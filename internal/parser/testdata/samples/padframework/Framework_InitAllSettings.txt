@@ -1,0 +1,28 @@
+# Initialize all constants and settings into a dictionary that is to be used throughout the project.
+SET Config TO {{ }}
+Variables.CreateNewList List=> TransactionData
+SET TransactionNumber TO 1
+SET LogLevel TO $'''%''%'''
+SET LogMessage TO $'''%''%'''
+SET SystemException TO $'''%''%'''
+SET BusinessException TO $'''%''%'''
+Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: PathToConfig Visible: False ReadOnly: True Instance=> ExcelConfigInstance
+Excel.ReadFromExcel.ReadAllCells Instance: ExcelConfigInstance FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> ConfigData
+LOOP FOREACH CurrentItem IN ConfigData
+    SET Config[CurrentItem['Name']] TO CurrentItem['Value']
+END
+Excel.CloseExcel.Close Instance: ExcelConfigInstance
+# Initialize all constants and settings into a dictionary that is to be used throughout the project.
+SET Config TO {{ }}
+Variables.CreateNewList List=> TransactionData
+SET TransactionNumber TO 1
+SET LogLevel TO $'''%''%'''
+SET LogMessage TO $'''%''%'''
+SET SystemException TO $'''%''%'''
+SET BusinessException TO $'''%''%'''
+Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: PathToConfig Visible: False ReadOnly: True Instance=> ExcelConfigInstance
+Excel.ReadFromExcel.ReadAllCells Instance: ExcelConfigInstance FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.FormattedTextValues RangeValue=> ConfigData
+LOOP FOREACH CurrentItem IN ConfigData
+    SET Config[CurrentItem['Name']] TO CurrentItem['Value']
+END
+Excel.CloseExcel.Close Instance: ExcelConfigInstance

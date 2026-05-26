@@ -1,0 +1,729 @@
+{
+  "name": "complex_flow",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Flow with complex properties and variables",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Flow with complex properties and variables"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Current Date Time",
+          "type": "ACTION",
+          "rawType": "DateTime.GetCurrentDateTime",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {
+            "DateTimeFormat": "DateTime.DateTimeFormat.DateAndTime",
+            "TimeZone": "TimeZoneInfo.Local",
+            "_output": "CurrentDateTime"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Current Date Time"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "To Text",
+          "type": "ACTION",
+          "rawType": "Text.ToText",
+          "indent": 4,
+          "lineNumber": 4,
+          "properties": {
+            "TextToConvert": "%CurrentDateTime%",
+            "_output": "CurrentDateText"
+          },
+          "variables": [
+            "CurrentDateTime"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "To Text"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set Password",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 5,
+          "properties": {
+            "_output": "Password",
+            "_value": "$'''MySecretPassword123!'''",
+            "_var": "Password"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Password%",
+              "target": "Password"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"MySecretPassword123!\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set Variable",
+          "type": "VARIABLE",
+          "rawType": "Variables.SetVariable",
+          "indent": 4,
+          "lineNumber": 6,
+          "properties": {
+            "Name": "HardcodedCred",
+            "NewValue": "%Password%",
+            "_output": "HardcodedCred"
+          },
+          "variables": [
+            "Password"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%HardcodedCred%",
+              "target": "HardcodedCred"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "''"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Launch Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.LaunchBrowser",
+          "indent": 4,
+          "lineNumber": 7,
+          "properties": {
+            "BrowserType": "WebAutomation.BrowserType.Chrome",
+            "Timeout": "30",
+            "_output": "Browser"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Browser"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Navigate To",
+          "type": "ACTION",
+          "rawType": "WebAutomation.NavigateTo",
+          "indent": 4,
+          "lineNumber": 8,
+          "properties": {
+            "BrowserInstance": "%Browser%",
+            "Url": "https://example.com/login?user=%Username%\u0026pass=%Password%"
+          },
+          "variables": [
+            "Username",
+            "Password",
+            "Browser"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Navigate To"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Populate Text Field",
+          "type": "ACTION",
+          "rawType": "WebAutomation.PopulateTextField",
+          "indent": 4,
+          "lineNumber": 9,
+          "properties": {
+            "BrowserInstance": "%Browser%",
+            "Control": "appmask['Username Field']",
+            "Value": "%Username%"
+          },
+          "variables": [
+            "Browser",
+            "Username"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Populate Text Field"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Populate Text Field",
+          "type": "ACTION",
+          "rawType": "WebAutomation.PopulateTextField",
+          "indent": 4,
+          "lineNumber": 10,
+          "properties": {
+            "BrowserInstance": "%Browser%",
+            "Control": "appmask['Password Field']",
+            "Value": "%HardcodedCred%"
+          },
+          "variables": [
+            "Browser",
+            "HardcodedCred"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Populate Text Field"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Click Click",
+          "type": "ACTION",
+          "rawType": "WebAutomation.ClickClick",
+          "indent": 4,
+          "lineNumber": 11,
+          "properties": {
+            "BrowserInstance": "%Browser%",
+            "Control": "appmask['Login Button']"
+          },
+          "variables": [
+            "Browser"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Click Click"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "WAIT 5",
+          "type": "WAIT",
+          "rawType": "WAIT",
+          "indent": 4,
+          "lineNumber": 12,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "WAIT 5"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 13,
+          "properties": {
+            "Message": "Login attempted for user %Username%"
+          },
+          "variables": [
+            "Username"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.CloseBrowser",
+          "indent": 4,
+          "lineNumber": 14,
+          "properties": {
+            "BrowserInstance": "%Browser%"
+          },
+          "variables": [
+            "Browser"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Browser"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Write Text",
+          "type": "ACTION",
+          "rawType": "File.WriteText",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {
+            "Encoding": "File.TextEncoding.UTF8",
+            "File": "C:\\temp\\output_%CurrentDateText%.txt",
+            "TextToWrite": "Login complete at %CurrentDateTime%"
+          },
+          "variables": [
+            "CurrentDateText",
+            "CurrentDateTime"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Write Text"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Helpers",
+      "blocks": [
+        {
+          "name": "Set MaxRetries",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 18,
+          "properties": {
+            "_output": "MaxRetries",
+            "_value": "3",
+            "_var": "MaxRetries"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%MaxRetries%",
+              "target": "MaxRetries"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "3"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set RetryCount",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 19,
+          "properties": {
+            "_output": "RetryCount",
+            "_value": "0",
+            "_var": "RetryCount"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%RetryCount%",
+              "target": "RetryCount"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "0"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP WHILE %RetryCount% \u003c %MaxRetries%",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 4,
+          "lineNumber": 20,
+          "properties": {},
+          "variables": [
+            "RetryCount",
+            "MaxRetries"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%RetryCount%",
+              "target": "RetryCount"
+            },
+            {
+              "type": "text",
+              "value": " \u003c "
+            },
+            {
+              "type": "variable",
+              "value": "%MaxRetries%",
+              "target": "MaxRetries"
+            }
+          ],
+          "children": [
+            {
+              "name": "Attempt to connect",
+              "type": "COMMENT",
+              "rawType": "COMMENT",
+              "indent": 8,
+              "lineNumber": 21,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Attempt to connect"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Launch Browser",
+              "type": "ACTION",
+              "rawType": "WebAutomation.LaunchBrowser",
+              "indent": 8,
+              "lineNumber": 22,
+              "properties": {
+                "BrowserType": "WebAutomation.BrowserType.Edge",
+                "_output": "Browser"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Launch Browser"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "On Block Error",
+              "type": "ERROR_HANDLER",
+              "rawType": "OnBlockError",
+              "indent": 8,
+              "lineNumber": 23,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Connection failed",
+                  "type": "COMMENT",
+                  "rawType": "COMMENT",
+                  "indent": 12,
+                  "lineNumber": 24,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Connection failed"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Increase Variable",
+                  "type": "VARIABLE",
+                  "rawType": "Variables.IncreaseVariable",
+                  "indent": 12,
+                  "lineNumber": 25,
+                  "properties": {
+                    "Name": "RetryCount",
+                    "Value": "1",
+                    "_output": "RetryCount"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%RetryCount%",
+                      "target": "RetryCount"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "1"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 12,
+                  "lineNumber": 26,
+                  "properties": {
+                    "Message": "Retry %RetryCount% of %MaxRetries%"
+                  },
+                  "variables": [
+                    "RetryCount",
+                    "MaxRetries"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "End On Block Error",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 27,
+                  "properties": {
+                    "_parentType": "ERROR_HANDLER"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End On Block Error"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "IF %RetryCount% \u003e= %MaxRetries%",
+              "type": "CONDITION",
+              "rawType": "IF",
+              "indent": 8,
+              "lineNumber": 28,
+              "properties": {},
+              "variables": [
+                "RetryCount",
+                "MaxRetries"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%RetryCount%",
+                  "target": "RetryCount"
+                },
+                {
+                  "type": "text",
+                  "value": " \u003e= "
+                },
+                {
+                  "type": "variable",
+                  "value": "%MaxRetries%",
+                  "target": "MaxRetries"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 12,
+                  "lineNumber": 29,
+                  "properties": {
+                    "Message": "Max retries reached"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Else",
+                  "type": "ELSE",
+                  "rawType": "ELSE",
+                  "indent": 8,
+                  "lineNumber": 30,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Else"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "Success path",
+                      "type": "COMMENT",
+                      "rawType": "COMMENT",
+                      "indent": 12,
+                      "lineNumber": 31,
+                      "properties": {},
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Success path"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "name": "Navigate To",
+                      "type": "ACTION",
+                      "rawType": "WebAutomation.NavigateTo",
+                      "indent": 12,
+                      "lineNumber": 32,
+                      "properties": {
+                        "BrowserInstance": "%Browser%",
+                        "Url": "https://example.com"
+                      },
+                      "variables": [
+                        "Browser"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Navigate To"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "name": "Set RetryCount",
+                      "type": "VARIABLE",
+                      "rawType": "SET",
+                      "indent": 12,
+                      "lineNumber": 33,
+                      "properties": {
+                        "_output": "RetryCount",
+                        "_value": "%MaxRetries%",
+                        "_var": "RetryCount"
+                      },
+                      "variables": [
+                        "MaxRetries"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "variable",
+                          "value": "%RetryCount%",
+                          "target": "RetryCount"
+                        },
+                        {
+                          "type": "text",
+                          "value": " = "
+                        },
+                        {
+                          "type": "variable",
+                          "value": "%MaxRetries%",
+                          "target": "MaxRetries"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "name": "End If",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 34,
+                  "properties": {
+                    "_parentType": "CONDITION"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End If"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 35,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 15,
+      "message": "unclosed block: Write Text",
+      "severity": "error",
+      "snippet": "File.WriteText"
+    }
+  ],
+  "metadata": {
+    "blockCount": 32,
+    "subflowCount": 2,
+    "maxDepth": 4,
+    "rawLineCount": 37
+  }
+}

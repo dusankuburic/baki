@@ -1,0 +1,2 @@
+# Capture a screenshot of the entire screen and name it with the timestap of when it happened.
+Workstation.TakeScreenshot.TakeScreenshotOfPrimaryScreenAndSaveToFile File: Config['PathToExceptionScreenshots'] ImageFormat: System.ImageFormat.Jpg

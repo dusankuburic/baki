@@ -1,0 +1,36 @@
+#Region "Main"
+    COMMENT  Flow with complex properties and variables
+    DateTime.GetCurrentDateTime DateTimeFormat: DateTime.DateTimeFormat.DateAndTime TimeZone: TimeZoneInfo.Local => CurrentDateTime
+    Text.ToText TextToConvert: %CurrentDateTime% => CurrentDateText
+    SET Password TO $'''MySecretPassword123!'''
+    Variables.SetVariable NewValue: %Password% Name: HardcodedCred
+    WebAutomation.LaunchBrowser BrowserType: WebAutomation.BrowserType.Chrome Timeout: 30 => Browser
+    WebAutomation.NavigateTo Url: $'''https://example.com/login?user=%Username%&pass=%Password%''' BrowserInstance: %Browser%
+    WebAutomation.PopulateTextField BrowserInstance: %Browser% Control: appmask['Username Field'] Value: $'''%Username%'''
+    WebAutomation.PopulateTextField BrowserInstance: %Browser% Control: appmask['Password Field'] Value: $'''%HardcodedCred%'''
+    WebAutomation.ClickClick BrowserInstance: %Browser% Control: appmask['Login Button']
+    WAIT 5
+    Display.ShowMessageBox Message: $'''Login attempted for user %Username%'''
+    WebAutomation.CloseBrowser BrowserInstance: %Browser%
+    File.WriteText File: $'''C:\temp\output_%CurrentDateText%.txt''' TextToWrite: $'''Login complete at %CurrentDateTime%''' Encoding: File.TextEncoding.UTF8
+#EndRegion
+#Region "Helpers"
+    SET MaxRetries TO 3
+    SET RetryCount TO 0
+    LOOP WHILE %RetryCount% < %MaxRetries%
+        COMMENT  Attempt to connect
+        WebAutomation.LaunchBrowser BrowserType: WebAutomation.BrowserType.Edge => Browser
+        ON BLOCK ERROR
+            COMMENT  Connection failed
+            Variables.IncreaseVariable Value: 1 Name: RetryCount
+            Display.ShowMessageBox Message: $'''Retry %RetryCount% of %MaxRetries%'''
+        END
+        IF %RetryCount% >= %MaxRetries%
+            Display.ShowMessageBox Message: $'''Max retries reached'''
+        ELSE
+            COMMENT  Success path
+            WebAutomation.NavigateTo Url: $'''https://example.com''' BrowserInstance: %Browser%
+            SET RetryCount TO %MaxRetries%
+        END
+    END
+#EndRegion

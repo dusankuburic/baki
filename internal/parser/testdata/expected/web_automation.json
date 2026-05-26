@@ -1,0 +1,373 @@
+{
+  "name": "web_automation",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "Buttons": "Display.Buttons.OK",
+            "DefaultButton": "Display.DefaultButton.Button1",
+            "Icon": "Display.Icon.None",
+            "IsTopMost": "False",
+            "Message": "Starting web automation"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Launch Firefox",
+          "type": "ACTION",
+          "rawType": "WebAutomation.LaunchFirefox",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "ClearCache": "False",
+            "ClearCookies": "False",
+            "Url": "https://example.com",
+            "WindowStyle": "WebAutomation.BrowserWindowStyle.Normal"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Firefox"
+            }
+          ],
+          "children": [
+            {
+              "name": "Fill Text By Text",
+              "type": "ACTION",
+              "rawType": "WebAutomation.FillTextByText",
+              "indent": 4,
+              "lineNumber": 4,
+              "properties": {
+                "FillWith": "%Username%",
+                "Text": "username"
+              },
+              "variables": [
+                "Username"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Fill Text By Text"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Fill Text By Text",
+              "type": "ACTION",
+              "rawType": "WebAutomation.FillTextByText",
+              "indent": 4,
+              "lineNumber": 5,
+              "properties": {
+                "FillWith": "%Password%",
+                "Text": "password"
+              },
+              "variables": [
+                "Password"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Fill Text By Text"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Click By Text",
+              "type": "ACTION",
+              "rawType": "WebAutomation.ClickByText",
+              "indent": 4,
+              "lineNumber": 6,
+              "properties": {
+                "Text": "Sign in"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Click By Text"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "WAIT 2",
+          "type": "WAIT",
+          "rawType": "WAIT",
+          "indent": 0,
+          "lineNumber": 7,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "WAIT 2"
+            }
+          ],
+          "children": [
+            {
+              "name": "Get Element By Text",
+              "type": "ACTION",
+              "rawType": "WebAutomation.GetElementByText",
+              "indent": 4,
+              "lineNumber": 8,
+              "properties": {
+                "Text": "Welcome"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Get Element By Text"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Click By Text",
+          "type": "ACTION",
+          "rawType": "WebAutomation.ClickByText",
+          "indent": 0,
+          "lineNumber": 9,
+          "properties": {
+            "Text": "Dashboard"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Click By Text"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Details Of Element",
+          "type": "ACTION",
+          "rawType": "WebAutomation.GetDetailsOfElement",
+          "indent": 0,
+          "lineNumber": 10,
+          "properties": {
+            "Attribute": "href",
+            "StoreTo": "%DashboardUrl%"
+          },
+          "variables": [
+            "DashboardUrl"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Details Of Element"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF %DashboardUrl% = $'''https://example.com/dashboard'''",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 12,
+          "properties": {},
+          "variables": [
+            "DashboardUrl"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%DashboardUrl%",
+              "target": "DashboardUrl"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"https://example.com/dashboard\""
+            }
+          ],
+          "children": [
+            {
+              "name": "Show Message Box",
+              "type": "ACTION",
+              "rawType": "Display.ShowMessageBox",
+              "indent": 4,
+              "lineNumber": 13,
+              "properties": {
+                "Buttons": "Display.Buttons.OK",
+                "DefaultButton": "Display.DefaultButton.Button1",
+                "Icon": "Display.Icon.Information",
+                "IsTopMost": "False",
+                "Message": "Login successful"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Show Message Box"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Else",
+              "type": "ELSE",
+              "rawType": "ELSE",
+              "indent": 0,
+              "lineNumber": 14,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Else"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 4,
+                  "lineNumber": 15,
+                  "properties": {
+                    "Buttons": "Display.Buttons.OK",
+                    "DefaultButton": "Display.DefaultButton.Button1",
+                    "Icon": "Display.Icon.Warning",
+                    "IsTopMost": "False",
+                    "Message": "Login failed"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 16,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Set Username",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 17,
+          "properties": {
+            "_output": "Username",
+            "_value": "$'''admin'''",
+            "_var": "Username"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Username%",
+              "target": "Username"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"admin\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set Password",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 18,
+          "properties": {
+            "_output": "Password",
+            "_value": "$'''super-secret-password'''",
+            "_var": "Password"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Password%",
+              "target": "Password"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"super-secret-password\""
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 11,
+      "message": "malformed line",
+      "severity": "warning",
+      "snippet": "WebAutomation.CloseWindow"
+    },
+    {
+      "line": 18,
+      "message": "unclosed block: Set Password",
+      "severity": "error",
+      "snippet": "SET"
+    }
+  ],
+  "metadata": {
+    "blockCount": 16,
+    "subflowCount": 1,
+    "maxDepth": 3,
+    "rawLineCount": 20
+  }
+}

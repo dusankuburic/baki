@@ -1,0 +1,205 @@
+package service
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"pad-analyzer/internal/models"
+	"pad-analyzer/internal/storage"
+)
+
+// newTestSettingsStore creates a SettingsStore backed by a temp file.
+func newTestSettingsStore(t *testing.T) *storage.SettingsStore {
+	t.Helper()
+	dir := t.TempDir()
+	s, err := storage.NewSettingsStoreAt(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("NewSettingsStoreAt: %v", err)
+	}
+	return s
+}
+
+// ---- searchBlock ------------------------------------------------------------
+
+func TestSearchBlock_Found(t *testing.T) {
+	blocks := []models.Block{
+		{ID: "a", Name: "First"},
+		{
+			ID:   "b",
+			Name: "Parent",
+			Children: []models.Block{
+				{ID: "c", Name: "Child"},
+			},
+		},
+	}
+
+	if found := searchBlock(blocks, "a"); found == nil || found.ID != "a" {
+		t.Errorf("expected to find block 'a', got %v", found)
+	}
+	if found := searchBlock(blocks, "c"); found == nil || found.ID != "c" {
+		t.Errorf("expected to find nested block 'c', got %v", found)
+	}
+}
+
+func TestSearchBlock_NotFound(t *testing.T) {
+	blocks := []models.Block{{ID: "a"}}
+	if found := searchBlock(blocks, "z"); found != nil {
+		t.Errorf("expected nil for unknown ID, got %+v", found)
+	}
+}
+
+func TestSearchBlock_EmptySlice(t *testing.T) {
+	if found := searchBlock(nil, "x"); found != nil {
+		t.Fatal("expected nil for empty slice")
+	}
+}
+
+// ---- SearchFlow -------------------------------------------------------------
+
+func TestFlowService_SearchFlow_NoDoc(t *testing.T) {
+	svc := &FlowService{ctx: context.Background()}
+	_, err := svc.SearchFlow("nonexistent-id", models.SearchQuery{Text: "anything", MaxResults: 10})
+	if err == nil {
+		t.Fatal("expected error when no doc loaded")
+	}
+}
+
+func TestFlowService_SearchFlow_Returns(t *testing.T) {
+	svc := makeTestDoc(t, simpleFlow)
+	doc := svc.CurrentDoc()
+
+	results, err := svc.SearchFlow(doc.ID, models.SearchQuery{
+		Text:       "MyVar",
+		MaxResults: 10,
+	})
+	if err != nil {
+		t.Fatalf("SearchFlow: %v", err)
+	}
+	if results == nil {
+		t.Fatal("expected non-nil results")
+	}
+}
+
+func TestFlowService_SearchFlow_WrongFlowID(t *testing.T) {
+	svc := makeTestDoc(t, simpleFlow)
+	_, err := svc.SearchFlow("wrong-id", models.SearchQuery{Text: "MyVar", MaxResults: 10})
+	if err == nil {
+		t.Fatal("expected error for wrong flow ID")
+	}
+}
+
+// ---- SetRuleEnabled / UpdateRuleConfig --------------------------------------
+
+func TestAnalysisService_SetRuleEnabled(t *testing.T) {
+	s := newTestSettingsStore(t)
+	_, analysis := makeTestAnalysisService(t, simpleFlow)
+	analysis.settings = s
+
+	const ruleID = "unhandled-error"
+	if err := analysis.SetRuleEnabled(ruleID, false); err != nil {
+		t.Fatalf("SetRuleEnabled: %v", err)
+	}
+
+	got := s.Get()
+	rc, ok := got.Analysis.Rules[ruleID]
+	if !ok {
+		t.Fatalf("rule %q not found in settings after SetRuleEnabled", ruleID)
+	}
+	if rc.Enabled {
+		t.Errorf("expected rule %q to be disabled, got enabled", ruleID)
+	}
+
+	// Re-enable and verify.
+	if err := analysis.SetRuleEnabled(ruleID, true); err != nil {
+		t.Fatalf("SetRuleEnabled(true): %v", err)
+	}
+	got = s.Get()
+	if !got.Analysis.Rules[ruleID].Enabled {
+		t.Errorf("expected rule %q to be enabled after re-enabling", ruleID)
+	}
+}
+
+func TestAnalysisService_UpdateRuleConfig(t *testing.T) {
+	s := newTestSettingsStore(t)
+	_, analysis := makeTestAnalysisService(t, simpleFlow)
+	analysis.settings = s
+
+	config := models.RuleConfig{
+		Enabled:  false,
+		Severity: "error",
+	}
+	const ruleID = "deep-nesting"
+	if err := analysis.UpdateRuleConfig(ruleID, config); err != nil {
+		t.Fatalf("UpdateRuleConfig: %v", err)
+	}
+
+	got := s.Get().Analysis.Rules[ruleID]
+	if got.Enabled != false {
+		t.Errorf("Enabled = %v, want false", got.Enabled)
+	}
+	if got.Severity != "error" {
+		t.Errorf("Severity = %q, want %q", got.Severity, "error")
+	}
+}
+
+// ---- RemoveRecentFile / ClearRecentFiles ------------------------------------
+
+func TestFlowService_RemoveRecentFile(t *testing.T) {
+	s := newTestSettingsStore(t)
+	svc := &FlowService{ctx: context.Background(), settings: s}
+
+	storage.AddRecentFile(s, "/flow/a.txt", 0)
+	storage.AddRecentFile(s, "/flow/b.txt", 0)
+
+	if err := svc.RemoveRecentFile("/flow/a.txt"); err != nil {
+		t.Fatalf("RemoveRecentFile: %v", err)
+	}
+
+	files := s.Get().RecentFiles
+	for _, f := range files {
+		if f.Path == "/flow/a.txt" {
+			t.Error("removed file still present in recent files")
+		}
+	}
+}
+
+func TestFlowService_ClearRecentFiles(t *testing.T) {
+	s := newTestSettingsStore(t)
+	svc := &FlowService{ctx: context.Background(), settings: s}
+
+	storage.AddRecentFile(s, "/flow/a.txt", 0)
+	storage.AddRecentFile(s, "/flow/b.txt", 0)
+
+	if err := svc.ClearRecentFiles(); err != nil {
+		t.Fatalf("ClearRecentFiles: %v", err)
+	}
+
+	if len(s.Get().RecentFiles) != 0 {
+		t.Errorf("expected empty recent files after clear, got %d", len(s.Get().RecentFiles))
+	}
+}
+
+// ---- LoadFlowFromPath guard paths (no backend notifier required) ---------------
+// The happy path calls notifier.Emit which might be difficult to mock in simple tests,
+// so we only test the early-exit guard conditions here.
+
+func TestFlowService_LoadFlowFromPath_NoSettings(t *testing.T) {
+	// settings == nil → early return before any notifier call.
+	svc := &FlowService{ctx: context.Background(), settings: nil}
+	_, err := svc.LoadFlowFromPath("/any/path.txt")
+	if err == nil {
+		t.Fatal("expected error when settings is nil")
+	}
+}
+
+func TestFlowService_LoadFlowFromPath_NonExistent(t *testing.T) {
+	// Non-existent file → os.Stat fails before any notifier call.
+	s := newTestSettingsStore(t)
+	svc := &FlowService{ctx: context.Background(), settings: s}
+
+	_, err := svc.LoadFlowFromPath(filepath.Join(t.TempDir(), "no-such-file.txt"))
+	if err == nil {
+		t.Fatal("expected error for non-existent file")
+	}
+}

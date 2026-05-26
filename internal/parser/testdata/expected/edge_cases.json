@@ -1,0 +1,368 @@
+{
+  "name": "edge_cases",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Edge case: empty subflows, special chars, unicode",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Edge case: empty subflows, special chars, unicode"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set EmptyVar",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {
+            "_output": "EmptyVar",
+            "_value": "$''''''",
+            "_var": "EmptyVar"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%EmptyVar%",
+              "target": "EmptyVar"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set UnicodeVar",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 4,
+          "properties": {
+            "_output": "UnicodeVar",
+            "_value": "$'''日本語テスト ñ é ü © ® ™'''",
+            "_var": "UnicodeVar"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%UnicodeVar%",
+              "target": "UnicodeVar"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"日本語テスト ñ é ü © ® ™\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set SpecialChars",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 5,
+          "properties": {
+            "_output": "SpecialChars",
+            "_value": "$'''Line1\\nLine2\\tTabbed \"quoted\" 'single' '''",
+            "_var": "SpecialChars"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%SpecialChars%",
+              "target": "SpecialChars"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"Line1\\nLine2\\tTabbed \"quoted\" 'single' \""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Empty loop",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 6,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Empty loop"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH Item IN %EmptyList%",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 4,
+          "lineNumber": 7,
+          "properties": {},
+          "variables": [
+            "EmptyList",
+            "Item"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Item IN "
+            },
+            {
+              "type": "variable",
+              "value": "%EmptyList%",
+              "target": "EmptyList"
+            }
+          ],
+          "children": [
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 8,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Nested ifs without else",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 9,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Nested ifs without else"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF %x% \u003e 0",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 4,
+          "lineNumber": 10,
+          "properties": {},
+          "variables": [
+            "x"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%x%",
+              "target": "x"
+            },
+            {
+              "type": "text",
+              "value": " \u003e 0"
+            }
+          ],
+          "children": [
+            {
+              "name": "IF %x% \u003e 10",
+              "type": "CONDITION",
+              "rawType": "IF",
+              "indent": 8,
+              "lineNumber": 11,
+              "properties": {},
+              "variables": [
+                "x"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%x%",
+                  "target": "x"
+                },
+                {
+                  "type": "text",
+                  "value": " \u003e 10"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 12,
+                  "lineNumber": 12,
+                  "properties": {
+                    "Message": "Large"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "End If",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 13,
+                  "properties": {
+                    "_parentType": "CONDITION"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End If"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 14,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Multiple consecutive comments",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Multiple consecutive comments"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "These test comment handling",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 16,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "These test comment handling"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "And parser resilience",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 17,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "And parser resilience"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "The end",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 18,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "The end"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 18,
+      "message": "unclosed block: The end",
+      "severity": "error",
+      "snippet": "COMMENT"
+    }
+  ],
+  "metadata": {
+    "blockCount": 17,
+    "subflowCount": 1,
+    "maxDepth": 3,
+    "rawLineCount": 20
+  }
+}

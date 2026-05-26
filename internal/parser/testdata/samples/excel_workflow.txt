@@ -1,0 +1,27 @@
+#Region "Main"
+Excel.LaunchExcel Visible: True LoadAddIns: False
+    Excel.GetFirstFreeRowOnColumn Column: 1 StoreTo: %FreeRow%
+    LOOP FROM 2 TO %FreeRow% - 1 STEP 1
+        Excel.ReadFromExcel.ReadCell Column: 1 Row: %CurrentItem% StoreTo: %Name%
+        Excel.ReadFromExcel.ReadCell Column: 2 Row: %CurrentItem% StoreTo: %Email%
+        IF %Name% = $'''''' THEN
+            Display.ShowMessageBox Message: $'''Empty name at row %CurrentItem%''' Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False
+        ELSE
+            Variables.SetVariable Name: %Output% Value: %Name% + $''' <''' + %Email% + $'''>'''
+            Text.WriteToFile TextToWrite: %Output% FilePath: $'''C:\\output\\contacts.txt''' AppendNewLine: True IfFileExists: Append
+        END
+    END
+    Excel.SaveAs Document: %ExcelInstance% FilePath: $'''C:\\output\\backup.xlsx'''
+ON BLOCK ERROR
+    Display.ShowMessageBox Message: $'''Excel error occurred''' Icon: Display.Icon.Error Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False
+END
+Excel.CloseExcel SaveChanges: False
+#EndRegion
+#Region "FormatReport"
+Excel.LaunchExcel Visible: True LoadAddIns: False
+    Excel.SetCellFormat CellFormat: Excel.CellFormat.Bold Column: 1 Row: 1
+    Excel.SetCellFormat CellFormat: Excel.CellFormat.Bold Column: 2 Row: 1
+    Variables.SetVariable Name: %Header% Value: $'''Name,Email'''
+    Text.WriteToFile TextToWrite: %Header% FilePath: $'''C:\\output\\header.txt''' AppendNewLine: False IfFileExists: Overwrite
+Excel.CloseExcel SaveChanges: True
+#EndRegion

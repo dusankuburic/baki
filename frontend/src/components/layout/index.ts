@@ -1,0 +1,6 @@
+export {default as TitleBar} from './TitleBar'
+export {default as Sidebar} from './Sidebar'
+export {default as MainPane} from './MainPane'
+export {default as InspectorPanel} from './InspectorPanel'
+export {default as StatusBar} from './StatusBar'
+export {default as PaneDivider} from './PaneDivider'

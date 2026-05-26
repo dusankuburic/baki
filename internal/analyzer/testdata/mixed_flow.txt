@@ -1,0 +1,21 @@
+Block,1,WebAutomation.Click link on web page,4,0
+  Label 'Click link on web page'
+  WaitFor=0
+Block,2,UIAutomation.Click button,4,4
+  Label 'Click button'
+Block,3,SetVariable.MyVar,4,8
+  Value => %MyVar%
+Block,4,Exit subflow,4,12
+Block,5,Some unreachable action,4,16
+  Label 'This is dead code'
+Block,6,Loop.ForEach,4,20
+  Item => %CurrentItem%
+  Block,7,WebAutomation.Get text,4,24
+    Label 'Get text from page'
+  Block,8,SetVariable.Counter,4,28
+    Value => %Counter%
+Block,9,OnError.Handler,4,32
+  Label 'Handle error'
+Block,10,WebAutomation.Fill text field,4,36
+  Label 'Fill in password'
+  Text='password=super_secret_value_here'

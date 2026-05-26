@@ -1,0 +1,48 @@
+XML.ReadFromFile File: $'''C:\\Users\\dusanku\\Music\\exercise4_xml.txt''' Encoding: XML.FileEncoding.DefaultEncoding XmlDocument=> XmlDocument
+XML.ExecuteXPathQuery.ExecuteXPath XmlDocument: XmlDocument XPathQuery: $'''/Artikli/Artikal''' XPathResults=> ArtikalNodes
+Variables.CreateNewList List=> ArtikalList
+LOOP FOREACH CurrentNode IN ArtikalNodes
+    SET CurrArtikal TO {{ }}
+    BLOCK 'Extract Id'
+ON BLOCK ERROR
+
+END
+        XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly XmlDocument: CurrentNode XPathQuery: $'''/Artikal/Id''' XPathResult=> XPathIdResult
+        XML.GetXmlElementValue.GetElementValueAsNumeric Document: XPathIdResult NumericValue=> elId
+        SET CurrArtikal['Id'] TO elId
+    END
+    BLOCK 'Extract Name'
+ON BLOCK ERROR
+
+END
+        XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly XmlDocument: CurrentNode XPathQuery: $'''/Artikal/Naziv''' XPathResult=> XPathNazivResult
+        XML.GetXmlElementValue.GetElementValue Document: XPathNazivResult TextValue=> elName
+        SET CurrArtikal['Name'] TO elName
+    END
+    BLOCK 'Extract Cena'
+ON BLOCK ERROR
+
+END
+        XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly XmlDocument: CurrentNode XPathQuery: $'''/Artikal/Cena''' XPathResult=> XPathCenaResult
+        XML.GetXmlElementValue.GetElementValueAsNumeric Document: XPathCenaResult NumericValue=> elCena
+        SET CurrArtikal['Cena'] TO elCena
+    END
+    BLOCK 'Extract Kolicina'
+ON BLOCK ERROR
+
+END
+        XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly XmlDocument: CurrentNode XPathQuery: $'''/Artikal/Kolicina''' XPathResult=> XPathKolicinaResult
+        XML.GetXmlElementValue.GetElementValueAsNumeric Document: XPathKolicinaResult NumericValue=> elKolicina
+        SET CurrArtikal['Kolicina'] TO elKolicina
+    END
+    BLOCK 'Extract Opis'
+ON BLOCK ERROR
+
+END
+        XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly XmlDocument: CurrentNode XPathQuery: $'''/Artikal/Opis''' XPathResult=> XPathOpisResult
+        XML.GetXmlElementValue.GetElementValue Document: XPathOpisResult TextValue=> elOpis
+        SET CurrArtikal['Opis'] TO elOpis
+    END
+    Variables.AddItemToList Item: CurrArtikal List: ArtikalList
+END
+Display.ShowMessageDialog.ShowMessage Title: $'''LIST OF ARTIKLI''' Message: ArtikalList Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False

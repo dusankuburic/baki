@@ -1,0 +1,2859 @@
+{
+  "name": "padframework",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "/# [Process title]\n[Process description]\n[Additional information (e.g., author, contact information and applications involved and required external setup)]#/",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "/# [Process title]\n[Process description]\n[Additional information (e.g., author, contact information and applications involved and required external setup)]#/"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set PathToConfig",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {
+            "_output": "PathToConfig",
+            "_value": "$'''C:\\\\Users\\\\dusanku\\\\Desktop\\\\Process Configurations\\\\Framework Folder Setup\\\\Config.xlsx'''",
+            "_var": "PathToConfig"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%PathToConfig%",
+              "target": "PathToConfig"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"C:\\\\Users\\\\dusanku\\\\Desktop\\\\Process Configurations\\\\Framework Folder Setup\\\\Config.xlsx\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_TestBench (disabled)",
+          "type": "SUBFLOW",
+          "rawType": "DISABLED_CALL",
+          "indent": 0,
+          "lineNumber": 5,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_TestBench",
+              "target": "Framework_TestBench"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_InitAllSettings",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 6,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_InitAllSettings",
+              "target": "Framework_InitAllSettings"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogLevel",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 7,
+          "properties": {
+            "_output": "LogLevel",
+            "_value": "$'''Info'''",
+            "_var": "LogLevel"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogLevel%",
+              "target": "LogLevel"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"Info\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogMessage",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 8,
+          "properties": {
+            "_output": "LogMessage",
+            "_value": "$'''Process started'''",
+            "_var": "LogMessage"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogMessage%",
+              "target": "LogMessage"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"Process started\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_LogMessage",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 9,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_LogMessage",
+              "target": "Framework_LogMessage"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_KillAllProcesses",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 10,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_KillAllProcesses",
+              "target": "Framework_KillAllProcesses"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_InitAllApplications",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 11,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_InitAllApplications",
+              "target": "Framework_InitAllApplications"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_GetTransactionData",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 12,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_GetTransactionData",
+              "target": "Framework_GetTransactionData"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "SetTransactionItem",
+          "type": "ACTION",
+          "rawType": "LABEL",
+          "indent": 0,
+          "lineNumber": 13,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "SetTransactionItem"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_SetTransactionItem",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 14,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_SetTransactionItem",
+              "target": "Framework_SetTransactionItem"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF IsNotEmpty(TransactionItem)",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 15,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "IsNotEmpty(TransactionItem)"
+            }
+          ],
+          "children": [
+            {
+              "name": "ProcessException",
+              "type": "ERROR_HANDLER",
+              "rawType": "OnBlockError",
+              "indent": 4,
+              "lineNumber": 16,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "ProcessException"
+                }
+              ],
+              "children": [
+                {
+                  "name": "On Block Error",
+                  "type": "ACTION",
+                  "rawType": "OnBlockError",
+                  "indent": 0,
+                  "lineNumber": 17,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "On Block Error"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "Call Framework_ProcessErrorHandler",
+              "type": "SUBFLOW",
+              "rawType": "CALL",
+              "indent": 4,
+              "lineNumber": 18,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "subflow",
+                  "value": "Framework_ProcessErrorHandler",
+                  "target": "Framework_ProcessErrorHandler"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Call Framework_Process",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 8,
+          "lineNumber": 20,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_Process",
+              "target": "Framework_Process"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_SetTransactionStatus",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 4,
+          "lineNumber": 22,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_SetTransactionStatus",
+              "target": "Framework_SetTransactionStatus"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "SetTransactionItem",
+          "type": "ACTION",
+          "rawType": "GOTO",
+          "indent": 4,
+          "lineNumber": 23,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "SetTransactionItem"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EndProcess",
+          "type": "ACTION",
+          "rawType": "GOTO",
+          "indent": 4,
+          "lineNumber": 25,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EndProcess"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EndProcess",
+          "type": "ACTION",
+          "rawType": "LABEL",
+          "indent": 0,
+          "lineNumber": 27,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EndProcess"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_CloseAllApplications",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 28,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_CloseAllApplications",
+              "target": "Framework_CloseAllApplications"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogLevel",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 29,
+          "properties": {
+            "_output": "LogLevel",
+            "_value": "$'''Info'''",
+            "_var": "LogLevel"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogLevel%",
+              "target": "LogLevel"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"Info\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogMessage",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 30,
+          "properties": {
+            "_output": "LogMessage",
+            "_value": "$'''Process finished'''",
+            "_var": "LogMessage"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogMessage%",
+              "target": "LogMessage"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"Process finished\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_LogMessage",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 31,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_LogMessage",
+              "target": "Framework_LogMessage"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_CloseAllApplications",
+      "blocks": [
+        {
+          "name": "Do the necessary procedures closing the used applications.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Do the necessary procedures closing the used applications."
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_GetTransactionData",
+      "blocks": [
+        {
+          "name": "Extract all items that the bot needs to process in a variable",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Extract all items that the bot needs to process in a variable"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_InitAllApplications",
+      "blocks": [
+        {
+          "name": "Open applications used in the process.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Open applications used in the process."
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Launch And Open Under Existing Process",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "Path": "Config['PathInputFile']",
+            "ReadOnly": "True Instance",
+            "Visible": "False",
+            "_output": "ExcelInputFile"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch And Open Under Existing Process"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Read Cells",
+          "type": "ACTION",
+          "rawType": "Excel.ReadFromExcel.ReadCells",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "EndColumn": "H",
+            "EndRow": "8",
+            "FirstLineIsHeader": "True",
+            "GetCellContentsMode": "Excel.GetCellContentsMode.PlainText RangeValue",
+            "Instance": "ExcelInputFile",
+            "StartColumn": "A",
+            "StartRow": "3",
+            "_output": "TransactionData"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Read Cells"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel.Close",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {
+            "Instance": "ExcelInputFile"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_InitAllSettings",
+      "blocks": [
+        {
+          "name": "Initialize all constants and settings into a dictionary that is to be used throughout the project.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Initialize all constants and settings into a dictionary that is to be used throughout the project."
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set Config",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "_output": "Config",
+            "_value": "{{ }}",
+            "_var": "Config"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Config%",
+              "target": "Config"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "{{ }}"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Create New List",
+          "type": "VARIABLE",
+          "rawType": "Variables.CreateNewList",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "_output": "TransactionData"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Create New List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set TransactionNumber",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {
+            "_output": "TransactionNumber",
+            "_value": "1",
+            "_var": "TransactionNumber"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%TransactionNumber%",
+              "target": "TransactionNumber"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogLevel",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 5,
+          "properties": {
+            "_output": "LogLevel",
+            "_value": "$'''%''%'''",
+            "_var": "LogLevel"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogLevel%",
+              "target": "LogLevel"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogMessage",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 6,
+          "properties": {
+            "_output": "LogMessage",
+            "_value": "$'''%''%'''",
+            "_var": "LogMessage"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogMessage%",
+              "target": "LogMessage"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set SystemException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 7,
+          "properties": {
+            "_output": "SystemException",
+            "_value": "$'''%''%'''",
+            "_var": "SystemException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%SystemException%",
+              "target": "SystemException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set BusinessException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 8,
+          "properties": {
+            "_output": "BusinessException",
+            "_value": "$'''%''%'''",
+            "_var": "BusinessException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%BusinessException%",
+              "target": "BusinessException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Launch And Open Under Existing Process",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess",
+          "indent": 0,
+          "lineNumber": 9,
+          "properties": {
+            "Path": "PathToConfig",
+            "ReadOnly": "True Instance",
+            "Visible": "False",
+            "_output": "ExcelConfigInstance"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch And Open Under Existing Process"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Read All Cells",
+          "type": "ACTION",
+          "rawType": "Excel.ReadFromExcel.ReadAllCells",
+          "indent": 0,
+          "lineNumber": 10,
+          "properties": {
+            "FirstLineIsHeader": "True",
+            "GetCellContentsMode": "Excel.GetCellContentsMode.FormattedTextValues RangeValue",
+            "Instance": "ExcelConfigInstance",
+            "_output": "ConfigData"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Read All Cells"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH CurrentItem IN ConfigData",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 11,
+          "properties": {},
+          "variables": [
+            "CurrentItem"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "CurrentItem IN ConfigData"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set Config[CurrentItem['Name']]",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 12,
+              "properties": {
+                "_output": "Config[CurrentItem['Name']]",
+                "_value": "CurrentItem['Value']",
+                "_var": "Config[CurrentItem['Name']]"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%Config[CurrentItem['Name']]%",
+                  "target": "Config"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "text",
+                  "value": "CurrentItem["
+                },
+                {
+                  "type": "string",
+                  "value": "\"Value\""
+                },
+                {
+                  "type": "text",
+                  "value": "]"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 13,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Close",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel.Close",
+          "indent": 0,
+          "lineNumber": 14,
+          "properties": {
+            "Instance": "ExcelConfigInstance"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Initialize all constants and settings into a dictionary that is to be used throughout the project.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 15,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Initialize all constants and settings into a dictionary that is to be used throughout the project."
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set Config",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 16,
+          "properties": {
+            "_output": "Config",
+            "_value": "{{ }}",
+            "_var": "Config"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Config%",
+              "target": "Config"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "{{ }}"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Create New List",
+          "type": "VARIABLE",
+          "rawType": "Variables.CreateNewList",
+          "indent": 0,
+          "lineNumber": 17,
+          "properties": {
+            "_output": "TransactionData"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Create New List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set TransactionNumber",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 18,
+          "properties": {
+            "_output": "TransactionNumber",
+            "_value": "1",
+            "_var": "TransactionNumber"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%TransactionNumber%",
+              "target": "TransactionNumber"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogLevel",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 19,
+          "properties": {
+            "_output": "LogLevel",
+            "_value": "$'''%''%'''",
+            "_var": "LogLevel"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogLevel%",
+              "target": "LogLevel"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set LogMessage",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 20,
+          "properties": {
+            "_output": "LogMessage",
+            "_value": "$'''%''%'''",
+            "_var": "LogMessage"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LogMessage%",
+              "target": "LogMessage"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set SystemException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 21,
+          "properties": {
+            "_output": "SystemException",
+            "_value": "$'''%''%'''",
+            "_var": "SystemException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%SystemException%",
+              "target": "SystemException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set BusinessException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 22,
+          "properties": {
+            "_output": "BusinessException",
+            "_value": "$'''%''%'''",
+            "_var": "BusinessException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%BusinessException%",
+              "target": "BusinessException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Launch And Open Under Existing Process",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess",
+          "indent": 0,
+          "lineNumber": 23,
+          "properties": {
+            "Path": "PathToConfig",
+            "ReadOnly": "True Instance",
+            "Visible": "False",
+            "_output": "ExcelConfigInstance"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch And Open Under Existing Process"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Read All Cells",
+          "type": "ACTION",
+          "rawType": "Excel.ReadFromExcel.ReadAllCells",
+          "indent": 0,
+          "lineNumber": 24,
+          "properties": {
+            "FirstLineIsHeader": "True",
+            "GetCellContentsMode": "Excel.GetCellContentsMode.FormattedTextValues RangeValue",
+            "Instance": "ExcelConfigInstance",
+            "_output": "ConfigData"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Read All Cells"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH CurrentItem IN ConfigData",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 25,
+          "properties": {},
+          "variables": [
+            "CurrentItem"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "CurrentItem IN ConfigData"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set Config[CurrentItem['Name']]",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 26,
+              "properties": {
+                "_output": "Config[CurrentItem['Name']]",
+                "_value": "CurrentItem['Value']",
+                "_var": "Config[CurrentItem['Name']]"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%Config[CurrentItem['Name']]%",
+                  "target": "Config"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "text",
+                  "value": "CurrentItem["
+                },
+                {
+                  "type": "string",
+                  "value": "\"Value\""
+                },
+                {
+                  "type": "text",
+                  "value": "]"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 27,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Close",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel.Close",
+          "indent": 0,
+          "lineNumber": 28,
+          "properties": {
+            "Instance": "ExcelConfigInstance"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_KillAllProcesses",
+      "blocks": [
+        {
+          "name": "Force the termination of the used applications.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Force the termination of the used applications."
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_LogMessage",
+      "blocks": [
+        {
+          "name": "/# Log a message to a locally saved Text file.\nA new log file is created for each execution day.#/",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "/# Log a message to a locally saved Text file.\nA new log file is created for each execution day.#/"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Local",
+          "type": "ACTION",
+          "rawType": "DateTime.GetCurrentDateTime.Local",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "DateTimeFormat": "DateTime.DateTimeFormat.DateAndTime CurrentDateTime",
+            "_output": "CurrentDateTime"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Local"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "From Custom Date Time",
+          "type": "ACTION",
+          "rawType": "Text.ConvertDateTimeToText.FromCustomDateTime",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {
+            "CustomFormat": "$'''dd.MM.yyyy''' Result",
+            "DateTime": "CurrentDateTime",
+            "_output": "FormattedDate"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "From Custom Date Time"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "From Custom Date Time",
+          "type": "ACTION",
+          "rawType": "Text.ConvertDateTimeToText.FromCustomDateTime",
+          "indent": 0,
+          "lineNumber": 5,
+          "properties": {
+            "CustomFormat": "$'''HH:mm:ss''' Result",
+            "DateTime": "CurrentDateTime",
+            "_output": "FormattedTime"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "From Custom Date Time"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF (File.IfFile.DoesNotExist File: $'''%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt''')",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 6,
+          "properties": {
+            "File": "$'''%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt''') THEN"
+          },
+          "variables": [
+            "Config",
+            "FormattedDate"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "(File.IfFile.DoesNotExist File: $"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%",
+              "target": "Config"
+            },
+            {
+              "type": "text",
+              "value": ".txt"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "')"
+            }
+          ],
+          "children": [
+            {
+              "name": "Write Text",
+              "type": "ACTION",
+              "rawType": "File.WriteText",
+              "indent": 4,
+              "lineNumber": 7,
+              "properties": {
+                "AppendNewLine": "True",
+                "Encoding": "File.FileEncoding.Unicode",
+                "File": "%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt",
+                "IfFileExists": "File.IfFileExists.Append",
+                "TextToWrite": "FormattedTime + ' | ' + LogLevel + ' | ' + LogMessage"
+              },
+              "variables": [
+                "Config",
+                "FormattedDate"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Write Text"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Else",
+              "type": "ELSE",
+              "rawType": "ELSE",
+              "indent": 0,
+              "lineNumber": 8,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Else"
+                }
+              ],
+              "children": [
+                {
+                  "name": "IF LogMessage = $'''Worker started'''",
+                  "type": "CONDITION",
+                  "rawType": "IF",
+                  "indent": 4,
+                  "lineNumber": 9,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "LogMessage = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"Worker started\""
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "Write Text",
+                      "type": "ACTION",
+                      "rawType": "File.WriteText",
+                      "indent": 8,
+                      "lineNumber": 10,
+                      "properties": {
+                        "AppendNewLine": "True",
+                        "Encoding": "File.FileEncoding.Unicode",
+                        "File": "%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt",
+                        "IfFileExists": "File.IfFileExists.Append",
+                        "TextToWrite": "\n----------------------------------------------------\n \n%FormattedTime + ' | ' + LogLevel + ' | ' + LogMessage%"
+                      },
+                      "variables": [
+                        "Config",
+                        "FormattedDate",
+                        "FormattedTime",
+                        "LogLevel",
+                        "LogMessage"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Write Text"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "name": "Else",
+                      "type": "ELSE",
+                      "rawType": "ELSE",
+                      "indent": 4,
+                      "lineNumber": 14,
+                      "properties": {},
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Else"
+                        }
+                      ],
+                      "children": [
+                        {
+                          "name": "Write Text",
+                          "type": "ACTION",
+                          "rawType": "File.WriteText",
+                          "indent": 8,
+                          "lineNumber": 15,
+                          "properties": {
+                            "AppendNewLine": "True",
+                            "Encoding": "File.FileEncoding.Unicode",
+                            "File": "%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt",
+                            "IfFileExists": "File.IfFileExists.Append",
+                            "TextToWrite": "FormattedTime + ' | ' + LogLevel + ' | ' + LogMessage"
+                          },
+                          "variables": [
+                            "Config",
+                            "FormattedDate"
+                          ],
+                          "tokens": [
+                            {
+                              "type": "text",
+                              "value": "Write Text"
+                            }
+                          ],
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "name": "End If",
+                      "type": "END",
+                      "rawType": "END",
+                      "indent": 4,
+                      "lineNumber": 16,
+                      "properties": {
+                        "_parentType": "CONDITION"
+                      },
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "End If"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 17,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Framework_Process",
+      "blocks": [
+        {
+          "name": "Run major steps of the process, which are implemented by multiple subflows.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Run major steps of the process, which are implemented by multiple subflows."
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_ProcessErrorHandler",
+      "blocks": [
+        {
+          "name": "Handle exceptions that happened in the process by restarting all applications",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Handle exceptions that happened in the process by restarting all applications"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Error =\u003e LastError",
+          "type": "ACTION",
+          "rawType": "ERROR_CAPTURE",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "Reset": "True"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Error =\u003e LastError"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set SystemException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "_output": "SystemException",
+            "_value": "LastError.Message",
+            "_var": "SystemException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%SystemException%",
+              "target": "SystemException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "LastError.Message"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "CloseAllApplicationsException",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "CloseAllApplicationsException"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ACTION",
+              "rawType": "OnBlockError",
+              "indent": 0,
+              "lineNumber": 5,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Call Framework_KillAllProcesses",
+              "type": "SUBFLOW",
+              "rawType": "CALL",
+              "indent": 4,
+              "lineNumber": 6,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "subflow",
+                  "value": "Framework_KillAllProcesses",
+                  "target": "Framework_KillAllProcesses"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 7,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Call Framework_CloseAllApplications",
+              "type": "SUBFLOW",
+              "rawType": "CALL",
+              "indent": 4,
+              "lineNumber": 8,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "subflow",
+                  "value": "Framework_CloseAllApplications",
+                  "target": "Framework_CloseAllApplications"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 9,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Call Framework_InitAllApplications",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 10,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_InitAllApplications",
+              "target": "Framework_InitAllApplications"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_SetTransactionItem",
+      "blocks": [
+        {
+          "name": "Get a transaction item from the specified source.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get a transaction item from the specified source."
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF TransactionNumber \u003c= TransactionData.RowsCount",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "TransactionNumber \u003c= TransactionData.RowsCount"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set TransactionItem",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 3,
+              "properties": {
+                "_output": "TransactionItem",
+                "_value": "TransactionData[TransactionNumber - 1]",
+                "_var": "TransactionItem"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%TransactionItem%",
+                  "target": "TransactionItem"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "text",
+                  "value": "TransactionData[TransactionNumber - 1]"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Else",
+              "type": "ELSE",
+              "rawType": "ELSE",
+              "indent": 0,
+              "lineNumber": 4,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Else"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set TransactionItem",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 4,
+                  "lineNumber": 5,
+                  "properties": {
+                    "_output": "TransactionItem",
+                    "_value": "$'''%''%'''",
+                    "_var": "TransactionItem"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%TransactionItem%",
+                      "target": "TransactionItem"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "$"
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"\""
+                    },
+                    {
+                      "type": "text",
+                      "value": "'"
+                    },
+                    {
+                      "type": "variable",
+                      "value": "%''%"
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"\""
+                    },
+                    {
+                      "type": "text",
+                      "value": "'"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 6,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Framework_SetTransactionStatus",
+      "blocks": [
+        {
+          "name": "IF (SystemException = '' AND BusinessException = '') = $'''True'''",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "(SystemException = "
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": " AND BusinessException = "
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": ") = "
+            },
+            {
+              "type": "string",
+              "value": "\"True\""
+            }
+          ],
+          "children": [
+            {
+              "name": "Set LogLevel",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 2,
+              "properties": {
+                "_output": "LogLevel",
+                "_value": "$'''Info'''",
+                "_var": "LogLevel"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%LogLevel%",
+                  "target": "LogLevel"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "string",
+                  "value": "\"Info\""
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Set LogMessage",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 3,
+              "properties": {
+                "_output": "LogMessage",
+                "_value": "$'''Transaction successful'''",
+                "_var": "LogMessage"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%LogMessage%",
+                  "target": "LogMessage"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "string",
+                  "value": "\"Transaction successful\""
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Else",
+              "type": "ELSE",
+              "rawType": "ELSE",
+              "indent": 0,
+              "lineNumber": 4,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Else"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set LogLevel",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 4,
+                  "lineNumber": 5,
+                  "properties": {
+                    "_output": "LogLevel",
+                    "_value": "$'''Warn'''",
+                    "_var": "LogLevel"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%LogLevel%",
+                      "target": "LogLevel"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"Warn\""
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Set LogMessage",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 4,
+                  "lineNumber": 6,
+                  "properties": {
+                    "_output": "LogMessage",
+                    "_value": "$'''Transaction not successful'''",
+                    "_var": "LogMessage"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%LogMessage%",
+                      "target": "LogMessage"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"Transaction not successful\""
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 7,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "IF IsNotEmpty(SystemException)",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 8,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "IsNotEmpty(SystemException)"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set LogLevel",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 9,
+              "properties": {
+                "_output": "LogLevel",
+                "_value": "$'''Error'''",
+                "_var": "LogLevel"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%LogLevel%",
+                  "target": "LogLevel"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "string",
+                  "value": "\"Error\""
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Set LogMessage",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 10,
+              "properties": {
+                "_output": "LogMessage",
+                "_value": "SystemException",
+                "_var": "LogMessage"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%LogMessage%",
+                  "target": "LogMessage"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "text",
+                  "value": "SystemException"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 11,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "IF IsNotEmpty(BusinessException)",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 12,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "IsNotEmpty(BusinessException)"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set LogLevel",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 13,
+              "properties": {
+                "_output": "LogLevel",
+                "_value": "$'''BusinessException'''",
+                "_var": "LogLevel"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%LogLevel%",
+                  "target": "LogLevel"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "string",
+                  "value": "\"BusinessException\""
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Set LogMessage",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 4,
+              "lineNumber": 14,
+              "properties": {
+                "_output": "LogMessage",
+                "_value": "BusinessException",
+                "_var": "LogMessage"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%LogMessage%",
+                  "target": "LogMessage"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "text",
+                  "value": "BusinessException"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 15,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Call Framework_LogMessage",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 16,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_LogMessage",
+              "target": "Framework_LogMessage"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set SystemException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 17,
+          "properties": {
+            "_output": "SystemException",
+            "_value": "$'''%''%'''",
+            "_var": "SystemException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%SystemException%",
+              "target": "SystemException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set BusinessException",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 18,
+          "properties": {
+            "_output": "BusinessException",
+            "_value": "$'''%''%'''",
+            "_var": "BusinessException"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%BusinessException%",
+              "target": "BusinessException"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "$"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            },
+            {
+              "type": "variable",
+              "value": "%''%"
+            },
+            {
+              "type": "string",
+              "value": "\"\""
+            },
+            {
+              "type": "text",
+              "value": "'"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Increase Variable",
+          "type": "VARIABLE",
+          "rawType": "Variables.IncreaseVariable",
+          "indent": 0,
+          "lineNumber": 19,
+          "properties": {
+            "IncrementValue": "1",
+            "Value": "TransactionNumber"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Increase Variable"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_TakeScreenshot",
+      "blocks": [
+        {
+          "name": "Capture a screenshot of the entire screen and name it with the timestap of when it happened.",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Capture a screenshot of the entire screen and name it with the timestap of when it happened."
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Take Screenshot Of Primary Screen And Save To File",
+          "type": "ACTION",
+          "rawType": "Workstation.TakeScreenshot.TakeScreenshotOfPrimaryScreenAndSaveToFile",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "File": "Config['PathToExceptionScreenshots']",
+            "ImageFormat": "System.ImageFormat.Jpg"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Take Screenshot Of Primary Screen And Save To File"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Framework_TestBench",
+      "blocks": [
+        {
+          "name": "/# Use this subflow to test actions.\nMake sure to enable it in the Main to run the tests.#/",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "/# Use this subflow to test actions.\nMake sure to enable it in the Main to run the tests.#/"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_InitAllSettings",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_InitAllSettings",
+              "target": "Framework_InitAllSettings"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_InitAllApplications",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_InitAllApplications",
+              "target": "Framework_InitAllApplications"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Framework_CloseAllApplications",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 0,
+          "lineNumber": 5,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_CloseAllApplications",
+              "target": "Framework_CloseAllApplications"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EXIT Code: 0",
+          "type": "ACTION",
+          "rawType": "EXIT",
+          "indent": 0,
+          "lineNumber": 6,
+          "properties": {
+            "Code": "0"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EXIT Code: 0"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 31,
+      "message": "unclosed block: Call Framework_LogMessage",
+      "severity": "error",
+      "snippet": "CALL"
+    },
+    {
+      "line": 1,
+      "message": "unclosed block: Do the necessary procedures closing the used applications.",
+      "severity": "error",
+      "snippet": "COMMENT"
+    },
+    {
+      "line": 1,
+      "message": "unclosed block: Extract all items that the bot needs to process in a variable",
+      "severity": "error",
+      "snippet": "COMMENT"
+    },
+    {
+      "line": 4,
+      "message": "unclosed block: Close",
+      "severity": "error",
+      "snippet": "Excel.CloseExcel.Close"
+    },
+    {
+      "line": 28,
+      "message": "unclosed block: Close",
+      "severity": "error",
+      "snippet": "Excel.CloseExcel.Close"
+    },
+    {
+      "line": 1,
+      "message": "unclosed block: Force the termination of the used applications.",
+      "severity": "error",
+      "snippet": "COMMENT"
+    },
+    {
+      "line": 1,
+      "message": "unclosed block: Run major steps of the process, which are implemented by multiple subflows.",
+      "severity": "error",
+      "snippet": "COMMENT"
+    },
+    {
+      "line": 10,
+      "message": "unclosed block: Call Framework_InitAllApplications",
+      "severity": "error",
+      "snippet": "CALL"
+    },
+    {
+      "line": 19,
+      "message": "unclosed block: Increase Variable",
+      "severity": "error",
+      "snippet": "Variables.IncreaseVariable"
+    },
+    {
+      "line": 2,
+      "message": "unclosed block: Take Screenshot Of Primary Screen And Save To File",
+      "severity": "error",
+      "snippet": "Workstation.TakeScreenshot.TakeScreenshotOfPrimaryScreenAndSaveToFile"
+    },
+    {
+      "line": 6,
+      "message": "unclosed block: EXIT Code: 0",
+      "severity": "error",
+      "snippet": "EXIT"
+    }
+  ],
+  "metadata": {
+    "blockCount": 116,
+    "subflowCount": 13,
+    "maxDepth": 5,
+    "rawLineCount": 140
+  }
+}

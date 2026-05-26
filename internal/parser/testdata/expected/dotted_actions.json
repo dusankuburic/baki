@@ -1,0 +1,702 @@
+{
+  "name": "dotted_actions",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Dotted action format sample (newer PAD exports)",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Dotted action format sample (newer PAD exports)"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Current Date Time",
+          "type": "ACTION",
+          "rawType": "DateTime.GetCurrentDateTime",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {
+            "DateTimeFormat": "DateTime.DateTimeFormat.DateAndTime",
+            "TimeZone": "TimeZoneInfo.Local",
+            "_output": "CurrentDateTime"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Current Date Time"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "To Text",
+          "type": "ACTION",
+          "rawType": "Text.ToText",
+          "indent": 4,
+          "lineNumber": 4,
+          "properties": {
+            "TextToConvert": "%CurrentDateTime%",
+            "_output": "CurrentDateText"
+          },
+          "variables": [
+            "CurrentDateTime"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "To Text"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set Variable",
+          "type": "VARIABLE",
+          "rawType": "Variables.SetVariable",
+          "indent": 4,
+          "lineNumber": 5,
+          "properties": {
+            "Name": "DisplayDate",
+            "NewValue": "%CurrentDateText%",
+            "_output": "DisplayDate"
+          },
+          "variables": [
+            "CurrentDateText"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%DisplayDate%",
+              "target": "DisplayDate"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "''"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 6,
+          "properties": {
+            "Buttons": "Display.Buttons.OK",
+            "DefaultButton": "Display.DefaultButton.Button1",
+            "Icon": "Display.Icon.Information",
+            "Message": "Current date: %DisplayDate%",
+            "_output": "ButtonPressed"
+          },
+          "variables": [
+            "DisplayDate"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH Item IN %ItemList%",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 4,
+          "lineNumber": 7,
+          "properties": {},
+          "variables": [
+            "ItemList",
+            "Item"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Item IN "
+            },
+            {
+              "type": "variable",
+              "value": "%ItemList%",
+              "target": "ItemList"
+            }
+          ],
+          "children": [
+            {
+              "name": "IF %Item% = Special",
+              "type": "CONDITION",
+              "rawType": "IF",
+              "indent": 8,
+              "lineNumber": 8,
+              "properties": {},
+              "variables": [
+                "Item"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%Item%",
+                  "target": "Item"
+                },
+                {
+                  "type": "text",
+                  "value": " = Special"
+                }
+              ],
+              "children": [
+                {
+                  "name": "To Upper",
+                  "type": "ACTION",
+                  "rawType": "Text.ToUpper",
+                  "indent": 12,
+                  "lineNumber": 9,
+                  "properties": {
+                    "Text": "%Item%",
+                    "_output": "UpperItem"
+                  },
+                  "variables": [
+                    "Item"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "To Upper"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Set Variable",
+                  "type": "VARIABLE",
+                  "rawType": "Variables.SetVariable",
+                  "indent": 12,
+                  "lineNumber": 10,
+                  "properties": {
+                    "Name": "ProcessedItem",
+                    "NewValue": "%UpperItem%",
+                    "_output": "ProcessedItem"
+                  },
+                  "variables": [
+                    "UpperItem"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%ProcessedItem%",
+                      "target": "ProcessedItem"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "''"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Else",
+                  "type": "ELSE",
+                  "rawType": "ELSE",
+                  "indent": 8,
+                  "lineNumber": 11,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Else"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "Set Variable",
+                      "type": "VARIABLE",
+                      "rawType": "Variables.SetVariable",
+                      "indent": 12,
+                      "lineNumber": 12,
+                      "properties": {
+                        "Name": "ProcessedItem",
+                        "NewValue": "%Item%",
+                        "_output": "ProcessedItem"
+                      },
+                      "variables": [
+                        "Item"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "variable",
+                          "value": "%ProcessedItem%",
+                          "target": "ProcessedItem"
+                        },
+                        {
+                          "type": "text",
+                          "value": " = "
+                        },
+                        {
+                          "type": "text",
+                          "value": "''"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "name": "End If",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 13,
+                  "properties": {
+                    "_parentType": "CONDITION"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End If"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 14,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "On Block Error",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "On Block Error"
+            }
+          ],
+          "children": [
+            {
+              "name": "Show Message Box",
+              "type": "ACTION",
+              "rawType": "Display.ShowMessageBox",
+              "indent": 8,
+              "lineNumber": 16,
+              "properties": {
+                "Icon": "Display.Icon.Error",
+                "Message": "Error occurred"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Show Message Box"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 17,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Launch Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.LaunchBrowser",
+          "indent": 4,
+          "lineNumber": 18,
+          "properties": {
+            "BrowserType": "WebAutomation.BrowserType.Chrome",
+            "Timeout": "30",
+            "_output": "Browser"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Browser"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Navigate To",
+          "type": "ACTION",
+          "rawType": "WebAutomation.NavigateTo",
+          "indent": 4,
+          "lineNumber": 19,
+          "properties": {
+            "BrowserInstance": "%Browser%",
+            "Url": "https://example.com"
+          },
+          "variables": [
+            "Browser"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Navigate To"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.CloseBrowser",
+          "indent": 4,
+          "lineNumber": 20,
+          "properties": {
+            "BrowserInstance": "%Browser%"
+          },
+          "variables": [
+            "Browser"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Browser"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "DataProcessing",
+      "blocks": [
+        {
+          "name": "Launch Excel",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel",
+          "indent": 4,
+          "lineNumber": 23,
+          "properties": {
+            "Visible": "True",
+            "_output": "ExcelInstance"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Excel"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH CurrentRow IN %ExcelData%",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 4,
+          "lineNumber": 25,
+          "properties": {},
+          "variables": [
+            "ExcelData",
+            "CurrentRow"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "CurrentRow IN "
+            },
+            {
+              "type": "variable",
+              "value": "%ExcelData%",
+              "target": "ExcelData"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set RowData",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 8,
+              "lineNumber": 26,
+              "properties": {
+                "_output": "RowData",
+                "_value": "%CurrentRow%",
+                "_var": "RowData"
+              },
+              "variables": [
+                "CurrentRow"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%RowData%",
+                  "target": "RowData"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "variable",
+                  "value": "%CurrentRow%",
+                  "target": "CurrentRow"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "IF %RowData['Active']% = True",
+              "type": "CONDITION",
+              "rawType": "IF",
+              "indent": 8,
+              "lineNumber": 27,
+              "properties": {},
+              "variables": [
+                "RowData"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%RowData['Active']%",
+                  "target": "RowData"
+                },
+                {
+                  "type": "text",
+                  "value": " = True"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Process active row",
+                  "type": "COMMENT",
+                  "rawType": "COMMENT",
+                  "indent": 12,
+                  "lineNumber": 28,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Process active row"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Concatenate",
+                  "type": "ACTION",
+                  "rawType": "Text.Concatenate",
+                  "indent": 12,
+                  "lineNumber": 29,
+                  "properties": {
+                    "Text1": "%RowData['FirstName']%",
+                    "Text2": " ",
+                    "Text3": "%RowData['LastName']%",
+                    "_output": "FullName"
+                  },
+                  "variables": [
+                    "RowData"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Concatenate"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Set Variable",
+                  "type": "VARIABLE",
+                  "rawType": "Variables.SetVariable",
+                  "indent": 12,
+                  "lineNumber": 30,
+                  "properties": {
+                    "Name": "CurrentUserName",
+                    "NewValue": "%FullName%",
+                    "_output": "CurrentUserName"
+                  },
+                  "variables": [
+                    "FullName"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%CurrentUserName%",
+                      "target": "CurrentUserName"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "''"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "End If",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 31,
+                  "properties": {
+                    "_parentType": "CONDITION"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End If"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 32,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Close Excel",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel",
+          "indent": 4,
+          "lineNumber": 33,
+          "properties": {
+            "Instance": "%ExcelInstance%",
+            "SaveBeforeClosing": "True"
+          },
+          "variables": [
+            "ExcelInstance"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Excel"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Write Text",
+          "type": "ACTION",
+          "rawType": "File.WriteText",
+          "indent": 4,
+          "lineNumber": 34,
+          "properties": {
+            "Encoding": "File.TextEncoding.UTF8",
+            "File": "C:\\output\\results.txt",
+            "TextToWrite": "Processed user: %CurrentUserName%"
+          },
+          "variables": [
+            "CurrentUserName"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Write Text"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 20,
+      "message": "unclosed block: Close Browser",
+      "severity": "error",
+      "snippet": "WebAutomation.CloseBrowser"
+    },
+    {
+      "line": 24,
+      "message": "malformed line",
+      "severity": "warning",
+      "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:D100''' =\u003e ExcelData"
+    },
+    {
+      "line": 34,
+      "message": "unclosed block: Write Text",
+      "severity": "error",
+      "snippet": "File.WriteText"
+    }
+  ],
+  "metadata": {
+    "blockCount": 30,
+    "subflowCount": 2,
+    "maxDepth": 4,
+    "rawLineCount": 36
+  }
+}

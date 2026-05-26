@@ -1,0 +1,582 @@
+{
+  "name": "excel_workflow",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Launch Excel",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "LoadAddIns": "False",
+            "Visible": "True"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Excel"
+            }
+          ],
+          "children": [
+            {
+              "name": "Get First Free Row On Column",
+              "type": "ACTION",
+              "rawType": "Excel.GetFirstFreeRowOnColumn",
+              "indent": 4,
+              "lineNumber": 3,
+              "properties": {
+                "Column": "1",
+                "StoreTo": "%FreeRow%"
+              },
+              "variables": [
+                "FreeRow"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Get First Free Row On Column"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "LOOP FROM 2 TO %FreeRow% - 1 STEP 1",
+              "type": "LOOP",
+              "rawType": "LOOP",
+              "indent": 4,
+              "lineNumber": 4,
+              "properties": {},
+              "variables": [
+                "FreeRow",
+                "CurrentItem"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "FROM 2 TO "
+                },
+                {
+                  "type": "variable",
+                  "value": "%FreeRow%",
+                  "target": "FreeRow"
+                },
+                {
+                  "type": "text",
+                  "value": " - 1 STEP 1"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Read Cell",
+                  "type": "ACTION",
+                  "rawType": "Excel.ReadFromExcel.ReadCell",
+                  "indent": 8,
+                  "lineNumber": 5,
+                  "properties": {
+                    "Column": "1",
+                    "Row": "%CurrentItem%",
+                    "StoreTo": "%Name%"
+                  },
+                  "variables": [
+                    "CurrentItem",
+                    "Name"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Read Cell"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Read Cell",
+                  "type": "ACTION",
+                  "rawType": "Excel.ReadFromExcel.ReadCell",
+                  "indent": 8,
+                  "lineNumber": 6,
+                  "properties": {
+                    "Column": "2",
+                    "Row": "%CurrentItem%",
+                    "StoreTo": "%Email%"
+                  },
+                  "variables": [
+                    "CurrentItem",
+                    "Email"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Read Cell"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "IF %Name% = $''''''",
+                  "type": "CONDITION",
+                  "rawType": "IF",
+                  "indent": 8,
+                  "lineNumber": 7,
+                  "properties": {},
+                  "variables": [
+                    "Name"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%Name%",
+                      "target": "Name"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"\""
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "Show Message Box",
+                      "type": "ACTION",
+                      "rawType": "Display.ShowMessageBox",
+                      "indent": 12,
+                      "lineNumber": 8,
+                      "properties": {
+                        "Buttons": "Display.Buttons.OK",
+                        "DefaultButton": "Display.DefaultButton.Button1",
+                        "Icon": "Display.Icon.Warning",
+                        "IsTopMost": "False",
+                        "Message": "Empty name at row %CurrentItem%"
+                      },
+                      "variables": [
+                        "CurrentItem"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Show Message Box"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "name": "Else",
+                      "type": "ELSE",
+                      "rawType": "ELSE",
+                      "indent": 8,
+                      "lineNumber": 9,
+                      "properties": {},
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Else"
+                        }
+                      ],
+                      "children": [
+                        {
+                          "name": "Set Variable",
+                          "type": "VARIABLE",
+                          "rawType": "Variables.SetVariable",
+                          "indent": 12,
+                          "lineNumber": 10,
+                          "properties": {
+                            "Name": "%Output%",
+                            "Value": "%Name% + $''' \u003c''' + %Email% + $'''\u003e'''",
+                            "_output": "Output"
+                          },
+                          "variables": [
+                            "Output",
+                            "Name",
+                            "Email"
+                          ],
+                          "tokens": [
+                            {
+                              "type": "text",
+                              "value": "%"
+                            },
+                            {
+                              "type": "variable",
+                              "value": "%Output%",
+                              "target": "Output"
+                            },
+                            {
+                              "type": "text",
+                              "value": "%"
+                            },
+                            {
+                              "type": "text",
+                              "value": " = "
+                            },
+                            {
+                              "type": "variable",
+                              "value": "%Name%",
+                              "target": "Name"
+                            },
+                            {
+                              "type": "text",
+                              "value": " + "
+                            },
+                            {
+                              "type": "string",
+                              "value": "\" \u003c\""
+                            },
+                            {
+                              "type": "text",
+                              "value": " + "
+                            },
+                            {
+                              "type": "variable",
+                              "value": "%Email%",
+                              "target": "Email"
+                            },
+                            {
+                              "type": "text",
+                              "value": " + "
+                            },
+                            {
+                              "type": "string",
+                              "value": "\"\u003e\""
+                            }
+                          ],
+                          "children": []
+                        },
+                        {
+                          "name": "Write To File",
+                          "type": "ACTION",
+                          "rawType": "Text.WriteToFile",
+                          "indent": 12,
+                          "lineNumber": 11,
+                          "properties": {
+                            "AppendNewLine": "True",
+                            "FilePath": "C:\\\\output\\\\contacts.txt",
+                            "IfFileExists": "Append",
+                            "TextToWrite": "%Output%"
+                          },
+                          "variables": [
+                            "Output"
+                          ],
+                          "tokens": [
+                            {
+                              "type": "text",
+                              "value": "Write To File"
+                            }
+                          ],
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "name": "End If",
+                      "type": "END",
+                      "rawType": "END",
+                      "indent": 8,
+                      "lineNumber": 12,
+                      "properties": {
+                        "_parentType": "CONDITION"
+                      },
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "End If"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "name": "End Loop",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 4,
+                  "lineNumber": 13,
+                  "properties": {
+                    "_parentType": "LOOP"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End Loop"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "Save As",
+              "type": "ACTION",
+              "rawType": "Excel.SaveAs",
+              "indent": 4,
+              "lineNumber": 14,
+              "properties": {
+                "Document": "%ExcelInstance%",
+                "FilePath": "C:\\\\output\\\\backup.xlsx"
+              },
+              "variables": [
+                "ExcelInstance"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Save As"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "On Block Error",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 0,
+          "lineNumber": 15,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "On Block Error"
+            }
+          ],
+          "children": [
+            {
+              "name": "Show Message Box",
+              "type": "ACTION",
+              "rawType": "Display.ShowMessageBox",
+              "indent": 4,
+              "lineNumber": 16,
+              "properties": {
+                "Buttons": "Display.Buttons.OK",
+                "DefaultButton": "Display.DefaultButton.Button1",
+                "Icon": "Display.Icon.Error",
+                "IsTopMost": "False",
+                "Message": "Excel error occurred"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Show Message Box"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 17,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Close Excel",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel",
+          "indent": 0,
+          "lineNumber": 18,
+          "properties": {
+            "SaveChanges": "False"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Excel"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "FormatReport",
+      "blocks": [
+        {
+          "name": "Launch Excel",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel",
+          "indent": 0,
+          "lineNumber": 21,
+          "properties": {
+            "LoadAddIns": "False",
+            "Visible": "True"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Excel"
+            }
+          ],
+          "children": [
+            {
+              "name": "Set Cell Format",
+              "type": "ACTION",
+              "rawType": "Excel.SetCellFormat",
+              "indent": 4,
+              "lineNumber": 22,
+              "properties": {
+                "CellFormat": "Excel.CellFormat.Bold",
+                "Column": "1",
+                "Row": "1"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Set Cell Format"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Set Cell Format",
+              "type": "ACTION",
+              "rawType": "Excel.SetCellFormat",
+              "indent": 4,
+              "lineNumber": 23,
+              "properties": {
+                "CellFormat": "Excel.CellFormat.Bold",
+                "Column": "2",
+                "Row": "1"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Set Cell Format"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Set Variable",
+              "type": "VARIABLE",
+              "rawType": "Variables.SetVariable",
+              "indent": 4,
+              "lineNumber": 24,
+              "properties": {
+                "Name": "%Header%",
+                "Value": "Name,Email",
+                "_output": "Header"
+              },
+              "variables": [
+                "Header"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "%"
+                },
+                {
+                  "type": "variable",
+                  "value": "%Header%",
+                  "target": "Header"
+                },
+                {
+                  "type": "text",
+                  "value": "%"
+                },
+                {
+                  "type": "text",
+                  "value": " = "
+                },
+                {
+                  "type": "text",
+                  "value": "Name,Email"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Write To File",
+              "type": "ACTION",
+              "rawType": "Text.WriteToFile",
+              "indent": 4,
+              "lineNumber": 25,
+              "properties": {
+                "AppendNewLine": "False",
+                "FilePath": "C:\\\\output\\\\header.txt",
+                "IfFileExists": "Overwrite",
+                "TextToWrite": "%Header%"
+              },
+              "variables": [
+                "Header"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Write To File"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Close Excel",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel",
+          "indent": 0,
+          "lineNumber": 26,
+          "properties": {
+            "SaveChanges": "True"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Excel"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 18,
+      "message": "unclosed block: Close Excel",
+      "severity": "error",
+      "snippet": "Excel.CloseExcel"
+    },
+    {
+      "line": 26,
+      "message": "unclosed block: Close Excel",
+      "severity": "error",
+      "snippet": "Excel.CloseExcel"
+    }
+  ],
+  "metadata": {
+    "blockCount": 23,
+    "subflowCount": 2,
+    "maxDepth": 5,
+    "rawLineCount": 28
+  }
+}

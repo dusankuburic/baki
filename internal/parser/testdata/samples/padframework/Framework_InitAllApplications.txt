@@ -1,0 +1,4 @@
+# Open applications used in the process.
+Excel.LaunchExcel.LaunchAndOpenUnderExistingProcess Path: Config['PathInputFile'] Visible: False ReadOnly: True Instance=> ExcelInputFile
+Excel.ReadFromExcel.ReadCells Instance: ExcelInputFile StartColumn: $'''A''' StartRow: 3 EndColumn: $'''H''' EndRow: 8 FirstLineIsHeader: True GetCellContentsMode: Excel.GetCellContentsMode.PlainText RangeValue=> TransactionData
+Excel.CloseExcel.Close Instance: ExcelInputFile

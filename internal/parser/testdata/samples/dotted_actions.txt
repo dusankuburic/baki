@@ -1,0 +1,35 @@
+#Region "Main"
+    COMMENT  Dotted action format sample (newer PAD exports)
+    DateTime.GetCurrentDateTime DateTimeFormat: DateTime.DateTimeFormat.DateAndTime TimeZone: TimeZoneInfo.Local => CurrentDateTime
+    Text.ToText TextToConvert: %CurrentDateTime% => CurrentDateText
+    Variables.SetVariable NewValue: $'''%CurrentDateText%''' Name: DisplayDate
+    Display.ShowMessageBox Message: $'''Current date: %DisplayDate%''' Icon: Display.Icon.Information Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 => ButtonPressed
+    LOOP FOREACH Item IN %ItemList%
+        IF %Item% = Special
+            Text.ToUpper Text: %Item% => UpperItem
+            Variables.SetVariable NewValue: %UpperItem% Name: ProcessedItem
+        ELSE
+            Variables.SetVariable NewValue: %Item% Name: ProcessedItem
+        END
+    END
+    ON BLOCK ERROR
+        Display.ShowMessageBox Message: $'''Error occurred''' Icon: Display.Icon.Error
+    END
+    WebAutomation.LaunchBrowser BrowserType: WebAutomation.BrowserType.Chrome Timeout: 30 => Browser
+    WebAutomation.NavigateTo Url: $'''https://example.com''' BrowserInstance: %Browser%
+    WebAutomation.CloseBrowser BrowserInstance: %Browser%
+#EndRegion
+#Region "DataProcessing"
+    Excel.LaunchExcel Visible: True => ExcelInstance
+    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:D100''' => ExcelData
+    LOOP FOREACH CurrentRow IN %ExcelData%
+        SET RowData TO %CurrentRow%
+        IF %RowData['Active']% = True
+            COMMENT  Process active row
+            Text.Concatenate Text1: %RowData['FirstName']% Text2: $''' ''' Text3: %RowData['LastName']% => FullName
+            Variables.SetVariable NewValue: %FullName% Name: CurrentUserName
+        END
+    END
+    Excel.CloseExcel Instance: %ExcelInstance% SaveBeforeClosing: True
+    File.WriteText File: $'''C:\output\results.txt''' TextToWrite: $'''Processed user: %CurrentUserName%''' Encoding: File.TextEncoding.UTF8
+#EndRegion

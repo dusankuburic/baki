@@ -1,0 +1,1 @@
+# Force the termination of the used applications.

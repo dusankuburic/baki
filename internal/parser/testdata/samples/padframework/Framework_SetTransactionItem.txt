@@ -1,0 +1,6 @@
+# Get a transaction item from the specified source.
+IF TransactionNumber <= TransactionData.RowsCount THEN
+    SET TransactionItem TO TransactionData[TransactionNumber - 1]
+ELSE
+    SET TransactionItem TO $'''%''%'''
+END

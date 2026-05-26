@@ -1,0 +1,31 @@
+import {request} from './client'
+import type {ProviderInfo, ProviderTestResult, DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types/domain'
+
+export const providersApi = {
+  listProviders: (): Promise<ProviderInfo[]> =>
+    request('/api/providers/list', undefined, 'GET'),
+
+  saveApiKey: (provider: string, key: string): Promise<void> =>
+    request('/api/keys/save', { provider, key }),
+
+  hasApiKey: (provider: string): Promise<boolean> =>
+    request('/api/keys/has', { provider }),
+
+  deleteApiKey: (provider: string): Promise<void> =>
+    request('/api/keys/delete', { provider }),
+
+  testProviderConnection: (provider: string): Promise<ProviderTestResult> =>
+    request('/api/providers/test', { provider }),
+
+  startGitHubAuth: (): Promise<DeviceAuthResponse> =>
+    request('/api/providers/github/start', undefined, 'GET'),
+
+  pollGitHubAuth: (deviceCode: string): Promise<GitHubAuthResult> =>
+    request('/api/providers/github/poll', { deviceCode }),
+
+  revokeGitHubAuth: (): Promise<void> =>
+    request('/api/providers/github/revoke', undefined, 'GET'),
+
+  getGitHubUser: (): Promise<GitHubUser | null> =>
+    request('/api/providers/github/user', undefined, 'GET'),
+}

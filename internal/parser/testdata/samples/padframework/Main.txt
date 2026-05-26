@@ -1,0 +1,31 @@
+/# [Process title]
+[Process description]
+[Additional information (e.g., author, contact information and applications involved and required external setup)]#/
+SET PathToConfig TO $'''C:\\Users\\dusanku\\Desktop\\Process Configurations\\Framework Folder Setup\\Config.xlsx'''
+DISABLE CALL Framework_TestBench
+CALL Framework_InitAllSettings
+SET LogLevel TO $'''Info'''
+SET LogMessage TO $'''Process started'''
+CALL Framework_LogMessage
+CALL Framework_KillAllProcesses
+CALL Framework_InitAllApplications
+CALL Framework_GetTransactionData
+LABEL SetTransactionItem
+CALL Framework_SetTransactionItem
+IF IsNotEmpty(TransactionItem) THEN
+    BLOCK ProcessException
+ON BLOCK ERROR all
+    CALL Framework_ProcessErrorHandler
+END
+        CALL Framework_Process
+    END
+    CALL Framework_SetTransactionStatus
+    GOTO SetTransactionItem
+ELSE
+    GOTO EndProcess
+END
+LABEL EndProcess
+CALL Framework_CloseAllApplications
+SET LogLevel TO $'''Info'''
+SET LogMessage TO $'''Process finished'''
+CALL Framework_LogMessage

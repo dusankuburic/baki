@@ -1,0 +1,434 @@
+{
+  "name": "nested_flow",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Nested structures test",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Nested structures test"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH Item IN %ItemList%",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [
+            "ItemList",
+            "Item"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Item IN "
+            },
+            {
+              "type": "variable",
+              "value": "%ItemList%",
+              "target": "ItemList"
+            }
+          ],
+          "children": [
+            {
+              "name": "IF %Item% \u003e 10",
+              "type": "CONDITION",
+              "rawType": "IF",
+              "indent": 8,
+              "lineNumber": 4,
+              "properties": {},
+              "variables": [
+                "Item"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%Item%",
+                  "target": "Item"
+                },
+                {
+                  "type": "text",
+                  "value": " \u003e 10"
+                }
+              ],
+              "children": [
+                {
+                  "name": "LOOP FOREACH SubItem IN %SubItemList%",
+                  "type": "LOOP",
+                  "rawType": "LOOP",
+                  "indent": 12,
+                  "lineNumber": 5,
+                  "properties": {},
+                  "variables": [
+                    "SubItemList",
+                    "SubItem"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "SubItem IN "
+                    },
+                    {
+                      "type": "variable",
+                      "value": "%SubItemList%",
+                      "target": "SubItemList"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "IF %SubItem% = %Item%",
+                      "type": "CONDITION",
+                      "rawType": "IF",
+                      "indent": 16,
+                      "lineNumber": 6,
+                      "properties": {},
+                      "variables": [
+                        "SubItem",
+                        "Item"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "variable",
+                          "value": "%SubItem%",
+                          "target": "SubItem"
+                        },
+                        {
+                          "type": "text",
+                          "value": " = "
+                        },
+                        {
+                          "type": "variable",
+                          "value": "%Item%",
+                          "target": "Item"
+                        }
+                      ],
+                      "children": [
+                        {
+                          "name": "Deep nesting found",
+                          "type": "COMMENT",
+                          "rawType": "COMMENT",
+                          "indent": 20,
+                          "lineNumber": 7,
+                          "properties": {},
+                          "variables": [],
+                          "tokens": [
+                            {
+                              "type": "text",
+                              "value": "Deep nesting found"
+                            }
+                          ],
+                          "children": []
+                        },
+                        {
+                          "name": "Show Message Box",
+                          "type": "ACTION",
+                          "rawType": "Display.ShowMessageBox",
+                          "indent": 20,
+                          "lineNumber": 8,
+                          "properties": {
+                            "Message": "Match found: %Item%"
+                          },
+                          "variables": [
+                            "Item"
+                          ],
+                          "tokens": [
+                            {
+                              "type": "text",
+                              "value": "Show Message Box"
+                            }
+                          ],
+                          "children": []
+                        },
+                        {
+                          "name": "End If",
+                          "type": "END",
+                          "rawType": "END",
+                          "indent": 16,
+                          "lineNumber": 9,
+                          "properties": {
+                            "_parentType": "CONDITION"
+                          },
+                          "variables": [],
+                          "tokens": [
+                            {
+                              "type": "text",
+                              "value": "End If"
+                            }
+                          ],
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "name": "End Loop",
+                      "type": "END",
+                      "rawType": "END",
+                      "indent": 12,
+                      "lineNumber": 10,
+                      "properties": {
+                        "_parentType": "LOOP"
+                      },
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "End Loop"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "name": "Else",
+                  "type": "ELSE",
+                  "rawType": "ELSE",
+                  "indent": 8,
+                  "lineNumber": 11,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Else"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "Item is small",
+                      "type": "COMMENT",
+                      "rawType": "COMMENT",
+                      "indent": 12,
+                      "lineNumber": 12,
+                      "properties": {},
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "Item is small"
+                        }
+                      ],
+                      "children": []
+                    },
+                    {
+                      "name": "Set SmallItem",
+                      "type": "VARIABLE",
+                      "rawType": "SET",
+                      "indent": 12,
+                      "lineNumber": 13,
+                      "properties": {
+                        "_output": "SmallItem",
+                        "_value": "%Item%",
+                        "_var": "SmallItem"
+                      },
+                      "variables": [
+                        "Item"
+                      ],
+                      "tokens": [
+                        {
+                          "type": "variable",
+                          "value": "%SmallItem%",
+                          "target": "SmallItem"
+                        },
+                        {
+                          "type": "text",
+                          "value": " = "
+                        },
+                        {
+                          "type": "variable",
+                          "value": "%Item%",
+                          "target": "Item"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "name": "End If",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 14,
+                  "properties": {
+                    "_parentType": "CONDITION"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End If"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 15,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "On Block Error",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 4,
+          "lineNumber": 16,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "On Block Error"
+            }
+          ],
+          "children": [
+            {
+              "name": "LOOP FOREACH Retry IN %RetryList%",
+              "type": "LOOP",
+              "rawType": "LOOP",
+              "indent": 8,
+              "lineNumber": 17,
+              "properties": {},
+              "variables": [
+                "RetryList",
+                "Retry"
+              ],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Retry IN "
+                },
+                {
+                  "type": "variable",
+                  "value": "%RetryList%",
+                  "target": "RetryList"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Retry logic",
+                  "type": "COMMENT",
+                  "rawType": "COMMENT",
+                  "indent": 12,
+                  "lineNumber": 18,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Retry logic"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Set Variable",
+                  "type": "VARIABLE",
+                  "rawType": "Variables.SetVariable",
+                  "indent": 12,
+                  "lineNumber": 19,
+                  "properties": {
+                    "Name": "CurrentRetry",
+                    "NewValue": "%Retry%",
+                    "_output": "CurrentRetry"
+                  },
+                  "variables": [
+                    "Retry"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%CurrentRetry%",
+                      "target": "CurrentRetry"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "''"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "End Loop",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 20,
+                  "properties": {
+                    "_parentType": "LOOP"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End Loop"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 21,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "blockCount": 20,
+    "subflowCount": 1,
+    "maxDepth": 5,
+    "rawLineCount": 23
+  }
+}

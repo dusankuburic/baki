@@ -1,0 +1,33 @@
+#Region "Main"
+    COMMENT  Test all action types
+    WAIT 10
+    SET MyVar TO $'''hello'''
+    Variables.IncreaseVariable Value: 1 Name: Counter
+    Variables.DecreaseVariable Value: 1 Name: Counter
+    Mouse.MoveMouse X: 100 Y: 200 MovementType: Mouse.MovementType.Absolute
+    Keyboard.PressKeys Keys: $'''{Enter}'''
+    System.RunApplication ApplicationPath: $'''notepad.exe''' WindowStyle: System.WindowStyle.Maximized
+    Folder.GetSpecialFolder SpecialFolder: Folder.SpecialFolder.Desktop => DesktopPath
+    File.ReadFromFile File: $'''%DesktopPath%\test.txt''' Encoding: File.TextEncoding.UTF8 => FileContent
+    Text.Replace TextToSearch: %FileContent% TextToFind: $'''old''' IsRegEx: False IgnoreCase: True => ReplacedText
+    Display.ShowMessageBox Message: $'''%ReplacedText%'''
+    Excel.LaunchExcel Visible: False => ExcelInstance
+    Excel.WriteToExcel Instance: %ExcelInstance% Value: %ReplacedText% Column: 1 Row: 1
+    Excel.SaveAs Instance: %ExcelInstance% DocumentFormat: Excel.ExcelFormat.Xlsx File: $'''%DesktopPath%\output.xlsx'''
+    Excel.CloseExcel Instance: %ExcelInstance% SaveBeforeClosing: False
+#EndRegion
+#Region "ProcessList"
+    SET Items TO %List%
+    LOOP FOREACH CurrentItem IN %Items%
+        COMMENT  Process each item
+        IF %CurrentItem% != Empty
+            Text.ToNumber TextToConvert: %CurrentItem% => ItemNumber
+            Variables.SetVariable NewValue: %ItemNumber% Name: LastProcessedItem
+        END
+    END
+#EndRegion
+#Region "Cleanup"
+    COMMENT  Final cleanup
+    File.Delete Files: $'''%DesktopPath%\temp*.txt'''
+    Display.ShowMessageBox Message: $'''Cleanup complete. Last item: %LastProcessedItem%'''
+#EndRegion

@@ -1,0 +1,19 @@
+#Region "Main"
+Display.ShowMessageBox Message: $'''Starting web automation''' Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False
+WebAutomation.LaunchFirefox Url: $'''https://example.com''' WindowStyle: WebAutomation.BrowserWindowStyle.Normal ClearCache: False ClearCookies: False
+    WebAutomation.FillTextByText Text: $'''username''' FillWith: $'''%Username%'''
+    WebAutomation.FillTextByText Text: $'''password''' FillWith: $'''%Password%'''
+    WebAutomation.ClickByText Text: $'''Sign in'''
+WAIT 2
+    WebAutomation.GetElementByText Text: $'''Welcome'''
+WebAutomation.ClickByText Text: $'''Dashboard'''
+WebAutomation.GetDetailsOfElement Attribute: $'''href''' StoreTo: %DashboardUrl%
+WebAutomation.CloseWindow
+IF %DashboardUrl% = $'''https://example.com/dashboard''' THEN
+    Display.ShowMessageBox Message: $'''Login successful''' Icon: Display.Icon.Information Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False
+ELSE
+    Display.ShowMessageBox Message: $'''Login failed''' Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: False
+END
+SET Username TO $'''admin'''
+SET Password TO $'''super-secret-password'''
+#EndRegion

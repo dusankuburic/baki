@@ -1,0 +1,10 @@
+# Handle exceptions that happened in the process by restarting all applications
+ERROR => LastError Reset: True
+SET SystemException TO LastError.Message
+BLOCK CloseAllApplicationsException
+ON BLOCK ERROR all
+    CALL Framework_KillAllProcesses
+END
+    CALL Framework_CloseAllApplications
+END
+CALL Framework_InitAllApplications

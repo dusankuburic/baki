@@ -1,0 +1,120 @@
+import {useEffect, useState} from 'react'
+import {analysisApi} from '@/api'
+import type {Rule, RuleConfig, Severity} from '@/types/domain'
+import {Switch} from '@/components/shared'
+import {Shield, AlertCircle, AlertTriangle, Info} from 'lucide-react'
+import SegmentedControl from '@/components/shared/SegmentedControl'
+import clsx from 'clsx'
+
+export default function RulesPanel() {
+  const [rules, setRules] = useState<Rule[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    analysisApi.getRules().then(res => {
+      setRules(res as any || [])
+      setLoading(false)
+    })
+  }, [])
+
+  const handleToggle = async (ruleId: string, enabled: boolean) => {
+    const rule = rules.find(r => r.id === ruleId)
+    if (!rule) return
+    
+    try {
+      const config: RuleConfig = {
+        enabled,
+        severity: rule.defaultSeverity // Use current or default
+      }
+      await analysisApi.updateRuleConfig(ruleId, config)
+      setRules(prev => prev.map(r => r.id === ruleId ? {...r, enabled} : r))
+    } catch (err) {
+      console.error('Failed to update rule:', err)
+    }
+  }
+
+  const handleSeverityChange = async (ruleId: string, severity: Severity) => {
+    const rule = rules.find(r => r.id === ruleId)
+    if (!rule) return
+
+    try {
+      const config: RuleConfig = {
+        enabled: rule.enabled,
+        severity: severity
+      }
+      await analysisApi.updateRuleConfig(ruleId, config)
+      setRules(prev => prev.map(r => r.id === ruleId ? {...r, defaultSeverity: severity} : r))
+    } catch (err) {
+      console.error('Failed to update rule severity:', err)
+    }
+  }
+
+  if (loading) return <div className="p-8 text-center text-text-tertiary">Loading rules...</div>
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
+          <Shield size={20} className="text-brand-500" />
+          Analysis Rules
+        </h2>
+        <p className="text-sm text-text-secondary mt-1">
+          Configure which static analysis rules are active and their reporting severity.
+        </p>
+      </div>
+
+      <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">
+        {rules.map((rule, i) => (
+          <div 
+            key={rule.id} 
+            className={clsx(
+              "p-4 flex flex-col gap-3 transition-colors",
+              i !== rules.length - 1 && "border-bottom border-border-subtle",
+              !rule.enabled && "opacity-60 bg-surface-2/30"
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-text-primary">{rule.name}</h3>
+                  <span className="text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-surface-3 text-text-tertiary">
+                    {rule.category}
+                  </span>
+                </div>
+                <p className="text-xs text-text-tertiary mt-1">{rule.description}</p>
+              </div>
+              <Switch 
+                checked={rule.enabled} 
+                onChange={(checked) => handleToggle(rule.id, checked)} 
+              />
+            </div>
+
+            {rule.enabled && (
+              <div className="flex items-center gap-4 animate-fade-in">
+                <span className="text-[10px] font-bold uppercase text-text-tertiary">Report as:</span>
+                <SegmentedControl
+                  size="sm"
+                  value={rule.defaultSeverity}
+                  onChange={(v) => handleSeverityChange(rule.id, v as Severity)}
+                  options={[
+                    {value: 'error', label: 'Error', icon: AlertCircle},
+                    {value: 'warning', label: 'Warning', icon: AlertTriangle},
+                    {value: 'info', label: 'Info', icon: Info},
+                  ]}
+                  className="bg-surface-2"
+                />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      
+      <div className="p-4 bg-brand-500/5 border border-brand-500/10 rounded-lg flex gap-3">
+        <Info className="text-brand-500 shrink-0" size={18} />
+        <p className="text-xs text-text-secondary leading-relaxed">
+          <strong>Tip:</strong> Elevate rules like <code className="text-brand-400">missing-delay</code> to <strong>Error</strong> when debugging UI synchronization issues to make them stand out in the findings list.
+        </p>
+      </div>
+    </div>
+  )
+}

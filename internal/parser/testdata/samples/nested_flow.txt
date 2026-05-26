@@ -1,0 +1,22 @@
+#Region "Main"
+    COMMENT  Nested structures test
+    LOOP FOREACH Item IN %ItemList%
+        IF %Item% > 10
+            LOOP FOREACH SubItem IN %SubItemList%
+                IF %SubItem% = %Item%
+                    COMMENT  Deep nesting found
+                    Display.ShowMessageBox Message: $'''Match found: %Item%'''
+                END
+            END
+        ELSE
+            COMMENT  Item is small
+            SET SmallItem TO %Item%
+        END
+    END
+    ON BLOCK ERROR
+        LOOP FOREACH Retry IN %RetryList%
+            COMMENT  Retry logic
+            Variables.SetVariable NewValue: %Retry% Name: CurrentRetry
+        END
+    END
+#EndRegion

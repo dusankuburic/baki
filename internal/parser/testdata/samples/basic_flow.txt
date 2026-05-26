@@ -1,0 +1,42 @@
+#Region "Main"
+    COMMENT  This is the main entry point for the flow
+    Display.ShowMessageBox Message: $'''Welcome to PAD Analyzer!''' Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 => ButtonPressed
+    DateTime.GetCurrentDateTime DateTimeFormat: DateTime.DateTimeFormat.DateAndTime => CurrentDateTime
+    SET CurrentDate TO %CurrentDateTime%
+    Variables.SetVariable NewValue: %CurrentDate% Name: FormattedDate
+    COMMENT  Now let's check some conditions
+    IF %ButtonPressed% = OK
+        Display.ShowMessageBox Message: $'''You clicked OK at %FormattedDate%''' Icon: Display.Icon.Information
+    ELSE
+        Display.ShowMessageBox Message: $'''You clicked something else''' Icon: Display.Icon.Warning
+    END
+    COMMENT  Let's loop through some items
+    SET Counter TO 0
+    LOOP WHILE %Counter% < 5
+        Variables.IncreaseVariable Value: 1 Name: Counter
+        Display.ShowMessageBox Message: $'''Counter is now %Counter%'''
+    END
+#EndRegion
+#Region "ProcessData"
+    Excel.LaunchExcel Visible: True => ExcelInstance
+    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' => ExcelData
+    LOOP FOREACH CurrentRow IN %ExcelData%
+        IF %CurrentRow['Status']% = Active
+            COMMENT  Process active row
+            Variables.SetVariable NewValue: %CurrentRow['Name']% Name: ActiveUserName
+            Display.ShowMessageBox Message: $'''Processing user: %ActiveUserName%'''
+        END
+    END
+    Excel.CloseExcel Instance: %ExcelInstance% SaveBeforeClosing: True
+#EndRegion
+#Region "ErrorHandling"
+    ON BLOCK ERROR
+        COMMENT  Handle any errors that occur
+        Display.ShowMessageBox Message: $'''An error occurred: %WorkflowError%''' Icon: Display.Icon.Error
+        SET ErrorHandled TO True
+    END
+    WebAutomation.LaunchBrowser BrowserType: WebAutomation.BrowserType.Chrome => Browser
+    WebAutomation.NavigateTo Url: $'''https://example.com''' BrowserInstance: %Browser%
+    WebAutomation.ClickClick BrowserInstance: %Browser% Control: appmask['Submit Button']
+    WebAutomation.CloseBrowser BrowserInstance: %Browser%
+#EndRegion

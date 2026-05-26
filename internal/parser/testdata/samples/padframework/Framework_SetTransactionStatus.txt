@@ -1,0 +1,19 @@
+IF (SystemException = '' AND BusinessException = '') = $'''True''' THEN
+    SET LogLevel TO $'''Info'''
+    SET LogMessage TO $'''Transaction successful'''
+ELSE
+    SET LogLevel TO $'''Warn'''
+    SET LogMessage TO $'''Transaction not successful'''
+END
+IF IsNotEmpty(SystemException) THEN
+    SET LogLevel TO $'''Error'''
+    SET LogMessage TO SystemException
+END
+IF IsNotEmpty(BusinessException) THEN
+    SET LogLevel TO $'''BusinessException'''
+    SET LogMessage TO BusinessException
+END
+CALL Framework_LogMessage
+SET SystemException TO $'''%''%'''
+SET BusinessException TO $'''%''%'''
+Variables.IncreaseVariable Value: TransactionNumber IncrementValue: 1

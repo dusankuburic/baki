@@ -1,0 +1,19 @@
+#Region "Main"
+    COMMENT  Edge case: empty subflows, special chars, unicode
+    SET EmptyVar TO $''''''
+    SET UnicodeVar TO $'''日本語テスト ñ é ü © ® ™'''
+    SET SpecialChars TO $'''Line1\nLine2\tTabbed "quoted" 'single' '''
+    COMMENT  Empty loop
+    LOOP FOREACH Item IN %EmptyList%
+    END
+    COMMENT  Nested ifs without else
+    IF %x% > 0
+        IF %x% > 10
+            Display.ShowMessageBox Message: $'''Large'''
+        END
+    END
+    COMMENT  Multiple consecutive comments
+    COMMENT  These test comment handling
+    COMMENT  And parser resilience
+    COMMENT  The end
+#EndRegion

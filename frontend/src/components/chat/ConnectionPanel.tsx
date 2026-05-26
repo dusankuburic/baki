@@ -1,0 +1,240 @@
+import {useState, useRef, useEffect, useCallback} from 'react'
+import clsx from 'clsx'
+import {Check, ChevronDown, Settings, Zap} from 'lucide-react'
+import type {ModelDetail, ProviderID} from '@/types/domain'
+import {useUIStore} from '@/stores/uiStore'
+import {Portal} from '../shared'
+
+interface ProviderSummary {
+  id: ProviderID
+  name: string
+  configured: boolean
+  authType?: string
+}
+
+interface Props {
+  providers: ProviderSummary[]
+  selectedProvider: ProviderID
+  onSelectProvider: (id: ProviderID) => void
+  models: ModelDetail[]
+  selectedModel: string
+  onSelectModel: (modelId: string) => void
+  demoRemaining?: number | null
+  onExport?: () => void
+  hasMessages?: boolean
+}
+
+export default function ConnectionPanel({
+  providers,
+  selectedProvider,
+  onSelectProvider,
+  models,
+  selectedModel,
+  onSelectModel,
+  demoRemaining,
+  onExport,
+  hasMessages,
+}: Props) {
+  const [providerOpen, setProviderOpen] = useState(false)
+  const [modelsOpen, setModelsOpen] = useState(false)
+  const [provPos, setProvPos] = useState({top: 0, left: 0, width: 0})
+  const [modPos, setModPos] = useState({top: 0, left: 0, width: 0})
+  const provRef = useRef<HTMLDivElement>(null)
+  const modRef = useRef<HTMLDivElement>(null)
+
+  const updatePositions = useCallback(() => {
+    if (provRef.current) {
+      const rect = provRef.current.getBoundingClientRect()
+      setProvPos({top: rect.bottom + 4, left: rect.left, width: rect.width})
+    }
+    if (modRef.current) {
+      const rect = modRef.current.getBoundingClientRect()
+      setModPos({top: rect.bottom + 4, left: rect.left, width: rect.width})
+    }
+  }, [])
+
+  useEffect(() => {
+    if (providerOpen || modelsOpen) {
+      updatePositions()
+      window.addEventListener('resize', updatePositions)
+      window.addEventListener('scroll', updatePositions, true)
+    }
+    return () => {
+      window.removeEventListener('resize', updatePositions)
+      window.removeEventListener('scroll', updatePositions, true)
+    }
+  }, [providerOpen, modelsOpen, updatePositions])
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (provRef.current && !provRef.current.contains(e.target as Node)) setProviderOpen(false)
+      if (modRef.current && !modRef.current.contains(e.target as Node)) setModelsOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
+  const currentProv = providers.find(p => p.id === selectedProvider)
+  const currentMod = models.find(m => m.id === selectedModel)
+  const connectedCount = providers.filter(p => p.configured).length
+
+  return (
+    <div className="px-3 pt-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <div ref={provRef} className="relative flex-1 min-w-0">
+          <button
+            className={clsx(
+              'flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg text-sm transition-colors border',
+              providerOpen
+                ? 'bg-surface-2 border-border-default'
+                : 'hover:bg-surface-2 border-transparent'
+            )}
+            onClick={() => { setProviderOpen(!providerOpen); setModelsOpen(false) }}
+          >
+            <span className={clsx(
+              'w-2 h-2 rounded-full shrink-0',
+              currentProv?.configured ? 'bg-green-400' : 'bg-red-400'
+            )} />
+            <span className="truncate text-text-secondary font-medium">
+              {currentProv?.name || 'Select provider'}
+            </span>
+            <ChevronDown size={13} className={clsx('shrink-0 text-text-tertiary transition-transform', providerOpen && 'rotate-180')} />
+          </button>
+          {providerOpen && (
+            <Portal>
+              <div 
+                className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in"
+                style={{top: provPos.top, left: provPos.left, width: provPos.width}}
+              >
+                {providers.map(p => (
+                  <button
+                    key={p.id}
+                    className={clsx(
+                      'flex items-center gap-2.5 px-3 py-2 text-sm w-full text-left hover:bg-surface-2 transition-colors',
+                      p.id === selectedProvider && p.configured && 'text-brand-400',
+                      !p.configured && 'opacity-60'
+                    )}
+                    onClick={() => {
+                      if (p.configured) {
+                        onSelectProvider(p.id)
+                        setProviderOpen(false)
+                      } else {
+                        setProviderOpen(false)
+                        setSettingsOpen(true)
+                      }
+                    }}
+                  >
+                    <span className={clsx(
+                      'w-2 h-2 rounded-full shrink-0',
+                      p.configured ? 'bg-green-400' : 'bg-text-tertiary'
+                    )} />
+                    <span className="flex-1 truncate">{p.name}</span>
+                    {p.id === selectedProvider && p.configured && <Check size={14} className="text-brand-400" />}
+                    {!p.configured && (
+                      <span className="text-2xs text-text-tertiary">Configure →</span>
+                    )}
+                  </button>
+                ))}
+                <div className="px-3 py-1.5 border-t border-border-subtle mt-1 flex items-center justify-between">
+                  <span className="text-2xs text-text-tertiary">
+                    {connectedCount} of {providers.length} configured
+                  </span>
+                  <button
+                    className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
+                    onClick={() => { setProviderOpen(false); setSettingsOpen(true) }}
+                  >
+                    <Settings size={11} />
+                    Manage
+                  </button>
+                </div>
+              </div>
+            </Portal>
+          )}
+        </div>
+
+        {hasMessages && onExport && (
+          <button
+            className="p-1.5 rounded-lg hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
+            onClick={onExport}
+            title="Export conversation"
+          >
+            <Zap size={14} />
+          </button>
+        )}
+      </div>
+
+      {demoRemaining !== null && (
+        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-brand-500/10 border border-brand-500/20">
+          <Zap size={11} className="text-brand-400 shrink-0" />
+          <span className="text-2xs text-brand-300">
+            Demo: {demoRemaining} remaining today
+          </span>
+        </div>
+      )}
+
+      {models.length > 1 && (
+        <div ref={modRef} className="relative">
+          <button
+            className={clsx(
+              'flex items-center gap-1.5 w-full px-2.5 py-1.5 rounded-lg text-xs transition-colors border',
+              modelsOpen
+                ? 'bg-surface-2 border-border-default'
+                : 'hover:bg-surface-2 border-transparent'
+            )}
+            onClick={() => { setModelsOpen(!modelsOpen); setProviderOpen(false) }}
+          >
+            <span className="text-text-tertiary">Model:</span>
+            <span className="truncate text-text-secondary font-medium">
+              {currentMod?.displayName || selectedModel}
+            </span>
+            {currentMod && (
+              <span className="text-2xs text-text-tertiary shrink-0">
+                {(currentMod.contextLimit / 1000)}k
+              </span>
+            )}
+            <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform ml-auto', modelsOpen && 'rotate-180')} />
+          </button>
+          {modelsOpen && (
+            <Portal>
+              <div 
+                className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in max-h-[240px] overflow-y-auto"
+                style={{top: modPos.top, left: modPos.left, width: modPos.width}}
+              >
+                {models.map(m => (
+                  <button
+                    key={m.id}
+                    className={clsx(
+                      'flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-surface-2 transition-colors',
+                      m.id === selectedModel && 'bg-brand-500/5'
+                    )}
+                    onClick={() => { onSelectModel(m.id); setModelsOpen(false) }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className={clsx('text-xs font-medium truncate', m.id === selectedModel ? 'text-brand-400' : 'text-text-secondary')}>
+                        {m.displayName}
+                      </div>
+                      <div className="text-2xs text-text-tertiary">
+                        {(m.contextLimit / 1000)}k context
+                        {m.inputCostPerM > 0 && ` · $${m.inputCostPerM}/$${m.outputCostPerM} per 1M`}
+                      </div>
+                    </div>
+                    {m.id === selectedModel && <Check size={13} className="text-brand-400 shrink-0" />}
+                  </button>
+                ))}
+              </div>
+            </Portal>
+          )}
+        </div>
+      )}
+
+      {models.length <= 1 && currentMod && (
+        <div className="flex items-center gap-1.5 px-2.5 text-2xs text-text-tertiary">
+          <span>Using</span>
+          <span className="text-text-secondary font-medium">{currentMod.displayName}</span>
+          <span>· {(currentMod.contextLimit / 1000)}k ctx</span>
+        </div>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,1 @@
+# Do the necessary procedures closing the used applications.

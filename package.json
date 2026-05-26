@@ -1,0 +1,14 @@
+{
+  "name": "pad-analyzer",
+  "version": "0.1.0",
+  "description": "PAD Flow Analyzer",
+  "scripts": {
+    "build:sidecar": "go run scripts/build-sidecar/main.go",
+    "tauri": "tauri",
+    "dev": "npm run build:sidecar && tauri dev",
+    "build": "npm run build:sidecar && tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

@@ -1,0 +1,629 @@
+{
+  "name": "actions_flow",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Test all action types",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Test all action types"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "WAIT 10",
+          "type": "WAIT",
+          "rawType": "WAIT",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "WAIT 10"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set MyVar",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 4,
+          "properties": {
+            "_output": "MyVar",
+            "_value": "$'''hello'''",
+            "_var": "MyVar"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%MyVar%",
+              "target": "MyVar"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"hello\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Increase Variable",
+          "type": "VARIABLE",
+          "rawType": "Variables.IncreaseVariable",
+          "indent": 4,
+          "lineNumber": 5,
+          "properties": {
+            "Name": "Counter",
+            "Value": "1",
+            "_output": "Counter"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Counter%",
+              "target": "Counter"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Decrease Variable",
+          "type": "VARIABLE",
+          "rawType": "Variables.DecreaseVariable",
+          "indent": 4,
+          "lineNumber": 6,
+          "properties": {
+            "Name": "Counter",
+            "Value": "1",
+            "_output": "Counter"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Counter%",
+              "target": "Counter"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Move Mouse",
+          "type": "ACTION",
+          "rawType": "Mouse.MoveMouse",
+          "indent": 4,
+          "lineNumber": 7,
+          "properties": {
+            "MovementType": "Mouse.MovementType.Absolute",
+            "X": "100",
+            "Y": "200"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Move Mouse"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Press Keys",
+          "type": "ACTION",
+          "rawType": "Keyboard.PressKeys",
+          "indent": 4,
+          "lineNumber": 8,
+          "properties": {
+            "Keys": "{Enter}"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Press Keys"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Run Application",
+          "type": "ACTION",
+          "rawType": "System.RunApplication",
+          "indent": 4,
+          "lineNumber": 9,
+          "properties": {
+            "ApplicationPath": "notepad.exe",
+            "WindowStyle": "System.WindowStyle.Maximized"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Run Application"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Special Folder",
+          "type": "ACTION",
+          "rawType": "Folder.GetSpecialFolder",
+          "indent": 4,
+          "lineNumber": 10,
+          "properties": {
+            "SpecialFolder": "Folder.SpecialFolder.Desktop",
+            "_output": "DesktopPath"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Special Folder"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Read From File",
+          "type": "ACTION",
+          "rawType": "File.ReadFromFile",
+          "indent": 4,
+          "lineNumber": 11,
+          "properties": {
+            "Encoding": "File.TextEncoding.UTF8",
+            "File": "%DesktopPath%\\test.txt",
+            "_output": "FileContent"
+          },
+          "variables": [
+            "DesktopPath"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Read From File"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Replace",
+          "type": "ACTION",
+          "rawType": "Text.Replace",
+          "indent": 4,
+          "lineNumber": 12,
+          "properties": {
+            "IgnoreCase": "True",
+            "IsRegEx": "False",
+            "TextToFind": "old",
+            "TextToSearch": "%FileContent%",
+            "_output": "ReplacedText"
+          },
+          "variables": [
+            "FileContent"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Replace"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 13,
+          "properties": {
+            "Message": "%ReplacedText%"
+          },
+          "variables": [
+            "ReplacedText"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Launch Excel",
+          "type": "ACTION",
+          "rawType": "Excel.LaunchExcel",
+          "indent": 4,
+          "lineNumber": 14,
+          "properties": {
+            "Visible": "False",
+            "_output": "ExcelInstance"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Launch Excel"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Write To Excel",
+          "type": "ACTION",
+          "rawType": "Excel.WriteToExcel",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {
+            "Column": "1",
+            "Instance": "%ExcelInstance%",
+            "Row": "1",
+            "Value": "%ReplacedText%"
+          },
+          "variables": [
+            "ExcelInstance",
+            "ReplacedText"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Write To Excel"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Save As",
+          "type": "ACTION",
+          "rawType": "Excel.SaveAs",
+          "indent": 4,
+          "lineNumber": 16,
+          "properties": {
+            "DocumentFormat": "Excel.ExcelFormat.Xlsx",
+            "File": "%DesktopPath%\\output.xlsx",
+            "Instance": "%ExcelInstance%"
+          },
+          "variables": [
+            "ExcelInstance",
+            "DesktopPath"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Save As"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close Excel",
+          "type": "ACTION",
+          "rawType": "Excel.CloseExcel",
+          "indent": 4,
+          "lineNumber": 17,
+          "properties": {
+            "Instance": "%ExcelInstance%",
+            "SaveBeforeClosing": "False"
+          },
+          "variables": [
+            "ExcelInstance"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Excel"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "ProcessList",
+      "blocks": [
+        {
+          "name": "Set Items",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 20,
+          "properties": {
+            "_output": "Items",
+            "_value": "%List%",
+            "_var": "Items"
+          },
+          "variables": [
+            "List"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Items%",
+              "target": "Items"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH CurrentItem IN %Items%",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 4,
+          "lineNumber": 21,
+          "properties": {},
+          "variables": [
+            "Items",
+            "CurrentItem"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "CurrentItem IN "
+            },
+            {
+              "type": "variable",
+              "value": "%Items%",
+              "target": "Items"
+            }
+          ],
+          "children": [
+            {
+              "name": "Process each item",
+              "type": "COMMENT",
+              "rawType": "COMMENT",
+              "indent": 8,
+              "lineNumber": 22,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Process each item"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "IF %CurrentItem% != Empty",
+              "type": "CONDITION",
+              "rawType": "IF",
+              "indent": 8,
+              "lineNumber": 23,
+              "properties": {},
+              "variables": [
+                "CurrentItem"
+              ],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%CurrentItem%",
+                  "target": "CurrentItem"
+                },
+                {
+                  "type": "text",
+                  "value": " != Empty"
+                }
+              ],
+              "children": [
+                {
+                  "name": "To Number",
+                  "type": "ACTION",
+                  "rawType": "Text.ToNumber",
+                  "indent": 12,
+                  "lineNumber": 24,
+                  "properties": {
+                    "TextToConvert": "%CurrentItem%",
+                    "_output": "ItemNumber"
+                  },
+                  "variables": [
+                    "CurrentItem"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "To Number"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Set Variable",
+                  "type": "VARIABLE",
+                  "rawType": "Variables.SetVariable",
+                  "indent": 12,
+                  "lineNumber": 25,
+                  "properties": {
+                    "Name": "LastProcessedItem",
+                    "NewValue": "%ItemNumber%",
+                    "_output": "LastProcessedItem"
+                  },
+                  "variables": [
+                    "ItemNumber"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%LastProcessedItem%",
+                      "target": "LastProcessedItem"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "''"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "End If",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 8,
+                  "lineNumber": 26,
+                  "properties": {
+                    "_parentType": "CONDITION"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End If"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 27,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "blocks": [
+        {
+          "name": "Final cleanup",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 30,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Final cleanup"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Delete",
+          "type": "ACTION",
+          "rawType": "File.Delete",
+          "indent": 4,
+          "lineNumber": 31,
+          "properties": {
+            "Files": "%DesktopPath%\\temp*.txt"
+          },
+          "variables": [
+            "DesktopPath"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Delete"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 32,
+          "properties": {
+            "Message": "Cleanup complete. Last item: %LastProcessedItem%"
+          },
+          "variables": [
+            "LastProcessedItem"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 17,
+      "message": "unclosed block: Close Excel",
+      "severity": "error",
+      "snippet": "Excel.CloseExcel"
+    },
+    {
+      "line": 32,
+      "message": "unclosed block: Show Message Box",
+      "severity": "error",
+      "snippet": "Display.ShowMessageBox"
+    }
+  ],
+  "metadata": {
+    "blockCount": 27,
+    "subflowCount": 3,
+    "maxDepth": 3,
+    "rawLineCount": 34
+  }
+}

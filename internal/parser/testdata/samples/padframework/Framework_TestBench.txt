@@ -1,0 +1,6 @@
+/# Use this subflow to test actions.
+Make sure to enable it in the Main to run the tests.#/
+CALL Framework_InitAllSettings
+CALL Framework_InitAllApplications
+CALL Framework_CloseAllApplications
+EXIT Code: 0

@@ -1,0 +1,1 @@
+# Extract all items that the bot needs to process in a variable

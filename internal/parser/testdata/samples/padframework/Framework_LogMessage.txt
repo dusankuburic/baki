@@ -1,0 +1,17 @@
+/# Log a message to a locally saved Text file.
+A new log file is created for each execution day.#/
+DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTime
+Text.ConvertDateTimeToText.FromCustomDateTime DateTime: CurrentDateTime CustomFormat: $'''dd.MM.yyyy''' Result=> FormattedDate
+Text.ConvertDateTimeToText.FromCustomDateTime DateTime: CurrentDateTime CustomFormat: $'''HH:mm:ss''' Result=> FormattedTime
+IF (File.IfFile.DoesNotExist File: $'''%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt''') THEN
+    File.WriteText File: $'''%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt''' TextToWrite: FormattedTime + ' | ' + LogLevel + ' | ' + LogMessage AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+ELSE
+    IF LogMessage = $'''Worker started''' THEN
+        File.WriteText File: $'''%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt''' TextToWrite: $'''
+----------------------------------------------------
+ 
+%FormattedTime + ' | ' + LogLevel + ' | ' + LogMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+    ELSE
+        File.WriteText File: $'''%Config['PathToLogFile'] + Config['ProcessName'] + '_' + FormattedDate%.txt''' TextToWrite: FormattedTime + ' | ' + LogLevel + ' | ' + LogMessage AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+    END
+END
