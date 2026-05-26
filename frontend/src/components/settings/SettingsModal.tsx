@@ -1,17 +1,25 @@
 import {useState} from 'react'
 import clsx from 'clsx'
 import Modal from '@/components/shared/Modal'
-import ProvidersPanel from './ProvidersPanel'
-import AppearancePanel from './AppearancePanel'
-import RulesPanel from './RulesPanel'
-import ShortcutsPanel from './ShortcutsPanel'
-import PrivacyPanel from './PrivacyPanel'
-import AboutPanel from './AboutPanel'
+import {
+  GeneralPanel,
+  ProvidersPanel,
+  AIBehaviorPanel,
+  AppearancePanel,
+  ParserPanel,
+  RulesPanel,
+  ShortcutsPanel,
+  PrivacyPanel,
+  AboutPanel
+} from './index'
 
-type SettingsSection = 'providers' | 'appearance' | 'analysis' | 'shortcuts' | 'privacy' | 'about'
+type SettingsSection = 'general' | 'parser' | 'accounts' | 'behavior' | 'appearance' | 'analysis' | 'shortcuts' | 'privacy' | 'about'
 
 const sections: {id: SettingsSection; label: string}[] = [
-  {id: 'providers', label: 'Providers'},
+  {id: 'general', label: 'General'},
+  {id: 'parser', label: 'Parser'},
+  {id: 'accounts', label: 'AI Accounts'},
+  {id: 'behavior', label: 'AI Behavior'},
   {id: 'appearance', label: 'Appearance'},
   {id: 'analysis', label: 'Analysis'},
   {id: 'shortcuts', label: 'Shortcuts'},
@@ -25,7 +33,7 @@ interface Props {
 }
 
 export default function SettingsModal({isOpen, onClose}: Props) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>('providers')
+  const [activeSection, setActiveSection] = useState<SettingsSection>('general')
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="xl" closeOnEsc={true}>
@@ -47,7 +55,10 @@ export default function SettingsModal({isOpen, onClose}: Props) {
           ))}
         </nav>
         <div className="flex-1 p-6 overflow-y-auto max-h-[70vh]">
-          {activeSection === 'providers' && <ProvidersPanel />}
+          {activeSection === 'general' && <GeneralPanel />}
+          {activeSection === 'parser' && <ParserPanel />}
+          {activeSection === 'accounts' && <ProvidersPanel />}
+          {activeSection === 'behavior' && <AIBehaviorPanel />}
           {activeSection === 'appearance' && <AppearancePanel />}
           {activeSection === 'analysis' && <RulesPanel />}
           {activeSection === 'shortcuts' && <ShortcutsPanel />}

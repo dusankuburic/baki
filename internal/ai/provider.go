@@ -90,3 +90,14 @@ type messageRole struct {
 func ProviderError(provider string, code int, msg string) error {
 	return fmt.Errorf("%s API status %d: %s", provider, code, msg)
 }
+
+// ModelContextLimit returns the context limit for a specific model, falling
+// back to the provider-wide limit when the model is not in the model list.
+func ModelContextLimit(p Provider, model string) int {
+	for _, m := range p.Models() {
+		if m.ID == model && m.ContextLimit > 0 {
+			return m.ContextLimit
+		}
+	}
+	return p.ContextLimit()
+}

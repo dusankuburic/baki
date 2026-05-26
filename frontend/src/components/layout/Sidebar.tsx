@@ -1,6 +1,7 @@
 import {useCallback, useMemo} from 'react'
+import clsx from 'clsx'
 import {useKeyboard} from '@/hooks/useKeyboard'
-import {FolderOpen} from 'lucide-react'
+import {FolderOpen, FolderTree, BarChart2} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import FileHeader from '@/components/sidebar/FileHeader'
 import FileList from '@/components/sidebar/FileList'
@@ -181,18 +182,24 @@ export default function Sidebar() {
                 />
             )}
 
-            <div className="flex border-b border-border-default">
-                {(['explorer', 'variables'] as const).map(tab => (
+            <div className="flex items-center h-10 px-2 gap-1 border-b border-border-default bg-surface-1">
+                {([
+                    {value: 'explorer'  as const, label: 'Explorer',  icon: FolderTree},
+                    {value: 'variables' as const, label: 'Variables', icon: BarChart2},
+                ]).map(({value, label, icon: Icon}) => (
                     <button
-                        key={tab}
-                        className={`flex-1 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                            sidebarTab === tab
-                                ? 'text-brand-500 border-b-2 border-brand-500'
-                                : 'text-text-tertiary hover:text-text-secondary border-b-2 border-transparent'
-                        }`}
-                        onClick={() => setSidebarTab(tab)}
+                        key={value}
+                        className={clsx(
+                            'flex-1 flex items-center justify-center gap-1.5 h-7 px-2 text-xs font-medium',
+                            'rounded-md transition-colors duration-fast',
+                            sidebarTab === value
+                                ? 'bg-surface-3 text-text-primary shadow-xs'
+                                : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-2'
+                        )}
+                        onClick={() => setSidebarTab(value)}
                     >
-                        {tab === 'explorer' ? 'Explorer' : 'Variables'}
+                        <Icon size={13} />
+                        {label}
                     </button>
                 ))}
             </div>

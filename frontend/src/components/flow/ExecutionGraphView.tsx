@@ -89,8 +89,9 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
   useEffect(() => {
     if (!containerRef.current) return
 
-    const isDark = resolvedTheme === 'dark'
-    
+    const cs = getComputedStyle(document.documentElement)
+    const cssVar = (v: string) => cs.getPropertyValue(v).trim()
+
     const instance = cytoscape({
       container: containerRef.current,
       style: [
@@ -100,11 +101,11 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
             'shape': 'round-rectangle',
             'width': '220px',
             'height': '80px',
-            'background-color': isDark ? '#1c1c21' : '#ffffff',
+            'background-color': cssVar('--surface-2'),
             'border-width': 2,
-            'border-color': isDark ? '#3f3f47' : '#e4e4e7',
+            'border-color': cssVar('--border-strong'),
             'label': 'data(label)',
-            'color': isDark ? '#f4f4f5' : '#18181b',
+            'color': cssVar('--text-primary'),
             'font-size': '14px',
             'font-weight': 'bold',
             'text-valign': 'center',
@@ -118,15 +119,15 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
           style: {
             'border-color': '#6366f1',
             'border-width': 3,
-            'background-color': isDark ? '#23232b' : '#f5f7ff'
+            'background-color': cssVar('--surface-3')
           }
         },
         {
           selector: 'edge',
           style: {
             'width': 2,
-            'line-color': isDark ? '#3f3f47' : '#e4e4e7',
-            'target-arrow-color': isDark ? '#3f3f47' : '#e4e4e7',
+            'line-color': cssVar('--border-strong'),
+            'target-arrow-color': cssVar('--border-strong'),
             'target-arrow-shape': 'triangle',
             'curve-style': 'bezier'
           }

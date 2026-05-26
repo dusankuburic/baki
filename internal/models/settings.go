@@ -3,9 +3,15 @@ package models
 type ThemeMode string
 
 const (
-	ThemeDark   ThemeMode = "dark"
-	ThemeLight  ThemeMode = "light"
-	ThemeSystem ThemeMode = "system"
+	ThemeDark       ThemeMode = "dark"
+	ThemeLight      ThemeMode = "light"
+	ThemeSystem     ThemeMode = "system"
+	ThemeMidnight   ThemeMode = "midnight"
+	ThemeWarm       ThemeMode = "warm"
+	ThemeTokyoNight ThemeMode = "tokyo-night"
+	ThemeOneDark    ThemeMode = "one-dark"
+	ThemeDracula    ThemeMode = "dracula"
+	ThemeNord       ThemeMode = "nord"
 )
 
 type AppSettings struct {

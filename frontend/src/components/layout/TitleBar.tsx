@@ -1,6 +1,7 @@
-import {Minus, Square, X} from 'lucide-react'
+import {Minus, Square, X, Settings} from 'lucide-react'
 import {getCurrentWindow} from '@tauri-apps/api/window'
 import {useFlowStore} from '@/stores/flowStore'
+import {useUIStore} from '@/stores/uiStore'
 
 export default function TitleBar() {
     const document = useFlowStore(s => s.document)
@@ -15,6 +16,7 @@ export default function TitleBar() {
         : ['PAD Analyzer']
 
     const win = getCurrentWindow()
+    const toggleSettings = useUIStore(s => s.toggleSettings)
 
     return (
         <div
@@ -33,6 +35,13 @@ export default function TitleBar() {
             </span>
             <div className="flex-1 h-full pointer-events-none" />
             <div className="flex items-center gap-1">
+                <button
+                    onClick={toggleSettings}
+                    className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
+                    title="Settings (Ctrl+,)"
+                >
+                    <Settings size={12} />
+                </button>
                 <button
                     onClick={() => win.minimize()}
                     className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"

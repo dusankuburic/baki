@@ -11,8 +11,8 @@ import (
 )
 
 const githubClientID = "Ov23liihCNhg6umzjTqT"
-const githubDeviceCodeURL = "https://github.com/login/device/code"
-const githubTokenURL = "https://github.com/login/oauth/access_token"
+var githubDeviceCodeURL = "https://github.com/login/device/code"
+var githubTokenURL = "https://github.com/login/oauth/access_token"
 const githubUserURL = "https://api.github.com/user"
 
 type GitHubAuth struct {

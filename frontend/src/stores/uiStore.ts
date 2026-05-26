@@ -2,7 +2,7 @@ import {create} from 'zustand'
 import type {FlowDiff} from '@/types/domain'
 
 interface UiState {
-  resolvedTheme: 'dark' | 'light'
+  resolvedTheme: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
   sidebarTab: 'explorer' | 'variables'
   mainPaneView: 'block' | 'graph' | 'map' | 'local-map' | 'diff'
   inspectorTab: 'details' | 'ai' | 'findings'
@@ -17,7 +17,7 @@ interface UiState {
   graphZoom: number
   activeDiff: FlowDiff | null
 
-  setResolvedTheme: (t: 'dark' | 'light') => void
+  setResolvedTheme: (t: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord') => void
   setSidebarTab: (t: 'explorer' | 'variables') => void
   setMainPaneView: (v: 'block' | 'graph' | 'map' | 'local-map' | 'diff') => void
   setInspectorTab: (t: 'details' | 'ai' | 'findings') => void

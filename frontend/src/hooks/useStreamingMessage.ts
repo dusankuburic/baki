@@ -15,17 +15,21 @@ export function useStreamingMessage(handler: StreamHandler) {
   handlerRef.current = handler
   const activeStreamId = useChatStore(s => s.activeStreamId)
 
-  const registerStream = useCallback((streamId: string) => {
+  const registerStream = useCallback(async (streamId: string) => {
     if (unregisterRef.current) {
       unregisterRef.current()
       unregisterRef.current = null
     }
 
-    const subPromise = subscribeToEvents((event: any) => {
+    // Await the subscription so the SSE connection is fully established
+    // before signalling the backend to start streaming. Without this await,
+    // beginStream can fire while the EventSource is still connecting and all
+    // events get dropped, leaving the UI frozen in the streaming state.
+    const unsub = await subscribeToEvents((event: any) => {
       if (event.name !== 'chat:event') return
       const payload = event.data || {}
       if (payload.streamId !== streamId) return
-      
+
       const type = payload.type
       const data = payload.data || {}
 
@@ -42,7 +46,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       }
     })
 
-    unregisterRef.current = () => { subPromise.then(unsub => unsub()) }
+    unregisterRef.current = unsub
     chatApi.beginStream(streamId).catch(() => {})
   }, [])
 

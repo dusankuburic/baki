@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -108,12 +109,12 @@ func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 			switch {
 			case resp.StatusCode == 401:
 				return nil, ErrApiKeyInvalid
+			case resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code):
+				return nil, ErrInsufficientBalance
 			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
 			case resp.StatusCode >= 500:
 				return nil, fmt.Errorf("glm server error: %s", apiErr.Error.Message)
-			case apiErr.Error.Code == "1113":
-				return nil, ErrInsufficientBalance
 			}
 			return nil, fmt.Errorf("glm API: %s", apiErr.Error.Message)
 		}
@@ -168,10 +169,23 @@ func (g *GLMProvider) Stream(ctx context.Context, req Request, onChunk func(Chun
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr openAIErrorResp
 		if err := json.Unmarshal(errBody, &apiErr); err == nil && apiErr.Error.Message != "" {
+			if resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code) {
+				return ErrInsufficientBalance
+			}
 			return fmt.Errorf("glm stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
 		}
 		return fmt.Errorf("glm stream error (status %d)", resp.StatusCode)
 	}
 
 	return parseOpenAISSE(resp.Body, onChunk)
+}
+
+// isGLMBalanceError reports whether a 429 response is an insufficient-balance
+// error rather than a true rate-limit. z.ai uses the same status code for both.
+func isGLMBalanceError(msg, code string) bool {
+	if code == "1113" {
+		return true
+	}
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "balance") || strings.Contains(msg, "resource package")
 }

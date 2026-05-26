@@ -50,14 +50,6 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 	b.WriteString(req.Flow.Name)
 	b.WriteString("\n\n")
 
-	if len(req.Flow.ParseErrors) > 0 {
-		b.WriteString("## Parse Errors\n\n")
-		for _, pe := range req.Flow.ParseErrors {
-			fmt.Fprintf(&b, "- Line %d: %s\n", pe.Line, pe.Message)
-		}
-		b.WriteString("\n")
-	}
-
 	hasSources := len(req.RawSourceFiles) > 0
 
 	if hasSources {

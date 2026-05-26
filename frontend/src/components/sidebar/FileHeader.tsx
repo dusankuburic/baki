@@ -53,7 +53,7 @@ export default function FileHeader({
     }
 
     return (
-        <div className="flex items-center h-12 px-3 border-b border-border-subtle gap-2">
+        <div className="relative flex items-center h-12 px-3 border-b border-border-subtle gap-2">
             <Tooltip content={document.filePath}>
                 <span className="text-sm font-medium text-text-primary truncate flex-1 select-none">
                     {document.name}
@@ -66,26 +66,24 @@ export default function FileHeader({
             >
                 <FolderOpen size={14} />
             </button>
-            <div className="relative">
-                <button
-                    onClick={() => setMenuOpen(v => !v)}
-                    className={clsx(
-                        'w-6 h-6 flex items-center justify-center rounded-sm text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast',
-                        menuOpen && 'text-text-secondary bg-surface-3'
-                    )}
-                >
-                    <ChevronDown size={14} />
-                </button>
-                {menuOpen && (
-                    <RecentFilesMenu
-                        files={recentFiles}
-                        onSelect={handleRecentSelect}
-                        onRemove={onRemoveRecent}
-                        onClear={onClearRecent}
-                        onClose={() => setMenuOpen(false)}
-                    />
+            <button
+                onClick={() => setMenuOpen(v => !v)}
+                className={clsx(
+                    'w-6 h-6 flex items-center justify-center rounded-sm text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast',
+                    menuOpen && 'text-text-secondary bg-surface-3'
                 )}
-            </div>
+            >
+                <ChevronDown size={14} />
+            </button>
+            {menuOpen && (
+                <RecentFilesMenu
+                    files={recentFiles}
+                    onSelect={handleRecentSelect}
+                    onRemove={onRemoveRecent}
+                    onClear={onClearRecent}
+                    onClose={() => setMenuOpen(false)}
+                />
+            )}
         </div>
     )
 }

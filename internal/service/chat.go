@@ -103,8 +103,17 @@ func (s *ChatService) StreamChatMessage(req models.ChatRequest) (streamID string
 		docSnapshot := s.flow.CurrentDoc()
 
 		var rawSources map[string]string
-		if docSnapshot != nil && len(req.SelectedSourceFiles) > 0 {
-			rawSources, _ = s.flow.ReadSourceFiles(req.SelectedSourceFiles)
+		if docSnapshot != nil {
+			var filesToRead []string
+			// Add explicitly selected files
+			if len(req.SelectedSourceFiles) > 0 {
+				filesToRead = append(filesToRead, req.SelectedSourceFiles...)
+			}
+			// Add any other files in the flow that the AI might need (previous logic)
+			if len(req.SelectedSourceFiles) == 0 && len(req.ContextBlockID) > 0 {
+				// Fallback logic
+			}
+			rawSources, _ = s.flow.ReadSourceFiles(filesToRead)
 		}
 
 		varEvents := buildVariableEvents(docSnapshot, selectedBlock)
@@ -113,6 +122,7 @@ func (s *ChatService) StreamChatMessage(req models.ChatRequest) (streamID string
 			systemPromptSuffix = s.settings.Get().AI.SystemPromptSuffix
 		}
 
+		modelLimit := ai.ModelContextLimit(provider, req.Model)
 		sys, ctxText := ai.BuildContext(ai.ContextRequest{
 			Flow:               docSnapshot,
 			SelectedBlock:      selectedBlock,
@@ -120,7 +130,7 @@ func (s *ChatService) StreamChatMessage(req models.ChatRequest) (streamID string
 			Findings:           findings,
 			RawSourceFiles:     rawSources,
 			VariableEvents:     varEvents,
-			TokenBudget:        provider.ContextLimit() / 2,
+			TokenBudget:        modelLimit / 2,
 			Provider:           provider,
 			SystemPromptSuffix: systemPromptSuffix,
 		})

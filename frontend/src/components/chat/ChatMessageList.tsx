@@ -1,10 +1,14 @@
 import {useRef, useEffect, useCallback, useState} from 'react'
 import {ChevronDown} from 'lucide-react'
+import clsx from 'clsx'
 
 interface Props {
   children: React.ReactNode
   isStreaming?: boolean
 }
+
+const SCROLL_UPDATE_THROTTLE = 120 // ms between scroll updates
+const SCROLL_THRESHOLD = 100 // pixels from bottom to trigger auto-scroll
 
 export default function ChatMessageList({children, isStreaming}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -38,6 +42,23 @@ export default function ChatMessageList({children, isStreaming}: Props) {
     }
   }, [isStreaming])
 
+  // Throttled smooth scroll during streaming
+  useEffect(() => {
+    if (!isStreaming || userScrolledRef.current) return
+
+    const interval = setInterval(() => {
+      const el = containerRef.current
+      if (!el) return
+
+      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      if (distanceToBottom < SCROLL_THRESHOLD) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      }
+    }, SCROLL_UPDATE_THROTTLE)
+
+    return () => clearInterval(interval)
+  }, [isStreaming])
+
   useEffect(() => {
     if (isStreaming && !userScrolledRef.current) {
       const el = containerRef.current
@@ -59,7 +80,10 @@ export default function ChatMessageList({children, isStreaming}: Props) {
     <div className="flex-1 overflow-hidden relative">
       <div
         ref={containerRef}
-        className="h-full overflow-y-auto px-3 py-3 flex flex-col gap-3"
+        className={clsx(
+          'h-full overflow-y-auto px-3 py-3 flex flex-col gap-3 custom-scrollbar',
+          isStreaming && 'is-streaming'
+        )}
         onScroll={handleScroll}
       >
         {children}

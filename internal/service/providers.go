@@ -14,45 +14,40 @@ import (
 
 // ProviderService manages AI provider configuration, authentication, and connectivity.
 type ProviderService struct {
-	ctx     context.Context
-	auth    *ai.GitHubAuth
-	factory *ai.ProviderFactory
+	ctx         context.Context
+	auth        *ai.GitHubAuth
+	copilotAuth *ai.CopilotAuth
+	factory     *ai.ProviderFactory
 }
 
-func NewProviderService(ctx context.Context, auth *ai.GitHubAuth, factory *ai.ProviderFactory) *ProviderService {
-	return &ProviderService{ctx: ctx, auth: auth, factory: factory}
+func NewProviderService(ctx context.Context, auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory) *ProviderService {
+	return &ProviderService{ctx: ctx, auth: auth, copilotAuth: copilotAuth, factory: factory}
 }
 
 func (s *ProviderService) ListProviders() (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
-	type provDef struct {
-		id       string
-		name     string
-		authType string
-		model    ai.Provider
-	}
+	for _, meta := range ai.AvailableProviders() {
+		p := ai.GetMetadataProvider(meta.ID)
+		if p == nil {
+			continue
+		}
 
-	defs := []provDef{
-		{"claude", "Claude", "api_key", ai.NewClaudeProvider("")},
-		{"openai", "OpenAI", "api_key", ai.NewOpenAIProvider("")},
-		{"gemini", "Gemini", "api_key", ai.NewGeminiProvider("")},
-		{"xai", "xAI (Grok)", "api_key", ai.NewXAIProvider("")},
-		{"glm", "GLM (z.ai)", "api_key", ai.NewGLMProvider("")},
-		{"github-models", "GitHub Models", "oauth", ai.NewGitHubModelsProvider("")},
-	}
-
-	for _, d := range defs {
 		configured := false
-		if d.id == "github-models" {
+		switch meta.ID {
+		case "github-models":
 			ok, _ := storage.HasApiKey("github-models-token")
 			configured = ok
-		} else {
-			ok, _ := storage.HasApiKey(d.id)
+		case "copilot":
+			oauthOk, _ := storage.HasApiKey("copilot-oauth-token")
+			patOk, _ := storage.HasApiKey("copilot")
+			configured = oauthOk || patOk
+		default:
+			ok, _ := storage.HasApiKey(meta.ID)
 			configured = ok
 		}
 
-		modelInfos := d.model.Models()
+		modelInfos := p.Models()
 		modelDetails := make([]models.ModelDetail, len(modelInfos))
 		for i, m := range modelInfos {
 			modelDetails[i] = models.ModelDetail{
@@ -65,13 +60,13 @@ func (s *ProviderService) ListProviders() (providers []models.ProviderInfo, err 
 		}
 
 		providers = append(providers, models.ProviderInfo{
-			ID:           d.id,
-			Name:         d.name,
+			ID:           meta.ID,
+			Name:         meta.Name,
 			Configured:   configured,
 			Models:       modelDetails,
-			DefaultModel: d.model.DefaultModel(),
-			ContextLimit: d.model.ContextLimit(),
-			AuthType:     d.authType,
+			DefaultModel: p.DefaultModel(),
+			ContextLimit: p.ContextLimit(),
+			AuthType:     meta.AuthType,
 		})
 	}
 
@@ -146,6 +141,8 @@ func (s *ProviderService) TestProviderConnection(providerID string) (result *mod
 	return &models.ProviderTestResult{Ok: true, Latency: latency}, nil
 }
 
+// --- GitHub Models OAuth ---
+
 func (s *ProviderService) StartGitHubAuth() (resp *ai.DeviceAuthResponse, err error) {
 	defer logger.Guard("App.StartGitHubAuth", &err)
 	return s.auth.StartDeviceFlow(s.ctx)
@@ -180,6 +177,46 @@ func (s *ProviderService) GetGitHubUser() (user *ai.GitHubUser, err error) {
 	token, err := storage.GetApiKey("github-models-token")
 	if err != nil {
 		return nil, fmt.Errorf("no github token: %w", err)
+	}
+	return s.auth.GetUser(s.ctx, token)
+}
+
+// --- GitHub Copilot OAuth ---
+
+func (s *ProviderService) StartCopilotAuth() (resp *ai.DeviceAuthResponse, err error) {
+	defer logger.Guard("App.StartCopilotAuth", &err)
+	return s.copilotAuth.StartDeviceFlow(s.ctx)
+}
+
+func (s *ProviderService) PollCopilotAuth(deviceCode string) (result *ai.GitHubAuthResult, err error) {
+	defer logger.Guard("App.PollCopilotAuth", &err)
+
+	result, err = s.copilotAuth.PollToken(s.ctx, deviceCode)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Status == "success" && result.Token != "" {
+		if saveErr := storage.SaveApiKey("copilot-oauth-token", result.Token); saveErr != nil {
+			logger.Error("failed to save copilot oauth token", "error", saveErr)
+		}
+		result.Token = ""
+	}
+
+	return result, nil
+}
+
+func (s *ProviderService) RevokeCopilotAuth() (err error) {
+	defer logger.Guard("App.RevokeCopilotAuth", &err)
+	return storage.DeleteApiKey("copilot-oauth-token")
+}
+
+func (s *ProviderService) GetCopilotUser() (user *ai.GitHubUser, err error) {
+	defer logger.Guard("App.GetCopilotUser", &err)
+
+	token, err := storage.GetApiKey("copilot-oauth-token")
+	if err != nil {
+		return nil, fmt.Errorf("no copilot oauth token: %w", err)
 	}
 	return s.auth.GetUser(s.ctx, token)
 }

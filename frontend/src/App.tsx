@@ -337,8 +337,8 @@ export default function App() {
                 const doc = await flowApi.openFlowFolder()
                 if (doc) setDocument(doc as any)
             },
-            'file.export.pdf': async () => { try { await exportApi.exportPDF() } catch (_e) {} },
-            'file.export.md': async () => { try { await exportApi.exportMarkdown() } catch (_e) {} },
+            'file.export.pdf': async () => { try { await exportApi.exportPDF() } catch { /* ignore */ } },
+            'file.export.md': async () => { try { await exportApi.exportMarkdown() } catch { /* ignore */ } },
             'analysis.filter.errors': () => useAnalysisStore.getState().setSeverityFilter(new Set(['error'])),
             'analysis.filter.warnings': () => useAnalysisStore.getState().setSeverityFilter(new Set(['warning'])),
             'analysis.filter.info': () => useAnalysisStore.getState().setSeverityFilter(new Set(['info'])),

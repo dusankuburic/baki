@@ -104,6 +104,15 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       if (sourceFiles.length > 0) {
         updateThread(id, {selectedSourceFiles: sourceFiles.map(f => f.filename)})
       }
+      // createThread pre-populates conversations with [], which prevents the
+      // load effect from running. Restore the persisted flow conversation here.
+      chatApi.getConversation(doc.id, 'flow').then((conv: any) => {
+        if (conv?.messages?.length > 0) {
+          for (const m of conv.messages) {
+            appendMessage(id, m as ChatMessage)
+          }
+        }
+      }).catch(() => {})
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.id])
@@ -112,7 +121,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (!activeThreadId || !doc?.id) return
     // Only load from backend if the thread has no messages yet in the store
     const existing = useChatStore.getState().conversations.get(activeThreadId)
-    if (existing && existing.length > 0) return
+    if (existing !== undefined) return
     const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
     const scope = thread?.contextBlockId || 'flow'
     let cancelled = false
@@ -196,10 +205,19 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   const {registerStream} = useStreamingMessage(handler)
 
-  const buildRequest = useCallback((text: string) => {
+  const buildRequest = useCallback((text: string, overrideFiles?: string[]) => {
     if (!doc || !activeThread) return null
     const history = getMessages(activeThread.id)
     const providerConfig = aiSettings.providers[provider as keyof typeof aiSettings.providers]
+    
+    // Always use the latest state from the store to avoid stale closures
+    const currentThread = useChatStore.getState().threads.find(t => t.id === activeThread.id)
+    let filesToUse = currentThread?.selectedSourceFiles || []
+    
+    if (overrideFiles !== undefined && overrideFiles.length > 0) {
+      filesToUse = overrideFiles
+    }
+
     return {
       flowId: doc.id,
       provider,
@@ -207,16 +225,16 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       messages: history.map((m: ChatMessage) => ({id: m.id, role: m.role, content: m.content, timestamp: m.timestamp})),
       userMessage: text,
       contextBlockId: activeThread.contextBlockId || '',
-      selectedSourceFiles: activeThread.selectedSourceFiles.length > 0 ? activeThread.selectedSourceFiles : undefined,
+      selectedSourceFiles: filesToUse.length > 0 ? filesToUse : undefined,
       temperature: providerConfig?.temperature ?? 0.3,
       maxTokens: providerConfig?.maxTokens ?? 4096,
     }
   }, [doc, activeThread, provider, selectedModel, aiSettings, getMessages])
 
-  const executeSend = useCallback(async (text: string) => {
+  const executeSend = useCallback(async (text: string, overrideFiles?: string[]) => {
     if (!doc || !activeThread) return
     if (useChatStore.getState().activeStreamId !== null) return
-    const req: any = buildRequest(text)
+    const req: any = buildRequest(text, overrideFiles)
     if (!req) return
 
     const userMsg: ChatMessage = {
@@ -277,7 +295,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     }
   }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel])
 
-  const handleSend = useCallback((text: string) => { executeSend(text) }, [executeSend])
+  const handleSend = useCallback((text: string, files: string[]) => {
+    if (files.length > 0 && activeThreadId) {
+       updateThread(activeThreadId, {selectedSourceFiles: files})
+    }
+    executeSend(text, files.length > 0 ? files : undefined)
+  }, [executeSend, activeThreadId, updateThread])
 
   // Stable refs for the effect to avoid re-triggering it when they change
   const executeSendRef = useRef(executeSend)
@@ -297,17 +320,20 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     }
   }, [globalPendingMessage, doc?.id, activeThreadId, setGlobalPendingMessage])
 
-  const handlePreviewContext = useCallback(async (text: string) => {
-    const req = buildRequest(text)
+  const handlePreviewContext = useCallback(async (text: string, files: string[]) => {
+    if (files.length > 0 && activeThreadId) {
+       updateThread(activeThreadId, {selectedSourceFiles: files})
+    }
+    const req = buildRequest(text, files.length > 0 ? files : undefined)
     if (!req) return
     try {
       const preview = await chatApi.previewContext(req as any) as any as ContextPreview
       setContextPreview(preview)
       setPendingMessage(text)
     } catch {
-      executeSend(text)
+      executeSend(text, files.length > 0 ? files : undefined)
     }
-  }, [buildRequest, executeSend])
+  }, [buildRequest, executeSend, activeThreadId, updateThread])
 
   const handleResend = useCallback(() => {
     if (!doc || !activeThread || isStreaming) return

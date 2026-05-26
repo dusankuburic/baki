@@ -1,7 +1,7 @@
 import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {flowApi} from '@/api'
-import type {RecentFile, FlowDocument as DomainFlowDocument, FlowFileInfo} from '@/types/domain'
+import type {RecentFile, FlowDocument as DomainFlowDocument} from '@/types/domain'
 
 export function useFileOpen() {
     const document = useFlowStore(s => s.document)

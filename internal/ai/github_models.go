@@ -27,7 +27,7 @@ func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 
 func (g *GitHubModelsProvider) ID() string          { return "github-models" }
 func (g *GitHubModelsProvider) Name() string        { return "GitHub Models" }
-func (g *GitHubModelsProvider) ContextLimit() int    { return 128000 }
+func (g *GitHubModelsProvider) ContextLimit() int    { return 8192 }
 func (g *GitHubModelsProvider) DefaultModel() string { return "gpt-4o" }
 func (g *GitHubModelsProvider) FreeModel() string    { return "" }
 
@@ -40,40 +40,44 @@ func (g *GitHubModelsProvider) EstimateTokens(text string) int {
 }
 
 func (g *GitHubModelsProvider) Models() []ModelInfo {
+	// GitHub Models free tier enforces an 8 192-token request limit for most
+	// models regardless of the model's native context window. These limits
+	// are used to cap the context budget so the API never returns a 413.
+	const ghFreeLimit = 8192
 	return []ModelInfo{
 		{
 			ID: "gpt-4o", DisplayName: "GPT-4o",
-			ContextLimit: 128000,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0},
 		},
 		{
 			ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini",
-			ContextLimit: 128000,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6},
 		},
 		{
 			ID: "Meta-Llama-3.3-70B-Instruct", DisplayName: "Llama 3.3 70B",
-			ContextLimit: 128000,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 0.7, OutputCostPerM: 0.9},
 		},
 		{
 			ID: "Mistral-large-2411", DisplayName: "Mistral Large",
-			ContextLimit: 128000,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 2.0, OutputCostPerM: 6.0},
 		},
 		{
 			ID: "Phi-4", DisplayName: "Phi-4",
-			ContextLimit: 16384,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 0.07, OutputCostPerM: 0.14},
 		},
 		{
 			ID: "DeepSeek-V3-0324", DisplayName: "DeepSeek V3",
-			ContextLimit: 65536,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 0.49, OutputCostPerM: 0.94},
 		},
 		{
 			ID: "ai21-jamba-1.5-large", DisplayName: "Jamba 1.5 Large",
-			ContextLimit: 256000,
+			ContextLimit: ghFreeLimit,
 			Pricing:      Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0},
 		},
 	}

@@ -28,4 +28,16 @@ export const providersApi = {
 
   getGitHubUser: (): Promise<GitHubUser | null> =>
     request('/api/providers/github/user', undefined, 'GET'),
+
+  startCopilotAuth: (): Promise<DeviceAuthResponse> =>
+    request('/api/providers/copilot/start', undefined, 'GET'),
+
+  pollCopilotAuth: (deviceCode: string): Promise<GitHubAuthResult> =>
+    request('/api/providers/copilot/poll', { deviceCode }),
+
+  revokeCopilotAuth: (): Promise<void> =>
+    request('/api/providers/copilot/revoke', undefined, 'GET'),
+
+  getCopilotUser: (): Promise<GitHubUser | null> =>
+    request('/api/providers/copilot/user', undefined, 'GET'),
 }

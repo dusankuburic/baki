@@ -52,18 +52,34 @@ export async function subscribeToEvents(callback: (event: {name: string, data: a
     
     if (!eventSource) {
         const cfg = await getBackendConfig()
-        eventSource = new EventSource(`http://localhost:${cfg.port}/api/events?token=${cfg.token}`)
-        
-        eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data)
-            listeners.forEach(l => l(data))
-        }
-
-        eventSource.onerror = () => {
-            eventSource?.close()
-            eventSource = null
-            // Reconnect logic could be added here
-        }
+        await new Promise<void>((resolve) => {
+            const es = new EventSource(`http://localhost:${cfg.port}/api/events?token=${cfg.token}`)
+            let settled = false
+            const settle = () => {
+                if (!settled) { settled = true; resolve() }
+            }
+            
+            es.onopen = () => {
+                console.log('SSE connected')
+                settle()
+            }
+            es.onerror = (e) => {
+                console.error('SSE error', e)
+                es.close()
+                eventSource = null
+                settle()
+            }
+            es.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data)
+                    console.log('SSE message', data)
+                    listeners.forEach(l => l(data))
+                } catch (err) {
+                    console.error('SSE JSON error', err)
+                }
+            }
+            eventSource = es
+        })
     }
 
     return () => {

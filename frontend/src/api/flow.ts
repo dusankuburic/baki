@@ -1,6 +1,6 @@
 import {request} from './client'
 import {open} from '@tauri-apps/plugin-dialog'
-import type {FlowDocument, FlowFileInfo, RecentFile, SearchQuery, SearchResults} from '@/types/domain'
+import type {FlowDocument, RecentFile, SearchQuery, SearchResults} from '@/types/domain'
 
 export const flowApi = {
   openFlowFile: async (): Promise<FlowDocument | null> => {
@@ -41,4 +41,7 @@ export const flowApi = {
 
   revealInFileManager: (path: string): Promise<void> =>
     request('/api/flow/reveal', {path}),
+
+  getSourceFiles: (): Promise<any[]> =>
+    request('/api/flow/source-files', undefined, 'GET'),
 }

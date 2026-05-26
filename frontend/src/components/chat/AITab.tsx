@@ -10,7 +10,20 @@ import {
   ChatToolbar, ChatThreadBar,
 } from '.'
 import {useState, useEffect, useMemo} from 'react'
+import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
+import StreamingProgress from './StreamingProgress'
+import ConnectionStatus from './ConnectionStatus'
+import EmptyChatState from './EmptyChatState'
+
+const WELCOME_MESSAGES: Record<string, string> = {
+  copilot: 'GitHub Copilot is ready — ask about your PAD flow, request code, or analyze findings.',
+  claude: 'Claude is ready to help you analyze and debug your PAD flow.',
+  openai: 'GPT is ready — ask questions about your flow or request analysis.',
+  gemini: 'Gemini is ready to help you explore your PAD flow.',
+  demo: 'Demo mode — try out AI analysis with limited daily requests.',
+}
+const DEFAULT_WELCOME = 'AI assistant is ready — ask about your flow, request analysis, or explore findings.'
 
 export default function AITab() {
   const _selectedBlockId = useFlowStore(s => s.selectedBlockId)
@@ -49,10 +62,12 @@ export default function AITab() {
 
   const [suggestedPrompts, setSuggestedPrompts] = useState<string[]>([])
 
+  const contextBlockId = activeThread?.contextBlockId ?? null
+
   const hasFindings = useMemo(() => {
-    if (!activeThread?.contextBlockId || !_analysisReport) return false
-    return _analysisReport.findings.some(f => f.blockId === activeThread.contextBlockId)
-  }, [activeThread?.contextBlockId, _analysisReport])
+    if (!contextBlockId || !_analysisReport) return false
+    return _analysisReport.findings.some(f => f.blockId === contextBlockId)
+  }, [contextBlockId, _analysisReport])
 
   useEffect(() => {
     chatApi.getSuggestedPrompts(!!selectedBlockId, hasFindings).then((ps: any) => {
@@ -64,7 +79,6 @@ export default function AITab() {
     return <ApiKeyMissingState />
   }
 
-  const contextBlockId = activeThread?.contextBlockId ?? null
   const selectedSourceFiles = activeThread?.selectedSourceFiles ?? []
   const totalTokensIn = activeThread?.tokensIn ?? 0
   const totalTokensOut = activeThread?.tokensOut ?? 0
@@ -93,6 +107,13 @@ export default function AITab() {
         onExport={handleExport}
         hasMessages={messages.length > 0}
       />
+
+      <div className="px-3 py-1.5">
+        <ConnectionStatus
+          state={isCurrentThreadStreaming ? 'connected' : 'connected'}
+          provider={currentModelDetail?.displayName}
+        />
+      </div>
 
       <ChatThreadBar
         threads={flowThreads}
@@ -145,11 +166,16 @@ export default function AITab() {
         onCompact={handleCompact}
       />
 
-      {showWelcome && (
+      {doc && showWelcome && (
         <>
-          <SuggestedPrompts prompts={suggestedPrompts} onSelect={handleSend} />
+          <div className="px-4 pt-4 pb-2">
+            <p className="text-xs text-text-tertiary leading-relaxed">
+              {WELCOME_MESSAGES[useChatStore.getState().selectedProvider] ?? DEFAULT_WELCOME}
+            </p>
+          </div>
+          <SuggestedPrompts prompts={suggestedPrompts} onSelect={(text) => handleSend(text, [])} />
           <PromptTemplates
-            onSelect={handleSend}
+            onSelect={(text) => handleSend(text, [])}
             hasBlock={!!contextBlockId}
             flowName={doc?.name}
             blockName={selectedBlock?.name}
@@ -186,27 +212,35 @@ export default function AITab() {
         )}
       </ChatMessageList>
 
-      {isCurrentThreadStreaming && streamingTokens > 0 ? (
-        <div className="px-3 py-1">
-          <span className="text-2xs text-text-tertiary animate-pulse-soft">
-            ~{streamingTokens > 1000 ? `${(streamingTokens / 1000).toFixed(1)}k` : streamingTokens} tokens generating...
-          </span>
-        </div>
+      {!doc || !activeThread ? (
+        <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} />
       ) : (
-        <TokenCounter
-          promptTokens={totalTokensIn}
-          completionTokens={totalTokensOut}
-          inputCostPerM={showCost ? currentModelDetail!.inputCostPerM : undefined}
-          outputCostPerM={showCost ? currentModelDetail!.outputCostPerM : undefined}
-        />
+        <>
+          {isCurrentThreadStreaming && streamingTokens > 0 ? (
+            <StreamingProgress
+              tokens={streamingTokens}
+              isStreaming={isCurrentThreadStreaming}
+              estimatedTokens={undefined}
+            />
+          ) : (
+            <TokenCounter
+              promptTokens={totalTokensIn}
+              completionTokens={totalTokensOut}
+              inputCostPerM={showCost ? currentModelDetail!.inputCostPerM : undefined}
+              outputCostPerM={showCost ? currentModelDetail!.outputCostPerM : undefined}
+            />
+          )}
+        </>
       )}
 
-      <ChatInput
-        onSend={handleSend}
-        onPreview={handlePreviewContext}
-        onCancel={handleCancelStream}
-        disabled={!doc || !activeThread}
-      />
+      {doc && activeThread && (
+        <ChatInput
+          onSend={(text, files) => handleSend(text, files)}
+          onPreview={(text, files) => handlePreviewContext(text, files)}
+          onCancel={handleCancelStream}
+          onFilesChange={setThreadSourceFiles}
+        />
+      )}
 
       {contextPreview && pendingMessage && (
         <ContextPreviewModal

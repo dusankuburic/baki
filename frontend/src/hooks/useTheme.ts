@@ -1,6 +1,7 @@
 import {useCallback, useEffect} from 'react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useUIStore} from '@/stores/uiStore'
+import type {ThemeMode} from '@/types/domain'
 
 export function useTheme() {
     const theme = useSettingsStore(s => s.settings.appearance.theme)
@@ -11,7 +12,7 @@ export function useTheme() {
     useEffect(() => {
         const resolved = resolveTheme(theme)
         document.documentElement.dataset.theme = resolved
-        setResolvedTheme(resolved)
+        if (resolved !== 'system') setResolvedTheme(resolved)
         try { localStorage.setItem('pad-theme', resolved) } catch (_e) { /* localStorage unavailable */ }
     }, [theme, setResolvedTheme])
 
@@ -28,14 +29,15 @@ export function useTheme() {
     }, [theme, setResolvedTheme])
 
     const toggleTheme = useCallback(() => {
-        const next = resolvedTheme === 'dark' ? 'light' : 'dark'
-        updateAppearance({theme: next as 'dark' | 'light'})
+        const next: ThemeMode = resolvedTheme === 'light' ? 'dark' : 'light'
+        updateAppearance({theme: next})
     }, [resolvedTheme, updateAppearance])
 
     return {theme, resolvedTheme, toggleTheme}
 }
 
-function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
-    if (theme !== 'system') return theme
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+function resolveTheme(theme: ThemeMode): ThemeMode {
+    if (theme === 'system')
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+    return theme
 }

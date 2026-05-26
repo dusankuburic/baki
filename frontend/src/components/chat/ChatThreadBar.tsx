@@ -22,17 +22,7 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
   }, [threads.length])
 
   if (threads.length === 0) {
-    return (
-      <div className="flex items-center px-2 pt-1">
-        <button
-          className="flex items-center gap-1 px-2 py-1 rounded-md text-2xs text-text-tertiary hover:text-brand-400 hover:bg-brand-500/8 transition-colors"
-          onClick={onCreate}
-        >
-          <Plus size={12} />
-          <span>New chat</span>
-        </button>
-      </div>
-    )
+    return null
   }
 
   return (
@@ -96,7 +86,7 @@ function ThreadTab({thread, isActive, onSelect, onClose, onRename}: {
   return (
     <div
       className={clsx(
-        'group flex items-center gap-1 px-2.5 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[140px]',
+        'group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px]',
         isActive
           ? 'border-brand-500 bg-brand-500/5'
           : 'border-transparent hover:bg-surface-2'

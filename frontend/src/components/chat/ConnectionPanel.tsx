@@ -12,6 +12,12 @@ interface ProviderSummary {
   authType?: string
 }
 
+const PROVIDER_COLORS: Record<string, string> = {
+  claude: '#d4a574', openai: '#10a37f', gemini: '#4285f4',
+  xai: '#f43f5e', glm: '#06b6d4', 'github-models': '#8b5cf6',
+  copilot: '#6e40c9', demo: '#64748b',
+}
+
 interface Props {
   providers: ProviderSummary[]
   selectedProvider: ProviderID
@@ -41,6 +47,8 @@ export default function ConnectionPanel({
   const [modPos, setModPos] = useState({top: 0, left: 0, width: 0})
   const provRef = useRef<HTMLDivElement>(null)
   const modRef = useRef<HTMLDivElement>(null)
+  const provDropdownRef = useRef<HTMLDivElement>(null)
+  const modDropdownRef = useRef<HTMLDivElement>(null)
 
   const updatePositions = useCallback(() => {
     if (provRef.current) {
@@ -67,8 +75,11 @@ export default function ConnectionPanel({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (provRef.current && !provRef.current.contains(e.target as Node)) setProviderOpen(false)
-      if (modRef.current && !modRef.current.contains(e.target as Node)) setModelsOpen(false)
+      const target = e.target as Node
+      const inProv = provRef.current?.contains(target) || provDropdownRef.current?.contains(target)
+      const inMod  = modRef.current?.contains(target)  || modDropdownRef.current?.contains(target)
+      if (!inProv) setProviderOpen(false)
+      if (!inMod)  setModelsOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -92,10 +103,10 @@ export default function ConnectionPanel({
             )}
             onClick={() => { setProviderOpen(!providerOpen); setModelsOpen(false) }}
           >
-            <span className={clsx(
-              'w-2 h-2 rounded-full shrink-0',
-              currentProv?.configured ? 'bg-green-400' : 'bg-red-400'
-            )} />
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{backgroundColor: currentProv?.configured ? PROVIDER_COLORS[currentProv.id] ?? '#22c55e' : '#ef4444'}}
+            />
             <span className="truncate text-text-secondary font-medium">
               {currentProv?.name || 'Select provider'}
             </span>
@@ -103,7 +114,8 @@ export default function ConnectionPanel({
           </button>
           {providerOpen && (
             <Portal>
-              <div 
+              <div
+                ref={provDropdownRef}
                 className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in"
                 style={{top: provPos.top, left: provPos.left, width: provPos.width}}
               >
@@ -125,10 +137,10 @@ export default function ConnectionPanel({
                       }
                     }}
                   >
-                    <span className={clsx(
-                      'w-2 h-2 rounded-full shrink-0',
-                      p.configured ? 'bg-green-400' : 'bg-text-tertiary'
-                    )} />
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{backgroundColor: p.configured ? PROVIDER_COLORS[p.id] ?? '#22c55e' : undefined}}
+                    />
                     <span className="flex-1 truncate">{p.name}</span>
                     {p.id === selectedProvider && p.configured && <Check size={14} className="text-brand-400" />}
                     {!p.configured && (
@@ -197,7 +209,8 @@ export default function ConnectionPanel({
           </button>
           {modelsOpen && (
             <Portal>
-              <div 
+              <div
+                ref={modDropdownRef}
                 className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in max-h-[240px] overflow-y-auto"
                 style={{top: modPos.top, left: modPos.left, width: modPos.width}}
               >

@@ -121,10 +121,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       tokensIn: 0,
       tokensOut: 0,
     }
-    set(state => ({
-      threads: [...state.threads, thread],
-      activeThreadId: id,
-    }))
+    set(state => {
+      // Pre-populate with [] so the backend-restore effect treats this as
+      // already initialised. Without this, every new thread would re-load
+      // the previous thread's conversation from disk (same 'flow' scope).
+      const nextConversations = new Map(state.conversations)
+      nextConversations.set(id, [])
+      return {threads: [...state.threads, thread], activeThreadId: id, conversations: nextConversations}
+    })
     return id
   },
 

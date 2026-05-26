@@ -6,7 +6,7 @@ export type ProviderID = 'claude' | 'openai' | 'gemini' | 'xai' | 'glm' | 'githu
 
 export type AuthType = 'api_key' | 'oauth';
 
-export type ThemeMode = 'dark' | 'light' | 'system';
+export type ThemeMode = 'dark' | 'light' | 'system' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord';
 
 export interface BlockToken {
   type: 'text' | 'variable' | 'subflow' | 'label' | 'string';
@@ -100,7 +100,6 @@ export interface FlowDocument {
   name: string;
   filePath: string;
   subflows: Subflow[];
-  parseErrors?: ParseError[];
   metadata: FlowMetadata;
   files?: FlowFileInfo[];
   isFolder?: boolean;

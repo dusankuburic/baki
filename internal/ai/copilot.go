@@ -10,25 +10,48 @@ import (
 	"time"
 )
 
-const copilotBaseURL = "https://api.githubcopilot.com/chat/completions"
+var copilotBaseURL = "https://api.githubcopilot.com/chat/completions"
 
-type CopilotProvider struct {
-	token  string
-	client *http.Client
+const (
+	copilotIntegrationID = "vscode-chat"
+	copilotEditorVersion = "vscode/1.95.0"
+	copilotPluginVersion = "copilot-chat/0.22.0"
+)
+
+func setCopilotHeaders(h http.Header) {
+	h.Set("Copilot-Integration-Id", copilotIntegrationID)
+	h.Set("Editor-Version", copilotEditorVersion)
+	h.Set("Editor-Plugin-Version", copilotPluginVersion)
 }
 
+type CopilotProvider struct {
+	tokenFn func(ctx context.Context) (string, error)
+	client  *http.Client
+}
+
+// NewCopilotProvider creates a provider that uses a static token (manual PAT).
 func NewCopilotProvider(token string) *CopilotProvider {
 	return &CopilotProvider{
-		token:  token,
+		tokenFn: func(_ context.Context) (string, error) { return token, nil },
+		client:  &http.Client{Timeout: 120 * time.Second},
+	}
+}
+
+// NewCopilotProviderWithAuth creates a provider that resolves a fresh session token via CopilotAuth.
+func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotProvider {
+	return &CopilotProvider{
+		tokenFn: func(ctx context.Context) (string, error) {
+			return auth.GetSessionToken(ctx, githubToken)
+		},
 		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
-func (p *CopilotProvider) ID() string          { return "copilot" }
-func (p *CopilotProvider) Name() string        { return "GitHub Copilot" }
-func (p *CopilotProvider) ContextLimit() int   { return 128000 }
+func (p *CopilotProvider) ID() string           { return "copilot" }
+func (p *CopilotProvider) Name() string         { return "GitHub Copilot" }
+func (p *CopilotProvider) ContextLimit() int    { return 128000 }
 func (p *CopilotProvider) DefaultModel() string { return "gpt-4o" }
-func (p *CopilotProvider) FreeModel() string   { return "" }
+func (p *CopilotProvider) FreeModel() string    { return "" }
 
 func (p *CopilotProvider) PricePerMillionTokens() Pricing {
 	return Pricing{InputCostPerM: 0, OutputCostPerM: 0}
@@ -58,12 +81,15 @@ func (p *CopilotProvider) Models() []ModelInfo {
 	}
 }
 
-func (p *CopilotProvider) addHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+p.token)
+func (p *CopilotProvider) addHeaders(ctx context.Context, req *http.Request) error {
+	token, err := p.tokenFn(ctx)
+	if err != nil {
+		return fmt.Errorf("get copilot token: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
-	req.Header.Set("Editor-Version", "vscode/1.95.0")
-	req.Header.Set("Editor-Plugin-Version", "copilot-chat/0.22.0")
+	setCopilotHeaders(req.Header)
+	return nil
 }
 
 func (p *CopilotProvider) Chat(ctx context.Context, req Request) (*Response, error) {
@@ -73,13 +99,18 @@ func (p *CopilotProvider) Chat(ctx context.Context, req Request) (*Response, err
 		Temperature: req.Temperature,
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", copilotBaseURL, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	p.addHeaders(httpReq)
+	if err := p.addHeaders(ctx, httpReq); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -87,7 +118,10 @@ func (p *CopilotProvider) Chat(ctx context.Context, req Request) (*Response, err
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		var apiErr openAIErrorResp
@@ -127,13 +161,18 @@ func (p *CopilotProvider) Stream(ctx context.Context, req Request, onChunk func(
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
 		Stream:      true,
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", copilotBaseURL, bytes.NewReader(jsonBody))
 	if err != nil {
 		return err
 	}
-	p.addHeaders(httpReq)
+	if err := p.addHeaders(ctx, httpReq); err != nil {
+		return err
+	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := p.client.Do(httpReq)

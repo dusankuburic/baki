@@ -48,9 +48,9 @@ export default function MessageBubble({message, isStreaming, isThinking, isLastA
         <div className="px-4 py-3 bg-surface-2 border border-border-subtle rounded-2xl rounded-tl-md">
           <div className="flex items-center gap-2">
             <div className="flex gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{animationDelay: '0ms'}} />
-              <span className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{animationDelay: '150ms'}} />
-              <span className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{animationDelay: '300ms'}} />
+              <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '0ms'}} />
+              <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '150ms'}} />
+              <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '300ms'}} />
             </div>
             <span className="text-xs text-text-tertiary">Thinking...</span>
           </div>
@@ -61,7 +61,7 @@ export default function MessageBubble({message, isStreaming, isThinking, isLastA
 
   return (
     <div
-      className={clsx('group flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}
+      className={clsx('group flex flex-col gap-1 animate-message-in', isUser ? 'items-end' : 'items-start')}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => setShowActions(false)}
     >
@@ -84,7 +84,7 @@ export default function MessageBubble({message, isStreaming, isThinking, isLastA
 
       <div
         className={clsx(
-          'relative px-4 py-3 max-w-[92%] text-sm leading-relaxed',
+          'relative px-3 py-2.5 max-w-full text-sm leading-relaxed',
           isUser
             ? 'bg-brand-500/12 border border-brand-500/20 rounded-2xl rounded-tr-sm'
             : isError
@@ -101,7 +101,7 @@ export default function MessageBubble({message, isStreaming, isThinking, isLastA
               {message.content}
             </ReactMarkdown>
             {isStreaming && (
-              <span className="inline-block w-[2px] h-[1.1em] bg-brand-400 ml-0.5 align-text-bottom animate-cursor" />
+              <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
             )}
           </div>
         )}

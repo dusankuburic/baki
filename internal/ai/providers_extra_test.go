@@ -451,8 +451,8 @@ func TestGLMProvider_Stream_Success(t *testing.T) {
 
 func TestGitHubModelsProvider_Identity(t *testing.T) {
 	p := NewGitHubModelsProvider("token")
-	if p.ContextLimit() != 128000 {
-		t.Errorf("ContextLimit() = %d, want 128000", p.ContextLimit())
+	if p.ContextLimit() != 8192 {
+		t.Errorf("ContextLimit() = %d, want 8192 (GitHub Models free-tier request cap)", p.ContextLimit())
 	}
 	if p.DefaultModel() != "gpt-4o" {
 		t.Errorf("DefaultModel() = %q, want gpt-4o", p.DefaultModel())

@@ -2,6 +2,7 @@ import {create} from 'zustand'
 import type {
   AppSettings, ProviderID, AIProviderConfig,
   AppearanceSettings, LayoutSettings, AISettings,
+  GeneralSettings, ParserSettings,
 } from '@/types/domain'
 
 import {settingsApi} from '@/api'
@@ -124,7 +125,9 @@ interface SettingsState {
 
   loadFromBackend: () => Promise<void>
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>
+  updateGeneral: (general: Partial<GeneralSettings>) => Promise<void>
   updateAppearance: (appearance: Partial<AppearanceSettings>) => Promise<void>
+  updateParser: (parser: Partial<ParserSettings>) => Promise<void>
   updateLayout: (layout: Partial<LayoutSettings>) => Promise<void>
   updateAI: (ai: Partial<AISettings>) => Promise<void>
   updateProvider: (id: ProviderID, config: Partial<AIProviderConfig>) => Promise<void>
@@ -158,9 +161,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try { await persist(next) } catch { set({settings: prev}) }
   },
 
+  updateGeneral: async (general) => {
+    const prev = get().settings
+    const next = {...prev, general: {...prev.general, ...general}}
+    set({settings: next})
+    try { await persist(next) } catch { set({settings: prev}) }
+  },
+
   updateAppearance: async (appearance) => {
     const prev = get().settings
     const next = {...prev, appearance: {...prev.appearance, ...appearance}}
+    set({settings: next})
+    try { await persist(next) } catch { set({settings: prev}) }
+  },
+
+  updateParser: async (parser) => {
+    const prev = get().settings
+    const next = {...prev, parser: {...prev.parser, ...parser}}
     set({settings: next})
     try { await persist(next) } catch { set({settings: prev}) }
   },

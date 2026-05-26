@@ -20,7 +20,7 @@ export default function FilterChips({chips, activeTypes, onToggle, onSelectAll}:
     const allActive = activeTypes.size === ALL_TYPES.length || activeTypes.size === 0
 
     return (
-        <div className="flex items-center h-9 px-3 gap-1 overflow-x-auto scrollbar-none">
+        <div className="flex items-center h-9 px-3 gap-1 overflow-x-auto scrollbar-none [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent_100%)]">
             <button
                 onClick={onSelectAll}
                 className={clsx(

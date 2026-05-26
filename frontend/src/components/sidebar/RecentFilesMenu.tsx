@@ -49,10 +49,10 @@ function RecentRow({file, onSelect, onRemove}: {
                 <div className="text-sm text-text-primary truncate">{file.name}</div>
                 <div className="text-2xs text-text-tertiary truncate">{file.path}</div>
             </div>
-            <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
-                <span className="text-2xs text-text-tertiary">{formatRelativeTime(file.lastOpen)}</span>
+            <div className="flex flex-col items-end gap-0.5 shrink min-w-0 max-w-[56px]">
+                <span className="text-2xs text-text-tertiary truncate">{formatRelativeTime(file.lastOpen)}</span>
                 {!file.isFolder && (
-                    <span className="text-2xs text-text-tertiary">{formatSize(file.size)}</span>
+                    <span className="text-2xs text-text-tertiary truncate">{formatSize(file.size)}</span>
                 )}
             </div>
             <button
@@ -86,7 +86,7 @@ export default function RecentFilesMenu({files, onSelect, onRemove, onClear, onC
     return (
         <div
             ref={menuRef}
-            className="absolute right-0 top-full mt-1 w-72 bg-surface-2 border border-border-default rounded-lg shadow-lg z-overlay animate-fade-in overflow-hidden"
+            className="absolute left-0 right-0 top-full mt-1 bg-surface-2 border border-border-default rounded-lg shadow-lg z-overlay animate-fade-in overflow-hidden"
         >
             <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
                 <span className="text-xs font-medium text-text-secondary">Recent</span>

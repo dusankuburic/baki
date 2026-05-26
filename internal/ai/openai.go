@@ -111,7 +111,10 @@ func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		Temperature: req.Temperature,
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", openAIBaseURL, bytes.NewReader(jsonBody))
 	if err != nil {
@@ -127,7 +130,10 @@ func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		var apiErr openAIErrorResp
@@ -169,7 +175,10 @@ func (o *OpenAIProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
 		Stream:      true,
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", openAIBaseURL, bytes.NewReader(jsonBody))
 	if err != nil {

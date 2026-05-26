@@ -1,8 +1,8 @@
 import {useState, useEffect, useCallback} from 'react'
 import ApiKeyInput from './ApiKeyInput'
 import GitHubLoginButton from '@/components/chat/GitHubLoginButton'
+import CopilotLoginButton from '@/components/chat/CopilotLoginButton'
 import {providersApi} from '@/api'
-import {useSettingsStore} from '@/stores/settingsStore'
 
 interface ProviderEntry {
   id: string
@@ -14,6 +14,7 @@ interface ProviderEntry {
 export default function ProvidersPanel() {
   const [_providers, setProviders] = useState<ProviderEntry[]>([])
   const [githubUser, setGithubUser] = useState<string | null>(null)
+  const [copilotUser, setCopilotUser] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     providersApi.listProviders().then((ps: any) => {
@@ -25,6 +26,7 @@ export default function ProvidersPanel() {
       })))
     }).catch(() => {})
     providersApi.getGitHubUser().then((u: any) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
+    providersApi.getCopilotUser().then((u: any) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -76,45 +78,38 @@ export default function ProvidersPanel() {
         </ProviderSection>
 
         <ProviderSection name="GitHub Copilot" color="#6e40c9">
-          <p className="text-xs text-text-tertiary mb-2">
-            Enter a GitHub Personal Access Token with Copilot access (requires a Copilot subscription).
-          </p>
-          <ApiKeyInput provider="copilot" label="GitHub Token" onConfigured={refresh} />
+          <div className="space-y-2.5">
+            <p className="text-xs text-text-tertiary leading-relaxed">
+              Requires a GitHub account with an active{' '}
+              <a href="https://github.com/features/copilot" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">Copilot subscription</a>.
+            </p>
+            {copilotUser ? (
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-text-secondary">Connected as <strong className="text-text-primary">@{copilotUser}</strong></span>
+                <button
+                  className="text-xs text-red-400 hover:text-red-300"
+                  onClick={() => providersApi.revokeCopilotAuth().then(() => refresh()).catch(() => {})}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <CopilotLoginButton onAuthComplete={refresh} />
+            )}
+            {!copilotUser && (
+              <details className="text-xs text-text-tertiary">
+                <summary className="cursor-pointer hover:text-text-secondary transition-colors">
+                  Or use a Personal Access Token
+                </summary>
+                <div className="mt-2">
+                  <ApiKeyInput provider="copilot" label="GitHub Token (PAT)" onConfigured={refresh} />
+                </div>
+              </details>
+            )}
+          </div>
         </ProviderSection>
       </div>
-
-      <div className="mt-10">
-        <h3 className="text-base font-semibold text-text-primary mb-1">Custom Instructions</h3>
-        <p className="text-xs text-text-tertiary mb-3">
-          Appended to the AI system prompt. Use this to set a preferred language, focus area, or persona.
-        </p>
-        <CustomInstructionsInput />
-      </div>
     </div>
-  )
-}
-
-function CustomInstructionsInput() {
-  const suffix = useSettingsStore(s => s.settings.ai.systemPromptSuffix ?? '')
-  const updateAI = useSettingsStore(s => s.updateAI)
-  const [local, setLocal] = useState(suffix)
-
-  useEffect(() => { setLocal(suffix) }, [suffix])
-
-  const handleBlur = () => {
-    if (local !== suffix) {
-      updateAI({systemPromptSuffix: local})
-    }
-  }
-
-  return (
-    <textarea
-      className="w-full h-24 px-3 py-2 text-sm bg-bg-secondary border border-border-subtle rounded-md text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none focus:ring-1 focus:ring-brand-500 focus:border-brand-500"
-      placeholder="e.g. Always respond in Serbian. Focus on security and error handling."
-      value={local}
-      onChange={e => setLocal(e.target.value)}
-      onBlur={handleBlur}
-    />
   )
 }
 

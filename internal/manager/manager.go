@@ -56,14 +56,15 @@ func (a *App) Init(ctx context.Context, notifier service.Notifier) {
 	}
 	a.settings = settings
 
-	factory := ai.NewProviderFactory(storage.GetApiKey)
+	copilotAuth := ai.NewCopilotAuth()
+	factory := ai.NewProviderFactory(storage.GetApiKey, copilotAuth)
 	auth := ai.NewGitHubAuth()
 	demo := ai.NewDemoLimiter(configDir)
 
 	a.flow = service.NewFlowService(ctx, notifier, settings)
 	a.analysis = service.NewAnalysisService(ctx, notifier, a.flow, settings)
 	a.export = service.NewExportService(ctx, notifier, a.flow, a.analysis)
-	a.providers = service.NewProviderService(ctx, auth, factory)
+	a.providers = service.NewProviderService(ctx, auth, copilotAuth, factory)
 	a.chat = service.NewChatService(ctx, notifier, configDir, a.flow, a.analysis, settings, factory, demo)
 
 	logger.Info("app initialized")
@@ -209,6 +210,28 @@ func (a *App) RevokeGitHubAuth() (err error) {
 func (a *App) GetGitHubUser() (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetGitHubUser", &err)
 	return a.providers.GetGitHubUser()
+}
+
+// --- copilot auth ---
+
+func (a *App) StartCopilotAuth() (resp *ai.DeviceAuthResponse, err error) {
+	defer logger.Guard("App.StartCopilotAuth", &err)
+	return a.providers.StartCopilotAuth()
+}
+
+func (a *App) PollCopilotAuth(code string) (result *ai.GitHubAuthResult, err error) {
+	defer logger.Guard("App.PollCopilotAuth", &err)
+	return a.providers.PollCopilotAuth(code)
+}
+
+func (a *App) RevokeCopilotAuth() (err error) {
+	defer logger.Guard("App.RevokeCopilotAuth", &err)
+	return a.providers.RevokeCopilotAuth()
+}
+
+func (a *App) GetCopilotUser() (user *ai.GitHubUser, err error) {
+	defer logger.Guard("App.GetCopilotUser", &err)
+	return a.providers.GetCopilotUser()
 }
 
 // --- chat ---
