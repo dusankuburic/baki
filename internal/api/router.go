@@ -4,15 +4,32 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"pad-analyzer/internal/manager"
+	"strings"
 	"sync"
+
+	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/collaboration"
+	"pad-analyzer/internal/manager"
+	"pad-analyzer/internal/migration"
+	wshub "pad-analyzer/internal/websocket"
 )
 
 type Router struct {
-	app       *manager.App
-	token     string
-	clients   map[chan Event]bool
-	clientsMu sync.Mutex
+	app            *manager.App
+	token          string
+	jwtEnabled     bool // true in cloud mode: validate JWT instead of pre-shared token
+	allowedOrigins []string
+	clients        map[chan Event]bool
+	clientsMu      sync.Mutex
+	hub            *wshub.Hub
+	localUserID    string
+	localName      string
+	authMgr        *auth.Manager
+	orgSvc         *collaboration.OrgService
+
+	migrationMu      sync.Mutex
+	migrationRes     *migration.Result
+	migrationRunning bool
 }
 
 type Event struct {
@@ -20,12 +37,45 @@ type Event struct {
 	Data any    `json:"data"`
 }
 
-func NewRouter(app *manager.App, token string) *Router {
-	return &Router{
-		app:     app,
-		token:   token,
-		clients: make(map[chan Event]bool),
+// NewRouter creates the HTTP router.
+//
+// token is the pre-shared secret (local mode) or the JWT signing key (cloud mode).
+// jwtEnabled should be true for cloud deployments where each request carries a JWT.
+// allowedOrigins lists origins permitted for CORS and WebSocket upgrades.
+// Pass nil or empty to allow only same-origin (localhost in local mode).
+func NewRouter(app *manager.App, token string, jwtEnabled bool, allowedOrigins []string) *Router {
+	// Use postgres-backed org storage when available, otherwise fall back to in-memory.
+	orgStore := collaboration.NewMemOrgStore()
+	if s, ok := app.StorageBackend().(collaboration.OrgStore); ok {
+		orgStore = s
 	}
+
+	return &Router{
+		app:            app,
+		token:          token,
+		jwtEnabled:     jwtEnabled,
+		allowedOrigins: allowedOrigins,
+		clients:        make(map[chan Event]bool),
+		hub:            wshub.NewHub(),
+		localUserID:    "local",
+		localName:      "You",
+		authMgr:        auth.NewManager(token),
+		orgSvc:         collaboration.NewOrgService(orgStore),
+	}
+}
+
+// isOriginAllowed reports whether the given Origin header value is in the allowlist.
+// An empty origin (non-browser, curl, etc.) is always allowed.
+func (rt *Router) isOriginAllowed(origin string) bool {
+	if origin == "" {
+		return true
+	}
+	for _, o := range rt.allowedOrigins {
+		if strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	return false
 }
 
 func (rt *Router) Emit(name string, data any) {
@@ -40,9 +90,37 @@ func (rt *Router) Emit(name string, data any) {
 	}
 }
 
+// publicRoutes are paths that must remain accessible without authentication
+// in cloud/JWT mode (login, token refresh, registration).
+var publicRoutes = map[string]bool{
+	"/api/auth/register": true,
+	"/api/auth/login":    true,
+	"/api/auth/refresh":  true,
+	"/healthz":           true,
+	"/api/health":        true,
+}
+
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Limit request body to 10 MB to prevent DoS via large payloads.
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	// Security headers — always set regardless of mode.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	if rt.jwtEnabled {
+		// HSTS only makes sense when TLS is present (cloud mode).
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	}
+
+	// CORS: echo the request origin only if it is in the allowlist.
+	// In local/Tauri mode the allowedOrigins list is empty, so only
+	// non-browser callers (empty Origin) are accepted without a check.
+	origin := r.Header.Get("Origin")
+	if rt.isOriginAllowed(origin) && origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
@@ -51,20 +129,47 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth middleware
-	token := r.Header.Get("Authorization")
-	if token == "" {
-		token = "Bearer " + r.URL.Query().Get("token")
-	}
-
-	if token != "Bearer "+rt.token {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+	if rt.jwtEnabled {
+		// Cloud mode: use JWT auth except for public auth routes.
+		if !publicRoutes[r.URL.Path] {
+			tokenStr := auth.ExtractToken(r)
+			if tokenStr == "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			claims, err := rt.authMgr.Verify(tokenStr)
+			if err != nil {
+				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				return
+			}
+			r = r.WithContext(auth.WithClaims(r.Context(), claims))
+		}
+	} else {
+		// Local/Tauri mode: validate against the pre-shared static token.
+		tokenStr := auth.ExtractToken(r)
+		if tokenStr != rt.token {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// SSE endpoint
 	if r.URL.Path == "/api/events" {
 		rt.handleEvents(w, r)
+		return
+	}
+
+	// WebSocket collaboration endpoint.
+	// In JWT mode resolve the real user from claims; fall back to "local" in desktop mode.
+	if r.URL.Path == "/ws" {
+		userID, userName := rt.localUserID, rt.localName
+		if rt.jwtEnabled {
+			if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+				userID = claims.UserID
+				userName = claims.Email
+			}
+		}
+		wshub.Handler(rt.hub, userID, userName, rt.allowedOrigins)(w, r)
 		return
 	}
 

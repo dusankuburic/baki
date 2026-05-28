@@ -16,7 +16,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      include: ['src/stores/**', 'src/lib/**', 'src/hooks/**'],
+      include: ['src/stores/**', 'src/lib/**', 'src/hooks/**', 'src/components/**', 'src/services/**'],
     },
   },
 })

@@ -1,0 +1,391 @@
+package filesystem
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"pad-analyzer/internal/storage/interfaces"
+)
+
+// LocalStorageBackend implements StorageBackend for local file system storage
+type LocalStorageBackend struct {
+	dataDir string
+	users   map[string]*interfaces.User
+	orgs    map[string]*interfaces.Organisation
+	sharing map[string][]*interfaces.Collaborator
+}
+
+// NewLocalStorageBackend creates a new local file system storage backend
+func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	return &LocalStorageBackend{
+		dataDir: dataDir,
+		users:   make(map[string]*interfaces.User),
+		orgs:    make(map[string]*interfaces.Organisation),
+		sharing: make(map[string][]*interfaces.Collaborator),
+	}, nil
+}
+
+// SaveFlow saves a flow document to the local file system
+func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
+	flowPath := filepath.Join(lsb.dataDir, "flows", flow.ID+".json")
+
+	// Create flows directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(flowPath), 0755); err != nil {
+		return fmt.Errorf("failed to create flows directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(flow, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal flow: %w", err)
+	}
+
+	if err := os.WriteFile(flowPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write flow file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadFlow loads a flow document from the local file system
+func (lsb *LocalStorageBackend) LoadFlow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
+	flowPath := filepath.Join(lsb.dataDir, "flows", id+".json")
+
+	data, err := os.ReadFile(flowPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, interfaces.ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to read flow file: %w", err)
+	}
+
+	var flow interfaces.FlowDocument
+	if err := json.Unmarshal(data, &flow); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal flow: %w", err)
+	}
+
+	return &flow, nil
+}
+
+// ListFlows lists flow documents matching the given filter
+func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
+	flowsDir := filepath.Join(lsb.dataDir, "flows")
+
+	// Check if flows directory exists
+	if _, err := os.Stat(flowsDir); os.IsNotExist(err) {
+		return []*interfaces.FlowDocument{}, nil
+	}
+
+	files, err := os.ReadDir(flowsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read flows directory: %w", err)
+	}
+
+	var flows []*interfaces.FlowDocument
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		// Extract flow ID from filename
+		flowID := file.Name()[:len(file.Name())-5] // Remove .json extension
+
+		flow, err := lsb.LoadFlow(ctx, flowID)
+		if err != nil {
+			// Skip files that can't be loaded
+			continue
+		}
+
+		if !lsb.matchesFilter(flow, filter) {
+			continue
+		}
+
+		flows = append(flows, flow)
+
+		// Apply limit
+		if filter.Limit > 0 && len(flows) >= filter.Limit {
+			break
+		}
+	}
+
+	return flows, nil
+}
+
+// matchesFilter returns true if the flow satisfies all set filter conditions.
+// Flows with no OwnerID are visible to everyone (backwards compatibility with pre-auth files).
+func (lsb *LocalStorageBackend) matchesFilter(flow *interfaces.FlowDocument, f interfaces.FlowFilter) bool {
+	if f.UserID != "" || f.OrganizationID != "" {
+		ownerMatch := flow.OwnerID == "" || flow.OwnerID == f.UserID
+		orgMatch := f.OrganizationID != "" && flow.OrganizationID == f.OrganizationID
+		if !ownerMatch && !orgMatch {
+			return false
+		}
+	}
+	if f.Query != "" && !strings.Contains(strings.ToLower(flow.Name), strings.ToLower(f.Query)) {
+		return false
+	}
+	return true
+}
+
+// DeleteFlow deletes a flow document from the local file system
+func (lsb *LocalStorageBackend) DeleteFlow(ctx context.Context, id string) error {
+	flowPath := filepath.Join(lsb.dataDir, "flows", id+".json")
+
+	if err := os.Remove(flowPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete flow file: %w", err)
+	}
+
+	return nil
+}
+
+// SaveSettings saves application settings to the local file system
+func (lsb *LocalStorageBackend) SaveSettings(ctx context.Context, settings *interfaces.AppSettings) error {
+	settingsPath := filepath.Join(lsb.dataDir, "settings.json")
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
+
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write settings file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadSettings loads application settings from the local file system
+func (lsb *LocalStorageBackend) LoadSettings(ctx context.Context) (*interfaces.AppSettings, error) {
+	settingsPath := filepath.Join(lsb.dataDir, "settings.json")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Return default settings if file doesn't exist
+			return lsb.getDefaultSettings(), nil
+		}
+		return nil, fmt.Errorf("failed to read settings file: %w", err)
+	}
+
+	var settings interfaces.AppSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal settings: %w", err)
+	}
+
+	return &settings, nil
+}
+
+// SaveConversation saves a conversation to the local file system
+func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, scope string, messages []interfaces.ChatMessage) error {
+	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
+
+	// Create conversations directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(conversationPath), 0755); err != nil {
+		return fmt.Errorf("failed to create conversations directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(messages, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal conversation: %w", err)
+	}
+
+	if err := os.WriteFile(conversationPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write conversation file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadConversation loads a conversation from the local file system
+func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, scope string) ([]interfaces.ChatMessage, error) {
+	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
+
+	data, err := os.ReadFile(conversationPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []interfaces.ChatMessage{}, nil
+		}
+		return nil, fmt.Errorf("failed to read conversation file: %w", err)
+	}
+
+	var messages []interfaces.ChatMessage
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal conversation: %w", err)
+	}
+
+	return messages, nil
+}
+
+// Ping checks if the storage backend is accessible
+func (lsb *LocalStorageBackend) Ping(ctx context.Context) error {
+	// Check if data directory is accessible
+	if _, err := os.Stat(lsb.dataDir); err != nil {
+		return fmt.Errorf("data directory not accessible: %w", err)
+	}
+	return nil
+}
+
+// Close closes the storage backend
+func (lsb *LocalStorageBackend) Close() error {
+	// No resources to clean up for local file system
+	return nil
+}
+
+// getDefaultSettings returns default application settings
+func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
+	return &interfaces.AppSettings{
+		Version: 1,
+		General: interfaces.GeneralSettings{
+			FirstRunCompleted: false,
+			LastUsedVersion:   "",
+			CheckForUpdates:    "weekly",
+		},
+		Appearance: interfaces.AppearanceSettings{
+			Theme:   "dark",
+			Density: "comfortable",
+		},
+		Layout: interfaces.LayoutSettings{
+			SidebarWidth:    280,
+			InspectorWidth: 320,
+			ChatPanelHeight: nil,
+		},
+		AI: interfaces.AISettings{
+			ActiveProvider: "claude",
+			DemoMode: interfaces.DemoModeSettings{
+				Enabled:    true,
+				DailyLimit: 5,
+			},
+		},
+		Parser: interfaces.ParserSettings{
+			MaxFileSizeMB: 50,
+		},
+		Telemetry: interfaces.TelemetrySettings{
+			Enabled: false,
+		},
+	}
+}
+
+// ---- User operations ----
+
+func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
+	lsb.users[user.Email] = user
+	lsb.users[user.ID] = user
+	return nil
+}
+
+func (lsb *LocalStorageBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) {
+	if u, ok := lsb.users[email]; ok {
+		return u, nil
+	}
+	return nil, interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) {
+	if u, ok := lsb.users[id]; ok {
+		return u, nil
+	}
+	return nil, interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) CountUsers(ctx context.Context) (int, error) {
+	// In-memory users for local storage are just for tests; usually 0 or 1.
+	return len(lsb.users), nil
+}
+
+func (lsb *LocalStorageBackend) ListUsers(ctx context.Context) ([]*interfaces.User, error) {
+	var users []*interfaces.User
+	for _, u := range lsb.users {
+		users = append(users, u)
+	}
+	return users, nil
+}
+
+// ---- Organisation operations ----
+
+func (lsb *LocalStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
+	lsb.orgs[org.ID] = org
+	return nil
+}
+
+func (lsb *LocalStorageBackend) LoadOrg(ctx context.Context, id string) (*interfaces.Organisation, error) {
+	if o, ok := lsb.orgs[id]; ok {
+		return o, nil
+	}
+	return nil, interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error) {
+	var result []*interfaces.Organisation
+	for _, o := range lsb.orgs {
+		for _, m := range o.Members {
+			if m.UserID == userID {
+				result = append(result, o)
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (lsb *LocalStorageBackend) DeleteOrg(ctx context.Context, id string) error {
+	if _, ok := lsb.orgs[id]; ok {
+		delete(lsb.orgs, id)
+		return nil
+	}
+	return interfaces.ErrNotFound
+}
+
+// ---- Sharing operations ----
+
+func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID string) ([]*interfaces.Collaborator, error) {
+	collabs := lsb.sharing[flowID]
+	if collabs == nil {
+		return []*interfaces.Collaborator{}, nil
+	}
+	return collabs, nil
+}
+
+func (lsb *LocalStorageBackend) AddCollaborator(ctx context.Context, flowID string, c *interfaces.Collaborator) error {
+	if c.GrantedAt.IsZero() {
+		c.GrantedAt = time.Now().UTC()
+	}
+	list := lsb.sharing[flowID]
+	for i, existing := range list {
+		if existing.UserID == c.UserID {
+			list[i] = c
+			return nil
+		}
+	}
+	lsb.sharing[flowID] = append(list, c)
+	return nil
+}
+
+func (lsb *LocalStorageBackend) UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error {
+	list := lsb.sharing[flowID]
+	for _, existing := range list {
+		if existing.UserID == userID {
+			existing.Permission = permission
+			return nil
+		}
+	}
+	return interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) RemoveCollaborator(ctx context.Context, flowID, userID string) error {
+	list := lsb.sharing[flowID]
+	for i, existing := range list {
+		if existing.UserID == userID {
+			lsb.sharing[flowID] = append(list[:i], list[i+1:]...)
+			return nil
+		}
+	}
+	return interfaces.ErrNotFound
+}

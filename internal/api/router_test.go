@@ -1,0 +1,156 @@
+package api
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"pad-analyzer/internal/manager"
+)
+
+const testToken = "test-secret-token"
+
+// newTestRouter creates a Router with a fresh App and a fixed token.
+// The App is not fully initialised (Init is not called), so only routes that
+// don't reach the app layer can be tested here. Handler-level tests live in
+// handlers_test.go and require a fully initialised App.
+func newTestRouter() *Router {
+	return NewRouter(manager.NewApp(nil), testToken, false, nil)
+}
+
+// --- Auth middleware ---
+
+func TestRouter_MissingAuth_Returns401(t *testing.T) {
+	rt := newTestRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system/info", nil)
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestRouter_WrongToken_Returns401(t *testing.T) {
+	rt := newTestRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system/info", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestRouter_TokenInQuery_IsAccepted(t *testing.T) {
+	rt := newTestRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system/info?token="+testToken, nil)
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+
+	// 401 would mean the auth check failed; anything else means we passed auth
+	if rr.Code == http.StatusUnauthorized {
+		t.Error("token in query should be accepted")
+	}
+}
+
+// --- CORS ---
+
+func TestRouter_OPTIONS_Returns200WithCORSHeaders(t *testing.T) {
+	// Router with an explicit allowlist — the listed origin must be echoed back.
+	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"})
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/system/info", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for OPTIONS, got %d", rr.Code)
+	}
+	if origin := rr.Header().Get("Access-Control-Allow-Origin"); origin != "https://app.example.com" {
+		t.Errorf("expected CORS origin to be echoed back, got %q", origin)
+	}
+	if methods := rr.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(methods, "POST") {
+		t.Errorf("expected CORS methods to include POST, got %q", methods)
+	}
+}
+
+func TestRouter_OPTIONS_UnknownOrigin_NoACO(t *testing.T) {
+	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"})
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/system/info", nil)
+	req.Header.Set("Origin", "https://evil.com")
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for OPTIONS, got %d", rr.Code)
+	}
+	if origin := rr.Header().Get("Access-Control-Allow-Origin"); origin != "" {
+		t.Errorf("expected no ACAO header for unknown origin, got %q", origin)
+	}
+}
+
+// --- 404 routing ---
+
+func TestRouter_UnknownPath_Returns404(t *testing.T) {
+	rt := newTestRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+// --- SSE endpoint ---
+
+func TestRouter_EventsEndpoint_SetsSSEHeaders(t *testing.T) {
+	rt := newTestRouter()
+
+	// Use a short-lived context so the blocking event loop exits promptly.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rr := httptest.NewRecorder()
+
+	// Run in a goroutine because the handler blocks until context is done.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.ServeHTTP(rr, req)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE handler did not return after context cancellation")
+	}
+
+	ct := rr.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("expected SSE content-type, got %q", ct)
+	}
+}
+
+// --- Emit ---
+
+func TestRouter_Emit_DoesNotPanicWithNoClients(t *testing.T) {
+	rt := newTestRouter()
+	// Should be a no-op when no SSE clients are connected
+	rt.Emit("test-event", map[string]string{"key": "value"})
+}

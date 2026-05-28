@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import {Copy, Check, RefreshCw, RotateCcw, Bot, User} from 'lucide-react'
-import {useState, useCallback} from 'react'
+import {useState, useCallback, memo} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types/domain'
@@ -23,7 +23,7 @@ function formatTime(ts: string): string {
   }
 }
 
-export default function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onRegenerate, onRetry}: Props) {
+function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onRegenerate, onRetry}: Props) {
   const isUser = message.role === 'user'
   const isError = message.finishReason === 'error'
   const [copied, setCopied] = useState(false)
@@ -142,3 +142,13 @@ export default function MessageBubble({message, isStreaming, isThinking, isLastA
     </div>
   )
 }
+
+// Memoize to prevent re-renders during streaming - only re-render when props change
+export default memo(MessageBubble, (prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.isStreaming === nextProps.isStreaming &&
+    prevProps.isThinking === nextProps.isThinking
+  )
+})

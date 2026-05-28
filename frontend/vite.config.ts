@@ -9,4 +9,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/testing/setup.ts'],
+    // Keep explicit vitest imports — no globals injection needed
+    globals: false,
+  },
 })

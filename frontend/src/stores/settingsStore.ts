@@ -41,6 +41,7 @@ const defaultSettings: AppSettings = {
     inspectorCollapsed: false,
     lastActiveInspectorTab: 'details',
     lastViewMode: 'block',
+    // chatPanelHeight: undefined = auto-fill (default)
   },
   ai: {
     activeProvider: 'claude',

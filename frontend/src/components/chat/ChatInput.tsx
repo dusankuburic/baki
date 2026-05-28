@@ -5,8 +5,8 @@ import {useChatStore} from '@/stores/chatStore'
 import FileAutocomplete from './FileAutocomplete'
 
 interface Props {
-  onSend: (text: string, files: string[]) => void
-  onPreview?: (text: string, files: string[]) => void
+  onSend: (text: string, files: string[], excludeContext?: boolean) => void
+  onPreview?: (text: string, files: string[], excludeContext?: boolean) => void
   onCancel?: () => void
   onFilesChange?: (files: string[]) => void
   disabled?: boolean
@@ -17,6 +17,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   const [value, setValue] = useState('')
   const [autocompleteQuery, setAutocompleteQuery] = useState<string | null>(null)
   const [taggedFiles, setTaggedFiles] = useState<string[]>([])
+  const [excludeContext, setExcludeContext] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const streaming = useChatStore(s => s.activeStreamId !== null)
 
@@ -65,21 +66,22 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   const handleSend = useCallback(() => {
     const trimmed = value.trim()
     if (!trimmed || isDisabled) return
-    onSend(trimmed, extractFiles(trimmed))
+    onSend(trimmed, extractFiles(trimmed), excludeContext)
     setValue('')
+    setTaggedFiles([])
     setAutocompleteQuery(null)
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
       }
     })
-  }, [value, isDisabled, onSend])
+  }, [value, isDisabled, onSend, extractFiles, excludeContext])
 
   const handlePreview = useCallback(() => {
     const trimmed = value.trim()
     if (!trimmed || isDisabled || !onPreview) return
-    onPreview(trimmed, extractFiles(trimmed))
-  }, [value, isDisabled, onPreview])
+    onPreview(trimmed, extractFiles(trimmed), excludeContext)
+  }, [value, isDisabled, onPreview, excludeContext])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (autocompleteQuery !== null) {
@@ -156,7 +158,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
         )}
         <textarea
           ref={textareaRef}
-          className="flex-1 bg-transparent text-sm resize-none focus:outline-none min-h-[20px] max-h-[140px] placeholder:text-text-tertiary/60 leading-relaxed"
+          className="flex-1 bg-transparent text-sm resize-none focus:outline-none min-h-[20px] max-h-[140px] placeholder:text-text-tertiary/60 leading-relaxed no-scrollbar"
           rows={1}
           value={value}
           onChange={handleChange}
@@ -201,15 +203,29 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
           </div>
         )}
       </div>
-      <div className="flex justify-between mt-1.5 px-0.5">
-        <span className="text-2xs text-text-tertiary/50">
-          Enter to send · Shift+Enter for newline
-        </span>
-        {onPreview && (
-          <span className="text-2xs text-text-tertiary/50">
-            {navigator.platform?.includes('Mac') ? '\u2318' : 'Ctrl'}+Shift+Enter preview
+      <div className="flex justify-between items-center mt-1.5 px-0.5">
+        <label className="flex items-center gap-1.5 cursor-pointer group">
+          <input
+            type="checkbox"
+            checked={excludeContext}
+            onChange={(e) => setExcludeContext(e.target.checked)}
+            className="w-3 h-3 rounded border-border-subtle text-brand-500 focus:ring-brand-500 focus:ring-offset-0"
+            disabled={isDisabled}
+          />
+          <span className="text-2xs text-text-tertiary group-hover:text-text-secondary transition-colors">
+            Send without context
           </span>
-        )}
+        </label>
+        <div className="flex gap-2">
+          <span className="text-2xs text-text-tertiary/50">
+            Enter to send · Shift+Enter for newline
+          </span>
+          {onPreview && (
+            <span className="text-2xs text-text-tertiary/50">
+              {navigator.platform?.includes('Mac') ? '\u2318' : 'Ctrl'}+Shift+Enter preview
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )

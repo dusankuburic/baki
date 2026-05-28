@@ -1,10 +1,11 @@
 import {request} from './client'
-import {open} from '@tauri-apps/plugin-dialog'
+import { createAdapter } from '@/platform/adapters'
 import type {FlowDocument, RecentFile, SearchQuery, SearchResults} from '@/types/domain'
 
 export const flowApi = {
   openFlowFile: async (): Promise<FlowDocument | null> => {
-    const path = await open({
+    const adapter = createAdapter()
+    const path = await adapter.fileOpen({
       filters: [{name: 'PAD Flow Export', extensions: ['txt']}, {name: 'All Files', extensions: ['*']}]
     })
     if (!path) return null
@@ -13,12 +14,10 @@ export const flowApi = {
   },
 
   openFlowFolder: async (): Promise<FlowDocument | null> => {
-    const path = await open({
-      directory: true
-    })
+    const adapter = createAdapter()
+    const path = await adapter.fileOpenDirectory()
     if (!path) return null
-    const finalPath = Array.isArray(path) ? path[0] : path
-    return request('/api/flow/load-folder', {path: finalPath})
+    return request('/api/flow/load-folder', {path})
   },
 
   loadFlowFromPath: (path: string): Promise<FlowDocument | null> =>

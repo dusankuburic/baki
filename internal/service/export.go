@@ -47,51 +47,56 @@ func (s *ExportService) CompareCurrentWith(oldPath string) (diff *models.FlowDif
 	return parser.DiffFlows(oldDoc, newDoc), nil
 }
 
-func (s *ExportService) ExportMarkdown(path string) (err error) {
+func (s *ExportService) ExportMarkdown(path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportMarkdown", &err)
 
 	curDoc := s.flow.CurrentDoc()
 
 	if curDoc == nil {
-		return fmt.Errorf("no flow loaded")
+		return nil, fmt.Errorf("no flow loaded")
 	}
 
 	report := s.analysis.LastReport()
 	if report == nil {
-		return fmt.Errorf("no analysis report available — run analysis first")
+		return nil, fmt.Errorf("no analysis report available — run analysis first")
 	}
 
 	md := export.ReportToMarkdown(report, curDoc)
+	content = []byte(md)
 
-	if err = os.WriteFile(path, []byte(md), 0644); err != nil {
-		return fmt.Errorf("write file: %w", err)
+	if path != "" {
+		if err = os.WriteFile(path, content, 0644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
 	}
 
-	return nil
+	return content, nil
 }
 
-func (s *ExportService) ExportPDF(path string) (err error) {
+func (s *ExportService) ExportPDF(path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportPDF", &err)
 
 	curDoc := s.flow.CurrentDoc()
 
 	if curDoc == nil {
-		return fmt.Errorf("no flow loaded")
+		return nil, fmt.Errorf("no flow loaded")
 	}
 
 	report := s.analysis.LastReport()
 	if report == nil {
-		return fmt.Errorf("no analysis report available — run analysis first")
+		return nil, fmt.Errorf("no analysis report available — run analysis first")
 	}
 
 	pdfBytes, err := export.ReportToPDF(report, curDoc)
 	if err != nil {
-		return fmt.Errorf("generate PDF: %w", err)
+		return nil, fmt.Errorf("generate PDF: %w", err)
 	}
 
-	if err = os.WriteFile(path, pdfBytes, 0644); err != nil {
-		return fmt.Errorf("write file: %w", err)
+	if path != "" {
+		if err = os.WriteFile(path, pdfBytes, 0644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
 	}
 
-	return nil
+	return pdfBytes, nil
 }

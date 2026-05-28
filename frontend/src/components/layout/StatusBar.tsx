@@ -1,6 +1,8 @@
-import {Check, Loader} from 'lucide-react'
+import {Check, Loader, User, Shield} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useAuthStore} from '@/stores/authStore'
+import {useUIStore} from '@/stores/uiStore'
 
 export default function StatusBar() {
     const document = useFlowStore(s => s.document)
@@ -9,6 +11,8 @@ export default function StatusBar() {
     const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
     const progress = useAnalysisStore(s => s.progress)
     const report = useAnalysisStore(s => document ? s.reports.get(document.id) : undefined)
+    const user = useAuthStore(s => s.user)
+    const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
     const blockCount = document?.metadata?.blockCount ?? 0
     const subflowCount = document?.metadata?.subflowCount ?? 0
@@ -45,7 +49,29 @@ export default function StatusBar() {
                     <span>Ready</span>
                 )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4">
+                {user && (
+                    <>
+                        {user.role === 'admin' && (
+                            <button
+                                onClick={() => setMainPaneView('admin')}
+                                className="flex items-center gap-1 hover:text-text-secondary transition-colors"
+                                title="Admin Dashboard"
+                            >
+                                <Shield size={12} />
+                                <span>Admin</span>
+                            </button>
+                        )}
+                        <button
+                            onClick={() => setMainPaneView('profile')}
+                            className="flex items-center gap-1 hover:text-text-secondary transition-colors"
+                            title="User Profile"
+                        >
+                            <User size={12} />
+                            <span>{user.email}</span>
+                        </button>
+                    </>
+                )}
                 {document && (
                     <span>{document.name}</span>
                 )}

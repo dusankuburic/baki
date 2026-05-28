@@ -1,5 +1,6 @@
 import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
+import {useUIStore} from '@/stores/uiStore'
 import {flowApi} from '@/api'
 import type {RecentFile, FlowDocument as DomainFlowDocument} from '@/types/domain'
 
@@ -9,8 +10,16 @@ export function useFileOpen() {
     const setFolderFiles = useFlowStore(s => s.setFolderFiles)
     const setSelectedFilePath = useFlowStore(s => s.setSelectedFilePath)
     const openInGroup = useFlowStore(s => s.openInGroup)
+    const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
+
+    const checkView = useCallback(() => {
+        const view = useUIStore.getState().mainPaneView
+        if (view === 'profile' || view === 'admin') {
+            setMainPaneView('block')
+        }
+    }, [setMainPaneView])
 
     useEffect(() => {
         flowApi.recentFiles()
@@ -26,11 +35,12 @@ export function useFileOpen() {
                 setDocument(domainDoc)
                 setFolderFiles([])
                 setSelectedFilePath(domainDoc.filePath)
+                checkView()
             }
         } catch (err) {
             console.error('Failed to open file:', err)
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView])
 
     const handleOpenFolder = useCallback(async () => {
         try {
@@ -42,11 +52,12 @@ export function useFileOpen() {
                     setFolderFiles(domainDoc.files)
                     setSelectedFilePath(domainDoc.files[0].path)
                 }
+                checkView()
             }
         } catch (err) {
             console.error('Failed to open folder:', err)
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView])
 
     const handleSelectFolderFile = useCallback(async (path: string) => {
         setSelectedFilePath(path)
@@ -57,16 +68,20 @@ export function useFileOpen() {
             const sf = doc.subflows.find(s => s.sourceFile === fileName)
             if (sf) {
                 openInGroup(sf.id)
+                checkView()
                 return
             }
         }
         try {
             const newDoc = await flowApi.loadFlowFromPath(path)
-            if (newDoc) setDocument(newDoc as any as DomainFlowDocument)
+            if (newDoc) {
+                setDocument(newDoc as any as DomainFlowDocument)
+                checkView()
+            }
         } catch (err) {
             console.error('Failed to load file:', err)
         }
-    }, [setDocument, setSelectedFilePath, openInGroup])
+    }, [setDocument, setSelectedFilePath, openInGroup, checkView])
 
     const handleLoadRecent = useCallback(async (path: string) => {
         try {
@@ -84,11 +99,12 @@ export function useFileOpen() {
                     setFolderFiles([])
                     setSelectedFilePath(domainDoc.filePath)
                 }
+                checkView()
             }
         } catch (err) {
             console.error('Failed to load recent item:', err)
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView])
 
     const handleRemoveRecent = useCallback(async (path: string) => {
         try {

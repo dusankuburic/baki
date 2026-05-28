@@ -221,6 +221,7 @@ export interface ChatRequest {
   temperature?: number;
   maxTokens?: number;
   demoMode?: boolean;
+  excludeContext?: boolean;
 }
 
 export interface SourceFileInfo {
@@ -281,8 +282,9 @@ export interface LayoutSettings {
   inspectorWidth: number;
   sidebarCollapsed: boolean;
   inspectorCollapsed: boolean;
-  lastActiveInspectorTab: 'details' | 'ai' | 'findings';
-  lastViewMode: 'block' | 'graph' | 'map' | 'local-map' | 'diff';
+  lastActiveInspectorTab: 'details' | 'ai' | 'findings' | 'sharing';
+  lastViewMode: 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin';
+  chatPanelHeight?: number;
 }
 
 export interface AISettings {

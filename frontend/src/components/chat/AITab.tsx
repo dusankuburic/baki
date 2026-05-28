@@ -90,7 +90,7 @@ export default function AITab() {
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col min-h-full">
       <ConnectionPanel
         providers={configuredProviders.map(p => ({
           id: p.id as any,
@@ -173,9 +173,9 @@ export default function AITab() {
               {WELCOME_MESSAGES[useChatStore.getState().selectedProvider] ?? DEFAULT_WELCOME}
             </p>
           </div>
-          <SuggestedPrompts prompts={suggestedPrompts} onSelect={(text) => handleSend(text, [])} />
+          <SuggestedPrompts prompts={suggestedPrompts} onSelect={(text) => handleSend(text, [], false)} />
           <PromptTemplates
-            onSelect={(text) => handleSend(text, [])}
+            onSelect={(text) => handleSend(text, [], false)}
             hasBlock={!!contextBlockId}
             flowName={doc?.name}
             blockName={selectedBlock?.name}
@@ -183,39 +183,43 @@ export default function AITab() {
         </>
       )}
 
-      <ChatMessageList isStreaming={isCurrentThreadStreaming}>
-        {messages.map((m, i) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            isLastAssistant={i === lastAssistantIdx}
-            onRegenerate={i === lastAssistantIdx ? handleResend : undefined}
-            onRetry={m.finishReason === 'error' ? handleResend : undefined}
-          />
-        ))}
-        {showThinking && (
-          <MessageBubble
-            message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
-            isThinking
-          />
-        )}
-        {isCurrentThreadStreaming && streamingText && (
-          <MessageBubble
-            message={{
-              id: streamingMessageId || 'streaming',
-              role: 'assistant',
-              content: streamingText,
-              timestamp: new Date().toISOString(),
-            }}
-            isStreaming
-          />
-        )}
-      </ChatMessageList>
-
-      {!doc || !activeThread ? (
-        <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} />
+      {/* Main content area */}
+      {doc && activeThread ? (
+        <ChatMessageList isStreaming={isCurrentThreadStreaming}>
+          {messages.map((m, i) => (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              isLastAssistant={i === lastAssistantIdx}
+              onRegenerate={i === lastAssistantIdx ? handleResend : undefined}
+              onRetry={m.finishReason === 'error' ? handleResend : undefined}
+            />
+          ))}
+          {showThinking && (
+            <MessageBubble
+              message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
+              isThinking
+            />
+          )}
+          {isCurrentThreadStreaming && streamingText && (
+            <MessageBubble
+              message={{
+                id: streamingMessageId || 'streaming',
+                role: 'assistant',
+                content: streamingText,
+                timestamp: new Date().toISOString(),
+              }}
+              isStreaming
+            />
+          )}
+        </ChatMessageList>
       ) : (
-        <>
+        <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} />
+      )}
+
+      {/* Bottom fixed section: tokens/progress + input */}
+      {doc && activeThread && (
+        <div className="flex-shrink-0">
           {isCurrentThreadStreaming && streamingTokens > 0 ? (
             <StreamingProgress
               tokens={streamingTokens}
@@ -230,16 +234,14 @@ export default function AITab() {
               outputCostPerM={showCost ? currentModelDetail!.outputCostPerM : undefined}
             />
           )}
-        </>
-      )}
 
-      {doc && activeThread && (
-        <ChatInput
-          onSend={(text, files) => handleSend(text, files)}
-          onPreview={(text, files) => handlePreviewContext(text, files)}
-          onCancel={handleCancelStream}
-          onFilesChange={setThreadSourceFiles}
-        />
+          <ChatInput
+            onSend={(text, files, excludeContext) => handleSend(text, files, excludeContext)}
+            onPreview={(text, files, excludeContext) => handlePreviewContext(text, files, excludeContext)}
+            onCancel={handleCancelStream}
+            onFilesChange={setThreadSourceFiles}
+          />
+        </div>
       )}
 
       {contextPreview && pendingMessage && (

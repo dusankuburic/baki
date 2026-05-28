@@ -3,6 +3,8 @@ import {X, FolderOpen, XCircle, MinusSquare} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
 import {GraphView} from '@/components/graph'
 import {Spinner} from '@/components/shared'
+import {UserProfile} from '@/components/auth/UserProfile'
+import {AdminDashboard} from '@/components/admin/AdminDashboard'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import Breadcrumbs from './Breadcrumbs'
 
@@ -16,6 +18,29 @@ import type {FlowDocument} from '@/types/domain'
 export default function MainPane() {
     const mainPaneView = useUIStore(s => s.mainPaneView)
     const document = useFlowStore(s => s.document)
+
+    if (mainPaneView === 'profile') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-y-auto p-4">
+                    <UserProfile />
+                </div>
+            </div>
+        )
+    }
+
+    if (mainPaneView === 'admin') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-y-auto p-4">
+                    <AdminDashboard />
+                </div>
+            </div>
+        )
+    }
+
     const groups = useFlowStore(s => s.groups)
     const focusedGroupIndex = useFlowStore(s => s.focusedGroupIndex)
     const groupWidths = useFlowStore(s => s.groupWidths)
@@ -132,11 +157,11 @@ export default function MainPane() {
                                         <Suspense fallback={<Spinner />}>
                                             <ExecutionGraphView key={`local-map-${group.activeTabId}`} subflowId={group.activeTabId} />
                                         </Suspense>
-                                    ) : (
+                                    ) : mainPaneView === 'map' ? (
                                         <Suspense fallback={<Spinner />}>
                                             <ExecutionGraphView key="global-map" />
                                         </Suspense>
-                                    )
+                                    ) : null
                                 )}
                             </div>
                         </div>

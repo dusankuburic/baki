@@ -177,7 +177,7 @@ func (s *ChatService) StreamChatMessage(req models.ChatRequest) (streamID string
 				ctl.mu.Unlock()
 			}
 			if chunk.Done {
-				emit("done", map[string]interface{}{"totalTokens": totalOut, "tokensIn": totalIn, "finishReason": "stop"})
+				emit("done", map[string]interface{}{"tokensOut": totalOut, "tokensIn": totalIn, "finishReason": "stop"})
 			}
 		})
 

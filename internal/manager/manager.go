@@ -11,6 +11,7 @@ import (
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // These are injected at build time via -ldflags:
@@ -25,6 +26,7 @@ var (
 type App struct {
 	ctx       context.Context
 	notifier  service.Notifier
+	storage   storageif.StorageBackend // nil in local mode; postgres backend in cloud mode
 	settings  *storage.SettingsStore
 	flow      *service.FlowService
 	analysis  *service.AnalysisService
@@ -33,7 +35,11 @@ type App struct {
 	export    *service.ExportService
 }
 
-func NewApp() *App { return &App{} }
+// NewApp creates the application manager. Pass a non-nil storageBackend to
+// enable cloud/database mode; pass nil to use the default local filesystem.
+func NewApp(storageBackend storageif.StorageBackend) *App {
+	return &App{storage: storageBackend}
+}
 
 func (a *App) Init(ctx context.Context, notifier service.Notifier) {
 	a.ctx = ctx
@@ -68,6 +74,72 @@ func (a *App) Init(ctx context.Context, notifier service.Notifier) {
 	a.chat = service.NewChatService(ctx, notifier, configDir, a.flow, a.analysis, settings, factory, demo)
 
 	logger.Info("app initialized")
+}
+
+// StorageBackend returns the active storage backend (nil in local mode).
+func (a *App) StorageBackend() storageif.StorageBackend {
+	return a.storage
+}
+
+// --- library (cloud-mode flow storage) ---
+
+// ListLibraryFlows returns flows visible to the requesting user.
+// userID scopes results to personally-owned flows; orgID additionally includes org-shared flows.
+func (a *App) ListLibraryFlows(userID, orgID, query string, limit, offset int) (docs []*storageif.FlowDocument, err error) {
+	defer logger.Guard("App.ListLibraryFlows", &err)
+	if a.storage == nil {
+		return []*storageif.FlowDocument{}, nil
+	}
+	return a.storage.ListFlows(a.ctx, storageif.FlowFilter{
+		UserID:         userID,
+		OrganizationID: orgID,
+		Query:          query,
+		Limit:          limit,
+		Offset:         offset,
+	})
+}
+
+// GetLibraryFlow loads a single flow by ID, returning ErrNotFound if absent.
+// In cloud mode the caller should verify ownership after loading.
+func (a *App) GetLibraryFlow(flowID string) (doc *storageif.FlowDocument, err error) {
+	defer logger.Guard("App.GetLibraryFlow", &err)
+	if a.storage == nil {
+		return nil, storageif.ErrNotFound
+	}
+	return a.storage.LoadFlow(a.ctx, flowID)
+}
+
+// CreateLibraryFlow persists a new flow owned by ownerID.
+func (a *App) CreateLibraryFlow(ownerID, orgID string, doc storageif.FlowDocument) (saved *storageif.FlowDocument, err error) {
+	defer logger.Guard("App.CreateLibraryFlow", &err)
+	if a.storage == nil {
+		return nil, fmt.Errorf("cloud storage not available in local mode")
+	}
+	doc.OwnerID = ownerID
+	doc.OrganizationID = orgID
+	if err := a.storage.SaveFlow(a.ctx, &doc); err != nil {
+		return nil, err
+	}
+	return &doc, nil
+}
+
+// UpdateLibraryFlow saves changes to an existing flow document.
+// The handler is responsible for verifying ownership before calling.
+func (a *App) UpdateLibraryFlow(doc *storageif.FlowDocument) (err error) {
+	defer logger.Guard("App.UpdateLibraryFlow", &err)
+	if a.storage == nil {
+		return fmt.Errorf("cloud storage not available in local mode")
+	}
+	return a.storage.SaveFlow(a.ctx, doc)
+}
+
+// DeleteLibraryFlow removes a flow. The handler should verify ownership before calling.
+func (a *App) DeleteLibraryFlow(flowID string) (err error) {
+	defer logger.Guard("App.DeleteLibraryFlow", &err)
+	if a.storage == nil {
+		return fmt.Errorf("cloud storage not available in local mode")
+	}
+	return a.storage.DeleteFlow(a.ctx, flowID)
 }
 
 // --- system ---
@@ -177,7 +249,9 @@ func (a *App) ReadSourceFiles(names []string) (result map[string]string, err err
 }
 
 func (a *App) OnFileOpenFromSystem(path string) {
-	a.flow.OnFileOpenFromSystem(path)
+	if a.flow != nil {
+		a.flow.OnFileOpenFromSystem(path)
+	}
 }
 
 // --- providers ---
@@ -242,11 +316,15 @@ func (a *App) StreamChatMessage(req models.ChatRequest) (id string, err error) {
 }
 
 func (a *App) BeginStream(id string) {
-	a.chat.BeginStream(id)
+	if a.chat != nil {
+		a.chat.BeginStream(id)
+	}
 }
 
 func (a *App) CancelStream(id string) {
-	a.chat.CancelStream(id)
+	if a.chat != nil {
+		a.chat.CancelStream(id)
+	}
 }
 
 func (a *App) GetConversation(flowID, blockId string) (conv *models.ConversationFile, err error) {
@@ -302,6 +380,9 @@ func (a *App) GetExecutionGraph() (graph *models.GraphData, err error) {
 }
 
 func (a *App) GetRules() []models.Rule {
+	if a.analysis == nil {
+		return nil
+	}
 	return a.analysis.GetRules()
 }
 
@@ -322,12 +403,12 @@ func (a *App) CompareCurrentWith(path string) (diff *models.FlowDiff, err error)
 	return a.export.CompareCurrentWith(path)
 }
 
-func (a *App) ExportMarkdown(path string) (err error) {
+func (a *App) ExportMarkdown(path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportMarkdown", &err)
 	return a.export.ExportMarkdown(path)
 }
 
-func (a *App) ExportPDF(path string) (err error) {
+func (a *App) ExportPDF(path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportPDF", &err)
 	return a.export.ExportPDF(path)
 }

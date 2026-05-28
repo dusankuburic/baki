@@ -1,4 +1,4 @@
-import {useRef, useEffect, useCallback, useState} from 'react'
+import {useRef, useEffect, useCallback, useState, memo} from 'react'
 import {ChevronDown} from 'lucide-react'
 import clsx from 'clsx'
 
@@ -10,7 +10,7 @@ interface Props {
 const SCROLL_UPDATE_THROTTLE = 120 // ms between scroll updates
 const SCROLL_THRESHOLD = 100 // pixels from bottom to trigger auto-scroll
 
-export default function ChatMessageList({children, isStreaming}: Props) {
+function ChatMessageList({children, isStreaming}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const userScrolledRef = useRef(false)
@@ -100,3 +100,8 @@ export default function ChatMessageList({children, isStreaming}: Props) {
     </div>
   )
 }
+
+// Memoize to prevent re-renders during streaming - only re-render when isStreaming changes
+export default memo(ChatMessageList, (prevProps, nextProps) => {
+  return prevProps.isStreaming === nextProps.isStreaming
+})

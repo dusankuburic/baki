@@ -38,7 +38,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           handlerRef.current.onChunk(data.text || '')
           break
         case 'done':
-          handlerRef.current.onDone(data.totalTokens || 0, data.tokensIn || 0)
+          handlerRef.current.onDone(data.tokensOut || 0, data.tokensIn || 0)
           break
         case 'error':
           handlerRef.current.onError(data.error || 'Unknown error')

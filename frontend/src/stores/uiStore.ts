@@ -3,9 +3,9 @@ import type {FlowDiff} from '@/types/domain'
 
 interface UiState {
   resolvedTheme: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
-  sidebarTab: 'explorer' | 'variables'
-  mainPaneView: 'block' | 'graph' | 'map' | 'local-map' | 'diff'
-  inspectorTab: 'details' | 'ai' | 'findings'
+  sidebarTab: 'explorer' | 'variables' | 'library'
+  mainPaneView: 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin'
+  inspectorTab: 'details' | 'ai' | 'findings' | 'sharing'
   sidebarCollapsed: boolean
   inspectorCollapsed: boolean
   commandPaletteOpen: boolean
@@ -18,9 +18,9 @@ interface UiState {
   activeDiff: FlowDiff | null
 
   setResolvedTheme: (t: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord') => void
-  setSidebarTab: (t: 'explorer' | 'variables') => void
-  setMainPaneView: (v: 'block' | 'graph' | 'map' | 'local-map' | 'diff') => void
-  setInspectorTab: (t: 'details' | 'ai' | 'findings') => void
+  setSidebarTab: (t: 'explorer' | 'variables' | 'library') => void
+  setMainPaneView: (v: 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin') => void
+  setInspectorTab: (t: 'details' | 'ai' | 'findings' | 'sharing') => void
   setSidebarCollapsed: (v: boolean) => void
   setInspectorCollapsed: (v: boolean) => void
   setCommandPaletteOpen: (o: boolean | ((prev: boolean) => boolean)) => void

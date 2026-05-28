@@ -1,7 +1,7 @@
 import {useCallback, useMemo} from 'react'
 import clsx from 'clsx'
 import {useKeyboard} from '@/hooks/useKeyboard'
-import {FolderOpen, FolderTree, BarChart2} from 'lucide-react'
+import {FolderOpen, FolderTree, BarChart2, Library} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import FileHeader from '@/components/sidebar/FileHeader'
 import FileList from '@/components/sidebar/FileList'
@@ -9,6 +9,7 @@ import SearchBar from '@/components/sidebar/SearchBar'
 import FilterChips from '@/components/sidebar/FilterChips'
 import FlowTree from '@/components/sidebar/FlowTree'
 import VariablesTab from '@/components/sidebar/VariablesTab'
+import LibraryTab from '@/components/sidebar/LibraryTab'
 import SidebarToolbar from '@/components/sidebar/SidebarToolbar'
 import {useFlowStore, ALL_TYPES} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -67,6 +68,9 @@ export default function Sidebar() {
     const handleSelectBlock = useCallback((blockId: string, subflowId: string) => {
         selectBlock(blockId)
         selectSubflow(subflowId)
+        if (useUIStore.getState().mainPaneView === 'profile' || useUIStore.getState().mainPaneView === 'admin') {
+            useUIStore.getState().setMainPaneView('block')
+        }
     }, [selectBlock, selectSubflow])
 
     const handleToggleType = useCallback((type: BlockType) => {
@@ -186,6 +190,7 @@ export default function Sidebar() {
                 {([
                     {value: 'explorer'  as const, label: 'Explorer',  icon: FolderTree},
                     {value: 'variables' as const, label: 'Variables', icon: BarChart2},
+                    {value: 'library'   as const, label: 'Library',   icon: Library},
                 ]).map(({value, label, icon: Icon}) => (
                     <button
                         key={value}
@@ -239,7 +244,12 @@ export default function Sidebar() {
                             searchHighlights={searchHighlightsMap}
                             findingCounts={findingCounts}
                             onSelectBlock={handleSelectBlock}
-                            onSelectSubflow={selectSubflow}
+                            onSelectSubflow={(id) => {
+                                selectSubflow(id)
+                                if (useUIStore.getState().mainPaneView === 'profile' || useUIStore.getState().mainPaneView === 'admin') {
+                                    useUIStore.getState().setMainPaneView('block')
+                                }
+                            }}
                             onToggleSubflowExpand={toggleSubflowExpand}
                             onToggleBlockExpand={toggleBlockExpand}
                         />
@@ -259,8 +269,10 @@ export default function Sidebar() {
                         </div>
                     )}
                 </>
-            ) : (
+            ) : sidebarTab === 'variables' ? (
                 <VariablesTab />
+            ) : (
+                <LibraryTab />
             )}
 
             <SidebarToolbar hasFlow={!!document} onAnalyze={handleAnalyze} />
