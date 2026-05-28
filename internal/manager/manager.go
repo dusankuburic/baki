@@ -213,6 +213,11 @@ func (a *App) LoadFlowFolder(path string) (doc *models.FlowDocument, err error) 
 	return a.flow.LoadFlowFolder(path)
 }
 
+func (a *App) LoadFlowFiles(files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
+	defer logger.Guard("App.LoadFlowFiles", &err)
+	return a.flow.LoadFlowFiles(files, rootName)
+}
+
 func (a *App) RecentFiles() (files []models.RecentFile, err error) {
 	defer logger.Guard("App.RecentFiles", &err)
 	return a.flow.RecentFiles()

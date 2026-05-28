@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/logger"
 )
 
 func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
@@ -20,6 +21,12 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 	// Sharing routes: /api/flows/:flowId/collaborators[/:userId]
 	if strings.HasPrefix(r.URL.Path, "/api/flows/") {
 		rt.handleSharingRoute(w, r)
+		return
+	}
+
+	// Org routes (REST): /api/orgs[/:id[/members[/:userId[/role]]]]
+	if path == "/api/orgs" || strings.HasPrefix(path, "/api/orgs/") {
+		rt.handleOrgsRoute(w, r)
 		return
 	}
 
@@ -53,6 +60,8 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 		rt.handleLoadFlowFromPath(w, r)
 	case "/api/flow/load-folder":
 		rt.handleLoadFlowFolder(w, r)
+	case "/api/flow/upload":
+		rt.handleUploadFlow(w, r)
 	case "/api/flow/recent":
 		rt.handleRecentFiles(w, r)
 	case "/api/flow/remove-recent":
@@ -159,18 +168,8 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 		rt.handleAuthLogout(w, r)
 	case "/api/auth/change-password":
 		rt.handleAuthChangePassword(w, r)
-
-	// --- Org ---
-	case "/api/org/list":
-		rt.handleOrgList(w, r)
-	case "/api/org/create":
-		rt.handleOrgCreate(w, r)
-	case "/api/org/member/add":
-		rt.handleOrgMemberAdd(w, r)
-	case "/api/org/member/remove":
-		rt.handleOrgMemberRemove(w, r)
-	case "/api/org/member/role":
-		rt.handleOrgMemberSetRole(w, r)
+	case "/api/ws-ticket":
+		rt.handleWSTicket(w, r)
 
 	// --- Admin ---
 	case "/api/admin/users/list":
@@ -197,6 +196,28 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 			rt.handleAdminUserRole(w, r)
 			return
 		}
+
+		// If staticDir is set, serve frontend assets.
+		if rt.staticDir != "" {
+			// API routes that didn't match should return 404, not the SPA index.html.
+			if strings.HasPrefix(path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
+
+			// Serve static files. If the file doesn't exist, serve index.html (SPA support).
+			fs := http.Dir(rt.staticDir)
+			file, err := fs.Open(path)
+			if err != nil {
+				// Fallback to index.html for SPA routing
+				http.ServeFile(w, r, rt.staticDir+"/index.html")
+				return
+			}
+			file.Close()
+			http.FileServer(fs).ServeHTTP(w, r)
+			return
+		}
+
 		http.NotFound(w, r)
 	}
 }
@@ -233,6 +254,9 @@ func (rt *Router) sendJSON(w http.ResponseWriter, data any) {
 }
 
 func (rt *Router) sendError(w http.ResponseWriter, err error, code int) {
+	if code >= 500 {
+		logger.Error("internal server error", "error", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	msg := err.Error()

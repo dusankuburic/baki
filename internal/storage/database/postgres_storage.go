@@ -374,7 +374,7 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context) ([]*interfaces.U
 		u.Role = auth.Role(roleStr)
 		users = append(users, &u)
 	}
-	return users, nil
+	return users, rows.Err()
 }
 
 // ---- Organisation operations ----
@@ -454,6 +454,9 @@ func (b *PostgresStorageBackend) LoadOrg(ctx context.Context, id string) (*inter
 		m.Role = auth.Role(roleStr)
 		org.Members = append(org.Members, m)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate members: %w", err)
+	}
 
 	return &org, nil
 }
@@ -477,6 +480,9 @@ func (b *PostgresStorageBackend) ListOrgsForUser(ctx context.Context, userID str
 			return nil, fmt.Errorf("scan org: %w", err)
 		}
 		orgs = append(orgs, &org)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate orgs: %w", err)
 	}
 
 	// We don't load full member lists for the user's org list to keep it fast.
@@ -514,7 +520,7 @@ func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID s
 		}
 		collabs = append(collabs, &c)
 	}
-	return collabs, nil
+	return collabs, rows.Err()
 }
 
 func (b *PostgresStorageBackend) AddCollaborator(ctx context.Context, flowID string, c *interfaces.Collaborator) error {
@@ -569,6 +575,58 @@ func (b *PostgresStorageBackend) RemoveCollaborator(ctx context.Context, flowID,
 func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	_, err := b.db.ExecContext(ctx, schema)
 	return err
+}
+
+// ---- Refresh-token rotation store ----
+// These back the auth refresh-token rotation/revocation flow in cloud mode.
+
+// StoreRefreshToken records an issued refresh token by its jti. It also makes a
+// best-effort purge of already-expired rows to keep the table small.
+func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time) error {
+	if _, err := b.db.ExecContext(ctx,
+		`INSERT INTO refresh_tokens (jti, user_id, expires_at) VALUES ($1, $2, $3)
+		 ON CONFLICT (jti) DO NOTHING`,
+		jti, userID, expiresAt.UTC(),
+	); err != nil {
+		return fmt.Errorf("store refresh token: %w", err)
+	}
+	_, _ = b.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE expires_at < NOW()`)
+	return nil
+}
+
+// IsRefreshTokenValid reports whether the jti exists, is not revoked, and has
+// not expired.
+func (b *PostgresStorageBackend) IsRefreshTokenValid(ctx context.Context, jti string) (bool, error) {
+	var ok bool
+	err := b.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM refresh_tokens
+		 WHERE jti = $1 AND NOT revoked AND expires_at > NOW())`,
+		jti,
+	).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("check refresh token: %w", err)
+	}
+	return ok, nil
+}
+
+// RevokeRefreshToken revokes a single refresh token by jti (used on rotation).
+func (b *PostgresStorageBackend) RevokeRefreshToken(ctx context.Context, jti string) error {
+	if _, err := b.db.ExecContext(ctx,
+		`UPDATE refresh_tokens SET revoked = TRUE WHERE jti = $1`, jti,
+	); err != nil {
+		return fmt.Errorf("revoke refresh token: %w", err)
+	}
+	return nil
+}
+
+// RevokeUserRefreshTokens revokes every refresh token for a user (used on logout).
+func (b *PostgresStorageBackend) RevokeUserRefreshTokens(ctx context.Context, userID string) error {
+	if _, err := b.db.ExecContext(ctx,
+		`UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND NOT revoked`, userID,
+	); err != nil {
+		return fmt.Errorf("revoke user refresh tokens: %w", err)
+	}
+	return nil
 }
 
 const schema = `
@@ -633,4 +691,19 @@ CREATE TABLE IF NOT EXISTS flow_collaborators (
 	PRIMARY KEY (flow_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS flow_collaborators_flow_id_idx ON flow_collaborators (flow_id);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+	jti        TEXT        PRIMARY KEY,
+	user_id    TEXT        NOT NULL,
+	expires_at TIMESTAMPTZ NOT NULL,
+	revoked    BOOLEAN     NOT NULL DEFAULT FALSE,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens (user_id);
+
+CREATE TABLE IF NOT EXISTS provider_keys (
+	provider   TEXT        PRIMARY KEY,
+	ciphertext TEXT        NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `

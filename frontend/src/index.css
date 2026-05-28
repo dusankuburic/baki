@@ -36,6 +36,8 @@
 }
 
 :root {
+  color-scheme: dark;
+
   /* === SURFACES — dark theme default === */
   --surface-0: #0a0a0b;
   --surface-1: #131316;
@@ -161,6 +163,8 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
+
   --surface-0: #fafafa;
   --surface-1: #ffffff;
   --surface-2: #f4f4f5;
@@ -881,4 +885,80 @@ html, body, #root {
 
 .chat-message-list.is-streaming .message-bubble:last-child {
   opacity: 1;
+}
+
+/* === AUTOFILL OVERRIDE === */
+/* Chrome does not resolve CSS custom properties inside :-webkit-autofill — hardcode per theme */
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #1c1c21 inset !important;
+  -webkit-text-fill-color: #f4f4f5 !important;
+  caret-color: #f4f4f5;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+[data-theme="light"] input:-webkit-autofill,
+[data-theme="light"] input:-webkit-autofill:hover,
+[data-theme="light"] input:-webkit-autofill:focus,
+[data-theme="light"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #f4f4f5 inset !important;
+  -webkit-text-fill-color: #18181b !important;
+  caret-color: #18181b;
+}
+
+[data-theme="midnight"] input:-webkit-autofill,
+[data-theme="midnight"] input:-webkit-autofill:hover,
+[data-theme="midnight"] input:-webkit-autofill:focus,
+[data-theme="midnight"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #131f38 inset !important;
+  -webkit-text-fill-color: #e8edf5 !important;
+  caret-color: #e8edf5;
+}
+
+[data-theme="warm"] input:-webkit-autofill,
+[data-theme="warm"] input:-webkit-autofill:hover,
+[data-theme="warm"] input:-webkit-autofill:focus,
+[data-theme="warm"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #231e18 inset !important;
+  -webkit-text-fill-color: #f5ede3 !important;
+  caret-color: #f5ede3;
+}
+
+[data-theme="tokyo-night"] input:-webkit-autofill,
+[data-theme="tokyo-night"] input:-webkit-autofill:hover,
+[data-theme="tokyo-night"] input:-webkit-autofill:focus,
+[data-theme="tokyo-night"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #1f2335 inset !important;
+  -webkit-text-fill-color: #c0caf5 !important;
+  caret-color: #c0caf5;
+}
+
+[data-theme="one-dark"] input:-webkit-autofill,
+[data-theme="one-dark"] input:-webkit-autofill:hover,
+[data-theme="one-dark"] input:-webkit-autofill:focus,
+[data-theme="one-dark"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #282c34 inset !important;
+  -webkit-text-fill-color: #abb2bf !important;
+  caret-color: #abb2bf;
+}
+
+[data-theme="dracula"] input:-webkit-autofill,
+[data-theme="dracula"] input:-webkit-autofill:hover,
+[data-theme="dracula"] input:-webkit-autofill:focus,
+[data-theme="dracula"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #44475a inset !important;
+  -webkit-text-fill-color: #f8f8f2 !important;
+  caret-color: #f8f8f2;
+}
+
+[data-theme="nord"] input:-webkit-autofill,
+[data-theme="nord"] input:-webkit-autofill:hover,
+[data-theme="nord"] input:-webkit-autofill:focus,
+[data-theme="nord"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #3b4252 inset !important;
+  -webkit-text-fill-color: #eceff4 !important;
+  caret-color: #eceff4;
 }

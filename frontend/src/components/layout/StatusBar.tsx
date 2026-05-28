@@ -1,8 +1,10 @@
+import {useEffect, useState} from 'react'
 import {Check, Loader, User, Shield} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useUIStore} from '@/stores/uiStore'
+import {subscribeConnectionState, type EventConnectionState} from '@/api/client'
 
 export default function StatusBar() {
     const document = useFlowStore(s => s.document)
@@ -13,6 +15,9 @@ export default function StatusBar() {
     const report = useAnalysisStore(s => document ? s.reports.get(document.id) : undefined)
     const user = useAuthStore(s => s.user)
     const setMainPaneView = useUIStore(s => s.setMainPaneView)
+
+    const [conn, setConn] = useState<EventConnectionState>('idle')
+    useEffect(() => subscribeConnectionState(setConn), [])
 
     const blockCount = document?.metadata?.blockCount ?? 0
     const subflowCount = document?.metadata?.subflowCount ?? 0
@@ -50,6 +55,15 @@ export default function StatusBar() {
                 )}
             </div>
             <div className="flex items-center gap-4">
+                {(conn === 'reconnecting' || conn === 'connecting') && (
+                    <span
+                        className="flex items-center gap-1 text-semantic-warning"
+                        title="Live updates connection"
+                    >
+                        <Loader size={10} className="animate-spin" />
+                        {conn === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+                    </span>
+                )}
                 {user && (
                     <>
                         {user.role === 'admin' && (

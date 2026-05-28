@@ -85,6 +85,21 @@ export interface PlatformAdapter {
    * Write to clipboard
    */
   writeClipboard(text: string): Promise<void>;
+
+  /**
+   * Minimize the application window (desktop only; no-op on web).
+   */
+  minimizeWindow(): Promise<void>;
+
+  /**
+   * Toggle maximize/restore the application window (desktop only; no-op on web).
+   */
+  toggleMaximizeWindow(): Promise<void>;
+
+  /**
+   * Close the application window (desktop only; no-op on web).
+   */
+  closeWindow(): Promise<void>;
 }
 
 /**

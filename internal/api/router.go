@@ -1,24 +1,41 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/manager"
 	"pad-analyzer/internal/migration"
 	wshub "pad-analyzer/internal/websocket"
+
+	_ "pad-analyzer/docs"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
+
+// refreshTokenStore tracks issued refresh tokens so they can be rotated and
+// revoked (cloud mode). The Postgres backend implements it; in local mode the
+// router runs without it (stateless refresh).
+type refreshTokenStore interface {
+	StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time) error
+	IsRefreshTokenValid(ctx context.Context, jti string) (bool, error)
+	RevokeRefreshToken(ctx context.Context, jti string) error
+	RevokeUserRefreshTokens(ctx context.Context, userID string) error
+}
 
 type Router struct {
 	app            *manager.App
 	token          string
 	jwtEnabled     bool // true in cloud mode: validate JWT instead of pre-shared token
 	allowedOrigins []string
+	staticDir      string
 	clients        map[chan Event]bool
 	clientsMu      sync.Mutex
 	hub            *wshub.Hub
@@ -26,10 +43,16 @@ type Router struct {
 	localName      string
 	authMgr        *auth.Manager
 	orgSvc         *collaboration.OrgService
+	tokenStore     refreshTokenStore // non-nil in cloud mode with a DB backend
 
 	migrationMu      sync.Mutex
 	migrationRes     *migration.Result
 	migrationRunning bool
+
+	// usedTickets records consumed WebSocket connect tickets (by jti) so a
+	// ticket can be redeemed at most once. Entries are pruned as they expire.
+	usedTicketsMu sync.Mutex
+	usedTickets   map[string]time.Time
 }
 
 type Event struct {
@@ -43,11 +66,18 @@ type Event struct {
 // jwtEnabled should be true for cloud deployments where each request carries a JWT.
 // allowedOrigins lists origins permitted for CORS and WebSocket upgrades.
 // Pass nil or empty to allow only same-origin (localhost in local mode).
-func NewRouter(app *manager.App, token string, jwtEnabled bool, allowedOrigins []string) *Router {
+func NewRouter(app *manager.App, token string, jwtEnabled bool, allowedOrigins []string, staticDir string) *Router {
 	// Use postgres-backed org storage when available, otherwise fall back to in-memory.
 	orgStore := collaboration.NewMemOrgStore()
 	if s, ok := app.StorageBackend().(collaboration.OrgStore); ok {
 		orgStore = s
+	}
+
+	// Refresh-token rotation requires a durable store; only enabled when the
+	// backend (Postgres) implements it.
+	var tokenStore refreshTokenStore
+	if ts, ok := app.StorageBackend().(refreshTokenStore); ok {
+		tokenStore = ts
 	}
 
 	return &Router{
@@ -55,13 +85,39 @@ func NewRouter(app *manager.App, token string, jwtEnabled bool, allowedOrigins [
 		token:          token,
 		jwtEnabled:     jwtEnabled,
 		allowedOrigins: allowedOrigins,
+		staticDir:      staticDir,
 		clients:        make(map[chan Event]bool),
 		hub:            wshub.NewHub(),
 		localUserID:    "local",
 		localName:      "You",
 		authMgr:        auth.NewManager(token),
 		orgSvc:         collaboration.NewOrgService(orgStore),
+		tokenStore:     tokenStore,
+		usedTickets:    make(map[string]time.Time),
 	}
+}
+
+// consumeTicket records a ticket jti as used and reports whether the caller may
+// proceed. It returns false if the ticket was already redeemed (replay). Expired
+// entries are pruned opportunistically to bound the map's size.
+func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
+	if jti == "" {
+		return false
+	}
+	rt.usedTicketsMu.Lock()
+	defer rt.usedTicketsMu.Unlock()
+
+	now := time.Now()
+	for id, t := range rt.usedTickets {
+		if t.Before(now) {
+			delete(rt.usedTickets, id)
+		}
+	}
+	if _, seen := rt.usedTickets[jti]; seen {
+		return false
+	}
+	rt.usedTickets[jti] = exp
+	return true
 }
 
 // isOriginAllowed reports whether the given Origin header value is in the allowlist.
@@ -129,10 +185,27 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if rt.jwtEnabled {
-		// Cloud mode: use JWT auth except for public auth routes.
-		if !publicRoutes[r.URL.Path] {
-			tokenStr := auth.ExtractToken(r)
+	// Swagger UI
+	if strings.HasPrefix(r.URL.Path, "/swagger/") || r.URL.Path == "/swagger" {
+		if r.URL.Path == "/swagger" {
+			http.Redirect(w, r, "/swagger/", http.StatusMovedPermanently)
+			return
+		}
+		httpSwagger.WrapHandler.ServeHTTP(w, r)
+		return
+	}
+
+	// Authentication.
+	//
+	// /ws is intentionally excluded here: browsers cannot set an Authorization
+	// header on a WebSocket handshake, so the only header-free options are the
+	// token in the URL (which leaks into logs/history) or a short-lived ticket.
+	// The /ws branch below authenticates via a single-use ticket instead.
+	isAPI := strings.HasPrefix(r.URL.Path, "/api/")
+	if isAPI && !publicRoutes[r.URL.Path] {
+		tokenStr := auth.ExtractToken(r)
+		if rt.jwtEnabled {
+			// Cloud mode: validate JWT
 			if tokenStr == "" {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -143,13 +216,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			r = r.WithContext(auth.WithClaims(r.Context(), claims))
-		}
-	} else {
-		// Local/Tauri mode: validate against the pre-shared static token.
-		tokenStr := auth.ExtractToken(r)
-		if tokenStr != rt.token {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		} else {
+			// Local/Tauri mode: validate against the pre-shared static token
+			if tokenStr != rt.token {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 	}
 
@@ -160,15 +232,24 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// WebSocket collaboration endpoint.
-	// In JWT mode resolve the real user from claims; fall back to "local" in desktop mode.
+	//
+	// Authenticated via a short-lived, single-use ?ticket= (obtained from
+	// POST /api/ws-ticket with the normal access token). This keeps the
+	// long-lived access token out of the WS URL. The same flow is used in
+	// local mode so the desktop client never puts its token in the URL either.
 	if r.URL.Path == "/ws" {
-		userID, userName := rt.localUserID, rt.localName
-		if rt.jwtEnabled {
-			if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-				userID = claims.UserID
-				userName = claims.Email
-			}
+		ticket := r.URL.Query().Get("ticket")
+		claims, err := rt.authMgr.VerifyWSTicket(ticket)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
+		if !rt.consumeTicket(claims.ID, claims.ExpiresAt.Time) {
+			// Replayed or malformed ticket.
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		userID, userName := claims.UserID, claims.Email
 		wshub.Handler(rt.hub, userID, userName, rt.allowedOrigins)(w, r)
 		return
 	}

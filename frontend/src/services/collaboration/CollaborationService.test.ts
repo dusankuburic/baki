@@ -37,6 +37,21 @@ class MockWebSocket {
 
 let mockWs: MockWebSocket | null = null
 
+// A ticket provider stand-in. The socket is opened only after this resolves, so
+// tests await a macrotask before inspecting the created WebSocket.
+const ticketProvider = () => Promise.resolve('ticket-123')
+
+// Wait long enough for the awaited ticket fetch + the mock's async onopen.
+const flush = () => new Promise(r => setTimeout(r, 10))
+
+// Deterministically wait until the socket reports connected (the ticket fetch
+// and onopen are both async, so a fixed delay can flake under load).
+async function waitConnected() {
+  for (let i = 0; i < 100 && collaborationService.getStatus() !== 'connected'; i++) {
+    await new Promise(r => setTimeout(r, 2))
+  }
+}
+
 beforeEach(() => {
   mockWs = null
   vi.stubGlobal('WebSocket', class extends MockWebSocket {
@@ -59,31 +74,48 @@ describe('CollaborationService', () => {
     const statuses: ConnectionStatus[] = []
     collaborationService.onStatusChange(s => statuses.push(s))
 
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
     expect(statuses).toContain('connecting')
 
-    // Wait for MockWebSocket to fire onopen
-    await new Promise(r => setTimeout(r, 10))
+    await waitConnected()
     expect(statuses.at(-1)).toBe('connected')
   })
 
-  it('builds the correct WebSocket URL', () => {
-    collaborationService.connect('my-flow', 'http://localhost:9000', 'abc')
+  it('builds the WebSocket URL with a ticket (not the token)', async () => {
+    collaborationService.connect('my-flow', 'http://localhost:9000', ticketProvider)
+    await waitConnected()
     expect(mockWs?.url).toBe(
-      'ws://localhost:9000/ws?flowId=my-flow&token=abc'
+      'ws://localhost:9000/ws?flowId=my-flow&ticket=ticket-123'
     )
+    // The long-lived access token must never appear in the URL.
+    expect(mockWs?.url).not.toContain('token=')
   })
 
-  it('replaces https with wss in the URL', () => {
-    collaborationService.connect('f1', 'https://example.com', 'tok')
+  it('replaces https with wss in the URL', async () => {
+    collaborationService.connect('f1', 'https://example.com', ticketProvider)
+    await waitConnected()
     expect(mockWs?.url.startsWith('wss://')).toBe(true)
+  })
+
+  it('fetches a fresh ticket on each connection attempt', async () => {
+    const getTicket = vi.fn(() => Promise.resolve('t-abc'))
+    collaborationService.connect('flow-1', 'http://localhost:8080', getTicket)
+    await waitConnected()
+    expect(getTicket).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not open a socket if the ticket fetch fails', async () => {
+    const getTicket = vi.fn(() => Promise.reject(new Error('401')))
+    collaborationService.connect('flow-1', 'http://localhost:8080', getTicket)
+    await flush()
+    expect(mockWs).toBeNull()
   })
 
   it('delivers incoming envelopes to subscribers', async () => {
     const received: Envelope[] = []
     collaborationService.subscribe(e => received.push(e))
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
-    await new Promise(r => setTimeout(r, 10)) // wait for open
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
 
     const env: Envelope = {
       type: 'presence.join', flowId: 'flow-1', userId: 'u1',
@@ -96,8 +128,8 @@ describe('CollaborationService', () => {
   })
 
   it('send() writes JSON to the WebSocket when connected', async () => {
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
-    await new Promise(r => setTimeout(r, 10))
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
 
     collaborationService.send({ type: 'ping' })
     expect(mockWs!.sent).toHaveLength(1)
@@ -114,20 +146,20 @@ describe('CollaborationService', () => {
     const statuses: ConnectionStatus[] = []
     collaborationService.onStatusChange(s => statuses.push(s))
 
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
-    await new Promise(r => setTimeout(r, 10))
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
 
     collaborationService.disconnect()
-    await new Promise(r => setTimeout(r, 10))
+    await flush()
 
     expect(statuses.at(-1)).toBe('disconnected')
   })
 
   it('does not reconnect after explicit disconnect()', async () => {
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
-    await new Promise(r => setTimeout(r, 10))
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
     collaborationService.disconnect()
-    await new Promise(r => setTimeout(r, 10))
+    await flush()
 
     const wsCountBefore = mockWs ? 1 : 0
     // No new WebSocket should be created
@@ -137,9 +169,9 @@ describe('CollaborationService', () => {
 
   it('getStatus() reflects current connection state', async () => {
     expect(collaborationService.getStatus()).toBe('disconnected')
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
     expect(collaborationService.getStatus()).toBe('connecting')
-    await new Promise(r => setTimeout(r, 10))
+    await waitConnected()
     expect(collaborationService.getStatus()).toBe('connected')
   })
 
@@ -147,8 +179,8 @@ describe('CollaborationService', () => {
     const received: Envelope[] = []
     const unsub = collaborationService.subscribe(e => received.push(e))
 
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
-    await new Promise(r => setTimeout(r, 10))
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
 
     unsub()
     mockWs!.receive({
@@ -158,8 +190,8 @@ describe('CollaborationService', () => {
   })
 
   it('ignores malformed JSON from server', async () => {
-    collaborationService.connect('flow-1', 'http://localhost:8080', 'tok')
-    await new Promise(r => setTimeout(r, 10))
+    collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+    await waitConnected()
 
     // Should not throw
     mockWs!.onmessage?.({ data: 'not-json' })

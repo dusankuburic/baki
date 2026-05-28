@@ -1,0 +1,3343 @@
+basePath: /
+definitions:
+  ai.DeviceAuthResponse:
+    properties:
+      device_code:
+        type: string
+      expires_in:
+        type: integer
+      interval:
+        type: integer
+      user_code:
+        type: string
+      verification_uri:
+        type: string
+    type: object
+  ai.GitHubAuthResult:
+    properties:
+      error:
+        type: string
+      status:
+        type: string
+      token:
+        type: string
+    type: object
+  ai.GitHubUser:
+    properties:
+      login:
+        type: string
+      name:
+        type: string
+    type: object
+  api.libraryFlow:
+    properties:
+      blockCount:
+        type: integer
+      description:
+        type: string
+      id:
+        type: string
+      isSharedWithMe:
+        type: boolean
+      name:
+        type: string
+      ownerDisplayName:
+        type: string
+      ownerId:
+        type: string
+      subflowCount:
+        type: integer
+      updatedAt:
+        type: string
+    type: object
+  auth.Role:
+    enum:
+    - admin
+    - member
+    - viewer
+    - guest
+    type: string
+    x-enum-varnames:
+    - RoleAdmin
+    - RoleMember
+    - RoleViewer
+    - RoleGuest
+  interfaces.Collaborator:
+    properties:
+      email:
+        type: string
+      grantedAt:
+        type: string
+      permission:
+        type: string
+      userId:
+        type: string
+    type: object
+  interfaces.OrgMember:
+    properties:
+      joinedAt:
+        type: string
+      role:
+        $ref: '#/definitions/auth.Role'
+      userId:
+        type: string
+    type: object
+  interfaces.Organisation:
+    properties:
+      createdAt:
+        type: string
+      id:
+        type: string
+      members:
+        items:
+          $ref: '#/definitions/interfaces.OrgMember'
+        type: array
+      name:
+        type: string
+      ownerId:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  interfaces.User:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      role:
+        $ref: '#/definitions/auth.Role'
+      updatedAt:
+        type: string
+    type: object
+  models.AIProviderConfig:
+    properties:
+      contextTokenBudget:
+        type: integer
+      defaultModel:
+        type: string
+      enabled:
+        type: boolean
+      maxTokens:
+        type: integer
+      temperature:
+        type: number
+    type: object
+  models.AISettings:
+    properties:
+      activeProvider:
+        type: string
+      demoMode:
+        $ref: '#/definitions/models.DemoModeSettings'
+      providers:
+        additionalProperties:
+          $ref: '#/definitions/models.AIProviderConfig'
+        type: object
+      saveConversationHistory:
+        type: boolean
+      showCostEstimates:
+        type: boolean
+      systemPromptSuffix:
+        type: string
+    type: object
+  models.AnalysisReport:
+    properties:
+      durationMs:
+        type: integer
+      findings:
+        items:
+          $ref: '#/definitions/models.Finding'
+        type: array
+      flowId:
+        type: string
+      generatedAt:
+        type: string
+      stats:
+        $ref: '#/definitions/models.AnalysisStats'
+    type: object
+  models.AnalysisSettings:
+    properties:
+      autoAnalyzeOnOpen:
+        type: boolean
+      rules:
+        additionalProperties:
+          $ref: '#/definitions/models.RuleConfig'
+        type: object
+    type: object
+  models.AnalysisStats:
+    properties:
+      blocksAnalyzed:
+        type: integer
+      errors:
+        type: integer
+      info:
+        type: integer
+      rulesRun:
+        type: integer
+      warnings:
+        type: integer
+    type: object
+  models.AppSettings:
+    properties:
+      ai:
+        $ref: '#/definitions/models.AISettings'
+      analysis:
+        $ref: '#/definitions/models.AnalysisSettings'
+      appearance:
+        $ref: '#/definitions/models.AppearanceSettings'
+      general:
+        $ref: '#/definitions/models.GeneralSettings'
+      layout:
+        $ref: '#/definitions/models.LayoutSettings'
+      parser:
+        $ref: '#/definitions/models.ParserSettings'
+      recentFiles:
+        items:
+          $ref: '#/definitions/models.RecentFile'
+        type: array
+      telemetry:
+        $ref: '#/definitions/models.TelemetrySettings'
+      version:
+        type: integer
+    type: object
+  models.AppearanceSettings:
+    properties:
+      codeFont:
+        type: string
+      density:
+        type: string
+      highContrast:
+        type: boolean
+      reduceMotion:
+        type: boolean
+      theme:
+        $ref: '#/definitions/models.ThemeMode'
+      uiFont:
+        type: string
+    type: object
+  models.Block:
+    properties:
+      children:
+        items:
+          $ref: '#/definitions/models.Block'
+        type: array
+      id:
+        type: string
+      indent:
+        type: integer
+      lineNumber:
+        type: integer
+      name:
+        type: string
+      parentId:
+        type: string
+      properties:
+        additionalProperties:
+          type: string
+        type: object
+      rawType:
+        type: string
+      subflowId:
+        type: string
+      tokens:
+        items:
+          $ref: '#/definitions/models.BlockToken'
+        type: array
+      type:
+        $ref: '#/definitions/models.BlockType'
+      variables:
+        items:
+          type: string
+        type: array
+    type: object
+  models.BlockDiff:
+    properties:
+      change:
+        $ref: '#/definitions/models.ChangeType'
+      new:
+        $ref: '#/definitions/models.Block'
+      old:
+        allOf:
+        - $ref: '#/definitions/models.Block'
+        description: For Modified, we might have both. For Added only New. For Removed
+          only Old.
+    type: object
+  models.BlockToken:
+    properties:
+      target:
+        description: The ID or name of the target (subflow name, variable name, etc.)
+        type: string
+      type:
+        description: '"text", "variable", "subflow", "label"'
+        type: string
+      value:
+        description: The text to display
+        type: string
+    type: object
+  models.BlockType:
+    enum:
+    - ACTION
+    - LOOP
+    - CONDITION
+    - SUBFLOW
+    - ERROR_HANDLER
+    - COMMENT
+    - VARIABLE
+    - WAIT
+    - ELSE
+    - CASE
+    - DEFAULT
+    - BLOCK
+    - SWITCH
+    - END
+    - UNKNOWN
+    type: string
+    x-enum-varnames:
+    - BlockTypeAction
+    - BlockTypeLoop
+    - BlockTypeCondition
+    - BlockTypeSubflow
+    - BlockTypeErrorHandler
+    - BlockTypeComment
+    - BlockTypeVariable
+    - BlockTypeWait
+    - BlockTypeElse
+    - BlockTypeCase
+    - BlockTypeDefault
+    - BlockTypeBlock
+    - BlockTypeSwitch
+    - BlockTypeEnd
+    - BlockTypeUnknown
+  models.ChangeType:
+    enum:
+    - none
+    - added
+    - removed
+    - modified
+    type: string
+    x-enum-varnames:
+    - ChangeNone
+    - ChangeAdded
+    - ChangeRemoved
+    - ChangeModified
+  models.ChatMessage:
+    properties:
+      content:
+        type: string
+      contextBlockId:
+        type: string
+      contextSubflowId:
+        type: string
+      finishReason:
+        type: string
+      id:
+        type: string
+      model:
+        type: string
+      provider:
+        type: string
+      role:
+        type: string
+      timestamp:
+        type: string
+      tokensIn:
+        type: integer
+      tokensOut:
+        type: integer
+    type: object
+  models.ChatRequest:
+    properties:
+      contextBlockId:
+        type: string
+      demoMode:
+        type: boolean
+      flowId:
+        type: string
+      maxTokens:
+        type: integer
+      messages:
+        items:
+          $ref: '#/definitions/models.ChatMessage'
+        type: array
+      model:
+        type: string
+      provider:
+        type: string
+      selectedSourceFiles:
+        items:
+          type: string
+        type: array
+      systemPrompt:
+        type: string
+      temperature:
+        type: number
+      userMessage:
+        type: string
+    type: object
+  models.DemoModeSettings:
+    properties:
+      dailyLimit:
+        type: integer
+      dailyUsed:
+        type: integer
+      enabled:
+        type: boolean
+      resetDate:
+        type: string
+    type: object
+  models.Finding:
+    properties:
+      autoFixHint:
+        type: string
+      blockId:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      metadata:
+        additionalProperties: true
+        type: object
+      ruleId:
+        type: string
+      severity:
+        $ref: '#/definitions/models.Severity'
+      subflowId:
+        type: string
+      suggestion:
+        type: string
+      title:
+        type: string
+    type: object
+  models.FlowDiff:
+    properties:
+      newId:
+        type: string
+      oldId:
+        type: string
+      subflows:
+        items:
+          $ref: '#/definitions/models.SubflowDiff'
+        type: array
+    type: object
+  models.FlowDocument:
+    properties:
+      filePath:
+        type: string
+      files:
+        items:
+          $ref: '#/definitions/models.FlowFileInfo'
+        type: array
+      id:
+        type: string
+      isFolder:
+        type: boolean
+      metadata:
+        $ref: '#/definitions/models.FlowMetadata'
+      name:
+        type: string
+      parseErrors:
+        items:
+          $ref: '#/definitions/models.ParseError'
+        type: array
+      subflows:
+        items:
+          $ref: '#/definitions/models.Subflow'
+        type: array
+    type: object
+  models.FlowFileInfo:
+    properties:
+      name:
+        type: string
+      path:
+        type: string
+      size:
+        type: integer
+    type: object
+  models.FlowMetadata:
+    properties:
+      blockCount:
+        type: integer
+      fileSize:
+        type: integer
+      maxDepth:
+        type: integer
+      parsedAt:
+        type: string
+      rawLineCount:
+        type: integer
+      subflowCount:
+        type: integer
+    type: object
+  models.GeneralSettings:
+    properties:
+      checkForUpdates:
+        type: string
+      firstRunCompleted:
+        type: boolean
+      lastUsedVersion:
+        type: string
+      openInNewWindow:
+        type: boolean
+    type: object
+  models.GraphData:
+    properties:
+      edges:
+        items:
+          $ref: '#/definitions/models.GraphEdge'
+        type: array
+      nodes:
+        items:
+          $ref: '#/definitions/models.GraphNode'
+        type: array
+    type: object
+  models.GraphEdge:
+    properties:
+      source:
+        type: string
+      target:
+        type: string
+    type: object
+  models.GraphNode:
+    properties:
+      blockCount:
+        type: integer
+      errorCount:
+        type: integer
+      id:
+        type: string
+      label:
+        type: string
+      type:
+        description: '"subflow"'
+        type: string
+      warnCount:
+        type: integer
+    type: object
+  models.Highlight:
+    properties:
+      end:
+        type: integer
+      start:
+        type: integer
+    type: object
+  models.LayoutSettings:
+    properties:
+      inspectorCollapsed:
+        type: boolean
+      inspectorWidth:
+        type: integer
+      lastActiveInspectorTab:
+        type: string
+      lastViewMode:
+        type: string
+      sidebarCollapsed:
+        type: boolean
+      sidebarWidth:
+        type: integer
+    type: object
+  models.ModelDetail:
+    properties:
+      contextLimit:
+        type: integer
+      displayName:
+        type: string
+      id:
+        type: string
+      inputCostPerM:
+        type: number
+      outputCostPerM:
+        type: number
+    type: object
+  models.ParseError:
+    properties:
+      column:
+        type: integer
+      line:
+        type: integer
+      message:
+        type: string
+      severity:
+        type: string
+      snippet:
+        type: string
+    type: object
+  models.ParserSettings:
+    properties:
+      maxFileSizeMB:
+        type: integer
+      preserveComments:
+        type: boolean
+      spacesPerIndent:
+        type: integer
+      treatTabsAsSpaces:
+        type: boolean
+    type: object
+  models.ProviderInfo:
+    properties:
+      authType:
+        type: string
+      configured:
+        type: boolean
+      contextLimit:
+        type: integer
+      defaultModel:
+        type: string
+      id:
+        type: string
+      models:
+        items:
+          $ref: '#/definitions/models.ModelDetail'
+        type: array
+      name:
+        type: string
+    type: object
+  models.ProviderTestResult:
+    properties:
+      error:
+        type: string
+      latencyMs:
+        type: integer
+      ok:
+        type: boolean
+    type: object
+  models.RecentFile:
+    properties:
+      isFolder:
+        type: boolean
+      lastOpen:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      size:
+        type: integer
+    type: object
+  models.Rule:
+    properties:
+      category:
+        type: string
+      defaultSeverity:
+        $ref: '#/definitions/models.Severity'
+      description:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  models.RuleConfig:
+    properties:
+      enabled:
+        type: boolean
+      options:
+        additionalProperties: true
+        type: object
+      severity:
+        type: string
+    type: object
+  models.SearchQuery:
+    properties:
+      blockTypes:
+        items:
+          $ref: '#/definitions/models.BlockType'
+        type: array
+      fuzzy:
+        type: boolean
+      maxResults:
+        type: integer
+      text:
+        type: string
+    type: object
+  models.SearchResult:
+    properties:
+      blockId:
+        type: string
+      highlights:
+        items:
+          $ref: '#/definitions/models.Highlight'
+        type: array
+      matchedField:
+        type: string
+      matchedText:
+        type: string
+      score:
+        type: integer
+      subflowId:
+        type: string
+    type: object
+  models.SearchResults:
+    properties:
+      durationMs:
+        type: integer
+      query:
+        $ref: '#/definitions/models.SearchQuery'
+      results:
+        items:
+          $ref: '#/definitions/models.SearchResult'
+        type: array
+      totalCount:
+        type: integer
+    type: object
+  models.Severity:
+    enum:
+    - error
+    - warning
+    - info
+    type: string
+    x-enum-varnames:
+    - SeverityError
+    - SeverityWarning
+    - SeverityInfo
+  models.Subflow:
+    properties:
+      blocks:
+        items:
+          $ref: '#/definitions/models.Block'
+        type: array
+      id:
+        type: string
+      name:
+        type: string
+      sourceFile:
+        description: file name (without path) this subflow was parsed from
+        type: string
+      variables:
+        items:
+          $ref: '#/definitions/models.VariableDecl'
+        type: array
+    type: object
+  models.SubflowDiff:
+    properties:
+      blocks:
+        items:
+          $ref: '#/definitions/models.BlockDiff'
+        type: array
+      change:
+        $ref: '#/definitions/models.ChangeType'
+      name:
+        type: string
+    type: object
+  models.TelemetrySettings:
+    properties:
+      anonymousID:
+        type: string
+      enabled:
+        type: boolean
+      lastSubmitted:
+        type: string
+    type: object
+  models.ThemeMode:
+    enum:
+    - dark
+    - light
+    - system
+    - midnight
+    - warm
+    - tokyo-night
+    - one-dark
+    - dracula
+    - nord
+    type: string
+    x-enum-varnames:
+    - ThemeDark
+    - ThemeLight
+    - ThemeSystem
+    - ThemeMidnight
+    - ThemeWarm
+    - ThemeTokyoNight
+    - ThemeOneDark
+    - ThemeDracula
+    - ThemeNord
+  models.VariableDecl:
+    properties:
+      initialValue:
+        type: string
+      name:
+        type: string
+      scope:
+        type: string
+      type:
+        type: string
+    type: object
+  models.VariableEvent:
+    properties:
+      blockId:
+        type: string
+      line:
+        type: integer
+      subflowId:
+        type: string
+      type:
+        description: '"init", "mutate", "read"'
+        type: string
+    type: object
+  models.VariableHistory:
+    properties:
+      events:
+        items:
+          $ref: '#/definitions/models.VariableEvent'
+        type: array
+      name:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: This is the API for the Pad Analyzer project.
+  title: Pad Analyzer API
+  version: "1.0"
+paths:
+  /api/admin/users/{userId}/role:
+    post:
+      consumes:
+      - application/json
+      description: Updates the system role for a specific user. Only available to
+        system admins.
+      parameters:
+      - description: User ID
+        in: path
+        name: userId
+        required: true
+        type: string
+      - description: Set Role Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            role:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set user role
+      tags:
+      - admin
+  /api/admin/users/list:
+    get:
+      description: Returns a list of all registered users. Only available to system
+        admins.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/interfaces.User'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List all users
+      tags:
+      - admin
+  /api/analysis/analyze:
+    post:
+      description: Runs all enabled analysis rules on the current flow document.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.AnalysisReport'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Analyze current flow
+      tags:
+      - analysis
+  /api/analysis/graph:
+    get:
+      description: Returns a graph representation of the flow's execution path.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.GraphData'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get execution graph
+      tags:
+      - analysis
+  /api/analysis/lineage:
+    post:
+      consumes:
+      - application/json
+      description: Returns the history and dependencies of a specific variable within
+        the flow.
+      parameters:
+      - description: Variable Lineage Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            varName:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.VariableHistory'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get variable lineage
+      tags:
+      - analysis
+  /api/analysis/rule/config:
+    post:
+      consumes:
+      - application/json
+      description: Updates the configuration parameters for a specific analysis rule.
+      parameters:
+      - description: Update Rule Config Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            config:
+              $ref: '#/definitions/models.RuleConfig'
+            id:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update analysis rule config
+      tags:
+      - analysis
+  /api/analysis/rule/enabled:
+    post:
+      consumes:
+      - application/json
+      description: Enables or disables a specific analysis rule by ID.
+      parameters:
+      - description: Set Rule Enabled Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            enabled:
+              type: boolean
+            id:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Enable/disable analysis rule
+      tags:
+      - analysis
+  /api/analysis/rules:
+    get:
+      description: Returns all available analysis rules and their current configuration.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Rule'
+            type: array
+      summary: List analysis rules
+      tags:
+      - analysis
+  /api/auth/change-password:
+    post:
+      consumes:
+      - application/json
+      description: Changes the password for the currently authenticated user.
+      parameters:
+      - description: Change Password Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            currentPassword:
+              type: string
+            newPassword:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Change password
+      tags:
+      - auth
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates a user and returns access and refresh tokens.
+      parameters:
+      - description: Login Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Login user
+      tags:
+      - auth
+  /api/auth/logout:
+    post:
+      description: Logs out the current user. In stateless JWT mode, this is primarily
+        a client-side operation.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Logout user
+      tags:
+      - auth
+  /api/auth/me:
+    get:
+      description: Returns information about the currently authenticated user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get current user info
+      tags:
+      - auth
+  /api/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Returns a new access token using a valid refresh token.
+      parameters:
+      - description: Refresh Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            refreshToken:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Refresh access token
+      tags:
+      - auth
+  /api/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new user account with email and password.
+      parameters:
+      - description: Registration Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
+  /api/chat/begin:
+    post:
+      consumes:
+      - application/json
+      description: Signals the backend to start sending events for the specified stream
+        ID.
+      parameters:
+      - description: Begin Stream Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            streamId:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Begin stream
+      tags:
+      - chat
+  /api/chat/cancel:
+    post:
+      consumes:
+      - application/json
+      description: Cancels an active streaming session.
+      parameters:
+      - description: Cancel Stream Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            streamId:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Cancel stream
+      tags:
+      - chat
+  /api/chat/clear:
+    post:
+      consumes:
+      - application/json
+      description: Deletes the chat history for a specific flow and provider.
+      parameters:
+      - description: Clear Conversation Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            flowId:
+              type: string
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Clear conversation history
+      tags:
+      - chat
+  /api/chat/demo-remaining:
+    get:
+      description: Returns the number of demo AI requests remaining for the current
+        session.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: integer
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get remaining demo requests
+      tags:
+      - chat
+  /api/chat/export:
+    post:
+      consumes:
+      - application/json
+      description: Exports the chat history to a file. Only available in local mode.
+      parameters:
+      - description: Export Conversation Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            flowId:
+              type: string
+            path:
+              type: string
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export conversation
+      tags:
+      - chat
+  /api/chat/get:
+    post:
+      consumes:
+      - application/json
+      description: Retrieves the chat history for a specific flow and provider.
+      parameters:
+      - description: Get Conversation Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            flowId:
+              type: string
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ChatMessage'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get conversation history
+      tags:
+      - chat
+  /api/chat/preview-context:
+    post:
+      consumes:
+      - application/json
+      description: Returns a preview of the context that will be sent to the AI provider.
+      parameters:
+      - description: Preview Context Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ChatRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview AI context
+      tags:
+      - chat
+  /api/chat/save:
+    post:
+      consumes:
+      - application/json
+      description: Saves the chat history for a specific flow and provider.
+      parameters:
+      - description: Save Conversation Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            flowId:
+              type: string
+            messages:
+              items:
+                $ref: '#/definitions/models.ChatMessage'
+              type: array
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save conversation history
+      tags:
+      - chat
+  /api/chat/stream:
+    post:
+      consumes:
+      - application/json
+      description: Initiates a streaming chat session with an AI provider.
+      parameters:
+      - description: Chat Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ChatRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Stream ID
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stream chat message
+      tags:
+      - chat
+  /api/chat/suggested-prompts:
+    post:
+      consumes:
+      - application/json
+      description: Returns suggested prompts based on the current flow state.
+      parameters:
+      - description: Get Suggested Prompts Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            hasBlock:
+              type: boolean
+            hasFindings:
+              type: boolean
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get suggested prompts
+      tags:
+      - chat
+  /api/export/compare:
+    post:
+      consumes:
+      - application/json
+      description: Returns a diff between the currently loaded flow and a flow at
+        the specified path. Only available in local mode.
+      parameters:
+      - description: Compare Flow Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FlowDiff'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Compare current flow with another
+      tags:
+      - export
+  /api/export/markdown:
+    post:
+      consumes:
+      - application/json
+      description: Exports the specified flow to a Markdown file. Returns base64 encoded
+        data. Only available in local mode.
+      parameters:
+      - description: Export Markdown Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export flow as Markdown
+      tags:
+      - export
+  /api/export/pdf:
+    post:
+      consumes:
+      - application/json
+      description: Exports the specified flow to a PDF file. Returns base64 encoded
+        data. Only available in local mode.
+      parameters:
+      - description: Export PDF Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export flow as PDF
+      tags:
+      - export
+  /api/flow/clear-recent:
+    post:
+      description: Clears the entire list of recently opened flow documents.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Clear recent files
+      tags:
+      - flow
+  /api/flow/load-folder:
+    post:
+      consumes:
+      - application/json
+      description: Loads a flow document from the specified local folder path. Only
+        available in local mode.
+      parameters:
+      - description: Load Flow Folder Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FlowDocument'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Load flow folder
+      tags:
+      - flow
+  /api/flow/load-path:
+    post:
+      consumes:
+      - application/json
+      description: Loads a flow document from the specified local file path. Only
+        available in local mode.
+      parameters:
+      - description: Load Flow Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FlowDocument'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Load flow from path
+      tags:
+      - flow
+  /api/flow/open-from-system:
+    post:
+      consumes:
+      - application/json
+      description: Notifies the application that a file was opened via the operating
+        system.
+      parameters:
+      - description: File Open Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Handle file open from system
+      tags:
+      - flow
+  /api/flow/read-sources:
+    post:
+      consumes:
+      - application/json
+      description: Reads the content of specified source files.
+      parameters:
+      - description: Read Source Files Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            files:
+              items:
+                type: string
+              type: array
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Read source files
+      tags:
+      - flow
+  /api/flow/recent:
+    get:
+      description: Returns a list of recently opened flow documents.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.RecentFile'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get recent files
+      tags:
+      - flow
+  /api/flow/remove-recent:
+    post:
+      consumes:
+      - application/json
+      description: Removes a file from the list of recently opened flow documents.
+      parameters:
+      - description: Remove Recent File Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove recent file
+      tags:
+      - flow
+  /api/flow/reveal:
+    post:
+      consumes:
+      - application/json
+      description: Opens the system file manager at the specified path. Only available
+        in local mode.
+      parameters:
+      - description: Reveal Path Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            path:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reveal in file manager
+      tags:
+      - flow
+  /api/flow/search:
+    post:
+      consumes:
+      - application/json
+      description: Performs a search for text or patterns within a specific flow document.
+      parameters:
+      - description: Search Flow Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            id:
+              type: string
+            query:
+              $ref: '#/definitions/models.SearchQuery'
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SearchResults'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Search within flow
+      tags:
+      - flow
+  /api/flow/source-files:
+    get:
+      description: Returns a list of source files related to the current flow.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get source files
+      tags:
+      - flow
+  /api/flows/{flowId}/collaborators:
+    get:
+      description: Returns a list of users who have access to the specified flow.
+        Only the flow owner can view collaborators.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: flowId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/interfaces.Collaborator'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List flow collaborators
+      tags:
+      - sharing
+    post:
+      consumes:
+      - application/json
+      description: Grants access to a flow to another user. Only the flow owner can
+        add collaborators.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: flowId
+        required: true
+        type: string
+      - description: Add Collaborator Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            permission:
+              type: string
+            userId:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/interfaces.Collaborator'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add flow collaborator
+      tags:
+      - sharing
+  /api/flows/{flowId}/collaborators/{userId}:
+    delete:
+      description: Revokes a user's access to a specific flow. Only the flow owner
+        can remove collaborators.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: flowId
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove flow collaborator
+      tags:
+      - sharing
+    put:
+      consumes:
+      - application/json
+      description: Updates the permission level for an existing flow collaborator.
+        Only the flow owner can update permissions.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: flowId
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userId
+        required: true
+        type: string
+      - description: Update Permission Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            permission:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/interfaces.Collaborator'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update flow collaborator permission
+      tags:
+      - sharing
+  /api/health:
+    get:
+      description: Returns the status of the API and its storage backend.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Check API health
+      tags:
+      - system
+  /api/keys/delete:
+    post:
+      consumes:
+      - application/json
+      description: Deletes an API key for a given provider.
+      parameters:
+      - description: Delete API Key Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete API key
+      tags:
+      - keys
+  /api/keys/has:
+    post:
+      consumes:
+      - application/json
+      description: Checks if an API key for a given provider is saved.
+      parameters:
+      - description: Check API Key Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: boolean
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Check if API key exists
+      tags:
+      - keys
+  /api/keys/save:
+    post:
+      consumes:
+      - application/json
+      description: Saves an API key for a given provider.
+      parameters:
+      - description: API Key Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            key:
+              type: string
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save API key
+      tags:
+      - keys
+  /api/library:
+    get:
+      description: Returns a list of flow documents stored in the library, with optional
+        filtering by organization and search query.
+      parameters:
+      - description: Organization ID
+        in: query
+        name: orgId
+        type: string
+      - description: Search query
+        in: query
+        name: q
+        type: string
+      - description: Limit
+        in: query
+        name: limit
+        type: integer
+      - description: Offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/api.libraryFlow'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List library flows
+      tags:
+      - library
+    post:
+      consumes:
+      - application/json
+      description: Saves a new flow document to the library.
+      parameters:
+      - description: Create Library Flow Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            content:
+              items:
+                format: int32
+                type: integer
+              type: array
+            description:
+              type: string
+            name:
+              type: string
+            orgId:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.libraryFlow'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create library flow
+      tags:
+      - library
+  /api/library/{id}:
+    delete:
+      description: Deletes a specific flow document from the library. Only the owner
+        can delete.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete library flow
+      tags:
+      - library
+    get:
+      description: Returns the metadata for a specific library flow.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.libraryFlow'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get library flow metadata
+      tags:
+      - library
+    put:
+      consumes:
+      - application/json
+      description: Updates the name, description, or content of a specific library
+        flow. Only the owner can update.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update Library Flow Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            content:
+              items:
+                format: int32
+                type: integer
+              type: array
+            description:
+              type: string
+            name:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.libraryFlow'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update library flow
+      tags:
+      - library
+  /api/library/{id}/content:
+    get:
+      description: Returns the raw JSON content of a specific library flow.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get library flow content
+      tags:
+      - library
+  /api/orgs:
+    get:
+      description: Returns a list of organizations the currently authenticated user
+        belongs to.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/interfaces.Organisation'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List user's organizations
+      tags:
+      - organization
+    post:
+      consumes:
+      - application/json
+      description: Creates a new organization. Only available to system admins.
+      parameters:
+      - description: Create Organization Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            name:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/interfaces.Organisation'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create organization
+      tags:
+      - organization
+  /api/orgs/{id}:
+    delete:
+      description: Deletes an existing organization. Only organization admins can
+        delete.
+      parameters:
+      - description: Organization ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete organization
+      tags:
+      - organization
+  /api/orgs/{id}/members:
+    post:
+      consumes:
+      - application/json
+      description: Adds a user to an organization with a specific role. Only organization
+        admins can add members.
+      parameters:
+      - description: Organization ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Add Member Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            role:
+              type: string
+            userId:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add organization member
+      tags:
+      - organization
+  /api/orgs/{id}/members/{userId}:
+    delete:
+      description: Removes a user from an organization. Only organization admins can
+        remove members.
+      parameters:
+      - description: Organization ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove organization member
+      tags:
+      - organization
+  /api/orgs/{id}/members/{userId}/role:
+    post:
+      consumes:
+      - application/json
+      description: Updates the role of a user within an organization. Only organization
+        admins can set roles.
+      parameters:
+      - description: Organization ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userId
+        required: true
+        type: string
+      - description: Set Role Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            role:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set organization member role
+      tags:
+      - organization
+  /api/providers/copilot/poll:
+    post:
+      consumes:
+      - application/json
+      description: Polls GitHub for the status of the Copilot device flow authentication.
+      parameters:
+      - description: Poll Copilot Auth Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            deviceCode:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.GitHubAuthResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Poll Copilot OAuth
+      tags:
+      - providers
+  /api/providers/copilot/revoke:
+    post:
+      description: Revokes the GitHub Copilot authentication for the current user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke Copilot OAuth
+      tags:
+      - providers
+  /api/providers/copilot/start:
+    post:
+      description: Initiates the GitHub Copilot device flow authentication.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.DeviceAuthResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start Copilot OAuth
+      tags:
+      - providers
+  /api/providers/copilot/user:
+    get:
+      description: Returns information about the currently authenticated Copilot user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.GitHubUser'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Copilot user info
+      tags:
+      - providers
+  /api/providers/github/poll:
+    post:
+      consumes:
+      - application/json
+      description: Polls GitHub for the status of the device flow authentication.
+      parameters:
+      - description: Poll Auth Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            deviceCode:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.GitHubAuthResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Poll GitHub OAuth
+      tags:
+      - providers
+  /api/providers/github/revoke:
+    post:
+      description: Revokes the GitHub authentication for the current user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke GitHub OAuth
+      tags:
+      - providers
+  /api/providers/github/start:
+    post:
+      description: Initiates the GitHub device flow authentication.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.DeviceAuthResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start GitHub OAuth
+      tags:
+      - providers
+  /api/providers/github/user:
+    get:
+      description: Returns information about the currently authenticated GitHub user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ai.GitHubUser'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get GitHub user info
+      tags:
+      - providers
+  /api/providers/list:
+    get:
+      description: Returns a list of supported AI providers and their current status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.ProviderInfo'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List AI providers
+      tags:
+      - providers
+  /api/providers/test:
+    post:
+      consumes:
+      - application/json
+      description: Tests the connection to a specific AI provider.
+      parameters:
+      - description: Test Connection Request
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            provider:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ProviderTestResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test provider connection
+      tags:
+      - providers
+  /api/system/info:
+    get:
+      description: Returns information about the application.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get app info
+      tags:
+      - system
+  /api/system/settings:
+    get:
+      description: Returns the current application settings.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.AppSettings'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get app settings
+      tags:
+      - system
+    post:
+      consumes:
+      - application/json
+      description: Updates the application settings.
+      parameters:
+      - description: App Settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          $ref: '#/definitions/models.AppSettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update app settings
+      tags:
+      - system
+swagger: "2.0"

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // Claims are the custom JWT claims stored in every access token.
@@ -30,11 +31,23 @@ type TokenPair struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresAt    time.Time
+	// RefreshID is the refresh token's unique ID (jti). It lets a server-side
+	// store track and revoke individual refresh tokens for rotation.
+	RefreshID        string
+	RefreshExpiresAt time.Time
 }
 
 const (
 	defaultAccessTTL  = 15 * time.Minute
 	defaultRefreshTTL = 7 * 24 * time.Hour
+	// wsTicketTTL bounds how long a WebSocket connect ticket is valid. Tickets
+	// are exchanged for a live connection within seconds of issuance, so the
+	// window is deliberately tiny to limit replay if one leaks (e.g. via a
+	// proxy access log that records the ?ticket= query parameter).
+	wsTicketTTL = 30 * time.Second
+	// wsTicketAudience tags tickets so they cannot be used as API access tokens
+	// (and access tokens cannot be used as tickets).
+	wsTicketAudience = "pad-ws-ticket"
 )
 
 // Manager handles JWT issuance and verification.
@@ -85,13 +98,16 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 		return nil, fmt.Errorf("auth: sign access token: %w", err)
 	}
 
+	refreshExpiresAt := now.Add(m.refreshTTL)
+	refreshID := uuid.NewString()
 	refreshClaims := RefreshClaims{
 		UserID: userID,
 		Email:  email,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        refreshID,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(m.refreshTTL)),
+			ExpiresAt: jwt.NewNumericDate(refreshExpiresAt),
 			Subject:   userID,
 			Issuer:    m.issuer,
 			Audience:  jwt.ClaimStrings{m.audience},
@@ -104,15 +120,63 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 	}
 
 	return &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    expiresAt,
+		AccessToken:      accessToken,
+		RefreshToken:     refreshToken,
+		ExpiresAt:        expiresAt,
+		RefreshID:        refreshID,
+		RefreshExpiresAt: refreshExpiresAt,
 	}, nil
 }
 
-// Verify parses and validates an access token, returning its claims.
+// IssueWSTicket creates a short-lived, single-use ticket the client exchanges
+// for a WebSocket connection. It keeps the long-lived access token out of the
+// WS URL (which is otherwise recorded in proxy/server logs and browser history).
+// Returns the signed ticket and its expiry.
+func (m *Manager) IssueWSTicket(userID, email string, role Role) (string, time.Time, error) {
+	now := time.Now()
+	expiresAt := now.Add(wsTicketTTL)
+	claims := Claims{
+		UserID: userID,
+		Email:  email,
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			Subject:   userID,
+			Issuer:    m.issuer,
+			Audience:  jwt.ClaimStrings{wsTicketAudience},
+		},
+	}
+	ticket, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("auth: sign ws ticket: %w", err)
+	}
+	return ticket, expiresAt, nil
+}
+
+// VerifyWSTicket parses and validates a WebSocket connect ticket. It enforces
+// the ticket audience so an ordinary access token cannot be presented in its
+// place. Single-use enforcement (replay prevention) is the caller's job.
+func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
+		jwt.WithAudience(wsTicketAudience))
+	if err != nil {
+		return nil, fmt.Errorf("auth: verify ws ticket: %w", err)
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, errors.New("auth: invalid ws ticket claims")
+	}
+	return claims, nil
+}
+
+// Verify parses and validates an access token, returning its claims. It
+// enforces the client audience so a WebSocket ticket cannot be used as an
+// access token for ordinary API calls.
 func (m *Manager) Verify(tokenStr string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc)
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
+		jwt.WithAudience(m.audience))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify token: %w", err)
 	}

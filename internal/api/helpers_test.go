@@ -17,7 +17,7 @@ import (
 func newJWTTestRouter(t *testing.T) *Router {
 	t.Helper()
 	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	return NewRouter(manager.NewApp(fs), testToken, true, nil)
+	return NewRouter(manager.NewApp(fs), testToken, true, nil, "")
 }
 
 // jwtBearer issues a token for the given user and returns a ready Bearer header value.
@@ -72,7 +72,7 @@ func newLibraryTestRouter(t *testing.T) (*Router, func(id, ownerID string)) {
 		t.Fatalf("create local storage: %v", err)
 	}
 	app := manager.NewApp(fs)
-	rt := NewRouter(app, testToken, true, nil)
+	rt := NewRouter(app, testToken, true, nil, "")
 	seed := func(id, ownerID string) {
 		doc := &storageif.FlowDocument{
 			ID:      id,

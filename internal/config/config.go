@@ -30,6 +30,7 @@ type ServerConfig struct {
 	Port           int
 	AllowedOrigins []string // CORS / WebSocket origin allowlist (cloud mode)
 	TrustedProxies []string // IPs of trusted reverse proxies for rate limiting
+	StaticDir      string   // Directory for static frontend assets
 }
 
 // StorageConfig holds storage backend settings

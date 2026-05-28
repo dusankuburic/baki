@@ -11,6 +11,35 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
+// requireFlowOwner verifies the caller owns flowID before allowing collaborator
+// management. In local/Tauri mode (single user) all operations are trusted.
+// Returns false (and writes the response) when the flow is missing or not owned
+// by the caller.
+func (rt *Router) requireFlowOwner(w http.ResponseWriter, r *http.Request, flowID string) bool {
+	if !rt.jwtEnabled {
+		return true
+	}
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		http.Error(w, "storage unavailable", http.StatusInternalServerError)
+		return false
+	}
+	flow, err := backend.LoadFlow(r.Context(), flowID)
+	if err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			http.NotFound(w, r)
+		} else {
+			rt.sendError(w, err, http.StatusInternalServerError)
+		}
+		return false
+	}
+	if flow.OwnerID != rt.callerID(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 // handleSharingRoute dispatches /api/flows/:flowId/collaborators[/:userId]
 func (rt *Router) handleSharingRoute(w http.ResponseWriter, r *http.Request) {
 	// Path: /api/flows/<flowId>/collaborators  or
@@ -56,7 +85,24 @@ func (rt *Router) handleSharingRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// @Summary List flow collaborators
+// @Description Returns a list of users who have access to the specified flow. Only the flow owner can view collaborators.
+// @Tags sharing
+// @Produce json
+// @Param flowId path string true "Flow ID"
+// @Success 200 {array} interfaces.Collaborator
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/flows/{flowId}/collaborators [get]
 func (rt *Router) handleListCollaborators(w http.ResponseWriter, r *http.Request, flowID string) {
+	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
+	if !rt.requireFlowOwner(w, r, flowID) {
+		return
+	}
 	collabs, err := rt.app.StorageBackend().ListCollaborators(r.Context(), flowID)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
@@ -65,8 +111,25 @@ func (rt *Router) handleListCollaborators(w http.ResponseWriter, r *http.Request
 	rt.sendJSON(w, collabs)
 }
 
+// @Summary Add flow collaborator
+// @Description Grants access to a flow to another user. Only the flow owner can add collaborators.
+// @Tags sharing
+// @Accept json
+// @Produce json
+// @Param flowId path string true "Flow ID"
+// @Param request body object{email=string,userId=string,permission=string} true "Add Collaborator Request"
+// @Success 200 {object} interfaces.Collaborator
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/flows/{flowId}/collaborators [post]
 func (rt *Router) handleAddCollaborator(w http.ResponseWriter, r *http.Request, flowID string) {
 	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
+	if !rt.requireFlowOwner(w, r, flowID) {
 		return
 	}
 
@@ -134,7 +197,28 @@ func (rt *Router) handleAddCollaborator(w http.ResponseWriter, r *http.Request, 
 	rt.sendJSON(w, c)
 }
 
+// @Summary Update flow collaborator permission
+// @Description Updates the permission level for an existing flow collaborator. Only the flow owner can update permissions.
+// @Tags sharing
+// @Accept json
+// @Produce json
+// @Param flowId path string true "Flow ID"
+// @Param userId path string true "User ID"
+// @Param request body object{permission=string} true "Update Permission Request"
+// @Success 200 {object} interfaces.Collaborator
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/flows/{flowId}/collaborators/{userId} [put]
 func (rt *Router) handleUpdateCollaborator(w http.ResponseWriter, r *http.Request, flowID, userID string) {
+	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
+	if !rt.requireFlowOwner(w, r, flowID) {
+		return
+	}
 	var req struct {
 		Permission string `json:"permission"`
 	}
@@ -167,8 +251,23 @@ func (rt *Router) handleUpdateCollaborator(w http.ResponseWriter, r *http.Reques
 	rt.sendJSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary Remove flow collaborator
+// @Description Revokes a user's access to a specific flow. Only the flow owner can remove collaborators.
+// @Tags sharing
+// @Produce json
+// @Param flowId path string true "Flow ID"
+// @Param userId path string true "User ID"
+// @Success 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/flows/{flowId}/collaborators/{userId} [delete]
 func (rt *Router) handleRemoveCollaborator(w http.ResponseWriter, r *http.Request, flowID, userID string) {
 	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
+	if !rt.requireFlowOwner(w, r, flowID) {
 		return
 	}
 

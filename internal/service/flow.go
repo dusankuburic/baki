@@ -109,6 +109,23 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 	return doc, nil
 }
 
+func (s *FlowService) LoadFlowFiles(files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
+	defer logger.Guard("App.LoadFlowFiles", &err)
+
+	doc, err = parser.ParseFiles(files, rootName)
+	if err != nil {
+		return nil, err
+	}
+
+	s.docMu.Lock()
+	s.currentDoc = doc
+	s.searchIndex = search.NewSearchIndex(doc.ID, doc)
+	s.docMu.Unlock()
+
+	s.notifier.Emit("flow:loaded", doc)
+	return doc, nil
+}
+
 func (s *FlowService) RecentFiles() (files []models.RecentFile, err error) {
 	defer logger.Guard("App.RecentFiles", &err)
 	if s.settings == nil {

@@ -1,13 +1,26 @@
 import React, { useState } from 'react'
+import { KeyRound, CheckCircle2, XCircle } from 'lucide-react'
+import clsx from 'clsx'
 import { useAuthStore } from '@/stores/authStore'
 import { authApi } from '@/api/auth'
+import Button from '@/components/shared/Button'
+import Input from '@/components/shared/Input'
+
+function roleBadgeClass(role: string) {
+  switch (role) {
+    case 'admin':   return 'bg-block-subflow/10 text-block-subflow'
+    case 'member':  return 'bg-block-action/10 text-block-action'
+    case 'viewer':  return 'bg-block-condition/10 text-block-condition'
+    default:        return 'bg-surface-4 text-text-tertiary'
+  }
+}
 
 export const UserProfile: React.FC = () => {
   const { user, logout } = useAuthStore()
   const [currentPassword, setCurrentPassword] = useState('')
-  const [newPassword, setNewPassword] = useState('')
+  const [newPassword, setNewPassword]         = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null)
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -16,7 +29,6 @@ export const UserProfile: React.FC = () => {
       setStatus({ type: 'error', message: 'New passwords do not match' })
       return
     }
-
     setIsSubmitting(true)
     setStatus(null)
     try {
@@ -34,72 +46,98 @@ export const UserProfile: React.FC = () => {
 
   if (!user) return null
 
+  const initials = user.email.charAt(0).toUpperCase()
+
   return (
-    <div className="p-6 max-w-md mx-auto bg-white rounded-xl shadow-md space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">User Profile</h1>
-        <button
-          onClick={() => logout()}
-          className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-        >
-          Logout
-        </button>
-      </div>
+    <div className="p-6 md:p-8 max-w-lg mx-auto space-y-5">
 
-      <div className="space-y-2">
-        <p><strong>Email:</strong> {user.email}</p>
-        <p><strong>Role:</strong> <span className="capitalize">{user.role}</span></p>
-      </div>
-
-      <hr className="my-4" />
-
-      <h2 className="text-xl font-semibold">Change Password</h2>
-      <form onSubmit={handleChangePassword} className="space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-700">Current Password</label>
-          <input
-            type="password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            required
-            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700">New Password</label>
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            required
-            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700">Confirm New Password</label>
-          <input
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            required
-            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-
-        {status && (
-          <div className={`p-2 rounded text-sm ${status.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-            {status.message}
+      {/* User Info Card */}
+      <div className="bg-surface-2 border border-border-default rounded-xl p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold text-lg flex-shrink-0 select-none">
+              {initials}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-text-primary">{user.email}</p>
+              <span className={clsx(
+                'inline-block mt-1 px-2 py-0.5 rounded-md text-xs font-semibold uppercase',
+                roleBadgeClass(user.role)
+              )}>
+                {user.role}
+              </span>
+            </div>
           </div>
-        )}
+          <Button variant="danger" size="sm" onClick={() => logout()}>
+            Logout
+          </Button>
+        </div>
+      </div>
 
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="w-full py-2 px-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-        >
-          {isSubmitting ? 'Updating...' : 'Update Password'}
-        </button>
-      </form>
+      {/* Change Password */}
+      <div className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
+          <KeyRound size={13} className="text-text-tertiary" />
+          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Change Password</h2>
+        </div>
+
+        <form onSubmit={handleChangePassword} className="p-5 space-y-3">
+          <div>
+            <label className="text-xs font-medium text-text-secondary block mb-1.5">Current Password</label>
+            <Input
+              type="password"
+              value={currentPassword}
+              onChange={e => setCurrentPassword(e.target.value)}
+              placeholder="Enter current password"
+              required
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-text-secondary block mb-1.5">New Password</label>
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              placeholder="Enter new password"
+              required
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-text-secondary block mb-1.5">Confirm New Password</label>
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              placeholder="Confirm new password"
+              required
+            />
+          </div>
+
+          {status && (
+            <div className={clsx(
+              'flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm border',
+              status.type === 'success'
+                ? 'bg-semantic-success/10 border-semantic-success/30 text-semantic-success'
+                : 'bg-semantic-error/10 border-semantic-error/30 text-semantic-error'
+            )}>
+              {status.type === 'success'
+                ? <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
+                : <XCircle size={14} className="mt-0.5 flex-shrink-0" />}
+              <span>{status.message}</span>
+            </div>
+          )}
+
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            fullWidth
+            loading={isSubmitting}
+          >
+            Update Password
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }

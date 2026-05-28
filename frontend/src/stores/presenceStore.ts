@@ -6,7 +6,7 @@ import {
   type Envelope,
 } from '@/services/collaboration/CollaborationService'
 import { syncManager } from '@/services/sync/SyncManager'
-import { getBackendConfig } from '@/api/client'
+import { getBackendConfig, getWsTicket } from '@/api/client'
 
 export interface PresenceUser {
   userId: string
@@ -43,7 +43,7 @@ export const usePresenceStore = create<PresenceState>((set) => ({
     const cfg = await getBackendConfig()
     set({ flowId, users: {} })
 
-    collaborationService.connect(flowId, cfg.apiUrl, cfg.token)
+    collaborationService.connect(flowId, cfg.apiUrl, getWsTicket)
     syncManager.start()
 
     cleanupHandlers.push(

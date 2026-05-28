@@ -23,7 +23,7 @@ export interface CreateLibraryFlowRequest {
   name: string
   description?: string
   orgId?: string
-  flowDocument: FlowDocument
+  content: FlowDocument
 }
 
 export const libraryApi = {

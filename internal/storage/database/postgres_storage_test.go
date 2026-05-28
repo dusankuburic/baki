@@ -181,3 +181,55 @@ func TestPostgres_LoadConversation_Empty(t *testing.T) {
 		t.Errorf("expected nil for missing conversation, got %v", msgs)
 	}
 }
+
+func TestPostgres_RefreshTokenRotation(t *testing.T) {
+	b := openTestDB(t)
+	ctx := context.Background()
+	user := "rt-test-user"
+	t.Cleanup(func() { _ = b.RevokeUserRefreshTokens(ctx, user) })
+
+	jti := "rt-jti-" + time.Now().Format("150405.000000000")
+
+	// A freshly stored token is valid.
+	if err := b.StoreRefreshToken(ctx, jti, user, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("StoreRefreshToken: %v", err)
+	}
+	if ok, err := b.IsRefreshTokenValid(ctx, jti); err != nil || !ok {
+		t.Fatalf("expected valid token, got ok=%v err=%v", ok, err)
+	}
+
+	// Revoking (rotation) invalidates it.
+	if err := b.RevokeRefreshToken(ctx, jti); err != nil {
+		t.Fatalf("RevokeRefreshToken: %v", err)
+	}
+	if ok, _ := b.IsRefreshTokenValid(ctx, jti); ok {
+		t.Fatal("expected revoked token to be invalid")
+	}
+
+	// Unknown jti is invalid but not an error.
+	if ok, err := b.IsRefreshTokenValid(ctx, "does-not-exist"); err != nil || ok {
+		t.Fatalf("expected unknown token invalid, got ok=%v err=%v", ok, err)
+	}
+
+	// Expired token is invalid.
+	expJTI := jti + "-expired"
+	if err := b.StoreRefreshToken(ctx, expJTI, user, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("StoreRefreshToken(expired): %v", err)
+	}
+	if ok, _ := b.IsRefreshTokenValid(ctx, expJTI); ok {
+		t.Fatal("expected expired token to be invalid")
+	}
+
+	// RevokeUserRefreshTokens revokes every active token for the user.
+	a, c := jti+"-a", jti+"-b"
+	_ = b.StoreRefreshToken(ctx, a, user, time.Now().Add(time.Hour))
+	_ = b.StoreRefreshToken(ctx, c, user, time.Now().Add(time.Hour))
+	if err := b.RevokeUserRefreshTokens(ctx, user); err != nil {
+		t.Fatalf("RevokeUserRefreshTokens: %v", err)
+	}
+	for _, j := range []string{a, c} {
+		if ok, _ := b.IsRefreshTokenValid(ctx, j); ok {
+			t.Fatalf("expected %s to be revoked after RevokeUserRefreshTokens", j)
+		}
+	}
+}

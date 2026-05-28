@@ -31,6 +31,14 @@ const mockMe      = authApi.me      as ReturnType<typeof vi.fn>
 
 const fakeUser: AuthUser = { id: 'u1', email: 'alice@example.com', role: 'member' }
 
+// Build a token whose middle segment decodes to a JWT payload with the given
+// `exp` (seconds). loadFromStorage decodes this to decide whether to skip a
+// doomed refresh call. Default: 15 minutes in the future (valid).
+function makeJwt(expMsFromNow = 900_000): string {
+  const payload = btoa(JSON.stringify({ exp: Math.floor((Date.now() + expMsFromNow) / 1000) }))
+  return `header.${payload}.sig`
+}
+
 const fakeLoginResponse: LoginResponse = {
   accessToken:  'access-abc',
   refreshToken: 'refresh-xyz',
@@ -38,19 +46,29 @@ const fakeLoginResponse: LoginResponse = {
   user:          fakeUser,
 }
 
-// jsdom's localStorage implementation in vitest 4 is incomplete — stub the whole thing.
-let _storage: Record<string, string> = {}
+// jsdom's storage implementations in vitest 4 are incomplete — stub them.
+// The store keeps the refresh token in sessionStorage and the access token
+// in memory (via setSessionToken), never in localStorage.
+let _local: Record<string, string> = {}
 vi.stubGlobal('localStorage', {
-  getItem:    (key: string) => _storage[key] ?? null,
-  setItem:    (key: string, value: string) => { _storage[key] = value },
-  removeItem: (key: string) => { delete _storage[key] },
+  getItem:    (key: string) => _local[key] ?? null,
+  setItem:    (key: string, value: string) => { _local[key] = value },
+  removeItem: (key: string) => { delete _local[key] },
+})
+
+let _session: Record<string, string> = {}
+vi.stubGlobal('sessionStorage', {
+  getItem:    (key: string) => _session[key] ?? null,
+  setItem:    (key: string, value: string) => { _session[key] = value },
+  removeItem: (key: string) => { delete _session[key] },
 })
 
 const initialState = useAuthStore.getState()
 
 beforeEach(() => {
   useAuthStore.setState(initialState, true)
-  _storage = {}
+  _local = {}
+  _session = {}
   vi.resetAllMocks()
   mockLogout.mockResolvedValue(undefined)
 })
@@ -71,12 +89,14 @@ describe('login', () => {
     expect(s.error).toBeNull()
   })
 
-  it('stores tokens in localStorage', async () => {
+  it('stores the refresh token in sessionStorage and the access token in state', async () => {
     mockLogin.mockResolvedValue(fakeLoginResponse)
     await useAuthStore.getState().login({ email: 'a@b.com', password: 'p' })
 
-    expect(localStorage.getItem('auth_access_token')).toBe('access-abc')
-    expect(localStorage.getItem('auth_refresh_token')).toBe('refresh-xyz')
+    // Access token lives in memory/state only — never in web storage (XSS hardening).
+    expect(useAuthStore.getState().accessToken).toBe('access-abc')
+    expect(localStorage.getItem('auth_access_token')).toBeNull()
+    expect(sessionStorage.getItem('auth_refresh_token')).toBe('refresh-xyz')
   })
 
   it('sets error and rethrows on failure', async () => {
@@ -108,14 +128,12 @@ describe('logout', () => {
     expect(s.isAuthenticated).toBe(false)
   })
 
-  it('clears localStorage tokens', async () => {
-    localStorage.setItem('auth_access_token', 'tok')
-    localStorage.setItem('auth_refresh_token', 'ref')
+  it('clears the stored refresh token', async () => {
+    sessionStorage.setItem('auth_refresh_token', 'ref')
 
     await useAuthStore.getState().logout()
 
-    expect(localStorage.getItem('auth_access_token')).toBeNull()
-    expect(localStorage.getItem('auth_refresh_token')).toBeNull()
+    expect(sessionStorage.getItem('auth_refresh_token')).toBeNull()
   })
 
   it('clears state even when the API call fails', async () => {
@@ -131,31 +149,33 @@ describe('logout', () => {
 // ---- refresh ----
 
 describe('refresh', () => {
-  it('updates the access token on success', async () => {
-    localStorage.setItem('auth_refresh_token', 'refresh-xyz')
+  it('updates the access token and returns true on success', async () => {
+    sessionStorage.setItem('auth_refresh_token', 'refresh-xyz')
     mockRefresh.mockResolvedValue({ accessToken: 'new-access', expiresAt: new Date().toISOString() })
 
-    await useAuthStore.getState().refresh()
+    const ok = await useAuthStore.getState().refresh()
 
+    expect(ok).toBe(true)
     expect(useAuthStore.getState().accessToken).toBe('new-access')
-    expect(localStorage.getItem('auth_access_token')).toBe('new-access')
   })
 
-  it('clears auth when no refresh token is stored', async () => {
+  it('clears auth and returns false when no refresh token is stored', async () => {
     useAuthStore.setState({ user: fakeUser, isAuthenticated: true })
 
-    await useAuthStore.getState().refresh()
+    const ok = await useAuthStore.getState().refresh()
 
+    expect(ok).toBe(false)
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })
 
-  it('clears auth when refresh API fails', async () => {
-    localStorage.setItem('auth_refresh_token', 'expired-refresh')
+  it('clears auth and returns false when refresh API fails', async () => {
+    sessionStorage.setItem('auth_refresh_token', 'expired-refresh')
     mockRefresh.mockRejectedValue(new Error('expired'))
     useAuthStore.setState({ user: fakeUser, isAuthenticated: true })
 
-    await useAuthStore.getState().refresh()
+    const ok = await useAuthStore.getState().refresh()
 
+    expect(ok).toBe(false)
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })
 })
@@ -163,8 +183,9 @@ describe('refresh', () => {
 // ---- loadFromStorage ----
 
 describe('loadFromStorage', () => {
-  it('restores session when a valid token is in localStorage', async () => {
-    localStorage.setItem('auth_access_token', 'stored-token')
+  it('restores session when a valid (unexpired) refresh token is stored', async () => {
+    sessionStorage.setItem('auth_refresh_token', makeJwt())
+    mockRefresh.mockResolvedValue({ accessToken: 'new-access', expiresAt: new Date().toISOString() })
     mockMe.mockResolvedValue(fakeUser)
 
     await useAuthStore.getState().loadFromStorage()
@@ -175,6 +196,28 @@ describe('loadFromStorage', () => {
 
   it('does nothing when no token is stored', async () => {
     await useAuthStore.getState().loadFromStorage()
+    expect(useAuthStore.getState().isAuthenticated).toBe(false)
+    expect(mockMe).not.toHaveBeenCalled()
+  })
+
+  it('skips all network calls when the stored token is already expired', async () => {
+    sessionStorage.setItem('auth_refresh_token', makeJwt(-1000)) // exp in the past
+
+    await useAuthStore.getState().loadFromStorage()
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false)
+    expect(mockRefresh).not.toHaveBeenCalled()
+    expect(mockMe).not.toHaveBeenCalled()
+    // Stale token is cleared so it won't be retried on the next load.
+    expect(sessionStorage.getItem('auth_refresh_token')).toBeNull()
+  })
+
+  it('does not call me() when refresh fails', async () => {
+    sessionStorage.setItem('auth_refresh_token', makeJwt())
+    mockRefresh.mockRejectedValue(new Error('refresh rejected'))
+
+    await useAuthStore.getState().loadFromStorage()
+
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
     expect(mockMe).not.toHaveBeenCalled()
   })

@@ -69,20 +69,9 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 
 	terminatorIdx := -1
 	for i, b := range ptrs {
-		b.SubflowID = subflowID
-		b.ChildPtrs = nil
-
 		ctx.BlockIndex[b.ID] = i
 		if terminatorIdx < 0 && isTerminator(b) {
 			terminatorIdx = i
-		}
-
-		if len(b.Children) > 0 {
-			childPtrs := make([]*models.Block, len(b.Children))
-			for j := range b.Children {
-				childPtrs[j] = &b.Children[j]
-			}
-			b.ChildPtrs = childPtrs
 		}
 
 		ctx.AllBlocks[b.ID] = b
@@ -95,19 +84,23 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 		ctx.totalBlocks++
 
 		// Extract used variables
-		for _, val := range b.Properties {
-			matches := variableRefRegex.FindAllStringSubmatch(val, -1)
-			for _, m := range matches {
-				if len(m) > 1 {
-					ctx.UsedVariables[strings.TrimSpace(m[1])] = true
+		if b.Properties != nil {
+			for _, val := range b.Properties {
+				matches := variableRefRegex.FindAllStringSubmatch(val, -1)
+				for _, m := range matches {
+					if len(m) > 1 {
+						ctx.UsedVariables[strings.TrimSpace(m[1])] = true
+					}
 				}
 			}
 		}
-		for _, v := range b.Variables {
-			matches := variableRefRegex.FindAllStringSubmatch(v, -1)
-			for _, m := range matches {
-				if len(m) > 1 {
-					ctx.UsedVariables[strings.TrimSpace(m[1])] = true
+		if b.Variables != nil {
+			for _, v := range b.Variables {
+				matches := variableRefRegex.FindAllStringSubmatch(v, -1)
+				for _, m := range matches {
+					if len(m) > 1 {
+						ctx.UsedVariables[strings.TrimSpace(m[1])] = true
+					}
 				}
 			}
 		}
@@ -291,33 +284,42 @@ func BuildVariableLineage(doc *models.FlowDocument, varName string) *models.Vari
 		Events: make([]models.VariableEvent, 0),
 	}
 
-	for _, sf := range doc.Subflows {
-		walkSubflowBlocks(&sf, func(b *models.Block) {
-			// Check for assignment/output
-			if output, ok := b.Properties["_output"]; ok && output == varName {
-				eventType := "init"
-				if b.RawType != "SET" && b.RawType != "Variables.SetVariable" {
-					eventType = "mutate"
-				}
-				history.Events = append(history.Events, models.VariableEvent{
-					Type:      eventType,
-					BlockID:   b.ID,
-					Line:      b.LineNumber,
-					SubflowID: sf.Name,
-				})
-				return // If it's an output, we count it once (even if it also reads itself, e.g. x = x + 1)
-			}
+	if doc == nil || varName == "" {
+		return history
+	}
 
-			// Check for read
-			for _, v := range b.Variables {
-				if v == varName {
+	for i := range doc.Subflows {
+		sf := &doc.Subflows[i]
+		walkSubflowBlocks(sf, func(b *models.Block) {
+			// Check for assignment/output
+			if b.Properties != nil {
+				if output, ok := b.Properties["_output"]; ok && output == varName {
+					eventType := "init"
+					if b.RawType != "SET" && b.RawType != "Variables.SetVariable" {
+						eventType = "mutate"
+					}
 					history.Events = append(history.Events, models.VariableEvent{
-						Type:      "read",
+						Type:      eventType,
 						BlockID:   b.ID,
 						Line:      b.LineNumber,
 						SubflowID: sf.Name,
 					})
-					break
+					return // If it's an output, we count it once (even if it also reads itself, e.g. x = x + 1)
+				}
+			}
+
+			// Check for read
+			if b.Variables != nil {
+				for _, v := range b.Variables {
+					if v == varName {
+						history.Events = append(history.Events, models.VariableEvent{
+							Type:      "read",
+							BlockID:   b.ID,
+							Line:      b.LineNumber,
+							SubflowID: sf.Name,
+						})
+						break
+					}
 				}
 			}
 		})

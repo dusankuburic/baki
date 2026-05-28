@@ -12,8 +12,10 @@ import {useFlowStore} from './stores/flowStore'
 import {useChatStore} from './stores/chatStore'
 import {useSearchStore} from './stores/searchStore'
 import {useAnalysisStore} from './stores/analysisStore'
+import {usePresenceStore} from './stores/presenceStore'
 import {useKeyboard} from './hooks/useKeyboard'
 import {useTheme} from './hooks/useTheme'
+import {useTauriMenuEvents} from './hooks/useTauriMenuEvents'
 import TitleBar from './components/layout/TitleBar'
 import Sidebar from './components/layout/Sidebar'
 import MainPane from './components/layout/MainPane'
@@ -67,6 +69,15 @@ export default function App() {
             .then((files: RecentFile[]) => { if (files) setRecentFiles(files) })
             .catch(() => {})
     }, [document])
+
+    // Real-time collaboration: join the presence channel for the open flow.
+    // Only in web/cloud mode — desktop is single-user, so there is nobody to share with.
+    const documentId = document?.id ?? null
+    useEffect(() => {
+        if (isTauri() || !documentId) return
+        usePresenceStore.getState().connectToFlow(documentId)
+        return () => usePresenceStore.getState().disconnect()
+    }, [documentId])
 
     useEffect(() => {
         const unsub = onSettingsLoaded((s) => {
@@ -122,77 +133,8 @@ export default function App() {
 
     const {toggleTheme} = useTheme()
 
-    useEffect(() => {
-        if (!isTauri()) return
-        const unsubPromise = import('@tauri-apps/api/event').then(({ listen }) =>
-            listen<string>('menu-event', async (event) => {
-                const id = event.payload
-                switch (id) {
-                    case 'file.open': {
-                        const doc = await flowApi.openFlowFile()
-                        if (doc) openDocument(doc as any)
-                        break
-                    }
-                    case 'file.open.folder': {
-                        const doc = await flowApi.openFlowFolder()
-                        if (doc) openDocument(doc as any)
-                        break
-                    }
-                    case 'file.export.pdf':
-                        exportApi.exportPDF().catch(() => {})
-                        break
-                    case 'file.export.md':
-                        exportApi.exportMarkdown().catch(() => {})
-                        break
-                    case 'file.close.tab': {
-                        const {focusedGroupIndex, groups, closeTab} = useFlowStore.getState()
-                        const group = groups[focusedGroupIndex]
-                        if (group?.activeTabId) closeTab(focusedGroupIndex, group.activeTabId)
-                        break
-                    }
-                    case 'view.toggle.sidebar':
-                        toggleSidebar()
-                        break
-                    case 'view.toggle.inspector':
-                        toggleInspector()
-                        break
-                    case 'view.toggle.mode': {
-                        const current = useUIStore.getState().mainPaneView
-                        setMainPaneView(current === 'block' ? 'graph' : 'block')
-                        break
-                    }
-                    case 'view.theme.toggle':
-                        toggleTheme()
-                        break
-                    case 'window.reload':
-                        window.location.reload()
-                        break
-                    case 'help.shortcuts':
-                        setShortcutsHelpOpen(true)
-                        break
-                }
-            })
-        )
-        return () => { unsubPromise.then(unsub => unsub()) }
-    }, [setDocument, toggleSidebar, toggleInspector, setMainPaneView, toggleTheme])
-
-    useEffect(() => {
-        if (!isTauri()) return
-        const unsubPromise = import('@tauri-apps/api/event').then(({ listen }) =>
-            listen<string[]>('open-file', async (event) => {
-                const args = event.payload
-                const path = args.find(arg =>
-                    (arg.toLowerCase().endsWith('.txt') || arg.toLowerCase().endsWith('.pad')) &&
-                    !arg.toLowerCase().endsWith('.exe')
-                )
-                if (path) {
-                    const doc = await flowApi.loadFlowFromPath(path)
-                    if (doc) openDocument(doc as any)
-                }
-            })
-        )
-        return () => { unsubPromise.then(unsub => unsub()) }
-    }, [setDocument])
+    const showShortcuts = useCallback(() => setShortcutsHelpOpen(true), [])
+    useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts: showShortcuts})
 
     useEffect(() => {
         const handler = (event: ErrorEvent) => {
@@ -245,16 +187,27 @@ export default function App() {
             const file = files[0]
             if (!file) return
             try {
-                const path = (file as any).path as string
-                if (path) {
-                    const doc = await flowApi.loadFlowFromPath(path)
+                if (isTauri()) {
+                    const path = (file as any).path as string
+                    if (path) {
+                        const doc = await flowApi.loadFlowFromPath(path)
+                        if (doc) openDocument(doc as any)
+                    }
+                } else {
+                    // Web mode: read content and upload
+                    const content = await new Promise<string>((resolve) => {
+                        const reader = new FileReader()
+                        reader.onload = (e) => resolve(e.target?.result as string)
+                        reader.readAsText(file)
+                    })
+                    const doc = await flowApi.uploadFlow(file.name, {[file.name]: content})
                     if (doc) openDocument(doc as any)
                 }
             } catch (err) {
                 console.error('Failed to open dropped file:', err)
             }
         }
-    }, [setDocument])
+    }, [openDocument])
 
     useKeyboard({
         scope: 'global',
@@ -425,16 +378,18 @@ export default function App() {
             cmds.push({id: 'nav.admin', label: 'Admin Dashboard', section: 'Navigation', onSelect: () => setMainPaneView('admin')})
         }
 
-        for (const f of recentFiles.slice(0, 5)) {
-            cmds.push({
-                id: `recent:${f.path}`,
-                label: f.name,
-                section: 'Recent Files',
-                onSelect: async () => {
-                    const doc = await flowApi.loadFlowFromPath(f.path)
-                    if (doc) openDocument(doc as DomainFlowDocument)
-                },
-            })
+        if (isTauri()) {
+            for (const f of recentFiles.slice(0, 5)) {
+                cmds.push({
+                    id: `recent:${f.path}`,
+                    label: f.name,
+                    section: 'Recent Files',
+                    onSelect: async () => {
+                        const doc = await flowApi.loadFlowFromPath(f.path)
+                        if (doc) openDocument(doc as DomainFlowDocument)
+                    },
+                })
+            }
         }
 
         if (document) {

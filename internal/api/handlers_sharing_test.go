@@ -21,10 +21,24 @@ func seedUser(t *testing.T, rt *Router, id, email string) {
 	}
 }
 
+// seedFlow inserts a flow owned by ownerID so sharing handlers' ownership check passes.
+func seedFlow(t *testing.T, rt *Router, flowID, ownerID string) {
+	t.Helper()
+	err := rt.app.StorageBackend().SaveFlow(context.Background(), &storageif.FlowDocument{
+		ID:      flowID,
+		Name:    "test",
+		OwnerID: ownerID,
+	})
+	if err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
+}
+
 func TestHandleSharingList_EmptyByDefault(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
-	
+	seedFlow(t, rt, "flow-1", "admin")
+
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/flows/flow-1/collaborators", token, nil)
 	checkStatus(t, rr, http.StatusOK)
 	var collabs []any
@@ -37,8 +51,9 @@ func TestHandleSharingList_EmptyByDefault(t *testing.T) {
 func TestHandleSharingAdd_OK(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
 	seedUser(t, rt, "u1", "alice@example.com")
-	
+
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"email": "alice@example.com", "permission": "viewer",
 	})
@@ -53,11 +68,35 @@ func TestHandleSharingAdd_OK(t *testing.T) {
 	}
 }
 
+func TestHandleSharingAdd_NonOwnerReturns403(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	// flow-1 is owned by "someone-else"; the caller is "admin".
+	seedFlow(t, rt, "flow-1", "someone-else")
+	seedUser(t, rt, "u1", "alice@example.com")
+	token := jwtBearer(t, rt, "admin", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
+		"email": "alice@example.com", "permission": "viewer",
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+func TestHandleSharingAdd_MissingFlowReturns404(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	// no flow seeded
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/ghost/collaborators", token, map[string]any{
+		"email": "alice@example.com",
+	})
+	checkStatus(t, rr, http.StatusNotFound)
+}
+
 func TestHandleSharingAdd_DefaultsToViewer(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
 	seedUser(t, rt, "u1", "bob@example.com")
-	
+
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"userId": "u1",
 	})
@@ -72,7 +111,8 @@ func TestHandleSharingAdd_DefaultsToViewer(t *testing.T) {
 func TestHandleSharingAdd_UserNotFoundReturns404(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
-	
+	seedFlow(t, rt, "flow-1", "admin")
+
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"email": "nobody@example.com",
 	})
@@ -82,8 +122,9 @@ func TestHandleSharingAdd_UserNotFoundReturns404(t *testing.T) {
 func TestHandleSharingAdd_InvalidPermissionReturns400(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
 	seedUser(t, rt, "u1", "eve@example.com")
-	
+
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"userId": "u1", "permission": "superuser",
 	})
@@ -93,7 +134,8 @@ func TestHandleSharingAdd_InvalidPermissionReturns400(t *testing.T) {
 func TestHandleSharingAdd_MissingInputReturns400(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
-	
+	seedFlow(t, rt, "flow-1", "admin")
+
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"permission": "viewer",
 	})
@@ -103,8 +145,9 @@ func TestHandleSharingAdd_MissingInputReturns400(t *testing.T) {
 func TestHandleSharingUpdate_OK(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
 	seedUser(t, rt, "u1", "alice@example.com")
-	
+
 	doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"userId": "u1", "permission": "viewer",
 	})
@@ -122,8 +165,9 @@ func TestHandleSharingUpdate_OK(t *testing.T) {
 func TestHandleSharingRemove_OK(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
 	seedUser(t, rt, "u1", "alice@example.com")
-	
+
 	doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"userId": "u1", "permission": "viewer",
 	})
@@ -134,8 +178,9 @@ func TestHandleSharingRemove_OK(t *testing.T) {
 func TestHandleSharingListAfterAdd(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
 	seedUser(t, rt, "u1", "alice@example.com")
-	
+
 	doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"userId": "u1", "permission": "viewer",
 	})

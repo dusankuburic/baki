@@ -13,6 +13,7 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/manager"
+	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"syscall"
@@ -21,6 +22,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// @title Pad Analyzer API
+// @version 1.0
+// @description This is the API for the Pad Analyzer project.
+// @host localhost:8080
+// @BasePath /
 func main() {
 	cfg := loadConfig()
 
@@ -34,6 +40,18 @@ func main() {
 			os.Exit(1)
 		}
 		logger.Info("postgres storage backend ready")
+
+		// Cloud mode has no OS keychain, so provider API keys are persisted in
+		// Postgres, encrypted at rest with a key derived from the auth secret.
+		if pg, ok := backend.(*storagedb.PostgresStorageBackend); ok && cfg.Auth.Secret != "" {
+			ks, err := pg.NewEncryptedKeyStore([]byte(cfg.Auth.Secret))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to init encrypted keystore: %v\n", err)
+				os.Exit(1)
+			}
+			storage.SetSecretStore(ks)
+			logger.Info("encrypted database keystore enabled")
+		}
 	}
 
 	// Initialize App Manager
@@ -47,7 +65,7 @@ func main() {
 	}
 
 	// Initialize the Router (which also acts as a Notifier)
-	router := api.NewRouter(app, token, cfg.Auth.Enabled, cfg.Server.AllowedOrigins)
+	router := api.NewRouter(app, token, cfg.Auth.Enabled, cfg.Server.AllowedOrigins, cfg.Server.StaticDir)
 
 	// Init the App with the router as notifier
 	ctx := context.Background()

@@ -48,6 +48,62 @@ func TestRole_Permissions_NotEmpty(t *testing.T) {
 	}
 }
 
+// ---- WebSocket tickets ----
+
+func TestManager_IssueAndVerifyWSTicket(t *testing.T) {
+	mgr := newTestManager()
+
+	ticket, exp, err := mgr.IssueWSTicket("user-1", "alice@example.com", RoleMember)
+	if err != nil {
+		t.Fatalf("IssueWSTicket: %v", err)
+	}
+	if ticket == "" {
+		t.Fatal("expected non-empty ticket")
+	}
+	if !exp.After(time.Now()) {
+		t.Fatal("ticket should expire in the future")
+	}
+
+	claims, err := mgr.VerifyWSTicket(ticket)
+	if err != nil {
+		t.Fatalf("VerifyWSTicket: %v", err)
+	}
+	if claims.UserID != "user-1" || claims.Email != "alice@example.com" || claims.Role != RoleMember {
+		t.Errorf("claims mismatch: %+v", claims)
+	}
+	if claims.ID == "" {
+		t.Error("ticket must carry a jti for single-use tracking")
+	}
+}
+
+func TestManager_AccessTokenIsNotAValidWSTicket(t *testing.T) {
+	mgr := newTestManager()
+	pair, _ := mgr.Issue("u1", "a@b.com", RoleMember)
+
+	if _, err := mgr.VerifyWSTicket(pair.AccessToken); err == nil {
+		t.Fatal("an access token must not verify as a WS ticket (audience mismatch)")
+	}
+}
+
+func TestManager_WSTicketIsNotAValidAccessToken(t *testing.T) {
+	mgr := newTestManager()
+	ticket, _, _ := mgr.IssueWSTicket("u1", "a@b.com", RoleMember)
+
+	if _, err := mgr.Verify(ticket); err == nil {
+		t.Fatal("a WS ticket must not verify as an access token (audience mismatch)")
+	}
+}
+
+func TestManager_WSTicketWrongSecretRejected(t *testing.T) {
+	mgr1 := newTestManager()
+	mgr2 := NewManagerWithTTL("a-different-secret-value", 2*time.Second, 5*time.Second, "test-issuer", "test-audience")
+
+	ticket, _, _ := mgr1.IssueWSTicket("u1", "a@b.com", RoleViewer)
+	if _, err := mgr2.VerifyWSTicket(ticket); err == nil {
+		t.Fatal("ticket signed with a different secret must be rejected")
+	}
+}
+
 // ---- JWT Manager ----
 
 func TestManager_Issue_And_Verify(t *testing.T) {

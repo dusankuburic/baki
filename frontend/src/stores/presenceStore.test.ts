@@ -26,6 +26,7 @@ vi.mock('@/api/client', () => ({
     apiUrl: 'http://localhost:9999',
     token: 'test-token',
   }),
+  getWsTicket: vi.fn().mockResolvedValue('test-ticket'),
 }))
 
 import {
@@ -34,6 +35,7 @@ import {
   type ConnectionStatus,
 } from '@/services/collaboration/CollaborationService'
 import { syncManager } from '@/services/sync/SyncManager'
+import { getWsTicket } from '@/api/client'
 import { usePresenceStore } from './presenceStore'
 
 const mockConnect = collaborationService.connect as ReturnType<typeof vi.fn>
@@ -58,7 +60,8 @@ beforeEach(() => {
 describe('connectToFlow', () => {
   it('connects the collaboration service with backend config', async () => {
     await usePresenceStore.getState().connectToFlow('flow-123')
-    expect(mockConnect).toHaveBeenCalledWith('flow-123', 'http://localhost:9999', 'test-token')
+    // The ticket provider (not the long-lived token) is handed to the service.
+    expect(mockConnect).toHaveBeenCalledWith('flow-123', 'http://localhost:9999', getWsTicket)
   })
 
   it('starts the sync manager', async () => {

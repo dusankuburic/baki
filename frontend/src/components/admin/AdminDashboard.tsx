@@ -1,7 +1,27 @@
 import React, { useState, useEffect } from 'react'
+import { Shield, Users, RefreshCw, CheckCircle2, XCircle, Loader } from 'lucide-react'
+import clsx from 'clsx'
 import { adminApi, type MigrationStatus } from '@/api/admin'
 import { type AuthUser } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
+import Button from '@/components/shared/Button'
+
+function roleBadgeClass(role: string) {
+  switch (role) {
+    case 'admin':   return 'bg-block-subflow/10 text-block-subflow'
+    case 'member':  return 'bg-block-action/10 text-block-action'
+    case 'viewer':  return 'bg-block-condition/10 text-block-condition'
+    default:        return 'bg-surface-4 text-text-tertiary'
+  }
+}
+
+function migrationStatusClass(status?: string) {
+  switch (status) {
+    case 'running':   return 'bg-semantic-info/10 text-semantic-info'
+    case 'completed': return 'bg-semantic-success/10 text-semantic-success'
+    default:          return 'bg-surface-4 text-text-tertiary'
+  }
+}
 
 export const AdminDashboard: React.FC = () => {
   const { user: currentUser } = useAuthStore()
@@ -44,7 +64,6 @@ export const AdminDashboard: React.FC = () => {
 
   const handleStartMigration = async () => {
     if (!confirm('Start data migration from filesystem to database? This will skip already migrated flows.')) return
-    
     setError(null)
     try {
       await adminApi.startMigration()
@@ -58,59 +77,91 @@ export const AdminDashboard: React.FC = () => {
     if (userId === currentUser?.id && newRole !== 'admin') {
       if (!confirm('You are about to remove your own administrator privileges. Are you sure?')) return
     }
-
     try {
       await adminApi.setUserRole(userId, newRole)
       await fetchUsers()
     } catch (err) {
-      alert('Failed to change role: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      setError('Failed to change role: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
   }
 
   if (currentUser?.role !== 'admin') {
-    return <div className="p-4 text-red-600">Access Denied: Administrator role required.</div>
+    return (
+      <div className="p-6 flex items-center gap-2 text-semantic-error text-sm">
+        <Shield size={16} />
+        <span>Access Denied: Administrator role required.</span>
+      </div>
+    )
   }
 
+  const adminCount  = users.filter(u => u.role === 'admin').length
+  const memberCount = users.filter(u => u.role === 'member').length
+  const otherCount  = users.filter(u => u.role !== 'admin' && u.role !== 'member').length
+
   return (
-    <div className="p-6 space-y-8 max-w-5xl mx-auto">
+    <div className="p-6 md:p-8 space-y-6 max-w-5xl mx-auto">
+
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-        <button onClick={fetchData} className="text-blue-600 hover:underline" disabled={isLoading}>
-          {isLoading ? 'Refreshing...' : 'Refresh All'}
-        </button>
+        <div>
+          <h1 className="text-2xl font-semibold text-text-primary">Admin Dashboard</h1>
+          <p className="text-sm text-text-tertiary mt-0.5">Manage users and system settings</p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={isLoading ? Loader : RefreshCw}
+          onClick={fetchData}
+          disabled={isLoading}
+          className={clsx(isLoading && '[&_svg]:animate-spin')}
+        >
+          {isLoading ? 'Refreshing…' : 'Refresh'}
+        </Button>
       </div>
 
-      <section className="bg-white p-6 rounded-xl shadow-md border border-gray-200">
-        <h2 className="text-xl font-semibold mb-4">User Management</h2>
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard icon={Users}  label="Total Users" value={users.length} color="text-text-secondary" />
+        <StatCard icon={Shield} label="Admins"       value={adminCount}  color="text-block-subflow" />
+        <StatCard icon={Users}  label="Members"      value={memberCount} color="text-block-action" />
+        <StatCard icon={Users}  label="Other"        value={otherCount}  color="text-text-tertiary" />
+      </div>
+
+      {/* User Management */}
+      <section className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
+          <Users size={14} className="text-text-tertiary" />
+          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">User Management</h2>
+        </div>
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-border-subtle">
+            <thead className="bg-surface-3">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                {['Email', 'ID', 'Role', 'Change Role'].map(h => (
+                  <th key={h} className="px-5 py-2.5 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="divide-y divide-border-subtle">
               {users.map(u => (
-                <tr key={u.id}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{u.email}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{u.id}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <span className={`px-2 py-1 rounded-md text-xs font-bold uppercase ${
-                      u.role === 'admin' ? 'bg-purple-100 text-purple-800' :
-                      u.role === 'member' ? 'bg-blue-100 text-blue-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
+                <tr key={u.id} className="bg-surface-2 hover:bg-surface-3 transition-colors duration-fast">
+                  <td className="px-5 py-3 text-sm font-medium text-text-primary whitespace-nowrap">{u.email}</td>
+                  <td className="px-5 py-3 text-xs text-text-tertiary font-mono whitespace-nowrap">{u.id}</td>
+                  <td className="px-5 py-3 whitespace-nowrap">
+                    <span className={clsx(
+                      'px-2 py-0.5 rounded-md text-xs font-semibold uppercase',
+                      roleBadgeClass(u.role)
+                    )}>
                       {u.role}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  <td className="px-5 py-3 whitespace-nowrap">
                     <select
                       value={u.role}
-                      onChange={(e) => handleRoleChange(u.id, e.target.value)}
-                      className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-1"
+                      onChange={e => handleRoleChange(u.id, e.target.value)}
+                      className="bg-surface-3 border border-border-default rounded-md text-text-primary text-xs px-2 py-1 focus:outline-none focus:border-brand-500 transition-colors"
                     >
                       <option value="admin">Admin</option>
                       <option value="member">Member</option>
@@ -125,54 +176,94 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </section>
 
-      <section className="bg-white p-6 rounded-xl shadow-md border border-gray-200">
-        <h2 className="text-xl font-semibold mb-4">Data Migration (Local to Cloud)</h2>
-        <div className="space-y-4">
-          <div className="flex items-center space-x-4">
-            <span className="font-medium">Status:</span>
-            <span className={`px-3 py-1 rounded-full text-sm font-bold uppercase ${
-              migrationStatus?.status === 'running' ? 'bg-blue-100 text-blue-800' :
-              migrationStatus?.status === 'completed' ? 'bg-green-100 text-green-800' :
-              'bg-gray-100 text-gray-800'
-            }`}>
-              {migrationStatus?.status || 'Unknown'}
+      {/* Data Migration */}
+      <section className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
+          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Data Migration</h2>
+          <span className="text-xs text-text-tertiary">Local → Cloud</span>
+          {migrationStatus?.status && (
+            <span className={clsx(
+              'ml-auto px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase',
+              migrationStatusClass(migrationStatus.status)
+            )}>
+              {migrationStatus.status}
             </span>
-          </div>
+          )}
+        </div>
 
+        <div className="p-5 space-y-4">
           {migrationStatus?.result && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-gray-50 p-4 rounded-md border border-gray-100">
-              <div><strong>Migrated:</strong> {migrationStatus.result.FlowsMigrated}</div>
-              <div><strong>Skipped:</strong> {migrationStatus.result.FlowsSkipped}</div>
-              <div><strong>Failed:</strong> {migrationStatus.result.FlowsFailed}</div>
-              <div><strong>Settings:</strong> {migrationStatus.result.SettingsMoved ? '✅' : '❌'}</div>
-              <div className="col-span-full pt-2 border-t border-gray-200 mt-2">
-                <strong>Duration:</strong> {(migrationStatus.result.Duration / 1e9).toFixed(2)}s
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-surface-3 border border-border-subtle rounded-lg p-3">
+              <MigStat label="Migrated" value={migrationStatus.result.FlowsMigrated} />
+              <MigStat label="Skipped"  value={migrationStatus.result.FlowsSkipped} />
+              <MigStat label="Failed"   value={migrationStatus.result.FlowsFailed} />
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-text-tertiary">Settings</span>
+                <span className="flex items-center gap-1">
+                  {migrationStatus.result.SettingsMoved
+                    ? <CheckCircle2 size={14} className="text-semantic-success" />
+                    : <XCircle size={14} className="text-semantic-error" />}
+                  <span className="text-sm font-semibold text-text-primary">
+                    {migrationStatus.result.SettingsMoved ? 'Moved' : 'Not moved'}
+                  </span>
+                </span>
+              </div>
+              <div className="col-span-full pt-2 border-t border-border-subtle flex items-center gap-2">
+                <span className="text-xs text-text-tertiary">Duration</span>
+                <span className="text-sm font-semibold text-text-primary">
+                  {(migrationStatus.result.Duration / 1e9).toFixed(2)}s
+                </span>
               </div>
             </div>
           )}
 
-          <div className="pt-4">
-            <button
+          <div className="flex flex-col gap-2">
+            <Button
+              variant="primary"
+              size="md"
               onClick={handleStartMigration}
               disabled={migrationStatus?.status === 'running' || isLoading}
-              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm font-medium"
             >
               Start Migration
-            </button>
-            <p className="mt-2 text-xs text-text-tertiary">
-              This process scans the server's local 'data' directory and uploads flows to the database.
+            </Button>
+            <p className="text-xs text-text-tertiary">
+              Scans the server's local <code className="font-mono">data/</code> directory and uploads flows to the database. Already-migrated flows are skipped.
             </p>
           </div>
         </div>
       </section>
 
+      {/* Error */}
       {error && (
-        <div className="bg-red-50 border-l-4 border-red-400 p-4 text-red-700">
-          <p className="font-bold">Error</p>
-          <p>{error}</p>
+        <div className="bg-semantic-error/10 border border-semantic-error/30 rounded-lg px-4 py-3 text-semantic-error text-sm flex items-start gap-2">
+          <XCircle size={15} className="mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="font-semibold">Error</p>
+            <p className="text-semantic-error/80 mt-0.5">{error}</p>
+          </div>
         </div>
       )}
     </div>
   )
 }
 
+function StatCard({ icon: Icon, label, value, color }: { icon: React.ElementType; label: string; value: number; color: string }) {
+  return (
+    <div className="bg-surface-2 border border-border-default rounded-xl p-4 flex flex-col gap-2">
+      <div className="flex items-center gap-1.5">
+        <Icon size={13} className={color} />
+        <span className="text-xs text-text-tertiary uppercase tracking-wide">{label}</span>
+      </div>
+      <span className="text-3xl font-bold text-text-primary">{value}</span>
+    </div>
+  )
+}
+
+function MigStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-text-tertiary">{label}</span>
+      <span className="text-sm font-semibold text-text-primary">{value}</span>
+    </div>
+  )
+}

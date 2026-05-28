@@ -13,6 +13,7 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [remember, setRemember] = useState(false)
   const login = useAuthStore(s => s.login)
   const register = useAuthStore(s => s.register)
   const isLoading = useAuthStore(s => s.isLoading)
@@ -30,9 +31,9 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
 
     try {
       if (isRegister) {
-        await register({ email, password })
+        await register({ email, password }, remember)
       } else {
-        await login({ email, password })
+        await login({ email, password }, remember)
       }
       onSuccess?.()
     } catch {
@@ -94,6 +95,16 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
             autoComplete="new-password"
           />
         )}
+
+        <label className="flex items-center gap-2 text-sm text-text-secondary select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={e => setRemember(e.target.checked)}
+            className="accent-brand-500 w-3.5 h-3.5"
+          />
+          Keep me signed in on this device
+        </label>
 
         <Button
           type="submit"

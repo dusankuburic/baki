@@ -77,7 +77,7 @@ class IndexedDBStorage {
   // ---- flows ----
 
   async saveFlow(flow: StoredFlow): Promise<void> {
-    await this.tx(STORES.flows, 'readwrite', s => s.put(flow))
+    await this.tx(STORES.flows, 'readwrite', s => s.put(flow))git 
   }
 
   async loadFlow(id: string): Promise<StoredFlow | undefined> {

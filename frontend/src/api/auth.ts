@@ -23,6 +23,8 @@ export interface AuthUser {
 export interface RefreshResponse {
   accessToken: string
   expiresAt: string
+  // Present when the server rotates refresh tokens; the client should persist it.
+  refreshToken?: string
 }
 
 export const authApi = {

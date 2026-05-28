@@ -26,7 +26,7 @@ export class WebAdapter implements PlatformAdapter {
     }
 
     // For web deployment, get configuration from environment variables
-    const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
+    const apiUrl = import.meta.env.VITE_API_URL || window.location.origin;
     const token = undefined;
 
     this.config = {
@@ -62,26 +62,17 @@ export class WebAdapter implements PlatformAdapter {
           return;
         }
 
-        // For web, we return file content instead of paths
-        if (options.multiple) {
-          const fileContents: string[] = [];
-          Array.from(files).forEach(file => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-              fileContents.push(e.target?.result as string);
-              if (fileContents.length === files.length) {
-                resolve(fileContents);
-              }
-            };
-            reader.readAsText(file);
-          });
-        } else {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            resolve(e.target?.result as string || null);
-          };
-          reader.readAsText(files[0]);
-        }
+        const file = files[0];
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const content = e.target?.result as string;
+          resolve(JSON.stringify({
+            __is_web_upload__: true,
+            name: file.name,
+            files: { [file.name]: content }
+          }));
+        };
+        reader.readAsText(file);
 
         // Clean up
         document.body.removeChild(input);
@@ -99,11 +90,67 @@ export class WebAdapter implements PlatformAdapter {
   }
 
   /**
-   * Directory open not supported in web browsers
+   * Open directory dialog using webkitdirectory
    */
   async fileOpenDirectory(): Promise<string | null> {
-    console.warn('Directory selection not supported in web browsers');
-    return null;
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      // @ts-ignore - webkitdirectory is non-standard but widely supported
+      input.webkitdirectory = true;
+      input.style.display = 'none';
+
+      input.onchange = async (e) => {
+        const files = (e.target as HTMLInputElement).files;
+        if (!files || files.length === 0) {
+          resolve(null);
+          return;
+        }
+
+        const fileMap: Record<string, string> = {};
+        let directoryName = '';
+
+        const promises = Array.from(files)
+          .filter(file => file.name.toLowerCase().endsWith('.txt'))
+          .map(file => {
+            if (!directoryName && file.webkitRelativePath) {
+              directoryName = file.webkitRelativePath.split('/')[0];
+            }
+            return new Promise<void>((res) => {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                fileMap[file.name] = e.target?.result as string;
+                res();
+              };
+              reader.readAsText(file);
+            });
+          });
+
+        await Promise.all(promises);
+        
+        if (Object.keys(fileMap).length === 0) {
+          resolve(null);
+          return;
+        }
+
+        // Return a special JSON string that flowApi will recognize
+        resolve(JSON.stringify({
+          __is_web_upload__: true,
+          name: directoryName || 'Uploaded Folder',
+          files: fileMap
+        }));
+
+        document.body.removeChild(input);
+      };
+
+      input.oncancel = () => {
+        document.body.removeChild(input);
+        resolve(null);
+      };
+
+      document.body.appendChild(input);
+      input.click();
+    });
   }
 
   /**
@@ -118,7 +165,8 @@ export class WebAdapter implements PlatformAdapter {
    * Reveal file - not applicable in web browsers
    */
   async fileReveal(_path: string): Promise<void> {
-    throw new Error('File reveal not supported in web browsers');
+    // Revealing a file in the OS file manager has no browser equivalent — no-op.
+    console.warn('File reveal is not supported in web browsers');
   }
 
   /**
@@ -186,4 +234,9 @@ export class WebAdapter implements PlatformAdapter {
       throw error;
     }
   }
+
+  // Window controls are managed by the browser chrome in web mode — no-ops.
+  async minimizeWindow(): Promise<void> {}
+  async toggleMaximizeWindow(): Promise<void> {}
+  async closeWindow(): Promise<void> {}
 }

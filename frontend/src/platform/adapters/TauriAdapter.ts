@@ -4,6 +4,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import type {
@@ -148,5 +149,17 @@ export class TauriAdapter implements PlatformAdapter {
    */
   async writeClipboard(text: string): Promise<void> {
     await navigator.clipboard.writeText(text);
+  }
+
+  async minimizeWindow(): Promise<void> {
+    await getCurrentWindow().minimize();
+  }
+
+  async toggleMaximizeWindow(): Promise<void> {
+    await getCurrentWindow().toggleMaximize();
+  }
+
+  async closeWindow(): Promise<void> {
+    await getCurrentWindow().close();
   }
 }

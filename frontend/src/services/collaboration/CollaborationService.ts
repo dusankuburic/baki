@@ -50,32 +50,43 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'er
 type EventHandler = (env: Envelope) => void
 type StatusHandler = (s: ConnectionStatus) => void
 
+/**
+ * Provides a fresh, single-use WebSocket connect ticket. Called once per
+ * (re)connection attempt — tickets are short-lived and cannot be reused, so a
+ * new one is fetched on every socket open.
+ */
+type TicketProvider = () => Promise<string>
+
 const MAX_RECONNECT_DELAY_MS = 30_000
 
 class CollaborationService {
   private ws: WebSocket | null = null
   private flowId: string | null = null
   private apiUrl: string | null = null
-  private token: string | null = null
+  private getTicket: TicketProvider | null = null
   private status: ConnectionStatus = 'disconnected'
   private handlers = new Set<EventHandler>()
   private statusHandlers = new Set<StatusHandler>()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
   private shouldReconnect = false
+  // Bumped on every connect()/disconnect() so an in-flight ticket fetch from a
+  // superseded attempt can detect it is stale and abort before opening a socket.
+  private generation = 0
 
-  connect(flowId: string, apiUrl: string, token: string): void {
+  connect(flowId: string, apiUrl: string, getTicket: TicketProvider): void {
     this.disconnect()
     this.flowId = flowId
     this.apiUrl = apiUrl
-    this.token = token
+    this.getTicket = getTicket
     this.shouldReconnect = true
     this.reconnectAttempt = 0
-    this.openSocket()
+    void this.openSocket()
   }
 
   disconnect(): void {
     this.shouldReconnect = false
+    this.generation++
     this.clearReconnectTimer()
     if (this.ws) {
       this.ws.close()
@@ -104,24 +115,40 @@ class CollaborationService {
     return this.status
   }
 
-  private openSocket(): void {
-    if (!this.flowId || !this.apiUrl || !this.token) return
+  private async openSocket(): Promise<void> {
+    if (!this.flowId || !this.apiUrl || !this.getTicket) return
+
+    this.setStatus('connecting')
+
+    // Exchange the access token for a short-lived ticket. Capture the current
+    // generation so we can bail out if connect()/disconnect() ran while the
+    // ticket request was in flight.
+    const gen = this.generation
+    let ticket: string
+    try {
+      ticket = await this.getTicket()
+    } catch {
+      if (gen === this.generation && this.shouldReconnect) this.scheduleReconnect()
+      return
+    }
+    if (gen !== this.generation || !this.shouldReconnect) return
 
     const wsBase = this.apiUrl
       .replace(/^http/, 'ws')
       .replace(/\/$/, '')
-    const wsUrl = `${wsBase}/ws?flowId=${encodeURIComponent(this.flowId)}&token=${encodeURIComponent(this.token)}`
+    const wsUrl = `${wsBase}/ws?flowId=${encodeURIComponent(this.flowId)}&ticket=${encodeURIComponent(ticket)}`
 
-    this.setStatus('connecting')
     const ws = new WebSocket(wsUrl)
     this.ws = ws
 
     ws.onopen = () => {
+      if (this.ws !== ws) return // superseded socket
       this.reconnectAttempt = 0
       this.setStatus('connected')
     }
 
     ws.onmessage = (event: MessageEvent) => {
+      if (this.ws !== ws) return // superseded socket
       try {
         const env = JSON.parse(event.data as string) as Envelope
         this.handlers.forEach(h => h(env))
@@ -131,6 +158,9 @@ class CollaborationService {
     }
 
     ws.onclose = () => {
+      // A close from a superseded socket (e.g. one we already replaced during a
+      // rapid reconnect) must not clobber the current connection's state.
+      if (this.ws !== ws) return
       this.ws = null
       if (this.shouldReconnect) {
         this.scheduleReconnect()
@@ -140,6 +170,7 @@ class CollaborationService {
     }
 
     ws.onerror = () => {
+      if (this.ws !== ws) return // superseded socket
       // onclose fires immediately after onerror; reconnect logic lives there
       this.setStatus('error')
     }
@@ -150,7 +181,7 @@ class CollaborationService {
     this.reconnectAttempt++
     this.setStatus('connecting')
     this.reconnectTimer = setTimeout(() => {
-      if (this.shouldReconnect) this.openSocket()
+      if (this.shouldReconnect) void this.openSocket()
     }, delay)
   }
 

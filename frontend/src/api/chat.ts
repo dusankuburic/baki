@@ -1,5 +1,5 @@
 import {request} from './client'
-import {save} from '@tauri-apps/plugin-dialog'
+import {createAdapter} from '@/platform/adapters'
 import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview, SourceFileInfo} from '@/types/domain'
 
 export const chatApi = {
@@ -31,7 +31,7 @@ export const chatApi = {
     request('/api/chat/preview-context', req),
 
   exportConversation: async (flowId: string, provider: string): Promise<void> => {
-    const path = await save({
+    const path = await createAdapter().fileSave({
       filters: [{name: 'Markdown', extensions: ['md']}]
     })
     if (!path) return

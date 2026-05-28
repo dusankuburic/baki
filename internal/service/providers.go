@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"pad-analyzer/internal/ai"
@@ -176,7 +175,8 @@ func (s *ProviderService) GetGitHubUser() (user *ai.GitHubUser, err error) {
 
 	token, err := storage.GetApiKey("github-models-token")
 	if err != nil {
-		return nil, fmt.Errorf("no github token: %w", err)
+		// No stored token (or no secret storage) → not connected, not an error.
+		return nil, nil
 	}
 	return s.auth.GetUser(s.ctx, token)
 }
@@ -216,7 +216,8 @@ func (s *ProviderService) GetCopilotUser() (user *ai.GitHubUser, err error) {
 
 	token, err := storage.GetApiKey("copilot-oauth-token")
 	if err != nil {
-		return nil, fmt.Errorf("no copilot oauth token: %w", err)
+		// No stored token (or no secret storage) → not connected, not an error.
+		return nil, nil
 	}
 	return s.auth.GetUser(s.ctx, token)
 }

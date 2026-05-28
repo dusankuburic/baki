@@ -169,6 +169,97 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 	return doc, nil
 }
 
+func ParseFiles(files map[string]string, rootName string) (*models.FlowDocument, error) {
+	var filenames []string
+	for name := range files {
+		if strings.HasSuffix(strings.ToLower(name), ".txt") {
+			filenames = append(filenames, name)
+		}
+	}
+	if len(filenames) == 0 {
+		return nil, fmt.Errorf("no .txt files provided")
+	}
+
+	sort.Slice(filenames, func(i, j int) bool {
+		ni := strings.TrimSuffix(filenames[i], ".txt")
+		nj := strings.TrimSuffix(filenames[j], ".txt")
+		if ni == "Main" {
+			return true
+		}
+		if nj == "Main" {
+			return false
+		}
+		return ni < nj
+	})
+
+	var allSubflows []models.Subflow
+	var allErrors []models.ParseError
+	totalBlocks := 0
+	maxDepth := 0
+	totalLines := 0
+	var totalSize int64
+
+	var allFiles []models.FlowFileInfo
+
+	for _, name := range filenames {
+		text := files[name]
+		size := int64(len(text))
+		totalSize += size
+
+		allFiles = append(allFiles, models.FlowFileInfo{
+			Name: name,
+			Path: name,
+			Size: size,
+		})
+
+		doc, err := ParseText(text, name, size)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", name, err)
+		}
+
+		for _, sf := range doc.Subflows {
+			sf.SourceFile = name
+			allSubflows = append(allSubflows, sf)
+		}
+		allErrors = append(allErrors, doc.ParseErrors...)
+		totalBlocks += doc.Metadata.BlockCount
+		if doc.Metadata.MaxDepth > maxDepth {
+			maxDepth = doc.Metadata.MaxDepth
+		}
+		totalLines += doc.Metadata.RawLineCount
+	}
+
+	doc := &models.FlowDocument{
+		ID:          uuid.NewString(),
+		Name:        rootName,
+		Subflows:    allSubflows,
+		ParseErrors: allErrors,
+		Files:       allFiles,
+		IsFolder:    len(filenames) > 1,
+		Metadata: models.FlowMetadata{
+			BlockCount:   totalBlocks,
+			SubflowCount: len(allSubflows),
+			MaxDepth:     maxDepth,
+			ParsedAt:     time.Now(),
+			FileSize:     totalSize,
+			RawLineCount: totalLines,
+		},
+		BlocksByID:   make(map[string]*models.Block, totalBlocks),
+		BlockSubflow: make(map[string]*models.Subflow, totalBlocks),
+		SubflowsByID: make(map[string]*models.Subflow, len(allSubflows)),
+	}
+
+	for i := range doc.Subflows {
+		sf := &doc.Subflows[i]
+		doc.SubflowsByID[sf.ID] = sf
+		for j := range sf.Blocks {
+			indexBlockInDoc(doc, sf, &sf.Blocks[j])
+		}
+	}
+
+	return doc, nil
+}
+
 func wrapImplicitSubflow(tokens []Token, fileName string) []Token {
 	name := strings.TrimSuffix(fileName, filepath.Ext(fileName))
 	if name == "" {

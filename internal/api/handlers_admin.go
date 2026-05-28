@@ -8,6 +8,15 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
+// @Summary List all users
+// @Description Returns a list of all registered users. Only available to system admins.
+// @Tags admin
+// @Produce json
+// @Success 200 {array} interfaces.User
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/admin/users/list [get]
 func (rt *Router) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 	if !rt.requireRole(w, r, auth.RoleAdmin) {
 		return
@@ -27,6 +36,20 @@ func (rt *Router) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 	rt.sendJSON(w, users)
 }
 
+// @Summary Set user role
+// @Description Updates the system role for a specific user. Only available to system admins.
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Param userId path string true "User ID"
+// @Param request body object{role=string} true "Set Role Request"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/admin/users/{userId}/role [post]
 func (rt *Router) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
 	if !rt.requireRole(w, r, auth.RoleAdmin) {
 		return

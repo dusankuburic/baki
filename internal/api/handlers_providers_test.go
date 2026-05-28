@@ -54,10 +54,12 @@ func TestHandleRevokeGitHubAuth_RouteIsReachable(t *testing.T) {
 	}
 }
 
-func TestHandleGetGitHubUser_UninitializedAppReturns500(t *testing.T) {
+func TestHandleGetGitHubUser_NoTokenReturnsNotConnected(t *testing.T) {
 	rt := newTestRouter()
 	rr := doRequest(t, rt, http.MethodGet, "/api/providers/github/user", nil)
-	checkStatus(t, rr, http.StatusInternalServerError)
+	// With no stored token the endpoint reports "not connected" (200, null body)
+	// rather than a server error — this is the normal signed-out state.
+	checkStatus(t, rr, http.StatusOK)
 }
 
 func TestHandleStartCopilotAuth_UninitializedAppReturns500(t *testing.T) {
@@ -66,14 +68,16 @@ func TestHandleStartCopilotAuth_UninitializedAppReturns500(t *testing.T) {
 	checkStatus(t, rr, http.StatusInternalServerError)
 }
 
-func TestHandleRevokeCopilotAuth_UninitializedAppReturns500(t *testing.T) {
+func TestHandleRevokeCopilotAuth_NoTokenIsIdempotent(t *testing.T) {
 	rt := newTestRouter()
 	rr := doRequest(t, rt, http.MethodPost, "/api/providers/copilot/revoke", nil)
-	checkStatus(t, rr, http.StatusInternalServerError)
+	// Revoking when nothing is stored is a successful no-op.
+	checkStatus(t, rr, http.StatusOK)
 }
 
-func TestHandleGetCopilotUser_UninitializedAppReturns500(t *testing.T) {
+func TestHandleGetCopilotUser_NoTokenReturnsNotConnected(t *testing.T) {
 	rt := newTestRouter()
 	rr := doRequest(t, rt, http.MethodGet, "/api/providers/copilot/user", nil)
-	checkStatus(t, rr, http.StatusInternalServerError)
+	// No stored token → "not connected" (200, null body), not a server error.
+	checkStatus(t, rr, http.StatusOK)
 }

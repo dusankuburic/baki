@@ -1,32 +1,78 @@
 package storage
 
 import (
-	"fmt"
+	"errors"
+	"sync"
+
+	"pad-analyzer/internal/logger"
 
 	"github.com/zalando/go-keyring"
 )
 
 const keyringService = "pad-analyzer"
 
-func SaveApiKey(provider string, key string) error {
-	return keyring.Set(keyringService, "apikey:"+provider, key)
+// keyringStore is the default SecretStore, backed by the OS keychain.
+// It is the right choice for desktop (Tauri) mode. In headless/cloud
+// deployments the keychain is typically unavailable, so a database-backed
+// store should be injected via SetSecretStore instead.
+type keyringStore struct{}
+
+var warnUnavailableOnce sync.Once
+
+// keyringUnavailable reports whether err indicates the OS secret service is
+// unreachable (as opposed to the key simply not being present).
+func keyringUnavailable(err error) bool {
+	return err != nil && !errors.Is(err, keyring.ErrNotFound)
 }
 
-func GetApiKey(provider string) (string, error) {
-	return keyring.Get(keyringService, "apikey:"+provider)
+func warnUnavailable(op string, err error) {
+	warnUnavailableOnce.Do(func() {
+		logger.Warn("OS keychain unavailable; provider key storage is disabled in this deployment",
+			"op", op, "error", err)
+	})
 }
 
-func HasApiKey(provider string) (bool, error) {
-	_, err := keyring.Get(keyringService, "apikey:"+provider)
-	if err == keyring.ErrNotFound {
-		return false, nil
+func (keyringStore) Save(provider, key string) error {
+	if err := keyring.Set(keyringService, "apikey:"+provider, key); err != nil {
+		warnUnavailable("save", err)
+		return ErrSecretStorageUnavailable
 	}
+	return nil
+}
+
+// Get returns the stored key, or ErrSecretNotFound if it is absent OR the
+// keychain backend is unavailable. Treating an unavailable backend as
+// "not found" lets headless deployments behave as "no key configured" instead
+// of surfacing infrastructure errors to callers.
+func (keyringStore) Get(provider string) (string, error) {
+	v, err := keyring.Get(keyringService, "apikey:"+provider)
 	if err != nil {
-		return false, fmt.Errorf("checking keychain for %s: %w", provider, err)
+		if keyringUnavailable(err) {
+			warnUnavailable("get", err)
+		}
+		return "", ErrSecretNotFound
+	}
+	return v, nil
+}
+
+func (keyringStore) Has(provider string) (bool, error) {
+	_, err := keyring.Get(keyringService, "apikey:"+provider)
+	if err != nil {
+		if keyringUnavailable(err) {
+			warnUnavailable("has", err)
+		}
+		// Absent key or unavailable backend → no key from the caller's view.
+		return false, nil
 	}
 	return true, nil
 }
 
-func DeleteApiKey(provider string) error {
-	return keyring.Delete(keyringService, "apikey:"+provider)
+func (keyringStore) Delete(provider string) error {
+	err := keyring.Delete(keyringService, "apikey:"+provider)
+	if err == nil || errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	// Backend unavailable: nothing to delete, don't surface as an error.
+	warnUnavailable("delete", err)
+	return nil
 }

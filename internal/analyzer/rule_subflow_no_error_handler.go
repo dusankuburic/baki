@@ -44,11 +44,10 @@ func (r *SubflowNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext)
 		return nil
 	}
 
-	// Check whether any error-handler block exists anywhere in this subflow.
-	for _, eh := range ctx.BlocksByType[models.BlockTypeErrorHandler] {
-		if eh.SubflowID == sf.ID {
-			return nil
-		}
+	// Check whether any error-handler block exists anywhere in this subflow,
+	// including handlers nested inside child blocks.
+	if sfHasErrorHandler(sf.Blocks) {
+		return nil
 	}
 
 	return []models.Finding{{
@@ -80,4 +79,19 @@ func sfNeedsErrorHandler(blocks []models.Block) bool {
 	}
 	walk(blocks)
 	return count > 3
+}
+
+// sfHasErrorHandler reports whether an error-handler block exists anywhere in
+// the block tree, including nested child blocks.
+func sfHasErrorHandler(blocks []models.Block) bool {
+	for i := range blocks {
+		b := &blocks[i]
+		if b.Type == models.BlockTypeErrorHandler {
+			return true
+		}
+		if sfHasErrorHandler(b.Children) {
+			return true
+		}
+	}
+	return false
 }

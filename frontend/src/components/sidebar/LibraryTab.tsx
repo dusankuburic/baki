@@ -58,7 +58,7 @@ export default function LibraryTab() {
     try {
       await libraryApi.create({
         name,
-        flowDocument: currentDoc as any
+        content: currentDoc as any
       })
       fetchLibrary()
     } catch (err) {

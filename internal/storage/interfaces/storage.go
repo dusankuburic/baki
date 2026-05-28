@@ -14,12 +14,12 @@ var ErrNotFound = errors.New("not found")
 
 // User represents a system user in the storage backend.
 type User struct {
-	ID        string
-	Email     string
-	Password  string // Bcrypt hash
-	Role      auth.Role
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID        string    `json:"id"`
+	Email     string    `json:"email"`
+	Password  string    `json:"-"` // Bcrypt hash — never serialized to clients
+	Role      auth.Role `json:"role"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
 }
 
 // StorageBackend defines the interface for storage implementations

@@ -105,3 +105,52 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 		t.Errorf("mode mismatch: got %q", loaded.Mode)
 	}
 }
+
+func cloudCfg() *Config {
+	cfg := Default()
+	cfg.Mode = ModeCloud
+	cfg.Auth.Enabled = true
+	cfg.Storage.Backend = StorageDatabase
+	cfg.Storage.DatabaseURL = "postgres://localhost/db"
+	cfg.Auth.Secret = "a-sufficiently-long-random-secret-value-123456"
+	return cfg
+}
+
+func TestValidate_CloudSecretStrength(t *testing.T) {
+	t.Run("strong secret passes", func(t *testing.T) {
+		if err := Validate(cloudCfg()); err != nil {
+			t.Fatalf("expected strong secret to pass, got %v", err)
+		}
+	})
+	t.Run("short secret rejected", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Auth.Secret = "too-short"
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected short secret to be rejected in cloud mode")
+		}
+	})
+	t.Run("known default rejected", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Auth.Secret = "change-me-in-production"
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected known-default secret to be rejected in cloud mode")
+		}
+	})
+	t.Run("weak secret allowed in local mode", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Mode = ModeLocal
+		cfg.Auth.Enabled = false
+		cfg.Auth.Secret = ""
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("local mode should not enforce secret strength, got %v", err)
+		}
+	})
+}
+
+func TestValidate_WildcardOriginRejected(t *testing.T) {
+	cfg := cloudCfg()
+	cfg.Server.AllowedOrigins = []string{"*"}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected wildcard origin to be rejected")
+	}
+}

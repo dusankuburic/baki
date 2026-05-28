@@ -2,6 +2,7 @@ import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {flowApi} from '@/api'
+import {isTauri} from '@/platform/guards'
 import type {RecentFile, FlowDocument as DomainFlowDocument} from '@/types/domain'
 
 export function useFileOpen() {
@@ -22,6 +23,7 @@ export function useFileOpen() {
     }, [setMainPaneView])
 
     useEffect(() => {
+        if (!isTauri()) return
         flowApi.recentFiles()
             .then((files: RecentFile[]) => { if (files) setRecentFiles(files) })
             .catch(() => {})
@@ -72,6 +74,12 @@ export function useFileOpen() {
                 return
             }
         }
+        
+        if (!isTauri()) {
+            console.warn('Cannot load subflow from path in web mode')
+            return
+        }
+
         try {
             const newDoc = await flowApi.loadFlowFromPath(path)
             if (newDoc) {
@@ -84,6 +92,7 @@ export function useFileOpen() {
     }, [setDocument, setSelectedFilePath, openInGroup, checkView])
 
     const handleLoadRecent = useCallback(async (path: string) => {
+        if (!isTauri()) return
         try {
             const recent = recentFiles.find(f => f.path === path)
             const doc = recent?.isFolder 

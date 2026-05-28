@@ -29,6 +29,55 @@ func login(t *testing.T, rt *Router, email, password string) map[string]any {
 	return resp
 }
 
+func TestHandleAuthRegister_InvalidEmailReturns400(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email": "not-an-email", "password": "longenough",
+	})
+	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+func TestHandleAuthRegister_ShortPasswordReturns400(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email": "alice@example.com", "password": "short",
+	})
+	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+func TestHandleAuthRegister_DuplicateReturns409(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	body := map[string]any{"email": "dup@example.com", "password": "password"}
+	first := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", body)
+	checkStatus(t, first, http.StatusOK)
+	second := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", body)
+	checkStatus(t, second, http.StatusConflict)
+}
+
+func TestHandleAuthRegister_FirstUserIsAdmin(t *testing.T) {
+	rt := newJWTTestRouter(t)
+
+	first := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email": "first@example.com", "password": "password",
+	})
+	checkStatus(t, first, http.StatusOK)
+	var r1 map[string]any
+	decodeJSON(t, first, &r1)
+	if u, _ := r1["user"].(map[string]any); u["role"] != "admin" {
+		t.Errorf("expected first user role=admin, got %v", u["role"])
+	}
+
+	second := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email": "second@example.com", "password": "password",
+	})
+	checkStatus(t, second, http.StatusOK)
+	var r2 map[string]any
+	decodeJSON(t, second, &r2)
+	if u, _ := r2["user"].(map[string]any); u["role"] != "member" {
+		t.Errorf("expected second user role=member, got %v", u["role"])
+	}
+}
+
 func TestHandleAuthLogin_ReturnsTokenPair(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	resp := login(t, rt, "user1@example.com", "password")

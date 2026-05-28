@@ -16,31 +16,10 @@ import {useFlowStore, type EditorGroup} from '@/stores/flowStore'
 import type {FlowDocument} from '@/types/domain'
 
 export default function MainPane() {
+    // All hooks must run unconditionally on every render (Rules of Hooks).
+    // The profile/admin/empty views are handled by early returns AFTER the hooks.
     const mainPaneView = useUIStore(s => s.mainPaneView)
     const document = useFlowStore(s => s.document)
-
-    if (mainPaneView === 'profile') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-y-auto p-4">
-                    <UserProfile />
-                </div>
-            </div>
-        )
-    }
-
-    if (mainPaneView === 'admin') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-y-auto p-4">
-                    <AdminDashboard />
-                </div>
-            </div>
-        )
-    }
-
     const groups = useFlowStore(s => s.groups)
     const focusedGroupIndex = useFlowStore(s => s.focusedGroupIndex)
     const groupWidths = useFlowStore(s => s.groupWidths)
@@ -76,6 +55,28 @@ export default function MainPane() {
     const handleResetDivider = useCallback(() => {
         setGroupWidths(groups.map(() => 1 / groups.length))
     }, [groups.length, setGroupWidths])
+
+    if (mainPaneView === 'profile') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-y-auto p-4">
+                    <UserProfile />
+                </div>
+            </div>
+        )
+    }
+
+    if (mainPaneView === 'admin') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-y-auto p-4">
+                    <AdminDashboard />
+                </div>
+            </div>
+        )
+    }
 
     if (!document) {
         return (

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/storage/interfaces"
@@ -15,6 +16,7 @@ import (
 // LocalStorageBackend implements StorageBackend for local file system storage
 type LocalStorageBackend struct {
 	dataDir string
+	usersMu sync.Mutex // guards the users map against concurrent access
 	users   map[string]*interfaces.User
 	orgs    map[string]*interfaces.Organisation
 	sharing map[string][]*interfaces.Collaborator
@@ -276,19 +278,34 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 // ---- User operations ----
 
 func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
-	lsb.users[user.Email] = user
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	// Reject an email collision with a different user ID to mirror the Postgres
+	// UNIQUE(email) constraint.
+	for id, existing := range lsb.users {
+		if existing.Email == user.Email && id != user.ID {
+			return fmt.Errorf("email already in use")
+		}
+	}
+	// Key strictly by ID so each user is stored exactly once.
 	lsb.users[user.ID] = user
 	return nil
 }
 
 func (lsb *LocalStorageBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) {
-	if u, ok := lsb.users[email]; ok {
-		return u, nil
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	for _, u := range lsb.users {
+		if u.Email == email {
+			return u, nil
+		}
 	}
 	return nil, interfaces.ErrNotFound
 }
 
 func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		return u, nil
 	}
@@ -296,12 +313,15 @@ func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*i
 }
 
 func (lsb *LocalStorageBackend) CountUsers(ctx context.Context) (int, error) {
-	// In-memory users for local storage are just for tests; usually 0 or 1.
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
 	return len(lsb.users), nil
 }
 
 func (lsb *LocalStorageBackend) ListUsers(ctx context.Context) ([]*interfaces.User, error) {
-	var users []*interfaces.User
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	users := make([]*interfaces.User, 0, len(lsb.users))
 	for _, u := range lsb.users {
 		users = append(users, u)
 	}

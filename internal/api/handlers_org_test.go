@@ -9,7 +9,7 @@ import (
 // The owner is always the router's local user ("local" in test routers).
 func createOrg(t *testing.T, rt *Router, name string) string {
 	t.Helper()
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/create", map[string]any{
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs", map[string]any{
 		"name": name,
 	})
 	checkStatus(t, rr, http.StatusOK)
@@ -24,7 +24,7 @@ func createOrg(t *testing.T, rt *Router, name string) string {
 
 func TestHandleOrgList_EmptyByDefault(t *testing.T) {
 	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/list", nil)
+	rr := doRequest(t, rt, http.MethodGet, "/api/orgs", nil)
 	checkStatus(t, rr, http.StatusOK)
 
 	var orgs []any
@@ -38,7 +38,7 @@ func TestHandleOrgList_ShowsOrgAfterCreate(t *testing.T) {
 	rt := newTestRouter()
 	createOrg(t, rt, "Acme")
 
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/list", nil)
+	rr := doRequest(t, rt, http.MethodGet, "/api/orgs", nil)
 	checkStatus(t, rr, http.StatusOK)
 
 	var orgs []any
@@ -50,7 +50,7 @@ func TestHandleOrgList_ShowsOrgAfterCreate(t *testing.T) {
 
 func TestHandleOrgCreate_OK(t *testing.T) {
 	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/create", map[string]any{
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs", map[string]any{
 		"name": "Acme",
 	})
 	checkStatus(t, rr, http.StatusOK)
@@ -71,16 +71,31 @@ func TestHandleOrgCreate_OK(t *testing.T) {
 
 func TestHandleOrgCreate_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter()
-	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/org/create")
+	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/orgs")
 	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+func TestHandleOrgDelete_OK(t *testing.T) {
+	rt := newTestRouter()
+	orgID := createOrg(t, rt, "Acme")
+
+	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/"+orgID, nil)
+	checkStatus(t, rr, http.StatusOK)
+
+	// The org list should now be empty.
+	rr = doRequest(t, rt, http.MethodGet, "/api/orgs", nil)
+	var orgs []any
+	decodeJSON(t, rr, &orgs)
+	if len(orgs) != 0 {
+		t.Errorf("expected 0 orgs after delete, got %d", len(orgs))
+	}
 }
 
 func TestHandleOrgMemberAdd_OK(t *testing.T) {
 	rt := newTestRouter()
 	orgID := createOrg(t, rt, "Team")
 
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/add", map[string]any{
-		"orgId":  orgID,
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
 		"userId": "member1",
 		"role":   "member",
 	})
@@ -89,8 +104,7 @@ func TestHandleOrgMemberAdd_OK(t *testing.T) {
 
 func TestHandleOrgMemberAdd_UnknownOrgReturns404(t *testing.T) {
 	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/add", map[string]any{
-		"orgId":  "no-such-org",
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/no-such-org/members", map[string]any{
 		"userId": "member1",
 		"role":   "member",
 	})
@@ -101,30 +115,29 @@ func TestHandleOrgMemberAdd_DuplicateReturns409(t *testing.T) {
 	rt := newTestRouter()
 	orgID := createOrg(t, rt, "Team")
 
-	addReq := map[string]any{"orgId": orgID, "userId": "member1", "role": "member"}
-	doRequest(t, rt, http.MethodPost, "/api/org/member/add", addReq)
+	addReq := map[string]any{"userId": "member1", "role": "member"}
+	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", addReq)
 
 	// Adding the same member again should return 409 Conflict.
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/add", addReq)
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", addReq)
 	checkStatus(t, rr, http.StatusConflict)
 }
 
 func TestHandleOrgMemberAdd_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter()
-	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/org/member/add")
+	orgID := createOrg(t, rt, "Team")
+	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members")
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 func TestHandleOrgMemberRemove_OK(t *testing.T) {
 	rt := newTestRouter()
 	orgID := createOrg(t, rt, "Team")
-	doRequest(t, rt, http.MethodPost, "/api/org/member/add", map[string]any{
-		"orgId": orgID, "userId": "member1", "role": "member",
+	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
+		"userId": "member1", "role": "member",
 	})
 
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/remove", map[string]any{
-		"orgId": orgID, "userId": "member1",
-	})
+	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/"+orgID+"/members/member1", nil)
 	checkStatus(t, rr, http.StatusOK)
 }
 
@@ -133,49 +146,40 @@ func TestHandleOrgMemberRemove_LastAdminReturns409(t *testing.T) {
 	orgID := createOrg(t, rt, "Team")
 
 	// "local" is the owner/only admin — removing them should be blocked.
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/remove", map[string]any{
-		"orgId": orgID, "userId": "local",
-	})
+	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/"+orgID+"/members/local", nil)
 	checkStatus(t, rr, http.StatusConflict)
 }
 
 func TestHandleOrgMemberRemove_UnknownOrgReturns404(t *testing.T) {
 	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/remove", map[string]any{
-		"orgId": "no-such-org", "userId": "member1",
-	})
+	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/no-such-org/members/member1", nil)
 	checkStatus(t, rr, http.StatusNotFound)
-}
-
-func TestHandleOrgMemberRemove_BadBodyReturns400(t *testing.T) {
-	rt := newTestRouter()
-	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/org/member/remove")
-	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 func TestHandleOrgMemberSetRole_OK(t *testing.T) {
 	rt := newTestRouter()
 	orgID := createOrg(t, rt, "Team")
-	doRequest(t, rt, http.MethodPost, "/api/org/member/add", map[string]any{
-		"orgId": orgID, "userId": "member1", "role": "member",
+	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
+		"userId": "member1", "role": "member",
 	})
 
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/role", map[string]any{
-		"orgId": orgID, "userId": "member1", "role": "admin",
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members/member1/role", map[string]any{
+		"role": "admin",
 	})
 	checkStatus(t, rr, http.StatusOK)
 }
 
 func TestHandleOrgMemberSetRole_UnknownOrgReturns404(t *testing.T) {
 	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/org/member/role", map[string]any{
-		"orgId": "no-such-org", "userId": "member1", "role": "admin",
+	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/no-such-org/members/member1/role", map[string]any{
+		"role": "admin",
 	})
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
 func TestHandleOrgMemberSetRole_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter()
-	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/org/member/role")
+	orgID := createOrg(t, rt, "Team")
+	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members/member1/role")
 	checkStatus(t, rr, http.StatusBadRequest)
 }

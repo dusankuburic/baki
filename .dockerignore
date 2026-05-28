@@ -1,0 +1,11 @@
+.git
+.claude
+.gemini
+frontend/node_modules
+node_modules
+src-tauri/target
+dist
+frontend/dist
+.env
+*.exe
+baki-backend

@@ -40,10 +40,13 @@ describe('LoginForm', () => {
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
-      expect(loginMock).toHaveBeenCalledWith({
-        email: 'user@example.com',
-        password: 'pass123',
-      })
+      expect(loginMock).toHaveBeenCalledWith(
+        {
+          email: 'user@example.com',
+          password: 'pass123',
+        },
+        false, // rememberMe defaults to off
+      )
     })
   })
 

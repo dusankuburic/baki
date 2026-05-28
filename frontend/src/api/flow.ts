@@ -5,19 +5,45 @@ import type {FlowDocument, RecentFile, SearchQuery, SearchResults} from '@/types
 export const flowApi = {
   openFlowFile: async (): Promise<FlowDocument | null> => {
     const adapter = createAdapter()
-    const path = await adapter.fileOpen({
+    const result = await adapter.fileOpen({
       filters: [{name: 'PAD Flow Export', extensions: ['txt']}, {name: 'All Files', extensions: ['*']}]
     })
-    if (!path) return null
-    const finalPath = Array.isArray(path) ? path[0] : path
+    if (!result) return null
+    
+    // Check if it's a web upload (JSON content) or a Tauri path
+    if (typeof result === 'string') {
+      try {
+        const data = JSON.parse(result)
+        if (data && data.__is_web_upload__) {
+          return request('/api/flow/upload', data)
+        }
+      } catch (e) {
+        // Not a JSON string, must be a path
+      }
+    }
+
+    const finalPath = Array.isArray(result) ? result[0] : result
     return request('/api/flow/load-path', {path: finalPath})
   },
 
   openFlowFolder: async (): Promise<FlowDocument | null> => {
     const adapter = createAdapter()
-    const path = await adapter.fileOpenDirectory()
-    if (!path) return null
-    return request('/api/flow/load-folder', {path})
+    const result = await adapter.fileOpenDirectory()
+    if (!result) return null
+
+    // Check if it's a web upload (JSON content) or a Tauri path
+    if (typeof result === 'string') {
+      try {
+        const data = JSON.parse(result)
+        if (data && data.__is_web_upload__) {
+          return request('/api/flow/upload', data)
+        }
+      } catch (e) {
+        // Not a JSON string, must be a path
+      }
+    }
+
+    return request('/api/flow/load-folder', {path: result})
   },
 
   loadFlowFromPath: (path: string): Promise<FlowDocument | null> =>
@@ -25,6 +51,9 @@ export const flowApi = {
 
   loadFlowFolder: (path: string): Promise<FlowDocument | null> =>
     request('/api/flow/load-folder', {path}),
+
+  uploadFlow: (name: string, files: Record<string, string>): Promise<FlowDocument | null> =>
+    request('/api/flow/upload', {name, files}),
 
   recentFiles: (): Promise<RecentFile[]> =>
     request('/api/flow/recent', undefined, 'GET'),

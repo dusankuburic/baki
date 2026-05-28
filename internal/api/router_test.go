@@ -18,7 +18,7 @@ const testToken = "test-secret-token"
 // don't reach the app layer can be tested here. Handler-level tests live in
 // handlers_test.go and require a fully initialised App.
 func newTestRouter() *Router {
-	return NewRouter(manager.NewApp(nil), testToken, false, nil)
+	return NewRouter(manager.NewApp(nil), testToken, false, nil, "")
 }
 
 // --- Auth middleware ---
@@ -65,7 +65,7 @@ func TestRouter_TokenInQuery_IsAccepted(t *testing.T) {
 
 func TestRouter_OPTIONS_Returns200WithCORSHeaders(t *testing.T) {
 	// Router with an explicit allowlist — the listed origin must be echoed back.
-	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"})
+	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"}, "")
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/system/info", nil)
 	req.Header.Set("Origin", "https://app.example.com")
@@ -85,7 +85,7 @@ func TestRouter_OPTIONS_Returns200WithCORSHeaders(t *testing.T) {
 }
 
 func TestRouter_OPTIONS_UnknownOrigin_NoACO(t *testing.T) {
-	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"})
+	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"}, "")
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/system/info", nil)
 	req.Header.Set("Origin", "https://evil.com")

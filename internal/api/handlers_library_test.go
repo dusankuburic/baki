@@ -139,3 +139,47 @@ func TestHandleLibraryGet_SharedFlowVisibleToNonOwner(t *testing.T) {
 		t.Errorf("expected isSharedWithMe=true for non-owner, got %v", resp["isSharedWithMe"])
 	}
 }
+
+func TestHandleLibraryGet_ResolvesOwnerDisplayName(t *testing.T) {
+	rt, seed := newLibraryTestRouter(t)
+	seedUser(t, rt, "alice", "alice@example.com")
+	seed("flow1", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library/flow1", bearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+
+	var resp map[string]any
+	decodeJSON(t, rr, &resp)
+	if resp["ownerDisplayName"] != "alice@example.com" {
+		t.Errorf("expected ownerDisplayName=alice@example.com, got %v", resp["ownerDisplayName"])
+	}
+}
+
+func TestHandleLibraryUpdate_EmptyOwnerForbidden(t *testing.T) {
+	rt, seed := newLibraryTestRouter(t)
+	// Legacy flow with no owner must not be world-writable in cloud mode.
+	seed("flow-public", "")
+	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/flow-public", bearer, map[string]any{
+		"name": "hijacked",
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+func TestHandleLibraryUpdate_OwnerCanUpdate(t *testing.T) {
+	rt, seed := newLibraryTestRouter(t)
+	seed("flow1", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/flow1", bearer, map[string]any{
+		"name": "renamed",
+	})
+	checkStatus(t, rr, http.StatusOK)
+	var resp map[string]any
+	decodeJSON(t, rr, &resp)
+	if resp["name"] != "renamed" {
+		t.Errorf("expected name=renamed, got %v", resp["name"])
+	}
+}
