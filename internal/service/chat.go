@@ -69,7 +69,7 @@ func NewChatService(
 	}
 }
 
-func (s *ChatService) StreamChatMessage(req models.ChatRequest) (streamID string, err error) {
+func (s *ChatService) StreamChatMessage(scope string, req models.ChatRequest) (streamID string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
 
 	streamID = uuid.NewString()
@@ -86,7 +86,7 @@ func (s *ChatService) StreamChatMessage(req models.ChatRequest) (streamID string
 		defer s.activeStreams.Delete(streamID)
 		defer cancel()
 
-		provider, err := s.factory.For(req.Provider)
+		provider, err := s.factory.For(scope, req.Provider)
 		if err != nil {
 			<-ctl.started
 			emit("error", map[string]interface{}{"error": err.Error(), "code": "provider_unavailable"})
@@ -311,10 +311,10 @@ func (s *ChatService) GetDemoRemaining() (remaining int, err error) {
 	return s.demoLimiter.Remaining()
 }
 
-func (s *ChatService) PreviewContext(req models.ChatRequest) (result *models.ContextPreview, err error) {
+func (s *ChatService) PreviewContext(scope string, req models.ChatRequest) (result *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
 
-	provider, provErr := s.factory.For(req.Provider)
+	provider, provErr := s.factory.For(scope, req.Provider)
 	if provErr != nil {
 		return nil, fmt.Errorf("get provider: %w", provErr)
 	}

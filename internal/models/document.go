@@ -27,6 +27,33 @@ type FlowDocument struct {
 	SubflowsByID map[string]*Subflow `json:"-"`
 }
 
+// RebuildIndexes repopulates the transient lookup maps (BlocksByID,
+// BlockSubflow, SubflowsByID) by walking Subflows and their (possibly nested)
+// blocks. These maps are not serialized (json:"-"), so this MUST be called
+// after deserializing a FlowDocument from stored JSON before the document is
+// used for analysis/lineage/graph. It mirrors the indexing the parser performs
+// at parse time.
+func (d *FlowDocument) RebuildIndexes() {
+	d.BlocksByID = make(map[string]*Block)
+	d.BlockSubflow = make(map[string]*Subflow)
+	d.SubflowsByID = make(map[string]*Subflow)
+	for i := range d.Subflows {
+		sf := &d.Subflows[i]
+		d.SubflowsByID[sf.ID] = sf
+		for j := range sf.Blocks {
+			d.indexBlock(sf, &sf.Blocks[j])
+		}
+	}
+}
+
+func (d *FlowDocument) indexBlock(sf *Subflow, b *Block) {
+	d.BlocksByID[b.ID] = b
+	d.BlockSubflow[b.ID] = sf
+	for i := range b.Children {
+		d.indexBlock(sf, &b.Children[i])
+	}
+}
+
 type FlowMetadata struct {
 	BlockCount   int       `json:"blockCount"`
 	SubflowCount int       `json:"subflowCount"`

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -63,7 +64,7 @@ func (a *App) Init(ctx context.Context, notifier service.Notifier) {
 	a.settings = settings
 
 	copilotAuth := ai.NewCopilotAuth()
-	factory := ai.NewProviderFactory(storage.GetApiKey, copilotAuth)
+	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth)
 	auth := ai.NewGitHubAuth()
 	demo := ai.NewDemoLimiter(configDir)
 
@@ -107,6 +108,42 @@ func (a *App) GetLibraryFlow(flowID string) (doc *storageif.FlowDocument, err er
 		return nil, storageif.ErrNotFound
 	}
 	return a.storage.LoadFlow(a.ctx, flowID)
+}
+
+// LoadParsedFlow loads a stored flow by id and rehydrates it into a parsed
+// *models.FlowDocument ready for analysis (transient indexes rebuilt). Cloud
+// mode only; returns an error when no storage backend is configured. Callers
+// must authorize access to flowID before invoking this.
+func (a *App) LoadParsedFlow(flowID string) (doc *models.FlowDocument, err error) {
+	defer logger.Guard("App.LoadParsedFlow", &err)
+	if a.storage == nil {
+		return nil, fmt.Errorf("flow storage not available in local mode")
+	}
+	rec, err := a.storage.LoadFlow(a.ctx, flowID)
+	if err != nil {
+		return nil, err // includes storageif.ErrNotFound for unknown ids
+	}
+	parsed := &models.FlowDocument{}
+	if len(rec.Content) > 0 {
+		if err := json.Unmarshal(rec.Content, parsed); err != nil {
+			return nil, fmt.Errorf("parse stored flow content: %w", err)
+		}
+	}
+	// The stored record is the source of truth for identity.
+	parsed.ID = rec.ID
+	if parsed.Name == "" {
+		parsed.Name = rec.Name
+	}
+	parsed.RebuildIndexes()
+	return parsed, nil
+}
+
+// CurrentParsedDoc returns the in-memory parsed document (local/desktop mode).
+func (a *App) CurrentParsedDoc() *models.FlowDocument {
+	if a.flow == nil {
+		return nil
+	}
+	return a.flow.CurrentDoc()
 }
 
 // CreateLibraryFlow persists a new flow owned by ownerID.
@@ -186,19 +223,19 @@ func (a *App) LogError(payload models.FrontendError) {
 
 // --- provider keys ---
 
-func (a *App) SaveApiKey(provider string, key string) (err error) {
+func (a *App) SaveApiKey(scope, provider string, key string) (err error) {
 	defer logger.Guard("App.SaveApiKey", &err)
-	return storage.SaveApiKey(provider, key)
+	return storage.SaveApiKeyScoped(scope, provider, key)
 }
 
-func (a *App) HasApiKey(provider string) (result bool, err error) {
+func (a *App) HasApiKey(scope, provider string) (result bool, err error) {
 	defer logger.Guard("App.HasApiKey", &err)
-	return storage.HasApiKey(provider)
+	return storage.HasApiKeyScoped(scope, provider)
 }
 
-func (a *App) DeleteApiKey(provider string) (err error) {
+func (a *App) DeleteApiKey(scope, provider string) (err error) {
 	defer logger.Guard("App.DeleteApiKey", &err)
-	return storage.DeleteApiKey(provider)
+	return storage.DeleteApiKeyScoped(scope, provider)
 }
 
 // --- flow ---
@@ -261,14 +298,14 @@ func (a *App) OnFileOpenFromSystem(path string) {
 
 // --- providers ---
 
-func (a *App) ListProviders() (providers []models.ProviderInfo, err error) {
+func (a *App) ListProviders(scope string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
-	return a.providers.ListProviders()
+	return a.providers.ListProviders(scope)
 }
 
-func (a *App) TestProviderConnection(id string) (r *models.ProviderTestResult, err error) {
+func (a *App) TestProviderConnection(scope, id string) (r *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
-	return a.providers.TestProviderConnection(id)
+	return a.providers.TestProviderConnection(scope, id)
 }
 
 func (a *App) StartGitHubAuth() (resp *ai.DeviceAuthResponse, err error) {
@@ -315,9 +352,9 @@ func (a *App) GetCopilotUser() (user *ai.GitHubUser, err error) {
 
 // --- chat ---
 
-func (a *App) StreamChatMessage(req models.ChatRequest) (id string, err error) {
+func (a *App) StreamChatMessage(scope string, req models.ChatRequest) (id string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
-	return a.chat.StreamChatMessage(req)
+	return a.chat.StreamChatMessage(scope, req)
 }
 
 func (a *App) BeginStream(id string) {
@@ -357,9 +394,9 @@ func (a *App) GetDemoRemaining() (remaining int, err error) {
 	return a.chat.GetDemoRemaining()
 }
 
-func (a *App) PreviewContext(req models.ChatRequest) (result *models.ContextPreview, err error) {
+func (a *App) PreviewContext(scope string, req models.ChatRequest) (result *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
-	return a.chat.PreviewContext(req)
+	return a.chat.PreviewContext(scope, req)
 }
 
 func (a *App) GetSuggestedPrompts(hasBlock bool, hasFindings bool) (prompts []string, err error) {
@@ -369,19 +406,19 @@ func (a *App) GetSuggestedPrompts(hasBlock bool, hasFindings bool) (prompts []st
 
 // --- analysis ---
 
-func (a *App) AnalyzeFlow() (report *models.AnalysisReport, err error) {
+func (a *App) AnalyzeFlow(doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
-	return a.analysis.AnalyzeFlow()
+	return a.analysis.AnalyzeFlow(doc)
 }
 
-func (a *App) GetVariableLineage(v string) (history *models.VariableHistory, err error) {
+func (a *App) GetVariableLineage(doc *models.FlowDocument, v string) (history *models.VariableHistory, err error) {
 	defer logger.Guard("App.GetVariableLineage", &err)
-	return a.analysis.GetVariableLineage(v)
+	return a.analysis.GetVariableLineage(doc, v)
 }
 
-func (a *App) GetExecutionGraph() (graph *models.GraphData, err error) {
+func (a *App) GetExecutionGraph(doc *models.FlowDocument) (graph *models.GraphData, err error) {
 	defer logger.Guard("App.GetExecutionGraph", &err)
-	return a.analysis.GetExecutionGraph()
+	return a.analysis.GetExecutionGraph(doc)
 }
 
 func (a *App) GetRules() []models.Rule {

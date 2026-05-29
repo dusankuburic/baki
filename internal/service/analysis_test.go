@@ -29,7 +29,7 @@ func TestAnalysisService_LastReport_nil(t *testing.T) {
 func TestAnalysisService_GetVariableLineage_no_doc(t *testing.T) {
 	flow := &FlowService{ctx: context.Background()}
 	svc := &AnalysisService{ctx: context.Background(), flow: flow}
-	_, err := svc.GetVariableLineage("MyVar")
+	_, err := svc.GetVariableLineage(nil, "MyVar")
 	if err == nil {
 		t.Fatal("expected error when no doc loaded")
 	}
@@ -37,7 +37,7 @@ func TestAnalysisService_GetVariableLineage_no_doc(t *testing.T) {
 
 func TestAnalysisService_GetVariableLineage_found(t *testing.T) {
 	_, svc := makeTestAnalysisService(t, simpleFlow)
-	history, err := svc.GetVariableLineage("MyVar")
+	history, err := svc.GetVariableLineage(svc.flow.CurrentDoc(), "MyVar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestAnalysisService_GetVariableLineage_found(t *testing.T) {
 
 func TestAnalysisService_GetVariableLineage_unknown_var(t *testing.T) {
 	_, svc := makeTestAnalysisService(t, simpleFlow)
-	history, err := svc.GetVariableLineage("NoSuchVar")
+	history, err := svc.GetVariableLineage(svc.flow.CurrentDoc(), "NoSuchVar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestAnalysisService_GetVariableLineage_unknown_var(t *testing.T) {
 func TestAnalysisService_GetExecutionGraph_no_doc(t *testing.T) {
 	flow := &FlowService{ctx: context.Background()}
 	svc := &AnalysisService{ctx: context.Background(), flow: flow}
-	_, err := svc.GetExecutionGraph()
+	_, err := svc.GetExecutionGraph(nil)
 	if err == nil {
 		t.Fatal("expected error when no doc loaded")
 	}
@@ -79,7 +79,7 @@ func TestAnalysisService_GetExecutionGraph_no_doc(t *testing.T) {
 
 func TestAnalysisService_GetExecutionGraph_single_subflow(t *testing.T) {
 	_, svc := makeTestAnalysisService(t, simpleFlow)
-	graph, err := svc.GetExecutionGraph()
+	graph, err := svc.GetExecutionGraph(svc.flow.CurrentDoc())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestAnalysisService_GetExecutionGraph_single_subflow(t *testing.T) {
 
 func TestAnalysisService_GetExecutionGraph_two_subflows(t *testing.T) {
 	_, svc := makeTestAnalysisService(t, twoSubflowFlow)
-	graph, err := svc.GetExecutionGraph()
+	graph, err := svc.GetExecutionGraph(svc.flow.CurrentDoc())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

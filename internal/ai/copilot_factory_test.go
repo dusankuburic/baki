@@ -8,14 +8,14 @@ import (
 func TestProviderFactory_For_Copilot_WithOAuthToken(t *testing.T) {
 	auth := NewCopilotAuth()
 	keys := map[string]string{"copilot-oauth-token": "gh-oauth-tok"}
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
 	}, auth)
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with OAuth: %v", err)
 	}
@@ -31,14 +31,14 @@ func TestProviderFactory_For_Copilot_OAuthTakesPriorityOverPAT(t *testing.T) {
 		"copilot-oauth-token": "gh-oauth-tok",
 		"copilot":             "manual-pat",
 	}
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
 	}, auth)
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot): %v", err)
 	}
@@ -52,14 +52,14 @@ func TestProviderFactory_For_Copilot_OAuthTakesPriorityOverPAT(t *testing.T) {
 func TestProviderFactory_For_Copilot_FallbackToPAT(t *testing.T) {
 	// No OAuth token — should succeed via PAT.
 	keys := map[string]string{"copilot": "manual-pat"}
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil) // nil copilotAuth — PAT path doesn't need it
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with PAT fallback: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestProviderFactory_For_Copilot_FallbackToPAT(t *testing.T) {
 }
 
 func TestProviderFactory_For_Copilot_NeitherConfigured(t *testing.T) {
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil)
 
-	_, err := f.For("copilot")
+	_, err := f.For("", "copilot")
 	if err == nil {
 		t.Fatal("expected error when neither OAuth token nor PAT is configured")
 	}
@@ -85,14 +85,14 @@ func TestProviderFactory_For_Copilot_EmptyOAuthTokenFallsBackToPAT(t *testing.T)
 		"copilot-oauth-token": "", // present but empty
 		"copilot":             "manual-pat",
 	}
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
 	}, NewCopilotAuth())
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with empty OAuth: %v", err)
 	}
@@ -109,14 +109,14 @@ func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) 
 		"copilot-oauth-token": "gh-tok",
 		"copilot":             "pat",
 	}
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil) // nil copilotAuth
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with nil auth + PAT: %v", err)
 	}
@@ -128,14 +128,14 @@ func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) 
 func TestProviderFactory_For_Copilot_OnlyOAuthNoAuth_Error(t *testing.T) {
 	// OAuth token present, copilotAuth nil, no PAT → should error.
 	keys := map[string]string{"copilot-oauth-token": "gh-tok"}
-	f := NewProviderFactory(func(k string) (string, error) {
+	f := NewProviderFactory(func(_, k string) (string, error) {
 		if v, ok := keys[k]; ok {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil) // nil copilotAuth — OAuth path skipped, PAT not found
 
-	_, err := f.For("copilot")
+	_, err := f.For("", "copilot")
 	if err == nil {
 		t.Fatal("expected error: OAuth token present but copilotAuth nil, no PAT available")
 	}

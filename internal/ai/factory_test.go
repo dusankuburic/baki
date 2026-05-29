@@ -21,8 +21,8 @@ func TestStorageKey_OtherProviders(t *testing.T) {
 }
 
 func TestProviderFactory_For_Demo(t *testing.T) {
-	f := NewProviderFactory(func(string) (string, error) { return "", nil }, nil)
-	p, err := f.For("demo")
+	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, nil)
+	p, err := f.For("", "demo")
 	if err != nil {
 		t.Fatalf("For(%q): %v", "demo", err)
 	}
@@ -32,8 +32,8 @@ func TestProviderFactory_For_Demo(t *testing.T) {
 }
 
 func TestProviderFactory_For_Unknown(t *testing.T) {
-	f := NewProviderFactory(func(string) (string, error) { return "", nil }, nil)
-	_, err := f.For("nonexistent-provider")
+	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, nil)
+	_, err := f.For("", "nonexistent-provider")
 	if err == nil {
 		t.Fatal("expected error for unknown provider ID, got nil")
 	}
@@ -41,9 +41,9 @@ func TestProviderFactory_For_Unknown(t *testing.T) {
 
 func TestProviderFactory_For_KeyLookupError(t *testing.T) {
 	keyErr := errors.New("keyring unavailable")
-	f := NewProviderFactory(func(string) (string, error) { return "", keyErr }, nil)
+	f := NewProviderFactory(func(_, _ string) (string, error) { return "", keyErr }, nil)
 
-	_, err := f.For("claude")
+	_, err := f.For("", "claude")
 	if err == nil {
 		t.Fatal("expected error when key lookup fails")
 	}
@@ -53,11 +53,11 @@ func TestProviderFactory_For_KeyLookupError(t *testing.T) {
 }
 
 func TestProviderFactory_For_AllKnownProviders(t *testing.T) {
-	f := NewProviderFactory(func(string) (string, error) { return "test-key", nil }, nil)
+	f := NewProviderFactory(func(_, _ string) (string, error) { return "test-key", nil }, nil)
 	knownProviders := []string{"claude", "openai", "gemini", "xai", "glm", "github-models"}
 
 	for _, id := range knownProviders {
-		p, err := f.For(id)
+		p, err := f.For("", id)
 		if err != nil {
 			t.Errorf("For(%q): unexpected error: %v", id, err)
 			continue
@@ -72,9 +72,9 @@ func TestProviderFactory_For_Copilot_OAuth(t *testing.T) {
 	keys := map[string]string{
 		"copilot-oauth-token": "gh-oauth-123",
 	}
-	f := NewProviderFactory(func(k string) (string, error) { return keys[k], nil }, NewCopilotAuth())
+	f := NewProviderFactory(func(_, k string) (string, error) { return keys[k], nil }, NewCopilotAuth())
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,9 +87,9 @@ func TestProviderFactory_For_Copilot_PATFallback(t *testing.T) {
 	keys := map[string]string{
 		"copilot": "ghp_manual_pat",
 	}
-	f := NewProviderFactory(func(k string) (string, error) { return keys[k], nil }, NewCopilotAuth())
+	f := NewProviderFactory(func(_, k string) (string, error) { return keys[k], nil }, NewCopilotAuth())
 
-	p, err := f.For("copilot")
+	p, err := f.For("", "copilot")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,9 +99,9 @@ func TestProviderFactory_For_Copilot_PATFallback(t *testing.T) {
 }
 
 func TestProviderFactory_For_Copilot_NotConfigured(t *testing.T) {
-	f := NewProviderFactory(func(string) (string, error) { return "", nil }, NewCopilotAuth())
+	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, NewCopilotAuth())
 
-	_, err := f.For("copilot")
+	_, err := f.For("", "copilot")
 	if err == nil {
 		t.Fatal("expected error for unconfigured copilot")
 	}

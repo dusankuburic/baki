@@ -40,6 +40,79 @@ func (rt *Router) requireFlowOwner(w http.ResponseWriter, r *http.Request, flowI
 	return true
 }
 
+// permRank orders flow collaborator permissions so they can be compared with ">=".
+var permRank = map[string]int{
+	"viewer": 10,
+	"editor": 20,
+	"admin":  30,
+}
+
+// orgRoleToPermRank maps an org member's role to the equivalent flow permission
+// rank for org-owned flows: admins manage, members edit, everyone else reads.
+func orgRoleToPermRank(role auth.Role) int {
+	switch role {
+	case auth.RoleAdmin:
+		return permRank["admin"]
+	case auth.RoleMember:
+		return permRank["editor"]
+	default:
+		return permRank["viewer"]
+	}
+}
+
+// requireFlowAccess authorizes the caller to act on flowID at >= minPerm
+// ("viewer" | "editor" | "admin"). Local/Tauri mode is single-user and always
+// passes. Cloud mode: the owner always passes; a member of the flow's org passes
+// if their org role grants enough; otherwise an explicit collaborator grant must
+// meet minPerm. Writes 404 when the flow is missing, 403 when under-privileged.
+func (rt *Router) requireFlowAccess(w http.ResponseWriter, r *http.Request, flowID, minPerm string) bool {
+	if !rt.jwtEnabled {
+		return true
+	}
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		http.Error(w, "storage unavailable", http.StatusInternalServerError)
+		return false
+	}
+	if flowID == "" {
+		http.NotFound(w, r)
+		return false
+	}
+	flow, err := backend.LoadFlow(r.Context(), flowID)
+	if err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			http.NotFound(w, r)
+		} else {
+			rt.sendError(w, err, http.StatusInternalServerError)
+		}
+		return false
+	}
+	need := permRank[minPerm]
+	caller := rt.callerID(r)
+	if flow.OwnerID == caller {
+		return true
+	}
+	if flow.OrganizationID != "" {
+		if role, err := rt.orgSvc.MemberRole(flow.OrganizationID, caller); err == nil {
+			if orgRoleToPermRank(role) >= need {
+				return true
+			}
+		}
+	}
+	collabs, err := backend.ListCollaborators(r.Context(), flowID)
+	if err != nil {
+		rt.sendError(w, err, http.StatusInternalServerError)
+		return false
+	}
+	for _, c := range collabs {
+		if c.UserID == caller && permRank[c.Permission] >= need {
+			return true
+		}
+	}
+	http.Error(w, "Forbidden", http.StatusForbidden)
+	return false
+}
+
 // handleSharingRoute dispatches /api/flows/:flowId/collaborators[/:userId]
 func (rt *Router) handleSharingRoute(w http.ResponseWriter, r *http.Request) {
 	// Path: /api/flows/<flowId>/collaborators  or
@@ -103,7 +176,12 @@ func (rt *Router) handleListCollaborators(w http.ResponseWriter, r *http.Request
 	if !rt.requireFlowOwner(w, r, flowID) {
 		return
 	}
-	collabs, err := rt.app.StorageBackend().ListCollaborators(r.Context(), flowID)
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		rt.sendJSON(w, []*storageif.Collaborator{})
+		return
+	}
+	collabs, err := backend.ListCollaborators(r.Context(), flowID)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -143,11 +221,17 @@ func (rt *Router) handleAddCollaborator(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		http.Error(w, "sharing is not available in local mode", http.StatusForbidden)
+		return
+	}
+
 	var userID, email string
 
 	if req.Email != "" {
 		// Look up user by email
-		u, err := rt.app.StorageBackend().LoadUserByEmail(r.Context(), req.Email)
+		u, err := backend.LoadUserByEmail(r.Context(), req.Email)
 		if err != nil {
 			if errors.Is(err, storageif.ErrNotFound) {
 				http.Error(w, "user not found", http.StatusNotFound)
@@ -160,7 +244,7 @@ func (rt *Router) handleAddCollaborator(w http.ResponseWriter, r *http.Request, 
 		email = u.Email
 	} else if req.UserID != "" {
 		// Look up user by ID
-		u, err := rt.app.StorageBackend().LoadUserByID(r.Context(), req.UserID)
+		u, err := backend.LoadUserByID(r.Context(), req.UserID)
 		if err != nil {
 			if errors.Is(err, storageif.ErrNotFound) {
 				http.Error(w, "user not found", http.StatusNotFound)
@@ -190,7 +274,7 @@ func (rt *Router) handleAddCollaborator(w http.ResponseWriter, r *http.Request, 
 		Permission: req.Permission,
 		GrantedAt:  time.Now().UTC(),
 	}
-	if err := rt.app.StorageBackend().AddCollaborator(r.Context(), flowID, c); err != nil {
+	if err := backend.AddCollaborator(r.Context(), flowID, c); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -219,6 +303,11 @@ func (rt *Router) handleUpdateCollaborator(w http.ResponseWriter, r *http.Reques
 	if !rt.requireFlowOwner(w, r, flowID) {
 		return
 	}
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		http.Error(w, "sharing is not available in local mode", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Permission string `json:"permission"`
 	}
@@ -230,8 +319,8 @@ func (rt *Router) handleUpdateCollaborator(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid permission", http.StatusBadRequest)
 		return
 	}
-	
-	if err := rt.app.StorageBackend().UpdateCollaborator(r.Context(), flowID, userID, req.Permission); err != nil {
+
+	if err := backend.UpdateCollaborator(r.Context(), flowID, userID, req.Permission); err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
 			rt.sendError(w, err, http.StatusNotFound)
 		} else {
@@ -239,9 +328,9 @@ func (rt *Router) handleUpdateCollaborator(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	
+
 	// Reload to return updated object
-	collabs, _ := rt.app.StorageBackend().ListCollaborators(r.Context(), flowID)
+	collabs, _ := backend.ListCollaborators(r.Context(), flowID)
 	for _, c := range collabs {
 		if c.UserID == userID {
 			rt.sendJSON(w, c)
@@ -270,8 +359,13 @@ func (rt *Router) handleRemoveCollaborator(w http.ResponseWriter, r *http.Reques
 	if !rt.requireFlowOwner(w, r, flowID) {
 		return
 	}
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		http.Error(w, "sharing is not available in local mode", http.StatusForbidden)
+		return
+	}
 
-	if err := rt.app.StorageBackend().RemoveCollaborator(r.Context(), flowID, userID); err != nil {
+	if err := backend.RemoveCollaborator(r.Context(), flowID, userID); err != nil {
 		rt.sendError(w, err, http.StatusNotFound)
 		return
 	}

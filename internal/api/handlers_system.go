@@ -42,6 +42,9 @@ func (rt *Router) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/system/settings [post]
 func (rt *Router) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
 	var s models.AppSettings
 	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 		logger.Error("failed to decode settings", "error", err)
@@ -110,7 +113,7 @@ func (rt *Router) handleSaveApiKey(w http.ResponseWriter, r *http.Request) {
 		rt.sendError(w, errors.New("unknown provider"), http.StatusBadRequest)
 		return
 	}
-	if err := rt.app.SaveApiKey(req.Provider, req.Key); err != nil {
+	if err := rt.app.SaveApiKey(rt.keyScope(r), req.Provider, req.Key); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -248,7 +251,7 @@ func (rt *Router) handleHasApiKey(w http.ResponseWriter, r *http.Request) {
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
-	has, err := rt.app.HasApiKey(req.Provider)
+	has, err := rt.app.HasApiKey(rt.keyScope(r), req.Provider)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -274,7 +277,7 @@ func (rt *Router) handleDeleteApiKey(w http.ResponseWriter, r *http.Request) {
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
-	if err := rt.app.DeleteApiKey(req.Provider); err != nil {
+	if err := rt.app.DeleteApiKey(rt.keyScope(r), req.Provider); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
 	}

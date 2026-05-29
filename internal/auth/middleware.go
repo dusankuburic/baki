@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 )
@@ -37,7 +38,7 @@ func Middleware(mgr *Manager, next http.Handler) http.Handler {
 // the JWT infrastructure is being rolled out.
 func StaticTokenMiddleware(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ExtractToken(r) != token {
+		if subtle.ConstantTimeCompare([]byte(ExtractToken(r)), []byte(token)) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

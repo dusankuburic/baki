@@ -25,18 +25,20 @@ func TestHandleUpdateRuleConfig_BadBodyReturns400(t *testing.T) {
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
-// --- No-body endpoints (Guard-protected → 500 with nil app services) ---
+// --- Analysis endpoints with no flow loaded ---
+// With explicit flow resolution, an uninitialized app (no current document)
+// yields a clean 400 "no flow loaded" from resolveFlow rather than a panic→500.
 
-func TestHandleAnalyzeFlow_UninitializedAppReturns500(t *testing.T) {
+func TestHandleAnalyzeFlow_NoFlowLoadedReturns400(t *testing.T) {
 	rt := newTestRouter()
 	rr := doRequest(t, rt, http.MethodPost, "/api/analysis/analyze", nil)
-	checkStatus(t, rr, http.StatusInternalServerError)
+	checkStatus(t, rr, http.StatusBadRequest)
 }
 
-func TestHandleGetExecutionGraph_UninitializedAppReturns500(t *testing.T) {
+func TestHandleGetExecutionGraph_NoFlowLoadedReturns400(t *testing.T) {
 	rt := newTestRouter()
 	rr := doRequest(t, rt, http.MethodGet, "/api/analysis/graph", nil)
-	checkStatus(t, rr, http.StatusInternalServerError)
+	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 // GET /api/analysis/rules: App.GetRules() now nil-checks a.analysis, so it

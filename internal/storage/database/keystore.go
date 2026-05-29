@@ -83,17 +83,18 @@ func (s *EncryptedKeyStore) decrypt(encoded string) (string, error) {
 	return string(plaintext), nil
 }
 
-// Save upserts the encrypted key for a provider.
-func (s *EncryptedKeyStore) Save(provider, key string) error {
+// Save upserts the encrypted key for a (scope, provider) pair. An empty scope
+// is the legacy/local namespace (stored as user_id = '').
+func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 	ct, err := s.encrypt(key)
 	if err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(
-		`INSERT INTO provider_keys (provider, ciphertext, updated_at)
-		 VALUES ($1, $2, NOW())
-		 ON CONFLICT (provider) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = NOW()`,
-		provider, ct,
+		`INSERT INTO provider_keys (user_id, provider, ciphertext, updated_at)
+		 VALUES ($1, $2, $3, NOW())
+		 ON CONFLICT (user_id, provider) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = NOW()`,
+		scope, provider, ct,
 	); err != nil {
 		return fmt.Errorf("keystore: save: %w", err)
 	}
@@ -103,9 +104,9 @@ func (s *EncryptedKeyStore) Save(provider, key string) error {
 // Get returns the decrypted key, or storage.ErrSecretNotFound if no row exists
 // or the stored ciphertext can no longer be decrypted (e.g. the deployment
 // secret was rotated).
-func (s *EncryptedKeyStore) Get(provider string) (string, error) {
+func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	var ct string
-	err := s.db.QueryRow(`SELECT ciphertext FROM provider_keys WHERE provider = $1`, provider).Scan(&ct)
+	err := s.db.QueryRow(`SELECT ciphertext FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider).Scan(&ct)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", storage.ErrSecretNotFound
 	}
@@ -121,11 +122,11 @@ func (s *EncryptedKeyStore) Get(provider string) (string, error) {
 	return plaintext, nil
 }
 
-// Has reports whether a key row exists for the provider.
-func (s *EncryptedKeyStore) Has(provider string) (bool, error) {
+// Has reports whether a key row exists for the (scope, provider) pair.
+func (s *EncryptedKeyStore) Has(scope, provider string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM provider_keys WHERE provider = $1)`, provider,
+		`SELECT EXISTS (SELECT 1 FROM provider_keys WHERE user_id = $1 AND provider = $2)`, scope, provider,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("keystore: has: %w", err)
@@ -134,8 +135,8 @@ func (s *EncryptedKeyStore) Has(provider string) (bool, error) {
 }
 
 // Delete removes a stored provider key. Deleting a missing key is a no-op.
-func (s *EncryptedKeyStore) Delete(provider string) error {
-	if _, err := s.db.Exec(`DELETE FROM provider_keys WHERE provider = $1`, provider); err != nil {
+func (s *EncryptedKeyStore) Delete(scope, provider string) error {
+	if _, err := s.db.Exec(`DELETE FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider); err != nil {
 		return fmt.Errorf("keystore: delete: %w", err)
 	}
 	return nil

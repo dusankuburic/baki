@@ -6,7 +6,7 @@
  * Check if running in Tauri desktop environment
  */
 export function isTauri(): boolean {
-  return '__TAURI__' in window;
+  return '__TAURI_INTERNALS__' in window || '__TAURI__' in window;
 }
 
 /**

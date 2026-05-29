@@ -25,6 +25,32 @@ type libraryFlow struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
+// canReadLibraryFlow reports whether userID may read doc. Local/Tauri mode is
+// single-user and always allowed. Cloud mode: owner-less (public) docs are
+// readable; otherwise the caller must be the owner, a member of the doc's org,
+// or an explicit collaborator on the flow.
+func (rt *Router) canReadLibraryFlow(r *http.Request, doc *storageif.FlowDocument, userID string) bool {
+	if !rt.jwtEnabled {
+		return true
+	}
+	if doc.OwnerID == "" || doc.OwnerID == userID {
+		return true
+	}
+	if doc.OrganizationID != "" && rt.orgSvc.IsMember(doc.OrganizationID, userID) {
+		return true
+	}
+	if backend := rt.app.StorageBackend(); backend != nil {
+		if collabs, err := backend.ListCollaborators(r.Context(), doc.ID); err == nil {
+			for _, c := range collabs {
+				if c.UserID == userID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func toLibraryFlow(doc *storageif.FlowDocument, requestingUserID, ownerDisplayName string) libraryFlow {
 	return libraryFlow{
 		ID:               doc.ID,
@@ -173,8 +199,7 @@ func (rt *Router) handleLibraryGet(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
-	// Access check: must be owner or org member (org check is approximate here).
-	if rt.jwtEnabled && doc.OwnerID != "" && doc.OwnerID != userID && doc.OrganizationID == "" {
+	if !rt.canReadLibraryFlow(r, doc, userID) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -208,8 +233,7 @@ func (rt *Router) handleLibraryGetContent(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Access check
-	if rt.jwtEnabled && doc.OwnerID != "" && doc.OwnerID != userID && doc.OrganizationID == "" {
+	if !rt.canReadLibraryFlow(r, doc, userID) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}

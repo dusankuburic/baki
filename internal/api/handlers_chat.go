@@ -22,7 +22,10 @@ func (rt *Router) handleStreamChatMessage(w http.ResponseWriter, r *http.Request
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
-	id, err := rt.app.StreamChatMessage(req)
+	if !rt.requireFlowAccess(w, r, req.FlowID, "viewer") {
+		return
+	}
+	id, err := rt.app.StreamChatMessage(rt.keyScope(r), req)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -91,6 +94,9 @@ func (rt *Router) handleGetConversation(w http.ResponseWriter, r *http.Request) 
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
+	if !rt.requireFlowAccess(w, r, req.FlowID, "viewer") {
+		return
+	}
 	conv, err := rt.app.GetConversation(req.FlowID, req.Provider)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
@@ -119,6 +125,9 @@ func (rt *Router) handleSaveConversation(w http.ResponseWriter, r *http.Request)
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
+	if !rt.requireFlowAccess(w, r, req.FlowID, "editor") {
+		return
+	}
 	if err := rt.app.SaveConversation(req.FlowID, req.Provider, req.Messages); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -145,6 +154,9 @@ func (rt *Router) handleClearConversation(w http.ResponseWriter, r *http.Request
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
+	if !rt.requireFlowAccess(w, r, req.FlowID, "editor") {
+		return
+	}
 	if err := rt.app.ClearConversation(req.FlowID, req.Provider); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -163,6 +175,12 @@ func (rt *Router) handleClearConversation(w http.ResponseWriter, r *http.Request
 // @Failure 500 {object} map[string]string
 // @Router /api/chat/export [post]
 func (rt *Router) handleExportConversation(w http.ResponseWriter, r *http.Request) {
+	// Exporting writes to a path on the server's local filesystem, which only
+	// makes sense for the single-user desktop app. Forbid it in cloud mode.
+	if rt.jwtEnabled {
+		http.Error(w, "exporting to a local path is not supported in cloud mode", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		FlowID   string `json:"flowId"`
 		Provider string `json:"provider"`
@@ -211,7 +229,10 @@ func (rt *Router) handlePreviewContext(w http.ResponseWriter, r *http.Request) {
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
-	res, err := rt.app.PreviewContext(req)
+	if !rt.requireFlowAccess(w, r, req.FlowID, "viewer") {
+		return
+	}
+	res, err := rt.app.PreviewContext(rt.keyScope(r), req)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return

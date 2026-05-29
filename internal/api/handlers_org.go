@@ -20,6 +20,16 @@ func (rt *Router) callerID(r *http.Request) string {
 	return rt.localUserID
 }
 
+// keyScope returns the secret-store scope for the request: "" in local mode
+// (the legacy/unscoped namespace, preserving existing desktop secrets) or the
+// caller's user id in cloud mode (isolating per-user provider keys).
+func (rt *Router) keyScope(r *http.Request) string {
+	if !rt.jwtEnabled {
+		return ""
+	}
+	return rt.callerID(r)
+}
+
 // requireOrgAdmin checks that the calling user is an admin of orgID.
 // Returns false and writes 403 if not.
 func (rt *Router) requireOrgAdmin(w http.ResponseWriter, r *http.Request, orgID string) bool {

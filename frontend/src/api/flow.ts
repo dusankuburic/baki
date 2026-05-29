@@ -65,7 +65,7 @@ export const flowApi = {
     request('/api/flow/clear-recent'),
 
   searchFlow: (flowId: string, query: SearchQuery): Promise<SearchResults> =>
-    request('/api/flow/search', {flowId, query}),
+    request('/api/flow/search', {id: flowId, query}),
 
   revealInFileManager: (path: string): Promise<void> =>
     request('/api/flow/reveal', {path}),

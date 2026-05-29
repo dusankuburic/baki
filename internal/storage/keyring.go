@@ -32,8 +32,19 @@ func warnUnavailable(op string, err error) {
 	})
 }
 
-func (keyringStore) Save(provider, key string) error {
-	if err := keyring.Set(keyringService, "apikey:"+provider, key); err != nil {
+// keyringEntry returns the keychain entry name for a (scope, provider) pair.
+// An empty scope yields the historical "apikey:<provider>" name so existing
+// desktop entries continue to resolve unchanged; a non-empty scope namespaces
+// the entry per owner.
+func keyringEntry(scope, provider string) string {
+	if scope == "" {
+		return "apikey:" + provider
+	}
+	return "apikey:" + scope + ":" + provider
+}
+
+func (keyringStore) Save(scope, provider, key string) error {
+	if err := keyring.Set(keyringService, keyringEntry(scope, provider), key); err != nil {
 		warnUnavailable("save", err)
 		return ErrSecretStorageUnavailable
 	}
@@ -44,8 +55,8 @@ func (keyringStore) Save(provider, key string) error {
 // keychain backend is unavailable. Treating an unavailable backend as
 // "not found" lets headless deployments behave as "no key configured" instead
 // of surfacing infrastructure errors to callers.
-func (keyringStore) Get(provider string) (string, error) {
-	v, err := keyring.Get(keyringService, "apikey:"+provider)
+func (keyringStore) Get(scope, provider string) (string, error) {
+	v, err := keyring.Get(keyringService, keyringEntry(scope, provider))
 	if err != nil {
 		if keyringUnavailable(err) {
 			warnUnavailable("get", err)
@@ -55,8 +66,8 @@ func (keyringStore) Get(provider string) (string, error) {
 	return v, nil
 }
 
-func (keyringStore) Has(provider string) (bool, error) {
-	_, err := keyring.Get(keyringService, "apikey:"+provider)
+func (keyringStore) Has(scope, provider string) (bool, error) {
+	_, err := keyring.Get(keyringService, keyringEntry(scope, provider))
 	if err != nil {
 		if keyringUnavailable(err) {
 			warnUnavailable("has", err)
@@ -67,8 +78,8 @@ func (keyringStore) Has(provider string) (bool, error) {
 	return true, nil
 }
 
-func (keyringStore) Delete(provider string) error {
-	err := keyring.Delete(keyringService, "apikey:"+provider)
+func (keyringStore) Delete(scope, provider string) error {
+	err := keyring.Delete(keyringService, keyringEntry(scope, provider))
 	if err == nil || errors.Is(err, keyring.ErrNotFound) {
 		return nil
 	}

@@ -23,7 +23,7 @@ func NewProviderService(ctx context.Context, auth *ai.GitHubAuth, copilotAuth *a
 	return &ProviderService{ctx: ctx, auth: auth, copilotAuth: copilotAuth, factory: factory}
 }
 
-func (s *ProviderService) ListProviders() (providers []models.ProviderInfo, err error) {
+func (s *ProviderService) ListProviders(scope string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
 	for _, meta := range ai.AvailableProviders() {
@@ -32,17 +32,19 @@ func (s *ProviderService) ListProviders() (providers []models.ProviderInfo, err 
 			continue
 		}
 
+		// OAuth device-flow tokens are global (not yet per-user); manual API keys
+		// and the copilot PAT are resolved under the caller's scope.
 		configured := false
 		switch meta.ID {
 		case "github-models":
-			ok, _ := storage.HasApiKey("github-models-token")
+			ok, _ := storage.HasApiKeyScoped("", "github-models-token")
 			configured = ok
 		case "copilot":
-			oauthOk, _ := storage.HasApiKey("copilot-oauth-token")
-			patOk, _ := storage.HasApiKey("copilot")
+			oauthOk, _ := storage.HasApiKeyScoped("", "copilot-oauth-token")
+			patOk, _ := storage.HasApiKeyScoped(scope, "copilot")
 			configured = oauthOk || patOk
 		default:
-			ok, _ := storage.HasApiKey(meta.ID)
+			ok, _ := storage.HasApiKeyScoped(scope, meta.ID)
 			configured = ok
 		}
 
@@ -88,10 +90,10 @@ func (s *ProviderService) ListProviders() (providers []models.ProviderInfo, err 
 	return providers, nil
 }
 
-func (s *ProviderService) TestProviderConnection(providerID string) (result *models.ProviderTestResult, err error) {
+func (s *ProviderService) TestProviderConnection(scope, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
 
-	provider, err := s.factory.For(providerID)
+	provider, err := s.factory.For(scope, providerID)
 	if err != nil {
 		return &models.ProviderTestResult{Ok: false, Error: err.Error()}, nil
 	}

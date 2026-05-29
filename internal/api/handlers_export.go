@@ -17,6 +17,10 @@ import (
 // @Failure 500 {object} map[string]string
 // @Router /api/export/compare [post]
 func (rt *Router) handleCompareCurrentWith(w http.ResponseWriter, r *http.Request) {
+	if rt.jwtEnabled {
+		http.Error(w, "comparison from local paths is not supported in cloud mode", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -43,6 +47,10 @@ func (rt *Router) handleCompareCurrentWith(w http.ResponseWriter, r *http.Reques
 // @Failure 500 {object} map[string]string
 // @Router /api/export/markdown [post]
 func (rt *Router) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {
+	if rt.jwtEnabled {
+		http.Error(w, "export from local paths is not supported in cloud mode", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -72,6 +80,10 @@ func (rt *Router) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/export/pdf [post]
 func (rt *Router) handleExportPDF(w http.ResponseWriter, r *http.Request) {
+	if rt.jwtEnabled {
+		http.Error(w, "export from local paths is not supported in cloud mode", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -122,12 +123,33 @@ func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 
 // isOriginAllowed reports whether the given Origin header value is in the allowlist.
 // An empty origin (non-browser, curl, etc.) is always allowed.
+// In local mode (no JWT) any localhost or tauri:// origin is implicitly allowed
+// so that the Tauri WebView — whether served from the dev Vite server or the
+// production tauri:// protocol — can reach the loopback-only sidecar.
 func (rt *Router) isOriginAllowed(origin string) bool {
 	if origin == "" {
 		return true
 	}
+	if !rt.jwtEnabled && isLocalhostOrigin(origin) {
+		return true
+	}
 	for _, o := range rt.allowedOrigins {
 		if strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLocalhostOrigin returns true for origins that are unambiguously local:
+// http(s)://localhost:*, http(s)://127.0.0.1:*, and the Tauri custom protocol.
+func isLocalhostOrigin(origin string) bool {
+	for _, prefix := range []string{
+		"http://localhost", "https://localhost",
+		"http://127.0.0.1", "https://127.0.0.1",
+		"tauri://localhost",
+	} {
+		if strings.HasPrefix(origin, prefix) {
 			return true
 		}
 	}
@@ -217,8 +239,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			r = r.WithContext(auth.WithClaims(r.Context(), claims))
 		} else {
-			// Local/Tauri mode: validate against the pre-shared static token
-			if tokenStr != rt.token {
+			// Local/Tauri mode: validate against the pre-shared static token.
+			// Constant-time compare so the check can't be brute-forced via timing.
+			if subtle.ConstantTimeCompare([]byte(tokenStr), []byte(rt.token)) != 1 {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}

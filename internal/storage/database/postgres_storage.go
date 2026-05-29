@@ -702,8 +702,24 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens (user_id);
 
 CREATE TABLE IF NOT EXISTS provider_keys (
-	provider   TEXT        PRIMARY KEY,
+	user_id    TEXT        NOT NULL DEFAULT '',
+	provider   TEXT        NOT NULL,
 	ciphertext TEXT        NOT NULL,
-	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (user_id, provider)
 );
+
+-- Migrate a pre-existing provider-only-PK table to the per-user (user_id, provider) PK.
+ALTER TABLE provider_keys ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT '';
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1 FROM pg_constraint
+		WHERE conrelid = 'provider_keys'::regclass AND contype = 'p'
+		  AND array_length(conkey, 1) = 1
+	) THEN
+		ALTER TABLE provider_keys DROP CONSTRAINT provider_keys_pkey;
+		ALTER TABLE provider_keys ADD PRIMARY KEY (user_id, provider);
+	END IF;
+END $$;
 `

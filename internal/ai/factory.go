@@ -4,14 +4,19 @@ import "fmt"
 
 // ProviderFactory creates Provider instances using a caller-supplied key-fetching function.
 // This keeps the ai package free of storage dependencies.
+//
+// getKey takes a scope (owner namespace; "" = legacy/local) and a provider key
+// name. Manual per-user API keys are resolved under the caller's scope; OAuth
+// device-flow tokens (github-models, copilot OAuth) are resolved under the
+// global scope ("") — they are not yet per-user.
 type ProviderFactory struct {
-	getKey      func(string) (string, error)
+	getKey      func(scope, provider string) (string, error)
 	copilotAuth *CopilotAuth
 }
 
 // NewProviderFactory returns a factory that resolves API keys via getKey.
-// Typical usage: ai.NewProviderFactory(storage.GetApiKey, copilotAuth)
-func NewProviderFactory(getKey func(string) (string, error), copilotAuth *CopilotAuth) *ProviderFactory {
+// Typical usage: ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth)
+func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth) *ProviderFactory {
 	return &ProviderFactory{getKey: getKey, copilotAuth: copilotAuth}
 }
 
@@ -36,19 +41,27 @@ func storageKey(providerID string) string {
 	return providerID
 }
 
-// For returns an initialised Provider for the given providerID.
-func (f *ProviderFactory) For(providerID string) (Provider, error) {
+// For returns an initialised Provider for the given providerID, resolving its
+// key within scope (the caller's owner namespace; "" = legacy/local).
+func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if providerID == "demo" {
 		return NewDemoProvider(), nil
 	}
 	if providerID == "copilot" {
-		return f.forCopilot()
+		return f.forCopilot(scope)
 	}
 	ctor, ok := providerCtors[providerID]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerID)
 	}
-	key, err := f.getKey(storageKey(providerID))
+	// github-models is authenticated via the GitHub device flow, whose token is
+	// not yet per-user; resolve it in the global scope. All other providers use
+	// the caller's manual, per-user key.
+	keyScope := scope
+	if providerID == "github-models" {
+		keyScope = ""
+	}
+	key, err := f.getKey(keyScope, storageKey(providerID))
 	if err != nil {
 		return nil, fmt.Errorf("get %s key: %w", providerID, err)
 	}
@@ -71,15 +84,17 @@ func GetMetadataProvider(providerID string) Provider {
 }
 
 // forCopilot implements dual-auth: try OAuth token first, fall back to manual PAT.
-func (f *ProviderFactory) forCopilot() (Provider, error) {
-	// Try OAuth token first (stored by the device flow)
-	oauthToken, oauthErr := f.getKey("copilot-oauth-token")
+// The OAuth token comes from the device flow and is not yet per-user (global
+// scope ""); the manual PAT is a per-user key resolved under the caller's scope.
+func (f *ProviderFactory) forCopilot(scope string) (Provider, error) {
+	// Try OAuth token first (stored by the device flow; global scope).
+	oauthToken, oauthErr := f.getKey("", "copilot-oauth-token")
 	if oauthErr == nil && oauthToken != "" && f.copilotAuth != nil {
 		return NewCopilotProviderWithAuth(f.copilotAuth, oauthToken), nil
 	}
 
-	// Fall back to manual PAT
-	pat, patErr := f.getKey("copilot")
+	// Fall back to manual PAT (per-user).
+	pat, patErr := f.getKey(scope, "copilot")
 	if patErr == nil && pat != "" {
 		return NewCopilotProvider(pat), nil
 	}

@@ -13,7 +13,7 @@ import (
 // @Failure 500 {object} map[string]string
 // @Router /api/providers/list [get]
 func (rt *Router) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	providers, err := rt.app.ListProviders()
+	providers, err := rt.app.ListProviders(rt.keyScope(r))
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -39,7 +39,7 @@ func (rt *Router) handleTestProviderConnection(w http.ResponseWriter, r *http.Re
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
-	res, err := rt.app.TestProviderConnection(req.Provider)
+	res, err := rt.app.TestProviderConnection(rt.keyScope(r), req.Provider)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return

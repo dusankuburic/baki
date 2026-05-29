@@ -2,11 +2,42 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
+
+// resolveFlow returns the parsed FlowDocument a request should operate on.
+// Local/Tauri mode: the in-memory current document (single user). Cloud mode:
+// the flow identified by flowID, loaded from storage AFTER an authorization
+// check at minPerm ("viewer"|"editor"|"admin"). On failure it writes the
+// appropriate response (400 no-flow / 403 / 404 / 500) and returns ok=false.
+func (rt *Router) resolveFlow(w http.ResponseWriter, r *http.Request, flowID, minPerm string) (*models.FlowDocument, bool) {
+	if !rt.jwtEnabled {
+		doc := rt.app.CurrentParsedDoc()
+		if doc == nil {
+			rt.sendError(w, fmt.Errorf("no flow loaded"), http.StatusBadRequest)
+			return nil, false
+		}
+		return doc, true
+	}
+	if !rt.requireFlowAccess(w, r, flowID, minPerm) {
+		return nil, false
+	}
+	doc, err := rt.app.LoadParsedFlow(flowID)
+	if err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			http.NotFound(w, r)
+		} else {
+			rt.sendError(w, err, http.StatusInternalServerError)
+		}
+		return nil, false
+	}
+	return doc, true
+}
 
 func (rt *Router) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -200,6 +231,9 @@ func (rt *Router) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		rt.sendError(w, err, http.StatusBadRequest)
+		return
+	}
+	if !rt.requireFlowAccess(w, r, req.ID, "viewer") {
 		return
 	}
 	res, err := rt.app.SearchFlow(req.ID, req.Query)

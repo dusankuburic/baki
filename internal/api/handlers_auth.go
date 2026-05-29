@@ -16,6 +16,11 @@ import (
 
 const minPasswordLength = 8
 
+// bcryptCost is set above bcrypt.DefaultCost (10) to slow offline cracking of
+// leaked hashes. 12 ≈ a few hundred ms per hash — negligible for interactive
+// register/login, meaningful against brute force.
+const bcryptCost = 12
+
 // recordRefresh persists a newly-issued refresh token in the rotation store
 // (cloud mode only). Best-effort: a store failure is logged, and because the
 // token then won't be considered valid, the next refresh simply forces re-login.
@@ -72,7 +77,7 @@ func (rt *Router) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -366,7 +371,7 @@ func (rt *Router) handleAuthChangePassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcryptCost)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return

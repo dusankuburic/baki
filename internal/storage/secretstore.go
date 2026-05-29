@@ -18,11 +18,16 @@ var ErrSecretNotFound = errors.New("secret not found")
 // SecretStore abstracts provider-key persistence. The default implementation is
 // the OS keychain (desktop mode); cloud deployments inject an encrypted,
 // database-backed store via SetSecretStore.
+//
+// All methods take a scope that namespaces the secret to an owner. An empty
+// scope ("") is the legacy/local (single-user desktop) namespace and MUST map
+// to the historical unscoped storage location so existing secrets keep working.
+// In cloud mode the scope is the caller's user id, isolating per-user keys.
 type SecretStore interface {
-	Save(provider, key string) error
-	Get(provider string) (string, error)
-	Has(provider string) (bool, error)
-	Delete(provider string) error
+	Save(scope, provider, key string) error
+	Get(scope, provider string) (string, error)
+	Has(scope, provider string) (bool, error)
+	Delete(scope, provider string) error
 }
 
 var (
@@ -44,23 +49,37 @@ func currentStore() SecretStore {
 	return activeStore
 }
 
-// SaveApiKey persists a provider API key in the active secret backend.
-func SaveApiKey(provider, key string) error {
-	return currentStore().Save(provider, key)
+// SaveApiKeyScoped persists a provider API key for the given scope (owner).
+// An empty scope uses the legacy/local unscoped namespace.
+func SaveApiKeyScoped(scope, provider, key string) error {
+	return currentStore().Save(scope, provider, key)
 }
 
-// GetApiKey returns the stored key for a provider, or ErrSecretNotFound if it
-// is absent (or the backend is unavailable, which callers treat the same way).
-func GetApiKey(provider string) (string, error) {
-	return currentStore().Get(provider)
+// GetApiKeyScoped returns the stored key for a provider within scope, or
+// ErrSecretNotFound if absent (or the backend is unavailable).
+func GetApiKeyScoped(scope, provider string) (string, error) {
+	return currentStore().Get(scope, provider)
 }
 
-// HasApiKey reports whether a key is configured for the provider.
-func HasApiKey(provider string) (bool, error) {
-	return currentStore().Has(provider)
+// HasApiKeyScoped reports whether a key is configured for the provider in scope.
+func HasApiKeyScoped(scope, provider string) (bool, error) {
+	return currentStore().Has(scope, provider)
 }
 
-// DeleteApiKey removes a stored provider key.
-func DeleteApiKey(provider string) error {
-	return currentStore().Delete(provider)
+// DeleteApiKeyScoped removes a stored provider key within scope.
+func DeleteApiKeyScoped(scope, provider string) error {
+	return currentStore().Delete(scope, provider)
 }
+
+// SaveApiKey persists a provider API key in the legacy/local (unscoped) namespace.
+// Retained for callers without a user identity (e.g. desktop OAuth device flows).
+func SaveApiKey(provider, key string) error { return SaveApiKeyScoped("", provider, key) }
+
+// GetApiKey returns the stored key for a provider in the legacy/local namespace.
+func GetApiKey(provider string) (string, error) { return GetApiKeyScoped("", provider) }
+
+// HasApiKey reports whether a key is configured in the legacy/local namespace.
+func HasApiKey(provider string) (bool, error) { return HasApiKeyScoped("", provider) }
+
+// DeleteApiKey removes a stored provider key in the legacy/local namespace.
+func DeleteApiKey(provider string) error { return DeleteApiKeyScoped("", provider) }

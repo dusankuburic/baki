@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/models"
 )
 
@@ -15,7 +16,17 @@ import (
 // @Failure 500 {object} map[string]string
 // @Router /api/analysis/analyze [post]
 func (rt *Router) handleAnalyzeFlow(w http.ResponseWriter, r *http.Request) {
-	res, err := rt.app.AnalyzeFlow()
+	// flowId is required in cloud mode (identifies + authorizes the target flow)
+	// and ignored in local mode (operates on the current document).
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	doc, ok := rt.resolveFlow(w, r, req.FlowID, "viewer")
+	if !ok {
+		return
+	}
+	res, err := rt.app.AnalyzeFlow(doc)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -35,6 +46,7 @@ func (rt *Router) handleAnalyzeFlow(w http.ResponseWriter, r *http.Request) {
 // @Router /api/analysis/lineage [post]
 func (rt *Router) handleGetVariableLineage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		FlowID   string `json:"flowId"`
 		Variable string `json:"varName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -45,7 +57,11 @@ func (rt *Router) handleGetVariableLineage(w http.ResponseWriter, r *http.Reques
 		rt.sendError(w, fmt.Errorf("varName is required"), http.StatusBadRequest)
 		return
 	}
-	history, err := rt.app.GetVariableLineage(req.Variable)
+	doc, ok := rt.resolveFlow(w, r, req.FlowID, "viewer")
+	if !ok {
+		return
+	}
+	history, err := rt.app.GetVariableLineage(doc, req.Variable)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -61,7 +77,21 @@ func (rt *Router) handleGetVariableLineage(w http.ResponseWriter, r *http.Reques
 // @Failure 500 {object} map[string]string
 // @Router /api/analysis/graph [get]
 func (rt *Router) handleGetExecutionGraph(w http.ResponseWriter, r *http.Request) {
-	graph, err := rt.app.GetExecutionGraph()
+	// flowId identifies + authorizes the target flow in cloud mode and is ignored
+	// in local mode. Accept it from the body (frontend POSTs) or the query string.
+	flowID := r.URL.Query().Get("flowId")
+	if flowID == "" && r.Body != nil {
+		var req struct {
+			FlowID string `json:"flowId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		flowID = req.FlowID
+	}
+	doc, ok := rt.resolveFlow(w, r, flowID, "viewer")
+	if !ok {
+		return
+	}
+	graph, err := rt.app.GetExecutionGraph(doc)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -91,6 +121,10 @@ func (rt *Router) handleGetRules(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/analysis/rule/enabled [post]
 func (rt *Router) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
+	// Analysis-rule config is global server state; only members may change it.
+	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
 	var req struct {
 		ID      string `json:"id"`
 		Enabled bool   `json:"enabled"`
@@ -117,6 +151,10 @@ func (rt *Router) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/analysis/rule/config [post]
 func (rt *Router) handleUpdateRuleConfig(w http.ResponseWriter, r *http.Request) {
+	// Analysis-rule config is global server state; only members may change it.
+	if !rt.requireRole(w, r, auth.RoleMember) {
+		return
+	}
 	var req struct {
 		ID     string            `json:"id"`
 		Config models.RuleConfig `json:"config"`

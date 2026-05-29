@@ -12,32 +12,37 @@ import (
 )
 
 // AnalysisService owns analysis report state and all analysis-related operations.
+//
+// The analysis methods operate on an explicitly supplied *models.FlowDocument
+// (resolved + authorized by the caller), so the service holds no global
+// "current document". Reports are cached per flow id so the execution graph can
+// reuse the matching report. lastReport tracks the most recent analysis purely
+// to enrich chat context (which is not yet per-flow in cloud mode).
 type AnalysisService struct {
 	ctx        context.Context
 	notifier   Notifier
 	flow       *FlowService
 	settings   *storage.SettingsStore
+	reports    map[string]*models.AnalysisReport
 	lastReport *models.AnalysisReport
 	reportMu   sync.Mutex
 }
 
 func NewAnalysisService(ctx context.Context, notifier Notifier, flow *FlowService, settings *storage.SettingsStore) *AnalysisService {
-	return &AnalysisService{ctx: ctx, notifier: notifier, flow: flow, settings: settings}
+	return &AnalysisService{ctx: ctx, notifier: notifier, flow: flow, settings: settings, reports: make(map[string]*models.AnalysisReport)}
 }
 
-// LastReport returns the last analysis report under a mutex lock.
+// LastReport returns the most recently produced analysis report.
 func (s *AnalysisService) LastReport() *models.AnalysisReport {
 	s.reportMu.Lock()
 	defer s.reportMu.Unlock()
 	return s.lastReport
 }
 
-func (s *AnalysisService) AnalyzeFlow() (report *models.AnalysisReport, err error) {
+func (s *AnalysisService) AnalyzeFlow(doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
@@ -45,7 +50,7 @@ func (s *AnalysisService) AnalyzeFlow() (report *models.AnalysisReport, err erro
 
 	rules := analyzer.AllRules()
 
-	result := analyzer.RunAnalysis(curDoc, rules, settings, func(current, total int, ruleName string) {
+	result := analyzer.RunAnalysis(doc, rules, settings, func(current, total int, ruleName string) {
 		s.notifier.Emit("analysis:progress", map[string]any{
 			"current":  current,
 			"total":    total,
@@ -62,38 +67,35 @@ func (s *AnalysisService) AnalyzeFlow() (report *models.AnalysisReport, err erro
 	)
 
 	s.reportMu.Lock()
+	s.reports[doc.ID] = result
 	s.lastReport = result
 	s.reportMu.Unlock()
 
 	return result, nil
 }
 
-func (s *AnalysisService) GetVariableLineage(varName string) (history *models.VariableHistory, err error) {
+func (s *AnalysisService) GetVariableLineage(doc *models.FlowDocument, varName string) (history *models.VariableHistory, err error) {
 	defer logger.Guard("App.GetVariableLineage", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
-	return analyzer.BuildVariableLineage(curDoc, varName), nil
+	return analyzer.BuildVariableLineage(doc, varName), nil
 }
 
-func (s *AnalysisService) GetExecutionGraph() (graph *models.GraphData, err error) {
+func (s *AnalysisService) GetExecutionGraph(doc *models.FlowDocument) (graph *models.GraphData, err error) {
 	defer logger.Guard("App.GetExecutionGraph", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
 	s.reportMu.Lock()
-	report := s.lastReport
+	report := s.reports[doc.ID]
 	s.reportMu.Unlock()
 
-	return analyzer.BuildExecutionGraph(curDoc, report), nil
+	return analyzer.BuildExecutionGraph(doc, report), nil
 }
 
 func (s *AnalysisService) GetRules() (result []models.Rule) {

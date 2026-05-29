@@ -41,7 +41,7 @@ export default function SegmentedControl<T extends string>({
                         role="radio"
                         aria-checked={isActive}
                     >
-                        <span className="inline-flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                             {Icon && <Icon size={14} />}
                             {opt.label}
                         </span>

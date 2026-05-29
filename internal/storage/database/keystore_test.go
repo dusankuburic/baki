@@ -96,25 +96,27 @@ func TestEncryptedKeyStore_DBRoundTrip(t *testing.T) {
 	}
 
 	const provider = "test-provider-keystore"
-	defer ks.Delete(provider)
+	const userA, userB = "user-a", "user-b"
+	defer ks.Delete(userA, provider)
+	defer ks.Delete(userB, provider)
 
 	// Absent initially.
-	if has, err := ks.Has(provider); err != nil || has {
+	if has, err := ks.Has(userA, provider); err != nil || has {
 		t.Fatalf("Has before save: has=%v err=%v", has, err)
 	}
-	if _, err := ks.Get(provider); !errors.Is(err, storage.ErrSecretNotFound) {
+	if _, err := ks.Get(userA, provider); !errors.Is(err, storage.ErrSecretNotFound) {
 		t.Fatalf("Get before save: want ErrSecretNotFound, got %v", err)
 	}
 
 	// Save then read back.
 	const key = "sk-abc-deadbeef-0123456789"
-	if err := ks.Save(provider, key); err != nil {
+	if err := ks.Save(userA, provider, key); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if has, err := ks.Has(provider); err != nil || !has {
+	if has, err := ks.Has(userA, provider); err != nil || !has {
 		t.Fatalf("Has after save: has=%v err=%v", has, err)
 	}
-	got, err := ks.Get(provider)
+	got, err := ks.Get(userA, provider)
 	if err != nil {
 		t.Fatalf("Get after save: %v", err)
 	}
@@ -122,20 +124,28 @@ func TestEncryptedKeyStore_DBRoundTrip(t *testing.T) {
 		t.Fatalf("Get mismatch: got %q want %q", got, key)
 	}
 
+	// Per-user isolation: user B must not see user A's key.
+	if has, _ := ks.Has(userB, provider); has {
+		t.Fatal("user B should not see user A's key")
+	}
+	if _, err := ks.Get(userB, provider); !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("user B Get: want ErrSecretNotFound, got %v", err)
+	}
+
 	// Upsert with a new value.
 	const key2 = "sk-xyz-cafebabe-9876543210"
-	if err := ks.Save(provider, key2); err != nil {
+	if err := ks.Save(userA, provider, key2); err != nil {
 		t.Fatalf("Save (upsert): %v", err)
 	}
-	if got, _ := ks.Get(provider); got != key2 {
+	if got, _ := ks.Get(userA, provider); got != key2 {
 		t.Fatalf("Get after upsert: got %q want %q", got, key2)
 	}
 
 	// Delete.
-	if err := ks.Delete(provider); err != nil {
+	if err := ks.Delete(userA, provider); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if has, _ := ks.Has(provider); has {
+	if has, _ := ks.Has(userA, provider); has {
 		t.Fatal("Has after delete should be false")
 	}
 }
