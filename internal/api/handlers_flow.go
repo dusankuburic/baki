@@ -252,6 +252,13 @@ func (rt *Router) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/flow/source-files [get]
 func (rt *Router) handleGetSourceFiles(w http.ResponseWriter, r *http.Request) {
+	// Source files are local filesystem paths alongside the PAD file. This feature
+	// is only meaningful in desktop/local mode. Guard explicitly so a future refactor
+	// that sets currentDoc in cloud mode cannot inadvertently expose server file reads.
+	if rt.jwtEnabled {
+		rt.sendError(w, fmt.Errorf("source file reading is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
 	files, err := rt.app.GetSourceFiles()
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
@@ -271,6 +278,10 @@ func (rt *Router) handleGetSourceFiles(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/flow/read-sources [post]
 func (rt *Router) handleReadSourceFiles(w http.ResponseWriter, r *http.Request) {
+	if rt.jwtEnabled {
+		rt.sendError(w, fmt.Errorf("source file reading is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Files []string `json:"files"`
 	}

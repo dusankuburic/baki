@@ -23,7 +23,11 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
   // Native menu bar events.
   useEffect(() => {
     if (!isTauri()) return
-    const unsubPromise = import('@tauri-apps/api/event').then(({listen}) =>
+    // Sync cancel flag so cleanup is immediate — React does not await async cleanup
+    // functions, meaning the Promise.then pattern leaks the listener across re-runs.
+    let unsub: (() => void) | null = null
+    let cancelled = false
+    import('@tauri-apps/api/event').then(({listen}) =>
       listen<string>('menu-event', async (event) => {
         const id = event.payload
         switch (id) {
@@ -71,14 +75,16 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
             break
         }
       })
-    )
-    return () => { unsubPromise.then(unsub => unsub()) }
+    ).then(fn => { if (!cancelled) unsub = fn; else fn() })
+    return () => { cancelled = true; unsub?.() }
   }, [openDocument, toggleTheme, onShowShortcuts])
 
   // OS "open with" / file-association events.
   useEffect(() => {
     if (!isTauri()) return
-    const unsubPromise = import('@tauri-apps/api/event').then(({listen}) =>
+    let unsub: (() => void) | null = null
+    let cancelled = false
+    import('@tauri-apps/api/event').then(({listen}) =>
       listen<string[]>('open-file', async (event) => {
         const args = event.payload
         const path = args.find(arg =>
@@ -90,7 +96,7 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
           if (doc) openDocument(doc as any)
         }
       })
-    )
-    return () => { unsubPromise.then(unsub => unsub()) }
+    ).then(fn => { if (!cancelled) unsub = fn; else fn() })
+    return () => { cancelled = true; unsub?.() }
   }, [openDocument])
 }

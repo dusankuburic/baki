@@ -71,17 +71,27 @@ func main() {
 	ctx := context.Background()
 	app.Init(ctx, router)
 
-	// Wrap router with middleware
-	generalRl := middleware.NewRateLimiter(60, 20, cfg.Server.TrustedProxies)      // 60 req/s, burst of 20
-	authRl := middleware.NewRateLimiter(5.0/60.0, 5, cfg.Server.TrustedProxies)    // 5 req/min, burst of 5
+	// Wrap router with middleware.
+	//
+	// Rate limiting protects the public cloud deployment. In local/desktop mode the
+	// server is loopback-only and single-user, so it serves no security purpose and
+	// would only throttle the app's own startup burst (many provider/key checks fire
+	// at once, doubled by React StrictMode in dev) — surfacing as 429s that, because
+	// the limiter responds before the CORS layer, look like CORS failures in the
+	// browser. So only rate-limit in cloud mode.
+	var routerWithLimits http.Handler = router
+	if cfg.Mode == config.ModeCloud {
+		generalRl := middleware.NewRateLimiter(60, 20, cfg.Server.TrustedProxies)   // 60 req/s, burst of 20
+		authRl := middleware.NewRateLimiter(5.0/60.0, 5, cfg.Server.TrustedProxies) // 5 req/min, burst of 5
 
-	routerWithLimits := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/refresh" || r.URL.Path == "/api/auth/register" {
-			authRl.Limit(router).ServeHTTP(w, r)
-		} else {
-			generalRl.Limit(router).ServeHTTP(w, r)
-		}
-	})
+		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/refresh" || r.URL.Path == "/api/auth/register" {
+				authRl.Limit(router).ServeHTTP(w, r)
+			} else {
+				generalRl.Limit(router).ServeHTTP(w, r)
+			}
+		})
+	}
 
 	handler := middleware.Recovery(routerWithLimits)
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -22,7 +23,13 @@ func (rt *Router) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users, err := rt.app.StorageBackend().ListUsers(r.Context())
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		rt.sendError(w, fmt.Errorf("admin features require cloud mode"), http.StatusBadRequest)
+		return
+	}
+
+	users, err := backend.ListUsers(r.Context())
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -55,6 +62,12 @@ func (rt *Router) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	backend := rt.app.StorageBackend()
+	if backend == nil {
+		rt.sendError(w, fmt.Errorf("admin features require cloud mode"), http.StatusBadRequest)
+		return
+	}
+
 	// Path: /api/admin/users/<userId>/role
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/users/"), "/")
 	if len(parts) < 2 || parts[1] != "role" {
@@ -76,14 +89,14 @@ func (rt *Router) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := rt.app.StorageBackend().LoadUserByID(r.Context(), targetUserID)
+	user, err := backend.LoadUserByID(r.Context(), targetUserID)
 	if err != nil {
 		rt.sendError(w, err, http.StatusNotFound)
 		return
 	}
 
 	user.Role = req.Role
-	if err := rt.app.StorageBackend().SaveUser(r.Context(), user); err != nil {
+	if err := backend.SaveUser(r.Context(), user); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
 	}

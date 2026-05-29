@@ -30,7 +30,12 @@ export default function FindingsTab() {
 
   useEffect(() => {
     if (!isAnalyzing) return
-    const unsubPromise = subscribeToEvents((ev) => {
+    // Use a sync cancelled flag so cleanup is immediate — React does not await
+    // async cleanup functions, so the Promise.then pattern leaks the listener on
+    // fast unmount/remount (e.g. React StrictMode).
+    let unsub: (() => void) | null = null
+    let cancelled = false
+    subscribeToEvents((ev) => {
       if (ev.name !== 'analysis:progress') return
       const data = ev.data
       setProgress({
@@ -38,8 +43,8 @@ export default function FindingsTab() {
         total: data.total ?? 0,
         ruleName: data.ruleName ?? '',
       })
-    })
-    return () => { unsubPromise.then(unsub => unsub()) }
+    }).then(fn => { if (!cancelled) unsub = fn; else fn() })
+    return () => { cancelled = true; unsub?.() }
   }, [isAnalyzing, setProgress])
 
   const handleAnalyze = useCallback(async () => {

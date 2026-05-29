@@ -90,42 +90,47 @@ export default function AITab() {
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming
 
   return (
-    <div className="flex flex-col min-h-full">
-      <ConnectionPanel
-        providers={configuredProviders.map(p => ({
-          id: p.id as any,
-          name: p.name,
-          configured: p.configured,
-          authType: p.authType,
-        }))}
-        selectedProvider={activeThread ? (activeThread as any).provider ?? undefined : undefined}
-        onSelectProvider={handleSetProvider}
-        models={currentModels}
-        selectedModel={selectedModel}
-        onSelectModel={setSelectedModel}
-        demoRemaining={demoRemaining}
-        onExport={handleExport}
-        hasMessages={messages.length > 0}
-      />
+    <div className="flex flex-col h-full min-h-0">
+      {/* Pinned header — provider/model selector, connection status, thread tabs.
+          flex-shrink-0 keeps it anchored while only the message list scrolls. */}
+      <div className="flex-shrink-0 border-b border-border-subtle">
+        <ConnectionPanel
+          providers={configuredProviders.map(p => ({
+            id: p.id as any,
+            name: p.name,
+            configured: p.configured,
+            authType: p.authType,
+          }))}
+          selectedProvider={activeThread ? (activeThread as any).provider ?? undefined : undefined}
+          onSelectProvider={handleSetProvider}
+          models={currentModels}
+          selectedModel={selectedModel}
+          onSelectModel={setSelectedModel}
+          demoRemaining={demoRemaining}
+          onExport={handleExport}
+          hasMessages={messages.length > 0}
+        />
 
-      <div className="px-3 py-1.5">
-        <ConnectionStatus
-          state={isCurrentThreadStreaming ? 'connected' : 'connected'}
-          provider={currentModelDetail?.displayName}
+        <div className="px-3 py-1.5">
+          <ConnectionStatus
+            state={isCurrentThreadStreaming ? 'connected' : 'connected'}
+            provider={currentModelDetail?.displayName}
+          />
+        </div>
+
+        <ChatThreadBar
+          threads={flowThreads}
+          activeThreadId={activeThreadId}
+          onSelect={switchThread}
+          onCreate={handleCreateThread}
+          onClose={handleCloseThread}
+          onRename={handleRenameThread}
         />
       </div>
 
-      <ChatThreadBar
-        threads={flowThreads}
-        activeThreadId={activeThreadId}
-        onSelect={switchThread}
-        onCreate={handleCreateThread}
-        onClose={handleCloseThread}
-        onRename={handleRenameThread}
-      />
-
+      {/* Pinned sub-controls — context scope, source files, toolbar. */}
       {(contextBlockId || doc) && activeThread && (
-        <div className="mt-1">
+        <div className="flex-shrink-0 mt-1">
           {contextBlockId && selectedBlock ? (
             <ContextChip
               blockId={contextBlockId}
@@ -150,7 +155,7 @@ export default function AITab() {
       )}
 
       {sourceFiles.length > 0 && activeThread && (
-        <div className="mt-1">
+        <div className="flex-shrink-0 mt-1">
           <SourceFilePicker
             files={sourceFiles}
             selected={selectedSourceFiles}
@@ -159,65 +164,70 @@ export default function AITab() {
         </div>
       )}
 
-      <ChatToolbar
-        messageCount={messages.length}
-        onNewChat={handleCreateThread}
-        onClearContext={handleClearContext}
-        onCompact={handleCompact}
-      />
+      <div className="flex-shrink-0">
+        <ChatToolbar
+          messageCount={messages.length}
+          onNewChat={handleCreateThread}
+          onClearContext={handleClearContext}
+          onCompact={handleCompact}
+        />
+      </div>
 
-      {doc && showWelcome && (
-        <>
-          <div className="px-4 pt-4 pb-2">
-            <p className="text-xs text-text-tertiary leading-relaxed">
-              {WELCOME_MESSAGES[useChatStore.getState().selectedProvider] ?? DEFAULT_WELCOME}
-            </p>
-          </div>
-          <SuggestedPrompts prompts={suggestedPrompts} onSelect={(text) => handleSend(text, [], false)} />
-          <PromptTemplates
-            onSelect={(text) => handleSend(text, [], false)}
-            hasBlock={!!contextBlockId}
-            flowName={doc?.name}
-            blockName={selectedBlock?.name}
-          />
-        </>
-      )}
+      {/* Scroll region — exactly one of welcome / messages / empty-state fills it
+          and owns its own scrolling. */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        {doc && activeThread ? (
+          showWelcome ? (
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+              <div className="px-4 pt-4 pb-2">
+                <p className="text-xs text-text-tertiary leading-relaxed">
+                  {WELCOME_MESSAGES[useChatStore.getState().selectedProvider] ?? DEFAULT_WELCOME}
+                </p>
+              </div>
+              <SuggestedPrompts prompts={suggestedPrompts} onSelect={(text) => handleSend(text, [], false)} />
+              <PromptTemplates
+                onSelect={(text) => handleSend(text, [], false)}
+                hasBlock={!!contextBlockId}
+                flowName={doc?.name}
+                blockName={selectedBlock?.name}
+              />
+            </div>
+          ) : (
+            <ChatMessageList isStreaming={isCurrentThreadStreaming}>
+              {messages.map((m, i) => (
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  isLastAssistant={i === lastAssistantIdx}
+                  onRegenerate={i === lastAssistantIdx ? handleResend : undefined}
+                  onRetry={m.finishReason === 'error' ? handleResend : undefined}
+                />
+              ))}
+              {showThinking && (
+                <MessageBubble
+                  message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
+                  isThinking
+                />
+              )}
+              {isCurrentThreadStreaming && streamingText && (
+                <MessageBubble
+                  message={{
+                    id: streamingMessageId || 'streaming',
+                    role: 'assistant',
+                    content: streamingText,
+                    timestamp: new Date().toISOString(),
+                  }}
+                  isStreaming
+                />
+              )}
+            </ChatMessageList>
+          )
+        ) : (
+          <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} />
+        )}
+      </div>
 
-      {/* Main content area */}
-      {doc && activeThread ? (
-        <ChatMessageList isStreaming={isCurrentThreadStreaming}>
-          {messages.map((m, i) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              isLastAssistant={i === lastAssistantIdx}
-              onRegenerate={i === lastAssistantIdx ? handleResend : undefined}
-              onRetry={m.finishReason === 'error' ? handleResend : undefined}
-            />
-          ))}
-          {showThinking && (
-            <MessageBubble
-              message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
-              isThinking
-            />
-          )}
-          {isCurrentThreadStreaming && streamingText && (
-            <MessageBubble
-              message={{
-                id: streamingMessageId || 'streaming',
-                role: 'assistant',
-                content: streamingText,
-                timestamp: new Date().toISOString(),
-              }}
-              isStreaming
-            />
-          )}
-        </ChatMessageList>
-      ) : (
-        <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} />
-      )}
-
-      {/* Bottom fixed section: tokens/progress + input */}
+      {/* Pinned bottom — tokens/progress + input. */}
       {doc && activeThread && (
         <div className="flex-shrink-0">
           {isCurrentThreadStreaming && streamingTokens > 0 ? (

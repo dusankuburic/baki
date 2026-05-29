@@ -56,3 +56,8 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# Markdown — ignore all .md files except README.md (any dir) and GRAMMAR.md
+*.md
+!README.md
+!internal/parser/GRAMMAR.md

@@ -1,4 +1,4 @@
-import {useState, useRef, useEffect, useCallback} from 'react'
+import {useState, useRef, useEffect, useLayoutEffect, useCallback} from 'react'
 import clsx from 'clsx'
 import {Check, ChevronDown, Settings, Zap} from 'lucide-react'
 import type {ModelDetail, ProviderID} from '@/types/domain'
@@ -50,28 +50,55 @@ export default function ConnectionPanel({
   const provDropdownRef = useRef<HTMLDivElement>(null)
   const modDropdownRef = useRef<HTMLDivElement>(null)
 
-  const updatePositions = useCallback(() => {
-    if (provRef.current) {
-      const rect = provRef.current.getBoundingClientRect()
-      setProvPos({top: rect.bottom + 4, left: rect.left, width: rect.width})
+  // Anchor a fixed-position dropdown under its trigger, clamped into the viewport
+  // and flipped above the trigger when there isn't room below. Mirrors the logic
+  // in shared/Dropdown.tsx. Returns null when the trigger isn't laid out yet.
+  const computePos = useCallback((trigger: HTMLElement | null, menu: HTMLElement | null) => {
+    if (!trigger) return null
+    const t = trigger.getBoundingClientRect()
+    if (t.width === 0 && t.height === 0) return null
+    const menuH = menu?.getBoundingClientRect().height ?? 0
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const width = t.width
+    let left = t.left
+    if (left + width > vw - 8) left = vw - width - 8
+    if (left < 8) left = 8
+    let top = t.bottom + 4
+    if (menuH > 0 && top + menuH > vh - 8) {
+      top = t.top - menuH - 4 > 8 ? t.top - menuH - 4 : Math.max(8, vh - menuH - 8)
     }
-    if (modRef.current) {
-      const rect = modRef.current.getBoundingClientRect()
-      setModPos({top: rect.bottom + 4, left: rect.left, width: rect.width})
-    }
+    return {top, left, width}
   }, [])
 
-  useEffect(() => {
-    if (providerOpen || modelsOpen) {
-      updatePositions()
-      window.addEventListener('resize', updatePositions)
-      window.addEventListener('scroll', updatePositions, true)
+  // While a dropdown is open, keep it pinned to its trigger every frame so panel
+  // resizes / layout shifts can't strand it. Measured in a layout effect (before
+  // paint) to avoid a flash at the previous position.
+  useLayoutEffect(() => {
+    if (!providerOpen && !modelsOpen) return
+    const same = (
+      a: {top: number; left: number; width: number},
+      b: {top: number; left: number; width: number},
+    ) => a.top === b.top && a.left === b.left && a.width === b.width
+    const measure = () => {
+      if (providerOpen) {
+        const p = computePos(provRef.current, provDropdownRef.current)
+        if (p) setProvPos(prev => (same(prev, p) ? prev : p))
+      }
+      if (modelsOpen) {
+        const m = computePos(modRef.current, modDropdownRef.current)
+        if (m) setModPos(prev => (same(prev, m) ? prev : m))
+      }
     }
-    return () => {
-      window.removeEventListener('resize', updatePositions)
-      window.removeEventListener('scroll', updatePositions, true)
+    measure()
+    let raf = 0
+    const loop = () => {
+      measure()
+      raf = requestAnimationFrame(loop)
     }
-  }, [providerOpen, modelsOpen, updatePositions])
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [providerOpen, modelsOpen, computePos])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -116,7 +143,7 @@ export default function ConnectionPanel({
             <Portal>
               <div
                 ref={provDropdownRef}
-                className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in"
+                className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-tooltip py-1 animate-fade-in"
                 style={{top: provPos.top, left: provPos.left, width: provPos.width}}
               >
                 {providers.map(p => (
@@ -211,7 +238,7 @@ export default function ConnectionPanel({
             <Portal>
               <div
                 ref={modDropdownRef}
-                className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in max-h-[240px] overflow-y-auto"
+                className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-tooltip py-1 animate-fade-in max-h-[240px] overflow-y-auto"
                 style={{top: modPos.top, left: modPos.left, width: modPos.width}}
               >
                 {models.map(m => (

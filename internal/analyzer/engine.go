@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
 )
 
@@ -170,6 +171,20 @@ func computeStats(findings []models.Finding) models.AnalysisStats {
 	return stats
 }
 
+// safeCheck runs a single rule against a block, recovering from any panic so that
+// one buggy rule (or a malformed block) can't abort the entire analysis. The
+// offending rule/block is logged and skipped.
+func safeCheck(rule Rule, block *models.Block, ctx *RuleContext) (findings []models.Finding) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("analysis rule panicked; skipping",
+				"rule", rule.ID(), "block", block.ID, "panic", r)
+			findings = nil
+		}
+	}()
+	return rule.Check(block, ctx)
+}
+
 func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
 	onProgress func(current, total int, ruleName string)) *models.AnalysisReport {
 
@@ -202,8 +217,8 @@ func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSe
 				onProgress(counter, total, rule.Name())
 			}
 			
-			ruleFindings := rule.Check(block, ctx)
-			
+			ruleFindings := safeCheck(rule, block, ctx)
+
 			// Apply severity overrides from settings
 			if settings != nil {
 				if rc, ok := settings.Analysis.Rules[rule.ID()]; ok && rc.Severity != "" {
@@ -259,17 +274,28 @@ func GetParent(ctx *RuleContext, block *models.Block) *models.Block {
 
 func HasErrorHandlerAncestor(ctx *RuleContext, block *models.Block) bool {
 	cur := block
+	// visited guards against a cycle in ParentMap (a malformed/rehydrated index
+	// could produce one), which would otherwise loop forever.
+	visited := make(map[string]bool)
 	for {
+		if cur == nil || visited[cur.ID] {
+			return false
+		}
+		visited[cur.ID] = true
 		pid, ok := ctx.ParentMap[cur.ID]
 		if !ok {
 			return false
 		}
 		parent := ctx.AllBlocks[pid]
+		if parent == nil {
+			// ParentMap references a block absent from AllBlocks (inconsistent
+			// index) — stop rather than nil-panic.
+			return false
+		}
 		if parent.Type == models.BlockTypeErrorHandler {
 			return true
 		}
-		siblings := ctx.SiblingMap[pid]
-		for _, s := range siblings {
+		for _, s := range ctx.SiblingMap[pid] {
 			if s.Type == models.BlockTypeErrorHandler {
 				return true
 			}

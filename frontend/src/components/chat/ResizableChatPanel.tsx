@@ -18,6 +18,9 @@ export default function ResizableChatPanel({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const resizeHandleRef = useRef<HTMLDivElement>(null)
+  const startYRef = useRef(0)
+  const startHeightRef = useRef(0)
+  const pendingHeightRef = useRef<number | null>(null)
   const [height, setHeight] = useState<number | null>(null) // null = auto (fill space)
   const [isResizing, setIsResizing] = useState(false)
   const [isPoppedOut, setIsPoppedOut] = useState(false)
@@ -27,30 +30,34 @@ export default function ResizableChatPanel({
 
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    startYRef.current = e.clientY
+    startHeightRef.current = containerRef.current?.getBoundingClientRect().height ?? 0
+    pendingHeightRef.current = null
     setIsResizing(true)
   }, [])
 
+  const resize = useCallback((e: MouseEvent) => {
+    if (!isResizing) return
+    // Adjust from the height at grab time so a click with no movement leaves the
+    // panel unchanged. Dragging up grows it, dragging down shrinks it.
+    const delta = startYRef.current - e.clientY
+    const newHeight = Math.max(minHeight, Math.min(maxHeight, startHeightRef.current + delta))
+    pendingHeightRef.current = newHeight
+    setHeight(newHeight)
+  }, [isResizing, minHeight, maxHeight])
+
   const stopResize = useCallback(() => {
     setIsResizing(false)
+    // Persist once at the end of an actual drag (not on a plain click).
+    if (pendingHeightRef.current !== null) {
+      useSettingsStore.getState().updateSettings({
+        layout: {
+          ...useSettingsStore.getState().settings.layout,
+          chatPanelHeight: pendingHeightRef.current,
+        },
+      })
+    }
   }, [])
-
-  const resize = useCallback((e: MouseEvent) => {
-    if (!isResizing || !containerRef.current) return
-
-    const containerRect = containerRef.current.getBoundingClientRect()
-    const newHeight = containerRect.bottom - e.clientY
-
-    const clampedHeight = Math.max(minHeight, Math.min(maxHeight, newHeight))
-    setHeight(clampedHeight)
-
-    // Save to settings
-    useSettingsStore.getState().updateSettings({
-      layout: {
-        ...useSettingsStore.getState().settings.layout,
-        chatPanelHeight: clampedHeight,
-      },
-    })
-  }, [isResizing, minHeight, maxHeight])
 
   // Double-click to reset to auto-fill
   const handleDoubleClick = useCallback(() => {
@@ -80,7 +87,7 @@ export default function ResizableChatPanel({
 
   if (isPoppedOut) {
     return (
-      <div className="fixed inset-4 z-50 bg-surface-0 border border-border-subtle rounded-xl shadow-2xl flex flex-col animate-fade-in">
+      <div className="fixed inset-4 z-modal bg-surface-0 border border-border-subtle rounded-xl shadow-2xl flex flex-col animate-fade-in">
         <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
           <span className="text-xs font-medium text-text-secondary">AI Chat</span>
           <button
@@ -91,7 +98,9 @@ export default function ResizableChatPanel({
             <Minimize2 size={14} />
           </button>
         </div>
-        <div className="flex-1 overflow-hidden">
+        {/* AITab owns its own scroll region (pinned header + scrolling messages +
+            pinned input); this wrapper just provides a definite height and clips. */}
+        <div className="flex-1 min-h-0 overflow-hidden">
           {children}
         </div>
       </div>
@@ -113,8 +122,9 @@ export default function ResizableChatPanel({
         <Maximize2 size={12} />
       </button>
 
-      {/* Scrollable content area */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      {/* AITab owns its own scroll region (pinned header + scrolling messages +
+          pinned input); this wrapper just provides a definite height and clips. */}
+      <div className="flex-1 min-h-0 overflow-hidden">
         {children}
       </div>
 
@@ -122,7 +132,7 @@ export default function ResizableChatPanel({
       <div
         ref={resizeHandleRef}
         className={clsx(
-          'absolute bottom-0 left-0 right-0 h-4 cursor-ns-resize flex items-center justify-center',
+          'absolute bottom-0 left-0 right-0 h-3 cursor-ns-resize flex items-center justify-center',
           'hover:bg-brand-500/10 active:bg-brand-500/20 transition-colors',
           isResizing && 'bg-brand-500/20'
         )}

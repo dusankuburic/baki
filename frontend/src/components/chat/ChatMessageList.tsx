@@ -101,7 +101,6 @@ function ChatMessageList({children, isStreaming}: Props) {
   )
 }
 
-// Memoize to prevent re-renders during streaming - only re-render when isStreaming changes
-export default memo(ChatMessageList, (prevProps, nextProps) => {
-  return prevProps.isStreaming === nextProps.isStreaming
-})
+// Memoize to avoid unnecessary re-renders, but use React's default shallow
+// comparison so children (including the live streaming bubble) always update.
+export default memo(ChatMessageList)

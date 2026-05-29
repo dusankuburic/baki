@@ -46,8 +46,14 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 func (c *Client) Run() {
 	c.hub.Join(c.flowID, c)
 	defer func() {
+		// Leave the hub BEFORE closing the send channel. If close() fired first,
+		// the client would remain in the hub's snapshot with a closed channel and
+		// any concurrent hub.Broadcast() call would panic on "send on closed channel"
+		// (Go panics on a select-case send to a closed channel, unlike a receive).
+		// Ordering: Leave → close → conn.Close gives writePump a clean exit path.
 		c.hub.Leave(c.flowID, c)
-		c.conn.Close()
+		c.close()       // signal writePump to exit (ok==false on c.send)
+		c.conn.Close()  // force-close if writePump hasn't already
 	}()
 
 	go c.writePump()
@@ -70,7 +76,9 @@ func (c *Client) close() {
 
 // readPump reads incoming messages and dispatches them to the hub.
 func (c *Client) readPump() {
-	defer c.close()
+	// NOTE: c.close() is intentionally NOT deferred here. The send channel is
+	// closed in Run()'s deferred func, strictly after hub.Leave(), so no Broadcast
+	// can ever observe a closed channel while the client is still in the hub.
 
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))

@@ -120,16 +120,25 @@ export default function App() {
     }, [updateLayout])
 
     useEffect(() => {
-        const unsubPromise = subscribeToEvents((ev) => {
+        // Use a cancelled flag + sync unsub ref so cleanup is synchronous (React
+        // does not await async cleanup functions). openDocument is in deps so the
+        // handler always calls the current version after login/store resets.
+        let unsub: (() => void) | null = null
+        let cancelled = false
+        subscribeToEvents((ev) => {
             if (ev.name === 'flow:parse-progress') {
                 useFlowStore.setState({parseProgress: ev.data.percent ?? 0, isParsing: true})
             } else if (ev.name === 'flow:loaded') {
                 if (ev.data) openDocument(ev.data as any)
-            } else if (ev.name === 'flow:load-error') {                useFlowStore.getState().setParseError(ev.data?.error ?? 'Unknown error')
+            } else if (ev.name === 'flow:load-error') {
+                useFlowStore.getState().setParseError(ev.data?.error ?? 'Unknown error')
             }
-        })
-        return () => { unsubPromise.then(unsub => unsub()) }
-    }, [])
+        }).then(fn => { if (!cancelled) unsub = fn; else fn() })
+        return () => {
+            cancelled = true
+            unsub?.()
+        }
+    }, [openDocument])
 
     const {toggleTheme} = useTheme()
 

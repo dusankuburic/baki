@@ -31,6 +31,13 @@ export function invalidateConfigCache(): void {
 // Registered by authStore to trigger token refresh.
 let refreshCallback: (() => Promise<void>) | null = null
 
+// Deduplicate concurrent refresh calls. If two requests both get 401 at the
+// same time, both would call refreshCallback() with the same refresh token.
+// The second call would use the now-rotated (invalid) token and fail, clearing
+// auth state and logging the user out. Sharing one in-flight promise means all
+// concurrent callers wait for the same refresh result.
+let refreshInFlight: Promise<void> | null = null
+
 export function registerRefreshCallback(fn: () => Promise<void>): void {
     refreshCallback = fn
 }
@@ -60,10 +67,16 @@ const AUTH_PATHS = ['/api/auth/refresh', '/api/auth/login', '/api/auth/register'
 export async function request<T>(path: string, body?: unknown, method: string = 'POST'): Promise<T> {
     let response = await doFetch(path, body, method)
 
-    // Attempt one token refresh on 401
+    // Attempt one token refresh on 401.
+    // refreshInFlight deduplicates concurrent 401s: without it, two simultaneous
+    // expired-token requests would each call refreshCallback() with the same
+    // refresh token; the second call's token is already rotated → 401 → logout.
     if (response.status === 401 && refreshCallback && !AUTH_PATHS.includes(path)) {
         try {
-            await refreshCallback()   // updates localStorage
+            if (!refreshInFlight) {
+                refreshInFlight = refreshCallback().finally(() => { refreshInFlight = null })
+            }
+            await refreshInFlight
             invalidateConfigCache()   // force re-read of new token
             response = await doFetch(path, body, method)
         } catch {
@@ -76,7 +89,12 @@ export async function request<T>(path: string, body?: unknown, method: string = 
         throw new Error((error as { error?: string }).error || 'Request failed')
     }
 
-    return response.json() as Promise<T>
+    // Wrap the success-path JSON parse in a .catch() so a misconfigured proxy
+    // returning a 200 with an HTML body throws a clean Error rather than an
+    // unhandled SyntaxError that can crash the calling React component.
+    return response.json().catch(() => {
+        throw new Error('Server returned a non-JSON response')
+    }) as Promise<T>
 }
 
 /**

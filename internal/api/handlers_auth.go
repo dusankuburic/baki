@@ -57,6 +57,14 @@ func validateCredentials(email, password string) (string, bool) {
 // @Failure 500 {object} map[string]string
 // @Router /api/auth/register [post]
 func (rt *Router) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	// Registration requires a real user database — only available in cloud mode.
+	// In local/desktop mode StorageBackend() is nil, so this guard also prevents
+	// a nil dereference panic.
+	if !rt.jwtEnabled {
+		http.Error(w, "registration is not available in local mode", http.StatusNotFound)
+		return
+	}
+
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -146,9 +154,16 @@ func (rt *Router) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var role auth.Role
 
 	if rt.jwtEnabled {
-		// Cloud mode: use real credential verification
+		// Cloud mode: use real credential verification.
 		user, err := rt.app.StorageBackend().LoadUserByEmail(r.Context(), req.Email)
 		if err != nil {
+			// Always run a full bcrypt comparison even when the user doesn't exist
+			// so that response time cannot be used to enumerate registered emails
+			// (user-not-found would otherwise return ~300× faster than wrong-password).
+			_ = bcrypt.CompareHashAndPassword(
+				[]byte("$2a$12$C1bbK1eg7fyNXZ/DhDAJvuilldiH0nTU7s5DMenUexwPvNYQ6zZZm"),
+				[]byte(req.Password),
+			)
 			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 			return
 		}

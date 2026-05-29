@@ -12,6 +12,7 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/manager"
 	"pad-analyzer/internal/migration"
 	wshub "pad-analyzer/internal/websocket"
@@ -156,6 +157,10 @@ func isLocalhostOrigin(origin string) bool {
 	return false
 }
 
+// maxSSEClients caps concurrent SSE connections in cloud mode to prevent
+// unbounded memory growth from clients that connect and never disconnect.
+const maxSSEClients = 500
+
 func (rt *Router) Emit(name string, data any) {
 	rt.clientsMu.Lock()
 	defer rt.clientsMu.Unlock()
@@ -164,6 +169,9 @@ func (rt *Router) Emit(name string, data any) {
 		select {
 		case client <- ev:
 		default:
+			// Channel buffer full — client is too slow. Log so the issue is
+			// visible in server logs rather than silently disappearing.
+			logger.Warn("SSE client dropped event: send buffer full", "event", name)
 		}
 	}
 }
@@ -291,6 +299,18 @@ func (rt *Router) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	// Enforce a cap in cloud mode to prevent unbounded memory growth from
+	// clients that connect and never disconnect.
+	if rt.jwtEnabled {
+		rt.clientsMu.Lock()
+		count := len(rt.clients)
+		rt.clientsMu.Unlock()
+		if count >= maxSSEClients {
+			http.Error(w, "too many SSE connections", http.StatusServiceUnavailable)
+			return
+		}
+	}
 
 	ch := make(chan Event, 10)
 	rt.clientsMu.Lock()
