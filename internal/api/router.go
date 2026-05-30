@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/manager"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/migration"
 	wshub "pad-analyzer/internal/websocket"
 
@@ -99,9 +101,18 @@ func NewRouter(app *manager.App, token string, jwtEnabled bool, allowedOrigins [
 	}
 }
 
+// maxUsedTickets caps the replay-protection map so a flood of issued tickets
+// cannot grow the map unboundedly. Tickets are tiny (jti + expiry), so a
+// 10k cap is generous (~hundreds of KB) while still bounding worst-case
+// memory. When full, consumeTicket refuses new entries rather than evicting
+// arbitrary ones — that would create a window where a previously-used ticket
+// could be replayed.
+const maxUsedTickets = 10_000
+
 // consumeTicket records a ticket jti as used and reports whether the caller may
-// proceed. It returns false if the ticket was already redeemed (replay). Expired
-// entries are pruned opportunistically to bound the map's size.
+// proceed. Returns false on replay (already-seen jti) or when the bounded
+// store is full. Expired entries are pruned at every insert so the cap is
+// only reached if the issuance rate exceeds the ticket TTL × throughput.
 func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 	if jti == "" {
 		return false
@@ -110,12 +121,20 @@ func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 	defer rt.usedTicketsMu.Unlock()
 
 	now := time.Now()
+	// Prune expired entries first — this is the dominant size control.
 	for id, t := range rt.usedTickets {
 		if t.Before(now) {
 			delete(rt.usedTickets, id)
 		}
 	}
 	if _, seen := rt.usedTickets[jti]; seen {
+		return false
+	}
+	if len(rt.usedTickets) >= maxUsedTickets {
+		// Refuse rather than evict: evicting an arbitrary entry would let
+		// the just-evicted ticket be replayed before its real expiry.
+		logger.Warn("consumeTicket: usedTickets cap reached, refusing ticket",
+			"cap", maxUsedTickets, "jti", jti)
 		return false
 	}
 	rt.usedTickets[jti] = exp
@@ -183,17 +202,40 @@ var publicRoutes = map[string]bool{
 	"/api/auth/login":    true,
 	"/api/auth/refresh":  true,
 	"/healthz":           true,
+	"/readyz":            true,
 	"/api/health":        true,
+	"/metrics":           true, // Prometheus scrape; gate via network policy, not auth.
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Clean the path to handle double slashes and trailing slashes.
+	// This ensures that routes in dispatch() match correctly.
+	r.URL.Path = path.Clean(r.URL.Path)
+
 	// Limit request body to 10 MB to prevent DoS via large payloads.
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 
-	// Security headers — always set regardless of mode.
+	// Strip the default Go server header. Identifying the runtime + version
+	// helps targeted-CVE attackers more than it helps any legitimate
+	// operator (`Server` is not part of any contract).
+	w.Header().Set("Server", "")
+
+	// Security headers — applied to every response. Some (CSP) are only
+	// meaningful for HTML responses; we set them on the SPA-fallback path
+	// in dispatch() rather than here so JSON API responses don't carry
+	// CSP unnecessarily.
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	// Disable powerful browser APIs for any HTML this app might serve.
+	// The PAD Analyzer SPA needs none of these; an XSS that tries to use
+	// them is blocked at the browser policy layer.
+	w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=()")
+	// Cross-origin isolation: prevent other-origin documents from getting
+	// a reference to our window (mitigates a class of Spectre-style and
+	// cross-origin information disclosure attacks).
+	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	if rt.jwtEnabled {
 		// HSTS only makes sense when TLS is present (cloud mode).
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -316,11 +358,13 @@ func (rt *Router) handleEvents(w http.ResponseWriter, r *http.Request) {
 	rt.clientsMu.Lock()
 	rt.clients[ch] = true
 	rt.clientsMu.Unlock()
+	metrics.SSEClientStart()
 
 	defer func() {
 		rt.clientsMu.Lock()
 		delete(rt.clients, ch)
 		rt.clientsMu.Unlock()
+		metrics.SSEClientEnd()
 	}()
 
 	ctx := r.Context()

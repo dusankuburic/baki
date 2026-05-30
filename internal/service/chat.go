@@ -12,18 +12,30 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/analyzer"
 	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/storage"
 	"github.com/google/uuid"
 )
 
+// maxChatStreamDuration is the hard upper bound on a single streaming chat
+// turn. The stream goroutine is cancelled when the deadline hits OR when
+// CancelStream is called explicitly OR when the parent app context is
+// cancelled (server shutdown). The client cannot cancel by disappearing —
+// the SSE notifier is broadcast-based and doesn't track per-stream ownership.
+const maxChatStreamDuration = 5 * time.Minute
+
 // streamCtl tracks the lifecycle of a single streaming response.
 type streamCtl struct {
 	cancel  context.CancelFunc
 	started chan struct{}
-	buf     []ai.Chunk
-	mu      sync.Mutex
-	live    bool
+	// startOnce guards the close of `started` so that two concurrent
+	// /api/chat/begin calls for the same streamID (e.g. a retried request)
+	// can't both fall through the closed-channel check and double-close.
+	startOnce sync.Once
+	buf       []ai.Chunk
+	mu        sync.Mutex
+	live      bool
 }
 
 // aiOrDefault returns val if positive, otherwise def.
@@ -69,11 +81,11 @@ func NewChatService(
 	}
 }
 
-func (s *ChatService) StreamChatMessage(scope string, req models.ChatRequest) (streamID string, err error) {
+func (s *ChatService) StreamChatMessage(scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (streamID string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
 
 	streamID = uuid.NewString()
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(s.ctx, maxChatStreamDuration)
 	ctl := &streamCtl{cancel: cancel, started: make(chan struct{})}
 	s.activeStreams.Store(streamID, ctl)
 
@@ -82,41 +94,63 @@ func (s *ChatService) StreamChatMessage(scope string, req models.ChatRequest) (s
 			map[string]interface{}{"streamId": streamID, "type": eventType, "data": data})
 	}
 
+	// awaitStart blocks until the client calls /api/chat/begin or the stream's
+	// context is cancelled. Previously the goroutine did `<-ctl.started`
+	// unconditionally, so a stream that the client never began would tie up a
+	// goroutine until the 5-minute deadline. Returning false here means the
+	// stream was aborted before it could begin — the caller should clean up
+	// silently rather than emit further events.
+	awaitStart := func() bool {
+		select {
+		case <-ctl.started:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	metrics.ChatStreamStart()
 	go func() {
+		defer metrics.ChatStreamEnd()
 		defer s.activeStreams.Delete(streamID)
 		defer cancel()
 
 		provider, err := s.factory.For(scope, req.Provider)
 		if err != nil {
-			<-ctl.started
-			emit("error", map[string]interface{}{"error": err.Error(), "code": "provider_unavailable"})
+			if !awaitStart() {
+				return
+			}
+			// Distinguish "your stored key is unreadable after secret rotation"
+			// from generic "provider not configured" — the frontend can then
+			// show a "please re-enter your AI key" prompt rather than the
+			// usual "set up the provider" flow.
+			code := "provider_unavailable"
+			if errors.Is(err, storage.ErrSecretDecryptFailed) {
+				code = "provider_key_unreadable"
+			}
+			emit("error", map[string]interface{}{"error": err.Error(), "code": code})
 			return
 		}
 
 		var findings []models.Finding
-		report := s.analysis.LastReport()
 		if report != nil {
 			findings = report.Findings
 		}
-		selectedBlock := s.flow.FindBlockByID(req.ContextBlockID)
-
-		docSnapshot := s.flow.CurrentDoc()
+		selectedBlock := s.flow.FindBlockByID(doc, req.ContextBlockID)
 
 		var rawSources map[string]string
-		if docSnapshot != nil {
+		if doc != nil {
 			var filesToRead []string
 			// Add explicitly selected files
 			if len(req.SelectedSourceFiles) > 0 {
 				filesToRead = append(filesToRead, req.SelectedSourceFiles...)
 			}
-			// Add any other files in the flow that the AI might need (previous logic)
-			if len(req.SelectedSourceFiles) == 0 && len(req.ContextBlockID) > 0 {
-				// Fallback logic
+			if len(filesToRead) > 0 {
+				rawSources, _ = s.flow.ReadSourceFiles(doc, filesToRead)
 			}
-			rawSources, _ = s.flow.ReadSourceFiles(filesToRead)
 		}
 
-		varEvents := buildVariableEvents(docSnapshot, selectedBlock)
+		varEvents := buildVariableEvents(doc, selectedBlock)
 		systemPromptSuffix := ""
 		if s.settings != nil {
 			systemPromptSuffix = s.settings.Get().AI.SystemPromptSuffix
@@ -124,9 +158,9 @@ func (s *ChatService) StreamChatMessage(scope string, req models.ChatRequest) (s
 
 		modelLimit := ai.ModelContextLimit(provider, req.Model)
 		sys, ctxText := ai.BuildContext(ai.ContextRequest{
-			Flow:               docSnapshot,
+			Flow:               doc,
 			SelectedBlock:      selectedBlock,
-			SelectedSubflow:    s.flow.FindSubflowForBlock(req.ContextBlockID),
+			SelectedSubflow:    s.flow.FindSubflowForBlock(doc, req.ContextBlockID),
 			Findings:           findings,
 			RawSourceFiles:     rawSources,
 			VariableEvents:     varEvents,
@@ -143,7 +177,9 @@ func (s *ChatService) StreamChatMessage(scope string, req models.ChatRequest) (s
 			Role: "user", Content: ctxText + "\n\n---\n\n" + req.UserMessage,
 		})
 
-		<-ctl.started
+		if !awaitStart() {
+			return
+		}
 		ctl.mu.Lock()
 		for _, c := range ctl.buf {
 			emit("chunk", map[string]interface{}{"text": c.Text})
@@ -192,11 +228,7 @@ func (s *ChatService) StreamChatMessage(scope string, req models.ChatRequest) (s
 func (s *ChatService) BeginStream(streamID string) {
 	if v, ok := s.activeStreams.Load(streamID); ok {
 		if ctl, ok := v.(*streamCtl); ok {
-			select {
-			case <-ctl.started:
-			default:
-				close(ctl.started)
-			}
+			ctl.startOnce.Do(func() { close(ctl.started) })
 		}
 	}
 }
@@ -209,12 +241,10 @@ func (s *ChatService) CancelStream(streamID string) {
 	}
 }
 
-func (s *ChatService) GetConversation(flowID string, blockId string) (conv *models.ConversationFile, err error) {
+func (s *ChatService) GetConversation(doc *models.FlowDocument, blockId string) (conv *models.ConversationFile, err error) {
 	defer logger.Guard("App.GetConversation", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return &models.ConversationFile{Messages: []models.ChatMessage{}}, nil
 	}
 
@@ -223,15 +253,13 @@ func (s *ChatService) GetConversation(flowID string, blockId string) (conv *mode
 		scope = "flow"
 	}
 
-	return ai.LoadConversation(s.configDir, curDoc.FilePath, scope)
+	return ai.LoadConversation(s.configDir, doc.FilePath, scope)
 }
 
-func (s *ChatService) SaveConversation(flowID string, blockId string, messages []models.ChatMessage) (err error) {
+func (s *ChatService) SaveConversation(doc *models.FlowDocument, blockId string, messages []models.ChatMessage) (err error) {
 	defer logger.Guard("App.SaveConversation", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return fmt.Errorf("no flow loaded")
 	}
 
@@ -240,15 +268,13 @@ func (s *ChatService) SaveConversation(flowID string, blockId string, messages [
 		scope = "flow"
 	}
 
-	return ai.SaveConversation(s.configDir, curDoc.FilePath, scope, messages)
+	return ai.SaveConversation(s.configDir, doc.FilePath, scope, messages)
 }
 
-func (s *ChatService) ClearConversation(flowID string, blockId string) (err error) {
+func (s *ChatService) ClearConversation(doc *models.FlowDocument, blockId string) (err error) {
 	defer logger.Guard("App.ClearConversation", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return nil
 	}
 
@@ -257,15 +283,13 @@ func (s *ChatService) ClearConversation(flowID string, blockId string) (err erro
 		scope = "flow"
 	}
 
-	return ai.SaveConversation(s.configDir, curDoc.FilePath, scope, []models.ChatMessage{})
+	return ai.SaveConversation(s.configDir, doc.FilePath, scope, []models.ChatMessage{})
 }
 
-func (s *ChatService) ExportConversation(flowID string, blockId string, path string) (err error) {
+func (s *ChatService) ExportConversation(doc *models.FlowDocument, blockId string, path string) (err error) {
 	defer logger.Guard("App.ExportConversation", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return fmt.Errorf("no flow loaded")
 	}
 
@@ -274,7 +298,7 @@ func (s *ChatService) ExportConversation(flowID string, blockId string, path str
 		scope = "flow"
 	}
 
-	conv, loadErr := ai.LoadConversation(s.configDir, curDoc.FilePath, scope)
+	conv, loadErr := ai.LoadConversation(s.configDir, doc.FilePath, scope)
 	if loadErr != nil {
 		return fmt.Errorf("load conversation: %w", loadErr)
 	}
@@ -283,7 +307,7 @@ func (s *ChatService) ExportConversation(flowID string, blockId string, path str
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Chat Export — %s\n\n", curDoc.Name)
+	fmt.Fprintf(&b, "# Chat Export — %s\n\n", doc.Name)
 	if blockId != "" {
 		fmt.Fprintf(&b, "**Block:** %s\n\n", blockId)
 	}
@@ -311,7 +335,7 @@ func (s *ChatService) GetDemoRemaining() (remaining int, err error) {
 	return s.demoLimiter.Remaining()
 }
 
-func (s *ChatService) PreviewContext(scope string, req models.ChatRequest) (result *models.ContextPreview, err error) {
+func (s *ChatService) PreviewContext(scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (result *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
 
 	provider, provErr := s.factory.For(scope, req.Provider)
@@ -320,30 +344,27 @@ func (s *ChatService) PreviewContext(scope string, req models.ChatRequest) (resu
 	}
 
 	var findings []models.Finding
-	report := s.analysis.LastReport()
 	if report != nil {
 		findings = report.Findings
 	}
 
-	selectedBlock := s.flow.FindBlockByID(req.ContextBlockID)
-
-	docSnapshot := s.flow.CurrentDoc()
+	selectedBlock := s.flow.FindBlockByID(doc, req.ContextBlockID)
 
 	var rawSources map[string]string
-	if docSnapshot != nil && len(req.SelectedSourceFiles) > 0 {
-		rawSources, _ = s.flow.ReadSourceFiles(req.SelectedSourceFiles)
+	if doc != nil && len(req.SelectedSourceFiles) > 0 {
+		rawSources, _ = s.flow.ReadSourceFiles(doc, req.SelectedSourceFiles)
 	}
 
-	varEvents := buildVariableEvents(docSnapshot, selectedBlock)
+	varEvents := buildVariableEvents(doc, selectedBlock)
 	systemPromptSuffix := ""
 	if s.settings != nil {
 		systemPromptSuffix = s.settings.Get().AI.SystemPromptSuffix
 	}
 
 	sys, ctxText := ai.BuildContext(ai.ContextRequest{
-		Flow:               docSnapshot,
+		Flow:               doc,
 		SelectedBlock:      selectedBlock,
-		SelectedSubflow:    s.flow.FindSubflowForBlock(req.ContextBlockID),
+		SelectedSubflow:    s.flow.FindSubflowForBlock(doc, req.ContextBlockID),
 		Findings:           findings,
 		RawSourceFiles:     rawSources,
 		VariableEvents:     varEvents,

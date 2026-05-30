@@ -25,15 +25,17 @@ var (
 )
 
 type App struct {
-	ctx       context.Context
-	notifier  service.Notifier
-	storage   storageif.StorageBackend // nil in local mode; postgres backend in cloud mode
-	settings  *storage.SettingsStore
-	flow      *service.FlowService
-	analysis  *service.AnalysisService
-	chat      *service.ChatService
-	providers *service.ProviderService
-	export    *service.ExportService
+	ctx        context.Context
+	notifier   service.Notifier
+	storage    storageif.StorageBackend // nil in local mode; postgres backend in cloud mode
+	settings   *storage.SettingsStore
+	flow       *service.FlowService
+	analysis   *service.AnalysisService
+	chat       *service.ChatService
+	providers  *service.ProviderService
+	export     *service.ExportService
+	currentDoc *models.FlowDocument   // in-memory current document for local/desktop mode
+	lastReport *models.AnalysisReport // last analysis report for local/desktop mode
 }
 
 // NewApp creates the application manager. Pass a non-nil storageBackend to
@@ -42,7 +44,7 @@ func NewApp(storageBackend storageif.StorageBackend) *App {
 	return &App{storage: storageBackend}
 }
 
-func (a *App) Init(ctx context.Context, notifier service.Notifier) {
+func (a *App) Init(ctx context.Context, notifier service.Notifier, logCfg models.LogConfig, mode string) {
 	a.ctx = ctx
 	a.notifier = notifier
 
@@ -52,8 +54,12 @@ func (a *App) Init(ctx context.Context, notifier service.Notifier) {
 		return
 	}
 
-	if err := logger.Init(configDir, false); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
+	// In cloud mode, the logger is already initialized by main.go (which calls logger.InitWith).
+	// For local mode we keep the auto-init behavior.
+	if mode != "cloud" {
+		if err := logger.Init(configDir, false); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
+		}
 	}
 
 	settings, err := storage.NewSettingsStore()
@@ -69,12 +75,12 @@ func (a *App) Init(ctx context.Context, notifier service.Notifier) {
 	demo := ai.NewDemoLimiter(configDir)
 
 	a.flow = service.NewFlowService(ctx, notifier, settings)
-	a.analysis = service.NewAnalysisService(ctx, notifier, a.flow, settings)
+	a.analysis = service.NewAnalysisService(ctx, notifier, settings)
 	a.export = service.NewExportService(ctx, notifier, a.flow, a.analysis)
 	a.providers = service.NewProviderService(ctx, auth, copilotAuth, factory)
 	a.chat = service.NewChatService(ctx, notifier, configDir, a.flow, a.analysis, settings, factory, demo)
 
-	logger.Info("app initialized")
+	logger.Info("app initialized", "mode", mode)
 }
 
 // StorageBackend returns the active storage backend (nil in local mode).
@@ -140,10 +146,7 @@ func (a *App) LoadParsedFlow(flowID string) (doc *models.FlowDocument, err error
 
 // CurrentParsedDoc returns the in-memory parsed document (local/desktop mode).
 func (a *App) CurrentParsedDoc() *models.FlowDocument {
-	if a.flow == nil {
-		return nil
-	}
-	return a.flow.CurrentDoc()
+	return a.currentDoc
 }
 
 // CreateLibraryFlow persists a new flow owned by ownerID.
@@ -242,17 +245,29 @@ func (a *App) DeleteApiKey(scope, provider string) (err error) {
 
 func (a *App) LoadFlowFromPath(path string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFromPath", &err)
-	return a.flow.LoadFlowFromPath(path)
+	doc, err = a.flow.LoadFlowFromPath(path)
+	if err == nil {
+		a.currentDoc = doc
+	}
+	return doc, err
 }
 
 func (a *App) LoadFlowFolder(path string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFolder", &err)
-	return a.flow.LoadFlowFolder(path)
+	doc, err = a.flow.LoadFlowFolder(path)
+	if err == nil {
+		a.currentDoc = doc
+	}
+	return doc, err
 }
 
 func (a *App) LoadFlowFiles(files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFiles", &err)
-	return a.flow.LoadFlowFiles(files, rootName)
+	doc, err = a.flow.LoadFlowFiles(files, rootName)
+	if err == nil {
+		a.currentDoc = doc
+	}
+	return doc, err
 }
 
 func (a *App) RecentFiles() (files []models.RecentFile, err error) {
@@ -277,17 +292,43 @@ func (a *App) RevealInFileManager(path string) (err error) {
 
 func (a *App) SearchFlow(id string, q models.SearchQuery) (r *models.SearchResults, err error) {
 	defer logger.Guard("App.SearchFlow", &err)
-	return a.flow.SearchFlow(id, q)
+	doc, err := a.resolveDoc(id)
+	if err != nil {
+		return nil, err
+	}
+	return a.flow.SearchFlow(doc, q)
 }
 
-func (a *App) GetSourceFiles() (result []models.SourceFileInfo, err error) {
+func (a *App) GetSourceFiles(id string) (result []models.SourceFileInfo, err error) {
 	defer logger.Guard("App.GetSourceFiles", &err)
-	return a.flow.GetSourceFiles()
+	if a.currentDoc == nil {
+		return nil, nil
+	}
+	return a.flow.GetSourceFiles(a.currentDoc)
 }
 
-func (a *App) ReadSourceFiles(names []string) (result map[string]string, err error) {
+func (a *App) ReadSourceFiles(id string, names []string) (result map[string]string, err error) {
 	defer logger.Guard("App.ReadSourceFiles", &err)
-	return a.flow.ReadSourceFiles(names)
+	if a.currentDoc == nil {
+		return nil, nil
+	}
+	return a.flow.ReadSourceFiles(a.currentDoc, names)
+}
+
+// resolveDoc is a helper to get a parsed document from either memory (local) or storage (cloud).
+func (a *App) resolveDoc(flowID string) (*models.FlowDocument, error) {
+	if a.storage == nil {
+		if a.currentDoc != nil && a.currentDoc.ID == flowID {
+			return a.currentDoc, nil
+		}
+		// Fallback for local mode: if we have a current doc, return it anyway?
+		// Actually, in local mode there's only one.
+		if a.currentDoc != nil {
+			return a.currentDoc, nil
+		}
+		return nil, fmt.Errorf("no flow loaded")
+	}
+	return a.LoadParsedFlow(flowID)
 }
 
 func (a *App) OnFileOpenFromSystem(path string) {
@@ -354,7 +395,14 @@ func (a *App) GetCopilotUser() (user *ai.GitHubUser, err error) {
 
 func (a *App) StreamChatMessage(scope string, req models.ChatRequest) (id string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
-	return a.chat.StreamChatMessage(scope, req)
+	doc, err := a.resolveDoc(req.FlowID)
+	if err != nil {
+		return "", err
+	}
+	// For now we don't persist/cache reports in App. The chat service can
+	// handle nil reports (it just won't have findings in context).
+	// In a real production app, we'd load the last successful report from DB.
+	return a.chat.StreamChatMessage(scope, doc, nil, req)
 }
 
 func (a *App) BeginStream(id string) {
@@ -371,22 +419,38 @@ func (a *App) CancelStream(id string) {
 
 func (a *App) GetConversation(flowID, blockId string) (conv *models.ConversationFile, err error) {
 	defer logger.Guard("App.GetConversation", &err)
-	return a.chat.GetConversation(flowID, blockId)
+	doc, err := a.resolveDoc(flowID)
+	if err != nil {
+		return nil, err
+	}
+	return a.chat.GetConversation(doc, blockId)
 }
 
 func (a *App) SaveConversation(flowID, blockId string, msgs []models.ChatMessage) (err error) {
 	defer logger.Guard("App.SaveConversation", &err)
-	return a.chat.SaveConversation(flowID, blockId, msgs)
+	doc, err := a.resolveDoc(flowID)
+	if err != nil {
+		return err
+	}
+	return a.chat.SaveConversation(doc, blockId, msgs)
 }
 
 func (a *App) ClearConversation(flowID, blockId string) (err error) {
 	defer logger.Guard("App.ClearConversation", &err)
-	return a.chat.ClearConversation(flowID, blockId)
+	doc, err := a.resolveDoc(flowID)
+	if err != nil {
+		return err
+	}
+	return a.chat.ClearConversation(doc, blockId)
 }
 
 func (a *App) ExportConversation(flowID, blockId string, path string) (err error) {
 	defer logger.Guard("App.ExportConversation", &err)
-	return a.chat.ExportConversation(flowID, blockId, path)
+	doc, err := a.resolveDoc(flowID)
+	if err != nil {
+		return err
+	}
+	return a.chat.ExportConversation(doc, blockId, path)
 }
 
 func (a *App) GetDemoRemaining() (remaining int, err error) {
@@ -396,7 +460,11 @@ func (a *App) GetDemoRemaining() (remaining int, err error) {
 
 func (a *App) PreviewContext(scope string, req models.ChatRequest) (result *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
-	return a.chat.PreviewContext(scope, req)
+	doc, err := a.resolveDoc(req.FlowID)
+	if err != nil {
+		return nil, err
+	}
+	return a.chat.PreviewContext(scope, doc, nil, req)
 }
 
 func (a *App) GetSuggestedPrompts(hasBlock bool, hasFindings bool) (prompts []string, err error) {
@@ -408,7 +476,11 @@ func (a *App) GetSuggestedPrompts(hasBlock bool, hasFindings bool) (prompts []st
 
 func (a *App) AnalyzeFlow(doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
-	return a.analysis.AnalyzeFlow(doc)
+	report, err = a.analysis.AnalyzeFlow(doc)
+	if err == nil && a.storage == nil {
+		a.lastReport = report
+	}
+	return report, err
 }
 
 func (a *App) GetVariableLineage(doc *models.FlowDocument, v string) (history *models.VariableHistory, err error) {
@@ -442,15 +514,24 @@ func (a *App) UpdateRuleConfig(id string, config models.RuleConfig) (err error) 
 
 func (a *App) CompareCurrentWith(path string) (diff *models.FlowDiff, err error) {
 	defer logger.Guard("App.CompareCurrentWith", &err)
-	return a.export.CompareCurrentWith(path)
+	if a.currentDoc == nil {
+		return nil, fmt.Errorf("no current flow loaded")
+	}
+	return a.export.CompareCurrentWith(a.currentDoc, path)
 }
 
 func (a *App) ExportMarkdown(path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportMarkdown", &err)
-	return a.export.ExportMarkdown(path)
+	if a.currentDoc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+	return a.export.ExportMarkdown(a.currentDoc, a.lastReport, path)
 }
 
 func (a *App) ExportPDF(path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportPDF", &err)
-	return a.export.ExportPDF(path)
+	if a.currentDoc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+	return a.export.ExportPDF(a.currentDoc, a.lastReport, path)
 }

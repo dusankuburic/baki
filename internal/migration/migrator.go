@@ -1,5 +1,27 @@
 // Package migration handles data migration from the local filesystem backend
 // to a cloud-backed (PostgreSQL) StorageBackend.
+//
+// # Failure model
+//
+// Migration is **best-effort and idempotent**, not transactional:
+//
+//   - Per-flow failures (validation errors, dst write errors) are collected
+//     into Result.Errors. They never abort the run; the migrator continues
+//     with the next flow so a single bad row doesn't strand thousands of
+//     good ones.
+//   - Result.FlowsMigrated / FlowsSkipped / FlowsFailed give the operator
+//     a precise tally. If Errors is non-empty the operator should inspect
+//     them, address the root cause, and re-run.
+//   - Re-runs are safe: migrateOneFlow skips any flow already present in
+//     the destination (matched by ID). A partially-completed migration is
+//     completed by simply running Migrate again.
+//   - A non-nil error from Migrate signals a *fatal* infrastructure
+//     failure (destination unreachable, list query failed) — not per-flow
+//     issues. The Result is still returned and may contain partial progress.
+//
+// There is intentionally no rollback. Reverting a partial cloud migration
+// would require knowing which flows the operator already touched
+// out-of-band and would conflict with the idempotent-rerun model.
 package migration
 
 import (

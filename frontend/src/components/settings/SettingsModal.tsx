@@ -1,6 +1,7 @@
 import {useState} from 'react'
 import clsx from 'clsx'
 import Modal from '@/components/shared/Modal'
+import {isTauri} from '@/platform/guards'
 import {
   GeneralPanel,
   ProvidersPanel,
@@ -8,12 +9,17 @@ import {
   AppearancePanel,
   ParserPanel,
   RulesPanel,
+  OrganizationsPanel,
   ShortcutsPanel,
   PrivacyPanel,
   AboutPanel
 } from './index'
 
-type SettingsSection = 'general' | 'parser' | 'accounts' | 'behavior' | 'appearance' | 'analysis' | 'shortcuts' | 'privacy' | 'about'
+type SettingsSection = 'general' | 'parser' | 'accounts' | 'behavior' | 'appearance' | 'analysis' | 'orgs' | 'shortcuts' | 'privacy' | 'about'
+
+// Organisations are a cloud-mode (multi-user) concept; the desktop app is
+// single-user and has no notion of orgs, so hide that entry there.
+const isCloud = !isTauri()
 
 const sections: {id: SettingsSection; label: string}[] = [
   {id: 'general', label: 'General'},
@@ -22,6 +28,7 @@ const sections: {id: SettingsSection; label: string}[] = [
   {id: 'behavior', label: 'AI Behavior'},
   {id: 'appearance', label: 'Appearance'},
   {id: 'analysis', label: 'Analysis'},
+  ...(isCloud ? [{id: 'orgs' as const, label: 'Organizations'}] : []),
   {id: 'shortcuts', label: 'Shortcuts'},
   {id: 'privacy', label: 'Privacy'},
   {id: 'about', label: 'About'},
@@ -61,6 +68,7 @@ export default function SettingsModal({isOpen, onClose}: Props) {
           {activeSection === 'behavior' && <AIBehaviorPanel />}
           {activeSection === 'appearance' && <AppearancePanel />}
           {activeSection === 'analysis' && <RulesPanel />}
+          {activeSection === 'orgs' && isCloud && <OrganizationsPanel />}
           {activeSection === 'shortcuts' && <ShortcutsPanel />}
           {activeSection === 'privacy' && <PrivacyPanel />}
           {activeSection === 'about' && <AboutPanel />}

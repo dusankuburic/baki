@@ -12,6 +12,10 @@ import (
 // ErrNotFound is returned by backend methods when the requested record does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrEmailExists is returned by CreateUser when a user with the same email
+// already exists. The caller should map this to HTTP 409.
+var ErrEmailExists = errors.New("email already in use")
+
 // User represents a system user in the storage backend.
 type User struct {
 	ID        string    `json:"id"`
@@ -41,6 +45,14 @@ type StorageBackend interface {
 
 	// User operations
 	SaveUser(ctx context.Context, user *User) error
+	// CreateUser atomically inserts a new user. If no users exist at the time
+	// of the insert, the user is promoted to RoleAdmin regardless of the
+	// caller-supplied role, so every instance has an initial administrator.
+	// The count + insert happen in a single transaction (or under a mutex for
+	// the filesystem backend) so two concurrent registrations cannot both
+	// become admin. On successful return, user.Role reflects the role actually
+	// persisted. Returns ErrEmailExists if the email is already taken.
+	CreateUser(ctx context.Context, user *User) error
 	LoadUserByEmail(ctx context.Context, email string) (*User, error)
 	LoadUserByID(ctx context.Context, id string) (*User, error)
 	CountUsers(ctx context.Context) (int, error)
@@ -131,7 +143,6 @@ type AppSettings struct {
 	Layout     LayoutSettings
 	AI        AISettings
 	Parser    ParserSettings
-	Telemetry TelemetrySettings
 }
 
 // ChatMessage represents a chat message
@@ -169,10 +180,6 @@ type AISettings struct {
 
 type ParserSettings struct {
 	MaxFileSizeMB int
-}
-
-type TelemetrySettings struct {
-	Enabled bool
 }
 
 type DemoModeSettings struct {

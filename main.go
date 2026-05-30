@@ -13,13 +13,22 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/manager"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/telemetry"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+)
+
+var (
+	Version   = "0.1.0"
+	BuildDate = ""
+	GitCommit = ""
 )
 
 // @title Pad Analyzer API
@@ -30,21 +39,53 @@ import (
 func main() {
 	cfg := loadConfig()
 
+	// Initialize Logger
+	logger.InitWith(logger.Options{
+		Level:      cfg.Log.Level,
+		StdoutOnly: cfg.Mode == config.ModeCloud,
+	})
+
+	// Resolve sensitive configuration from Azure Key Vault if configured.
+	// This happens before storage/auth init so we have the resolved secrets.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := config.ResolveAzureSecrets(ctx, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve azure secrets: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize OpenTelemetry
+	otelShutdown, otelErr := telemetry.Init(ctx, "baki-backend", Version)
+	if otelErr != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", otelErr)
+	} else {
+		defer otelShutdown()
+	}
+
+	// Re-validate config after potential Key Vault resolution.
+	if err := config.Validate(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid configuration: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Initialize storage backend: PostgreSQL for cloud/database mode, nil for local.
 	var backend storageif.StorageBackend
+	var pgBackend *storagedb.PostgresStorageBackend
 	if cfg.Storage.Backend == config.StorageDatabase {
 		var err error
-		backend, err = storagedb.New(storagedb.DefaultConfig(cfg.Storage.DatabaseURL))
+		pgBackend, err = storagedb.New(storagedb.DefaultConfig(cfg.Storage.DatabaseURL))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to connect to database: %v\n", err)
 			os.Exit(1)
 		}
+		backend = pgBackend
 		logger.Info("postgres storage backend ready")
 
 		// Cloud mode has no OS keychain, so provider API keys are persisted in
 		// Postgres, encrypted at rest with a key derived from the auth secret.
-		if pg, ok := backend.(*storagedb.PostgresStorageBackend); ok && cfg.Auth.Secret != "" {
-			ks, err := pg.NewEncryptedKeyStore([]byte(cfg.Auth.Secret))
+		if cfg.Auth.Secret != "" {
+			ks, err := pgBackend.NewEncryptedKeyStore([]byte(cfg.Auth.Secret))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to init encrypted keystore: %v\n", err)
 				os.Exit(1)
@@ -68,21 +109,29 @@ func main() {
 	router := api.NewRouter(app, token, cfg.Auth.Enabled, cfg.Server.AllowedOrigins, cfg.Server.StaticDir)
 
 	// Init the App with the router as notifier
-	ctx := context.Background()
-	app.Init(ctx, router)
+	app.Init(ctx, router, cfg.Log, string(cfg.Mode))
 
-	// Wrap router with middleware.
-	//
-	// Rate limiting protects the public cloud deployment. In local/desktop mode the
-	// server is loopback-only and single-user, so it serves no security purpose and
-	// would only throttle the app's own startup burst (many provider/key checks fire
-	// at once, doubled by React StrictMode in dev) — surfacing as 429s that, because
-	// the limiter responds before the CORS layer, look like CORS failures in the
-	// browser. So only rate-limit in cloud mode.
+	// Background metrics collection (Prometheus)
+	stopMetrics := make(chan struct{})
+	if pgBackend != nil {
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-stopMetrics:
+					return
+				case <-t.C:
+					metrics.ObservePostgresPool(pgBackend.DB())
+				}
+			}
+		}()
+	}
+
 	var routerWithLimits http.Handler = router
 	if cfg.Mode == config.ModeCloud {
-		generalRl := middleware.NewRateLimiter(60, 20, cfg.Server.TrustedProxies)   // 60 req/s, burst of 20
-		authRl := middleware.NewRateLimiter(5.0/60.0, 5, cfg.Server.TrustedProxies) // 5 req/min, burst of 5
+		generalRl := middleware.NewRateLimiter(60, 20, cfg.Server.TrustedProxies).SetGroup("general")   // 60 req/s, burst of 20
+		authRl := middleware.NewRateLimiter(5.0/60.0, 5, cfg.Server.TrustedProxies).SetGroup("auth") // 5 req/min, burst of 5
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/refresh" || r.URL.Path == "/api/auth/register" {
@@ -93,7 +142,11 @@ func main() {
 		})
 	}
 
-	handler := middleware.Recovery(routerWithLimits)
+	// Middleware stack (outermost first): OTel → Recovery → AccessLog → Metrics → rate-limit → router.
+	handler := otelhttp.NewHandler(
+		middleware.Recovery(middleware.AccessLog(middleware.Metrics(routerWithLimits))),
+		"http.server",
+	)
 
 	// Bind the listener
 	var listener net.Listener
@@ -123,25 +176,50 @@ func main() {
 		fmt.Println(string(infoJSON))
 	}
 
-	server := &http.Server{Handler: handler}
+	// HTTP server hardening:
+	//   * ReadHeaderTimeout bounds slowloris attacks (clients drip-feeding
+	//     request headers to exhaust connections).
+	//   * IdleTimeout allows the OS to reap dead keep-alive connections.
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
-	// Graceful shutdown on SIGINT / SIGTERM
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-stop
+		<-ctx.Done()
 		logger.Info("shutting down")
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		close(stopMetrics)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(ctx)
+		_ = server.Shutdown(shutdownCtx)
 		if backend != nil {
 			_ = backend.Close()
 		}
 	}()
 
-	logger.Info("backend server starting", "addr", listener.Addr().String(), "mode", cfg.Mode)
-	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-		logger.Error("server failed", "error", err)
+	// Pick the listen mode: HTTPS directly (TLSCert/TLSKey set) or plain
+	// HTTP via the existing listener. Validation already refused the unsafe
+	// combination of cloud + auth + no TLS + no BehindProxy.
+	useTLS := cfg.Server.TLSCert != "" && cfg.Server.TLSKey != ""
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
+	logger.Info("backend server starting",
+		"addr", listener.Addr().String(),
+		"mode", cfg.Mode,
+		"scheme", scheme,
+		"behind_proxy", cfg.Server.BehindProxy,
+	)
+	var serveErr error
+	if useTLS {
+		serveErr = server.ServeTLS(listener, cfg.Server.TLSCert, cfg.Server.TLSKey)
+	} else {
+		serveErr = server.Serve(listener)
+	}
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		logger.Error("server failed", "error", serveErr)
 		os.Exit(1)
 	}
 }

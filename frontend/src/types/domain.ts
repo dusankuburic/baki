@@ -258,7 +258,6 @@ export interface AppSettings {
   ai: AISettings;
   parser: ParserSettings;
   analysis: AnalysisRulesSettings;
-  telemetry: TelemetrySettings;
 }
 
 export interface GeneralSettings {
@@ -327,12 +326,6 @@ export interface RuleConfig {
   enabled: boolean;
   severity: Severity;
   options?: Record<string, unknown>;
-}
-
-export interface TelemetrySettings {
-  enabled: boolean;
-  anonymousID: string;
-  lastSubmitted: string;
 }
 
 export interface Rule {

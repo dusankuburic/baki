@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -58,6 +59,41 @@ func (rt *Router) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
 	}
+
+	// In cloud mode, the in-memory doc is not used for subsequent requests.
+	// We MUST persist the uploaded flow to the database so the frontend
+	// can query its graph, lineage, and chat history using its ID.
+	if rt.jwtEnabled {
+		userID := rt.localUserID
+		if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+			userID = claims.UserID
+		}
+
+		content, err := json.Marshal(doc)
+		if err != nil {
+			rt.sendError(w, fmt.Errorf("failed to marshal uploaded flow: %w", err), http.StatusInternalServerError)
+			return
+		}
+
+		libDoc := storageif.FlowDocument{
+			ID:      doc.ID,
+			Name:    doc.Name,
+			Content: content,
+			OwnerID: userID,
+			Metadata: storageif.FlowMetadata{
+				BlockCount:   doc.Metadata.BlockCount,
+				SubflowCount: doc.Metadata.SubflowCount,
+			},
+		}
+
+		if backend := rt.app.StorageBackend(); backend != nil {
+			if err := backend.SaveFlow(r.Context(), &libDoc); err != nil {
+				rt.sendError(w, fmt.Errorf("failed to save uploaded flow: %w", err), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
 	rt.sendJSON(w, doc)
 }
 
@@ -253,13 +289,13 @@ func (rt *Router) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 // @Router /api/flow/source-files [get]
 func (rt *Router) handleGetSourceFiles(w http.ResponseWriter, r *http.Request) {
 	// Source files are local filesystem paths alongside the PAD file. This feature
-	// is only meaningful in desktop/local mode. Guard explicitly so a future refactor
-	// that sets currentDoc in cloud mode cannot inadvertently expose server file reads.
+	// is only meaningful in desktop/local mode.
 	if rt.jwtEnabled {
-		rt.sendError(w, fmt.Errorf("source file reading is not available in cloud mode"), http.StatusForbidden)
+		logger.Debug("source file reading requested in cloud mode; returning empty list")
+		rt.sendJSON(w, []string{})
 		return
 	}
-	files, err := rt.app.GetSourceFiles()
+	files, err := rt.app.GetSourceFiles("")
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
@@ -289,7 +325,7 @@ func (rt *Router) handleReadSourceFiles(w http.ResponseWriter, r *http.Request) 
 		rt.sendError(w, err, http.StatusBadRequest)
 		return
 	}
-	res, err := rt.app.ReadSourceFiles(req.Files)
+	res, err := rt.app.ReadSourceFiles("", req.Files)
 	if err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return

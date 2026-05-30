@@ -7,14 +7,35 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq" // register postgres driver
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/uptrace/opentelemetry-go-extra/otelsql"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+// pgErrUniqueViolation is the SQLSTATE for a unique constraint violation.
+const pgErrUniqueViolation = "23505"
+
+// pgErrSerializationFailure is the SQLSTATE returned to a transaction that
+// could not be serialized; the caller should retry.
+const pgErrSerializationFailure = "40001"
+
+// isPgErrCode reports whether err is a *pgconn.PgError with the given SQLSTATE.
+func isPgErrCode(err error, code string) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == code
+	}
+	return false
+}
 
 // PostgresStorageBackend implements interfaces.StorageBackend using PostgreSQL.
 type PostgresStorageBackend struct {
@@ -41,9 +62,42 @@ func DefaultConfig(dsn string) Config {
 
 // New opens a PostgreSQL connection, configures the pool, and runs migrations.
 func New(cfg Config) (*PostgresStorageBackend, error) {
-	db, err := sql.Open("postgres", cfg.DSN)
+	// Parse the DSN using pgx
+	pgxCfg, err := pgx.ParseConfig(cfg.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres: %w", err)
+		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+
+	// Phase 2: Integrate Azure Managed Identity if password is "managed-identity"
+	// We use RegisterConnConfig to allow the AzureConfigHook to provide the token.
+	connStr := stdlib.RegisterConnConfig(pgxCfg)
+
+	// stdlib.SetOption to pass our hook if we were using a more complex setup,
+	// but for now, the RegisterConnConfig + the hook logic in azure.go is sufficient
+	// if we call it correctly.
+	// Actually, stdlib doesn't have a direct "per-connection hook" for tokens
+	// in the same way pgxpool does, but we can call our hook once here to
+	// validate, or more reliably, we should use a custom dialer if we need
+	// refresh-per-connection.
+	//
+	// However, for Azure Container Apps, a new pod is started often enough,
+	// and tokens last 24h. But for true production, we want refresh.
+	//
+	if pgxCfg.Password == "managed-identity" {
+		if err := AzureConfigHook(context.Background(), pgxCfg); err != nil {
+			return nil, fmt.Errorf("azure: initial token fetch failed: %w", err)
+		}
+		// Re-register with the resolved token for the initial pool members
+		connStr = stdlib.RegisterConnConfig(pgxCfg)
+	}
+
+	// Phase 3: Instrument database/sql with OpenTelemetry
+	db, err := otelsql.Open("pgx", connStr,
+		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
+		otelsql.WithDBName(pgxCfg.Database),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open pgx with otel: %w", err)
 	}
 
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
@@ -67,6 +121,12 @@ func (b *PostgresStorageBackend) Ping(ctx context.Context) error {
 func (b *PostgresStorageBackend) Close() error {
 	return b.db.Close()
 }
+
+// DB exposes the underlying *sql.DB for callers that need pool-level
+// telemetry (e.g. the metrics package's ObservePostgresPool). Not part
+// of the StorageBackend interface — only the concrete Postgres backend
+// has a pool to observe.
+func (b *PostgresStorageBackend) DB() *sql.DB { return b.db }
 
 // SaveFlow upserts a flow document.
 func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
@@ -267,7 +327,10 @@ func (b *PostgresStorageBackend) SaveConversation(ctx context.Context, flowID, s
 	return err
 }
 
-// LoadConversation retrieves the conversation for a flow+scope.
+// LoadConversation retrieves the conversation for a flow+scope. Returns a
+// non-nil empty slice when no conversation exists yet — this matches the
+// filesystem backend's semantics so callers can use a single nil-safe check
+// across both backends. A `nil` return therefore always indicates an error.
 func (b *PostgresStorageBackend) LoadConversation(ctx context.Context, flowID, scope string) ([]interfaces.ChatMessage, error) {
 	var data []byte
 	err := b.db.QueryRowContext(ctx,
@@ -275,7 +338,7 @@ func (b *PostgresStorageBackend) LoadConversation(ctx context.Context, flowID, s
 		flowID, scope,
 	).Scan(&data)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return []interfaces.ChatMessage{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load conversation: %w", err)
@@ -283,6 +346,10 @@ func (b *PostgresStorageBackend) LoadConversation(ctx context.Context, flowID, s
 	var msgs []interfaces.ChatMessage
 	if err := json.Unmarshal(data, &msgs); err != nil {
 		return nil, fmt.Errorf("unmarshal messages: %w", err)
+	}
+	if msgs == nil {
+		// JSON "null" unmarshals to a nil slice; normalize to empty for parity.
+		msgs = []interfaces.ChatMessage{}
 	}
 	return msgs, nil
 }
@@ -307,8 +374,73 @@ func (b *PostgresStorageBackend) SaveUser(ctx context.Context, user *interfaces.
 		user.ID, user.Email, user.Password, string(user.Role), user.CreatedAt, user.UpdatedAt,
 	)
 	if err != nil {
+		if isPgErrCode(err, pgErrUniqueViolation) {
+			return interfaces.ErrEmailExists
+		}
 		return fmt.Errorf("upsert user: %w", err)
 	}
+	return nil
+}
+
+// CreateUser atomically inserts a new user. If the users table is empty at the
+// moment of insert, the user is promoted to RoleAdmin so the instance always
+// has an initial administrator. The count and the insert run in a single
+// SERIALIZABLE transaction; if the transaction loses a serialization race it
+// is retried a few times before giving up. Returns ErrEmailExists on a unique
+// email-constraint violation.
+func (b *PostgresStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
+	now := time.Now().UTC()
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	user.UpdatedAt = now
+
+	const maxRetries = 5
+	for range maxRetries {
+		err := b.tryCreateUser(ctx, user)
+		if err == nil {
+			return nil
+		}
+		if isPgErrCode(err, pgErrSerializationFailure) {
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("create user: serialization conflict after %d retries", maxRetries)
+}
+
+func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interfaces.User) error {
+	tx, err := b.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		return fmt.Errorf("count users: %w", err)
+	}
+	role := user.Role
+	if count == 0 {
+		role = auth.RoleAdmin
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO users (id, email, password, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		user.ID, user.Email, user.Password, string(role), user.CreatedAt, user.UpdatedAt,
+	); err != nil {
+		if isPgErrCode(err, pgErrUniqueViolation) {
+			return interfaces.ErrEmailExists
+		}
+		return fmt.Errorf("insert user: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		// Commit may surface the serialization failure for a SERIALIZABLE tx.
+		return err
+	}
+	user.Role = role
 	return nil
 }
 
@@ -512,7 +644,10 @@ func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID s
 	}
 	defer rows.Close()
 
-	var collabs []*interfaces.Collaborator
+	// Contract: empty result is a non-nil empty slice (matches filesystem
+	// backend), so callers can use `len(collabs) == 0` without backend-
+	// specific nil checks. A nil return is reserved for errors.
+	collabs := []*interfaces.Collaborator{}
 	for rows.Next() {
 		var c interfaces.Collaborator
 		if err := rows.Scan(&c.UserID, &c.Email, &c.Permission, &c.GrantedAt); err != nil {

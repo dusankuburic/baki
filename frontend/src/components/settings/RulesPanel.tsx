@@ -2,13 +2,17 @@ import {useEffect, useState} from 'react'
 import {analysisApi} from '@/api'
 import type {Rule, RuleConfig, Severity} from '@/types/domain'
 import {Switch} from '@/components/shared'
-import {Shield, AlertCircle, AlertTriangle, Info} from 'lucide-react'
+import {Shield, AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
+import {useSettingsStore} from '@/stores/settingsStore'
 import clsx from 'clsx'
 
 export default function RulesPanel() {
   const [rules, setRules] = useState<Rule[]>([])
   const [loading, setLoading] = useState(true)
+  const settings = useSettingsStore(s => s.settings)
+  const updateSettings = useSettingsStore(s => s.updateSettings)
+  const autoAnalyzeOnOpen = settings.analysis.autoAnalyzeOnOpen
 
   useEffect(() => {
     analysisApi.getRules().then(res => {
@@ -61,6 +65,22 @@ export default function RulesPanel() {
         <p className="text-sm text-text-secondary mt-1">
           Configure which static analysis rules are active and their reporting severity.
         </p>
+      </div>
+
+      <div className="p-4 flex items-center justify-between border border-border-default rounded-xl bg-surface-1">
+        <div className="flex items-start gap-3">
+          <Zap size={18} className="text-brand-500 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-bold text-text-primary">Auto-analyze on flow open</h3>
+            <p className="text-xs text-text-tertiary mt-1">
+              Run all enabled rules automatically as soon as a flow finishes loading.
+            </p>
+          </div>
+        </div>
+        <Switch
+          checked={autoAnalyzeOnOpen}
+          onChange={(v) => updateSettings({analysis: {...settings.analysis, autoAnalyzeOnOpen: v}})}
+        />
       </div>
 
       <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">

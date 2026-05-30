@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -70,6 +71,9 @@ func LoadFromEnv() (*Config, error) {
 	if v := os.Getenv("PAD_STATIC_DIR"); v != "" {
 		cfg.Server.StaticDir = v
 	}
+	if v := os.Getenv("PAD_KEYVAULT_URL"); v != "" {
+		cfg.Server.KeyVaultURL = v
+	}
 	if v := os.Getenv("PAD_ALLOWED_ORIGINS"); v != "" {
 		for _, o := range strings.Split(v, ",") {
 			if trimmed := strings.TrimSpace(o); trimmed != "" {
@@ -105,6 +109,18 @@ func LoadFromEnv() (*Config, error) {
 	}
 	if v := os.Getenv("PAD_AUTH_SECRET"); v != "" {
 		cfg.Auth.Secret = v
+	}
+	if v := os.Getenv("PAD_TLS_CERT"); v != "" {
+		cfg.Server.TLSCert = v
+	}
+	if v := os.Getenv("PAD_TLS_KEY"); v != "" {
+		cfg.Server.TLSKey = v
+	}
+	if v := os.Getenv("PAD_BEHIND_PROXY"); v != "" {
+		cfg.Server.BehindProxy = v == "true" || v == "1"
+	}
+	if v := os.Getenv("PAD_LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
 	}
 
 	if err := Validate(cfg); err != nil {
@@ -159,6 +175,71 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Storage.Backend == StorageDatabase && cfg.Storage.DatabaseURL == "" {
 		return errors.New("config: storage.database_url is required when storage.backend is database")
+	}
+	if err := validateTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+		return err
+	}
+	if err := validateTLSConfig(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateTLSConfig enforces the plaintext-credentials safety net:
+//
+//   - If TLSCert/TLSKey are partially set (one without the other), that's a
+//     misconfiguration — refuse.
+//   - In cloud mode with auth enabled, the operator must explicitly choose
+//     one of: serve TLS directly (TLSCert+TLSKey), or declare a trusted
+//     reverse proxy in front (BehindProxy=true). Otherwise the binary on
+//     port 80 would broadcast JWTs and passwords in plaintext. The flag
+//     pair is the smallest "I know what I'm doing" surface that prevents
+//     the most common accidental misdeploy.
+func validateTLSConfig(cfg *Config) error {
+	hasCert := strings.TrimSpace(cfg.Server.TLSCert) != ""
+	hasKey := strings.TrimSpace(cfg.Server.TLSKey) != ""
+	if hasCert != hasKey {
+		return errors.New("config: server.tls_cert and server.tls_key must be set together (or both empty)")
+	}
+	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && !hasCert && !cfg.Server.BehindProxy {
+		return errors.New("config: cloud-mode auth requires TLS — set PAD_TLS_CERT/PAD_TLS_KEY to serve HTTPS directly, or PAD_BEHIND_PROXY=true if a TLS-terminating reverse proxy is in front. Without one, JWTs and passwords would be sent in plaintext.")
+	}
+	return nil
+}
+
+// validateTrustedProxies enforces that each entry in PAD_TRUSTED_PROXIES is
+// either a parseable IP or a parseable CIDR, and that no entry is a wildcard
+// that would effectively disable rate-limit isolation. The rate limiter only
+// honors X-Forwarded-For when the request's RemoteAddr matches a trusted
+// proxy, so a misconfigured allowlist of "*" or "0.0.0.0/0" would silently
+// let any client spoof its IP.
+func validateTrustedProxies(entries []string) error {
+	for _, raw := range entries {
+		e := strings.TrimSpace(raw)
+		if e == "" {
+			continue
+		}
+		// Reject wildcards explicitly — operators sometimes set "*" expecting
+		// "trust everything"; the current code would silently treat that as a
+		// literal string that matches no real IP, which masks the misconfig.
+		if e == "*" {
+			return fmt.Errorf("config: trusted_proxies entry %q is a wildcard; list explicit IPs or CIDRs (use private ranges like 10.0.0.0/8 if needed)", raw)
+		}
+		if strings.Contains(e, "/") {
+			_, prefix, err := net.ParseCIDR(e)
+			if err != nil {
+				return fmt.Errorf("config: trusted_proxies entry %q is not a valid CIDR: %w", raw, err)
+			}
+			// Block "trust the entire internet" patterns.
+			ones, bits := prefix.Mask.Size()
+			if ones == 0 && bits > 0 {
+				return fmt.Errorf("config: trusted_proxies entry %q matches all addresses; list narrower ranges", raw)
+			}
+			continue
+		}
+		if net.ParseIP(e) == nil {
+			return fmt.Errorf("config: trusted_proxies entry %q is not a valid IP address or CIDR", raw)
+		}
 	}
 	return nil
 }

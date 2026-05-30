@@ -11,5 +11,5 @@ export type {
   AppSettings, GeneralSettings, AppearanceSettings, LayoutSettings,
   AISettings, AIProviderConfig, DemoModeSettings,
   ParserSettings, AnalysisRulesSettings, RuleConfig,
-  TelemetrySettings, AppInfo,
+  AppInfo,
 } from './domain'

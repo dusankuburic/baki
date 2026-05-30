@@ -113,6 +113,10 @@ func cloudCfg() *Config {
 	cfg.Storage.Backend = StorageDatabase
 	cfg.Storage.DatabaseURL = "postgres://localhost/db"
 	cfg.Auth.Secret = "a-sufficiently-long-random-secret-value-123456"
+	// Most existing tests don't care about the TLS posture; declare a
+	// reverse proxy so the plaintext-credentials safety check passes.
+	// Tests that specifically exercise the TLS validation override this.
+	cfg.Server.BehindProxy = true
 	return cfg
 }
 
@@ -152,5 +156,80 @@ func TestValidate_WildcardOriginRejected(t *testing.T) {
 	cfg.Server.AllowedOrigins = []string{"*"}
 	if err := Validate(cfg); err == nil {
 		t.Fatal("expected wildcard origin to be rejected")
+	}
+}
+
+func TestValidate_TLSConfig(t *testing.T) {
+	t.Run("local mode allows plaintext", func(t *testing.T) {
+		cfg := Default() // ModeLocal, Auth disabled
+		if err := Validate(cfg); err != nil {
+			t.Errorf("local mode should not require TLS, got %v", err)
+		}
+	})
+	t.Run("cloud + auth + no TLS + no proxy is rejected", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.BehindProxy = false
+		cfg.Server.TLSCert = ""
+		cfg.Server.TLSKey = ""
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected validation error for plaintext cloud auth")
+		}
+	})
+	t.Run("cloud + auth + TLS cert/key passes", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.BehindProxy = false
+		cfg.Server.TLSCert = "/etc/tls/cert.pem"
+		cfg.Server.TLSKey = "/etc/tls/key.pem"
+		if err := Validate(cfg); err != nil {
+			t.Errorf("cloud + TLS should pass, got %v", err)
+		}
+	})
+	t.Run("cloud + auth + BehindProxy passes", func(t *testing.T) {
+		cfg := cloudCfg() // already sets BehindProxy=true
+		if err := Validate(cfg); err != nil {
+			t.Errorf("cloud + BehindProxy should pass, got %v", err)
+		}
+	})
+	t.Run("partial TLS (cert without key) is rejected", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.TLSCert = "/etc/tls/cert.pem"
+		cfg.Server.TLSKey = ""
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected error for partial TLS config")
+		}
+	})
+}
+
+func TestValidate_TrustedProxies(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries []string
+		wantErr bool
+	}{
+		{"empty list ok", nil, false},
+		{"single IPv4 ok", []string{"10.0.0.1"}, false},
+		{"single IPv6 ok", []string{"::1"}, false},
+		{"CIDR ok", []string{"10.0.0.0/8", "192.168.1.0/24"}, false},
+		{"mixed IP + CIDR ok", []string{"10.0.0.1", "192.168.0.0/16"}, false},
+		{"trims whitespace", []string{" 10.0.0.1 "}, false},
+		{"rejects wildcard *", []string{"*"}, true},
+		{"rejects 0.0.0.0/0", []string{"0.0.0.0/0"}, true},
+		{"rejects ::/0", []string{"::/0"}, true},
+		{"rejects hostname", []string{"example.com"}, true},
+		{"rejects bogus CIDR", []string{"10.0.0.0/64"}, true},
+		{"rejects garbage", []string{"not-an-ip"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := cloudCfg()
+			cfg.Server.TrustedProxies = tc.entries
+			err := Validate(cfg)
+			if tc.wantErr && err == nil {
+				t.Errorf("entries=%v: expected error, got nil", tc.entries)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("entries=%v: unexpected error: %v", tc.entries, err)
+			}
+		})
 	}
 }

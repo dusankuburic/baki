@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+// errStreamTruncated wraps io.ErrUnexpectedEOF for SSE bodies that ended
+// cleanly without sending a provider-specific terminal marker (Claude's
+// `message_stop` / `[DONE]`, OpenAI's `[DONE]` / `finish_reason`, Gemini's
+// non-empty `finishReason`). Previously each parser synthesized a `Done`
+// chunk in this case, so a network-truncated response was indistinguishable
+// from a complete one. Returning an error here lets the chat service emit
+// a stream-error event so the client can show "incomplete response."
+func errStreamTruncated(provider string) error {
+	return fmt.Errorf("%s stream truncated before terminal marker: %w", provider, io.ErrUnexpectedEOF)
+}
+
 func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -103,7 +114,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	if !doneSent {
-		onChunk(Chunk{Done: true})
+		return errStreamTruncated("claude")
 	}
 	return nil
 }
@@ -169,7 +180,7 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	if !doneSent {
-		onChunk(Chunk{Done: true})
+		return errStreamTruncated("openai")
 	}
 	return nil
 }
@@ -214,7 +225,11 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 					onChunk(Chunk{Text: part.Text})
 				}
 			}
-			if cand.FinishReason == "STOP" {
+			// Any non-empty FinishReason is terminal — STOP, MAX_TOKENS,
+			// SAFETY, RECITATION, OTHER. Previously only STOP was treated
+			// as terminal, so a MAX_TOKENS-capped response was reported as
+			// truncated even though it was a clean end from the provider.
+			if cand.FinishReason != "" {
 				if !doneSent {
 					doneSent = true
 					tokensOut, tokensIn := 0, 0
@@ -233,7 +248,7 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	if !doneSent {
-		onChunk(Chunk{Done: true})
+		return errStreamTruncated("gemini")
 	}
 	return nil
 }

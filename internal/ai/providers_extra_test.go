@@ -130,7 +130,13 @@ func TestGeminiProvider_Stream_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write([]byte(`data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}` + "\n\n"))
-		w.Write([]byte(`data: {"candidates":[{"content":{"parts":[{"text":" Gemini"]}],"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}` + "\n\n"))
+		// Note: the second data line was previously malformed (`{"text":" Gemini"]}]` —
+		// missing `}` after the string). The old parser silently skipped the
+		// malformed line and relied on the EOF-without-DONE fallback to emit a
+		// Done chunk. After the truncation fix, that fallback returns an error
+		// instead, exposing the broken fixture. JSON is now well-formed and
+		// the STOP finishReason serves as the terminal marker.
+		w.Write([]byte(`data: {"candidates":[{"content":{"parts":[{"text":" Gemini"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}` + "\n\n"))
 	}))
 	defer server.Close()
 

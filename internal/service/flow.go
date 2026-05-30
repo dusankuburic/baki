@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
@@ -19,46 +18,30 @@ import (
 
 // FlowService owns document state, search index, and all file-related operations.
 type FlowService struct {
-	ctx         context.Context
-	notifier    Notifier
-	settings    *storage.SettingsStore
-	searchIndex *search.SearchIndex
-	currentDoc  *models.FlowDocument
-	docMu       sync.RWMutex
+	ctx      context.Context
+	notifier Notifier
+	settings *storage.SettingsStore
 }
 
 func NewFlowService(ctx context.Context, notifier Notifier, settings *storage.SettingsStore) *FlowService {
 	return &FlowService{ctx: ctx, notifier: notifier, settings: settings}
 }
 
-// CurrentDoc returns the current document under a read lock.
-func (s *FlowService) CurrentDoc() *models.FlowDocument {
-	s.docMu.RLock()
-	defer s.docMu.RUnlock()
-	return s.currentDoc
-}
-
-// FindBlockByID looks up a block by ID using the BlocksByID map.
-func (s *FlowService) FindBlockByID(blockID string) *models.Block {
-	s.docMu.RLock()
-	defer s.docMu.RUnlock()
-	if s.currentDoc == nil || blockID == "" {
+func (s *FlowService) FindBlockByID(doc *models.FlowDocument, blockID string) *models.Block {
+	if doc == nil || blockID == "" {
 		return nil
 	}
-	if b, ok := s.currentDoc.BlocksByID[blockID]; ok {
+	if b, ok := doc.BlocksByID[blockID]; ok {
 		return b
 	}
 	return nil
 }
 
-// FindSubflowForBlock looks up which subflow contains the given block ID.
-func (s *FlowService) FindSubflowForBlock(blockID string) *models.Subflow {
-	s.docMu.RLock()
-	defer s.docMu.RUnlock()
-	if s.currentDoc == nil || blockID == "" {
+func (s *FlowService) FindSubflowForBlock(doc *models.FlowDocument, blockID string) *models.Subflow {
+	if doc == nil || blockID == "" {
 		return nil
 	}
-	if sf, ok := s.currentDoc.BlockSubflow[blockID]; ok {
+	if sf, ok := doc.BlockSubflow[blockID]; ok {
 		return sf
 	}
 	return nil
@@ -66,12 +49,18 @@ func (s *FlowService) FindSubflowForBlock(blockID string) *models.Subflow {
 
 func (s *FlowService) LoadFlowFromPath(path string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFromPath", &err)
+	if err := validateUserPath(path); err != nil {
+		return nil, err
+	}
 	return s.loadAndParse(path)
 }
 
 func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFolder", &err)
 
+	if err := validateUserPath(folderPath); err != nil {
+		return nil, err
+	}
 	if s.settings == nil {
 		return nil, fmt.Errorf("application not fully initialized")
 	}
@@ -96,11 +85,6 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 		return nil, err
 	}
 
-	s.docMu.Lock()
-	s.currentDoc = doc
-	s.searchIndex = search.NewSearchIndex(doc.ID, doc)
-	s.docMu.Unlock()
-
 	if s.settings != nil {
 		totalSize := doc.Metadata.FileSize
 		storage.AddRecentFile(s.settings, folderPath, totalSize)
@@ -116,11 +100,6 @@ func (s *FlowService) LoadFlowFiles(files map[string]string, rootName string) (d
 	if err != nil {
 		return nil, err
 	}
-
-	s.docMu.Lock()
-	s.currentDoc = doc
-	s.searchIndex = search.NewSearchIndex(doc.ID, doc)
-	s.docMu.Unlock()
 
 	s.notifier.Emit("flow:loaded", doc)
 	return doc, nil
@@ -164,34 +143,19 @@ func (s *FlowService) RevealInFileManager(path string) (err error) {
 	return nil
 }
 
-func (s *FlowService) SearchFlow(flowID string, query models.SearchQuery) (results *models.SearchResults, err error) {
+func (s *FlowService) SearchFlow(doc *models.FlowDocument, query models.SearchQuery) (results *models.SearchResults, err error) {
 	defer logger.Guard("App.SearchFlow", &err)
 
-	s.docMu.RLock()
-	idx := s.searchIndex
-	curDoc := s.currentDoc
-	s.docMu.RUnlock()
-
-	if idx == nil || idx.FlowID() != flowID {
-		if curDoc != nil && curDoc.ID == flowID {
-			idx = search.NewSearchIndex(flowID, curDoc)
-			s.docMu.Lock()
-			s.searchIndex = idx
-			s.docMu.Unlock()
-		} else {
-			return nil, fmt.Errorf("no flow loaded with id %s", flowID)
-		}
+	if doc == nil {
+		return nil, fmt.Errorf("no flow loaded")
 	}
 
+	idx := search.NewSearchIndex(doc.ID, doc)
 	return idx.Search(query), nil
 }
 
-func (s *FlowService) GetSourceFiles() (result []models.SourceFileInfo, err error) {
+func (s *FlowService) GetSourceFiles(doc *models.FlowDocument) (result []models.SourceFileInfo, err error) {
 	defer logger.Guard("App.GetSourceFiles", &err)
-
-	s.docMu.RLock()
-	doc := s.currentDoc
-	s.docMu.RUnlock()
 
 	if doc == nil {
 		return nil, nil
@@ -232,12 +196,8 @@ func (s *FlowService) GetSourceFiles() (result []models.SourceFileInfo, err erro
 	return result, nil
 }
 
-func (s *FlowService) ReadSourceFiles(filenames []string) (result map[string]string, err error) {
+func (s *FlowService) ReadSourceFiles(doc *models.FlowDocument, filenames []string) (result map[string]string, err error) {
 	defer logger.Guard("App.ReadSourceFiles", &err)
-
-	s.docMu.RLock()
-	doc := s.currentDoc
-	s.docMu.RUnlock()
 
 	if doc == nil {
 		return nil, nil
@@ -325,11 +285,6 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	}
 
 	doc.FilePath = path
-
-	s.docMu.Lock()
-	s.currentDoc = doc
-	s.searchIndex = search.NewSearchIndex(doc.ID, doc)
-	s.docMu.Unlock()
 
 	if s.settings != nil {
 		storage.AddRecentFile(s.settings, path, info.Size())

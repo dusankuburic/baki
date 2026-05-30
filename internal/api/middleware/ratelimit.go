@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,24 +16,74 @@ type bucket struct {
 
 // RateLimiter is a per-IP token-bucket rate limiter.
 type RateLimiter struct {
-	rate           float64 // tokens added per second
-	capacity       float64 // max tokens
-	trustedProxies []string
-	mu             sync.Mutex
-	buckets        map[string]*bucket
+	rate         float64 // tokens added per second
+	capacity     float64 // max tokens
+	trustedIPs   []net.IP
+	trustedCIDRs []*net.IPNet
+	mu           sync.Mutex
+	buckets      map[string]*bucket
+	// group labels rate_limit_exceeded_total emissions, so the metrics
+	// scraper can distinguish "general" refusals from "auth" refusals.
+	group string
+}
+
+// SetGroup sets the metric label used when refusing requests; defaults to
+// "general" if unset. Call once after NewRateLimiter to differentiate
+// instances ("auth", "general", etc.).
+func (rl *RateLimiter) SetGroup(g string) *RateLimiter {
+	rl.group = g
+	return rl
 }
 
 // NewRateLimiter creates a RateLimiter that allows rps requests per second with
-// a burst capacity of burst.
+// a burst capacity of burst. Trusted-proxy entries are parsed here as either
+// plain IP addresses or CIDR blocks; malformed entries are silently dropped
+// (config-load validation already rejects them, this is defense-in-depth so
+// the middleware never panics on a bad input it shouldn't have received).
 func NewRateLimiter(rps, burst float64, trustedProxies []string) *RateLimiter {
 	rl := &RateLimiter{
-		rate:           rps,
-		capacity:       burst,
-		trustedProxies: trustedProxies,
-		buckets:        make(map[string]*bucket),
+		rate:     rps,
+		capacity: burst,
+		buckets:  make(map[string]*bucket),
+		group:    "general",
+	}
+	for _, p := range trustedProxies {
+		entry := strings.TrimSpace(p)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, cidr, err := net.ParseCIDR(entry); err == nil {
+				rl.trustedCIDRs = append(rl.trustedCIDRs, cidr)
+			}
+			continue
+		}
+		if ip := net.ParseIP(entry); ip != nil {
+			rl.trustedIPs = append(rl.trustedIPs, ip)
+		}
 	}
 	go rl.cleanup()
 	return rl
+}
+
+// isTrustedProxy reports whether the request's immediate peer is in the
+// configured trusted-proxy list (matching either an exact IP or any CIDR).
+func (rl *RateLimiter) isTrustedProxy(remoteIP string) bool {
+	ip := net.ParseIP(remoteIP)
+	if ip == nil {
+		return false
+	}
+	for _, t := range rl.trustedIPs {
+		if t.Equal(ip) {
+			return true
+		}
+	}
+	for _, c := range rl.trustedCIDRs {
+		if c.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (rl *RateLimiter) allow(ip string) bool {
@@ -76,34 +127,29 @@ func (rl *RateLimiter) cleanup() {
 }
 
 // getIP extracts the real client IP, only trusting X-Forwarded-For if the
-// request comes from a trusted proxy.
+// request comes from a configured trusted proxy.
 func (rl *RateLimiter) getIP(r *http.Request) string {
 	remoteIP := r.RemoteAddr
-	if idx := strings.LastIndex(remoteIP, ":"); idx != -1 {
-		remoteIP = remoteIP[:idx]
+	// SplitHostPort handles both "1.2.3.4:5678" and "[::1]:5678"; fall back to
+	// the raw value for malformed inputs.
+	if host, _, err := net.SplitHostPort(remoteIP); err == nil {
+		remoteIP = host
 	}
 
-	// Only trust XFF if it comes from a trusted proxy
-	if len(rl.trustedProxies) > 0 {
-		isTrusted := false
-		for _, proxy := range rl.trustedProxies {
-			if remoteIP == proxy {
-				isTrusted = true
-				break
-			}
-		}
-
-		if isTrusted {
-			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-				if idx := strings.IndexByte(xff, ','); idx >= 0 {
-					return strings.TrimSpace(xff[:idx])
-				}
-				return strings.TrimSpace(xff)
-			}
-		}
+	if len(rl.trustedIPs) == 0 && len(rl.trustedCIDRs) == 0 {
+		return remoteIP
 	}
-
-	return remoteIP
+	if !rl.isTrustedProxy(remoteIP) {
+		return remoteIP
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return remoteIP
+	}
+	if idx := strings.IndexByte(xff, ','); idx >= 0 {
+		return strings.TrimSpace(xff[:idx])
+	}
+	return strings.TrimSpace(xff)
 }
 
 // Limit returns middleware that enforces the rate limit, keyed by remote IP.
@@ -111,9 +157,13 @@ func (rl *RateLimiter) Limit(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := rl.getIP(r)
 		if !rl.allow(ip) {
+			RecordRateLimitExceeded(rl.group)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+			// Best-effort: the client likely doesn't care about the body, and
+			// since we've already written the status, we have nothing to
+			// recover. Swallow silently if it fails.
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
 			return
 		}
 		h.ServeHTTP(w, r)

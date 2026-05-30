@@ -92,6 +92,7 @@ func (m *memBackend) LoadConversation(_ context.Context, flowID, scope string) (
 
 // ---- User operations ----
 func (m *memBackend) SaveUser(ctx context.Context, user *interfaces.User) error { return nil }
+func (m *memBackend) CreateUser(ctx context.Context, user *interfaces.User) error { return nil }
 func (m *memBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) { return nil, interfaces.ErrNotFound }
 func (m *memBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) { return nil, interfaces.ErrNotFound }
 func (m *memBackend) CountUsers(ctx context.Context) (int, error) { return 0, nil }
@@ -183,6 +184,63 @@ func TestMigrator_InvalidFlowRecordedAsFailure(t *testing.T) {
 	}
 	if len(res.Errors) != 1 {
 		t.Errorf("expected 1 error entry, got %d", len(res.Errors))
+	}
+}
+
+// TestMigrator_PartialFailure_RerunCompletes locks in the documented
+// re-run model: when a first attempt fails some flows because the
+// destination wasn't ready for them, fixing the underlying issue and
+// re-running the migrator must complete the partial state without
+// re-doing the already-migrated rows.
+func TestMigrator_PartialFailure_RerunCompletes(t *testing.T) {
+	src := newMemBackend()
+	dst := newMemBackend()
+
+	// Seed three flows; mark one as "bad" by giving it a malformed name
+	// the validator rejects.
+	src.flows["ok-1"] = &interfaces.FlowDocument{
+		ID: "ok-1", Name: "Good Flow 1", Content: []byte(`{}`),
+	}
+	src.flows["bad"] = &interfaces.FlowDocument{
+		ID: "bad", Name: "", Content: []byte("not-json"),
+	}
+	src.flows["ok-2"] = &interfaces.FlowDocument{
+		ID: "ok-2", Name: "Good Flow 2", Content: []byte(`{}`),
+	}
+
+	// First run: 2 succeed, 1 fails validation.
+	res, err := migration.New(src, dst).Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if res.FlowsMigrated != 2 {
+		t.Errorf("first run: migrated %d, want 2", res.FlowsMigrated)
+	}
+	if res.FlowsFailed != 1 {
+		t.Errorf("first run: failed %d, want 1", res.FlowsFailed)
+	}
+
+	// Operator fixes the bad flow at the source and re-runs.
+	src.flows["bad"].Name = "Fixed Name"
+	src.flows["bad"].Content = []byte(`{}`)
+
+	res2, err := migration.New(src, dst).Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	// The previously-migrated flows must be skipped (idempotent), and the
+	// previously-failed flow must now succeed.
+	if res2.FlowsMigrated != 1 {
+		t.Errorf("rerun: migrated %d, want 1 (only the fixed flow)", res2.FlowsMigrated)
+	}
+	if res2.FlowsSkipped != 2 {
+		t.Errorf("rerun: skipped %d, want 2 (the already-migrated flows)", res2.FlowsSkipped)
+	}
+	if res2.FlowsFailed != 0 {
+		t.Errorf("rerun: failed %d, want 0", res2.FlowsFailed)
+	}
+	if len(dst.flows) != 3 {
+		t.Errorf("dst should have all 3 flows after rerun, got %d", len(dst.flows))
 	}
 }
 

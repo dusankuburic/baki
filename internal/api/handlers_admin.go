@@ -95,6 +95,30 @@ func (rt *Router) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Safeguard: refuse a change that would leave the instance with zero
+	// admins. Without this, a one-admin instance could be locked out of
+	// admin functions by a misclick. We count admins via ListUsers since
+	// the storage interface doesn't expose a dedicated CountAdmins yet —
+	// the user list is small (admin scale, not customer scale) so this is
+	// cheap.
+	if user.Role == auth.RoleAdmin && req.Role != auth.RoleAdmin {
+		allUsers, listErr := backend.ListUsers(r.Context())
+		if listErr != nil {
+			rt.sendError(w, listErr, http.StatusInternalServerError)
+			return
+		}
+		admins := 0
+		for _, u := range allUsers {
+			if u.Role == auth.RoleAdmin {
+				admins++
+			}
+		}
+		if admins <= 1 {
+			http.Error(w, "cannot demote the last admin; promote another user to admin first", http.StatusConflict)
+			return
+		}
+	}
+
 	user.Role = req.Role
 	if err := backend.SaveUser(r.Context(), user); err != nil {
 		rt.sendError(w, err, http.StatusInternalServerError)

@@ -22,7 +22,6 @@ type AppSettings struct {
 	AI         AISettings       `json:"ai"`
 	Parser     ParserSettings   `json:"parser"`
 	Analysis   AnalysisSettings `json:"analysis"`
-	Telemetry  TelemetrySettings `json:"telemetry"`
 	RecentFiles []RecentFile    `json:"recentFiles"`
 }
 
@@ -91,12 +90,6 @@ type RuleConfig struct {
 	Enabled   bool              `json:"enabled"`
 	Severity  string            `json:"severity"`
 	Options   map[string]interface{} `json:"options,omitempty"`
-}
-
-type TelemetrySettings struct {
-	Enabled       bool   `json:"enabled"`
-	AnonymousID   string `json:"anonymousID"`
-	LastSubmitted string `json:"lastSubmitted"`
 }
 
 func DefaultSettings() *AppSettings {
@@ -182,7 +175,6 @@ func DefaultSettings() *AppSettings {
 				"subflow-no-error-handler": {Enabled: true, Severity: "info"},
 			},
 		},
-		Telemetry: TelemetrySettings{},
 	}
 }
 

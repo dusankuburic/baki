@@ -2,11 +2,24 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/models"
 )
+
+// decodeOptional decodes JSON from r into v but tolerates an empty body. A
+// malformed (non-empty) body still produces an error so callers can return
+// HTTP 400 instead of letting zero-value request fields fall through and
+// generate a confusing downstream error.
+func decodeOptional(r io.Reader, v any) error {
+	if err := json.NewDecoder(r).Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
 
 // @Summary Analyze current flow
 // @Description Runs all enabled analysis rules on the current flow document.
@@ -21,7 +34,10 @@ func (rt *Router) handleAnalyzeFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := decodeOptional(r.Body, &req); err != nil {
+		rt.sendError(w, err, http.StatusBadRequest)
+		return
+	}
 	doc, ok := rt.resolveFlow(w, r, req.FlowID, "viewer")
 	if !ok {
 		return
@@ -84,7 +100,10 @@ func (rt *Router) handleGetExecutionGraph(w http.ResponseWriter, r *http.Request
 		var req struct {
 			FlowID string `json:"flowId"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := decodeOptional(r.Body, &req); err != nil {
+			rt.sendError(w, err, http.StatusBadRequest)
+			return
+		}
 		flowID = req.FlowID
 	}
 	doc, ok := rt.resolveFlow(w, r, flowID, "viewer")

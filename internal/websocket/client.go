@@ -3,10 +3,11 @@ package websocket
 import (
 	"encoding/json"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"pad-analyzer/internal/logger"
 )
 
 const (
@@ -14,6 +15,11 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 64 * 1024 // 64 KB
+	// sendBufferCap bounds per-client outgoing buffering. Collab events
+	// (cursor moves, block updates) can burst — 64 was too tight and
+	// caused silent drops under normal use. 256 gives modest headroom
+	// while still bounding worst-case memory.
+	sendBufferCap = 256
 )
 
 // Client represents a single WebSocket connection.
@@ -22,11 +28,11 @@ type Client struct {
 	DisplayName     string
 	SelectedBlockID string
 
-	hub    *Hub
-	flowID string
-	conn   *websocket.Conn
-	send   chan Envelope
-	once   sync.Once
+	hub          *Hub
+	flowID       string
+	conn         *websocket.Conn
+	send         chan Envelope
+	disconnected atomic.Bool // set once when Send or Run tears down the connection
 }
 
 // NewClient wraps an already-upgraded WebSocket connection.
@@ -37,7 +43,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 		hub:         hub,
 		flowID:      flowID,
 		conn:        conn,
-		send:        make(chan Envelope, 64),
+		send:        make(chan Envelope, sendBufferCap),
 	}
 }
 
@@ -46,32 +52,47 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 func (c *Client) Run() {
 	c.hub.Join(c.flowID, c)
 	defer func() {
-		// Leave the hub BEFORE closing the send channel. If close() fired first,
-		// the client would remain in the hub's snapshot with a closed channel and
-		// any concurrent hub.Broadcast() call would panic on "send on closed channel"
-		// (Go panics on a select-case send to a closed channel, unlike a receive).
-		// Ordering: Leave → close → conn.Close gives writePump a clean exit path.
+		// Cleanup order:
+		//   1. Leave the hub so future Broadcast snapshots stop including us.
+		//   2. Close the underlying TCP conn so writePump's next WriteMessage
+		//      (or ping tick) errors out and the pump returns.
+		// We deliberately do NOT close c.send. Another goroutine that already
+		// captured an old Broadcast snapshot might still be mid-iteration
+		// calling c.Send → c.send <- env; concurrently closing c.send would
+		// race against that send and panic. Instead we leak c.send and let
+		// GC reclaim it once nothing references this Client. writePump
+		// terminates via the network error, not via channel close.
 		c.hub.Leave(c.flowID, c)
-		c.close()       // signal writePump to exit (ok==false on c.send)
-		c.conn.Close()  // force-close if writePump hasn't already
+		c.disconnected.Store(true)
+		_ = c.conn.Close()
 	}()
 
 	go c.writePump()
 	c.readPump()
 }
 
-// Send queues an envelope for delivery to this client.
-// Drops the message (non-blocking) if the send buffer is full.
+// Send queues an envelope for delivery to this client. If the send buffer
+// is full the client is treated as too slow to keep up: instead of silently
+// dropping the message (which leaves the UI silently stale — missed cursor
+// moves, missed block edits), we close the underlying connection so the
+// client reconnects with a fresh state. The close happens at the network
+// layer; we never close c.send, so a concurrent caller iterating an old
+// Broadcast snapshot can still safely push into the buffered channel.
 func (c *Client) Send(env Envelope) {
+	if c.disconnected.Load() {
+		return
+	}
 	select {
 	case c.send <- env:
+		return
 	default:
 	}
-}
-
-// close drains and closes the send channel exactly once.
-func (c *Client) close() {
-	c.once.Do(func() { close(c.send) })
+	// Buffer full — slow client. Disconnect exactly once.
+	if c.disconnected.CompareAndSwap(false, true) {
+		logger.Warn("websocket: slow client disconnected (send buffer full)",
+			"userID", c.UserID, "flowID", c.flowID, "buffer_cap", sendBufferCap)
+		_ = c.conn.Close()
+	}
 }
 
 // readPump reads incoming messages and dispatches them to the hub.
@@ -121,12 +142,11 @@ func (c *Client) writePump() {
 
 	for {
 		select {
-		case env, ok := <-c.send:
+		case env := <-c.send:
+			// c.send is never closed (see Run's defer comment), so the
+			// `ok==false` branch isn't reachable. The pump exits when
+			// conn.Close happens and WriteMessage below returns an error.
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
 
 			data, err := json.Marshal(env)
 			if err != nil {

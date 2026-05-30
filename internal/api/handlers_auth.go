@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/mail"
-	"strings"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -98,14 +98,17 @@ func (rt *Router) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		Role:     auth.RoleMember,
 	}
 
-	// The very first registered user is promoted to admin so the instance has an
-	// initial administrator. SaveUser enforces email uniqueness, guarding against
-	// a concurrent duplicate registration.
-	if count, err := rt.app.StorageBackend().CountUsers(r.Context()); err == nil && count == 0 {
-		user.Role = auth.RoleAdmin
-	}
-
-	if err := rt.app.StorageBackend().SaveUser(r.Context(), user); err != nil {
+	// CreateUser atomically counts existing users and inserts the new one in a
+	// single transaction. If the table is empty at the moment of insert the
+	// user is promoted to RoleAdmin — this guarantees that two concurrent
+	// registrations cannot both become admin (previously CountUsers + SaveUser
+	// was a TOCTOU race). user.Role is overwritten with the role actually
+	// persisted on success.
+	if err := rt.app.StorageBackend().CreateUser(r.Context(), user); err != nil {
+		if errors.Is(err, interfaces.ErrEmailExists) {
+			http.Error(w, "user already exists", http.StatusConflict)
+			return
+		}
 		rt.sendError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -272,14 +275,13 @@ func (rt *Router) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]string
 // @Router /api/auth/me [get]
 func (rt *Router) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	raw := r.Header.Get("Authorization")
-	tokenStr := strings.TrimPrefix(raw, "Bearer ")
-	if tokenStr == "" || tokenStr == raw {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	claims, err := rt.authMgr.Verify(tokenStr)
-	if err != nil {
+	// /me is behind the same JWT middleware as every other authed handler;
+	// the middleware has already verified the token and stashed the claims
+	// on the request context. Re-parsing the Authorization header here (the
+	// old behavior) was redundant and risked drifting from the standard
+	// auth flow if middleware order ever changed.
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}

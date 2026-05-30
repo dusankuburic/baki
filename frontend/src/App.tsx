@@ -16,6 +16,7 @@ import {usePresenceStore} from './stores/presenceStore'
 import {useKeyboard} from './hooks/useKeyboard'
 import {useTheme} from './hooks/useTheme'
 import {useTauriMenuEvents} from './hooks/useTauriMenuEvents'
+import {useAutoAnalyze} from './hooks/useAutoAnalyze'
 import TitleBar from './components/layout/TitleBar'
 import Sidebar from './components/layout/Sidebar'
 import MainPane from './components/layout/MainPane'
@@ -141,6 +142,10 @@ export default function App() {
     }, [openDocument])
 
     const {toggleTheme} = useTheme()
+
+    // Auto-run analysis on flow open when Settings → Rules → "Auto-analyze on
+    // flow open" is enabled. Self-contained; reads settings + flow store.
+    useAutoAnalyze()
 
     const showShortcuts = useCallback(() => setShortcutsHelpOpen(true), [])
     useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts: showShortcuts})

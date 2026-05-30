@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"pad-analyzer/internal/analyzer"
 	"pad-analyzer/internal/logger"
@@ -19,24 +18,13 @@ import (
 // reuse the matching report. lastReport tracks the most recent analysis purely
 // to enrich chat context (which is not yet per-flow in cloud mode).
 type AnalysisService struct {
-	ctx        context.Context
-	notifier   Notifier
-	flow       *FlowService
-	settings   *storage.SettingsStore
-	reports    map[string]*models.AnalysisReport
-	lastReport *models.AnalysisReport
-	reportMu   sync.Mutex
+	ctx      context.Context
+	notifier Notifier
+	settings *storage.SettingsStore
 }
 
-func NewAnalysisService(ctx context.Context, notifier Notifier, flow *FlowService, settings *storage.SettingsStore) *AnalysisService {
-	return &AnalysisService{ctx: ctx, notifier: notifier, flow: flow, settings: settings, reports: make(map[string]*models.AnalysisReport)}
-}
-
-// LastReport returns the most recently produced analysis report.
-func (s *AnalysisService) LastReport() *models.AnalysisReport {
-	s.reportMu.Lock()
-	defer s.reportMu.Unlock()
-	return s.lastReport
+func NewAnalysisService(ctx context.Context, notifier Notifier, settings *storage.SettingsStore) *AnalysisService {
+	return &AnalysisService{ctx: ctx, notifier: notifier, settings: settings}
 }
 
 func (s *AnalysisService) AnalyzeFlow(doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
@@ -47,7 +35,6 @@ func (s *AnalysisService) AnalyzeFlow(doc *models.FlowDocument) (report *models.
 	}
 
 	settings := s.settings.Get()
-
 	rules := analyzer.AllRules()
 
 	result := analyzer.RunAnalysis(doc, rules, settings, func(current, total int, ruleName string) {
@@ -65,11 +52,6 @@ func (s *AnalysisService) AnalyzeFlow(doc *models.FlowDocument) (report *models.
 		"findings", len(result.Findings),
 		"durationMs", result.DurationMs,
 	)
-
-	s.reportMu.Lock()
-	s.reports[doc.ID] = result
-	s.lastReport = result
-	s.reportMu.Unlock()
 
 	return result, nil
 }
@@ -91,11 +73,9 @@ func (s *AnalysisService) GetExecutionGraph(doc *models.FlowDocument) (graph *mo
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
-	s.reportMu.Lock()
-	report := s.reports[doc.ID]
-	s.reportMu.Unlock()
-
-	return analyzer.BuildExecutionGraph(doc, report), nil
+	// In stateless mode, we don't cache reports. BuildExecutionGraph can
+	// work without a report (it just won't have finding markers on nodes).
+	return analyzer.BuildExecutionGraph(doc, nil), nil
 }
 
 func (s *AnalysisService) GetRules() (result []models.Rule) {

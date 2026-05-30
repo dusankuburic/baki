@@ -48,7 +48,11 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 		return NewDemoProvider(), nil
 	}
 	if providerID == "copilot" {
-		return f.forCopilot(scope)
+		p, err := f.forCopilot(scope)
+		if err != nil {
+			return nil, err
+		}
+		return NewTracedProvider(p), nil
 	}
 	ctor, ok := providerCtors[providerID]
 	if !ok {
@@ -65,7 +69,7 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get %s key: %w", providerID, err)
 	}
-	return ctor(key), nil
+	return NewTracedProvider(ctor(key)), nil
 }
 
 // GetMetadataProvider returns a provider instance with an empty key,

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -75,7 +76,7 @@ func (rt *Router) requireFlowAccess(w http.ResponseWriter, r *http.Request, flow
 		return false
 	}
 	if flowID == "" {
-		http.NotFound(w, r)
+		rt.sendError(w, fmt.Errorf("flow ID is required"), http.StatusBadRequest)
 		return false
 	}
 	flow, err := backend.LoadFlow(r.Context(), flowID)

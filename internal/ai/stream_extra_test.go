@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -48,8 +50,12 @@ func TestParseClaudeSSE_NonTextDeltaType_Ignored(t *testing.T) {
 	}
 }
 
-func TestParseClaudeSSE_EOF_WithoutDone_AutoSendsDone(t *testing.T) {
-	// Stream ends without any message_delta stop_reason or [DONE] → auto-send Done.
+func TestParseClaudeSSE_EOF_WithoutDone_ReturnsTruncatedError(t *testing.T) {
+	// Stream ends without a `message_delta` stop_reason or `[DONE]` marker.
+	// Previously the parser synthesized a Done chunk and returned nil, so a
+	// network-truncated response looked indistinguishable from a clean one.
+	// Now the parser returns io.ErrUnexpectedEOF so the chat service can
+	// surface the truncation to the client as an error event.
 	input := "event: content_block_delta\n" +
 		"data: {\"delta\": {\"type\": \"text_delta\", \"text\": \"partial\"}}\n\n"
 
@@ -59,11 +65,11 @@ func TestParseClaudeSSE_EOF_WithoutDone_AutoSendsDone(t *testing.T) {
 			doneSent = true
 		}
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
-	if !doneSent {
-		t.Error("expected auto-done when stream ends without explicit stop signal")
+	if doneSent {
+		t.Error("truncated stream should not emit a Done chunk — that would mask the partial response")
 	}
 }
 
@@ -92,8 +98,9 @@ func TestParseOpenAISSE_WithUsageInFinishChunk(t *testing.T) {
 	}
 }
 
-func TestParseOpenAISSE_EOF_WithoutDone_AutoSendsDone(t *testing.T) {
-	// Stream ends without [DONE] → auto-send Done.
+func TestParseOpenAISSE_EOF_WithoutDone_ReturnsTruncatedError(t *testing.T) {
+	// Stream ends without `[DONE]` or a non-empty `finish_reason`. Same
+	// rationale as the Claude truncation test above.
 	input := "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n\n"
 
 	var doneSent bool
@@ -102,18 +109,18 @@ func TestParseOpenAISSE_EOF_WithoutDone_AutoSendsDone(t *testing.T) {
 			doneSent = true
 		}
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
-	if !doneSent {
-		t.Error("expected auto-done when stream ends without [DONE]")
+	if doneSent {
+		t.Error("truncated stream should not emit a Done chunk")
 	}
 }
 
 // ---- parseGeminiSSE: EOF without doneSent → auto-done ---------------------
 
-func TestParseGeminiSSE_EOF_WithoutDone_AutoSendsDone(t *testing.T) {
-	// Stream ends without STOP finish reason → auto-send Done.
+func TestParseGeminiSSE_EOF_WithoutFinishReason_ReturnsTruncatedError(t *testing.T) {
+	// Stream ends without any finishReason. Same rationale as Claude/OpenAI.
 	input := "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"partial\"}]}}]}\n\n"
 
 	var doneSent bool
@@ -122,11 +129,38 @@ func TestParseGeminiSSE_EOF_WithoutDone_AutoSendsDone(t *testing.T) {
 			doneSent = true
 		}
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
-	if !doneSent {
-		t.Error("expected auto-done when stream ends without STOP reason")
+	if doneSent {
+		t.Error("truncated stream should not emit a Done chunk")
+	}
+}
+
+// TestParseGeminiSSE_NonStopFinishReason_TerminalAndNotTruncation locks in
+// the behavior fix that any non-empty FinishReason (MAX_TOKENS, SAFETY,
+// RECITATION, OTHER) is treated as a clean stream end, not a truncation.
+// Previously only "STOP" was considered terminal, so a token-capped
+// response was incorrectly auto-Done'd / now would be wrongly reported as
+// truncated.
+func TestParseGeminiSSE_NonStopFinishReason_TerminalAndNotTruncation(t *testing.T) {
+	cases := []string{"STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER"}
+	for _, reason := range cases {
+		t.Run(reason, func(t *testing.T) {
+			input := "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"x\"}]}, \"finishReason\": \"" + reason + "\"}]}\n\n"
+			var doneSent bool
+			err := parseGeminiSSE(strings.NewReader(input), func(chunk Chunk) {
+				if chunk.Done {
+					doneSent = true
+				}
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !doneSent {
+				t.Errorf("finishReason=%s: expected Done chunk", reason)
+			}
+		})
 	}
 }
 

@@ -3,6 +3,8 @@ package ai
 import (
 	"context"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -56,6 +58,62 @@ func TestDemoLimiter_ReserveForDisplay_ExhaustsLimit(t *testing.T) {
 	_, err := l.ReserveForDisplay()
 	if err == nil {
 		t.Fatal("expected error when daily limit is exhausted, got nil")
+	}
+}
+
+// TestDemoLimiter_ConcurrentReserve_NoLostIncrements stresses the
+// concurrency invariant claimed by N-4. The audit suggested that two
+// goroutines could both load, both see headroom, both write back, losing
+// an increment. Reading the code shows the mutex covers the full
+// load-modify-write cycle (defer Unlock runs after saveState), so this
+// shouldn't happen — but a race-detector test makes the invariant
+// machine-checked rather than just commented.
+//
+// Behaviour locked in:
+//
+//   - exactly `dailyLimit` reservations succeed across all goroutines
+//   - all subsequent calls return an "exhausted" error
+//   - no `-race` violations
+func TestDemoLimiter_ConcurrentReserve_NoLostIncrements(t *testing.T) {
+	l := newTestLimiter(t)
+
+	const N = 32
+	var (
+		ok      atomic.Int64
+		failed  atomic.Int64
+		wg      sync.WaitGroup
+		release = make(chan struct{})
+	)
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			<-release // release all goroutines simultaneously
+			if _, err := l.ReserveForDisplay(); err != nil {
+				failed.Add(1)
+			} else {
+				ok.Add(1)
+			}
+		}()
+	}
+	close(release)
+	wg.Wait()
+
+	if got := ok.Load(); got != int64(l.dailyLimit) {
+		t.Errorf("expected exactly %d successful reservations, got %d (lost increments?)", l.dailyLimit, got)
+	}
+	if got := failed.Load(); got != int64(N-l.dailyLimit) {
+		t.Errorf("expected %d failures, got %d", N-l.dailyLimit, got)
+	}
+
+	// And Remaining should report 0 — corroborates that the persisted state
+	// matches the count of successful reservations.
+	rem, err := l.Remaining()
+	if err != nil {
+		t.Fatalf("Remaining: %v", err)
+	}
+	if rem != 0 {
+		t.Errorf("Remaining after full exhaustion: got %d, want 0", rem)
 	}
 }
 

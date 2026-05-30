@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/storage"
 )
 
@@ -101,9 +102,13 @@ func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 	return nil
 }
 
-// Get returns the decrypted key, or storage.ErrSecretNotFound if no row exists
-// or the stored ciphertext can no longer be decrypted (e.g. the deployment
-// secret was rotated).
+// Get returns the decrypted key, storage.ErrSecretNotFound if no row exists,
+// or storage.ErrSecretDecryptFailed if a row exists but cannot be decrypted
+// with the current deployment key (almost always: PAD_AUTH_SECRET was
+// rotated). Distinguishing the two lets the API surface a clear "your AI
+// key needs to be re-entered after secret rotation" rather than masking the
+// rotation as "no key configured" and prompting the user to enter it again
+// indefinitely.
 func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	var ct string
 	err := s.db.QueryRow(`SELECT ciphertext FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider).Scan(&ct)
@@ -115,9 +120,12 @@ func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	}
 	plaintext, err := s.decrypt(ct)
 	if err != nil {
-		// Undecryptable ciphertext is treated as "not configured" so the caller
-		// can prompt for re-authentication rather than fail hard.
-		return "", storage.ErrSecretNotFound
+		// Log so the operator can see that a rotation invalidated stored
+		// keys; don't log scope (user id) at info level — keep it at warn
+		// with provider only.
+		logger.Warn("keystore: ciphertext decrypt failed (deployment key may have rotated)",
+			"provider", provider, "error", err)
+		return "", storage.ErrSecretDecryptFailed
 	}
 	return plaintext, nil
 }

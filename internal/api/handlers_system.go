@@ -122,19 +122,42 @@ func (rt *Router) handleSaveApiKey(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth returns 200 if the server is running and storage (if configured) is reachable.
 // @Summary Check API health
-// @Description Returns the status of the API and its storage backend.
+// handleLiveness implements the /healthz endpoint. Returns 200 whenever
+// the process is up — it intentionally does NOT touch the database or any
+// downstream dependency. A liveness probe failure tells the orchestrator
+// to restart the pod, so it must only fail for "this process is dead /
+// deadlocked" reasons. DB-availability checks belong in /readyz.
+//
+// @Summary Liveness probe
+// @Description Returns 200 if the process is up. Does not touch the database.
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /healthz [get]
+func (rt *Router) handleLiveness(w http.ResponseWriter, _ *http.Request) {
+	rt.sendJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleReadiness implements the /readyz endpoint. Pings the storage
+// backend (if any) with a short timeout. Returns 503 if the DB is
+// unreachable so the orchestrator can pull the pod out of the load-
+// balancer rotation without restarting it. Also used as a backwards-
+// compatible alias for /api/health.
+//
+// @Summary Readiness probe
+// @Description Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise.
 // @Tags system
 // @Produce json
 // @Success 200 {object} map[string]string
 // @Failure 503 {object} map[string]string
-// @Router /api/health [get]
-func (rt *Router) handleHealth(w http.ResponseWriter, r *http.Request) {
+// @Router /readyz [get]
+func (rt *Router) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	status := "ok"
 	if backend := rt.app.StorageBackend(); backend != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*1e9) // 2s
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := backend.Ping(ctx); err != nil {
-			logger.Warn("health check: storage ping failed", "error", err)
+			logger.Warn("readiness check: storage ping failed", "error", err)
 			status = "degraded"
 		}
 	}

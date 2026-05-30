@@ -4,9 +4,22 @@ import (
 	"context"
 	"testing"
 
+	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/interfaces"
 	testutil "pad-analyzer/internal/testutil"
 )
+
+// TestLocalStorageBackend_Contract runs the cross-backend contract suite
+// against the filesystem backend. The same suite runs against Postgres in
+// `database/postgres_storage_test.go::TestPostgres_Contract` so the two
+// implementations cannot diverge on return-shape semantics.
+func TestLocalStorageBackend_Contract(t *testing.T) {
+	b, err := NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorageBackend: %v", err)
+	}
+	contract.RunSuite(t, b)
+}
 
 // createTestFlow creates a test flow document
 func createTestFlow(id string) *interfaces.FlowDocument {

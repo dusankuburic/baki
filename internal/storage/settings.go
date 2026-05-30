@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
 )
 
@@ -79,8 +80,19 @@ func (s *SettingsStore) load() error {
 
 	var loaded models.AppSettings
 	if err := json.Unmarshal(data, &loaded); err != nil {
+		// The settings file is unparseable — most likely a partial write from
+		// a crash, or a manual edit gone wrong. Quarantine it (so the operator
+		// can inspect or restore) and fall back to defaults. Logging at error
+		// level so the recovery is visible in ops dashboards; previously this
+		// was completely silent.
 		backup := s.path + ".corrupt-" + time.Now().Format("20060102T150405")
-		os.Rename(s.path, backup)
+		if renameErr := os.Rename(s.path, backup); renameErr != nil {
+			logger.Error("settings: failed to quarantine corrupt file",
+				"path", s.path, "rename_error", renameErr, "parse_error", err)
+		} else {
+			logger.Error("settings: corrupt file quarantined, reset to defaults",
+				"path", s.path, "backup", backup, "parse_error", err)
+		}
 		s.current = models.DefaultSettings()
 		return s.persistLocked()
 	}
@@ -105,7 +117,14 @@ func (s *SettingsStore) persistLocked() error {
 	}
 
 	if err := os.Rename(tmp, s.path); err != nil {
-		os.Remove(tmp)
+		// Atomic-write failure: the .tmp file exists but the rename failed
+		// (e.g. cross-device link, antivirus interference, target locked).
+		// Surface this loudly — caller will return the error, but a log
+		// helps post-mortem because settings persistence may be invisible
+		// to UI flows.
+		logger.Error("settings: atomic rename failed",
+			"tmp", tmp, "target", s.path, "error", err)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

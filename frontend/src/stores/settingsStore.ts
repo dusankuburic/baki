@@ -117,7 +117,6 @@ const defaultSettings: AppSettings = {
     rules: {},
     autoAnalyzeOnOpen: false,
   },
-  telemetry: {enabled: false, anonymousID: '', lastSubmitted: ''},
 }
 
 interface SettingsState {

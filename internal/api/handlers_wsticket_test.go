@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -115,5 +116,34 @@ func TestConsumeTicket(t *testing.T) {
 	// freshly inserted not-yet-expired jti must still block replay.
 	if !rt.consumeTicket("jti-2", time.Now().Add(-time.Second)) {
 		t.Fatal("inserting a new jti should succeed even if its exp is in the past")
+	}
+}
+
+// TestConsumeTicket_CapEnforced verifies the bounded-store guard: once the
+// map hits maxUsedTickets of unexpired entries, further inserts are refused
+// rather than evicting arbitrary entries (which would allow replay).
+func TestConsumeTicket_CapEnforced(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	future := time.Now().Add(time.Hour)
+
+	// Fill the map to the cap with unique, far-future jtis.
+	for i := range maxUsedTickets {
+		jti := fmt.Sprintf("cap-%d", i)
+		if !rt.consumeTicket(jti, future) {
+			t.Fatalf("expected consume %d to succeed under the cap", i)
+		}
+	}
+	// The next insert must be refused because no entries are expired and
+	// the cap is reached.
+	if rt.consumeTicket("over-cap", future) {
+		t.Error("consume past the cap should be refused (no eviction allowed)")
+	}
+	// Insert an expired entry by directly placing one in the past, then
+	// the next call should prune it and accept a new jti.
+	rt.usedTicketsMu.Lock()
+	rt.usedTickets["cap-0"] = time.Now().Add(-time.Second)
+	rt.usedTicketsMu.Unlock()
+	if !rt.consumeTicket("after-prune", future) {
+		t.Error("consume after pruning an expired entry should succeed")
 	}
 }

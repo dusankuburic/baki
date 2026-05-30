@@ -15,6 +15,15 @@ var ErrSecretStorageUnavailable = errors.New("secret storage unavailable in this
 // requested provider.
 var ErrSecretNotFound = errors.New("secret not found")
 
+// ErrSecretDecryptFailed is returned by Get when a secret row exists but the
+// ciphertext cannot be decrypted with the current deployment key — almost
+// always because PAD_AUTH_SECRET was rotated. Previously this was masked
+// as ErrSecretNotFound, so operators saw "no key configured" and re-entered
+// the key, papering over the real cause indefinitely. Callers should
+// surface a clear "your AI key needs to be re-entered" message to the user
+// (or just delete the unreadable row and prompt).
+var ErrSecretDecryptFailed = errors.New("secret could not be decrypted (deployment key may have rotated)")
+
 // SecretStore abstracts provider-key persistence. The default implementation is
 // the OS keychain (desktop mode); cloud deployments inject an encrypted,
 // database-backed store via SetSecretStore.

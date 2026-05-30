@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/logger"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -241,11 +242,19 @@ func (rt *Router) handleLibraryGetContent(w http.ResponseWriter, r *http.Request
 	// Return the raw stored flow-document JSON (what the frontend's getContent expects),
 	// not the storage wrapper.
 	w.Header().Set("Content-Type", "application/json")
+	var (
+		payload []byte
+	)
 	if len(doc.Content) == 0 {
-		_, _ = w.Write([]byte("null"))
-		return
+		payload = []byte("null")
+	} else {
+		payload = doc.Content
 	}
-	_, _ = w.Write(doc.Content)
+	if _, err := w.Write(payload); err != nil {
+		// Status has already been written; client likely disconnected. Log
+		// for ops, but there's nothing further to send.
+		logger.Warn("handleGetLibraryItem: write response", "error", err, "flow_id", doc.ID)
+	}
 }
 
 // @Summary Delete library flow
@@ -354,12 +363,16 @@ func (rt *Router) handleLibraryUpdate(w http.ResponseWriter, r *http.Request, id
 // handleLibraryItem routes requests for /api/library/:id paths.
 func (rt *Router) handleLibraryItem(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/library/")
-	if path == "" {
+	if path == "" || path == "content" {
 		http.NotFound(w, r)
 		return
 	}
 
 	if id, ok := strings.CutSuffix(path, "/content"); ok {
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
 		rt.handleLibraryGetContent(w, r, id)
 		return
 	}

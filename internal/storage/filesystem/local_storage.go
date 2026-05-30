@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -269,9 +270,6 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 		Parser: interfaces.ParserSettings{
 			MaxFileSizeMB: 50,
 		},
-		Telemetry: interfaces.TelemetrySettings{
-			Enabled: false,
-		},
 	}
 }
 
@@ -284,10 +282,32 @@ func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.U
 	// UNIQUE(email) constraint.
 	for id, existing := range lsb.users {
 		if existing.Email == user.Email && id != user.ID {
-			return fmt.Errorf("email already in use")
+			return interfaces.ErrEmailExists
 		}
 	}
 	// Key strictly by ID so each user is stored exactly once.
+	lsb.users[user.ID] = user
+	return nil
+}
+
+// CreateUser inserts a new user under the users mutex so the empty-check and
+// the insert are atomic — two concurrent first-time registrations cannot both
+// be promoted to RoleAdmin. Returns ErrEmailExists on email collision.
+func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+
+	for _, existing := range lsb.users {
+		if existing.Email == user.Email {
+			return interfaces.ErrEmailExists
+		}
+	}
+
+	role := user.Role
+	if len(lsb.users) == 0 {
+		role = auth.RoleAdmin
+	}
+	user.Role = role
 	lsb.users[user.ID] = user
 	return nil
 }

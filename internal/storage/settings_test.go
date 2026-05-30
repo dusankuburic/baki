@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,18 @@ import (
 
 	"pad-analyzer/internal/models"
 )
+
+// captureSlog swaps slog's default logger for one that writes to buf, and
+// returns a restore function via t.Cleanup. Used by tests that assert log
+// emission. Not safe for `t.Parallel()`.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
 
 func TestSettingsStore_Update_PersistsAndGet(t *testing.T) {
 	s := newTestStore(t)
@@ -118,6 +132,35 @@ func TestSettingsStore_Load_CorruptFile_RecoverToDefaults(t *testing.T) {
 	// A fresh settings file should now exist at the original path.
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("expected fresh settings file at original path after corrupt recovery, got: %v", err)
+	}
+}
+
+func TestSettingsStore_Load_CorruptFile_EmitsErrorLog(t *testing.T) {
+	// Patch C visibility check: the corrupt-recovery path was previously
+	// silent; now it must log at error level with the backup path so the
+	// event shows up in ops dashboards.
+	logs := captureSlog(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte("{not valid json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &SettingsStore{path: path, current: models.DefaultSettings()}
+	if err := s.load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "settings: corrupt file quarantined") {
+		t.Errorf("expected quarantine log line, got: %q", out)
+	}
+	if !strings.Contains(out, "level=ERROR") {
+		t.Errorf("expected ERROR level log, got: %q", out)
+	}
+	if !strings.Contains(out, "backup=") {
+		t.Errorf("expected log to include backup path attribute, got: %q", out)
 	}
 }
 

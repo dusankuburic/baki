@@ -1,7 +1,11 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -169,5 +173,67 @@ func TestHandleAuthLogout_ReturnsOK(t *testing.T) {
 	decodeJSON(t, rr, &resp)
 	if resp["status"] != "ok" {
 		t.Errorf("expected status=ok, got %v", resp["status"])
+	}
+}
+
+// TestHandleAuthRegister_ConcurrentFirstUser_ExactlyOneAdmin exercises the
+// race that motivated the CreateUser atomic-storage method. Many goroutines
+// register with distinct emails at the same time; only the goroutine whose
+// insert lands first should be promoted to admin. Run under `go test -race`
+// to also catch unsafe state sharing in the storage layer.
+func TestHandleAuthRegister_ConcurrentFirstUser_ExactlyOneAdmin(t *testing.T) {
+	rt := newJWTTestRouter(t)
+
+	const N = 25
+	var wg sync.WaitGroup
+	var adminCount int64
+	var okCount int64
+	start := make(chan struct{})
+
+	wg.Add(N)
+	for i := range N {
+		go func() {
+			defer wg.Done()
+			<-start
+			rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+				"email":    fmt.Sprintf("user%d@example.com", i),
+				"password": "password",
+			})
+			if rr.Code != http.StatusOK {
+				t.Errorf("register %d: status=%d body=%s", i, rr.Code, rr.Body.String())
+				return
+			}
+			atomic.AddInt64(&okCount, 1)
+			var resp map[string]any
+			decodeJSON(t, rr, &resp)
+			if u, _ := resp["user"].(map[string]any); u != nil && u["role"] == "admin" {
+				atomic.AddInt64(&adminCount, 1)
+			}
+		}()
+	}
+	close(start) // release all goroutines simultaneously
+	wg.Wait()
+
+	if okCount != N {
+		t.Fatalf("expected %d successful registrations, got %d", N, okCount)
+	}
+	if adminCount != 1 {
+		t.Errorf("expected exactly 1 admin out of %d concurrent registrations, got %d", N, adminCount)
+	}
+
+	// Cross-check via the storage backend itself.
+	backend := rt.app.StorageBackend()
+	users, err := backend.ListUsers(context.Background())
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	storedAdmins := 0
+	for _, u := range users {
+		if string(u.Role) == "admin" {
+			storedAdmins++
+		}
+	}
+	if storedAdmins != 1 {
+		t.Errorf("storage shows %d admins, expected 1", storedAdmins)
 	}
 }

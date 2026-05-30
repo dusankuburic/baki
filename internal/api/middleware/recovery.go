@@ -15,7 +15,9 @@ func Recovery(h http.Handler) http.Handler {
 				log.Printf("panic: %v\n%s", rec, debug.Stack())
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+				if err := json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"}); err != nil {
+					log.Printf("recovery: failed to encode error response: %v", err)
+				}
 			}
 		}()
 		h.ServeHTTP(w, r)

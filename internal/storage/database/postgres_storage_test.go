@@ -6,9 +6,20 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/database"
 	"pad-analyzer/internal/storage/interfaces"
 )
+
+// TestPostgres_Contract runs the cross-backend contract suite against
+// Postgres so the two storage backends cannot quietly diverge on return-
+// shape semantics (nil vs empty slice, ErrNotFound vs nil, etc.). The
+// same suite runs against the filesystem backend in
+// `filesystem/local_storage_test.go::TestLocalStorageBackend_Contract`.
+func TestPostgres_Contract(t *testing.T) {
+	b := openTestDB(t)
+	contract.RunSuite(t, b)
+}
 
 // openTestDB connects using DATABASE_URL env var and skips if not set.
 func openTestDB(t *testing.T) *database.PostgresStorageBackend {
@@ -177,8 +188,14 @@ func TestPostgres_LoadConversation_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msgs != nil {
-		t.Errorf("expected nil for missing conversation, got %v", msgs)
+	// Contract: missing-conversation returns a non-nil empty slice, matching
+	// the filesystem backend so callers don't need backend-specific nil checks.
+	// (A nil return is reserved for error cases.)
+	if msgs == nil {
+		t.Errorf("expected empty slice for missing conversation, got nil")
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected length 0, got %d", len(msgs))
 	}
 }
 

@@ -24,10 +24,12 @@ func NewExportService(ctx context.Context, notifier Notifier, flow *FlowService,
 	return &ExportService{ctx: ctx, notifier: notifier, flow: flow, analysis: analysis}
 }
 
-func (s *ExportService) CompareCurrentWith(oldPath string) (diff *models.FlowDiff, err error) {
+func (s *ExportService) CompareCurrentWith(newDoc *models.FlowDocument, oldPath string) (diff *models.FlowDiff, err error) {
 	defer logger.Guard("App.CompareCurrentWith", &err)
 
-	newDoc := s.flow.CurrentDoc()
+	if err := validateUserPath(oldPath); err != nil {
+		return nil, err
+	}
 
 	if newDoc == nil {
 		return nil, fmt.Errorf("no current flow loaded")
@@ -47,21 +49,18 @@ func (s *ExportService) CompareCurrentWith(oldPath string) (diff *models.FlowDif
 	return parser.DiffFlows(oldDoc, newDoc), nil
 }
 
-func (s *ExportService) ExportMarkdown(path string) (content []byte, err error) {
+func (s *ExportService) ExportMarkdown(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportMarkdown", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
-	report := s.analysis.LastReport()
 	if report == nil {
 		return nil, fmt.Errorf("no analysis report available — run analysis first")
 	}
 
-	md := export.ReportToMarkdown(report, curDoc)
+	md := export.ReportToMarkdown(report, doc)
 	content = []byte(md)
 
 	if path != "" {
@@ -73,21 +72,18 @@ func (s *ExportService) ExportMarkdown(path string) (content []byte, err error) 
 	return content, nil
 }
 
-func (s *ExportService) ExportPDF(path string) (content []byte, err error) {
+func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportPDF", &err)
 
-	curDoc := s.flow.CurrentDoc()
-
-	if curDoc == nil {
+	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
-	report := s.analysis.LastReport()
 	if report == nil {
 		return nil, fmt.Errorf("no analysis report available — run analysis first")
 	}
 
-	pdfBytes, err := export.ReportToPDF(report, curDoc)
+	pdfBytes, err := export.ReportToPDF(report, doc)
 	if err != nil {
 		return nil, fmt.Errorf("generate PDF: %w", err)
 	}
