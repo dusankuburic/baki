@@ -72,8 +72,9 @@ func TestHandleClearRecentFiles_UninitializedAppReturns500(t *testing.T) {
 	checkStatus(t, rr, http.StatusInternalServerError)
 }
 
-func TestHandleGetSourceFiles_UninitializedAppReturns500(t *testing.T) {
+func TestHandleGetSourceFiles_NoDocReturnsOK(t *testing.T) {
 	rt := newTestRouter()
 	rr := doRequest(t, rt, http.MethodGet, "/api/flow/source-files", nil)
-	checkStatus(t, rr, http.StatusInternalServerError)
+	// GetSourceFiles returns nil gracefully when no document is loaded.
+	checkStatus(t, rr, http.StatusOK)
 }

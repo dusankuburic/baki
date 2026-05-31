@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/google/uuid"
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
@@ -155,6 +156,11 @@ func (a *App) CreateLibraryFlow(ownerID, orgID string, doc storageif.FlowDocumen
 	if a.storage == nil {
 		return nil, fmt.Errorf("cloud storage not available in local mode")
 	}
+
+	if doc.ID == "" {
+		doc.ID = uuid.NewString()
+	}
+
 	doc.OwnerID = ownerID
 	doc.OrganizationID = orgID
 	if err := a.storage.SaveFlow(a.ctx, &doc); err != nil {

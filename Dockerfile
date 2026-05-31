@@ -4,6 +4,13 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ ./
+# VITE_API_URL is baked into the JS bundle at build time by Vite.
+# Pass it as a build arg so the image targets the correct backend host:
+#   docker build --build-arg VITE_API_URL=https://your-backend.azurewebsites.net .
+# Omitting it falls back to window.location.origin (same-host, correct when
+# the Go server also serves the SPA from the same container/port).
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 
 # Stage 2: Build the backend
@@ -25,7 +32,11 @@ RUN apk add --no-cache ca-certificates libc6-compat wget
 
 # Run as non-root. A compromised app process cannot then modify system files
 # or escape to other tenants on a shared host.
-RUN addgroup -g 1000 -S pad && adduser -u 1000 -S pad -G pad
+# Alpine adduser -S does not create the home directory.  Create it explicitly
+# so os.UserConfigDir() (used by the settings store) works for the pad user.
+RUN addgroup -g 1000 -S pad && adduser -u 1000 -S pad -G pad \
+    && mkdir -p /home/pad \
+    && chown pad:pad /home/pad
 
 WORKDIR /app
 COPY --from=backend-builder --chown=pad:pad /app/baki-backend .
@@ -48,7 +59,7 @@ ENV PAD_BEHIND_PROXY=true
 # whenever the process is up; does NOT touch the DB (that's /readyz, which
 # the orchestrator should probe separately for readiness gating).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+    CMD wget -qO- "http://127.0.0.1:${PAD_PORT}/healthz" >/dev/null || exit 1
 
 USER pad:pad
 

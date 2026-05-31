@@ -189,6 +189,25 @@ func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+// VerifyIgnoreExpiry parses and validates an access token, returning its claims
+// even if the token has expired. It still verifies the cryptographic signature
+// and the audience.
+func (m *Manager) VerifyIgnoreExpiry(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
+		jwt.WithAudience(m.audience))
+
+	if err != nil && !errors.Is(err, jwt.ErrTokenExpired) {
+		return nil, fmt.Errorf("auth: verify token signature: %w", err)
+	}
+
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return nil, errors.New("auth: invalid token claims")
+	}
+
+	return claims, nil
+}
+
 // VerifyRefresh parses and validates a refresh token.
 func (m *Manager) VerifyRefresh(tokenStr string) (*RefreshClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &RefreshClaims{}, m.keyFunc)

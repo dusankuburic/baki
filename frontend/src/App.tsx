@@ -64,6 +64,13 @@ export default function App() {
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
     const dropRef = useRef<HTMLDivElement>(null)
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
+    const [sidebarLiveWidth, setSidebarLiveWidth] = useState<number | null>(null)
+    const [inspectorLiveWidth, setInspectorLiveWidth] = useState<number | null>(null)
+    const sidebarLiveWidthRef = useRef<number | null>(null)
+    const inspectorLiveWidthRef = useRef<number | null>(null)
+    // Stable ref so drag callbacks can read the current layout without closing over stale values
+    const layoutRef = useRef(layout)
+    layoutRef.current = layout
 
     useEffect(() => {
         flowApi.recentFiles()
@@ -166,14 +173,34 @@ export default function App() {
     }, [])
 
     const handleSidebarDrag = useCallback((delta: number) => {
-        const next = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, layout.sidebarWidth + delta))
-        updateLayout({sidebarWidth: next})
-    }, [layout.sidebarWidth, updateLayout])
+        const base = sidebarLiveWidthRef.current ?? layoutRef.current.sidebarWidth
+        const next = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, base + delta))
+        sidebarLiveWidthRef.current = next
+        setSidebarLiveWidth(next)
+    }, [])
+
+    const handleSidebarResizeEnd = useCallback(() => {
+        if (sidebarLiveWidthRef.current !== null) {
+            updateLayout({sidebarWidth: sidebarLiveWidthRef.current})
+            sidebarLiveWidthRef.current = null
+            setSidebarLiveWidth(null)
+        }
+    }, [updateLayout])
 
     const handleInspectorDrag = useCallback((delta: number) => {
-        const next = Math.min(MAX_INSPECTOR, Math.max(MIN_INSPECTOR, layout.inspectorWidth - delta))
-        updateLayout({inspectorWidth: next})
-    }, [layout.inspectorWidth, updateLayout])
+        const base = inspectorLiveWidthRef.current ?? layoutRef.current.inspectorWidth
+        const next = Math.min(MAX_INSPECTOR, Math.max(MIN_INSPECTOR, base - delta))
+        inspectorLiveWidthRef.current = next
+        setInspectorLiveWidth(next)
+    }, [])
+
+    const handleInspectorResizeEnd = useCallback(() => {
+        if (inspectorLiveWidthRef.current !== null) {
+            updateLayout({inspectorWidth: inspectorLiveWidthRef.current})
+            inspectorLiveWidthRef.current = null
+            setInspectorLiveWidth(null)
+        }
+    }, [updateLayout])
 
     const handleSidebarReset = useCallback(() => updateLayout({sidebarWidth: 280}), [updateLayout])
     const handleInspectorReset = useCallback(() => updateLayout({inspectorWidth: 320}), [updateLayout])
@@ -456,13 +483,13 @@ function extractBlockCommands(doc: DomainFlowDocument) {
                             <>
                                 <div
                                     className="flex-shrink-0 overflow-hidden border-r border-border-subtle"
-                                    style={{width: layout.sidebarWidth}}
+                                    style={{width: sidebarLiveWidth ?? layout.sidebarWidth}}
                                 >
                                     <Sidebar />
                                 </div>
                                 <PaneDivider
                                     onDrag={handleSidebarDrag}
-                                    onResizeEnd={() => {}}
+                                    onResizeEnd={handleSidebarResizeEnd}
                                     onDoubleClick={handleSidebarReset}
                                 />
                             </>
@@ -474,12 +501,12 @@ function extractBlockCommands(doc: DomainFlowDocument) {
                             <>
                                 <PaneDivider
                                     onDrag={handleInspectorDrag}
-                                    onResizeEnd={() => {}}
+                                    onResizeEnd={handleInspectorResizeEnd}
                                     onDoubleClick={handleInspectorReset}
                                 />
                                 <div
                                     className="flex-shrink-0 overflow-hidden border-l border-border-subtle"
-                                    style={{width: layout.inspectorWidth}}
+                                    style={{width: inspectorLiveWidth ?? layout.inspectorWidth}}
                                 >
                                     <InspectorPanel />
                                 </div>

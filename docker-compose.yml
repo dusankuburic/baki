@@ -7,7 +7,10 @@ services:
       - PAD_DATABASE_URL=postgres://postgres:postgres@db:5432/baki?sslmode=disable
       # Dev-only secret (>=32 chars). Override with a long random value in production.
       - PAD_AUTH_SECRET=dev-insecure-secret-override-in-prod-2f8b1c4e9a
-      # Same-origin SPA needs no CORS origins; add cross-origin dev hosts here if used.
+      # CORS / WebSocket origin allowlist.  This value is correct for local dev
+      # (the SPA is served by the same container on port 8080).
+      # FOR AZURE DEPLOYMENTS: override with your actual domain, e.g.:
+      #   PAD_ALLOWED_ORIGINS=https://your-app.azurewebsites.net
       - PAD_ALLOWED_ORIGINS=http://localhost:8080
     depends_on:
       db:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/parser"
 )
 
@@ -23,53 +24,38 @@ SET Result TO 'done'
 #End Region
 `
 
-func makeTestDoc(t *testing.T, text string) *FlowService {
+// makeTestDoc parses text into a FlowDocument and returns both a FlowService and the parsed doc.
+func makeTestDoc(t *testing.T, text string) (*FlowService, *models.FlowDocument) {
 	t.Helper()
 	doc, err := parser.ParseText(text, "test.txt", int64(len(text)))
 	if err != nil {
 		t.Fatalf("ParseText: %v", err)
 	}
 	svc := &FlowService{ctx: context.Background()}
-	svc.currentDoc = doc
-	return svc
-}
-
-func TestFlowService_CurrentDoc_nil(t *testing.T) {
-	svc := &FlowService{ctx: context.Background()}
-	if svc.CurrentDoc() != nil {
-		t.Fatal("expected nil before any file loaded")
-	}
-}
-
-func TestFlowService_CurrentDoc_set(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	if svc.CurrentDoc() == nil {
-		t.Fatal("expected non-nil doc after load")
-	}
+	return svc, doc
 }
 
 func TestFlowService_FindBlockByID_empty_id(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	if svc.FindBlockByID("") != nil {
+	svc, doc := makeTestDoc(t, simpleFlow)
+	if svc.FindBlockByID(doc, "") != nil {
 		t.Fatal("expected nil for empty ID")
 	}
 }
 
 func TestFlowService_FindBlockByID_nil_doc(t *testing.T) {
 	svc := &FlowService{ctx: context.Background()}
-	if svc.FindBlockByID("any-id") != nil {
-		t.Fatal("expected nil when no doc loaded")
+	if svc.FindBlockByID(nil, "any-id") != nil {
+		t.Fatal("expected nil when doc is nil")
 	}
 }
 
 func TestFlowService_FindBlockByID_found(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	doc := svc.CurrentDoc()
+	svc, doc := makeTestDoc(t, simpleFlow)
 	if len(doc.Subflows) == 0 || len(doc.Subflows[0].Blocks) == 0 {
 		t.Skip("no blocks parsed")
 	}
 	firstBlock := &doc.Subflows[0].Blocks[0]
-	found := svc.FindBlockByID(firstBlock.ID)
+	found := svc.FindBlockByID(doc, firstBlock.ID)
 	if found == nil {
 		t.Fatalf("expected to find block %q", firstBlock.ID)
 	}
@@ -79,35 +65,34 @@ func TestFlowService_FindBlockByID_found(t *testing.T) {
 }
 
 func TestFlowService_FindBlockByID_unknown(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	if svc.FindBlockByID("does-not-exist") != nil {
+	svc, doc := makeTestDoc(t, simpleFlow)
+	if svc.FindBlockByID(doc, "does-not-exist") != nil {
 		t.Fatal("expected nil for unknown ID")
 	}
 }
 
 func TestFlowService_FindSubflowForBlock_found(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	doc := svc.CurrentDoc()
+	svc, doc := makeTestDoc(t, simpleFlow)
 	if len(doc.Subflows) == 0 || len(doc.Subflows[0].Blocks) == 0 {
 		t.Skip("no blocks parsed")
 	}
 	firstBlock := &doc.Subflows[0].Blocks[0]
-	sf := svc.FindSubflowForBlock(firstBlock.ID)
+	sf := svc.FindSubflowForBlock(doc, firstBlock.ID)
 	if sf == nil {
 		t.Fatalf("expected subflow for block %q", firstBlock.ID)
 	}
 }
 
 func TestFlowService_FindSubflowForBlock_unknown(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	if svc.FindSubflowForBlock("no-such-block") != nil {
+	svc, doc := makeTestDoc(t, simpleFlow)
+	if svc.FindSubflowForBlock(doc, "no-such-block") != nil {
 		t.Fatal("expected nil for unknown block")
 	}
 }
 
 func TestFlowService_GetSourceFiles_no_doc(t *testing.T) {
 	svc := &FlowService{ctx: context.Background()}
-	files, err := svc.GetSourceFiles()
+	files, err := svc.GetSourceFiles(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,12 +102,11 @@ func TestFlowService_GetSourceFiles_no_doc(t *testing.T) {
 }
 
 func TestFlowService_GetSourceFiles_returns_subflows(t *testing.T) {
-	svc := makeTestDoc(t, twoSubflowFlow)
-	files, err := svc.GetSourceFiles()
+	svc, doc := makeTestDoc(t, twoSubflowFlow)
+	files, err := svc.GetSourceFiles(doc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// twoSubflowFlow has two regions → two subflows → two source file entries
 	if len(files) == 0 {
 		t.Fatal("expected at least one source file entry")
 	}

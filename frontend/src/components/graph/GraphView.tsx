@@ -56,7 +56,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       style: buildGraphStyle(tokens),
       minZoom: 0.2,
       maxZoom: 3,
-      wheelSensitivity: 0.3,
     })
 
     instance.on('tap', 'node', (evt) => {

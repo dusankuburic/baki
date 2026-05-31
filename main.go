@@ -34,7 +34,6 @@ var (
 // @title Pad Analyzer API
 // @version 1.0
 // @description This is the API for the Pad Analyzer project.
-// @host localhost:8080
 // @BasePath /
 func main() {
 	cfg := loadConfig()
@@ -74,7 +73,7 @@ func main() {
 	var pgBackend *storagedb.PostgresStorageBackend
 	if cfg.Storage.Backend == config.StorageDatabase {
 		var err error
-		pgBackend, err = storagedb.New(storagedb.DefaultConfig(cfg.Storage.DatabaseURL))
+		pgBackend, err = storagedb.New(ctx, storagedb.DefaultConfig(cfg.Storage.DatabaseURL))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to connect to database: %v\n", err)
 			os.Exit(1)

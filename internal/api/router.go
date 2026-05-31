@@ -201,6 +201,7 @@ var publicRoutes = map[string]bool{
 	"/api/auth/register": true,
 	"/api/auth/login":    true,
 	"/api/auth/refresh":  true,
+	"/api/auth/logout":   true,
 	"/healthz":           true,
 	"/readyz":            true,
 	"/api/health":        true,

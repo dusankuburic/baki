@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -84,7 +85,7 @@ func TestEncryptedKeyStore_DBRoundTrip(t *testing.T) {
 		t.Skip("DATABASE_URL not set; skipping Postgres keystore integration test")
 	}
 
-	b, err := New(DefaultConfig(dsn))
+	b, err := New(context.Background(), DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

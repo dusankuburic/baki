@@ -28,7 +28,7 @@ func openTestDB(t *testing.T) *database.PostgresStorageBackend {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set — skipping PostgreSQL integration tests")
 	}
-	b, err := database.New(database.DefaultConfig(dsn))
+	b, err := database.New(context.Background(), database.DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

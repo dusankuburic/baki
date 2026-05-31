@@ -15,8 +15,20 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("dispatching request", "method", r.Method, "path", path)
 
-	// Library routes have dynamic path segments (/api/library/:id).
-	if strings.HasPrefix(path, "/api/library/") {
+	// Library routes: /api/library[/:id[/content]]
+	if strings.HasPrefix(path, "/api/library") {
+		remaining := strings.TrimPrefix(path, "/api/library")
+		if remaining == "" || remaining == "/" {
+			if r.Method == http.MethodGet {
+				rt.handleLibraryList(w, r)
+			} else if r.Method == http.MethodPost {
+				rt.handleLibraryCreate(w, r)
+			} else {
+				http.NotFound(w, r)
+			}
+			return
+		}
+		// It's a sub-path like /api/library/123 or /api/library/123/content
 		rt.handleLibraryItem(w, r)
 		return
 	}
@@ -159,16 +171,6 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 		rt.handleExportMarkdown(w, r)
 	case "/api/export/pdf":
 		rt.handleExportPDF(w, r)
-
-	// --- Library ---
-	case "/api/library":
-		if r.Method == http.MethodGet {
-			rt.handleLibraryList(w, r)
-		} else if r.Method == http.MethodPost {
-			rt.handleLibraryCreate(w, r)
-		} else {
-			http.NotFound(w, r)
-		}
 
 	// --- Auth (JWT) ---
 	case "/api/auth/register":

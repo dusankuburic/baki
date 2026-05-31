@@ -1,5 +1,5 @@
 import {useRef, useState, useCallback, useEffect, ReactNode} from 'react'
-import {GripVertical, Maximize2, Minimize2} from 'lucide-react'
+import {Maximize2, Minimize2} from 'lucide-react'
 import {useSettingsStore} from '@/stores/settingsStore'
 
 interface Props {
@@ -17,51 +17,58 @@ export default function ResizableChatPanel({
   maxHeight = MAX_HEIGHT,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const resizeHandleRef = useRef<HTMLDivElement>(null)
   const startYRef = useRef(0)
   const startHeightRef = useRef(0)
   const pendingHeightRef = useRef<number | null>(null)
-  const [height, setHeight] = useState<number | null>(null) // null = auto (fill space)
+  const isResizingRef = useRef(false)
+  const [height, setHeight] = useState<number | null>(null)
   const [isResizing, setIsResizing] = useState(false)
   const [isPoppedOut, setIsPoppedOut] = useState(false)
-
-  // Don't load saved height - start with auto-fill (null)
-  // User can resize to set a specific height, which will be saved for future sessions
 
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     startYRef.current = e.clientY
     startHeightRef.current = containerRef.current?.getBoundingClientRect().height ?? 0
     pendingHeightRef.current = null
+    isResizingRef.current = true
     setIsResizing(true)
+    document.body.style.cursor = 'ns-resize'
   }, [])
 
+  // DOM mutation only — no React state update on each pixel.
+  // setHeight is called once in stopResize to sync React state with the final value.
   const resize = useCallback((e: MouseEvent) => {
-    if (!isResizing) return
-    // Adjust from the height at grab time so a click with no movement leaves the
-    // panel unchanged. Dragging up grows it, dragging down shrinks it.
+    if (!isResizingRef.current) return
     const delta = startYRef.current - e.clientY
     const newHeight = Math.max(minHeight, Math.min(maxHeight, startHeightRef.current + delta))
     pendingHeightRef.current = newHeight
-    setHeight(newHeight)
-  }, [isResizing, minHeight, maxHeight])
+    if (containerRef.current) {
+      containerRef.current.style.height = newHeight + 'px'
+    }
+  }, [minHeight, maxHeight])
 
   const stopResize = useCallback(() => {
+    if (!isResizingRef.current) return
+    isResizingRef.current = false
     setIsResizing(false)
-    // Persist once at the end of an actual drag (not on a plain click).
+    document.body.style.cursor = ''
     if (pendingHeightRef.current !== null) {
+      const finalHeight = pendingHeightRef.current
+      setHeight(finalHeight)
       useSettingsStore.getState().updateSettings({
         layout: {
           ...useSettingsStore.getState().settings.layout,
-          chatPanelHeight: pendingHeightRef.current,
+          chatPanelHeight: finalHeight,
         },
       })
     }
   }, [])
 
-  // Double-click to reset to auto-fill
   const handleDoubleClick = useCallback(() => {
     setHeight(null)
+    if (containerRef.current) {
+      containerRef.current.style.height = ''
+    }
     useSettingsStore.getState().updateSettings({
       layout: {
         ...useSettingsStore.getState().settings.layout,
@@ -98,8 +105,6 @@ export default function ResizableChatPanel({
             <Minimize2 size={14} />
           </button>
         </div>
-        {/* AITab owns its own scroll region (pinned header + scrolling messages +
-            pinned input); this wrapper just provides a definite height and clips. */}
         <div className="flex-1 min-h-0 overflow-hidden">
           {children}
         </div>
@@ -110,8 +115,12 @@ export default function ResizableChatPanel({
   return (
     <div
       ref={containerRef}
-      className="relative flex flex-col group h-full"
-      style={height ? {height: `${height}px`, transition: isResizing ? 'none' : 'height 150ms var(--ease-out)'} : {transition: isResizing ? 'none' : 'height 150ms var(--ease-out)'}}
+      className={clsx('relative flex flex-col group h-full', isResizing && 'select-none')}
+      style={{
+        ...(height ? {height: `${height}px`} : {}),
+        transition: isResizing ? 'none' : 'height 150ms var(--ease-out)',
+        willChange: isResizing ? 'height' : 'auto',
+      }}
     >
       {/* Pop-out button */}
       <button
@@ -122,31 +131,40 @@ export default function ResizableChatPanel({
         <Maximize2 size={12} />
       </button>
 
-      {/* AITab owns its own scroll region (pinned header + scrolling messages +
-          pinned input); this wrapper just provides a definite height and clips. */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {children}
       </div>
 
-      {/* Resize handle at the bottom */}
+      {/* Resize handle — three-dot pill indicator with accent line */}
       <div
-        ref={resizeHandleRef}
         className={clsx(
-          'absolute bottom-0 left-0 right-0 h-3 cursor-ns-resize flex items-center justify-center',
-          'hover:bg-brand-500/10 active:bg-brand-500/20 transition-colors',
-          isResizing && 'bg-brand-500/20'
+          'absolute bottom-0 left-0 right-0 h-2.5 cursor-ns-resize flex items-center justify-center group/handle',
+          isResizing ? 'bg-brand-500/10' : 'hover:bg-brand-500/5',
         )}
         onMouseDown={startResize}
         onDoubleClick={handleDoubleClick}
-        title="Drag to resize · Double-click to reset to auto-fill"
+        title="Drag to resize · Double-click to reset"
       >
-        <GripVertical size={14} className="text-text-tertiary/50 group-hover:text-brand-500/70 transition-colors" />
+        <div className={clsx(
+          'flex items-center gap-[3px] transition-all duration-150',
+          isResizing ? 'opacity-100 scale-110' : 'opacity-0 group-hover/handle:opacity-50',
+        )}>
+          <div className="w-[3px] h-[3px] rounded-full bg-brand-400" />
+          <div className="w-[3px] h-[3px] rounded-full bg-brand-400" />
+          <div className="w-[3px] h-[3px] rounded-full bg-brand-400" />
+        </div>
+        {/* Accent line */}
+        <div className={clsx(
+          'absolute bottom-0 left-6 right-6 h-px bg-brand-500 transition-all duration-200 origin-center',
+          isResizing
+            ? 'opacity-70 scale-x-100'
+            : 'opacity-0 scale-x-0 group-hover/handle:opacity-25 group-hover/handle:scale-x-100',
+        )} />
       </div>
     </div>
   )
 }
 
-// Helper to avoid import issues
 function clsx(...classes: (string | boolean | undefined | null)[]) {
   return classes.filter(Boolean).join(' ')
 }

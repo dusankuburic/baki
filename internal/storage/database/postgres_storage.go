@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -37,9 +38,17 @@ func isPgErrCode(err error, code string) bool {
 	return false
 }
 
+// azureRefreshState holds the credential and pgx config needed to keep the
+// Managed Identity token alive for connections opened after each refresh cycle.
+type azureRefreshState struct {
+	provider *azureTokenProvider
+	pgxCfg   *pgx.ConnConfig
+}
+
 // PostgresStorageBackend implements interfaces.StorageBackend using PostgreSQL.
 type PostgresStorageBackend struct {
-	db *sql.DB
+	db           *sql.DB
+	azureRefresh *azureRefreshState // non-nil when using Azure Managed Identity
 }
 
 // Config holds the connection settings for the PostgreSQL backend.
@@ -61,37 +70,35 @@ func DefaultConfig(dsn string) Config {
 }
 
 // New opens a PostgreSQL connection, configures the pool, and runs migrations.
-func New(cfg Config) (*PostgresStorageBackend, error) {
-	// Parse the DSN using pgx
+// ctx governs the application lifetime: it is used for migrations and, when
+// Azure Managed Identity is configured, drives the background token-refresh
+// goroutine (cancelled on SIGTERM / graceful shutdown).
+func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	pgxCfg, err := pgx.ParseConfig(cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
 
-	// Phase 2: Integrate Azure Managed Identity if password is "managed-identity"
-	// We use RegisterConnConfig to allow the AzureConfigHook to provide the token.
+	b := &PostgresStorageBackend{}
+
 	connStr := stdlib.RegisterConnConfig(pgxCfg)
 
-	// stdlib.SetOption to pass our hook if we were using a more complex setup,
-	// but for now, the RegisterConnConfig + the hook logic in azure.go is sufficient
-	// if we call it correctly.
-	// Actually, stdlib doesn't have a direct "per-connection hook" for tokens
-	// in the same way pgxpool does, but we can call our hook once here to
-	// validate, or more reliably, we should use a custom dialer if we need
-	// refresh-per-connection.
-	//
-	// However, for Azure Container Apps, a new pod is started often enough,
-	// and tokens last 24h. But for true production, we want refresh.
-	//
 	if pgxCfg.Password == "managed-identity" {
-		if err := AzureConfigHook(context.Background(), pgxCfg); err != nil {
-			return nil, fmt.Errorf("azure: initial token fetch failed: %w", err)
+		provider, err := newAzureTokenProvider()
+		if err != nil {
+			return nil, fmt.Errorf("azure: create credential: %w", err)
 		}
-		// Re-register with the resolved token for the initial pool members
+		token, err := provider.GetToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("azure: initial token fetch: %w", err)
+		}
+		pgxCfg.Password = token
+		// Re-register so the pool's connStr picks up the resolved token.
+		stdlib.UnregisterConnConfig(connStr)
 		connStr = stdlib.RegisterConnConfig(pgxCfg)
+		b.azureRefresh = &azureRefreshState{provider: provider, pgxCfg: pgxCfg}
 	}
 
-	// Phase 3: Instrument database/sql with OpenTelemetry
 	db, err := otelsql.Open("pgx", connStr,
 		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
 		otelsql.WithDBName(pgxCfg.Database),
@@ -104,12 +111,41 @@ func New(cfg Config) (*PostgresStorageBackend, error) {
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
-	b := &PostgresStorageBackend{db: db}
-	if err := b.migrate(context.Background()); err != nil {
+	b.db = db
+	if err := b.migrate(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+
+	if b.azureRefresh != nil {
+		go b.runAzureTokenRefresh(ctx)
+	}
+
 	return b, nil
+}
+
+// runAzureTokenRefresh refreshes the Managed Identity token every 20 minutes so
+// that new connections opened after each cycle always get a valid token.
+// Azure tokens expire after ~24 hours; refreshing every 20 minutes gives ample
+// margin.  Existing idle connections are cycled out naturally by ConnMaxLifetime
+// (default 1 hour), so they too will pick up fresh tokens before expiry.
+func (b *PostgresStorageBackend) runAzureTokenRefresh(ctx context.Context) {
+	ticker := time.NewTicker(20 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			token, err := b.azureRefresh.provider.GetToken(ctx)
+			if err != nil {
+				slog.Error("azure: managed identity token refresh failed", "err", err)
+				continue
+			}
+			b.azureRefresh.pgxCfg.Password = token
+			slog.Info("azure: managed identity token refreshed")
+		}
+	}
 }
 
 // ---- StorageBackend implementation ----

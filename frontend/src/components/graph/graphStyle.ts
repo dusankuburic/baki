@@ -73,7 +73,7 @@ export function buildGraphStyle(t: GraphTokenColors): any[] {
         'border-width': 1,
         shape: 'round-rectangle',
         width: 210,
-        height: 72,
+        height: 88,
         padding: 12,
         // fullLabel contains "TypeLabel\nStrippedName" (two lines)
         label: 'data(fullLabel)',
@@ -83,8 +83,8 @@ export function buildGraphStyle(t: GraphTokenColors): any[] {
         'text-valign': 'center',
         'text-halign': 'center',
         'text-wrap': 'wrap',
+        'text-overflow-wrap': 'anywhere',
         'text-max-width': 180,
-        'text-line-height': 1.4,
       },
     },
     ...typeStyles,

@@ -59,17 +59,16 @@ func TestSearchBlock_EmptySlice(t *testing.T) {
 
 func TestFlowService_SearchFlow_NoDoc(t *testing.T) {
 	svc := &FlowService{ctx: context.Background()}
-	_, err := svc.SearchFlow("nonexistent-id", models.SearchQuery{Text: "anything", MaxResults: 10})
+	_, err := svc.SearchFlow(nil, models.SearchQuery{Text: "anything", MaxResults: 10})
 	if err == nil {
-		t.Fatal("expected error when no doc loaded")
+		t.Fatal("expected error when doc is nil")
 	}
 }
 
 func TestFlowService_SearchFlow_Returns(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	doc := svc.CurrentDoc()
+	svc, doc := makeTestDoc(t, simpleFlow)
 
-	results, err := svc.SearchFlow(doc.ID, models.SearchQuery{
+	results, err := svc.SearchFlow(doc, models.SearchQuery{
 		Text:       "MyVar",
 		MaxResults: 10,
 	})
@@ -78,14 +77,6 @@ func TestFlowService_SearchFlow_Returns(t *testing.T) {
 	}
 	if results == nil {
 		t.Fatal("expected non-nil results")
-	}
-}
-
-func TestFlowService_SearchFlow_WrongFlowID(t *testing.T) {
-	svc := makeTestDoc(t, simpleFlow)
-	_, err := svc.SearchFlow("wrong-id", models.SearchQuery{Text: "MyVar", MaxResults: 10})
-	if err == nil {
-		t.Fatal("expected error for wrong flow ID")
 	}
 }
 
@@ -181,11 +172,8 @@ func TestFlowService_ClearRecentFiles(t *testing.T) {
 }
 
 // ---- LoadFlowFromPath guard paths (no backend notifier required) ---------------
-// The happy path calls notifier.Emit which might be difficult to mock in simple tests,
-// so we only test the early-exit guard conditions here.
 
 func TestFlowService_LoadFlowFromPath_NoSettings(t *testing.T) {
-	// settings == nil → early return before any notifier call.
 	svc := &FlowService{ctx: context.Background(), settings: nil}
 	_, err := svc.LoadFlowFromPath("/any/path.txt")
 	if err == nil {
@@ -194,7 +182,6 @@ func TestFlowService_LoadFlowFromPath_NoSettings(t *testing.T) {
 }
 
 func TestFlowService_LoadFlowFromPath_NonExistent(t *testing.T) {
-	// Non-existent file → os.Stat fails before any notifier call.
 	s := newTestSettingsStore(t)
 	svc := &FlowService{ctx: context.Background(), settings: s}
 

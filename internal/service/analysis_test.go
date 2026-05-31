@@ -4,31 +4,24 @@ import (
 	"context"
 	"testing"
 
+	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/parser"
 )
 
-func makeTestAnalysisService(t *testing.T, text string) (*FlowService, *AnalysisService) {
+// makeTestAnalysisService parses text into a FlowDocument and returns it alongside
+// a freshly-constructed AnalysisService. Used by analysis_test.go and flow_extra_test.go.
+func makeTestAnalysisService(t *testing.T, text string) (*models.FlowDocument, *AnalysisService) {
 	t.Helper()
 	doc, err := parser.ParseText(text, "test.txt", int64(len(text)))
 	if err != nil {
 		t.Fatalf("ParseText: %v", err)
 	}
-	flow := &FlowService{ctx: context.Background()}
-	flow.currentDoc = doc
-	analysis := &AnalysisService{ctx: context.Background(), flow: flow}
-	return flow, analysis
-}
-
-func TestAnalysisService_LastReport_nil(t *testing.T) {
-	_, svc := makeTestAnalysisService(t, simpleFlow)
-	if svc.LastReport() != nil {
-		t.Fatal("expected nil before any analysis run")
-	}
+	svc := &AnalysisService{ctx: context.Background()}
+	return doc, svc
 }
 
 func TestAnalysisService_GetVariableLineage_no_doc(t *testing.T) {
-	flow := &FlowService{ctx: context.Background()}
-	svc := &AnalysisService{ctx: context.Background(), flow: flow}
+	svc := &AnalysisService{ctx: context.Background()}
 	_, err := svc.GetVariableLineage(nil, "MyVar")
 	if err == nil {
 		t.Fatal("expected error when no doc loaded")
@@ -36,8 +29,8 @@ func TestAnalysisService_GetVariableLineage_no_doc(t *testing.T) {
 }
 
 func TestAnalysisService_GetVariableLineage_found(t *testing.T) {
-	_, svc := makeTestAnalysisService(t, simpleFlow)
-	history, err := svc.GetVariableLineage(svc.flow.CurrentDoc(), "MyVar")
+	doc, svc := makeTestAnalysisService(t, simpleFlow)
+	history, err := svc.GetVariableLineage(doc, "MyVar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,19 +40,17 @@ func TestAnalysisService_GetVariableLineage_found(t *testing.T) {
 	if history.Name != "MyVar" {
 		t.Errorf("history.Name = %q, want %q", history.Name, "MyVar")
 	}
-	// simpleFlow assigns MyVar via SET, so there should be at least one event
 	if len(history.Events) == 0 {
 		t.Error("expected at least one event for MyVar")
 	}
 }
 
 func TestAnalysisService_GetVariableLineage_unknown_var(t *testing.T) {
-	_, svc := makeTestAnalysisService(t, simpleFlow)
-	history, err := svc.GetVariableLineage(svc.flow.CurrentDoc(), "NoSuchVar")
+	doc, svc := makeTestAnalysisService(t, simpleFlow)
+	history, err := svc.GetVariableLineage(doc, "NoSuchVar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Unknown variable → history with empty events, not an error
 	if history == nil {
 		t.Fatal("expected non-nil history even for unknown var")
 	}
@@ -69,8 +60,7 @@ func TestAnalysisService_GetVariableLineage_unknown_var(t *testing.T) {
 }
 
 func TestAnalysisService_GetExecutionGraph_no_doc(t *testing.T) {
-	flow := &FlowService{ctx: context.Background()}
-	svc := &AnalysisService{ctx: context.Background(), flow: flow}
+	svc := &AnalysisService{ctx: context.Background()}
 	_, err := svc.GetExecutionGraph(nil)
 	if err == nil {
 		t.Fatal("expected error when no doc loaded")
@@ -78,27 +68,25 @@ func TestAnalysisService_GetExecutionGraph_no_doc(t *testing.T) {
 }
 
 func TestAnalysisService_GetExecutionGraph_single_subflow(t *testing.T) {
-	_, svc := makeTestAnalysisService(t, simpleFlow)
-	graph, err := svc.GetExecutionGraph(svc.flow.CurrentDoc())
+	doc, svc := makeTestAnalysisService(t, simpleFlow)
+	graph, err := svc.GetExecutionGraph(doc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if graph == nil {
 		t.Fatal("expected non-nil graph")
 	}
-	// simpleFlow has one implicit subflow → one node, no edges
 	if len(graph.Nodes) == 0 {
 		t.Error("expected at least one node")
 	}
 }
 
 func TestAnalysisService_GetExecutionGraph_two_subflows(t *testing.T) {
-	_, svc := makeTestAnalysisService(t, twoSubflowFlow)
-	graph, err := svc.GetExecutionGraph(svc.flow.CurrentDoc())
+	doc, svc := makeTestAnalysisService(t, twoSubflowFlow)
+	graph, err := svc.GetExecutionGraph(doc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Main calls Helper → should have an edge
 	if len(graph.Nodes) < 2 {
 		t.Errorf("expected 2 nodes, got %d", len(graph.Nodes))
 	}
@@ -108,7 +96,7 @@ func TestAnalysisService_GetExecutionGraph_two_subflows(t *testing.T) {
 }
 
 func TestAnalysisService_GetRules_returns_all(t *testing.T) {
-	_, svc := makeTestAnalysisService(t, simpleFlow)
+	svc := &AnalysisService{ctx: context.Background()}
 	rules := svc.GetRules()
 	if len(rules) == 0 {
 		t.Fatal("expected non-empty rule list")

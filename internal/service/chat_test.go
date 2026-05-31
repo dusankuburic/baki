@@ -43,7 +43,7 @@ func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
 		factory:  factory,
 	}
 
-	id, err := svc.StreamChatMessage("test", models.ChatRequest{Provider: "unknown"})
+	id, err := svc.StreamChatMessage("test", nil, nil, models.ChatRequest{Provider: "unknown"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
 		factory:  factory,
 	}
 
-	id, err := svc.StreamChatMessage("test", models.ChatRequest{Provider: "unknown"})
+	id, err := svc.StreamChatMessage("test", nil, nil, models.ChatRequest{Provider: "unknown"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 		factory:  factory,
 	}
 
-	id, err := svc.StreamChatMessage("test", models.ChatRequest{Provider: "unknown"})
+	id, err := svc.StreamChatMessage("test", nil, nil, models.ChatRequest{Provider: "unknown"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}

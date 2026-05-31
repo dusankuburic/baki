@@ -134,8 +134,26 @@ interface SettingsState {
   resetToDefaults: () => Promise<void>
 }
 
+// Persist with a debounce to prevent flooding the backend during rapid UI
+// updates (like window resizing or slider dragging).
+let persistTimer: any = null
 async function persist(settings: AppSettings): Promise<void> {
-  await settingsApi.updateSettings(settings as any)
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+  }
+
+  return new Promise((resolve) => {
+    persistTimer = setTimeout(async () => {
+      try {
+        await settingsApi.updateSettings(settings as any)
+      } catch (err) {
+        console.error('Failed to persist settings', err)
+      } finally {
+        persistTimer = null
+        resolve()
+      }
+    }, 1000) // 1 second debounce
+  })
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -158,42 +176,42 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const prev = get().settings
     const next = {...prev, ...patch}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   updateGeneral: async (general) => {
     const prev = get().settings
     const next = {...prev, general: {...prev.general, ...general}}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   updateAppearance: async (appearance) => {
     const prev = get().settings
     const next = {...prev, appearance: {...prev.appearance, ...appearance}}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   updateParser: async (parser) => {
     const prev = get().settings
     const next = {...prev, parser: {...prev.parser, ...parser}}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   updateLayout: async (layout) => {
     const prev = get().settings
     const next = {...prev, layout: {...prev.layout, ...layout}}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   updateAI: async (ai) => {
     const prev = get().settings
     const next = {...prev, ai: {...prev.ai, ...ai}}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   updateProvider: async (id, config) => {
@@ -201,12 +219,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const providers = {...prev.ai.providers, [id]: {...prev.ai.providers[id], ...config}}
     const next = {...prev, ai: {...prev.ai, providers}}
     set({settings: next})
-    try { await persist(next) } catch { set({settings: prev}) }
+    await persist(next)
   },
 
   resetToDefaults: async () => {
-    const prev = get().settings
     set({settings: defaultSettings})
-    try { await persist(defaultSettings) } catch { set({settings: prev}) }
+    await persist(defaultSettings)
   },
 }))

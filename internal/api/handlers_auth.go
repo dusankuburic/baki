@@ -300,11 +300,20 @@ func (rt *Router) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 // @Router /api/auth/logout [post]
 func (rt *Router) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	// In cloud mode, revoke the user's refresh tokens so they can't be replayed
-	// after logout. The access token is short-lived and expires on its own.
-	if rt.tokenStore != nil {
-		if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-			if err := rt.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
-				logger.Error("logout: failed to revoke refresh tokens", "error", err)
+	// after logout. The access token might already be expired when the user
+	// clicks logout, so we parse it manually here (since this endpoint is in
+	// publicRoutes) and tolerate the expiry error as long as the signature
+	// is valid.
+	if rt.jwtEnabled && rt.tokenStore != nil {
+		tokenStr := auth.ExtractToken(r)
+		if tokenStr != "" {
+			claims, err := rt.authMgr.VerifyIgnoreExpiry(tokenStr)
+			if err == nil {
+				if err := rt.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
+					logger.Error("logout: failed to revoke refresh tokens", "error", err)
+				}
+			} else {
+				logger.Warn("logout: invalid token signature", "error", err)
 			}
 		}
 	}

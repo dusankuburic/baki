@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Users, UserPlus, Trash2, Shield, Eye, Edit3 } from 'lucide-react'
 import { sharingApi, type Collaborator, type Permission } from '@/api/sharing'
 import { useFlowStore } from '@/stores/flowStore'
@@ -15,7 +15,7 @@ export const SharingTab: React.FC = () => {
   const [isAdding, setIsAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchCollaborators = async () => {
+  const fetchCollaborators = useCallback(async () => {
     if (!document) return
     setIsLoading(true)
     setError(null)
@@ -28,11 +28,11 @@ export const SharingTab: React.FC = () => {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [document])
 
   useEffect(() => {
     fetchCollaborators()
-  }, [document?.id])
+  }, [fetchCollaborators])
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
