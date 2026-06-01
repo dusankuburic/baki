@@ -137,29 +137,15 @@
                       "indent": 12,
                       "lineNumber": 10,
                       "properties": {
-                        "BrowserInstance": "Input_BrowserInstance"
+                        "BrowserInstance": "Input_BrowserInstance",
+                        "_retryCount": "3",
+                        "_retryWait": "3"
                       },
                       "variables": [],
                       "tokens": [
                         {
                           "type": "text",
                           "value": "Close Web Browser"
-                        }
-                      ],
-                      "children": []
-                    },
-                    {
-                      "name": "ON ERROR REPEAT 3 TIMES WAIT 3",
-                      "type": "COMMENT",
-                      "rawType": "COMMENT",
-                      "indent": 12,
-                      "lineNumber": 11,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "text",
-                          "value": "ON ERROR REPEAT 3 TIMES WAIT 3"
                         }
                       ],
                       "children": []
@@ -255,7 +241,12 @@
                           "tokens": [
                             {
                               "type": "text",
-                              "value": "Exit"
+                              "value": "GOTO "
+                            },
+                            {
+                              "type": "label",
+                              "value": "Exit",
+                              "target": "Exit"
                             }
                           ],
                           "children": []
@@ -602,7 +593,12 @@
                       "tokens": [
                         {
                           "type": "text",
-                          "value": "Exit"
+                          "value": "GOTO "
+                        },
+                        {
+                          "type": "label",
+                          "value": "Exit",
+                          "target": "Exit"
                         }
                       ],
                       "children": []
@@ -662,7 +658,12 @@
               "tokens": [
                 {
                   "type": "text",
-                  "value": "Exit"
+                  "value": "LABEL "
+                },
+                {
+                  "type": "label",
+                  "value": "Exit",
+                  "target": "Exit"
                 }
               ],
               "children": []
@@ -1084,11 +1085,38 @@
               "indent": 4,
               "lineNumber": 18,
               "properties": {},
-              "variables": [],
+              "variables": [
+                "LoopIndex"
+              ],
               "tokens": [
                 {
+                  "type": "variable",
+                  "value": "%LoopIndex%",
+                  "target": "LoopIndex"
+                },
+                {
                   "type": "text",
-                  "value": "LoopIndex FROM 0 TO 10 STEP 1"
+                  "value": " FROM "
+                },
+                {
+                  "type": "text",
+                  "value": "0"
+                },
+                {
+                  "type": "text",
+                  "value": " TO "
+                },
+                {
+                  "type": "text",
+                  "value": "10"
+                },
+                {
+                  "type": "text",
+                  "value": " STEP "
+                },
+                {
+                  "type": "text",
+                  "value": "1"
                 }
               ],
               "children": [
@@ -1287,9 +1315,9 @@
                       ],
                       "children": [
                         {
-                          "name": "EXIT LOOP",
+                          "name": "Exit Loop",
                           "type": "ACTION",
-                          "rawType": "EXIT",
+                          "rawType": "EXIT_LOOP",
                           "indent": 12,
                           "lineNumber": 32,
                           "properties": {},
@@ -1297,7 +1325,7 @@
                           "tokens": [
                             {
                               "type": "text",
-                              "value": "EXIT LOOP"
+                              "value": "Exit Loop"
                             }
                           ],
                           "children": []
@@ -1777,11 +1805,38 @@
               "indent": 4,
               "lineNumber": 18,
               "properties": {},
-              "variables": [],
+              "variables": [
+                "LoopIndex"
+              ],
               "tokens": [
                 {
+                  "type": "variable",
+                  "value": "%LoopIndex%",
+                  "target": "LoopIndex"
+                },
+                {
                   "type": "text",
-                  "value": "LoopIndex FROM 0 TO 10 STEP 1"
+                  "value": " FROM "
+                },
+                {
+                  "type": "text",
+                  "value": "0"
+                },
+                {
+                  "type": "text",
+                  "value": " TO "
+                },
+                {
+                  "type": "text",
+                  "value": "10"
+                },
+                {
+                  "type": "text",
+                  "value": " STEP "
+                },
+                {
+                  "type": "text",
+                  "value": "1"
                 }
               ],
               "children": [
@@ -1980,9 +2035,9 @@
                       ],
                       "children": [
                         {
-                          "name": "EXIT LOOP",
+                          "name": "Exit Loop",
                           "type": "ACTION",
-                          "rawType": "EXIT",
+                          "rawType": "EXIT_LOOP",
                           "indent": 12,
                           "lineNumber": 32,
                           "properties": {},
@@ -1990,7 +2045,7 @@
                           "tokens": [
                             {
                               "type": "text",
-                              "value": "EXIT LOOP"
+                              "value": "Exit Loop"
                             }
                           ],
                           "children": []
@@ -2470,11 +2525,38 @@
               "indent": 4,
               "lineNumber": 18,
               "properties": {},
-              "variables": [],
+              "variables": [
+                "LoopIndex"
+              ],
               "tokens": [
                 {
+                  "type": "variable",
+                  "value": "%LoopIndex%",
+                  "target": "LoopIndex"
+                },
+                {
                   "type": "text",
-                  "value": "LoopIndex FROM 0 TO 10 STEP 1"
+                  "value": " FROM "
+                },
+                {
+                  "type": "text",
+                  "value": "0"
+                },
+                {
+                  "type": "text",
+                  "value": " TO "
+                },
+                {
+                  "type": "text",
+                  "value": "10"
+                },
+                {
+                  "type": "text",
+                  "value": " STEP "
+                },
+                {
+                  "type": "text",
+                  "value": "1"
                 }
               ],
               "children": [
@@ -2673,9 +2755,9 @@
                       ],
                       "children": [
                         {
-                          "name": "EXIT LOOP",
+                          "name": "Exit Loop",
                           "type": "ACTION",
-                          "rawType": "EXIT",
+                          "rawType": "EXIT_LOOP",
                           "indent": 12,
                           "lineNumber": 32,
                           "properties": {},
@@ -2683,7 +2765,7 @@
                           "tokens": [
                             {
                               "type": "text",
-                              "value": "EXIT LOOP"
+                              "value": "Exit Loop"
                             }
                           ],
                           "children": []
@@ -2865,7 +2947,7 @@
     }
   ],
   "metadata": {
-    "blockCount": 141,
+    "blockCount": 140,
     "subflowCount": 4,
     "maxDepth": 6,
     "rawLineCount": 163

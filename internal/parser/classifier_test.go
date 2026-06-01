@@ -19,7 +19,11 @@ func TestClassifyBlockType(t *testing.T) {
 		{"COMMENT", models.BlockTypeComment},
 		{"SET", models.BlockTypeVariable},
 		{"Variables.SetVariable", models.BlockTypeVariable},
-		{"Variables.IncreaseVariable", models.BlockTypeVariable},
+		// List / math ops are reclassified as ACTION — not variable assignments.
+		{"Variables.IncreaseVariable", models.BlockTypeAction},
+		{"Variables.CreateNewList", models.BlockTypeAction},
+		{"Variables.AddItemToList", models.BlockTypeAction},
+		{"Variables.GenerateRandomNumber", models.BlockTypeAction},
 		{"WAIT", models.BlockTypeWait},
 		{"Display.ShowMessageBox", models.BlockTypeAction},
 		{"DateTime.GetCurrentDateTime", models.BlockTypeAction},

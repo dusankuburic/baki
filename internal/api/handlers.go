@@ -46,6 +46,12 @@ func (rt *Router) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.URL.Path {
+	// --- Local config (public) ---
+	// Returns the pre-shared token so the web client can authenticate in local mode.
+	// In JWT/cloud mode this returns 404 — the web client authenticates via login instead.
+	case "/api/local-config":
+		rt.handleLocalConfig(w, r)
+
 	// --- Health ---
 	case "/healthz":
 		rt.handleLiveness(w, r)

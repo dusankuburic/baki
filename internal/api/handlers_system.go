@@ -133,6 +133,17 @@ func (rt *Router) handleSaveApiKey(w http.ResponseWriter, r *http.Request) {
 // @Tags system
 // @Produce json
 // @Success 200 {object} map[string]string
+// handleLocalConfig returns the pre-shared token for local (non-JWT) mode so that
+// a web browser client can self-configure without manual setup.
+// In JWT/cloud mode this returns 404 — clients authenticate via login instead.
+func (rt *Router) handleLocalConfig(w http.ResponseWriter, _ *http.Request) {
+	if rt.jwtEnabled {
+		http.NotFound(w, nil)
+		return
+	}
+	rt.sendJSON(w, map[string]string{"token": rt.token})
+}
+
 // @Router /healthz [get]
 func (rt *Router) handleLiveness(w http.ResponseWriter, _ *http.Request) {
 	rt.sendJSON(w, map[string]string{"status": "ok"})

@@ -1,0 +1,245 @@
+{
+  "name": "goto_label",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Set Counter",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {
+            "_output": "Counter",
+            "_value": "0",
+            "_var": "Counter"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Counter%",
+              "target": "Counter"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "0"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Start",
+          "type": "ACTION",
+          "rawType": "LABEL",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "LABEL "
+            },
+            {
+              "type": "label",
+              "value": "Start",
+              "target": "Start"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Increase Variable",
+          "type": "ACTION",
+          "rawType": "Variables.IncreaseVariable",
+          "indent": 4,
+          "lineNumber": 4,
+          "properties": {
+            "IncrementValue": "1",
+            "Value": "Counter"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Counter%",
+              "target": "Counter"
+            },
+            {
+              "type": "text",
+              "value": " += "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF %Counter% \u003c 3",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 4,
+          "lineNumber": 5,
+          "properties": {},
+          "variables": [
+            "Counter"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Counter%",
+              "target": "Counter"
+            },
+            {
+              "type": "text",
+              "value": " \u003c 3"
+            }
+          ],
+          "children": [
+            {
+              "name": "Start",
+              "type": "ACTION",
+              "rawType": "GOTO",
+              "indent": 8,
+              "lineNumber": 6,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "GOTO "
+                },
+                {
+                  "type": "label",
+                  "value": "Start",
+                  "target": "Start"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 7,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Done",
+          "type": "ACTION",
+          "rawType": "GOTO",
+          "indent": 4,
+          "lineNumber": 8,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "GOTO "
+            },
+            {
+              "type": "label",
+              "value": "Done",
+              "target": "Done"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 9,
+          "properties": {
+            "Message": "this is skipped"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Done",
+          "type": "ACTION",
+          "rawType": "LABEL",
+          "indent": 4,
+          "lineNumber": 10,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "LABEL "
+            },
+            {
+              "type": "label",
+              "value": "Done",
+              "target": "Done"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 11,
+          "properties": {
+            "Message": "Counter reached: %Counter%"
+          },
+          "variables": [
+            "Counter"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 11,
+      "message": "unclosed block: Show Message Box",
+      "severity": "error",
+      "snippet": "Display.ShowMessageBox"
+    }
+  ],
+  "metadata": {
+    "blockCount": 10,
+    "subflowCount": 1,
+    "maxDepth": 2,
+    "rawLineCount": 13
+  }
+}

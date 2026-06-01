@@ -1,0 +1,15 @@
+Variables.GenerateRandomNumber.RandomNumber MinimumValue: 0 MaximumValue: 100 RandomNumber=> RandomNumber
+Variables.GenerateRandomNumber.ListOfRandomNumbers MinimumValue: 20 MaximumValue: 121 NumbersCount: 10 AllowDuplicates: False RandomNumbers=> RandomNumbers
+Variables.GenerateRandomNumber.ListOfRandomNumbers MinimumValue: 20 MaximumValue: 121 NumbersCount: 10 AllowDuplicates: True RandomNumbers=> RandomNumbers
+Variables.GenerateRandomNumber.ListOfRandomNumbers MinimumValue: 0 MaximumValue: 6003 NumbersCount: 10 AllowDuplicates: True RandomNumbers=> RandomNumbers
+    ON ERROR REPEAT 2 TIMES WAIT 2
+    ON ERROR
+
+    END
+Variables.GenerateRandomNumber.ListOfRandomNumbers MinimumValue: 66 MaximumValue: 6003 NumbersCount: 10 AllowDuplicates: True RandomNumbers=> RandomNumbers
+    ON ERROR REPEAT 3 TIMES WAIT 2
+    END
+Variables.GenerateRandomNumber.ListOfRandomNumbers MinimumValue: 66 MaximumValue: 6003 NumbersCount: 10 AllowDuplicates: False RandomNumbers=> RandomNumbers
+    ON ERROR REPEAT 3 TIMES WAIT 2 RetryType: RetryType.Exponential MinInterval: 2 MaxInterval: 360
+    END
+Variables.GenerateRandomNumber.ListOfRandomNumbers MinimumValue: 20 MaximumValue: 121 NumbersCount: 10 AllowDuplicates: False RandomNumbers=> RandomNumbers

@@ -125,12 +125,18 @@
           "properties": {},
           "variables": [
             "ItemList",
-            "Item"
+            "Item",
+            "ItemList"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%Item%",
+              "target": "Item"
+            },
+            {
               "type": "text",
-              "value": "Item IN "
+              "value": " IN "
             },
             {
               "type": "variable",
@@ -449,12 +455,18 @@
           "properties": {},
           "variables": [
             "ExcelData",
-            "CurrentRow"
+            "CurrentRow",
+            "ExcelData"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%CurrentRow%",
+              "target": "CurrentRow"
+            },
+            {
               "type": "text",
-              "value": "CurrentRow IN "
+              "value": " IN "
             },
             {
               "type": "variable",

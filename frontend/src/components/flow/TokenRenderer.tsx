@@ -7,7 +7,7 @@ import {analysisApi} from '@/api'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
 
-import {ExternalLink, Variable as VariableIcon} from 'lucide-react'
+import {ExternalLink, Variable as VariableIcon, Hash} from 'lucide-react'
 import {Tooltip} from '@/components/shared'
 
 interface TokenRendererProps {
@@ -20,6 +20,10 @@ export default function TokenRenderer({tokens}: TokenRendererProps) {
       {tokens.map((token, i) => {
         if (token.type === 'variable') {
             return <VariableToken key={i} token={token} />
+        }
+
+        if (token.type === 'label') {
+            return <LabelToken key={i} token={token} />
         }
 
         const isInteractive = token.type === 'subflow'
@@ -37,7 +41,10 @@ export default function TokenRenderer({tokens}: TokenRendererProps) {
               isInteractive && 'cursor-pointer',
               token.type === 'subflow' && 'inline-flex items-center gap-1 text-block-subflow font-semibold hover:underline decoration-block-subflow/30 underline-offset-2 transition-all',
               token.type === 'string' && 'text-block-string font-mono italic',
-              token.type === 'text' && 'text-text-primary'
+              // whitespace-pre-wrap: preserve leading/trailing spaces that flex
+              // layout strips at the start/end of each item's line box.
+              // Keeps " FROM ", " TO ", " = ", " += " etc. visually spaced.
+              token.type === 'text' && 'text-text-primary whitespace-pre-wrap'
             )}
           >
             {token.value}
@@ -47,6 +54,30 @@ export default function TokenRenderer({tokens}: TokenRendererProps) {
       })}
     </div>
   )
+}
+
+function LabelToken({token}: {token: BlockToken}) {
+    const navigateToLabelByName = useFlowStore(s => s.navigateToLabelByName)
+    const isGoto = !!token.target
+
+    const handleClick = (e: React.MouseEvent) => {
+        if (!isGoto || !token.target) return
+        e.stopPropagation()
+        navigateToLabelByName(token.target)
+    }
+
+    return (
+        <span
+            onClick={handleClick}
+            className={clsx(
+                'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md font-mono text-[0.9em] border mx-0.5 leading-none bg-purple-500/10 text-purple-400 border-purple-500/20 transition-colors',
+                isGoto && 'cursor-pointer hover:bg-purple-500/20 hover:border-purple-500/40'
+            )}
+        >
+            <Hash size={10} className="opacity-70" />
+            {token.value}
+        </span>
+    )
 }
 
 function VariableToken({token}: {token: BlockToken}) {

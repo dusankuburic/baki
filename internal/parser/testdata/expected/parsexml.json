@@ -46,7 +46,7 @@
         },
         {
           "name": "Create New List",
-          "type": "VARIABLE",
+          "type": "ACTION",
           "rawType": "Variables.CreateNewList",
           "indent": 0,
           "lineNumber": 3,
@@ -56,8 +56,9 @@
           "variables": [],
           "tokens": [
             {
-              "type": "text",
-              "value": "Create New List"
+              "type": "variable",
+              "value": "%ArtikalList%",
+              "target": "ArtikalList"
             }
           ],
           "children": []
@@ -70,12 +71,23 @@
           "lineNumber": 4,
           "properties": {},
           "variables": [
-            "CurrentNode"
+            "CurrentNode",
+            "ArtikalNodes"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%CurrentNode%",
+              "target": "CurrentNode"
+            },
+            {
               "type": "text",
-              "value": "CurrentNode IN ArtikalNodes"
+              "value": " IN "
+            },
+            {
+              "type": "variable",
+              "value": "%ArtikalNodes%",
+              "target": "ArtikalNodes"
             }
           ],
           "children": [
@@ -795,7 +807,7 @@
             },
             {
               "name": "Add Item To List",
-              "type": "VARIABLE",
+              "type": "ACTION",
               "rawType": "Variables.AddItemToList",
               "indent": 4,
               "lineNumber": 46,
@@ -806,8 +818,17 @@
               "variables": [],
               "tokens": [
                 {
+                  "type": "variable",
+                  "value": "%ArtikalList%",
+                  "target": "ArtikalList"
+                },
+                {
                   "type": "text",
-                  "value": "Add Item To List"
+                  "value": " ← "
+                },
+                {
+                  "type": "text",
+                  "value": "CurrArtikal"
                 }
               ],
               "children": []

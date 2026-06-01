@@ -1,0 +1,1600 @@
+{
+  "name": "actions",
+  "subflows": [
+    {
+      "name": "FlowControl",
+      "blocks": [
+        {
+          "name": "IF (FlowControl.IfSafeStop ShouldStop: True)",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {
+            "ShouldStop": "True) THEN"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "(FlowControl.IfSafeStop ShouldStop: True)"
+            }
+          ],
+          "children": [
+            {
+              "name": "Create New List",
+              "type": "ACTION",
+              "rawType": "Variables.CreateNewList",
+              "indent": 4,
+              "lineNumber": 2,
+              "properties": {
+                "_output": "List"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%List%",
+                  "target": "List"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 3,
+              "properties": {
+                "_parentType": "CONDITION"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End If"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "comment",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "comment"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Error =\u003e LastError",
+          "type": "ACTION",
+          "rawType": "ERROR_CAPTURE",
+          "indent": 0,
+          "lineNumber": 5,
+          "properties": {
+            "_output": "LastError"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Error =\u003e LastError"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EXIT FUNCTION",
+          "type": "ACTION",
+          "rawType": "EXIT",
+          "indent": 0,
+          "lineNumber": 6,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EXIT FUNCTION"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EXIT Code: 0 ErrorMessage: $'''CRITICAL'''",
+          "type": "ACTION",
+          "rawType": "EXIT",
+          "indent": 0,
+          "lineNumber": 7,
+          "properties": {
+            "Code": "0",
+            "ErrorMessage": "CRITICAL"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EXIT Code: 0 ErrorMessage: "
+            },
+            {
+              "type": "string",
+              "value": "\"CRITICAL\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "REGION",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 8,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "REGION"
+            }
+          ],
+          "children": [
+            {
+              "name": "End",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 9,
+              "properties": {
+                "_parentType": "BLOCK"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "REGION STOP FLOW",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 10,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "REGION STOP FLOW"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EXIT Code: 0",
+          "type": "ACTION",
+          "rawType": "EXIT",
+          "indent": 0,
+          "lineNumber": 11,
+          "properties": {
+            "Code": "0"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EXIT Code: 0"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "REGION NESTED",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 13,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "REGION NESTED"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "L1",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 14,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "L1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "L2",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 15,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "L2"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "L3",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 16,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "L3"
+            }
+          ],
+          "children": [
+            {
+              "name": "End",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 17,
+              "properties": {
+                "_parentType": "BLOCK"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "L1A",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 20,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "L1A"
+            }
+          ],
+          "children": [
+            {
+              "name": "End",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 21,
+              "properties": {
+                "_parentType": "BLOCK"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "L1B",
+          "type": "BLOCK",
+          "rawType": "REGION",
+          "indent": 0,
+          "lineNumber": 22,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "L1B"
+            }
+          ],
+          "children": [
+            {
+              "name": "End",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 23,
+              "properties": {
+                "_parentType": "BLOCK"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "GenerateRandomNumber",
+      "blocks": [
+        {
+          "name": "Random Number",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.RandomNumber",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {
+            "MaximumValue": "100 RandomNumber",
+            "MinimumValue": "0",
+            "_output": "RandomNumber"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Random Number"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "List Of Random Numbers",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.ListOfRandomNumbers",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "AllowDuplicates": "False RandomNumbers",
+            "MaximumValue": "121",
+            "MinimumValue": "20",
+            "NumbersCount": "10",
+            "_output": "RandomNumbers"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "List Of Random Numbers"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "List Of Random Numbers",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.ListOfRandomNumbers",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "AllowDuplicates": "True RandomNumbers",
+            "MaximumValue": "121",
+            "MinimumValue": "20",
+            "NumbersCount": "10",
+            "_output": "RandomNumbers"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "List Of Random Numbers"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "List Of Random Numbers",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.ListOfRandomNumbers",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {
+            "AllowDuplicates": "True RandomNumbers",
+            "MaximumValue": "6003",
+            "MinimumValue": "0",
+            "NumbersCount": "10",
+            "_output": "RandomNumbers",
+            "_retryCount": "2",
+            "_retryWait": "2"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "List Of Random Numbers"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ERROR_HANDLER",
+              "rawType": "OnBlockError",
+              "indent": 4,
+              "lineNumber": 6,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": [
+                {
+                  "name": "End On Block Error",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 4,
+                  "lineNumber": 8,
+                  "properties": {
+                    "_parentType": "ERROR_HANDLER"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End On Block Error"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "List Of Random Numbers",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.ListOfRandomNumbers",
+          "indent": 0,
+          "lineNumber": 9,
+          "properties": {
+            "AllowDuplicates": "True RandomNumbers",
+            "MaximumValue": "6003",
+            "MinimumValue": "66",
+            "NumbersCount": "10",
+            "_output": "RandomNumbers",
+            "_retryCount": "3",
+            "_retryWait": "2"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "List Of Random Numbers"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "List Of Random Numbers",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.ListOfRandomNumbers",
+          "indent": 0,
+          "lineNumber": 12,
+          "properties": {
+            "AllowDuplicates": "False RandomNumbers",
+            "MaximumValue": "6003",
+            "MinimumValue": "66",
+            "NumbersCount": "10",
+            "_output": "RandomNumbers",
+            "_retryCount": "3",
+            "_retryMaxInterval": "360",
+            "_retryMinInterval": "2",
+            "_retryType": "RetryType.Exponential",
+            "_retryWait": "2"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "List Of Random Numbers"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "List Of Random Numbers",
+          "type": "ACTION",
+          "rawType": "Variables.GenerateRandomNumber.ListOfRandomNumbers",
+          "indent": 0,
+          "lineNumber": 15,
+          "properties": {
+            "AllowDuplicates": "False RandomNumbers",
+            "MaximumValue": "121",
+            "MinimumValue": "20",
+            "NumbersCount": "10",
+            "_output": "RandomNumbers"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "List Of Random Numbers"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Loops",
+      "blocks": [
+        {
+          "name": "Create New List",
+          "type": "ACTION",
+          "rawType": "Variables.CreateNewList",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {
+            "_output": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set num",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "_output": "num",
+            "_value": "0",
+            "_var": "num"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%num%",
+              "target": "num"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "0"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "LOOP FOREACH CurrentItem IN List",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [
+            "CurrentItem",
+            "List"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%CurrentItem%",
+              "target": "CurrentItem"
+            },
+            {
+              "type": "text",
+              "value": " IN "
+            },
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": [
+            {
+              "name": "Increase Variable",
+              "type": "ACTION",
+              "rawType": "Variables.IncreaseVariable",
+              "indent": 4,
+              "lineNumber": 4,
+              "properties": {
+                "IncrementValue": "1",
+                "Value": "num"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%num%",
+                  "target": "num"
+                },
+                {
+                  "type": "text",
+                  "value": " += "
+                },
+                {
+                  "type": "text",
+                  "value": "1"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 5,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "LOOP LoopIndex FROM 0 TO 10 STEP 2",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 6,
+          "properties": {},
+          "variables": [
+            "LoopIndex"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LoopIndex%",
+              "target": "LoopIndex"
+            },
+            {
+              "type": "text",
+              "value": " FROM "
+            },
+            {
+              "type": "text",
+              "value": "0"
+            },
+            {
+              "type": "text",
+              "value": " TO "
+            },
+            {
+              "type": "text",
+              "value": "10"
+            },
+            {
+              "type": "text",
+              "value": " STEP "
+            },
+            {
+              "type": "text",
+              "value": "2"
+            }
+          ],
+          "children": [
+            {
+              "name": "Increase Variable",
+              "type": "ACTION",
+              "rawType": "Variables.IncreaseVariable",
+              "indent": 4,
+              "lineNumber": 7,
+              "properties": {
+                "IncrementValue": "1",
+                "Value": "num"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%num%",
+                  "target": "num"
+                },
+                {
+                  "type": "text",
+                  "value": " += "
+                },
+                {
+                  "type": "text",
+                  "value": "1"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 8,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "LOOP WHILE (num) \u003c= (1000)",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 9,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "(num) \u003c= (1000)"
+            }
+          ],
+          "children": [
+            {
+              "name": "Increase Variable",
+              "type": "ACTION",
+              "rawType": "Variables.IncreaseVariable",
+              "indent": 4,
+              "lineNumber": 10,
+              "properties": {
+                "IncrementValue": "77",
+                "Value": "num"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%num%",
+                  "target": "num"
+                },
+                {
+                  "type": "text",
+                  "value": " += "
+                },
+                {
+                  "type": "text",
+                  "value": "77"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 11,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "LOOP WHILE (num) \u003c= (1000)",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 12,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "(num) \u003c= (1000)"
+            }
+          ],
+          "children": [
+            {
+              "name": "Increase Variable",
+              "type": "ACTION",
+              "rawType": "Variables.IncreaseVariable",
+              "indent": 4,
+              "lineNumber": 13,
+              "properties": {
+                "IncrementValue": "77",
+                "Value": "num"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%num%",
+                  "target": "num"
+                },
+                {
+                  "type": "text",
+                  "value": " += "
+                },
+                {
+                  "type": "text",
+                  "value": "77"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Next Loop",
+              "type": "ACTION",
+              "rawType": "NEXT_LOOP",
+              "indent": 4,
+              "lineNumber": 14,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Next Loop"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 15,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "LOOP LoopIndex FROM 0 TO 10 STEP 2",
+          "type": "LOOP",
+          "rawType": "LOOP",
+          "indent": 0,
+          "lineNumber": 16,
+          "properties": {},
+          "variables": [
+            "LoopIndex"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%LoopIndex%",
+              "target": "LoopIndex"
+            },
+            {
+              "type": "text",
+              "value": " FROM "
+            },
+            {
+              "type": "text",
+              "value": "0"
+            },
+            {
+              "type": "text",
+              "value": " TO "
+            },
+            {
+              "type": "text",
+              "value": "10"
+            },
+            {
+              "type": "text",
+              "value": " STEP "
+            },
+            {
+              "type": "text",
+              "value": "2"
+            }
+          ],
+          "children": [
+            {
+              "name": "Increase Variable",
+              "type": "ACTION",
+              "rawType": "Variables.IncreaseVariable",
+              "indent": 4,
+              "lineNumber": 17,
+              "properties": {
+                "IncrementValue": "1",
+                "Value": "num"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "variable",
+                  "value": "%num%",
+                  "target": "num"
+                },
+                {
+                  "type": "text",
+                  "value": " += "
+                },
+                {
+                  "type": "text",
+                  "value": "1"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Exit Loop",
+              "type": "ACTION",
+              "rawType": "EXIT_LOOP",
+              "indent": 4,
+              "lineNumber": 18,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Exit Loop"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End Loop",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 19,
+              "properties": {
+                "_parentType": "LOOP"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Loop"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TruncateNumber",
+      "blocks": [
+        {
+          "name": "Get Integer Part",
+          "type": "ACTION",
+          "rawType": "Variables.TruncateNumber.GetIntegerPart",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {
+            "Number": "10 Result",
+            "_output": "TruncatedValue"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Integer Part"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Decimal Part",
+          "type": "ACTION",
+          "rawType": "Variables.TruncateNumber.GetDecimalPart",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "Number": "10123.123 Result",
+            "_output": "TruncatedValue2"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Decimal Part"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Round Number",
+          "type": "ACTION",
+          "rawType": "Variables.TruncateNumber.RoundNumber",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "DecimalPlaces": "3 Result",
+            "Number": "321.4343434",
+            "_output": "TruncatedValue3"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Round Number"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "VarActions",
+      "blocks": [
+        {
+          "name": "Create New List",
+          "type": "ACTION",
+          "rawType": "Variables.CreateNewList",
+          "indent": 0,
+          "lineNumber": 1,
+          "properties": {
+            "_output": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Create New List",
+          "type": "ACTION",
+          "rawType": "Variables.CreateNewList",
+          "indent": 0,
+          "lineNumber": 2,
+          "properties": {
+            "_output": "List1"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List1%",
+              "target": "List1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Clear List",
+          "type": "ACTION",
+          "rawType": "Variables.ClearList",
+          "indent": 0,
+          "lineNumber": 3,
+          "properties": {
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Remove Item From List By Index",
+          "type": "ACTION",
+          "rawType": "Variables.RemoveItemFromList.RemoveItemFromListByIndex",
+          "indent": 0,
+          "lineNumber": 4,
+          "properties": {
+            "ItemIndex": "0",
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            },
+            {
+              "type": "text",
+              "value": "["
+            },
+            {
+              "type": "text",
+              "value": "0"
+            },
+            {
+              "type": "text",
+              "value": "]"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Remove Item From List By Index",
+          "type": "ACTION",
+          "rawType": "Variables.RemoveItemFromList.RemoveItemFromListByIndex",
+          "indent": 0,
+          "lineNumber": 5,
+          "properties": {
+            "ItemIndex": "10",
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            },
+            {
+              "type": "text",
+              "value": "["
+            },
+            {
+              "type": "text",
+              "value": "10"
+            },
+            {
+              "type": "text",
+              "value": "]"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ERROR_HANDLER",
+              "rawType": "OnBlockError",
+              "indent": 4,
+              "lineNumber": 6,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": [
+                {
+                  "name": "End On Block Error",
+                  "type": "END",
+                  "rawType": "END",
+                  "indent": 4,
+                  "lineNumber": 8,
+                  "properties": {
+                    "_parentType": "ERROR_HANDLER"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "End On Block Error"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Sort List",
+          "type": "ACTION",
+          "rawType": "Variables.SortList.SortList",
+          "indent": 0,
+          "lineNumber": 9,
+          "properties": {
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Sort List By Property",
+          "type": "ACTION",
+          "rawType": "Variables.SortList.SortListByProperty",
+          "indent": 0,
+          "lineNumber": 10,
+          "properties": {
+            "List": "List",
+            "SortDirection1": "Variables.SortDirection.Ascending",
+            "SortDirection2": "Variables.SortDirection.Ascending",
+            "SortDirection3": "Variables.SortDirection.Ascending"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Shuffle List",
+          "type": "ACTION",
+          "rawType": "Variables.ShuffleList",
+          "indent": 0,
+          "lineNumber": 11,
+          "properties": {
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Shuffle List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Merge Lists",
+          "type": "ACTION",
+          "rawType": "Variables.MergeLists",
+          "indent": 0,
+          "lineNumber": 12,
+          "properties": {
+            "FirstList": "List",
+            "SecondList": "List1 OutputList",
+            "_output": "OutputList"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Merge Lists"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Reverse List",
+          "type": "ACTION",
+          "rawType": "Variables.ReverseList",
+          "indent": 0,
+          "lineNumber": 13,
+          "properties": {
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Remove Duplicate Items From List",
+          "type": "ACTION",
+          "rawType": "Variables.RemoveDuplicateItemsFromList",
+          "indent": 0,
+          "lineNumber": 14,
+          "properties": {
+            "IgnoreCase": "True",
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Remove Duplicate Items From List",
+          "type": "ACTION",
+          "rawType": "Variables.RemoveDuplicateItemsFromList",
+          "indent": 0,
+          "lineNumber": 15,
+          "properties": {
+            "IgnoreCase": "False",
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Find Common List Items",
+          "type": "ACTION",
+          "rawType": "Variables.FindCommonListItems",
+          "indent": 0,
+          "lineNumber": 16,
+          "properties": {
+            "FirstList": "List",
+            "SecondList": "List1 OutputList",
+            "_output": "IntersectionList"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Find Common List Items"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Subtract Lists",
+          "type": "ACTION",
+          "rawType": "Variables.SubtractLists",
+          "indent": 0,
+          "lineNumber": 17,
+          "properties": {
+            "FirstList": "List",
+            "SecondList": "List1 OutputList",
+            "_output": "ListDifference"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Subtract Lists"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Add Item To List",
+          "type": "ACTION",
+          "rawType": "Variables.AddItemToList",
+          "indent": 0,
+          "lineNumber": 18,
+          "properties": {
+            "Item": "1",
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            },
+            {
+              "type": "text",
+              "value": " ← "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Add Item To List",
+          "type": "ACTION",
+          "rawType": "Variables.AddItemToList",
+          "indent": 0,
+          "lineNumber": 19,
+          "properties": {
+            "Item": "some text",
+            "List": "List"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%List%",
+              "target": "List"
+            },
+            {
+              "type": "text",
+              "value": " ← "
+            },
+            {
+              "type": "text",
+              "value": "some text"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set num",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 0,
+          "lineNumber": 20,
+          "properties": {
+            "_output": "num",
+            "_value": "0",
+            "_var": "num"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%num%",
+              "target": "num"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "0"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Increase Variable",
+          "type": "ACTION",
+          "rawType": "Variables.IncreaseVariable",
+          "indent": 0,
+          "lineNumber": 21,
+          "properties": {
+            "IncrementValue": "1",
+            "Value": "num"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%num%",
+              "target": "num"
+            },
+            {
+              "type": "text",
+              "value": " += "
+            },
+            {
+              "type": "text",
+              "value": "1"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Decrease Variable",
+          "type": "ACTION",
+          "rawType": "Variables.DecreaseVariable",
+          "indent": 0,
+          "lineNumber": 22,
+          "properties": {
+            "DecrementValue": "34",
+            "Value": "num"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%num%",
+              "target": "num"
+            },
+            {
+              "type": "text",
+              "value": " -= "
+            },
+            {
+              "type": "text",
+              "value": "34"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 15,
+      "message": "unclosed block: List Of Random Numbers",
+      "severity": "error",
+      "snippet": "Variables.GenerateRandomNumber.ListOfRandomNumbers"
+    },
+    {
+      "line": 3,
+      "message": "unclosed block: Round Number",
+      "severity": "error",
+      "snippet": "Variables.TruncateNumber.RoundNumber"
+    },
+    {
+      "line": 22,
+      "message": "unclosed block: Decrease Variable",
+      "severity": "error",
+      "snippet": "Variables.DecreaseVariable"
+    }
+  ],
+  "metadata": {
+    "blockCount": 72,
+    "subflowCount": 5,
+    "maxDepth": 3,
+    "rawLineCount": 88
+  }
+}

@@ -1,13 +1,14 @@
-import React, {useMemo, useCallback} from 'react'
-import {Virtuoso} from 'react-virtuoso'
+import React, {useMemo, useCallback, useEffect, useRef} from 'react'
+import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
 import BlockCard from './BlockCard'
 import BlockConnector from './BlockConnector'
 import BlockCaseSeparator from './BlockCaseSeparator'
 import BlockElseSeparator from './BlockElseSeparator'
 import BlockEnd, {isContainerType} from './BlockEnd'
+import LoopControlBlock from './LoopControlBlock'
+import {isLoopControl} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {useScrollIntoView} from '@/hooks/useScrollIntoView'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import type {Severity, BlockType} from '@/types/domain'
@@ -35,6 +36,16 @@ function BlockItemWrapperComponent({
 
         if (block.type === 'END') {
             return <BlockEnd label={block.name} parentType={block.properties._parentType as BlockType} />
+        }
+
+        if (isLoopControl(block.rawType)) {
+            return (
+                <LoopControlBlock
+                    block={block}
+                    selected={selected}
+                    onClick={() => useFlowStore.getState().selectBlock(block.id)}
+                />
+            )
         }
 
         return (
@@ -85,6 +96,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     const selectedBlockId = useFlowStore(s => s.selectedBlockId)
     const setVisibleBlockId = useFlowStore(s => s.setVisibleBlockId)
     const flattened = useFlattenedBlocks(subflowId)
+    const virtuosoRef = useRef<VirtuosoHandle>(null)
 
     const handleRangeChanged = React.useCallback((range: {startIndex: number, endIndex: number}) => {
         if (flattened && flattened.length > 0 && range.startIndex < flattened.length) {
@@ -114,7 +126,12 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         return {findingCounts: counts, findingSeverities: sevs}
     }, [report])
 
-    useScrollIntoView(selectedBlockId)
+    useEffect(() => {
+        if (!selectedBlockId || !flattened.length) return
+        const index = flattened.findIndex(f => f.block.id === selectedBlockId)
+        if (index === -1) return
+        virtuosoRef.current?.scrollToIndex({index, behavior: 'smooth', align: 'center'})
+    }, [selectedBlockId, flattened])
 
     const navigateRelative = useCallback((delta: 1 | -1) => {
         if (!flattened.length) return
@@ -200,6 +217,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     return (
         <div className="block-view w-full h-full">
             <Virtuoso
+                ref={virtuosoRef}
                 style={{ height: '100%' }}
                 data={flattened}
                 computeItemKey={(_index, item) => item.block.id}

@@ -46,12 +46,27 @@ export function getBlockBg(type: string): string {
 export function resolveTypeLabel(type: string, name: string, rawType = ''): string {
     if (rawType === 'GOTO') return 'Goto'
     if (rawType === 'LABEL') return 'Label'
+    if (rawType === 'EXIT_LOOP') return 'Exit Loop'
+    if (rawType === 'NEXT_LOOP') return 'Next Loop'
     if (type === 'LOOP') {
         const n = name.toUpperCase()
         if (n.startsWith('LOOP FOREACH')) return 'ForEach Loop'
         if (n.startsWith('LOOP WHILE')) return 'While Loop'
+        return 'Range Loop'
+    }
+    // Variables.* list/math operations are reclassified as ACTION by the parser.
+    // Use the humanized action name as the badge label (e.g. "Create New List",
+    // "Add Item To List") so each block is self-describing without showing
+    // the raw module prefix or the generic "Action" catch-all.
+    if (type === 'ACTION' && rawType.startsWith('Variables.')) {
+        return name
     }
     return blockConfig[type]?.label ?? type
+}
+
+/** Returns true for loop-control flow statements (continue / break). */
+export function isLoopControl(rawType: string): boolean {
+    return rawType === 'EXIT_LOOP' || rawType === 'NEXT_LOOP'
 }
 
 /** Strips redundant structural keywords from a block name so only the payload is visible. */

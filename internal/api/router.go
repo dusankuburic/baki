@@ -198,14 +198,15 @@ func (rt *Router) Emit(name string, data any) {
 // publicRoutes are paths that must remain accessible without authentication
 // in cloud/JWT mode (login, token refresh, registration).
 var publicRoutes = map[string]bool{
-	"/api/auth/register": true,
-	"/api/auth/login":    true,
-	"/api/auth/refresh":  true,
-	"/api/auth/logout":   true,
-	"/healthz":           true,
-	"/readyz":            true,
-	"/api/health":        true,
-	"/metrics":           true, // Prometheus scrape; gate via network policy, not auth.
+	"/api/auth/register":  true,
+	"/api/auth/login":     true,
+	"/api/auth/refresh":   true,
+	"/api/auth/logout":    true,
+	"/api/local-config":   true, // returns pre-shared token in local mode so the web client can self-configure
+	"/healthz":            true,
+	"/readyz":             true,
+	"/api/health":         true,
+	"/metrics":            true, // Prometheus scrape; gate via network policy, not auth.
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {

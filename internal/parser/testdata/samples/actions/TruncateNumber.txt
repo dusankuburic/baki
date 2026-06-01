@@ -1,0 +1,3 @@
+Variables.TruncateNumber.GetIntegerPart Number: 10 Result=> TruncatedValue
+Variables.TruncateNumber.GetDecimalPart Number: 10123.123 Result=> TruncatedValue2
+Variables.TruncateNumber.RoundNumber Number: 321.4343434 DecimalPlaces: 3 Result=> TruncatedValue3

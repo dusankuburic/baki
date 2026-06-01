@@ -1,0 +1,11 @@
+#Region "Main"
+    CALL Helper
+    DISABLE CALL Helper
+    CALL AnotherSubflow
+#EndRegion
+#Region "Helper"
+    Display.ShowMessageBox Message: $'''Helper subflow'''
+#EndRegion
+#Region "AnotherSubflow"
+    Display.ShowMessageBox Message: $'''Another subflow'''
+#EndRegion

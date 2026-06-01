@@ -1,0 +1,22 @@
+Variables.CreateNewList List=> List
+Variables.CreateNewList List=> List1
+Variables.ClearList List: List
+Variables.RemoveItemFromList.RemoveItemFromListByIndex ItemIndex: 0 List: List
+Variables.RemoveItemFromList.RemoveItemFromListByIndex ItemIndex: 10 List: List
+    ON ERROR
+
+    END
+Variables.SortList.SortList List: List
+Variables.SortList.SortListByProperty List: List SortDirection1: Variables.SortDirection.Ascending SortDirection2: Variables.SortDirection.Ascending SortDirection3: Variables.SortDirection.Ascending
+Variables.ShuffleList List: List
+Variables.MergeLists FirstList: List SecondList: List1 OutputList=> OutputList
+Variables.ReverseList List: List
+Variables.RemoveDuplicateItemsFromList List: List IgnoreCase: True
+Variables.RemoveDuplicateItemsFromList List: List IgnoreCase: False
+Variables.FindCommonListItems FirstList: List SecondList: List1 OutputList=> IntersectionList
+Variables.SubtractLists FirstList: List SecondList: List1 OutputList=> ListDifference
+Variables.AddItemToList Item: 1 List: List
+Variables.AddItemToList Item: $'''some text''' List: List
+SET num TO 0
+Variables.IncreaseVariable Value: num IncrementValue: 1
+Variables.DecreaseVariable Value: num DecrementValue: 34

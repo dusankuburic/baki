@@ -20,14 +20,26 @@ export class WebAdapter implements PlatformAdapter {
    * Get backend configuration from environment or API
    */
   async getBackendConfig(): Promise<BackendConfig> {
-    // Return cached config if available
     if (this.config) {
       return this.config;
     }
 
-    // For web deployment, get configuration from environment variables
     const apiUrl = import.meta.env.VITE_API_URL || window.location.origin;
-    const token = undefined;
+
+    // In local (non-JWT) mode the backend generates a random per-session token
+    // and exposes it on a public endpoint so the web client can self-configure.
+    // In JWT/cloud mode this endpoint returns 404 and the client authenticates
+    // via login instead (sessionToken is set by authStore after login).
+    let token: string | undefined;
+    try {
+      const res = await fetch(`${apiUrl}/api/local-config`);
+      if (res.ok) {
+        const data = await res.json();
+        token = data.token;
+      }
+    } catch {
+      // backend unreachable or JWT mode — leave token undefined
+    }
 
     this.config = {
       apiUrl,

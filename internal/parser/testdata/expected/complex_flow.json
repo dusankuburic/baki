@@ -469,7 +469,7 @@
                 },
                 {
                   "name": "Increase Variable",
-                  "type": "VARIABLE",
+                  "type": "ACTION",
                   "rawType": "Variables.IncreaseVariable",
                   "indent": 12,
                   "lineNumber": 25,
@@ -482,16 +482,11 @@
                   "tokens": [
                     {
                       "type": "variable",
-                      "value": "%RetryCount%",
-                      "target": "RetryCount"
+                      "value": "%1%"
                     },
                     {
                       "type": "text",
-                      "value": " = "
-                    },
-                    {
-                      "type": "text",
-                      "value": "1"
+                      "value": " += "
                     }
                   ],
                   "children": []

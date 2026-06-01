@@ -29,12 +29,18 @@
           "properties": {},
           "variables": [
             "ItemList",
-            "Item"
+            "Item",
+            "ItemList"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%Item%",
+              "target": "Item"
+            },
+            {
               "type": "text",
-              "value": "Item IN "
+              "value": " IN "
             },
             {
               "type": "variable",
@@ -74,12 +80,18 @@
                   "properties": {},
                   "variables": [
                     "SubItemList",
-                    "SubItem"
+                    "SubItem",
+                    "SubItemList"
                   ],
                   "tokens": [
                     {
+                      "type": "variable",
+                      "value": "%SubItem%",
+                      "target": "SubItem"
+                    },
+                    {
                       "type": "text",
-                      "value": "SubItem IN "
+                      "value": " IN "
                     },
                     {
                       "type": "variable",
@@ -321,12 +333,18 @@
               "properties": {},
               "variables": [
                 "RetryList",
-                "Retry"
+                "Retry",
+                "RetryList"
               ],
               "tokens": [
                 {
+                  "type": "variable",
+                  "value": "%Retry%",
+                  "target": "Retry"
+                },
+                {
                   "type": "text",
-                  "value": "Retry IN "
+                  "value": " IN "
                 },
                 {
                   "type": "variable",

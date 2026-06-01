@@ -1,0 +1,12 @@
+#Region "Main"
+    SET Counter TO 0
+    LABEL 'Start'
+    Variables.IncreaseVariable Value: Counter IncrementValue: 1
+    IF %Counter% < 3 THEN
+        GOTO 'Start'
+    END
+    GOTO 'Done'
+    Display.ShowMessageBox Message: $'''this is skipped'''
+    LABEL 'Done'
+    Display.ShowMessageBox Message: $'''Counter reached: %Counter%'''
+#EndRegion

@@ -187,6 +187,36 @@ func classifyLine(lineNum, indent int, raw, content string) Token {
 		}
 	}
 
+	// **REGION name / **ENDREGION — alternative inline region syntax (double-star form).
+	// Treated as named block containers rather than subflow boundaries.
+	if m := reStarRegionStart.FindStringSubmatch(content); m != nil {
+		name := strings.TrimSpace(m[1])
+		if name == "" {
+			name = "Region"
+		}
+		return Token{
+			Kind:    TokBlockStart,
+			Line:    lineNum,
+			Indent:  indent,
+			Raw:     raw,
+			Content: content,
+			Name:    name,
+			RawType: "REGION",
+		}
+	}
+
+	if reStarRegionEnd.MatchString(content) {
+		return Token{
+			Kind:    TokEnd,
+			Line:    lineNum,
+			Indent:  indent,
+			Raw:     raw,
+			Content: content,
+			Name:    "",
+			RawType: "ENDREGION",
+		}
+	}
+
 	if m := reRegionStart.FindStringSubmatch(content); m != nil {
 		return Token{
 			Kind:    TokSubflowStart,
@@ -406,6 +436,30 @@ func classifyLine(lineNum, indent int, raw, content string) Token {
 			Content: content,
 			Name:    m[1],
 			RawType: "LABEL",
+		}
+	}
+
+	if reExitLoop.MatchString(content) {
+		return Token{
+			Kind:    TokAction,
+			Line:    lineNum,
+			Indent:  indent,
+			Raw:     raw,
+			Content: content,
+			Name:    "Exit Loop",
+			RawType: "EXIT_LOOP",
+		}
+	}
+
+	if reNextLoop.MatchString(content) {
+		return Token{
+			Kind:    TokAction,
+			Line:    lineNum,
+			Indent:  indent,
+			Raw:     raw,
+			Content: content,
+			Name:    "Next Loop",
+			RawType: "NEXT_LOOP",
 		}
 	}
 

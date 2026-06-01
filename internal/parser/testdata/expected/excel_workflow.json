@@ -51,8 +51,7 @@
               "lineNumber": 4,
               "properties": {},
               "variables": [
-                "FreeRow",
-                "CurrentItem"
+                "FreeRow"
               ],
               "tokens": [
                 {

@@ -1,0 +1,21 @@
+#Region "Main"
+    SET Status TO $'''Active'''
+    SWITCH %Status%
+        CASE 'Active'
+            Display.ShowMessageBox Message: $'''User is active'''
+        CASE 'Inactive'
+            Display.ShowMessageBox Message: $'''User is inactive'''
+        DEFAULT
+            Display.ShowMessageBox Message: $'''Unknown status'''
+    END
+    SWITCH %ErrorCode%
+        CASE '0'
+            SET Result TO $'''OK'''
+        CASE '404'
+            SET Result TO $'''Not Found'''
+        CASE '500'
+            SET Result TO $'''Server Error'''
+        DEFAULT
+            SET Result TO $'''Unknown'''
+    END
+#EndRegion

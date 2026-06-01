@@ -27,6 +27,17 @@ function findBlockInTree(blocks: Block[], id: string): Block | null {
     return null
 }
 
+function findLabelBlockInTree(blocks: Block[], labelName: string): Block | null {
+    for (const block of blocks) {
+        if (block.rawType === 'LABEL' && block.name === labelName) return block
+        if (block.children.length > 0) {
+            const found = findLabelBlockInTree(block.children, labelName)
+            if (found) return found
+        }
+    }
+    return null
+}
+
 export const ALL_TYPES: BlockType[] = ['ACTION', 'LOOP', 'CONDITION', 'SUBFLOW', 'ERROR_HANDLER', 'COMMENT', 'VARIABLE', 'WAIT', 'BLOCK', 'SWITCH', 'ELSE', 'CASE', 'DEFAULT', 'END', 'UNKNOWN']
 const MAX_GROUPS = 4
 const MAX_TABS_PER_GROUP = 8
@@ -86,6 +97,7 @@ interface FlowState {
 
   navigateToSubflowByName: (name: string) => void
   navigateToBlock: (blockId: string) => void
+  navigateToLabelByName: (labelName: string) => void
 
   reset: () => void
 
@@ -433,6 +445,18 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   navigateToBlock: (blockId) => {
     get().selectBlock(blockId)
+  },
+
+  navigateToLabelByName: (labelName) => {
+    const doc = get().document
+    if (!doc) return
+    for (const sf of doc.subflows) {
+      const label = findLabelBlockInTree(sf.blocks, labelName)
+      if (label) {
+        get().selectBlock(label.id)
+        return
+      }
+    }
   },
 
   reset: () => set({

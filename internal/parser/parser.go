@@ -173,11 +173,16 @@ func (s *parseState) processToken(tok Token) {
 		blk := newBlock(tok, s.current.id, models.BlockTypeLoop)
 		// Track loop-declared variables so analysis rules can detect scope and usage.
 		if m := reLoopForEach.FindStringSubmatch(tok.Content); m != nil {
-			// LOOP FOREACH Item IN %List% — "Item" is declared by the loop.
+			// LOOP FOREACH CurrentItem IN List
+			// m[1] = iteration variable ("CurrentItem") — declared/written by the loop.
+			// m[3] = bare collection name ("List")      — read/consumed by the loop.
 			blk.Variables = append(blk.Variables, m[1])
-		} else if reLoopRange.MatchString(tok.Content) {
-			// LOOP FROM x TO y [STEP z] — PAD implicitly declares "CurrentItem".
-			blk.Variables = append(blk.Variables, "CurrentItem")
+			if len(m) >= 4 && m[3] != "" {
+				blk.Variables = append(blk.Variables, m[3])
+			}
+		} else if m := reLoopRange.FindStringSubmatch(tok.Content); m != nil {
+			// LOOP LoopIndex FROM x TO y [STEP z] — the named counter variable.
+			blk.Variables = append(blk.Variables, m[1])
 		}
 		s.stack = popStack(s.stack, blk.Indent)
 		s.stack = insertIntoTree(s.current, blk, s.stack)
@@ -278,6 +283,27 @@ func (s *parseState) processToken(tok Token) {
 		if s.current == nil {
 			return
 		}
+		// Inline error handler: attach retry policy as properties on the parent action block
+		// rather than creating a visible child comment block.
+		if tok.RawType == "ON_ERROR_INLINE" {
+			if len(s.stack) > 0 {
+				parent := s.stack[len(s.stack)-1].block
+				if m := reOnErrorInlineParams.FindStringSubmatch(tok.Content); m != nil {
+					parent.Properties["_retryCount"] = m[1]
+					parent.Properties["_retryWait"] = m[2]
+					if m[3] != "" {
+						parent.Properties["_retryType"] = m[3]
+					}
+					if m[4] != "" {
+						parent.Properties["_retryMinInterval"] = m[4]
+					}
+					if m[5] != "" {
+						parent.Properties["_retryMaxInterval"] = m[5]
+					}
+				}
+			}
+			return
+		}
 		blk := &models.Block{
 			ID: uuid.NewString(), Name: tok.Name, Type: models.BlockTypeComment,
 			RawType: "COMMENT", Indent: tok.Indent, LineNumber: tok.Line,
@@ -374,8 +400,20 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 		return []models.BlockToken{{Type: "text", Value: blk.Name}}
 	}
 
+	// GOTO/LABEL — emit a label token so the UI can render the jump target distinctively
+	if blk.RawType == "GOTO" || blk.RawType == "LABEL" {
+		prefix := "GOTO "
+		if blk.RawType == "LABEL" {
+			prefix = "LABEL "
+		}
+		return []models.BlockToken{
+			{Type: "text", Value: prefix},
+			{Type: "label", Value: blk.Name, Target: blk.Name},
+		}
+	}
+
 	// Handle CALL actions (Run subflow) - strip "Call " to match stripBlockKeywords
-	if blk.RawType == "CALL" || blk.RawType == "DISABLED_CALL" || 
+	if blk.RawType == "CALL" || blk.RawType == "DISABLED_CALL" ||
 	   blk.RawType == "FlowControl.RunSubflow" || blk.RawType == "FlowControl.RunDesktopFlow" {
 		target := ""
 		if blk.RawType == "CALL" || blk.RawType == "DISABLED_CALL" {
@@ -420,6 +458,98 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 		}
 	}
 
+	// IncreaseVariable → "num += 1"
+	if blk.RawType == "Variables.IncreaseVariable" {
+		varName := blk.Properties["Value"]
+		delta := blk.Properties["IncrementValue"]
+		if varName != "" {
+			toks := tokenizeVariables("%" + varName + "%")
+			toks = append(toks, models.BlockToken{Type: "text", Value: " += "})
+			if delta != "" {
+				toks = append(toks, tokenizeVariables(delta)...)
+			}
+			return toks
+		}
+	}
+
+	// DecreaseVariable → "num -= 34"
+	if blk.RawType == "Variables.DecreaseVariable" {
+		varName := blk.Properties["Value"]
+		delta := blk.Properties["DecrementValue"]
+		if varName != "" {
+			toks := tokenizeVariables("%" + varName + "%")
+			toks = append(toks, models.BlockToken{Type: "text", Value: " -= "})
+			if delta != "" {
+				toks = append(toks, tokenizeVariables(delta)...)
+			}
+			return toks
+		}
+	}
+
+	// AddItemToList → "List ← item"
+	if blk.RawType == "Variables.AddItemToList" {
+		list := blk.Properties["List"]
+		item := blk.Properties["Item"]
+		if list != "" {
+			toks := tokenizeVariables("%" + list + "%")
+			toks = append(toks, models.BlockToken{Type: "text", Value: " ← "})
+			if item != "" {
+				toks = append(toks, tokenizeVariables(item)...)
+			}
+			return toks
+		}
+	}
+
+	// ReverseList → just the list name as a variable reference
+	if blk.RawType == "Variables.ReverseList" {
+		if list := blk.Properties["List"]; list != "" {
+			return tokenizeVariables("%" + list + "%")
+		}
+	}
+
+	// SortList (SortList and SortListByProperty variants) → just the list name
+	if strings.HasPrefix(blk.RawType, "Variables.SortList") {
+		if list := blk.Properties["List"]; list != "" {
+			return tokenizeVariables("%" + list + "%")
+		}
+	}
+
+	// CreateNewList → the output list variable name
+	if blk.RawType == "Variables.CreateNewList" {
+		if out := blk.Properties["_output"]; out != "" {
+			return tokenizeVariables("%" + out + "%")
+		}
+	}
+
+	// ClearList → just the list name
+	if blk.RawType == "Variables.ClearList" {
+		if list := blk.Properties["List"]; list != "" {
+			return tokenizeVariables("%" + list + "%")
+		}
+	}
+
+	// RemoveItemFromList (by index) → "List[0]"
+	if strings.HasPrefix(blk.RawType, "Variables.RemoveItemFromList") {
+		list := blk.Properties["List"]
+		index := blk.Properties["ItemIndex"]
+		if list != "" {
+			toks := tokenizeVariables("%" + list + "%")
+			toks = append(toks, models.BlockToken{Type: "text", Value: "["})
+			if index != "" {
+				toks = append(toks, tokenizeVariables(index)...)
+			}
+			toks = append(toks, models.BlockToken{Type: "text", Value: "]"})
+			return toks
+		}
+	}
+
+	// RemoveDuplicateItemsFromList → just the list name
+	if strings.HasPrefix(blk.RawType, "Variables.RemoveDuplicateItemsFromList") {
+		if list := blk.Properties["List"]; list != "" {
+			return tokenizeVariables("%" + list + "%")
+		}
+	}
+
 	// Handle other types by stripping keywords
 	name := blk.Name
 	// For conditions and loops, blk.Name already contains the full expression
@@ -430,6 +560,47 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 		name = strings.TrimSuffix(name, " THEN")
 		name = strings.TrimSuffix(name, " Then")
 	} else if blk.Type == models.BlockTypeLoop {
+		// ForEach: emit variable-styled tokens for both the iteration variable and
+		// the collection — "LOOP FOREACH CurrentItem IN List" → %CurrentItem% IN %List%.
+		// Both become clickable variable tokens in the UI (lineage, usage count).
+		if m := reLoopForEach.FindStringSubmatch(name); m != nil {
+			iterVar := m[1]
+			collection := ""
+			if len(m) >= 4 && m[3] != "" {
+				collection = m[3]
+			}
+			toks := tokenizeVariables("%" + iterVar + "%")
+			toks = append(toks, models.BlockToken{Type: "text", Value: " IN "})
+			if collection != "" {
+				toks = append(toks, tokenizeVariables("%"+collection+"%")...)
+			}
+			return toks
+		}
+
+		// Range loop: "LOOP LoopIndex FROM 0 TO 10 STEP 2"
+		// → %LoopIndex% FROM 0 TO 10 STEP 2
+		// The counter variable becomes a clickable variable token; FROM/TO/STEP
+		// values are rendered as-is (plain numbers stay text, %vars% become tokens).
+		if m := reLoopRange.FindStringSubmatch(name); m != nil {
+			varName := m[1]
+			from := m[2]
+			to := m[3]
+			step := ""
+			if len(m) >= 5 {
+				step = m[4]
+			}
+			toks := tokenizeVariables("%" + varName + "%")
+			toks = append(toks, models.BlockToken{Type: "text", Value: " FROM "})
+			toks = append(toks, tokenizeVariables(from)...)
+			toks = append(toks, models.BlockToken{Type: "text", Value: " TO "})
+			toks = append(toks, tokenizeVariables(to)...)
+			if step != "" {
+				toks = append(toks, models.BlockToken{Type: "text", Value: " STEP "})
+				toks = append(toks, tokenizeVariables(step)...)
+			}
+			return toks
+		}
+
 		name = strings.TrimPrefix(name, "LOOP FOREACH ")
 		name = strings.TrimPrefix(name, "LOOP WHILE ")
 		name = strings.TrimPrefix(name, "LOOP ")

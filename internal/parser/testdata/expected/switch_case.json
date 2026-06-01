@@ -1,0 +1,410 @@
+{
+  "name": "switch_case",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Set Status",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {
+            "_output": "Status",
+            "_value": "$'''Active'''",
+            "_var": "Status"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Status%",
+              "target": "Status"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "string",
+              "value": "\"Active\""
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "SWITCH %Status%",
+          "type": "SWITCH",
+          "rawType": "SWITCH",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [
+            "Status"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Status%",
+              "target": "Status"
+            }
+          ],
+          "children": [
+            {
+              "name": "CASE 'Active'",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 4,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "string",
+                  "value": "\"Active\""
+                }
+              ],
+              "children": [
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 12,
+                  "lineNumber": 5,
+                  "properties": {
+                    "Message": "User is active"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "CASE 'Inactive'",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 6,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "string",
+                  "value": "\"Inactive\""
+                }
+              ],
+              "children": [
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 12,
+                  "lineNumber": 7,
+                  "properties": {
+                    "Message": "User is inactive"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "Default",
+              "type": "DEFAULT",
+              "rawType": "DEFAULT",
+              "indent": 8,
+              "lineNumber": 8,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Default"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Show Message Box",
+                  "type": "ACTION",
+                  "rawType": "Display.ShowMessageBox",
+                  "indent": 12,
+                  "lineNumber": 9,
+                  "properties": {
+                    "Message": "Unknown status"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Show Message Box"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Switch",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 10,
+              "properties": {
+                "_parentType": "SWITCH"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Switch"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "SWITCH %ErrorCode%",
+          "type": "SWITCH",
+          "rawType": "SWITCH",
+          "indent": 4,
+          "lineNumber": 11,
+          "properties": {},
+          "variables": [
+            "ErrorCode"
+          ],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%ErrorCode%",
+              "target": "ErrorCode"
+            }
+          ],
+          "children": [
+            {
+              "name": "CASE '0'",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 12,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "string",
+                  "value": "\"0\""
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set Result",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 12,
+                  "lineNumber": 13,
+                  "properties": {
+                    "_output": "Result",
+                    "_value": "$'''OK'''",
+                    "_var": "Result"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%Result%",
+                      "target": "Result"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"OK\""
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "CASE '404'",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 14,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "string",
+                  "value": "\"404\""
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set Result",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 12,
+                  "lineNumber": 15,
+                  "properties": {
+                    "_output": "Result",
+                    "_value": "$'''Not Found'''",
+                    "_var": "Result"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%Result%",
+                      "target": "Result"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"Not Found\""
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "CASE '500'",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 16,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "string",
+                  "value": "\"500\""
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set Result",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 12,
+                  "lineNumber": 17,
+                  "properties": {
+                    "_output": "Result",
+                    "_value": "$'''Server Error'''",
+                    "_var": "Result"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%Result%",
+                      "target": "Result"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"Server Error\""
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "Default",
+              "type": "DEFAULT",
+              "rawType": "DEFAULT",
+              "indent": 8,
+              "lineNumber": 18,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Default"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set Result",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 12,
+                  "lineNumber": 19,
+                  "properties": {
+                    "_output": "Result",
+                    "_value": "$'''Unknown'''",
+                    "_var": "Result"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%Result%",
+                      "target": "Result"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"Unknown\""
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Switch",
+              "type": "END",
+              "rawType": "END",
+              "indent": 4,
+              "lineNumber": 20,
+              "properties": {
+                "_parentType": "SWITCH"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End Switch"
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "blockCount": 19,
+    "subflowCount": 1,
+    "maxDepth": 3,
+    "rawLineCount": 22
+  }
+}

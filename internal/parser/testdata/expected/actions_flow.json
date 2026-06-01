@@ -67,7 +67,7 @@
         },
         {
           "name": "Increase Variable",
-          "type": "VARIABLE",
+          "type": "ACTION",
           "rawType": "Variables.IncreaseVariable",
           "indent": 4,
           "lineNumber": 5,
@@ -80,23 +80,18 @@
           "tokens": [
             {
               "type": "variable",
-              "value": "%Counter%",
-              "target": "Counter"
+              "value": "%1%"
             },
             {
               "type": "text",
-              "value": " = "
-            },
-            {
-              "type": "text",
-              "value": "1"
+              "value": " += "
             }
           ],
           "children": []
         },
         {
           "name": "Decrease Variable",
-          "type": "VARIABLE",
+          "type": "ACTION",
           "rawType": "Variables.DecreaseVariable",
           "indent": 4,
           "lineNumber": 6,
@@ -109,16 +104,11 @@
           "tokens": [
             {
               "type": "variable",
-              "value": "%Counter%",
-              "target": "Counter"
+              "value": "%1%"
             },
             {
               "type": "text",
-              "value": " = "
-            },
-            {
-              "type": "text",
-              "value": "1"
+              "value": " -= "
             }
           ],
           "children": []
@@ -398,12 +388,18 @@
           "properties": {},
           "variables": [
             "Items",
-            "CurrentItem"
+            "CurrentItem",
+            "Items"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%CurrentItem%",
+              "target": "CurrentItem"
+            },
+            {
               "type": "text",
-              "value": "CurrentItem IN "
+              "value": " IN "
             },
             {
               "type": "variable",

@@ -46,6 +46,8 @@ var exactMap = map[string]models.BlockType{
 	"GOTO":                models.BlockTypeAction,
 	"LABEL":               models.BlockTypeAction,
 	"EXIT":                models.BlockTypeAction,
+	"EXIT_LOOP":           models.BlockTypeAction,
+	"NEXT_LOOP":           models.BlockTypeAction,
 	"ERROR_CAPTURE":       models.BlockTypeAction,
 }
 
@@ -81,7 +83,27 @@ func init() {
 		// ── Loop variants ─────────────────────────────────────────────────
 		{"Loop.", models.BlockTypeLoop},
 
-		// ── Variable manipulation (catches all future Variables.* actions) ─
+		// ── Variables: list / math / generation ops → ACTION ─────────────────
+		// These are standalone operations, not variable assignments.
+		// Longer prefixes sort before the catch-all "Variables." rule so they
+		// take precedence without any ordering changes needed here.
+		{"Variables.CreateNewList",                models.BlockTypeAction},
+		{"Variables.ClearList",                    models.BlockTypeAction},
+		{"Variables.AddItemToList",                models.BlockTypeAction},
+		{"Variables.RemoveItemFromList",           models.BlockTypeAction},
+		{"Variables.SortList",                     models.BlockTypeAction},
+		{"Variables.ShuffleList",                  models.BlockTypeAction},
+		{"Variables.MergeLists",                   models.BlockTypeAction},
+		{"Variables.ReverseList",                  models.BlockTypeAction},
+		{"Variables.RemoveDuplicateItemsFromList", models.BlockTypeAction},
+		{"Variables.FindCommonListItems",          models.BlockTypeAction},
+		{"Variables.SubtractLists",                models.BlockTypeAction},
+		{"Variables.IncreaseVariable",             models.BlockTypeAction},
+		{"Variables.DecreaseVariable",             models.BlockTypeAction},
+		{"Variables.GenerateRandomNumber",         models.BlockTypeAction},
+		{"Variables.TruncateNumber",               models.BlockTypeAction},
+
+		// ── Variable manipulation (catch-all for SET and future Variables.* ) ─
 		{"Variables.", models.BlockTypeVariable},
 		{"DataTable.", models.BlockTypeVariable},
 

@@ -220,7 +220,12 @@
           "tokens": [
             {
               "type": "text",
-              "value": "SetTransactionItem"
+              "value": "LABEL "
+            },
+            {
+              "type": "label",
+              "value": "SetTransactionItem",
+              "target": "SetTransactionItem"
             }
           ],
           "children": []
@@ -354,7 +359,12 @@
           "tokens": [
             {
               "type": "text",
-              "value": "SetTransactionItem"
+              "value": "GOTO "
+            },
+            {
+              "type": "label",
+              "value": "SetTransactionItem",
+              "target": "SetTransactionItem"
             }
           ],
           "children": []
@@ -370,7 +380,12 @@
           "tokens": [
             {
               "type": "text",
-              "value": "EndProcess"
+              "value": "GOTO "
+            },
+            {
+              "type": "label",
+              "value": "EndProcess",
+              "target": "EndProcess"
             }
           ],
           "children": []
@@ -386,7 +401,12 @@
           "tokens": [
             {
               "type": "text",
-              "value": "EndProcess"
+              "value": "LABEL "
+            },
+            {
+              "type": "label",
+              "value": "EndProcess",
+              "target": "EndProcess"
             }
           ],
           "children": []
@@ -662,7 +682,7 @@
         },
         {
           "name": "Create New List",
-          "type": "VARIABLE",
+          "type": "ACTION",
           "rawType": "Variables.CreateNewList",
           "indent": 0,
           "lineNumber": 3,
@@ -672,8 +692,9 @@
           "variables": [],
           "tokens": [
             {
-              "type": "text",
-              "value": "Create New List"
+              "type": "variable",
+              "value": "%TransactionData%",
+              "target": "TransactionData"
             }
           ],
           "children": []
@@ -953,12 +974,23 @@
           "lineNumber": 11,
           "properties": {},
           "variables": [
-            "CurrentItem"
+            "CurrentItem",
+            "ConfigData"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%CurrentItem%",
+              "target": "CurrentItem"
+            },
+            {
               "type": "text",
-              "value": "CurrentItem IN ConfigData"
+              "value": " IN "
+            },
+            {
+              "type": "variable",
+              "value": "%ConfigData%",
+              "target": "ConfigData"
             }
           ],
           "children": [
@@ -1084,7 +1116,7 @@
         },
         {
           "name": "Create New List",
-          "type": "VARIABLE",
+          "type": "ACTION",
           "rawType": "Variables.CreateNewList",
           "indent": 0,
           "lineNumber": 17,
@@ -1094,8 +1126,9 @@
           "variables": [],
           "tokens": [
             {
-              "type": "text",
-              "value": "Create New List"
+              "type": "variable",
+              "value": "%TransactionData%",
+              "target": "TransactionData"
             }
           ],
           "children": []
@@ -1375,12 +1408,23 @@
           "lineNumber": 25,
           "properties": {},
           "variables": [
-            "CurrentItem"
+            "CurrentItem",
+            "ConfigData"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%CurrentItem%",
+              "target": "CurrentItem"
+            },
+            {
               "type": "text",
-              "value": "CurrentItem IN ConfigData"
+              "value": " IN "
+            },
+            {
+              "type": "variable",
+              "value": "%ConfigData%",
+              "target": "ConfigData"
             }
           ],
           "children": [
@@ -2632,7 +2676,7 @@
         },
         {
           "name": "Increase Variable",
-          "type": "VARIABLE",
+          "type": "ACTION",
           "rawType": "Variables.IncreaseVariable",
           "indent": 0,
           "lineNumber": 19,
@@ -2643,8 +2687,17 @@
           "variables": [],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%TransactionNumber%",
+              "target": "TransactionNumber"
+            },
+            {
               "type": "text",
-              "value": "Increase Variable"
+              "value": " += "
+            },
+            {
+              "type": "text",
+              "value": "1"
             }
           ],
           "children": []

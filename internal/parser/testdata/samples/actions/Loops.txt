@@ -1,0 +1,19 @@
+Variables.CreateNewList List=> List
+SET num TO 0
+LOOP FOREACH CurrentItem IN List
+    Variables.IncreaseVariable Value: num IncrementValue: 1
+END
+LOOP LoopIndex FROM 0 TO 10 STEP 2
+    Variables.IncreaseVariable Value: num IncrementValue: 1
+END
+LOOP WHILE (num) <= (1000)
+    Variables.IncreaseVariable Value: num IncrementValue: 77
+END
+LOOP WHILE (num) <= (1000)
+    Variables.IncreaseVariable Value: num IncrementValue: 77
+    NEXT LOOP
+END
+LOOP LoopIndex FROM 0 TO 10 STEP 2
+    Variables.IncreaseVariable Value: num IncrementValue: 1
+    EXIT LOOP
+END

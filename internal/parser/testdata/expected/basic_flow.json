@@ -308,7 +308,7 @@
           "children": [
             {
               "name": "Increase Variable",
-              "type": "VARIABLE",
+              "type": "ACTION",
               "rawType": "Variables.IncreaseVariable",
               "indent": 8,
               "lineNumber": 16,
@@ -321,16 +321,11 @@
               "tokens": [
                 {
                   "type": "variable",
-                  "value": "%Counter%",
-                  "target": "Counter"
+                  "value": "%1%"
                 },
                 {
                   "type": "text",
-                  "value": " = "
-                },
-                {
-                  "type": "text",
-                  "value": "1"
+                  "value": " += "
                 }
               ],
               "children": []
@@ -408,12 +403,18 @@
           "properties": {},
           "variables": [
             "ExcelData",
-            "CurrentRow"
+            "CurrentRow",
+            "ExcelData"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%CurrentRow%",
+              "target": "CurrentRow"
+            },
+            {
               "type": "text",
-              "value": "CurrentRow IN "
+              "value": " IN "
             },
             {
               "type": "variable",

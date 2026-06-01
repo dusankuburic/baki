@@ -1,0 +1,133 @@
+{
+  "name": "disabled_call",
+  "subflows": [
+    {
+      "name": "Main",
+      "blocks": [
+        {
+          "name": "Call Helper",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 4,
+          "lineNumber": 2,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Helper",
+              "target": "Helper"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call Helper (disabled)",
+          "type": "SUBFLOW",
+          "rawType": "DISABLED_CALL",
+          "indent": 4,
+          "lineNumber": 3,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Helper",
+              "target": "Helper"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Call AnotherSubflow",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 4,
+          "lineNumber": 4,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "AnotherSubflow",
+              "target": "AnotherSubflow"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "Helper",
+      "blocks": [
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 7,
+          "properties": {
+            "Message": "Helper subflow"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "AnotherSubflow",
+      "blocks": [
+        {
+          "name": "Show Message Box",
+          "type": "ACTION",
+          "rawType": "Display.ShowMessageBox",
+          "indent": 4,
+          "lineNumber": 10,
+          "properties": {
+            "Message": "Another subflow"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Show Message Box"
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "parseErrors": [
+    {
+      "line": 4,
+      "message": "unclosed block: Call AnotherSubflow",
+      "severity": "error",
+      "snippet": "CALL"
+    },
+    {
+      "line": 7,
+      "message": "unclosed block: Show Message Box",
+      "severity": "error",
+      "snippet": "Display.ShowMessageBox"
+    },
+    {
+      "line": 10,
+      "message": "unclosed block: Show Message Box",
+      "severity": "error",
+      "snippet": "Display.ShowMessageBox"
+    }
+  ],
+  "metadata": {
+    "blockCount": 5,
+    "subflowCount": 3,
+    "maxDepth": 1,
+    "rawLineCount": 12
+  }
+}

@@ -132,12 +132,18 @@
           "properties": {},
           "variables": [
             "EmptyList",
-            "Item"
+            "Item",
+            "EmptyList"
           ],
           "tokens": [
             {
+              "type": "variable",
+              "value": "%Item%",
+              "target": "Item"
+            },
+            {
               "type": "text",
-              "value": "Item IN "
+              "value": " IN "
             },
             {
               "type": "variable",

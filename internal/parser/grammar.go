@@ -10,7 +10,12 @@ var (
 	reIfStart        = regexp.MustCompile(`^(?i)(IF\s+.+|If\.\w+|Text\.If\b|Variables\.If\b|Display\.If\b)`)
 	reElse           = regexp.MustCompile(`^(?i)(ELSE|Else\b|Text\.Else\b|Variables\.Else\b|Display\.Else\b)\s*$`)
 	reOnErrorStart   = regexp.MustCompile(`^(?i)ON\s+(BLOCK\s+)?ERROR\b`)
-	reOnErrorInline  = regexp.MustCompile(`^(?i)ON\s+ERROR\s+REPEAT\s+\d+\s+TIMES\s+WAIT\s+\d+\s*$`)
+	// reOnErrorInline matches "ON ERROR REPEAT N TIMES WAIT M" with optional trailing params
+	// (e.g. RetryType: RetryType.Exponential MinInterval: 2 MaxInterval: 360).
+	// Must be checked before reOnErrorStart so extended forms don't create spurious blocks.
+	reOnErrorInline  = regexp.MustCompile(`^(?i)ON\s+ERROR\s+REPEAT\s+\d+\s+TIMES\s+WAIT`)
+	// reOnErrorInlineParams captures the retry count, wait interval, and optional extended params.
+	reOnErrorInlineParams = regexp.MustCompile(`(?i)^ON\s+ERROR\s+REPEAT\s+(\d+)\s+TIMES\s+WAIT\s+(\S+)(?:\s+RetryType:\s+(\S+))?(?:\s+MinInterval:\s+(\S+))?(?:\s+MaxInterval:\s+(\S+))?`)
 	reComment        = regexp.MustCompile(`^(?i)(COMMENT\s+.*|#\s+.*|//\s+.*)`)
 	reBlockComment   = regexp.MustCompile(`^/#`)
 	reBlockCommentEnd = regexp.MustCompile(`#/$`)
@@ -38,10 +43,25 @@ var (
 	reIdentifier     = regexp.MustCompile(`[A-Za-z_]\w*`)
 	// Keywords to ignore when extracting variables from expressions.
 	reExpressionKeyword = regexp.MustCompile(`(?i)^(AND|OR|NOT|TRUE|FALSE|NULL|BLANK)$`)
-	// LOOP FOREACH Item IN %List% — captures the iteration variable name.
-	reLoopForEach    = regexp.MustCompile(`(?i)^LOOP\s+FOREACH\s+(\w+)\s+IN\s+`)
-	// LOOP FROM x TO y STEP z — range loops create an implicit CurrentItem counter.
-	reLoopRange      = regexp.MustCompile(`(?i)^LOOP\s+FROM\s+`)
+	// LOOP FOREACH Item IN List — captures the iteration variable name (group 1)
+	// and the collection reference (group 2 = full form, group 3 = bare name).
+	// The collection may appear as a bare name ("List") or percent-wrapped ("%List%").
+	reLoopForEach    = regexp.MustCompile(`(?i)^LOOP\s+FOREACH\s+(\w+)\s+IN\s+(%?(\w+)%?)`)
+	// LOOP LoopIndex FROM x TO y [STEP z] — captures:
+	//   group 1: counter variable name (e.g. "LoopIndex")
+	//   group 2: FROM value (e.g. "0" or "%StartVal%")
+	//   group 3: TO value   (e.g. "10" or "%EndVal%")
+	//   group 4: STEP value (optional, e.g. "2" or "%Step%")
+	// The value pattern (-?%?[\w.]+%?) covers plain numbers, negative numbers,
+	// and percent-wrapped variable references.
+	reLoopRange      = regexp.MustCompile(`(?i)^LOOP\s+(\w+)\s+FROM\s+(-?%?[\w.]+%?)\s+TO\s+(-?%?[\w.]+%?)(?:\s+STEP\s+(-?%?[\w.]+%?))?`)
+	// **REGION / **ENDREGION — alternative inline region syntax used in some PAD exports.
+	reStarRegionStart = regexp.MustCompile(`(?i)^\*\*REGION\s*(.*)`)
+	reStarRegionEnd   = regexp.MustCompile(`(?i)^\*\*ENDREGION`)
+	// NEXT LOOP — PAD's continue statement (skip to next iteration).
+	reNextLoop        = regexp.MustCompile(`(?i)^NEXT\s+LOOP$`)
+	// EXIT LOOP — PAD's break statement (exit loop early).
+	reExitLoop        = regexp.MustCompile(`(?i)^EXIT\s+LOOP$`)
 )
 
 func maskStrings(s string) string {
