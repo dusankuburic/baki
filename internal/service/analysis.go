@@ -18,16 +18,15 @@ import (
 // reuse the matching report. lastReport tracks the most recent analysis purely
 // to enrich chat context (which is not yet per-flow in cloud mode).
 type AnalysisService struct {
-	ctx      context.Context
 	notifier Notifier
 	settings *storage.SettingsStore
 }
 
-func NewAnalysisService(ctx context.Context, notifier Notifier, settings *storage.SettingsStore) *AnalysisService {
-	return &AnalysisService{ctx: ctx, notifier: notifier, settings: settings}
+func NewAnalysisService(notifier Notifier, settings *storage.SettingsStore) *AnalysisService {
+	return &AnalysisService{notifier: notifier, settings: settings}
 }
 
-func (s *AnalysisService) AnalyzeFlow(doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
+func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
 
 	if doc == nil {

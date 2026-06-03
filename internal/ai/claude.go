@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
-var claudeAPIURL = "https://api.anthropic.com/v1/messages"
+var claudeAPIURL = providerURL("CLAUDE_API_URL", "https://api.anthropic.com/v1/messages")
 var claudeAPIVersion = "2023-06-01"
 
 type ClaudeProvider struct {
@@ -22,7 +21,7 @@ type ClaudeProvider struct {
 func NewClaudeProvider(apiKey string) *ClaudeProvider {
 	return &ClaudeProvider{
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 
@@ -147,7 +146,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
 			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("claude server error: %s", apiErr.Error.Message)
+				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return nil, fmt.Errorf("claude API: %s", apiErr.Error.Message)
 		}
@@ -201,7 +200,18 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr claudeErrorResp
 		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
+			switch {
+			case resp.StatusCode == 401:
+				return ErrApiKeyInvalid
+			case resp.StatusCode == 429:
+				return ErrRateLimited
+			case resp.StatusCode >= 500:
+				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
 			return fmt.Errorf("claude stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return fmt.Errorf("claude stream error (status %d)", resp.StatusCode)
 	}

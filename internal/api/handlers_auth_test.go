@@ -222,7 +222,7 @@ func TestHandleAuthRegister_ConcurrentFirstUser_ExactlyOneAdmin(t *testing.T) {
 	}
 
 	// Cross-check via the storage backend itself.
-	backend := rt.app.StorageBackend()
+	backend := rt.security.Backend
 	users, err := backend.ListUsers(context.Background())
 	if err != nil {
 		t.Fatalf("ListUsers: %v", err)

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -300,8 +301,8 @@ func TestCopilotProvider_Stream_401(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for 401 stream response")
 	}
-	if !strings.Contains(err.Error(), "unauthorized") {
-		t.Errorf("error should contain server message, got: %v", err)
+	if !errors.Is(err, ErrApiKeyInvalid) {
+		t.Errorf("expected ErrApiKeyInvalid, got: %v", err)
 	}
 }
 

@@ -13,14 +13,13 @@ import (
 
 // ProviderService manages AI provider configuration, authentication, and connectivity.
 type ProviderService struct {
-	ctx         context.Context
 	auth        *ai.GitHubAuth
 	copilotAuth *ai.CopilotAuth
 	factory     *ai.ProviderFactory
 }
 
-func NewProviderService(ctx context.Context, auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory) *ProviderService {
-	return &ProviderService{ctx: ctx, auth: auth, copilotAuth: copilotAuth, factory: factory}
+func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory) *ProviderService {
+	return &ProviderService{auth: auth, copilotAuth: copilotAuth, factory: factory}
 }
 
 func (s *ProviderService) ListProviders(scope string) (providers []models.ProviderInfo, err error) {
@@ -90,7 +89,7 @@ func (s *ProviderService) ListProviders(scope string) (providers []models.Provid
 	return providers, nil
 }
 
-func (s *ProviderService) TestProviderConnection(scope, providerID string) (result *models.ProviderTestResult, err error) {
+func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
 
 	provider, err := s.factory.For(scope, providerID)
@@ -99,7 +98,7 @@ func (s *ProviderService) TestProviderConnection(scope, providerID string) (resu
 	}
 
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	testModels := []string{provider.DefaultModel()}
@@ -144,15 +143,15 @@ func (s *ProviderService) TestProviderConnection(scope, providerID string) (resu
 
 // --- GitHub Models OAuth ---
 
-func (s *ProviderService) StartGitHubAuth() (resp *ai.DeviceAuthResponse, err error) {
+func (s *ProviderService) StartGitHubAuth(ctx context.Context) (resp *ai.DeviceAuthResponse, err error) {
 	defer logger.Guard("App.StartGitHubAuth", &err)
-	return s.auth.StartDeviceFlow(s.ctx)
+	return s.auth.StartDeviceFlow(ctx)
 }
 
-func (s *ProviderService) PollGitHubAuth(deviceCode string) (result *ai.GitHubAuthResult, err error) {
+func (s *ProviderService) PollGitHubAuth(ctx context.Context, deviceCode string) (result *ai.GitHubAuthResult, err error) {
 	defer logger.Guard("App.PollGitHubAuth", &err)
 
-	result, err = s.auth.PollToken(s.ctx, deviceCode)
+	result, err = s.auth.PollToken(ctx, deviceCode)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +171,7 @@ func (s *ProviderService) RevokeGitHubAuth() (err error) {
 	return storage.DeleteApiKey("github-models-token")
 }
 
-func (s *ProviderService) GetGitHubUser() (user *ai.GitHubUser, err error) {
+func (s *ProviderService) GetGitHubUser(ctx context.Context) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetGitHubUser", &err)
 
 	token, err := storage.GetApiKey("github-models-token")
@@ -180,20 +179,20 @@ func (s *ProviderService) GetGitHubUser() (user *ai.GitHubUser, err error) {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
 	}
-	return s.auth.GetUser(s.ctx, token)
+	return s.auth.GetUser(ctx, token)
 }
 
 // --- GitHub Copilot OAuth ---
 
-func (s *ProviderService) StartCopilotAuth() (resp *ai.DeviceAuthResponse, err error) {
+func (s *ProviderService) StartCopilotAuth(ctx context.Context) (resp *ai.DeviceAuthResponse, err error) {
 	defer logger.Guard("App.StartCopilotAuth", &err)
-	return s.copilotAuth.StartDeviceFlow(s.ctx)
+	return s.copilotAuth.StartDeviceFlow(ctx)
 }
 
-func (s *ProviderService) PollCopilotAuth(deviceCode string) (result *ai.GitHubAuthResult, err error) {
+func (s *ProviderService) PollCopilotAuth(ctx context.Context, deviceCode string) (result *ai.GitHubAuthResult, err error) {
 	defer logger.Guard("App.PollCopilotAuth", &err)
 
-	result, err = s.copilotAuth.PollToken(s.ctx, deviceCode)
+	result, err = s.copilotAuth.PollToken(ctx, deviceCode)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +212,7 @@ func (s *ProviderService) RevokeCopilotAuth() (err error) {
 	return storage.DeleteApiKey("copilot-oauth-token")
 }
 
-func (s *ProviderService) GetCopilotUser() (user *ai.GitHubUser, err error) {
+func (s *ProviderService) GetCopilotUser(ctx context.Context) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetCopilotUser", &err)
 
 	token, err := storage.GetApiKey("copilot-oauth-token")
@@ -221,5 +220,5 @@ func (s *ProviderService) GetCopilotUser() (user *ai.GitHubUser, err error) {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
 	}
-	return s.auth.GetUser(s.ctx, token)
+	return s.auth.GetUser(ctx, token)
 }

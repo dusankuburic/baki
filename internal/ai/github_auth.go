@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 const githubClientID = "Ov23liihCNhg6umzjTqT"
@@ -20,9 +19,7 @@ type GitHubAuth struct {
 }
 
 func NewGitHubAuth() *GitHubAuth {
-	return &GitHubAuth{
-		client: &http.Client{Timeout: 30 * time.Second},
-	}
+	return &GitHubAuth{client: authHTTPClient}
 }
 
 type DeviceAuthResponse struct {

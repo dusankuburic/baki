@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -97,6 +98,10 @@ func (m *memBackend) LoadUserByEmail(ctx context.Context, email string) (*interf
 func (m *memBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) { return nil, interfaces.ErrNotFound }
 func (m *memBackend) CountUsers(ctx context.Context) (int, error) { return 0, nil }
 func (m *memBackend) ListUsers(ctx context.Context) ([]*interfaces.User, error) { return nil, nil }
+
+func (m *memBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) { return nil, nil }
+func (m *memBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error { return nil }
+func (m *memBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error { return nil }
 
 // ---- Organisation operations ----
 func (m *memBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error { return nil }

@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
-var copilotBaseURL = "https://api.githubcopilot.com/chat/completions"
+var copilotBaseURL = providerURL("COPILOT_API_URL", "https://api.githubcopilot.com/chat/completions")
 
 const (
 	copilotIntegrationID = "vscode-chat"
@@ -33,7 +32,7 @@ type CopilotProvider struct {
 func NewCopilotProvider(token string) *CopilotProvider {
 	return &CopilotProvider{
 		tokenFn: func(_ context.Context) (string, error) { return token, nil },
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  sharedHTTPClient,
 	}
 }
 
@@ -43,7 +42,7 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 		tokenFn: func(ctx context.Context) (string, error) {
 			return auth.GetSessionToken(ctx, githubToken)
 		},
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 
@@ -126,13 +125,18 @@ func (p *CopilotProvider) Chat(ctx context.Context, req Request) (*Response, err
 	if resp.StatusCode != http.StatusOK {
 		var apiErr openAIErrorResp
 		if err := json.Unmarshal(respBody, &apiErr); err == nil && apiErr.Error.Message != "" {
-			if resp.StatusCode == 401 {
+			switch {
+			case resp.StatusCode == 401:
 				return nil, ErrApiKeyInvalid
-			}
-			if resp.StatusCode == 429 {
+			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
+			case resp.StatusCode >= 500:
+				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return nil, fmt.Errorf("copilot API: %s", apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return nil, fmt.Errorf("copilot API error (status %d)", resp.StatusCode)
 	}
@@ -185,7 +189,18 @@ func (p *CopilotProvider) Stream(ctx context.Context, req Request, onChunk func(
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr openAIErrorResp
 		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
+			switch {
+			case resp.StatusCode == 401:
+				return ErrApiKeyInvalid
+			case resp.StatusCode == 429:
+				return ErrRateLimited
+			case resp.StatusCode >= 500:
+				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
 			return fmt.Errorf("copilot stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return fmt.Errorf("copilot stream error (status %d)", resp.StatusCode)
 	}

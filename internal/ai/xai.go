@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
-var xaiBaseURL = "https://api.x.ai/v1/chat/completions"
+var xaiBaseURL = providerURL("XAI_API_URL", "https://api.x.ai/v1/chat/completions")
 
 type XAIProvider struct {
 	apiKey string
@@ -21,7 +20,7 @@ type XAIProvider struct {
 func NewXAIProvider(apiKey string) *XAIProvider {
 	return &XAIProvider{
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 
@@ -96,7 +95,7 @@ func (x *XAIProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
 			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("xai server error: %s", apiErr.Error.Message)
+				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return nil, fmt.Errorf("xai API: %s", apiErr.Error.Message)
 		}
@@ -151,7 +150,18 @@ func (x *XAIProvider) Stream(ctx context.Context, req Request, onChunk func(Chun
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr openAIErrorResp
 		if err := json.Unmarshal(errBody, &apiErr); err == nil && apiErr.Error.Message != "" {
+			switch {
+			case resp.StatusCode == 401:
+				return ErrApiKeyInvalid
+			case resp.StatusCode == 429:
+				return ErrRateLimited
+			case resp.StatusCode >= 500:
+				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
 			return fmt.Errorf("xai stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return fmt.Errorf("xai stream error (status %d)", resp.StatusCode)
 	}

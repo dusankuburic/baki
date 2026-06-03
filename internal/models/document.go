@@ -12,14 +12,16 @@ const (
 )
 
 type FlowDocument struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	FilePath    string        `json:"filePath"`
-	Subflows    []Subflow     `json:"subflows"`
-	ParseErrors []ParseError  `json:"parseErrors,omitempty"`
-	Metadata    FlowMetadata  `json:"metadata"`
-	Files       []FlowFileInfo `json:"files,omitempty"`
-	IsFolder    bool          `json:"isFolder,omitempty"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	FilePath       string        `json:"filePath"`
+	OwnerID        string        `json:"ownerId,omitempty"`
+	OrganizationID string        `json:"orgId,omitempty"`
+	Subflows       []Subflow     `json:"subflows"`
+	ParseErrors    []ParseError  `json:"parseErrors,omitempty"`
+	Metadata       FlowMetadata  `json:"metadata"`
+	Files          []FlowFileInfo `json:"files,omitempty"`
+	IsFolder       bool          `json:"isFolder,omitempty"`
 
 	// Transient lookup maps (not serialized to JSON)
 	BlocksByID   map[string]*Block   `json:"-"`

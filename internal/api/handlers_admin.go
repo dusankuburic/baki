@@ -4,126 +4,90 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// @Summary List all users
-// @Description Returns a list of all registered users. Only available to system admins.
-// @Tags admin
-// @Produce json
-// @Success 200 {array} interfaces.User
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/admin/users/list [get]
-func (rt *Router) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
-	if !rt.requireRole(w, r, auth.RoleAdmin) {
-		return
-	}
-
-	backend := rt.app.StorageBackend()
-	if backend == nil {
-		rt.sendError(w, fmt.Errorf("admin features require cloud mode"), http.StatusBadRequest)
-		return
-	}
-
-	users, err := backend.ListUsers(r.Context())
-	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	// Sanitize password hashes out of the response
-	for _, u := range users {
-		u.Password = ""
-	}
-
-	rt.sendJSON(w, users)
+type AdminHandler struct {
+	backend  storageif.StorageBackend
+	security *SecurityConfig
 }
 
-// @Summary Set user role
-// @Description Updates the system role for a specific user. Only available to system admins.
-// @Tags admin
-// @Accept json
-// @Produce json
-// @Param userId path string true "User ID"
-// @Param request body object{role=string} true "Set Role Request"
-// @Success 200 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/admin/users/{userId}/role [post]
-func (rt *Router) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
-	if !rt.requireRole(w, r, auth.RoleAdmin) {
-		return
-	}
+func NewAdminHandler(backend storageif.StorageBackend, security *SecurityConfig) *AdminHandler {
+	return &AdminHandler{backend: backend, security: security}
+}
 
-	backend := rt.app.StorageBackend()
-	if backend == nil {
-		rt.sendError(w, fmt.Errorf("admin features require cloud mode"), http.StatusBadRequest)
+func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+	users, err := h.backend.ListUsers(r.Context())
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, users)
+}
 
-	// Path: /api/admin/users/<userId>/role
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/admin/users/"), "/")
-	if len(parts) < 2 || parts[1] != "role" {
-		http.NotFound(w, r)
+func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
-	targetUserID := parts[0]
+	id := chi.URLParam(r, "id")
 
 	var req struct {
-		Role auth.Role `json:"role"`
+		Role string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
-	if !req.Role.IsValid() {
-		http.Error(w, "invalid role", http.StatusBadRequest)
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return
 	}
 
-	user, err := backend.LoadUserByID(r.Context(), targetUserID)
-	if err != nil {
-		rt.sendError(w, err, http.StatusNotFound)
-		return
-	}
-
-	// Safeguard: refuse a change that would leave the instance with zero
-	// admins. Without this, a one-admin instance could be locked out of
-	// admin functions by a misclick. We count admins via ListUsers since
-	// the storage interface doesn't expose a dedicated CountAdmins yet —
-	// the user list is small (admin scale, not customer scale) so this is
-	// cheap.
-	if user.Role == auth.RoleAdmin && req.Role != auth.RoleAdmin {
-		allUsers, listErr := backend.ListUsers(r.Context())
-		if listErr != nil {
-			rt.sendError(w, listErr, http.StatusInternalServerError)
+	// Prevent demoting the last admin
+	if auth.Role(req.Role) != auth.RoleAdmin {
+		admins, err := h.backend.ListAdmins(r.Context())
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
-		admins := 0
-		for _, u := range allUsers {
-			if u.Role == auth.RoleAdmin {
-				admins++
-			}
-		}
-		if admins <= 1 {
-			http.Error(w, "cannot demote the last admin; promote another user to admin first", http.StatusConflict)
+		if len(admins) == 1 && admins[0].ID == id {
+			render.Error(w, fmt.Errorf("cannot demote the last administrator"), http.StatusConflict)
 			return
 		}
 	}
 
-	user.Role = req.Role
-	if err := backend.SaveUser(r.Context(), user); err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+	if err := h.backend.UpdateUserRole(r.Context(), id, auth.Role(req.Role)); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	render.JSON(w, map[string]string{"status": "ok"})
+}
 
-	rt.sendJSON(w, map[string]string{"status": "ok"})
+func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	render.Error(w, fmt.Errorf("migration service not yet autonomous"), http.StatusNotImplemented)
+}
+
+func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	render.JSON(w, map[string]any{
+		"running": false,
+		"result":  nil,
+	})
 }

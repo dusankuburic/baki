@@ -9,10 +9,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
-var glmBaseURL = "https://api.z.ai/api/paas/v4/chat/completions"
+var glmBaseURL = providerURL("GLM_API_URL", "https://api.z.ai/api/paas/v4/chat/completions")
 
 type GLMProvider struct {
 	apiKey string
@@ -22,7 +21,7 @@ type GLMProvider struct {
 func NewGLMProvider(apiKey string) *GLMProvider {
 	return &GLMProvider{
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 
@@ -114,7 +113,7 @@ func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
 			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("glm server error: %s", apiErr.Error.Message)
+				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return nil, fmt.Errorf("glm API: %s", apiErr.Error.Message)
 		}
@@ -169,10 +168,20 @@ func (g *GLMProvider) Stream(ctx context.Context, req Request, onChunk func(Chun
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr openAIErrorResp
 		if err := json.Unmarshal(errBody, &apiErr); err == nil && apiErr.Error.Message != "" {
-			if resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code) {
+			switch {
+			case resp.StatusCode == 401:
+				return ErrApiKeyInvalid
+			case resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code):
 				return ErrInsufficientBalance
+			case resp.StatusCode == 429:
+				return ErrRateLimited
+			case resp.StatusCode >= 500:
+				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return fmt.Errorf("glm stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return fmt.Errorf("glm stream error (status %d)", resp.StatusCode)
 	}

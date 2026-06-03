@@ -22,8 +22,8 @@ type User struct {
 	Email     string    `json:"email"`
 	Password  string    `json:"-"` // Bcrypt hash — never serialized to clients
 	Role      auth.Role `json:"role"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // StorageBackend defines the interface for storage implementations
@@ -45,18 +45,14 @@ type StorageBackend interface {
 
 	// User operations
 	SaveUser(ctx context.Context, user *User) error
-	// CreateUser atomically inserts a new user. If no users exist at the time
-	// of the insert, the user is promoted to RoleAdmin regardless of the
-	// caller-supplied role, so every instance has an initial administrator.
-	// The count + insert happen in a single transaction (or under a mutex for
-	// the filesystem backend) so two concurrent registrations cannot both
-	// become admin. On successful return, user.Role reflects the role actually
-	// persisted. Returns ErrEmailExists if the email is already taken.
 	CreateUser(ctx context.Context, user *User) error
 	LoadUserByEmail(ctx context.Context, email string) (*User, error)
 	LoadUserByID(ctx context.Context, id string) (*User, error)
 	CountUsers(ctx context.Context) (int, error)
 	ListUsers(ctx context.Context) ([]*User, error)
+	ListAdmins(ctx context.Context) ([]*User, error)
+	UpdateUserRole(ctx context.Context, id string, role auth.Role) error
+	UpdateUserPassword(ctx context.Context, id string, passwordHash string) error
 
 	// Organisation operations
 	SaveOrg(ctx context.Context, org *Organisation) error
@@ -104,7 +100,7 @@ type Collaborator struct {
 type FlowFilter struct {
 	UserID         string
 	OrganizationID string
-	Query          string     // case-insensitive name substring match
+	Query          string
 	IsPublic       *bool
 	CreatedAfter   *time.Time
 	CreatedBefore  *time.Time
@@ -112,12 +108,12 @@ type FlowFilter struct {
 	Offset         int
 }
 
-// FlowDocument represents a flow document (simplified for interface)
+// FlowDocument represents a flow document
 type FlowDocument struct {
 	ID             string
 	Name           string
 	Description    string
-	Content        json.RawMessage // raw JSON — avoids base64 double-encoding in Postgres JSONB
+	Content        json.RawMessage
 	Metadata       FlowMetadata
 	OwnerID        string
 	OrganizationID string
@@ -155,7 +151,7 @@ type ChatMessage struct {
 	TokensOut int
 }
 
-// Settings types (simplified)
+// Settings types
 type GeneralSettings struct {
 	FirstRunCompleted bool
 	LastUsedVersion   string
@@ -169,7 +165,7 @@ type AppearanceSettings struct {
 
 type LayoutSettings struct {
 	SidebarWidth    int
-	InspectorWidth int
+	InspectorWidth  int
 	ChatPanelHeight *int
 }
 
@@ -183,6 +179,6 @@ type ParserSettings struct {
 }
 
 type DemoModeSettings struct {
-	Enabled bool
+	Enabled    bool
 	DailyLimit int
 }

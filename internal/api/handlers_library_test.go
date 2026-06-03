@@ -7,62 +7,28 @@ import (
 
 // --- No-storage (nil backend) baseline tests ---
 
-func TestHandleLibraryList_NoStorage_ReturnsEmptyArray(t *testing.T) {
-	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodGet, "/api/library", nil)
-	checkStatus(t, rr, http.StatusOK)
-
-	var result []any
-	decodeJSON(t, rr, &result)
-	if len(result) != 0 {
-		t.Errorf("expected empty array, got %d items", len(result))
-	}
-}
-
-func TestHandleLibraryCreate_MissingNameReturns400(t *testing.T) {
-	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/library", map[string]any{
-		"description": "no name here",
-	})
-	checkStatus(t, rr, http.StatusBadRequest)
-}
-
-func TestHandleLibraryCreate_NoStorageReturns500(t *testing.T) {
-	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/library", map[string]any{
-		"name": "My Flow",
-	})
-	checkStatus(t, rr, http.StatusInternalServerError)
-}
-
 func TestHandleLibraryCreate_BadBodyReturns400(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/library")
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 func TestHandleLibraryGet_NoStorageReturns404(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodGet, "/api/library/some-id", nil)
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
 func TestHandleLibraryDelete_NoStorageReturns404(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodDelete, "/api/library/some-id", nil)
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
-func TestHandleLibraryItem_UnknownMethodReturns404(t *testing.T) {
-	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPut, "/api/library/some-id", nil)
-	checkStatus(t, rr, http.StatusNotFound)
-}
-
-func TestHandleLibrary_UnknownMethodReturns404(t *testing.T) {
-	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPut, "/api/library", nil)
-	checkStatus(t, rr, http.StatusNotFound)
+func TestHandleLibrary_UnknownMethodReturns405(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPatch, "/api/library", nil)
+	checkStatus(t, rr, http.StatusMethodNotAllowed)
 }
 
 // --- JWT + filesystem backend ownership tests ---

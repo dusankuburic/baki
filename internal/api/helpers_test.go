@@ -7,37 +7,97 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/manager"
+	"pad-analyzer/internal/collaboration"
+	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/service"
+	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// newJWTTestRouter creates a Router in cloud/JWT mode.
+type mockNotifier struct{}
+func (m *mockNotifier) Emit(name string, data any) {}
+
+func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
+	cfg := config.Default()
+	cfg.Auth.Enabled = jwtEnabled
+	cfg.Auth.Secret = testToken
+
+	notifier := &mockNotifier{}
+	settings, _ := storage.NewSettingsStore()
+	sysSvc := service.NewSystemService(settings, notifier)
+	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
+	if jwtEnabled {
+		docProv = service.NewCloudDocumentProvider(backend)
+	}
+	
+	authMgr := auth.NewManager(testToken)
+	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
+	
+	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, orgSvc)
+	libSvc := service.NewLibraryService(backend, flowSvc)
+	analysisSvc := service.NewAnalysisService(notifier, settings)
+	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
+	
+	demo := ai.NewDemoLimiter("")
+	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil)
+	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo)
+	
+	ghAuth := ai.NewGitHubAuth()
+	cpAuth := ai.NewCopilotAuth()
+	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory)
+	
+	security := &SecurityConfig{
+		JWTEnabled:  jwtEnabled,
+		LocalUserID: "local",
+		LocalName:   "You",
+		Token:       testToken,
+		AuthMgr:     authMgr,
+		Backend:     backend,
+		OrgSvc:      orgSvc,
+	}
+	
+	eventManager := NewEventManager(make(chan struct{}))
+	
+	handlers := Handlers{
+		Sys:      NewSystemHandler(sysSvc, security),
+		Flow:     NewFlowHandler(flowSvc, docProv, backend, security),
+		Library:  NewLibraryHandler(libSvc, security),
+		Chat:     NewChatHandler(chatSvc, flowSvc, security),
+		Analysis: NewAnalysisHandler(analysisSvc, flowSvc, security),
+		Export:   NewExportHandler(exportSvc, flowSvc, security),
+		Auth:     NewAuthHandler(nil, backend, security),
+		Admin:    NewAdminHandler(backend, security),
+		Provider: NewProviderHandler(providerSvc, security),
+		Org:      NewOrgHandler(orgSvc, backend, security),
+		Sharing:  NewSharingHandler(backend, flowSvc, security),
+	}
+
+	return NewRouter(security, eventManager, handlers, cfg, make(chan struct{}))
+}
+
 func newJWTTestRouter(t *testing.T) *Router {
 	t.Helper()
 	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	return NewRouter(manager.NewApp(fs), testToken, true, nil, "")
+	return newTestRouter(fs, true)
 }
 
-// jwtBearer issues a token for the given user and returns a ready Bearer header value.
 func jwtBearer(t *testing.T, rt *Router, userID, email string) string {
 	t.Helper()
-	pair, err := rt.authMgr.Issue(userID, email, auth.RoleAdmin)
+	pair, err := rt.security.AuthMgr.Issue(userID, email, auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("issue jwt: %v", err)
 	}
 	return "Bearer " + pair.AccessToken
 }
 
-// doRequest sends a request authenticated with the static test token.
 func doRequest(t *testing.T, rt *Router, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	return doRequestWithAuth(t, rt, method, path, "Bearer "+testToken, body)
 }
 
-// doRequestWithAuth sends a request with an explicit Authorization header.
-// Pass an empty string to omit the header.
 func doRequestWithAuth(t *testing.T, rt *Router, method, path, authHeader string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var b bytes.Buffer
@@ -55,7 +115,6 @@ func doRequestWithAuth(t *testing.T, rt *Router, method, path, authHeader string
 	return rr
 }
 
-// decodeJSON parses rr.Body into v.
 func decodeJSON(t *testing.T, rr *httptest.ResponseRecorder, v any) {
 	t.Helper()
 	if err := json.NewDecoder(rr.Body).Decode(v); err != nil {
@@ -63,16 +122,13 @@ func decodeJSON(t *testing.T, rr *httptest.ResponseRecorder, v any) {
 	}
 }
 
-// newLibraryTestRouter returns a JWT-mode Router backed by a temp filesystem store.
-// The returned seed function inserts a flow document directly into the store.
 func newLibraryTestRouter(t *testing.T) (*Router, func(id, ownerID string)) {
 	t.Helper()
 	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
 	if err != nil {
 		t.Fatalf("create local storage: %v", err)
 	}
-	app := manager.NewApp(fs)
-	rt := NewRouter(app, testToken, true, nil, "")
+	rt := newTestRouter(fs, true)
 	seed := func(id, ownerID string) {
 		doc := &storageif.FlowDocument{
 			ID:      id,
@@ -86,7 +142,6 @@ func newLibraryTestRouter(t *testing.T) (*Router, func(id, ownerID string)) {
 	return rt, seed
 }
 
-// checkStatus fails the test if rr.Code != want.
 func checkStatus(t *testing.T, rr *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	if rr.Code != want {
@@ -94,10 +149,22 @@ func checkStatus(t *testing.T, rr *httptest.ResponseRecorder, want int) {
 	}
 }
 
-// badBody returns a request body that is not valid JSON.
+// seedUserWithRole inserts a user with the given role directly via the backend.
+func seedUserWithRole(t *testing.T, rt *Router, id, email string, role auth.Role) {
+	t.Helper()
+	u := &storageif.User{
+		ID:       id,
+		Email:    email,
+		Password: "hash",
+		Role:     role,
+	}
+	if err := rt.security.Backend.SaveUser(context.Background(), u); err != nil {
+		t.Fatalf("seed user %s: %v", id, err)
+	}
+}
+
 var badBody = bytes.NewBufferString("not-json")
 
-// newBadBodyRequest creates a request with an invalid JSON body.
 func newBadBodyRequest(t *testing.T, rt *Router, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewBufferString("not-json"))

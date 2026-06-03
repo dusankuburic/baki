@@ -45,14 +45,14 @@ func storageKey(providerID string) string {
 // key within scope (the caller's owner namespace; "" = legacy/local).
 func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if providerID == "demo" {
-		return NewDemoProvider(), nil
+		return NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(NewDemoProvider()))), nil
 	}
 	if providerID == "copilot" {
 		p, err := f.forCopilot(scope)
 		if err != nil {
 			return nil, err
 		}
-		return NewTracedProvider(p), nil
+		return NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(p))), nil
 	}
 	ctor, ok := providerCtors[providerID]
 	if !ok {
@@ -69,12 +69,17 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get %s key: %w", providerID, err)
 	}
-	return NewTracedProvider(ctor(key)), nil
+	if key == "" {
+		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
+	}
+	return NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(ctor(key)))), nil
 }
 
-// GetMetadataProvider returns a provider instance with an empty key,
-// suitable for retrieving metadata (like Models() or Name()) without storage access.
-func GetMetadataProvider(providerID string) Provider {
+// GetMetadataProvider returns a MetadataProvider suitable for reading provider
+// information (models, pricing, context limits) without requiring a valid API key.
+// The returned value intentionally omits Chat and Stream — use ProviderFactory.For
+// to obtain a fully functional Provider.
+func GetMetadataProvider(providerID string) MetadataProvider {
 	if providerID == "demo" {
 		return NewDemoProvider()
 	}

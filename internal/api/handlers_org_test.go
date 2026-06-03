@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"testing"
+	"pad-analyzer/internal/storage/filesystem"
 )
 
 // createOrg creates an org via the API and returns its ID.
@@ -23,7 +24,7 @@ func createOrg(t *testing.T, rt *Router, name string) string {
 }
 
 func TestHandleOrgList_EmptyByDefault(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodGet, "/api/orgs", nil)
 	checkStatus(t, rr, http.StatusOK)
 
@@ -35,7 +36,7 @@ func TestHandleOrgList_EmptyByDefault(t *testing.T) {
 }
 
 func TestHandleOrgList_ShowsOrgAfterCreate(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	createOrg(t, rt, "Acme")
 
 	rr := doRequest(t, rt, http.MethodGet, "/api/orgs", nil)
@@ -49,7 +50,7 @@ func TestHandleOrgList_ShowsOrgAfterCreate(t *testing.T) {
 }
 
 func TestHandleOrgCreate_OK(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodPost, "/api/orgs", map[string]any{
 		"name": "Acme",
 	})
@@ -70,13 +71,13 @@ func TestHandleOrgCreate_OK(t *testing.T) {
 }
 
 func TestHandleOrgCreate_BadBodyReturns400(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/orgs")
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 func TestHandleOrgDelete_OK(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	orgID := createOrg(t, rt, "Acme")
 
 	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/"+orgID, nil)
@@ -92,18 +93,22 @@ func TestHandleOrgDelete_OK(t *testing.T) {
 }
 
 func TestHandleOrgMemberAdd_OK(t *testing.T) {
-	rt := newTestRouter()
+	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
+	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
+	
+	// Seed a user to add
+	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
 
 	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
-		"userId": "member1",
-		"role":   "member",
+		"email": "member1@example.com",
+		"role":  "member",
 	})
 	checkStatus(t, rr, http.StatusOK)
 }
 
 func TestHandleOrgMemberAdd_UnknownOrgReturns404(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/no-such-org/members", map[string]any{
 		"userId": "member1",
 		"role":   "member",
@@ -112,10 +117,12 @@ func TestHandleOrgMemberAdd_UnknownOrgReturns404(t *testing.T) {
 }
 
 func TestHandleOrgMemberAdd_DuplicateReturns409(t *testing.T) {
-	rt := newTestRouter()
+	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
+	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
+	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
 
-	addReq := map[string]any{"userId": "member1", "role": "member"}
+	addReq := map[string]any{"email": "member1@example.com", "role": "member"}
 	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", addReq)
 
 	// Adding the same member again should return 409 Conflict.
@@ -124,17 +131,20 @@ func TestHandleOrgMemberAdd_DuplicateReturns409(t *testing.T) {
 }
 
 func TestHandleOrgMemberAdd_BadBodyReturns400(t *testing.T) {
-	rt := newTestRouter()
-	orgID := createOrg(t, rt, "Team")
+	rt := newTestRouter(nil, false)
+	orgID := "some-org"
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members")
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 func TestHandleOrgMemberRemove_OK(t *testing.T) {
-	rt := newTestRouter()
+	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
+	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
+	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
+	
 	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
-		"userId": "member1", "role": "member",
+		"email": "member1@example.com", "role": "member",
 	})
 
 	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/"+orgID+"/members/member1", nil)
@@ -142,7 +152,7 @@ func TestHandleOrgMemberRemove_OK(t *testing.T) {
 }
 
 func TestHandleOrgMemberRemove_LastAdminReturns409(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	orgID := createOrg(t, rt, "Team")
 
 	// "local" is the owner/only admin — removing them should be blocked.
@@ -151,35 +161,38 @@ func TestHandleOrgMemberRemove_LastAdminReturns409(t *testing.T) {
 }
 
 func TestHandleOrgMemberRemove_UnknownOrgReturns404(t *testing.T) {
-	rt := newTestRouter()
+	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodDelete, "/api/orgs/no-such-org/members/member1", nil)
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
 func TestHandleOrgMemberSetRole_OK(t *testing.T) {
-	rt := newTestRouter()
+	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
+	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
+	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
+	
 	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
-		"userId": "member1", "role": "member",
+		"email": "member1@example.com", "role": "member",
 	})
 
-	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members/member1/role", map[string]any{
+	rr := doRequest(t, rt, http.MethodPut, "/api/orgs/"+orgID+"/members/member1/role", map[string]any{
 		"role": "admin",
 	})
 	checkStatus(t, rr, http.StatusOK)
-}
+	}
 
 func TestHandleOrgMemberSetRole_UnknownOrgReturns404(t *testing.T) {
-	rt := newTestRouter()
-	rr := doRequest(t, rt, http.MethodPost, "/api/orgs/no-such-org/members/member1/role", map[string]any{
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPut, "/api/orgs/no-such-org/members/member1/role", map[string]any{
 		"role": "admin",
 	})
 	checkStatus(t, rr, http.StatusNotFound)
 }
 
 func TestHandleOrgMemberSetRole_BadBodyReturns400(t *testing.T) {
-	rt := newTestRouter()
-	orgID := createOrg(t, rt, "Team")
-	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members/member1/role")
+	rt := newTestRouter(nil, false)
+	orgID := "some-org"
+	rr := newBadBodyRequest(t, rt, http.MethodPut, "/api/orgs/"+orgID+"/members/member1/role")
 	checkStatus(t, rr, http.StatusBadRequest)
 }

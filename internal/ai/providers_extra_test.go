@@ -110,8 +110,10 @@ func TestDefaultGeminiURL_GenerateContent(t *testing.T) {
 	if !strings.Contains(url, "gemini-2.5-pro") {
 		t.Errorf("URL should contain model name: %q", url)
 	}
-	if !strings.Contains(url, "my-key") {
-		t.Errorf("URL should contain API key: %q", url)
+	// The API key must NOT appear in the URL — it is sent via the
+	// x-goog-api-key header so it never leaks into proxy/access logs.
+	if strings.Contains(url, "my-key") || strings.Contains(url, "key=") {
+		t.Errorf("URL must not contain the API key: %q", url)
 	}
 	if strings.Contains(url, "alt=sse") {
 		t.Errorf("non-stream URL should not contain alt=sse: %q", url)

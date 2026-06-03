@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -262,8 +263,8 @@ func TestClaudeProvider_Stream_ErrorStatus(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for 429 stream response")
 	}
-	if !strings.Contains(err.Error(), "slow down") {
-		t.Errorf("error should contain message, got: %v", err)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got: %v", err)
 	}
 }
 
@@ -333,8 +334,8 @@ func TestOpenAIProvider_Stream_ErrorStatus(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for 401 stream response")
 	}
-	if !strings.Contains(err.Error(), "unauthorized") {
-		t.Errorf("error should contain message, got: %v", err)
+	if !errors.Is(err, ErrApiKeyInvalid) {
+		t.Errorf("expected ErrApiKeyInvalid, got: %v", err)
 	}
 }
 

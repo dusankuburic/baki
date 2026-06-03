@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/manager"
+	
 	"pad-analyzer/internal/storage/filesystem"
 )
 
@@ -71,8 +71,9 @@ func TestServeHTTP_StripsDefaultServerHeader(t *testing.T) {
 func makeStaticRouter(t *testing.T, staticDir string) *Router {
 	t.Helper()
 	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
-	app := manager.NewApp(fs)
-	return NewRouter(app, testToken, true, nil, staticDir)
+	rt := newTestRouter(fs, true)
+	rt.staticDir = staticDir
+	return rt
 }
 
 // TestServeStatic_CSPOnIndexHtml verifies the HTML response carries a

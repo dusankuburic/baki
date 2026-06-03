@@ -61,11 +61,27 @@ type Chunk struct {
 
 var (
 	ErrApiKeyInvalid       = errors.New("invalid API key")
+	ErrKeyNotConfigured    = errors.New("API key not configured")
 	ErrRateLimited         = errors.New("rate limited")
 	ErrContextLimit        = errors.New("context limit exceeded")
 	ErrProviderDown        = errors.New("provider is currently unavailable")
 	ErrInsufficientBalance = errors.New("insufficient balance")
+	ErrCircuitOpen         = errors.New("provider circuit open: too many recent failures")
 )
+
+// MetadataProvider exposes read-only provider information without API credentials.
+// Returned by GetMetadataProvider — it intentionally omits Chat and Stream to
+// prevent callers from accidentally issuing real API calls with an empty key.
+type MetadataProvider interface {
+	ID() string
+	Name() string
+	Models() []ModelInfo
+	DefaultModel() string
+	FreeModel() string
+	ContextLimit() int
+	PricePerMillionTokens() Pricing
+	EstimateTokens(text string) int
+}
 
 func orDefault(val, def int) int {
 	if val <= 0 {

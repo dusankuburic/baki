@@ -175,6 +175,29 @@ func (s *OrgService) MemberRole(orgID, userID string) (auth.Role, error) {
 	return "", ErrMemberNotFound
 }
 
+// ListMembers returns all members of the given organisation.
+func (s *OrgService) ListMembers(orgID string) ([]interfaces.OrgMember, error) {
+	org, err := s.store.LoadOrg(context.Background(), orgID)
+	if err != nil {
+		return nil, err
+	}
+	return org.Members, nil
+}
+
+// IsAdmin reports whether userID is an administrator of orgID.
+func (s *OrgService) IsAdmin(orgID, userID string) bool {
+	org, err := s.store.LoadOrg(context.Background(), orgID)
+	if err != nil {
+		return false
+	}
+	for _, m := range org.Members {
+		if m.UserID == userID && m.Role == auth.RoleAdmin {
+			return true
+		}
+	}
+	return false
+}
+
 // Delete removes an organisation entirely.
 func (s *OrgService) Delete(orgID string) error {
 	return s.store.DeleteOrg(context.Background(), orgID)

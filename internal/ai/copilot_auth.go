@@ -30,9 +30,7 @@ type CopilotAuth struct {
 }
 
 func NewCopilotAuth() *CopilotAuth {
-	return &CopilotAuth{
-		client: &http.Client{Timeout: 30 * time.Second},
-	}
+	return &CopilotAuth{client: authHTTPClient}
 }
 
 // StartDeviceFlow initiates the GitHub OAuth device flow using the Copilot client ID.

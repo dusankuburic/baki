@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type GeminiProvider struct {
@@ -20,7 +19,7 @@ type GeminiProvider struct {
 func NewGeminiProvider(apiKey string) *GeminiProvider {
 	return &GeminiProvider{
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 
@@ -55,12 +54,20 @@ func (g *GeminiProvider) Models() []ModelInfo {
 
 var geminiURL = defaultGeminiURL
 
-func defaultGeminiURL(model, apiKey, action string) string {
-	base := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:%s", model, action)
+// geminiBaseHost is the Gemini API hostname, overridable via GEMINI_API_URL
+// for proxy endpoints. The path is always constructed by defaultGeminiURL.
+var geminiBaseHost = providerURL("GEMINI_API_URL", "https://generativelanguage.googleapis.com")
+
+// defaultGeminiURL builds the request URL. The API key is NOT placed in the
+// query string (it would leak into proxy/access logs); it is sent via the
+// x-goog-api-key header at the call site instead. The apiKey parameter is
+// retained only so tests can override geminiURL with the same signature.
+func defaultGeminiURL(model, _ /*apiKey*/, action string) string {
+	base := fmt.Sprintf("%s/v1beta/models/%s:%s", geminiBaseHost, model, action)
 	if action == "streamGenerateContent" {
-		return base + "?alt=sse&key=" + apiKey
+		return base + "?alt=sse"
 	}
-	return base + "?key=" + apiKey
+	return base
 }
 
 type geminiRequest struct {
@@ -145,6 +152,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
@@ -163,7 +171,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
 			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("gemini server error: %s", apiErr.Error.Message)
+				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return nil, fmt.Errorf("gemini API: %s", apiErr.Error.Message)
 		}
@@ -214,6 +222,7 @@ func (g *GeminiProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
@@ -225,7 +234,18 @@ func (g *GeminiProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr geminiErrorResp
 		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
+			switch {
+			case resp.StatusCode == 400 && strings.Contains(apiErr.Error.Message, "API key"):
+				return ErrApiKeyInvalid
+			case resp.StatusCode == 429:
+				return ErrRateLimited
+			case resp.StatusCode >= 500:
+				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
 			return fmt.Errorf("gemini stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return fmt.Errorf("gemini stream error (status %d)", resp.StatusCode)
 	}

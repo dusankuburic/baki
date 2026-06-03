@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
-var githubModelsBaseURL = "https://models.inference.ai.azure.com/chat/completions"
+var githubModelsBaseURL = providerURL("GITHUB_MODELS_API_URL", "https://models.inference.ai.azure.com/chat/completions")
 
 type GitHubModelsProvider struct {
 	token  string
@@ -21,7 +20,7 @@ type GitHubModelsProvider struct {
 func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	return &GitHubModelsProvider{
 		token:  token,
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 
@@ -118,7 +117,7 @@ func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response
 			case resp.StatusCode == 429:
 				return nil, ErrRateLimited
 			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("github models server error: %s", apiErr.Error.Message)
+				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			return nil, fmt.Errorf("github models API: %s", apiErr.Error.Message)
 		}
@@ -171,7 +170,18 @@ func (g *GitHubModelsProvider) Stream(ctx context.Context, req Request, onChunk 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		var apiErr openAIErrorResp
 		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
+			switch {
+			case resp.StatusCode == 401:
+				return ErrApiKeyInvalid
+			case resp.StatusCode == 429:
+				return ErrRateLimited
+			case resp.StatusCode >= 500:
+				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
 			return fmt.Errorf("github models stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 		}
 		return fmt.Errorf("github models stream error (status %d)", resp.StatusCode)
 	}

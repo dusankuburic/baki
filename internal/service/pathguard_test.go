@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
@@ -39,7 +38,7 @@ func TestValidateUserPath_AcceptsOrdinaryPaths(t *testing.T) {
 }
 
 func TestLoadFlowFromPath_RejectsInvalidPath(t *testing.T) {
-	svc := &FlowService{ctx: context.Background()}
+	svc := &FlowService{}
 	if _, err := svc.LoadFlowFromPath(""); !errors.Is(err, ErrInvalidPath) {
 		t.Errorf("empty path should yield ErrInvalidPath, got %v", err)
 	}

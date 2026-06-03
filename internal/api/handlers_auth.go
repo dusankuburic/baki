@@ -3,127 +3,73 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
-	"net/mail"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/storage/interfaces"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-const minPasswordLength = 8
-
-// bcryptCost is set above bcrypt.DefaultCost (10) to slow offline cracking of
-// leaked hashes. 12 ≈ a few hundred ms per hash — negligible for interactive
-// register/login, meaningful against brute force.
-const bcryptCost = 12
-
-// recordRefresh persists a newly-issued refresh token in the rotation store
-// (cloud mode only). Best-effort: a store failure is logged, and because the
-// token then won't be considered valid, the next refresh simply forces re-login.
-func (rt *Router) recordRefresh(ctx context.Context, pair *auth.TokenPair, userID string) {
-	if rt.tokenStore == nil || pair.RefreshID == "" {
-		return
-	}
-	if err := rt.tokenStore.StoreRefreshToken(ctx, pair.RefreshID, userID, pair.RefreshExpiresAt); err != nil {
-		logger.Error("failed to store refresh token", "error", err)
-	}
+type AuthHandler struct {
+	tokenStore RefreshTokenStore
+	backend    storageif.StorageBackend
+	security   *SecurityConfig
 }
 
-// validateCredentials checks that the email is well-formed and the password
-// meets the minimum length. Returns a human-readable message on failure.
-func validateCredentials(email, password string) (string, bool) {
-	if _, err := mail.ParseAddress(email); err != nil {
-		return "invalid email address", false
-	}
-	if len(password) < minPasswordLength {
-		return "password must be at least 8 characters", false
-	}
-	return "", true
+func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig) *AuthHandler {
+	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security}
 }
 
-// @Summary Register a new user
-// @Description Creates a new user account with email and password.
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param request body object{email=string,password=string} true "Registration Request"
-// @Success 200 {object} map[string]any
-// @Failure 400 {object} map[string]string
-// @Failure 409 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/auth/register [post]
-func (rt *Router) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
-	// Registration requires a real user database — only available in cloud mode.
-	// In local/desktop mode StorageBackend() is nil, so this guard also prevents
-	// a nil dereference panic.
-	if !rt.jwtEnabled {
-		http.Error(w, "registration is not available in local mode", http.StatusNotFound)
+func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if !h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("registration not available in local mode"), http.StatusForbidden)
 		return
 	}
-
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
-	if msg, ok := validateCredentials(req.Email, req.Password); !ok {
-		http.Error(w, msg, http.StatusBadRequest)
+	if !strings.Contains(req.Email, "@") || len(req.Password) < 8 {
+		render.Error(w, fmt.Errorf("invalid email or password too short"), http.StatusBadRequest)
 		return
 	}
 
-	// Reject duplicate emails before doing any expensive hashing.
-	if _, err := rt.app.StorageBackend().LoadUserByEmail(r.Context(), req.Email); err == nil {
-		http.Error(w, "user already exists", http.StatusConflict)
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
+	hashed, err := auth.HashPassword(req.Password)
 	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	user := &interfaces.User{
-		ID:       uuid.New().String(),
+	user := &storageif.User{
+		ID:       uuid.NewString(),
 		Email:    req.Email,
-		Password: string(hash),
+		Password: hashed,
 		Role:     auth.RoleMember,
 	}
 
-	// CreateUser atomically counts existing users and inserts the new one in a
-	// single transaction. If the table is empty at the moment of insert the
-	// user is promoted to RoleAdmin — this guarantees that two concurrent
-	// registrations cannot both become admin (previously CountUsers + SaveUser
-	// was a TOCTOU race). user.Role is overwritten with the role actually
-	// persisted on success.
-	if err := rt.app.StorageBackend().CreateUser(r.Context(), user); err != nil {
-		if errors.Is(err, interfaces.ErrEmailExists) {
-			http.Error(w, "user already exists", http.StatusConflict)
-			return
-		}
-		rt.sendError(w, err, http.StatusInternalServerError)
+	user.Role = resolveRegistrationRole(r.Context(), h.backend)
+
+	if err := h.backend.CreateUser(r.Context(), user); err != nil {
+		render.Error(w, err, http.StatusConflict)
 		return
 	}
 
-	pair, err := rt.authMgr.Issue(user.ID, user.Email, user.Role)
-	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
-		return
-	}
-	rt.recordRefresh(r.Context(), pair, user.ID)
-
-	rt.sendJSON(w, map[string]any{
-		"accessToken":  pair.AccessToken,
-		"refreshToken": pair.RefreshToken,
-		"expiresAt":    pair.ExpiresAt,
+	render.JSON(w, map[string]any{
+		"status": "ok",
 		"user": map[string]any{
 			"id":    user.ID,
 			"email": user.Email,
@@ -132,282 +78,200 @@ func (rt *Router) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// @Summary Login user
-// @Description Authenticates a user and returns access and refresh tokens.
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param request body object{email=string,password=string} true "Login Request"
-// @Success 200 {object} map[string]any
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/auth/login [post]
-func (rt *Router) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if !h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("login not available in local mode"), http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
-	var userID, email string
-	var role auth.Role
-
-	if rt.jwtEnabled {
-		// Cloud mode: use real credential verification.
-		user, err := rt.app.StorageBackend().LoadUserByEmail(r.Context(), req.Email)
-		if err != nil {
-			// Always run a full bcrypt comparison even when the user doesn't exist
-			// so that response time cannot be used to enumerate registered emails
-			// (user-not-found would otherwise return ~300× faster than wrong-password).
-			_ = bcrypt.CompareHashAndPassword(
-				[]byte("$2a$12$C1bbK1eg7fyNXZ/DhDAJvuilldiH0nTU7s5DMenUexwPvNYQ6zZZm"),
-				[]byte(req.Password),
-			)
-			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-			return
-		}
-		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-			return
-		}
-		userID = user.ID
-		email = user.Email
-		role = user.Role
-	} else {
-		// Local/Tauri mode: the pre-shared token already guards the endpoint.
-		// Ignore password and use defaults.
-		userID = "local"
-		email = "local@localhost"
-		role = auth.RoleAdmin
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
 	}
 
-	pair, err := rt.authMgr.Issue(userID, email, role)
+	user, err := h.backend.LoadUserByEmail(r.Context(), req.Email)
 	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
 		return
 	}
-	rt.recordRefresh(r.Context(), pair, userID)
-	rt.sendJSON(w, map[string]any{
-		"accessToken":  pair.AccessToken,
-		"refreshToken": pair.RefreshToken,
-		"expiresAt":    pair.ExpiresAt,
-		"user": map[string]any{
-			"id":    userID,
-			"email": email,
-			"role":  role,
-		},
-	})
+
+	if !auth.CheckPasswordHash(req.Password, user.Password) {
+		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
+		return
+	}
+
+	pair, err := h.security.AuthMgr.Issue(user.ID, user.Email, user.Role)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	if h.tokenStore != nil {
+		expiresAt := time.Now().Add(7 * 24 * time.Hour)
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, expiresAt); err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	render.JSON(w, pair)
 }
 
-// @Summary Refresh access token
-// @Description Returns a new access token using a valid refresh token.
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param request body object{refreshToken=string} true "Refresh Request"
-// @Success 200 {object} map[string]any
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/auth/refresh [post]
-func (rt *Router) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
-		return
-	}
-	rc, err := rt.authMgr.VerifyRefresh(req.RefreshToken)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
-	// Rotation (cloud mode): the presented token must still be valid in the
-	// store; we then revoke it so it cannot be replayed. Each refresh hands out
-	// a brand-new refresh token, limiting the blast radius of a leaked token.
-	if rt.tokenStore != nil {
-		if rc.ID == "" {
-			// Pre-rotation token (no jti) — force a fresh login.
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		valid, err := rt.tokenStore.IsRefreshTokenValid(r.Context(), rc.ID)
-		if err != nil {
-			rt.sendError(w, err, http.StatusInternalServerError)
-			return
-		}
-		if !valid {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if err := rt.tokenStore.RevokeRefreshToken(r.Context(), rc.ID); err != nil {
-			rt.sendError(w, err, http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Use the email and role embedded in the refresh token so they are preserved
-	// across refreshes without trusting the client to supply them again.
-	pair, err := rt.authMgr.Issue(rc.UserID, rc.Email, rc.Role)
+	claims, err := h.security.AuthMgr.VerifyRefresh(req.RefreshToken)
 	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, http.StatusUnauthorized)
 		return
 	}
-	rt.recordRefresh(r.Context(), pair, rc.UserID)
-	rt.sendJSON(w, map[string]any{
-		"accessToken":  pair.AccessToken,
-		"refreshToken": pair.RefreshToken,
-		"expiresAt":    pair.ExpiresAt,
-	})
+
+	if h.tokenStore != nil {
+		valid, err := h.tokenStore.IsRefreshTokenValid(r.Context(), claims.ID)
+		if err != nil || !valid {
+			render.Error(w, fmt.Errorf("invalid or revoked refresh token"), http.StatusUnauthorized)
+			return
+		}
+		_ = h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID)
+	}
+
+	pair, err := h.security.AuthMgr.Issue(claims.UserID, claims.Email, claims.Role)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	if h.tokenStore != nil {
+		expiresAt := time.Now().Add(7 * 24 * time.Hour)
+		_ = h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, expiresAt)
+	}
+
+	render.JSON(w, pair)
 }
 
-// @Summary Get current user info
-// @Description Returns information about the currently authenticated user.
-// @Tags auth
-// @Produce json
-// @Success 200 {object} map[string]any
-// @Failure 401 {object} map[string]string
-// @Router /api/auth/me [get]
-func (rt *Router) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	// /me is behind the same JWT middleware as every other authed handler;
-	// the middleware has already verified the token and stashed the claims
-	// on the request context. Re-parsing the Authorization header here (the
-	// old behavior) was redundant and risked drifting from the standard
-	// auth flow if middleware order ever changed.
+func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	rt.sendJSON(w, map[string]any{
-		"userId": claims.UserID,
-		"email":  claims.Email,
-		"role":   claims.Role,
-	})
-}
-
-// @Summary Logout user
-// @Description Logs out the current user. In stateless JWT mode, this is primarily a client-side operation.
-// @Tags auth
-// @Produce json
-// @Success 200 {object} map[string]string
-// @Router /api/auth/logout [post]
-func (rt *Router) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
-	// In cloud mode, revoke the user's refresh tokens so they can't be replayed
-	// after logout. The access token might already be expired when the user
-	// clicks logout, so we parse it manually here (since this endpoint is in
-	// publicRoutes) and tolerate the expiry error as long as the signature
-	// is valid.
-	if rt.jwtEnabled && rt.tokenStore != nil {
-		tokenStr := auth.ExtractToken(r)
-		if tokenStr != "" {
-			claims, err := rt.authMgr.VerifyIgnoreExpiry(tokenStr)
-			if err == nil {
-				if err := rt.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
-					logger.Error("logout: failed to revoke refresh tokens", "error", err)
-				}
-			} else {
-				logger.Warn("logout: invalid token signature", "error", err)
-			}
-		}
-	}
-	rt.sendJSON(w, map[string]string{"status": "ok"})
-}
-
-// @Summary Issue a WebSocket connect ticket
-// @Description Returns a short-lived, single-use ticket the client exchanges for a WebSocket connection, keeping the access token out of the WS URL.
-// @Tags auth
-// @Produce json
-// @Success 200 {object} map[string]any
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/ws-ticket [post]
-func (rt *Router) handleWSTicket(w http.ResponseWriter, r *http.Request) {
-	// Identity resolution mirrors the WS handler's previous behaviour: use the
-	// authenticated JWT claims in cloud mode, fall back to the local identity in
-	// desktop mode (where the request is gated by the pre-shared static token).
-	userID, email := rt.localUserID, rt.localName
-	role := auth.RoleAdmin
-	if rt.jwtEnabled {
-		claims := auth.ClaimsFromContext(r.Context())
-		if claims == nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if !h.security.JWTEnabled {
+			render.JSON(w, map[string]string{
+				"id":    h.security.LocalUserID,
+				"email": h.security.LocalName,
+				"role":  string(auth.RoleAdmin),
+			})
 			return
 		}
-		userID, email, role = claims.UserID, claims.Email, claims.Role
-	}
-
-	ticket, expiresAt, err := rt.authMgr.IssueWSTicket(userID, email, role)
-	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	rt.sendJSON(w, map[string]any{
-		"ticket":    ticket,
-		"expiresAt": expiresAt,
+	render.JSON(w, map[string]string{
+		"id":    claims.UserID,
+		"email": claims.Email,
+		"role":  string(claims.Role),
 	})
 }
 
-// @Summary Change password
-// @Description Changes the password for the currently authenticated user.
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param request body object{currentPassword=string,newPassword=string} true "Change Password Request"
-// @Success 200 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/auth/change-password [post]
-func (rt *Router) handleAuthChangePassword(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		CurrentPassword string `json:"currentPassword"`
-		NewPassword     string `json:"newPassword"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.RefreshToken != "" && h.tokenStore != nil {
+		claims, err := h.security.AuthMgr.VerifyRefresh(req.RefreshToken)
+		if err == nil {
+			_ = h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID)
+		}
+	}
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		OldPassword string `json:"oldPassword"`
+		NewPassword string `json:"newPassword"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
-	if len(req.NewPassword) < minPasswordLength {
-		http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return
 	}
 
+	user, err := h.backend.LoadUserByID(r.Context(), claims.UserID)
+	if err != nil {
+		render.Error(w, err, http.StatusNotFound)
+		return
+	}
+
+	if !auth.CheckPasswordHash(req.OldPassword, user.Password) {
+		render.Error(w, fmt.Errorf("invalid old password"), http.StatusUnauthorized)
+		return
+	}
+
+	hashed, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.backend.UpdateUserPassword(r.Context(), user.ID, hashed); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	if h.tokenStore != nil {
+		_ = h.tokenStore.RevokeUserRefreshTokens(r.Context(), user.ID)
+	}
+
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// resolveRegistrationRole returns RoleAdmin for the very first registered user
+// (so there is always at least one admin), and RoleMember for everyone after.
+func resolveRegistrationRole(ctx context.Context, backend storageif.StorageBackend) auth.Role {
+	if users, _ := backend.ListUsers(ctx); len(users) == 0 {
+		return auth.RoleAdmin
+	}
+	return auth.RoleMember
+}
+
+func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	var userID, email string
+	var role auth.Role
+	if claims != nil {
+		userID, email, role = claims.UserID, claims.Email, claims.Role
+	} else {
+		userID, email, role = h.security.LocalUserID, h.security.LocalName, auth.RoleAdmin
 	}
 
-	user, err := rt.app.StorageBackend().LoadUserByID(r.Context(), claims.UserID)
+	ticket, _, err := h.security.AuthMgr.IssueWSTicket(userID, email, role)
 	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.CurrentPassword)); err != nil {
-		http.Error(w, "invalid current password", http.StatusUnauthorized)
-		return
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcryptCost)
-	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	user.Password = string(hash)
-	if err := rt.app.StorageBackend().SaveUser(r.Context(), user); err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	rt.sendJSON(w, map[string]string{"status": "ok"})
+	render.JSON(w, map[string]string{"ticket": ticket})
 }

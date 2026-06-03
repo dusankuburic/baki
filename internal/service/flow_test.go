@@ -1,11 +1,11 @@
 package service
 
 import (
-	"context"
 	"testing"
 
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/parser"
+	"pad-analyzer/internal/search"
 )
 
 // simpleFlow is minimal valid PAD content used as a test fixture.
@@ -31,7 +31,9 @@ func makeTestDoc(t *testing.T, text string) (*FlowService, *models.FlowDocument)
 	if err != nil {
 		t.Fatalf("ParseText: %v", err)
 	}
-	svc := &FlowService{ctx: context.Background()}
+	svc := &FlowService{
+		idxCache: make(map[string]*search.SearchIndex),
+	}
 	return svc, doc
 }
 
@@ -43,7 +45,7 @@ func TestFlowService_FindBlockByID_empty_id(t *testing.T) {
 }
 
 func TestFlowService_FindBlockByID_nil_doc(t *testing.T) {
-	svc := &FlowService{ctx: context.Background()}
+	svc := &FlowService{}
 	if svc.FindBlockByID(nil, "any-id") != nil {
 		t.Fatal("expected nil when doc is nil")
 	}
@@ -91,7 +93,7 @@ func TestFlowService_FindSubflowForBlock_unknown(t *testing.T) {
 }
 
 func TestFlowService_GetSourceFiles_no_doc(t *testing.T) {
-	svc := &FlowService{ctx: context.Background()}
+	svc := &FlowService{}
 	files, err := svc.GetSourceFiles(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -118,7 +120,7 @@ func TestFlowService_GetSourceFiles_returns_subflows(t *testing.T) {
 }
 
 func TestFlowService_RecentFiles_nil_settings(t *testing.T) {
-	svc := &FlowService{ctx: context.Background(), settings: nil}
+	svc := &FlowService{settings: nil}
 	files, err := svc.RecentFiles()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

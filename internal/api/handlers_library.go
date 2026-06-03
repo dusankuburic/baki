@@ -2,18 +2,27 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// libraryFlow is the API projection of a stored flow document.
+type LibraryHandler struct {
+	libSvc   *service.LibraryService
+	security *SecurityConfig
+}
+
+func NewLibraryHandler(libSvc *service.LibraryService, security *SecurityConfig) *LibraryHandler {
+	return &LibraryHandler{libSvc: libSvc, security: security}
+}
+
 type libraryFlow struct {
 	ID               string    `json:"id"`
 	Name             string    `json:"name"`
@@ -26,39 +35,13 @@ type libraryFlow struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
-// canReadLibraryFlow reports whether userID may read doc. Local/Tauri mode is
-// single-user and always allowed. Cloud mode: owner-less (public) docs are
-// readable; otherwise the caller must be the owner, a member of the doc's org,
-// or an explicit collaborator on the flow.
-func (rt *Router) canReadLibraryFlow(r *http.Request, doc *storageif.FlowDocument, userID string) bool {
-	if !rt.jwtEnabled {
-		return true
-	}
-	if doc.OwnerID == "" || doc.OwnerID == userID {
-		return true
-	}
-	if doc.OrganizationID != "" && rt.orgSvc.IsMember(doc.OrganizationID, userID) {
-		return true
-	}
-	if backend := rt.app.StorageBackend(); backend != nil {
-		if collabs, err := backend.ListCollaborators(r.Context(), doc.ID); err == nil {
-			for _, c := range collabs {
-				if c.UserID == userID {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func toLibraryFlow(doc *storageif.FlowDocument, requestingUserID, ownerDisplayName string) libraryFlow {
+func (h *LibraryHandler) toLibraryFlow(r *http.Request, doc *storageif.FlowDocument, requestingUserID string) libraryFlow {
 	return libraryFlow{
 		ID:               doc.ID,
 		Name:             doc.Name,
 		Description:      doc.Description,
 		OwnerID:          doc.OwnerID,
-		OwnerDisplayName: ownerDisplayName,
+		OwnerDisplayName: h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID),
 		IsSharedWithMe:   doc.OwnerID != requestingUserID,
 		BlockCount:       doc.Metadata.BlockCount,
 		SubflowCount:     doc.Metadata.SubflowCount,
@@ -66,38 +49,8 @@ func toLibraryFlow(doc *storageif.FlowDocument, requestingUserID, ownerDisplayNa
 	}
 }
 
-// ownerDisplayName resolves a user ID to a human-readable name (email) via the
-// user store. Returns "" when there is no backend or the user is unknown.
-func (rt *Router) ownerDisplayName(r *http.Request, ownerID string) string {
-	if ownerID == "" {
-		return ""
-	}
-	backend := rt.app.StorageBackend()
-	if backend == nil {
-		return ""
-	}
-	if u, err := backend.LoadUserByID(r.Context(), ownerID); err == nil {
-		return u.Email
-	}
-	return ""
-}
-
-// @Summary List library flows
-// @Description Returns a list of flow documents stored in the library, with optional filtering by organization and search query.
-// @Tags library
-// @Produce json
-// @Param orgId query string false "Organization ID"
-// @Param q query string false "Search query"
-// @Param limit query integer false "Limit"
-// @Param offset query integer false "Offset"
-// @Success 200 {array} libraryFlow
-// @Failure 500 {object} map[string]string
-// @Router /api/library [get]
-func (rt *Router) handleLibraryList(w http.ResponseWriter, r *http.Request) {
-	userID := rt.localUserID
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		userID = claims.UserID
-	}
+func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Request) {
+	userID := h.security.CallerID(r)
 
 	q := r.URL.Query()
 	orgID := q.Get("orgId")
@@ -105,45 +58,30 @@ func (rt *Router) handleLibraryList(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
 
-	docs, err := rt.app.ListLibraryFlows(userID, orgID, query, limit, offset)
+	docs, err := h.libSvc.ListLibraryFlows(r.Context(), userID, orgID, query, limit, offset)
 	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	nameCache := make(map[string]string)
-	result := make([]libraryFlow, len(docs))
+	items := make([]libraryFlow, len(docs))
 	for i, d := range docs {
-		dn, ok := nameCache[d.OwnerID]
-		if !ok {
-			dn = rt.ownerDisplayName(r, d.OwnerID)
-			nameCache[d.OwnerID] = dn
-		}
-		result[i] = toLibraryFlow(d, userID, dn)
+		items[i] = h.toLibraryFlow(r, d, userID)
 	}
-	rt.sendJSON(w, result)
+	render.JSON(w, render.PagedResponse[libraryFlow]{
+		Items:  items,
+		Total:  offset + len(items), // approximation; replace when storage adds COUNT
+		Offset: offset,
+		Limit:  limit,
+	})
 }
 
-// @Summary Create library flow
-// @Description Saves a new flow document to the library.
-// @Tags library
-// @Accept json
-// @Produce json
-// @Param request body object{name=string,description=string,orgId=string,content=json.RawMessage} true "Create Library Flow Request"
-// @Success 201 {object} libraryFlow
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/library [post]
-func (rt *Router) handleLibraryCreate(w http.ResponseWriter, r *http.Request) {
-	if !rt.requireRole(w, r, auth.RoleMember) {
+func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
 
-	userID := rt.localUserID
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		userID = claims.UserID
-	}
+	userID := h.security.CallerID(r)
 
 	var req struct {
 		Name        string          `json:"name"`
@@ -152,11 +90,11 @@ func (rt *Router) handleLibraryCreate(w http.ResponseWriter, r *http.Request) {
 		Content     json.RawMessage `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" {
-		rt.sendError(w, errors.New("name is required"), http.StatusBadRequest)
+		render.Error(w, fmt.Errorf("name is required"), http.StatusBadRequest)
 		return
 	}
 
@@ -165,170 +103,63 @@ func (rt *Router) handleLibraryCreate(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		Content:     req.Content,
 	}
-	saved, err := rt.app.CreateLibraryFlow(userID, req.OrgID, doc)
+	saved, err := h.libSvc.CreateLibraryFlow(r.Context(), userID, req.OrgID, doc)
 	if err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	rt.sendJSON(w, toLibraryFlow(saved, userID, rt.ownerDisplayName(r, saved.OwnerID)))
+	render.JSON(w, h.toLibraryFlow(r, saved, userID))
 }
 
-// @Summary Get library flow metadata
-// @Description Returns the metadata for a specific library flow.
-// @Tags library
-// @Produce json
-// @Param id path string true "Flow ID"
-// @Success 200 {object} libraryFlow
-// @Failure 403 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/library/{id} [get]
-func (rt *Router) handleLibraryGet(w http.ResponseWriter, r *http.Request, id string) {
-	userID := rt.localUserID
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		userID = claims.UserID
-	}
+func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
 
-	doc, err := rt.app.GetLibraryFlow(id)
+	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
 	if err != nil {
-		if errors.Is(err, storageif.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, 0)
 		return
 	}
-
-	if !rt.canReadLibraryFlow(r, doc, userID) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
-	rt.sendJSON(w, toLibraryFlow(doc, userID, rt.ownerDisplayName(r, doc.OwnerID)))
+	render.JSON(w, h.toLibraryFlow(r, doc, userID))
 }
 
-// @Summary Get library flow content
-// @Description Returns the raw JSON content of a specific library flow.
-// @Tags library
-// @Produce json
-// @Param id path string true "Flow ID"
-// @Success 200 {object} map[string]any
-// @Failure 403 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/library/{id}/content [get]
-func (rt *Router) handleLibraryGetContent(w http.ResponseWriter, r *http.Request, id string) {
-	userID := rt.localUserID
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		userID = claims.UserID
-	}
+func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
 
-	doc, err := rt.app.GetLibraryFlow(id)
+	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
 	if err != nil {
-		if errors.Is(err, storageif.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		rt.sendError(w, err, http.StatusInternalServerError)
+		render.Error(w, err, 0)
 		return
 	}
 
-	if !rt.canReadLibraryFlow(r, doc, userID) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
-	// Return the raw stored flow-document JSON (what the frontend's getContent expects),
-	// not the storage wrapper.
 	w.Header().Set("Content-Type", "application/json")
-	var (
-		payload []byte
-	)
-	if len(doc.Content) == 0 {
+	payload := doc.Content
+	if len(payload) == 0 {
 		payload = []byte("null")
-	} else {
-		payload = doc.Content
 	}
-	if _, err := w.Write(payload); err != nil {
-		// Status has already been written; client likely disconnected. Log
-		// for ops, but there's nothing further to send.
-		logger.Warn("handleGetLibraryItem: write response", "error", err, "flow_id", doc.ID)
-	}
+	_, _ = w.Write(payload)
 }
 
-// @Summary Delete library flow
-// @Description Deletes a specific flow document from the library. Only the owner can delete.
-// @Tags library
-// @Produce json
-// @Param id path string true "Flow ID"
-// @Success 200 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/library/{id} [delete]
-func (rt *Router) handleLibraryDelete(w http.ResponseWriter, r *http.Request, id string) {
-	userID := rt.localUserID
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		userID = claims.UserID
-	}
+func (h *LibraryHandler) handleLibraryDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
 
-	doc, err := rt.app.GetLibraryFlow(id)
-	if err != nil {
-		if errors.Is(err, storageif.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		rt.sendError(w, err, http.StatusInternalServerError)
+	if err := h.libSvc.DeleteLibraryFlow(r.Context(), id, userID); err != nil {
+		render.Error(w, err, 0)
 		return
 	}
-
-	// Only the owner may delete.
-	if rt.jwtEnabled && doc.OwnerID != "" && doc.OwnerID != userID {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
-	if err := rt.app.DeleteLibraryFlow(id); err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
-		return
-	}
-	rt.sendJSON(w, map[string]string{"status": "ok"})
+	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// @Summary Update library flow
-// @Description Updates the name, description, or content of a specific library flow. Only the owner can update.
-// @Tags library
-// @Accept json
-// @Produce json
-// @Param id path string true "Flow ID"
-// @Param request body object{name=string,description=string,content=json.RawMessage} true "Update Library Flow Request"
-// @Success 200 {object} libraryFlow
-// @Failure 400 {object} map[string]string
-// @Failure 403 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Router /api/library/{id} [put]
-func (rt *Router) handleLibraryUpdate(w http.ResponseWriter, r *http.Request, id string) {
-	userID := rt.localUserID
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
-		userID = claims.UserID
-	}
+func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
 
-	// Verify the flow exists and the caller owns it.
-	existing, err := rt.app.GetLibraryFlow(id)
+	existing, err := h.libSvc.GetLibraryFlow(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, storageif.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		rt.sendError(w, err, http.StatusInternalServerError)
-		return
-	}
-	// In cloud mode the caller must own the flow. Empty-owner (legacy) flows are
-	// not world-writable.
-	if rt.jwtEnabled && existing.OwnerID != userID {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		render.Error(w, err, 0)
 		return
 	}
 
@@ -338,11 +169,10 @@ func (rt *Router) handleLibraryUpdate(w http.ResponseWriter, r *http.Request, id
 		Content     json.RawMessage `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		rt.sendError(w, err, http.StatusBadRequest)
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
-	// Apply updates over the existing document.
 	if req.Name != "" {
 		existing.Name = req.Name
 	}
@@ -353,39 +183,9 @@ func (rt *Router) handleLibraryUpdate(w http.ResponseWriter, r *http.Request, id
 		existing.Content = req.Content
 	}
 
-	if err := rt.app.UpdateLibraryFlow(existing); err != nil {
-		rt.sendError(w, err, http.StatusInternalServerError)
+	if err := h.libSvc.UpdateLibraryFlow(r.Context(), existing, userID); err != nil {
+		render.Error(w, err, 0)
 		return
 	}
-	rt.sendJSON(w, toLibraryFlow(existing, userID, rt.ownerDisplayName(r, existing.OwnerID)))
-}
-
-// handleLibraryItem routes requests for /api/library/:id paths.
-func (rt *Router) handleLibraryItem(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/library/")
-	if path == "" || path == "content" {
-		http.NotFound(w, r)
-		return
-	}
-
-	if id, ok := strings.CutSuffix(path, "/content"); ok {
-		if id == "" {
-			http.NotFound(w, r)
-			return
-		}
-		rt.handleLibraryGetContent(w, r, id)
-		return
-	}
-
-	id := path
-	switch r.Method {
-	case http.MethodGet:
-		rt.handleLibraryGet(w, r, id)
-	case http.MethodPut:
-		rt.handleLibraryUpdate(w, r, id)
-	case http.MethodDelete:
-		rt.handleLibraryDelete(w, r, id)
-	default:
-		http.NotFound(w, r)
-	}
+	render.JSON(w, h.toLibraryFlow(r, existing, userID))
 }

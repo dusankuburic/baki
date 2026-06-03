@@ -23,6 +23,22 @@ type LocalStorageBackend struct {
 	sharing map[string][]*interfaces.Collaborator
 }
 
+// atomicWrite writes data to path durably: it writes to a sibling temp file
+// then renames it over the destination. Rename is atomic on the same
+// filesystem, so a crash mid-write can never leave a truncated/corrupt file at
+// path — readers see either the old contents or the complete new contents.
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp) // best-effort cleanup; don't mask the rename error
+		return err
+	}
+	return nil
+}
+
 // NewLocalStorageBackend creates a new local file system storage backend
 func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -51,7 +67,7 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		return fmt.Errorf("failed to marshal flow: %w", err)
 	}
 
-	if err := os.WriteFile(flowPath, data, 0644); err != nil {
+	if err := atomicWrite(flowPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write flow file: %w", err)
 	}
 
@@ -158,7 +174,7 @@ func (lsb *LocalStorageBackend) SaveSettings(ctx context.Context, settings *inte
 		return fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
-	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+	if err := atomicWrite(settingsPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write settings file: %w", err)
 	}
 
@@ -200,7 +216,7 @@ func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, sc
 		return fmt.Errorf("failed to marshal conversation: %w", err)
 	}
 
-	if err := os.WriteFile(conversationPath, data, 0644); err != nil {
+	if err := atomicWrite(conversationPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write conversation file: %w", err)
 	}
 
@@ -346,6 +362,40 @@ func (lsb *LocalStorageBackend) ListUsers(ctx context.Context) ([]*interfaces.Us
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+func (lsb *LocalStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	var admins []*interfaces.User
+	for _, u := range lsb.users {
+		if u.Role == auth.RoleAdmin {
+			admins = append(admins, u)
+		}
+	}
+	return admins, nil
+}
+
+func (lsb *LocalStorageBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	if u, ok := lsb.users[id]; ok {
+		u.Role = role
+		u.UpdatedAt = time.Now().UTC()
+		return nil
+	}
+	return interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	if u, ok := lsb.users[id]; ok {
+		u.Password = passwordHash
+		u.UpdatedAt = time.Now().UTC()
+		return nil
+	}
+	return interfaces.ErrNotFound
 }
 
 // ---- Organisation operations ----

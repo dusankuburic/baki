@@ -12,11 +12,9 @@ import (
 )
 
 // TestRequireRole_CloudMode verifies that admin-gated endpoints enforce the
-// admin role server-side in cloud (JWT) mode — a non-admin token must be
-// rejected with 403 and a missing token with 401, regardless of what the
-// frontend shows.
+// admin role server-side in cloud (JWT) mode.
 func TestRequireRole_CloudMode(t *testing.T) {
-	rt := &Router{jwtEnabled: true}
+	rt := newTestRouter(nil, true)
 
 	cases := []struct {
 		name     string
@@ -36,7 +34,7 @@ func TestRequireRole_CloudMode(t *testing.T) {
 			req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{Role: tc.role}))
 			rec := httptest.NewRecorder()
 
-			got := rt.requireRole(rec, req, auth.RoleAdmin)
+			got := rt.security.RequireRole(rec, req, auth.RoleAdmin)
 			if got != tc.want {
 				t.Fatalf("requireRole(role=%s) = %v, want %v", tc.role, got, tc.want)
 			}
@@ -50,11 +48,11 @@ func TestRequireRole_CloudMode(t *testing.T) {
 // TestRequireRole_MissingClaims verifies that a request with no claims in
 // context (no/invalid token) is rejected with 401 in cloud mode.
 func TestRequireRole_MissingClaims(t *testing.T) {
-	rt := &Router{jwtEnabled: true}
+	rt := newTestRouter(nil, true)
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users/list", nil)
 	rec := httptest.NewRecorder()
 
-	if rt.requireRole(rec, req, auth.RoleAdmin) {
+	if rt.security.RequireRole(rec, req, auth.RoleAdmin) {
 		t.Fatal("requireRole with nil claims should be denied")
 	}
 	if rec.Code != http.StatusUnauthorized {
@@ -63,14 +61,13 @@ func TestRequireRole_MissingClaims(t *testing.T) {
 }
 
 // TestRequireRole_LocalModeBypass documents the intentional behaviour that in
-// local (single-user, token-gated) mode role checks are skipped — the desktop
-// user is implicitly the administrator.
+// local (single-user, token-gated) mode role checks are skipped.
 func TestRequireRole_LocalModeBypass(t *testing.T) {
-	rt := &Router{jwtEnabled: false}
+	rt := newTestRouter(nil, false)
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users/list", nil)
 	rec := httptest.NewRecorder()
 
-	if !rt.requireRole(rec, req, auth.RoleAdmin) {
+	if !rt.security.RequireRole(rec, req, auth.RoleAdmin) {
 		t.Fatal("local mode should allow admin actions without JWT claims")
 	}
 }
@@ -78,7 +75,7 @@ func TestRequireRole_LocalModeBypass(t *testing.T) {
 // seedCollaborator grants userID the given permission on flowID.
 func seedCollaborator(t *testing.T, rt *Router, flowID, userID, perm string) {
 	t.Helper()
-	err := rt.app.StorageBackend().AddCollaborator(context.Background(), flowID, &storageif.Collaborator{
+	err := rt.security.Backend.AddCollaborator(context.Background(), flowID, &storageif.Collaborator{
 		UserID:     userID,
 		Email:      userID + "@example.com",
 		Permission: perm,
@@ -167,10 +164,10 @@ func TestChatClear_NonOwnerForbidden(t *testing.T) {
 }
 
 // Regression: a flow carrying an OrganizationID must NOT be readable by a
-// non-member. The previous check inverted this (any org-tagged flow was open).
+// non-member.
 func TestLibraryGet_OrgFlowNonMemberForbidden(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	if err := rt.app.StorageBackend().SaveFlow(context.Background(), &storageif.FlowDocument{
+	if err := rt.security.Backend.SaveFlow(context.Background(), &storageif.FlowDocument{
 		ID: "flow-org", Name: "test", OwnerID: "alice", OrganizationID: "org-1",
 	}); err != nil {
 		t.Fatalf("seed org flow: %v", err)
@@ -186,12 +183,11 @@ func TestExportMarkdown_ForbiddenInCloudMode(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	tok := jwtBearer(t, rt, "alice", "alice@example.com")
 
-	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/export/markdown", tok, map[string]any{"path": "x"})
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/export/markdown", tok, map[string]any{"path": "x", "flowId": "x"})
 	checkStatus(t, rr, http.StatusForbidden)
 }
 
-// Analysis endpoints resolve+authorize the target flow by id in cloud mode: a
-// non-owner must be denied before any analysis runs (IDOR protection).
+// Analysis endpoints resolve+authorize the target flow by id in cloud mode.
 func TestAnalyze_NonOwnerForbidden(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedFlow(t, rt, "flow-a", "alice")
@@ -217,7 +213,7 @@ func TestAnalyzeGraph_NonOwnerForbidden(t *testing.T) {
 	seedFlow(t, rt, "flow-a", "alice")
 	bobToken := jwtBearer(t, rt, "bob", "bob@example.com")
 
-	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/analysis/graph?flowId=flow-a", bobToken, nil)
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/graph", bobToken, map[string]any{"flowId": "flow-a"})
 	checkStatus(t, rr, http.StatusForbidden)
 }
 

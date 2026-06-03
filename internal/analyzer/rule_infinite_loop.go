@@ -14,16 +14,6 @@ func (r *InfiniteLoopRiskRule) Description() string  { return "LOOP blocks with 
 func (r *InfiniteLoopRiskRule) DefaultSeverity() models.Severity { return models.SeverityError }
 func (r *InfiniteLoopRiskRule) Category() string     { return "Reliability" }
 
-var exitActionPatterns = []string{
-	"ExitLoop",
-	"Exit loop",
-	"Break",
-	"Return",
-	"End flow",
-	"ExitSubflow",
-	"Exit subflow",
-}
-
 func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeLoop {
 		return nil
@@ -34,13 +24,13 @@ func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 	}
 
 	return []models.Finding{{
-		RuleID:    r.ID(),
-		Severity:  r.DefaultSeverity(),
-		Title:     "Loop may run forever",
+		RuleID:      r.ID(),
+		Severity:    r.DefaultSeverity(),
+		Title:       "Loop may run forever",
 		Description: "This loop has no recognizable exit condition such as Exit Loop, Break, or modifications to the loop variable.",
-		BlockID:   block.ID,
-		SubflowID: block.SubflowID,
-		Suggestion: "Add an 'Exit loop' action or ensure the loop variable is modified to guarantee termination.",
+		BlockID:     block.ID,
+		SubflowID:   block.SubflowID,
+		Suggestion:  "Add an 'Exit loop' action or ensure the loop variable is modified to guarantee termination.",
 	}}
 }
 
@@ -50,11 +40,9 @@ func hasExitCondition(loop *models.Block) bool {
 		if b.ID == loop.ID {
 			return
 		}
-		for _, pattern := range exitActionPatterns {
-			if strings.Contains(b.Name, pattern) || strings.Contains(b.RawType, pattern) {
-				found = true
-				return
-			}
+		if isExitLoop(b) {
+			found = true
+			return
 		}
 		for _, v := range b.Properties {
 			if strings.Contains(v, "Exit") || strings.Contains(v, "Break") {

@@ -164,8 +164,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const loaded = await settingsApi.getSettings() as any as AppSettings
       if (loaded) {
-        set({settings: loaded, isLoaded: true})
-        listeners.forEach(fn => fn(loaded))
+        // Deep-merge server response with defaults so Go zero-values (0 for
+        // int fields like sidebarWidth/inspectorWidth) don't clobber the
+        // frontend defaults that guarantee a usable layout on first run.
+        const merged: AppSettings = {
+          ...defaultSettings,
+          ...loaded,
+          layout: {
+            ...defaultSettings.layout,
+            ...loaded.layout,
+            sidebarWidth:   loaded.layout?.sidebarWidth   || defaultSettings.layout.sidebarWidth,
+            inspectorWidth: loaded.layout?.inspectorWidth || defaultSettings.layout.inspectorWidth,
+          },
+          ai: {
+            ...defaultSettings.ai,
+            ...loaded.ai,
+            providers: {
+              ...defaultSettings.ai.providers,
+              ...(loaded.ai?.providers ?? {}),
+            },
+          },
+        }
+        set({settings: merged, isLoaded: true})
+        listeners.forEach(fn => fn(merged))
       }
     } catch {
       set({isLoaded: true})

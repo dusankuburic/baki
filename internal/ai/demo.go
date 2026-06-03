@@ -91,7 +91,11 @@ func (l *DemoLimiter) loadState() (*demoState, error) {
 	}
 	var state demoState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return &demoState{}, nil
+		// A corrupt counter file must NOT silently reset to an empty state —
+		// that would grant the full daily limit again (effectively unlimited).
+		// Fail closed: surface the error so the enforcement path (ReserveForDisplay)
+		// denies rather than resets. A missing file (first run) is handled above.
+		return nil, fmt.Errorf("demo state file corrupt: %w", err)
 	}
 	return &state, nil
 }
@@ -105,7 +109,17 @@ func (l *DemoLimiter) saveState(state *demoState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(l.counterFile, data, 0644)
+	// Atomic write: temp file then rename, so a crash mid-write can't leave a
+	// truncated counter file (which loadState would then reject as corrupt).
+	tmp := l.counterFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, l.counterFile); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 type DemoProvider struct {
@@ -114,7 +128,7 @@ type DemoProvider struct {
 
 func NewDemoProvider() *DemoProvider {
 	return &DemoProvider{
-		client: &http.Client{Timeout: 120 * time.Second},
+		client: sharedHTTPClient,
 	}
 }
 

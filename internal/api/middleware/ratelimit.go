@@ -25,6 +25,7 @@ type RateLimiter struct {
 	// group labels rate_limit_exceeded_total emissions, so the metrics
 	// scraper can distinguish "general" refusals from "auth" refusals.
 	group string
+	stop  chan struct{}
 }
 
 // SetGroup sets the metric label used when refusing requests; defaults to
@@ -46,6 +47,7 @@ func NewRateLimiter(rps, burst float64, trustedProxies []string) *RateLimiter {
 		capacity: burst,
 		buckets:  make(map[string]*bucket),
 		group:    "general",
+		stop:     make(chan struct{}),
 	}
 	for _, p := range trustedProxies {
 		entry := strings.TrimSpace(p)
@@ -64,6 +66,31 @@ func NewRateLimiter(rps, burst float64, trustedProxies []string) *RateLimiter {
 	}
 	go rl.cleanup()
 	return rl
+}
+
+func (rl *RateLimiter) Stop() {
+	close(rl.stop)
+}
+
+// cleanup removes stale buckets every minute to prevent unbounded memory growth.
+func (rl *RateLimiter) cleanup() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			rl.mu.Lock()
+			cutoff := time.Now().Add(-5 * time.Minute)
+			for ip, b := range rl.buckets {
+				if b.lastFill.Before(cutoff) {
+					delete(rl.buckets, ip)
+				}
+			}
+			rl.mu.Unlock()
+		case <-rl.stop:
+			return
+		}
+	}
 }
 
 // isTrustedProxy reports whether the request's immediate peer is in the
@@ -109,21 +136,6 @@ func (rl *RateLimiter) allow(ip string) bool {
 	}
 	b.tokens--
 	return true
-}
-
-// cleanup removes stale buckets every minute to prevent unbounded memory growth.
-func (rl *RateLimiter) cleanup() {
-	t := time.NewTicker(time.Minute)
-	for range t.C {
-		rl.mu.Lock()
-		cutoff := time.Now().Add(-5 * time.Minute)
-		for ip, b := range rl.buckets {
-			if b.lastFill.Before(cutoff) {
-				delete(rl.buckets, ip)
-			}
-		}
-		rl.mu.Unlock()
-	}
 }
 
 // getIP extracts the real client IP, only trusting X-Forwarded-For if the

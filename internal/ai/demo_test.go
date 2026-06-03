@@ -151,25 +151,28 @@ func TestDemoLimiter_ResetsOnNewDay(t *testing.T) {
 	}
 }
 
-func TestDemoLimiter_CorruptStateFile_ReturnsFullLimit(t *testing.T) {
+// TestDemoLimiter_CorruptStateFile_FailsClosed verifies that a corrupt counter
+// file does NOT silently reset to a fresh state (which would re-grant the full
+// daily limit — effectively unlimited free calls). Both the read and the
+// enforcement path must surface an error so reservations are denied.
+func TestDemoLimiter_CorruptStateFile_FailsClosed(t *testing.T) {
 	l := newTestLimiter(t)
 
-	// Create the directory first (saveState would do this, but write directly here).
-	if err := os.MkdirAll(l.counterFile[:len(l.counterFile)-len("demo.json")-1], 0755); err != nil {
-		// Fallback: just write a valid state first to trigger dir creation.
-		_ = l.saveState(&demoState{})
+	// Seed a valid state (creates the directory) then corrupt the file.
+	if err := l.saveState(&demoState{}); err != nil {
+		t.Fatalf("saveState: %v", err)
 	}
-	// Overwrite with corrupt JSON.
 	if err := os.WriteFile(l.counterFile, []byte("{not valid json"), 0644); err != nil {
 		t.Fatalf("write corrupt state: %v", err)
 	}
 
-	got, err := l.Remaining()
-	if err != nil {
-		t.Fatalf("Remaining with corrupt state: %v", err)
+	if _, err := l.Remaining(); err == nil {
+		t.Error("expected Remaining to return an error for a corrupt state file")
 	}
-	if got != l.dailyLimit {
-		t.Errorf("corrupt state: got %d remaining, want %d (full limit)", got, l.dailyLimit)
+
+	// The enforcement path must fail closed — a corrupt file must not grant a demo call.
+	if _, err := l.ReserveForDisplay(); err == nil {
+		t.Error("expected ReserveForDisplay to deny (error) on a corrupt state file")
 	}
 }
 

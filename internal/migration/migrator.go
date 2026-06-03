@@ -28,9 +28,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -100,7 +100,7 @@ func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 
 	// Migrate settings (non-fatal if absent)
 	if err := m.migrateSettings(ctx); err != nil {
-		log.Printf("migration: settings warning: %v", err)
+		logger.Warn("migration: settings warning", "error", err)
 	} else {
 		res.SettingsMoved = true
 	}
@@ -137,7 +137,7 @@ func (m *Migrator) migrateFlows(ctx context.Context, res *Result) error {
 					FlowID:  flow.ID,
 					Message: err.Error(),
 				})
-				log.Printf("migration: flow %q failed: %v", flow.ID, err)
+				logger.Error("migration: flow failed", "flowID", flow.ID, "error", err)
 				continue
 			}
 			res.FlowsMigrated++

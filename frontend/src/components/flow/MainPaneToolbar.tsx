@@ -23,9 +23,9 @@ export default function MainPaneToolbar() {
     const goForward = useFlowStore(s => s.goForward)
 
     const activeTabId = groups[focusedGroupIndex]?.activeTabId ?? null
-    const subflow = activeTabId
-        ? document?.subflows.find(s => s.id === activeTabId)
-        : document?.subflows[0]
+    const subflow = activeTabId && document
+        ? document.subflows.find(s => s.id === activeTabId)
+        : document?.subflows?.[0]
     const breadcrumb = document
         ? [document.name, ...(subflow && subflow.name !== 'Main' ? [subflow.name] : [])]
         : []

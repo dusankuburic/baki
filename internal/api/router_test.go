@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"pad-analyzer/internal/manager"
+	
 )
 
 const testToken = "test-secret-token"
@@ -17,14 +17,14 @@ const testToken = "test-secret-token"
 // The App is not fully initialised (Init is not called), so only routes that
 // don't reach the app layer can be tested here. Handler-level tests live in
 // handlers_test.go and require a fully initialised App.
-func newTestRouter() *Router {
-	return NewRouter(manager.NewApp(nil), testToken, false, nil, "")
+func newLocalTestRouter() *Router {
+	return newTestRouter(nil, false)
 }
 
 // --- Auth middleware ---
 
 func TestRouter_MissingAuth_Returns401(t *testing.T) {
-	rt := newTestRouter()
+	rt := newLocalTestRouter()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/system/info", nil)
 	rr := httptest.NewRecorder()
@@ -36,7 +36,7 @@ func TestRouter_MissingAuth_Returns401(t *testing.T) {
 }
 
 func TestRouter_WrongToken_Returns401(t *testing.T) {
-	rt := newTestRouter()
+	rt := newLocalTestRouter()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/system/info", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
@@ -49,7 +49,7 @@ func TestRouter_WrongToken_Returns401(t *testing.T) {
 }
 
 func TestRouter_TokenInQuery_IsAccepted(t *testing.T) {
-	rt := newTestRouter()
+	rt := newLocalTestRouter()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/system/info?token="+testToken, nil)
 	rr := httptest.NewRecorder()
@@ -65,7 +65,8 @@ func TestRouter_TokenInQuery_IsAccepted(t *testing.T) {
 
 func TestRouter_OPTIONS_Returns200WithCORSHeaders(t *testing.T) {
 	// Router with an explicit allowlist — the listed origin must be echoed back.
-	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"}, "")
+	rt := newTestRouter(nil, false)
+	rt.AllowedOrigins = []string{"https://app.example.com"}
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/system/info", nil)
 	req.Header.Set("Origin", "https://app.example.com")
@@ -85,7 +86,7 @@ func TestRouter_OPTIONS_Returns200WithCORSHeaders(t *testing.T) {
 }
 
 func TestRouter_OPTIONS_UnknownOrigin_NoACO(t *testing.T) {
-	rt := NewRouter(manager.NewApp(nil), testToken, false, []string{"https://app.example.com"}, "")
+	rt := newTestRouter(nil, false)
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/system/info", nil)
 	req.Header.Set("Origin", "https://evil.com")
@@ -103,7 +104,7 @@ func TestRouter_OPTIONS_UnknownOrigin_NoACO(t *testing.T) {
 // --- 404 routing ---
 
 func TestRouter_UnknownPath_Returns404(t *testing.T) {
-	rt := newTestRouter()
+	rt := newLocalTestRouter()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/nonexistent", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
@@ -118,7 +119,7 @@ func TestRouter_UnknownPath_Returns404(t *testing.T) {
 // --- SSE endpoint ---
 
 func TestRouter_EventsEndpoint_SetsSSEHeaders(t *testing.T) {
-	rt := newTestRouter()
+	rt := newLocalTestRouter()
 
 	// Use a short-lived context so the blocking event loop exits promptly.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -150,7 +151,7 @@ func TestRouter_EventsEndpoint_SetsSSEHeaders(t *testing.T) {
 // --- Emit ---
 
 func TestRouter_Emit_DoesNotPanicWithNoClients(t *testing.T) {
-	rt := newTestRouter()
+	rt := newLocalTestRouter()
 	// Should be a no-op when no SSE clients are connected
-	rt.Emit("test-event", map[string]string{"key": "value"})
+	rt.eventManager.Emit("test-event", map[string]string{"key": "value"})
 }

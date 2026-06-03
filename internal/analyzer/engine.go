@@ -119,22 +119,11 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 	}
 }
 
-var terminatorPatterns = []string{
-	"ExitSubflow",
-	"Exit subflow",
-	"End flow",
-	"EndFlow",
-	"Return",
-	"TerminateFlow",
-}
-
 func isTerminator(b *models.Block) bool {
-	for _, p := range terminatorPatterns {
-		if strings.Contains(b.Name, p) || strings.Contains(b.RawType, p) {
-			return true
-		}
+	if b.Type == models.BlockTypeEnd {
+		return true
 	}
-	return false
+	return matchesAny(b, terminatorNames)
 }
 
 func walkBlocks(flow *models.FlowDocument, fn func(block *models.Block)) {
@@ -204,35 +193,50 @@ func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSe
 	}
 
 	total := len(enabledRules) * ctx.totalBlocks
-	var findings []models.Finding
 	counter := 0
 
-	for _, rule := range enabledRules {
-		walkBlocks(flow, func(block *models.Block) {
-			if block.Type == models.BlockTypeEnd {
-				return
+	// Pre-resolve each rule's severity override once (instead of a per-finding
+	// settings map lookup).
+	severityOverride := make([]models.Severity, len(enabledRules))
+	if settings != nil {
+		for i, rule := range enabledRules {
+			if rc, ok := settings.Analysis.Rules[rule.ID()]; ok && rc.Severity != "" {
+				severityOverride[i] = models.Severity(rc.Severity)
 			}
+		}
+	}
+
+	// Walk the block tree ONCE and dispatch every enabled rule per block,
+	// instead of doing a full traversal per rule (O(blocks) vs O(rules×blocks)).
+	// Findings are bucketed per rule and flattened in rule order afterwards, so
+	// the output order is byte-identical to the previous rule-major loop.
+	buckets := make([][]models.Finding, len(enabledRules))
+	walkBlocks(flow, func(block *models.Block) {
+		if block.Type == models.BlockTypeEnd {
+			return
+		}
+		for i, rule := range enabledRules {
 			counter++
 			if onProgress != nil && counter%50 == 0 {
 				onProgress(counter, total, rule.Name())
 			}
-			
-			ruleFindings := safeCheck(rule, block, ctx)
 
-			// Apply severity overrides from settings
-			if settings != nil {
-				if rc, ok := settings.Analysis.Rules[rule.ID()]; ok && rc.Severity != "" {
-					for i := range ruleFindings {
-						ruleFindings[i].Severity = models.Severity(rc.Severity)
-					}
+			ruleFindings := safeCheck(rule, block, ctx)
+			if ov := severityOverride[i]; ov != "" {
+				for j := range ruleFindings {
+					ruleFindings[j].Severity = ov
 				}
 			}
-			
-			findings = append(findings, ruleFindings...)
-		})
-		if onProgress != nil {
-			onProgress(counter, total, rule.Name())
+			buckets[i] = append(buckets[i], ruleFindings...)
 		}
+	})
+
+	var findings []models.Finding
+	for i := range buckets {
+		findings = append(findings, buckets[i]...)
+	}
+	if onProgress != nil && len(enabledRules) > 0 {
+		onProgress(counter, total, enabledRules[len(enabledRules)-1].Name())
 	}
 
 	if findings == nil {

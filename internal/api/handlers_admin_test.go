@@ -6,27 +6,12 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
-
-// seedUserWithRole inserts a user with the given role directly via the backend.
-func seedUserWithRole(t *testing.T, rt *Router, id, email string, role auth.Role) {
-	t.Helper()
-	u := &storageif.User{
-		ID:       id,
-		Email:    email,
-		Password: "hash",
-		Role:     role,
-	}
-	if err := rt.app.StorageBackend().SaveUser(context.Background(), u); err != nil {
-		t.Fatalf("seed user %s: %v", id, err)
-	}
-}
 
 // adminBearer returns an admin bearer token for the given seeded user.
 func adminBearer(t *testing.T, rt *Router, userID, email string) string {
 	t.Helper()
-	pair, err := rt.authMgr.Issue(userID, email, auth.RoleAdmin)
+	pair, err := rt.security.AuthMgr.Issue(userID, email, auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("issue jwt: %v", err)
 	}
@@ -43,7 +28,7 @@ func TestAdminUserRole_DemotingLastAdmin_Returns409(t *testing.T) {
 	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
 	bearer := adminBearer(t, rt, "admin-1", "admin@example.com")
 
-	rr := doRequestWithAuth(t, rt, http.MethodPost,
+	rr := doRequestWithAuth(t, rt, http.MethodPut,
 		"/api/admin/users/admin-1/role", bearer,
 		map[string]any{"role": string(auth.RoleMember)},
 	)
@@ -52,7 +37,7 @@ func TestAdminUserRole_DemotingLastAdmin_Returns409(t *testing.T) {
 	}
 
 	// Verify the role was not changed.
-	u, err := rt.app.StorageBackend().LoadUserByID(context.Background(), "admin-1")
+	u, err := rt.security.Backend.LoadUserByID(context.Background(), "admin-1")
 	if err != nil {
 		t.Fatalf("LoadUserByID: %v", err)
 	}
@@ -70,7 +55,7 @@ func TestAdminUserRole_DemotingAdminWithOtherAdmins_Succeeds(t *testing.T) {
 	seedUserWithRole(t, rt, "admin-2", "admin2@example.com", auth.RoleAdmin)
 	bearer := adminBearer(t, rt, "admin-1", "admin1@example.com")
 
-	rr := doRequestWithAuth(t, rt, http.MethodPost,
+	rr := doRequestWithAuth(t, rt, http.MethodPut,
 		"/api/admin/users/admin-2/role", bearer,
 		map[string]any{"role": string(auth.RoleMember)},
 	)
@@ -78,7 +63,7 @@ func TestAdminUserRole_DemotingAdminWithOtherAdmins_Succeeds(t *testing.T) {
 		t.Errorf("expected 200 when demoting one of two admins, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 
-	u, err := rt.app.StorageBackend().LoadUserByID(context.Background(), "admin-2")
+	u, err := rt.security.Backend.LoadUserByID(context.Background(), "admin-2")
 	if err != nil {
 		t.Fatalf("LoadUserByID: %v", err)
 	}
@@ -96,7 +81,7 @@ func TestAdminUserRole_PromotingMember_AlwaysSucceeds(t *testing.T) {
 	seedUserWithRole(t, rt, "member-1", "member@example.com", auth.RoleMember)
 	bearer := adminBearer(t, rt, "admin-1", "admin@example.com")
 
-	rr := doRequestWithAuth(t, rt, http.MethodPost,
+	rr := doRequestWithAuth(t, rt, http.MethodPut,
 		"/api/admin/users/member-1/role", bearer,
 		map[string]any{"role": string(auth.RoleAdmin)},
 	)

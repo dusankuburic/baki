@@ -27,7 +27,7 @@ func TestWSTicket_IssuedForAuthenticatedUser(t *testing.T) {
 		t.Fatal("expected a non-empty ticket")
 	}
 	// The ticket must verify and carry the requesting user's identity.
-	claims, err := rt.authMgr.VerifyWSTicket(resp.Ticket)
+	claims, err := rt.security.AuthMgr.VerifyWSTicket(resp.Ticket)
 	if err != nil {
 		t.Fatalf("issued ticket failed to verify: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestWS_RejectsMissingOrInvalidTicket(t *testing.T) {
 // separation): it would otherwise let the long-lived token authorize the WS.
 func TestWS_RejectsAccessTokenAsTicket(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	pair, _ := rt.authMgr.Issue("user-1", "alice@example.com", auth.RoleAdmin)
+	pair, _ := rt.security.AuthMgr.Issue("user-1", "alice@example.com", auth.RoleAdmin)
 
 	req := httptest.NewRequest(http.MethodGet, "/ws?flowId=f1&ticket="+pair.AccessToken, nil)
 	rr := httptest.NewRecorder()
@@ -77,7 +77,7 @@ func TestWS_RejectsAccessTokenAsTicket(t *testing.T) {
 // is NOT a 401, while the replay IS a 401.)
 func TestWS_TicketIsSingleUse(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	ticket, _, err := rt.authMgr.IssueWSTicket("user-1", "alice@example.com", auth.RoleAdmin)
+	ticket, _, err := rt.security.AuthMgr.IssueWSTicket("user-1", "alice@example.com", auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("IssueWSTicket: %v", err)
 	}

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"testing"
 
 	"pad-analyzer/internal/models"
@@ -16,12 +15,12 @@ func makeTestAnalysisService(t *testing.T, text string) (*models.FlowDocument, *
 	if err != nil {
 		t.Fatalf("ParseText: %v", err)
 	}
-	svc := &AnalysisService{ctx: context.Background()}
+	svc := &AnalysisService{}
 	return doc, svc
 }
 
 func TestAnalysisService_GetVariableLineage_no_doc(t *testing.T) {
-	svc := &AnalysisService{ctx: context.Background()}
+	svc := &AnalysisService{}
 	_, err := svc.GetVariableLineage(nil, "MyVar")
 	if err == nil {
 		t.Fatal("expected error when no doc loaded")
@@ -60,7 +59,7 @@ func TestAnalysisService_GetVariableLineage_unknown_var(t *testing.T) {
 }
 
 func TestAnalysisService_GetExecutionGraph_no_doc(t *testing.T) {
-	svc := &AnalysisService{ctx: context.Background()}
+	svc := &AnalysisService{}
 	_, err := svc.GetExecutionGraph(nil)
 	if err == nil {
 		t.Fatal("expected error when no doc loaded")
@@ -96,7 +95,7 @@ func TestAnalysisService_GetExecutionGraph_two_subflows(t *testing.T) {
 }
 
 func TestAnalysisService_GetRules_returns_all(t *testing.T) {
-	svc := &AnalysisService{ctx: context.Background()}
+	svc := &AnalysisService{}
 	rules := svc.GetRules()
 	if len(rules) == 0 {
 		t.Fatal("expected non-empty rule list")

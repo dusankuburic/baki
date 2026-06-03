@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,36 @@ func makeBlock(id, name string, bt models.BlockType, rawType string, indent int)
 		RawType:  rawType,
 		Indent:   indent,
 		Children: []models.Block{},
+	}
+}
+
+// BenchmarkRunAnalysis exercises the single-pass analyzer (one tree traversal
+// dispatching all rules per block) on a sizable synthetic flow. Before the
+// single-pass refactor this walked the tree once per rule (rules × blocks).
+func BenchmarkRunAnalysis(b *testing.B) {
+	const n = 2000
+	blocks := make([]models.Block, 0, n)
+	for i := 0; i < n; i++ {
+		blk := makeBlock(
+			fmt.Sprintf("b%d", i),
+			fmt.Sprintf("Click button %d", i),
+			models.BlockTypeAction,
+			"WebAutomation.Click.Click",
+			0,
+		)
+		blk.SubflowID = "sf1"
+		blocks = append(blocks, *blk)
+	}
+	flow := &models.FlowDocument{
+		ID:       "bench",
+		Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: blocks}},
+	}
+	rules := AllRules()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = RunAnalysis(flow, rules, nil, nil)
 	}
 }
 

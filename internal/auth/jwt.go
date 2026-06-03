@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Claims are the custom JWT claims stored in every access token.
@@ -28,18 +29,18 @@ type RefreshClaims struct {
 
 // TokenPair holds an access token and a refresh token.
 type TokenPair struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
+	AccessToken  string    `json:"accessToken"`
+	RefreshToken string    `json:"refreshToken"`
+	ExpiresAt    time.Time `json:"expiresAt"`
 	// RefreshID is the refresh token's unique ID (jti). It lets a server-side
 	// store track and revoke individual refresh tokens for rotation.
-	RefreshID        string
-	RefreshExpiresAt time.Time
+	RefreshID        string    `json:"refreshId"`
+	RefreshExpiresAt time.Time `json:"refreshExpiresAt"`
 }
 
 const (
 	defaultAccessTTL  = 15 * time.Minute
-	defaultRefreshTTL = 7 * 24 * time.Hour
+	defaultRefreshTTL = 24 * time.Hour
 	// wsTicketTTL bounds how long a WebSocket connect ticket is valid. Tickets
 	// are exchanged for a live connection within seconds of issuance, so the
 	// window is deliberately tiny to limit replay if one leaks (e.g. via a
@@ -228,4 +229,17 @@ func (m *Manager) keyFunc(token *jwt.Token) (any, error) {
 		return nil, fmt.Errorf("auth: unexpected signing method: %v", token.Header["alg"])
 	}
 	return m.secret, nil
+}
+
+// HashPassword returns the bcrypt hash of the password.
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
+}
+
+// CheckPasswordHash compares a bcrypt hashed password with its possible
+// plaintext equivalent. Returns true if it's a match.
+func CheckPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }

@@ -545,6 +545,36 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context) ([]*interfaces.U
 	return users, rows.Err()
 }
 
+func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
+	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, created_at, updated_at FROM users WHERE role = 'admin'`)
+	if err != nil {
+		return nil, fmt.Errorf("list admins: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*interfaces.User
+	for rows.Next() {
+		var u interfaces.User
+		var roleStr string
+		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan admin: %w", err)
+		}
+		u.Role = auth.Role(roleStr)
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
+func (b *PostgresStorageBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error {
+	_, err := b.db.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, string(role), id)
+	return err
+}
+
+func (b *PostgresStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
+	_, err := b.db.ExecContext(ctx, `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`, passwordHash, id)
+	return err
+}
+
 // ---- Organisation operations ----
 
 func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
@@ -702,7 +732,8 @@ func (b *PostgresStorageBackend) AddCollaborator(ctx context.Context, flowID str
 		INSERT INTO flow_collaborators (flow_id, user_id, permission, granted_at)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (flow_id, user_id) DO UPDATE SET
-			permission = EXCLUDED.permission`,
+			permission = EXCLUDED.permission,
+			granted_at = EXCLUDED.granted_at`,
 		flowID, c.UserID, c.Permission, c.GrantedAt)
 	if err != nil {
 		return fmt.Errorf("add collaborator: %w", err)
@@ -761,7 +792,11 @@ func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, use
 	); err != nil {
 		return fmt.Errorf("store refresh token: %w", err)
 	}
-	_, _ = b.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE expires_at < NOW()`)
+	// Best-effort purge of expired rows. Non-fatal (the insert already
+	// succeeded), but log failures so unbounded table growth is observable.
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE expires_at < NOW()`); err != nil {
+		slog.Warn("refresh token cleanup failed", "err", err)
+	}
 	return nil
 }
 
@@ -891,6 +926,26 @@ BEGIN
 	) THEN
 		ALTER TABLE provider_keys DROP CONSTRAINT provider_keys_pkey;
 		ALTER TABLE provider_keys ADD PRIMARY KEY (user_id, provider);
+	END IF;
+END $$;
+
+-- Add ON DELETE CASCADE from flow_collaborators to flows so deleting a flow
+-- does not leave orphaned collaborator rows. Existing deployments created the
+-- table without this FK; purge any orphans first (the FK would otherwise fail
+-- to validate), then add the constraint only if it isn't already present.
+DELETE FROM flow_collaborators c
+WHERE NOT EXISTS (SELECT 1 FROM flows f WHERE f.id = c.flow_id);
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_constraint
+		WHERE conrelid = 'flow_collaborators'::regclass
+		  AND contype = 'f'
+		  AND conname = 'flow_collaborators_flow_id_fkey'
+	) THEN
+		ALTER TABLE flow_collaborators
+			ADD CONSTRAINT flow_collaborators_flow_id_fkey
+			FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
 	END IF;
 END $$;
 `

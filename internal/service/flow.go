@@ -8,23 +8,119 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
+	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/parser"
 	"pad-analyzer/internal/search"
 	"pad-analyzer/internal/storage"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // FlowService owns document state, search index, and all file-related operations.
 type FlowService struct {
-	ctx      context.Context
-	notifier Notifier
-	settings *storage.SettingsStore
+	notifier    Notifier
+	settings    *storage.SettingsStore
+	docProvider DocumentProvider
+	storage     storageif.StorageBackend
+	orgSvc      *collaboration.OrgService
+
+	// idxCache memoises built search indexes by flow ID. Building an index walks
+	// and tokenises every block, so rebuilding it on every search-as-you-type
+	// keystroke is wasteful; a flow's content is immutable for a given ID
+	// (a new upload/parse yields a new ID), and in-place cloud updates call
+	// InvalidateSearchIndex.
+	idxMu    sync.RWMutex
+	idxCache map[string]*search.SearchIndex
 }
 
-func NewFlowService(ctx context.Context, notifier Notifier, settings *storage.SettingsStore) *FlowService {
-	return &FlowService{ctx: ctx, notifier: notifier, settings: settings}
+func NewFlowService(notifier Notifier, settings *storage.SettingsStore, docProvider DocumentProvider, storage storageif.StorageBackend, orgSvc *collaboration.OrgService) *FlowService {
+	return &FlowService{
+		notifier:    notifier,
+		settings:    settings,
+		docProvider: docProvider,
+		storage:     storage,
+		orgSvc:      orgSvc,
+		idxCache:    make(map[string]*search.SearchIndex),
+	}
+}
+
+// GetAuthorized loads a flow and verifies the user has at least minPerm access.
+// minPerm is "viewer", "editor", or "admin".
+func (s *FlowService) GetAuthorized(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
+	if s.storage == nil { // Local mode
+		return s.docProvider.ResolveDoc(ctx, flowID)
+	}
+
+	// 1. Load the doc metadata/header from storage to check permissions
+	doc, err := s.docProvider.ResolveDoc(ctx, flowID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Check ownership
+	if doc.OwnerID == "" || doc.OwnerID == userID {
+		return doc, nil
+	}
+
+	// 3. Check org membership
+	if doc.OrganizationID != "" && s.orgSvc != nil {
+		if role, err := s.orgSvc.MemberRole(doc.OrganizationID, userID); err == nil {
+			if orgRoleToPermRank(role) >= permRank(minPerm) {
+				return doc, nil
+			}
+		}
+	}
+
+	// 4. Check collaborators
+	collabs, err := s.storage.ListCollaborators(ctx, flowID)
+	if err == nil {
+		need := permRank(minPerm)
+		for _, c := range collabs {
+			if c.UserID == userID && permRank(c.Permission) >= need {
+				return doc, nil
+			}
+		}
+	}
+
+	return nil, ErrPermissionDenied
+}
+
+func permRank(p string) int {
+	switch p {
+	case "admin":
+		return 30
+	case "editor":
+		return 20
+	case "viewer":
+		return 10
+	default:
+		return 0
+	}
+}
+
+func orgRoleToPermRank(role auth.Role) int {
+	switch role {
+	case auth.RoleAdmin:
+		return 30
+	case auth.RoleMember:
+		return 20
+	default:
+		return 10
+	}
+}
+
+func (s *FlowService) DocProvider() DocumentProvider {
+	return s.docProvider
+}
+
+func (s *FlowService) InvalidateSearchIndex(flowID string) {
+	s.idxMu.Lock()
+	defer s.idxMu.Unlock()
+	delete(s.idxCache, flowID)
 }
 
 func (s *FlowService) FindBlockByID(doc *models.FlowDocument, blockID string) *models.Block {
@@ -52,7 +148,11 @@ func (s *FlowService) LoadFlowFromPath(path string) (doc *models.FlowDocument, e
 	if err := validateUserPath(path); err != nil {
 		return nil, err
 	}
-	return s.loadAndParse(path)
+	doc, err = s.loadAndParse(path)
+	if err == nil {
+		s.docProvider.SetCurrentDoc(doc)
+	}
+	return doc, err
 }
 
 func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocument, err error) {
@@ -90,10 +190,11 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 		storage.AddRecentFile(s.settings, folderPath, totalSize)
 	}
 
+	s.docProvider.SetCurrentDoc(doc)
 	return doc, nil
 }
 
-func (s *FlowService) LoadFlowFiles(files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
+func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFiles", &err)
 
 	doc, err = parser.ParseFiles(files, rootName)
@@ -101,6 +202,7 @@ func (s *FlowService) LoadFlowFiles(files map[string]string, rootName string) (d
 		return nil, err
 	}
 
+	s.docProvider.SetCurrentDoc(doc)
 	s.notifier.Emit("flow:loaded", doc)
 	return doc, nil
 }
@@ -150,8 +252,27 @@ func (s *FlowService) SearchFlow(doc *models.FlowDocument, query models.SearchQu
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
-	idx := search.NewSearchIndex(doc.ID, doc)
+	idx := s.searchIndexFor(doc)
 	return idx.Search(query), nil
+}
+
+func (s *FlowService) searchIndexFor(doc *models.FlowDocument) *search.SearchIndex {
+	s.idxMu.RLock()
+	if idx, ok := s.idxCache[doc.ID]; ok {
+		s.idxMu.RUnlock()
+		return idx
+	}
+	s.idxMu.RUnlock()
+
+	s.idxMu.Lock()
+	defer s.idxMu.Unlock()
+	// Check again under write lock
+	if idx, ok := s.idxCache[doc.ID]; ok {
+		return idx
+	}
+	idx := search.NewSearchIndex(doc.ID, doc)
+	s.idxCache[doc.ID] = idx
+	return idx
 }
 
 func (s *FlowService) GetSourceFiles(doc *models.FlowDocument) (result []models.SourceFileInfo, err error) {
@@ -318,7 +439,6 @@ func (s *FlowService) readSubflowSource(doc *models.FlowDocument, sf *models.Sub
 	return ""
 }
 
-// searchBlock is a recursive package-level helper that searches blocks by ID.
 func searchBlock(blocks []models.Block, id string) *models.Block {
 	for i := range blocks {
 		if blocks[i].ID == id {

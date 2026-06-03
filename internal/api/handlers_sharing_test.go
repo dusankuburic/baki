@@ -11,7 +11,7 @@ import (
 
 func seedUser(t *testing.T, rt *Router, id, email string) {
 	t.Helper()
-	err := rt.app.StorageBackend().SaveUser(context.Background(), &storageif.User{
+	err := rt.security.Backend.SaveUser(context.Background(), &storageif.User{
 		ID:    id,
 		Email: email,
 		Role:  auth.RoleMember,
@@ -24,7 +24,7 @@ func seedUser(t *testing.T, rt *Router, id, email string) {
 // seedFlow inserts a flow owned by ownerID so sharing handlers' ownership check passes.
 func seedFlow(t *testing.T, rt *Router, flowID, ownerID string) {
 	t.Helper()
-	err := rt.app.StorageBackend().SaveFlow(context.Background(), &storageif.FlowDocument{
+	err := rt.security.Backend.SaveFlow(context.Background(), &storageif.FlowDocument{
 		ID:      flowID,
 		Name:    "test",
 		OwnerID: ownerID,

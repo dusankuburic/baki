@@ -197,8 +197,6 @@ definitions:
         items:
           $ref: '#/definitions/models.RecentFile'
         type: array
-      telemetry:
-        $ref: '#/definitions/models.TelemetrySettings'
       version:
         type: integer
     type: object
@@ -471,6 +469,17 @@ definitions:
       subflowCount:
         type: integer
     type: object
+  models.FrontendError:
+    properties:
+      componentStack:
+        type: string
+      message:
+        type: string
+      stack:
+        type: string
+      url:
+        type: string
+    type: object
   models.GeneralSettings:
     properties:
       checkForUpdates:
@@ -723,15 +732,6 @@ definitions:
       name:
         type: string
     type: object
-  models.TelemetrySettings:
-    properties:
-      anonymousID:
-        type: string
-      enabled:
-        type: boolean
-      lastSubmitted:
-        type: string
-    type: object
   models.ThemeMode:
     enum:
     - dark
@@ -786,13 +786,61 @@ definitions:
       name:
         type: string
     type: object
-host: localhost:8080
 info:
   contact: {}
   description: This is the API for the Pad Analyzer project.
   title: Pad Analyzer API
   version: "1.0"
 paths:
+  /api/admin/migration/start:
+    post:
+      description: Kicks off the local→database flow migration (admin only, cloud
+        mode). Idempotent and non-blocking.
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start data migration
+      tags:
+      - admin
+  /api/admin/migration/status:
+    get:
+      description: Returns the status/result of the most recent data migration (admin
+        only).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Data migration status
+      tags:
+      - admin
   /api/admin/users/{userId}/role:
     post:
       consumes:
@@ -1815,6 +1863,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
@@ -2329,27 +2383,6 @@ paths:
       summary: Update flow collaborator permission
       tags:
       - sharing
-  /api/health:
-    get:
-      description: Returns the status of the API and its storage backend.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "503":
-          description: Service Unavailable
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Check API health
-      tags:
-      - system
   /api/keys/delete:
     post:
       consumes:
@@ -2732,6 +2765,28 @@ paths:
       summary: Get library flow content
       tags:
       - library
+  /api/local-config:
+    get:
+      description: Returns the pre-shared token in local (non-JWT) mode so a web client
+        can self-configure. 404 in cloud mode.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Local backend config
+      tags:
+      - system
   /api/orgs:
     get:
       description: Returns a list of organizations the currently authenticated user
@@ -3286,6 +3341,36 @@ paths:
       summary: Get app info
       tags:
       - system
+  /api/system/log-error:
+    post:
+      consumes:
+      - application/json
+      description: Records a client-side error for server-side observability.
+      parameters:
+      - description: Frontend error payload
+        in: body
+        name: error
+        required: true
+        schema:
+          $ref: '#/definitions/models.FrontendError'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Log a frontend error
+      tags:
+      - system
   /api/system/settings:
     get:
       description: Returns the current application settings.
@@ -3338,6 +3423,70 @@ paths:
               type: string
             type: object
       summary: Update app settings
+      tags:
+      - system
+  /api/ws-ticket:
+    post:
+      description: Returns a short-lived, single-use ticket the client exchanges for
+        a WebSocket connection, keeping the access token out of the WS URL.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Issue a WebSocket connect ticket
+      tags:
+      - auth
+  /healthz:
+    get:
+      description: Returns 200 if the process is up. Does not touch the database.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness probe
+      tags:
+      - system
+  /readyz:
+    get:
+      description: Returns 200 when downstream dependencies (DB) are reachable, 503
+        otherwise.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Readiness probe
       tags:
       - system
 swagger: "2.0"
