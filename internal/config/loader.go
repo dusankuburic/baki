@@ -10,6 +10,33 @@ import (
 	"strings"
 )
 
+// LoadRaw reads configuration from the given JSON file without validating.
+// The caller is responsible for calling Validate on the returned Config.
+func LoadRaw(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Default(), nil
+		}
+		return nil, fmt.Errorf("config: read %s: %w", path, err)
+	}
+	cfg := Default()
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// LoadFromEnvRaw reads PAD_* environment variables into a Config without
+// validating. The caller is responsible for calling Validate on the result.
+// Use this when you need to resolve additional secrets (e.g. Azure Key Vault)
+// before the config is validated.
+func LoadFromEnvRaw() *Config {
+	cfg := Default()
+	applyEnvVars(cfg)
+	return cfg
+}
+
 // Load reads configuration from the given JSON file.
 // If the file does not exist it returns Default() without an error.
 func Load(path string) (*Config, error) {
@@ -48,20 +75,35 @@ func Save(cfg *Config, path string) error {
 // LoadFromEnv builds a Config from PAD_* environment variables.
 // Recognised variables:
 //
-//	PAD_MODE             "local" or "cloud"      (default: "local")
-//	PAD_HOST             bind host               (default: "localhost")
-//	PAD_PORT             bind port               (default: 0 = ephemeral)
-//	PAD_STATIC_DIR       static assets directory (default: "")
-//	PAD_ALLOWED_ORIGINS  comma-separated origins for CORS/WebSocket
-//	PAD_TRUSTED_PROXIES  comma-separated IPs of trusted reverse proxies
-//	PAD_DATA_DIR         local storage root
-//	PAD_STORAGE          "local" or "database"
-//	PAD_DATABASE_URL     postgres DSN            (required when PAD_STORAGE=database)
-//	PAD_AUTH_ENABLED     "true" / "false"        (default: "false")
-//	PAD_AUTH_SECRET      JWT signing key
+//	PAD_MODE                   "local" or "cloud"      (default: "local")
+//	PAD_HOST                   bind host               (default: "localhost")
+//	PAD_PORT                   bind port               (default: 0 = ephemeral)
+//	PAD_STATIC_DIR             static assets directory (default: "")
+//	PAD_ALLOWED_ORIGINS        comma-separated origins for CORS/WebSocket
+//	PAD_TRUSTED_PROXIES        comma-separated IPs of trusted reverse proxies
+//	PAD_DATA_DIR               local storage root
+//	PAD_STORAGE                "local" or "database"
+//	PAD_DATABASE_URL           postgres DSN            (required when PAD_STORAGE=database)
+//	PAD_AUTH_ENABLED           "true" / "false"        (default: "false")
+//	PAD_AUTH_SECRET            JWT signing key
+//	PAD_DB_MAX_OPEN_CONNS      max open PostgreSQL connections (default: 25)
+//	PAD_DB_MAX_IDLE_CONNS      max idle PostgreSQL connections (default: 5)
+//	PAD_DB_CONN_MAX_LIFETIME   max connection lifetime (e.g. "1h", "30m"; default: "1h")
 func LoadFromEnv() (*Config, error) {
 	cfg := Default()
+	if err := applyEnvVars(cfg); err != nil {
+		return nil, err
+	}
+	if err := Validate(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
 
+// applyEnvVars reads PAD_* environment variables into cfg.
+// It returns an error only for syntactically invalid numeric values; all other
+// validation is deferred to Validate().
+func applyEnvVars(cfg *Config) error {
 	if v := os.Getenv("PAD_MODE"); v != "" {
 		cfg.Mode = DeploymentMode(v)
 	}
@@ -91,7 +133,7 @@ func LoadFromEnv() (*Config, error) {
 	if v := os.Getenv("PAD_PORT"); v != "" {
 		p, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("config: PAD_PORT is not a valid integer: %w", err)
+			return fmt.Errorf("config: PAD_PORT is not a valid integer: %w", err)
 		}
 		cfg.Server.Port = p
 	}
@@ -122,11 +164,26 @@ func LoadFromEnv() (*Config, error) {
 	if v := os.Getenv("PAD_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
-
-	if err := Validate(cfg); err != nil {
-		return nil, err
+	// PostgreSQL connection pool tuning — allows operators to right-size the pool
+	// for the Azure Database for PostgreSQL SKU without a code change.
+	if v := os.Getenv("PAD_DB_MAX_OPEN_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: PAD_DB_MAX_OPEN_CONNS is not a valid integer: %w", err)
+		}
+		cfg.Storage.DBMaxOpenConns = n
 	}
-	return cfg, nil
+	if v := os.Getenv("PAD_DB_MAX_IDLE_CONNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: PAD_DB_MAX_IDLE_CONNS is not a valid integer: %w", err)
+		}
+		cfg.Storage.DBMaxIdleConns = n
+	}
+	if v := os.Getenv("PAD_DB_CONN_MAX_LIFETIME"); v != "" {
+		cfg.Storage.DBConnMaxLifetime = v // validated at DB init time via time.ParseDuration
+	}
+	return nil
 }
 
 // minSecretLength is the minimum acceptable JWT signing secret length (bytes)

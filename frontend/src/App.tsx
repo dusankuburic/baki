@@ -9,6 +9,7 @@ import {useSettingsStore, onSettingsLoaded} from './stores/settingsStore'
 import {useUIStore} from './stores/uiStore'
 import {useAuthStore} from './stores/authStore'
 import {useFlowStore} from './stores/flowStore'
+import {useEditorStore} from './stores/editorStore'
 import {useChatStore} from './stores/chatStore'
 import {useSearchStore} from './stores/searchStore'
 import {useAnalysisStore} from './stores/analysisStore'
@@ -59,6 +60,7 @@ export default function App() {
 
     const document = useFlowStore(s => s.document)
     const user = useAuthStore(s => s.user)
+    const isAuthenticated = useAuthStore(s => s.isAuthenticated)
     const requestSearchFocus = useSearchStore(s => s.requestFocus)
     const [dragOver, setDragOver] = useState(false)
     const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
@@ -97,7 +99,7 @@ export default function App() {
         })
         loadFromBackend()
         return unsub
-    }, [loadFromBackend])
+    }, [loadFromBackend, isAuthenticated])
 
     useEffect(() => {
         const unsub = useUIStore.subscribe((state, prev) => {
@@ -264,7 +266,7 @@ export default function App() {
             'view.toggle.inspector': () => toggleInspector(),
             'nav.settings': () => toggleSettings(),
             'help.shortcuts': () => setShortcutsHelpOpen(true),
-            'view.split.toggle': () => useFlowStore.getState().splitRight(),
+            'view.split.toggle': () => useEditorStore.getState().splitRight(),
             'view.toggle.mode': () => {
                 const current = useUIStore.getState().mainPaneView
                 setMainPaneView(current === 'block' ? 'graph' : 'block')
@@ -298,25 +300,25 @@ export default function App() {
                 }
             },
             'file.close.tab': () => {
-                const {focusedGroupIndex, groups, closeTab} = useFlowStore.getState()
+                const {focusedGroupIndex, groups, closeTab} = useEditorStore.getState()
                 const group = groups[focusedGroupIndex]
                 if (group?.activeTabId) closeTab(focusedGroupIndex, group.activeTabId)
             },
             'file.close.others': () => {
-                const {focusedGroupIndex, groups, closeOtherTabs} = useFlowStore.getState()
+                const {focusedGroupIndex, groups, closeOtherTabs} = useEditorStore.getState()
                 const group = groups[focusedGroupIndex]
                 if (group?.activeTabId) closeOtherTabs(focusedGroupIndex, group.activeTabId)
             },
             'file.close.all': () => {
-                const {focusedGroupIndex, closeAllTabs} = useFlowStore.getState()
+                const {focusedGroupIndex, closeAllTabs} = useEditorStore.getState()
                 closeAllTabs(focusedGroupIndex)
             },
-            'view.group.1': () => useFlowStore.getState().focusGroup(0),
-            'view.group.2': () => useFlowStore.getState().focusGroup(1),
-            'view.group.3': () => useFlowStore.getState().focusGroup(2),
-            'view.group.4': () => useFlowStore.getState().focusGroup(3),
+            'view.group.1': () => useEditorStore.getState().focusGroup(0),
+            'view.group.2': () => useEditorStore.getState().focusGroup(1),
+            'view.group.3': () => useEditorStore.getState().focusGroup(2),
+            'view.group.4': () => useEditorStore.getState().focusGroup(3),
             'view.move.group.right': () => {
-                const s = useFlowStore.getState()
+                const s = useEditorStore.getState()
                 const {focusedGroupIndex, groups} = s
                 const activeTabId = groups[focusedGroupIndex]?.activeTabId
                 if (activeTabId && focusedGroupIndex < groups.length - 1) {
@@ -324,7 +326,7 @@ export default function App() {
                 }
             },
             'view.move.group.left': () => {
-                const s = useFlowStore.getState()
+                const s = useEditorStore.getState()
                 const {focusedGroupIndex, groups} = s
                 const activeTabId = groups[focusedGroupIndex]?.activeTabId
                 if (activeTabId && focusedGroupIndex > 0) {
@@ -384,7 +386,7 @@ export default function App() {
             {id: 'view.graph', label: 'Graph View', section: 'View', onSelect: () => setMainPaneView('graph')},
             {id: 'view.local-map', label: 'Local Subflow Map', section: 'View', shortcut: ['mod', 'shift', 'm'], onSelect: () => setMainPaneView('local-map')},
             {id: 'view.map', label: 'Subflow Map', section: 'View', shortcut: ['mod', 'm'], onSelect: () => setMainPaneView('map')},
-            {id: 'view.split', label: 'Split Editor Right', section: 'View', shortcut: ['mod', '\\'], onSelect: () => useFlowStore.getState().splitRight()},
+            {id: 'view.split', label: 'Split Editor Right', section: 'View', shortcut: ['mod', '\\'], onSelect: () => useEditorStore.getState().splitRight()},
             {id: 'settings', label: 'Open Settings', section: 'Navigation', shortcut: ['mod', ','], onSelect: toggleSettings},
             {id: 'search.focus', label: 'Focus Search', section: 'Search', shortcut: ['/'], onSelect: () => {
                 if (sidebarCollapsed) toggleSidebar()

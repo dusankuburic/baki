@@ -165,4 +165,40 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("round-trip: want 2 messages, got %d", len(got))
 		}
 	})
+
+	t.Run("SaveUserSettings_then_LoadUserSettings_round_trips", func(t *testing.T) {
+		userID := "contract-user-" + runID
+		settings := &interfaces.AppSettings{
+			Version: 1,
+			General: interfaces.GeneralSettings{CheckForUpdates: "daily"},
+		}
+		if err := b.SaveUserSettings(ctx, userID, settings); err != nil {
+			t.Fatalf("SaveUserSettings: %v", err)
+		}
+		got, err := b.LoadUserSettings(ctx, userID)
+		if err != nil {
+			t.Fatalf("LoadUserSettings: %v", err)
+		}
+		if got.General.CheckForUpdates != "daily" {
+			t.Errorf("round-trip: want daily, got %s", got.General.CheckForUpdates)
+		}
+	})
+
+	t.Run("SaveOrgSettings_then_LoadOrgSettings_round_trips", func(t *testing.T) {
+		orgID := "contract-org-" + runID
+		settings := &interfaces.AppSettings{
+			Version: 1,
+			General: interfaces.GeneralSettings{CheckForUpdates: "monthly"},
+		}
+		if err := b.SaveOrgSettings(ctx, orgID, settings); err != nil {
+			t.Fatalf("SaveOrgSettings: %v", err)
+		}
+		got, err := b.LoadOrgSettings(ctx, orgID)
+		if err != nil {
+			t.Fatalf("LoadOrgSettings: %v", err)
+		}
+		if got.General.CheckForUpdates != "monthly" {
+			t.Errorf("round-trip: want monthly, got %s", got.General.CheckForUpdates)
+		}
+	})
 }

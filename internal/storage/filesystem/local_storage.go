@@ -202,6 +202,26 @@ func (lsb *LocalStorageBackend) LoadSettings(ctx context.Context) (*interfaces.A
 	return &settings, nil
 }
 
+// SaveUserSettings saves user-specific settings (redirects to global settings for local mode)
+func (lsb *LocalStorageBackend) SaveUserSettings(ctx context.Context, userID string, settings *interfaces.AppSettings) error {
+	return lsb.SaveSettings(ctx, settings)
+}
+
+// LoadUserSettings loads user-specific settings (redirects to global settings for local mode)
+func (lsb *LocalStorageBackend) LoadUserSettings(ctx context.Context, userID string) (*interfaces.AppSettings, error) {
+	return lsb.LoadSettings(ctx)
+}
+
+// SaveOrgSettings saves org-specific settings (redirects to global settings for local mode)
+func (lsb *LocalStorageBackend) SaveOrgSettings(ctx context.Context, orgID string, settings *interfaces.AppSettings) error {
+	return lsb.SaveSettings(ctx, settings)
+}
+
+// LoadOrgSettings loads org-specific settings (redirects to global settings for local mode)
+func (lsb *LocalStorageBackend) LoadOrgSettings(ctx context.Context, orgID string) (*interfaces.AppSettings, error) {
+	return lsb.LoadSettings(ctx)
+}
+
 // SaveConversation saves a conversation to the local file system
 func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, scope string, messages []interfaces.ChatMessage) error {
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")

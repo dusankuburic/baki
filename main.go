@@ -36,6 +36,10 @@ var (
 
 func main() {
 	fx.New(
+		// fx.Run() handles both SIGINT and SIGTERM. The default StopTimeout is
+		// 15s; raise to 25s so we stay under Azure Container Apps' 30s pod
+		// grace period while giving in-flight requests time to drain.
+		fx.StopTimeout(25*time.Second),
 		fx.Provide(
 			func() context.Context { return context.Background() },
 			loadConfig,
@@ -58,25 +62,38 @@ func main() {
 }
 
 func loadConfig() *config.Config {
+	var cfg *config.Config
+
 	if path := os.Getenv("PAD_CONFIG"); path != "" {
-		cfg, err := config.Load(path)
+		// Raw load so Key Vault resolution can happen before validation.
+		c, err := config.LoadRaw(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to load config from %s: %v\n", path, err)
 			os.Exit(1)
 		}
-		return cfg
+		cfg = c
+	} else if os.Getenv("PAD_MODE") != "" || os.Getenv("PAD_PORT") != "" {
+		cfg = config.LoadFromEnvRaw()
+	} else {
+		cfg = config.Default()
 	}
 
-	if os.Getenv("PAD_MODE") != "" || os.Getenv("PAD_PORT") != "" {
-		cfg, err := config.LoadFromEnv()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid environment config: %v\n", err)
-			os.Exit(1)
+	// Resolve secrets from Azure Key Vault BEFORE validation so that
+	// secrets stored in Key Vault (pad-auth-secret, pad-database-url) can
+	// satisfy validation requirements without being duplicated in env vars.
+	if cfg.Server.KeyVaultURL != "" {
+		if err := config.ResolveAzureSecrets(context.Background(), cfg); err != nil {
+			// Non-fatal: warn and continue — secrets may already be in env vars.
+			fmt.Fprintf(os.Stderr, "warning: Azure Key Vault resolution incomplete: %v\n", err)
 		}
-		return cfg
 	}
 
-	return config.Default()
+	if err := config.Validate(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)
+		os.Exit(1)
+	}
+
+	return cfg
 }
 
 func provideShutdownCh(lc fx.Lifecycle) chan struct{} {
@@ -93,8 +110,19 @@ func provideShutdownCh(lc fx.Lifecycle) chan struct{} {
 func provideAuthManager(cfg *config.Config) *auth.Manager {
 	token := cfg.Auth.Secret
 	if token == "" {
+		// Cloud mode with auth enabled: Validate() would have already rejected
+		// a missing secret, so this branch only runs for local/no-auth mode.
+		// The generated UUID is ephemeral (per-run); it is printed in the startup
+		// JSON so the Tauri front-end can authenticate.
+		if cfg.Mode == config.ModeCloud && cfg.Auth.Enabled {
+			// Defence-in-depth: Validate() should have prevented this, but refuse
+			// to auto-generate a secret that would change on every restart in a
+			// multi-replica deployment, invalidating all existing sessions.
+			fmt.Fprintln(os.Stderr, "fatal: PAD_AUTH_SECRET must be set in cloud mode (auto-generation disabled)")
+			os.Exit(1)
+		}
 		token = uuid.NewString()
-		cfg.Auth.Secret = token // Ensure it's available for stdout later
+		cfg.Auth.Secret = token // Ensure it's available for local-mode startup output
 	}
 	return auth.NewManager(token)
 }
@@ -142,7 +170,24 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 		return StorageResult{Backend: nil}
 	}
 
-	pgBackend, err := storagedb.New(context.Background(), storagedb.DefaultConfig(cfg.Storage.DatabaseURL))
+	// Build pool config, applying operator overrides from PAD_DB_* env vars.
+	dbCfg := storagedb.DefaultConfig(cfg.Storage.DatabaseURL)
+	if cfg.Storage.DBMaxOpenConns > 0 {
+		dbCfg.MaxOpenConns = cfg.Storage.DBMaxOpenConns
+	}
+	if cfg.Storage.DBMaxIdleConns > 0 {
+		dbCfg.MaxIdleConns = cfg.Storage.DBMaxIdleConns
+	}
+	if cfg.Storage.DBConnMaxLifetime != "" {
+		d, err := time.ParseDuration(cfg.Storage.DBConnMaxLifetime)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid PAD_DB_CONN_MAX_LIFETIME %q: %v\n", cfg.Storage.DBConnMaxLifetime, err)
+			os.Exit(1)
+		}
+		dbCfg.ConnMaxLifetime = d
+	}
+
+	pgBackend, err := storagedb.New(context.Background(), dbCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to connect to database: %v\n", err)
 		os.Exit(1)
@@ -238,9 +283,18 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 	}
 
 	server := &http.Server{
-		Handler:           handler,
+		Handler: handler,
+		// ReadHeaderTimeout guards against Slowloris (headers dribbled slowly).
 		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// ReadTimeout covers the full request body read. Long-lived streaming
+		// connections (SSE, WebSocket) use http.Hijack / http.Flusher and are
+		// not affected by this deadline; only normal JSON endpoints benefit.
+		ReadTimeout: 30 * time.Second,
+		// WriteTimeout is deliberately 0 (unlimited) because SSE and chat-stream
+		// responses are long-lived. Per-handler write deadlines are set via
+		// http.ResponseController.SetWriteDeadline for non-streaming routes.
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	lc.Append(fx.Hook{
@@ -276,7 +330,13 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			for _, rl := range rateLimiters {
 				rl.Stop()
 			}
-			return server.Shutdown(ctx)
+			// fx.StopTimeout (25s) bounds the parent context. Reserve a small
+			// budget for the goroutines above to finish their teardown, then
+			// give server.Shutdown the remainder. If ctx already has a short
+			// deadline (rapid restart loop) we still respect it.
+			shutdownCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			return server.Shutdown(shutdownCtx)
 		},
 	})
 }

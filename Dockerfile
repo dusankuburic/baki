@@ -21,14 +21,22 @@ RUN go mod download
 COPY . .
 RUN go install github.com/swaggo/swag/cmd/swag@latest
 RUN swag init -g main.go --parseDependency --parseInternal
-RUN go build -o baki-backend main.go
+# CGO_ENABLED=0 produces a fully static binary that does not depend on glibc.
+# Without this, the binary built on golang:1.25-alpine links against musl libc
+# via cgo, then fails or behaves unpredictably when copied into the final
+# alpine:latest stage (which has musl + libc6-compat shim). A static binary
+# also lets the image run on distroless or scratch bases later if desired.
+# -trimpath strips build-machine paths; -ldflags -s -w drops debug symbols
+# for a ~30% smaller binary.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o baki-backend main.go
 
 # Stage 3: Final lean image
 FROM alpine:latest
-# ca-certificates: HTTPS to AI providers
-# libc6-compat:    glibc compat for the Go binary
+# ca-certificates: HTTPS to AI providers and Azure endpoints
 # wget:            HEALTHCHECK probe (alpine doesn't ship curl by default)
-RUN apk add --no-cache ca-certificates libc6-compat wget
+# NOTE: libc6-compat is intentionally NOT installed — the backend binary is built
+# with CGO_ENABLED=0 (static) and does not need glibc shims.
+RUN apk add --no-cache ca-certificates wget
 
 # Run as non-root. A compromised app process cannot then modify system files
 # or escape to other tenants on a shared host.
@@ -59,7 +67,7 @@ ENV PAD_BEHIND_PROXY=true
 # whenever the process is up; does NOT touch the DB (that's /readyz, which
 # the orchestrator should probe separately for readiness gating).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- "http://127.0.0.1:${PAD_PORT}/healthz" >/dev/null || exit 1
+    CMD wget -qO- "http://localhost:${PAD_PORT}/healthz" >/dev/null || exit 1
 
 USER pad:pad
 

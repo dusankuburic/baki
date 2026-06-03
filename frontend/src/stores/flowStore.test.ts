@@ -1,5 +1,6 @@
 import {describe, it, expect, beforeEach} from 'vitest'
 import {useFlowStore} from './flowStore'
+import {useEditorStore} from './editorStore'
 import type {Block, FlowDocument, Subflow} from '@/types/domain'
 
 // ---- helpers ----
@@ -30,6 +31,7 @@ function makeDoc(...subflows: Subflow[]): FlowDocument {
 // Reset store state before each test
 beforeEach(() => {
     useFlowStore.getState().reset()
+    useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})
 })
 
 // ---- setDocument ----
@@ -41,24 +43,6 @@ describe('setDocument', () => {
         const state = useFlowStore.getState()
         expect(state.selectedSubflowId).toBe('sf1')
         expect(state.document).toBe(doc)
-    })
-
-    it('creates initial group with first subflow tab', () => {
-        const doc = makeDoc(makeSubflow('sf1'))
-        useFlowStore.getState().setDocument(doc)
-        const {groups} = useFlowStore.getState()
-        expect(groups).toHaveLength(1)
-        expect(groups[0].tabs).toContain('sf1')
-        expect(groups[0].activeTabId).toBe('sf1')
-    })
-
-    it('resets selection when null is passed', () => {
-        const doc = makeDoc(makeSubflow('sf1'))
-        useFlowStore.getState().setDocument(doc)
-        useFlowStore.getState().setDocument(null)
-        const state = useFlowStore.getState()
-        expect(state.document).toBeNull()
-        expect(state.selectedSubflowId).toBeNull()
     })
 
     it('initializes navigation history with first subflow entry', () => {
@@ -144,103 +128,5 @@ describe('navigation history', () => {
         useFlowStore.getState().selectSubflow('sf2')
         useFlowStore.getState().selectSubflow('sf2')
         expect(useFlowStore.getState().navigationHistory).toHaveLength(2)
-    })
-})
-
-// ---- tab management ----
-
-describe('tab management', () => {
-    beforeEach(() => {
-        const doc = makeDoc(
-            makeSubflow('sf1'),
-            makeSubflow('sf2'),
-            makeSubflow('sf3'),
-        )
-        useFlowStore.getState().setDocument(doc)
-    })
-
-    it('openInGroup adds tab to the group', () => {
-        useFlowStore.getState().openInGroup('sf2', 0)
-        expect(useFlowStore.getState().groups[0].tabs).toContain('sf2')
-    })
-
-    it('openInGroup sets activeTabId', () => {
-        useFlowStore.getState().openInGroup('sf2', 0)
-        expect(useFlowStore.getState().groups[0].activeTabId).toBe('sf2')
-    })
-
-    it('openInGroup does not duplicate tab', () => {
-        useFlowStore.getState().openInGroup('sf1', 0)
-        useFlowStore.getState().openInGroup('sf1', 0)
-        expect(useFlowStore.getState().groups[0].tabs.filter(t => t === 'sf1')).toHaveLength(1)
-    })
-
-    it('closeTab removes the tab', () => {
-        useFlowStore.getState().openInGroup('sf2', 0)
-        useFlowStore.getState().closeTab(0, 'sf2')
-        expect(useFlowStore.getState().groups[0].tabs).not.toContain('sf2')
-    })
-
-    it('closeTab activates adjacent tab when active tab is closed', () => {
-        useFlowStore.getState().openInGroup('sf2', 0)
-        useFlowStore.getState().openInGroup('sf1', 0) // sf1 becomes active
-        useFlowStore.getState().closeTab(0, 'sf1')
-        const {groups} = useFlowStore.getState()
-        // sf2 should become active
-        expect(groups[0].activeTabId).toBe('sf2')
-    })
-})
-
-// ---- group management ----
-
-describe('group management', () => {
-    beforeEach(() => {
-        const doc = makeDoc(makeSubflow('sf1'), makeSubflow('sf2'))
-        useFlowStore.getState().setDocument(doc)
-        // Open sf2 so the focused group has 2 tabs — splitRight needs at least 2 tabs
-        // to leave the source group non-empty
-        useFlowStore.getState().openInGroup('sf2', 0)
-        useFlowStore.getState().openInGroup('sf1', 0) // make sf1 active again
-    })
-
-    it('splitRight creates a second group', () => {
-        useFlowStore.getState().splitRight()
-        expect(useFlowStore.getState().groups).toHaveLength(2)
-    })
-
-    it('splitRight focuses the new group', () => {
-        useFlowStore.getState().splitRight()
-        expect(useFlowStore.getState().focusedGroupIndex).toBe(1)
-    })
-
-    it('closeGroup removes the group', () => {
-        useFlowStore.getState().splitRight()
-        useFlowStore.getState().closeGroup(1)
-        expect(useFlowStore.getState().groups).toHaveLength(1)
-    })
-
-    it('cannot close group when there is only one', () => {
-        useFlowStore.getState().closeGroup(0)
-        expect(useFlowStore.getState().groups).toHaveLength(1)
-    })
-
-    it('moveTabToGroup moves tab between groups', () => {
-        useFlowStore.getState().splitRight()
-        // After split: group 0 has [sf2], group 1 has [sf1] (sf1 was the active tab moved right)
-        // Move sf2 from group 0 to group 1
-        useFlowStore.getState().moveTabToGroup(0, 'sf2', 1)
-        const {groups} = useFlowStore.getState()
-        const allTabs = groups.flatMap(g => g.tabs)
-        expect(allTabs).toContain('sf2')
-        const g1 = groups.find(g => g.tabs.includes('sf1'))!
-        expect(g1.tabs).toContain('sf2')
-    })
-
-    it('focusGroup changes focusedGroupIndex and selectedSubflowId', () => {
-        useFlowStore.getState().openInGroup('sf2', 0)
-        useFlowStore.getState().splitRight()
-        useFlowStore.getState().focusGroup(0)
-        const state = useFlowStore.getState()
-        expect(state.focusedGroupIndex).toBe(0)
     })
 })

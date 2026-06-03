@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,8 +11,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/cache"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
@@ -27,6 +31,7 @@ type FlowService struct {
 	docProvider DocumentProvider
 	storage     storageif.StorageBackend
 	orgSvc      *collaboration.OrgService
+	astCache    cache.Cache
 
 	// idxCache memoises built search indexes by flow ID. Building an index walks
 	// and tokenises every block, so rebuilding it on every search-as-you-type
@@ -37,13 +42,14 @@ type FlowService struct {
 	idxCache map[string]*search.SearchIndex
 }
 
-func NewFlowService(notifier Notifier, settings *storage.SettingsStore, docProvider DocumentProvider, storage storageif.StorageBackend, orgSvc *collaboration.OrgService) *FlowService {
+func NewFlowService(notifier Notifier, settings *storage.SettingsStore, docProvider DocumentProvider, storage storageif.StorageBackend, orgSvc *collaboration.OrgService, astCache cache.Cache) *FlowService {
 	return &FlowService{
 		notifier:    notifier,
 		settings:    settings,
 		docProvider: docProvider,
 		storage:     storage,
 		orgSvc:      orgSvc,
+		astCache:    astCache,
 		idxCache:    make(map[string]*search.SearchIndex),
 	}
 }
@@ -197,9 +203,37 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFiles", &err)
 
+	// Generate a combined hash of all files to use as a cache key
+	h := sha256.New()
+	// Sort keys for deterministic hash
+	fileNames := make([]string, 0, len(files))
+	for k := range files {
+		fileNames = append(fileNames, k)
+	}
+	for _, name := range fileNames {
+		h.Write([]byte(name))
+		h.Write([]byte(files[name]))
+	}
+	key := "ast-files:" + hex.EncodeToString(h.Sum(nil))
+
+	if s.astCache != nil {
+		if cached, ok := s.astCache.Get(ctx, key); ok {
+			if doc, ok := cached.(*models.FlowDocument); ok {
+				s.docProvider.SetCurrentDoc(doc)
+				s.notifier.Emit("flow:loaded", doc)
+				logger.Info("flow files loaded from cache", "root", rootName)
+				return doc, nil
+			}
+		}
+	}
+
 	doc, err = parser.ParseFiles(files, rootName)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.astCache != nil {
+		s.astCache.Set(ctx, key, doc, 24*time.Hour)
 	}
 
 	s.docProvider.SetCurrentDoc(doc)
@@ -388,6 +422,22 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 		return nil, fmt.Errorf("couldn't read file: %w", err)
 	}
 
+	hash := sha256.Sum256(data)
+	key := "ast:" + hex.EncodeToString(hash[:])
+
+	if s.astCache != nil {
+		if cached, ok := s.astCache.Get(context.Background(), key); ok {
+			if doc, ok := cached.(*models.FlowDocument); ok {
+				// We need a deep copy if we're going to modify FilePath
+				// But for now, let's just use it and set FilePath
+				doc.FilePath = path
+				s.notifier.Emit("flow:loaded", doc)
+				logger.Info("flow loaded from cache", "file", filepath.Base(path))
+				return doc, nil
+			}
+		}
+	}
+
 	text := string(data)
 	fileName := filepath.Base(path)
 
@@ -406,6 +456,10 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	}
 
 	doc.FilePath = path
+
+	if s.astCache != nil {
+		s.astCache.Set(context.Background(), key, doc, 24*time.Hour)
+	}
 
 	if s.settings != nil {
 		storage.AddRecentFile(s.settings, path, info.Size())

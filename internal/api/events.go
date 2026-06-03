@@ -19,10 +19,11 @@ type Event struct {
 // EventManager manages Server-Sent Events (SSE) clients and implements
 // service.Notifier to allow internal services to emit events to the frontend.
 type EventManager struct {
-	clients    map[chan Event]bool
-	clientsMu  sync.Mutex
-	sseIPCount map[string]int // per-IP SSE connection counter
-	shutdownCh <-chan struct{}
+	clients     map[chan Event]bool
+	clientsMu   sync.Mutex
+	sseIPCount  map[string]int // per-IP SSE connection counter
+	shutdownCh  <-chan struct{}
+	allowOrigin func(string) bool // injected by Router; nil = deny all cross-origin
 }
 
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
@@ -31,6 +32,12 @@ func NewEventManager(shutdownCh chan struct{}) *EventManager {
 		sseIPCount: make(map[string]int),
 		shutdownCh: shutdownCh,
 	}
+}
+
+// SetOriginChecker injects the router's CORS logic so the SSE endpoint
+// respects the same origin allowlist as every other route.
+func (m *EventManager) SetOriginChecker(fn func(string) bool) {
+	m.allowOrigin = fn
 }
 
 // Emit satisfies the service.Notifier interface.
@@ -81,7 +88,11 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Respect the configured CORS allowlist instead of wildcarding.
+	if origin := r.Header.Get("Origin"); origin != "" && m.allowOrigin != nil && m.allowOrigin(origin) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+	}
 	flusher.Flush()
 
 	metrics.SSEClientStart()

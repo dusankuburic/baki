@@ -12,7 +12,8 @@ const ExecutionGraphView = lazy(() => import('@/components/flow/ExecutionGraphVi
 const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffView'))
 import PaneDivider from '@/components/layout/PaneDivider'
 import {useUIStore} from '@/stores/uiStore'
-import {useFlowStore, type EditorGroup} from '@/stores/flowStore'
+import {useFlowStore} from '@/stores/flowStore'
+import {useEditorStore, type EditorGroup} from '@/stores/editorStore'
 import type {FlowDocument} from '@/types/domain'
 
 export default function MainPane() {
@@ -20,17 +21,17 @@ export default function MainPane() {
     // The profile/admin/empty views are handled by early returns AFTER the hooks.
     const mainPaneView = useUIStore(s => s.mainPaneView)
     const document = useFlowStore(s => s.document)
-    const groups = useFlowStore(s => s.groups)
-    const focusedGroupIndex = useFlowStore(s => s.focusedGroupIndex)
-    const groupWidths = useFlowStore(s => s.groupWidths)
-    const focusGroup = useFlowStore(s => s.focusGroup)
-    const openInGroup = useFlowStore(s => s.openInGroup)
-    const closeTab = useFlowStore(s => s.closeTab)
-    const closeAllTabs = useFlowStore(s => s.closeAllTabs)
-    const closeOtherTabs = useFlowStore(s => s.closeOtherTabs)
-    const closeGroup = useFlowStore(s => s.closeGroup)
-    const moveTabToGroup = useFlowStore(s => s.moveTabToGroup)
-    const setGroupWidths = useFlowStore(s => s.setGroupWidths)
+    const groups = useEditorStore(s => s.groups)
+    const focusedGroupIndex = useEditorStore(s => s.focusedGroupIndex)
+    const groupWidths = useEditorStore(s => s.groupWidths)
+    const focusGroup = useEditorStore(s => s.focusGroup)
+    const openInGroup = useEditorStore(s => s.openInGroup)
+    const closeTab = useEditorStore(s => s.closeTab)
+    const closeAllTabs = useEditorStore(s => s.closeAllTabs)
+    const closeOtherTabs = useEditorStore(s => s.closeOtherTabs)
+    const closeGroup = useEditorStore(s => s.closeGroup)
+    const moveTabToGroup = useEditorStore(s => s.moveTabToGroup)
+    const setGroupWidths = useEditorStore(s => s.setGroupWidths)
     const containerRef = useRef<HTMLDivElement>(null)
 
     const widths = useMemo(() => {

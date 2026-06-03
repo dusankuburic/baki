@@ -40,6 +40,7 @@ type Router struct {
 	handlers     Handlers
 
 	AllowedOrigins []string
+	trustedProxies []string
 	staticDir      string
 	hub            *wshub.Hub
 
@@ -62,12 +63,17 @@ func NewRouter(
 		eventManager:   eventManager,
 		handlers:       handlers,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
+		trustedProxies: cfg.Server.TrustedProxies,
 		staticDir:      cfg.Server.StaticDir,
 		hub:            wshub.NewHub(),
 		usedTickets:    make(map[string]time.Time),
 		shutdownCh:     shutdownCh,
 		mux:            chi.NewRouter(),
 	}
+
+	// Wire the CORS allowlist into the SSE EventManager so it respects
+	// the same origin policy as every other route (fixes hardcoded "*").
+	rt.eventManager.SetOriginChecker(rt.isOriginAllowed)
 
 	registerRoutes(rt, rt.mux)
 

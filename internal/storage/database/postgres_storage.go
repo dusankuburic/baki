@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,7 +41,10 @@ func isPgErrCode(err error, code string) bool {
 
 // azureRefreshState holds the credential and pgx config needed to keep the
 // Managed Identity token alive for connections opened after each refresh cycle.
+// mu protects pgxCfg.Password from being read by a connection open while the
+// refresh goroutine is rewriting it.
 type azureRefreshState struct {
+	mu       sync.Mutex
 	provider *azureTokenProvider
 	pgxCfg   *pgx.ConnConfig
 }
@@ -110,6 +114,11 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	// Reclaim idle connections after 5 minutes so the pool shrinks during
+	// quiet periods. Without this, every replica holds MaxIdleConns sockets
+	// open forever, multiplying the server-side connection count under
+	// horizontal scaling.
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	b.db = db
 	if err := b.migrate(ctx); err != nil {
@@ -129,6 +138,9 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 // Azure tokens expire after ~24 hours; refreshing every 20 minutes gives ample
 // margin.  Existing idle connections are cycled out naturally by ConnMaxLifetime
 // (default 1 hour), so they too will pick up fresh tokens before expiry.
+//
+// The pgxCfg.Password field is mutated under azureRefresh.mu because pgx may
+// read it concurrently when opening new pooled connections.
 func (b *PostgresStorageBackend) runAzureTokenRefresh(ctx context.Context) {
 	ticker := time.NewTicker(20 * time.Minute)
 	defer ticker.Stop()
@@ -142,7 +154,9 @@ func (b *PostgresStorageBackend) runAzureTokenRefresh(ctx context.Context) {
 				slog.Error("azure: managed identity token refresh failed", "err", err)
 				continue
 			}
+			b.azureRefresh.mu.Lock()
 			b.azureRefresh.pgxCfg.Password = token
+			b.azureRefresh.mu.Unlock()
 			slog.Info("azure: managed identity token refreshed")
 		}
 	}
@@ -343,6 +357,68 @@ func (b *PostgresStorageBackend) LoadSettings(ctx context.Context) (*interfaces.
 	var s interfaces.AppSettings
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("unmarshal settings: %w", err)
+	}
+	return &s, nil
+}
+
+// SaveUserSettings upserts settings for a specific user.
+func (b *PostgresStorageBackend) SaveUserSettings(ctx context.Context, userID string, settings *interfaces.AppSettings) error {
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal user settings: %w", err)
+	}
+	_, err = b.db.ExecContext(ctx, `
+		INSERT INTO user_settings (user_id, data, updated_at) VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+		userID, data, time.Now().UTC())
+	return err
+}
+
+// LoadUserSettings retrieves settings for a specific user.
+func (b *PostgresStorageBackend) LoadUserSettings(ctx context.Context, userID string) (*interfaces.AppSettings, error) {
+	var data []byte
+	err := b.db.QueryRowContext(ctx, `SELECT data FROM user_settings WHERE user_id = $1`, userID).Scan(&data)
+	if err == sql.ErrNoRows {
+		// Return default settings if none found
+		return &interfaces.AppSettings{Version: 1}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load user settings: %w", err)
+	}
+	var s interfaces.AppSettings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("unmarshal user settings: %w", err)
+	}
+	return &s, nil
+}
+
+// SaveOrgSettings upserts settings for a specific organisation.
+func (b *PostgresStorageBackend) SaveOrgSettings(ctx context.Context, orgID string, settings *interfaces.AppSettings) error {
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal org settings: %w", err)
+	}
+	_, err = b.db.ExecContext(ctx, `
+		INSERT INTO org_settings (org_id, data, updated_at) VALUES ($1, $2, $3)
+		ON CONFLICT (org_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+		orgID, data, time.Now().UTC())
+	return err
+}
+
+// LoadOrgSettings retrieves settings for a specific organisation.
+func (b *PostgresStorageBackend) LoadOrgSettings(ctx context.Context, orgID string) (*interfaces.AppSettings, error) {
+	var data []byte
+	err := b.db.QueryRowContext(ctx, `SELECT data FROM org_settings WHERE org_id = $1`, orgID).Scan(&data)
+	if err == sql.ErrNoRows {
+		// Return default settings if none found
+		return &interfaces.AppSettings{Version: 1}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load org settings: %w", err)
+	}
+	var s interfaces.AppSettings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("unmarshal org settings: %w", err)
 	}
 	return &s, nil
 }
@@ -774,9 +850,40 @@ func (b *PostgresStorageBackend) RemoveCollaborator(ctx context.Context, flowID,
 // ---- Schema migration ----
 
 // migrate creates the required tables if they do not exist.
+// migrationLockKey is an arbitrary fixed 64-bit integer used as the key for
+// pg_advisory_lock during schema migration. Any value works as long as it is
+// unique to this application — pick something derived from the project name
+// so it does not collide with locks taken by other software sharing the DB.
+const migrationLockKey int64 = 0x70616461_6E616C7A // "padanalz" in hex bytes
+
+// migrate runs the embedded schema, serializing concurrent startups across
+// replicas using a PostgreSQL session-level advisory lock. Without the lock,
+// two pods starting simultaneously can both execute the DO $$ ... $$ migration
+// blocks (e.g. provider_keys PK rebuild) and one of them will fail with a
+// duplicate-object or constraint-violation error.
+//
+// pg_advisory_lock is automatically released when the session ends, so we
+// dedicate a single connection to the migration and release the lock
+// explicitly before returning it to the pool.
 func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
-	_, err := b.db.ExecContext(ctx, schema)
-	return err
+	conn, err := b.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		// Best-effort release; if it fails the lock will free when the conn closes.
+		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
+	}()
+
+	if _, err := conn.ExecContext(ctx, schema); err != nil {
+		return fmt.Errorf("execute schema: %w", err)
+	}
+	return nil
 }
 
 // ---- Refresh-token rotation store ----
@@ -861,6 +968,18 @@ CREATE INDEX IF NOT EXISTS flows_org_id_idx   ON flows (org_id);
 
 CREATE TABLE IF NOT EXISTS app_settings (
 	id         INTEGER     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+	data       JSONB       NOT NULL DEFAULT '{}',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+	user_id    TEXT        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+	data       JSONB       NOT NULL DEFAULT '{}',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS org_settings (
+	org_id     TEXT        PRIMARY KEY REFERENCES organisations(id) ON DELETE CASCADE,
 	data       JSONB       NOT NULL DEFAULT '{}',
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

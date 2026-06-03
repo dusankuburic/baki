@@ -1,5 +1,6 @@
 import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
+import {useEditorStore} from '@/stores/editorStore'
 import {useUIStore} from '@/stores/uiStore'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
@@ -10,7 +11,7 @@ export function useFileOpen() {
     const setDocument = useFlowStore(s => s.setDocument)
     const setFolderFiles = useFlowStore(s => s.setFolderFiles)
     const setSelectedFilePath = useFlowStore(s => s.setSelectedFilePath)
-    const openInGroup = useFlowStore(s => s.openInGroup)
+    const openInGroup = useEditorStore(s => s.openInGroup)
     const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])

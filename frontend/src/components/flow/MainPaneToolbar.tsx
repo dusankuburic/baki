@@ -3,6 +3,7 @@ import SegmentedControl from '@/components/shared/SegmentedControl'
 import IconButton from '@/components/shared/IconButton'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {useEditorStore} from '@/stores/editorStore'
 import {exportApi} from '@/api'
 import {useToast} from '@/components/shared/Toast'
 
@@ -15,8 +16,8 @@ export default function MainPaneToolbar() {
     const setGraphZoom = useUIStore(s => s.setGraphZoom)
     const setActiveDiff = useUIStore(s => s.setActiveDiff)
     const document = useFlowStore(s => s.document)
-    const groups = useFlowStore(s => s.groups)
-    const focusedGroupIndex = useFlowStore(s => s.focusedGroupIndex)
+    const groups = useEditorStore(s => s.groups)
+    const focusedGroupIndex = useEditorStore(s => s.focusedGroupIndex)
     const navigationHistory = useFlowStore(s => s.navigationHistory)
     const historyIndex = useFlowStore(s => s.historyIndex)
     const goBack = useFlowStore(s => s.goBack)

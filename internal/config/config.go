@@ -57,6 +57,14 @@ type StorageConfig struct {
 	Backend StorageBackend
 	// DatabaseURL is used when Backend == StorageDatabase
 	DatabaseURL string
+
+	// Connection pool settings for the PostgreSQL backend.
+	// Zero values mean "use driver defaults" (see database.DefaultConfig).
+	// Configure via PAD_DB_MAX_OPEN_CONNS, PAD_DB_MAX_IDLE_CONNS,
+	// and PAD_DB_CONN_MAX_LIFETIME (e.g. "1h", "30m").
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime string // duration string, e.g. "1h"
 }
 
 // AuthConfig holds authentication settings

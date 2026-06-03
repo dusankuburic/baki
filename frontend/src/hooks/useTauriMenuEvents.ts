@@ -2,7 +2,7 @@ import {useEffect} from 'react'
 import {flowApi, exportApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {useUIStore} from '@/stores/uiStore'
-import {useFlowStore} from '@/stores/flowStore'
+import {useEditorStore} from '@/stores/editorStore'
 import type {FlowDocument as DomainFlowDocument} from '@/types/domain'
 
 interface Options {
@@ -48,7 +48,7 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
             exportApi.exportMarkdown().catch(() => {})
             break
           case 'file.close.tab': {
-            const {focusedGroupIndex, groups, closeTab} = useFlowStore.getState()
+            const {focusedGroupIndex, groups, closeTab} = useEditorStore.getState()
             const group = groups[focusedGroupIndex]
             if (group?.activeTabId) closeTab(focusedGroupIndex, group.activeTabId)
             break

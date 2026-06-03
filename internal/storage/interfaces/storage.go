@@ -38,6 +38,10 @@ type StorageBackend interface {
 	// Settings operations
 	SaveSettings(ctx context.Context, settings *AppSettings) error
 	LoadSettings(ctx context.Context) (*AppSettings, error)
+	SaveUserSettings(ctx context.Context, userID string, settings *AppSettings) error
+	LoadUserSettings(ctx context.Context, userID string) (*AppSettings, error)
+	SaveOrgSettings(ctx context.Context, orgID string, settings *AppSettings) error
+	LoadOrgSettings(ctx context.Context, orgID string) (*AppSettings, error)
 
 	// Conversation operations
 	SaveConversation(ctx context.Context, flowID, scope string, messages []ChatMessage) error

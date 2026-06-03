@@ -57,7 +57,7 @@ func TestSearchBlock_EmptySlice(t *testing.T) {
 // ---- SearchFlow -------------------------------------------------------------
 
 func TestFlowService_SearchFlow_NoDoc(t *testing.T) {
-	svc := NewFlowService(nil, nil, nil, nil, nil)
+	svc := NewFlowService(nil, nil, nil, nil, nil, nil)
 	_, err := svc.SearchFlow(nil, models.SearchQuery{Text: "anything", MaxResults: 10})
 	if err == nil {
 		t.Fatal("expected error when doc is nil")
@@ -137,7 +137,7 @@ func TestAnalysisService_UpdateRuleConfig(t *testing.T) {
 
 func TestFlowService_RemoveRecentFile(t *testing.T) {
 	s := newTestSettingsStore(t)
-	svc := NewFlowService(nil, s, nil, nil, nil)
+	svc := NewFlowService(nil, s, nil, nil, nil, nil)
 
 	storage.AddRecentFile(s, "/flow/a.txt", 0)
 	storage.AddRecentFile(s, "/flow/b.txt", 0)
@@ -156,7 +156,7 @@ func TestFlowService_RemoveRecentFile(t *testing.T) {
 
 func TestFlowService_ClearRecentFiles(t *testing.T) {
 	s := newTestSettingsStore(t)
-	svc := NewFlowService(nil, s, nil, nil, nil)
+	svc := NewFlowService(nil, s, nil, nil, nil, nil)
 
 	storage.AddRecentFile(s, "/flow/a.txt", 0)
 	storage.AddRecentFile(s, "/flow/b.txt", 0)
@@ -173,7 +173,7 @@ func TestFlowService_ClearRecentFiles(t *testing.T) {
 // ---- LoadFlowFromPath guard paths (no backend notifier required) ---------------
 
 func TestFlowService_LoadFlowFromPath_NoSettings(t *testing.T) {
-	svc := NewFlowService(nil, nil, nil, nil, nil)
+	svc := NewFlowService(nil, nil, nil, nil, nil, nil)
 	_, err := svc.LoadFlowFromPath("/any/path.txt")
 	if err == nil {
 		t.Fatal("expected error when settings is nil")
@@ -182,7 +182,7 @@ func TestFlowService_LoadFlowFromPath_NoSettings(t *testing.T) {
 
 func TestFlowService_LoadFlowFromPath_NonExistent(t *testing.T) {
 	s := newTestSettingsStore(t)
-	svc := NewFlowService(nil, s, nil, nil, nil)
+	svc := NewFlowService(nil, s, nil, nil, nil, nil)
 
 	_, err := svc.LoadFlowFromPath(filepath.Join(t.TempDir(), "no-such-file.txt"))
 	if err == nil {

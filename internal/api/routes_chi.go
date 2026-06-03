@@ -30,7 +30,10 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Get("/healthz", h.Sys.handleLiveness)
 	r.Get("/readyz", h.Sys.handleReadiness)
 	r.Get("/api/health", h.Sys.handleReadiness)
-	r.Handle("/metrics", middleware.MetricsHandler())
+	// /metrics is protected by a private-IP allowlist to prevent public internet
+	// access to internal operational data. Supplement this with Azure NSG /
+	// ACA ingress rules that block /metrics from the public load balancer.
+	r.Handle("/metrics", middleware.MetricsGuard(rt.trustedProxies)(middleware.MetricsHandler()))
 	r.Get("/api/events", rt.eventManager.HandleEvents)
 
 	// --- System & Keys ---
@@ -38,6 +41,10 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Get("/settings", h.Sys.handleGetSettings)
 		r.Post("/settings", h.Sys.handleUpdateSettings)
 		r.Put("/settings", h.Sys.handleUpdateSettings)
+		r.Get("/settings/user", h.Sys.handleGetSettings) // User-scoped (uses handleGetSettings which already handles scoping)
+		r.Post("/settings/user", h.Sys.handleUpdateSettings)
+		r.Get("/settings/org/{id}", h.Sys.handleGetSettings) // Org-scoped (placeholder, need to update handler for org)
+		r.Post("/settings/org/{id}", h.Sys.handleUpdateSettings)
 		r.Get("/info", h.Sys.handleAppInfo)
 		r.Post("/log-error", h.Sys.handleLogError)
 	})

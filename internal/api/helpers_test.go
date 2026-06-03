@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -27,7 +28,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, notifier)
+	sysSvc := service.NewSystemService(settings, notifier, backend)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
@@ -36,7 +37,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	authMgr := auth.NewManager(testToken)
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
 	
-	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, orgSvc)
+	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, orgSvc, nil)
 	libSvc := service.NewLibraryService(backend, flowSvc)
 	analysisSvc := service.NewAnalysisService(notifier, settings)
 	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
@@ -62,7 +63,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	eventManager := NewEventManager(make(chan struct{}))
 	
 	handlers := Handlers{
-		Sys:      NewSystemHandler(sysSvc, security),
+		Sys:      NewSystemHandler(sysSvc, security, backend),
 		Flow:     NewFlowHandler(flowSvc, docProv, backend, security),
 		Library:  NewLibraryHandler(libSvc, security),
 		Chat:     NewChatHandler(chatSvc, flowSvc, security),
@@ -147,6 +148,16 @@ func checkStatus(t *testing.T, rr *httptest.ResponseRecorder, want int) {
 	if rr.Code != want {
 		t.Errorf("expected status %d, got %d — body: %s", want, rr.Code, rr.Body.String())
 	}
+}
+
+// newRecorder sends req through rt and returns the recorded response.
+// Unlike doRequest / doRequestWithAuth it accepts a fully formed *http.Request
+// so callers can set custom RemoteAddr, headers, etc.
+func newRecorder(t *testing.T, rt *Router, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+	return rr
 }
 
 // seedUserWithRole inserts a user with the given role directly via the backend.

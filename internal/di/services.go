@@ -4,6 +4,7 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/cache"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
@@ -25,6 +26,10 @@ func ProvideConfigDir() (string, error) {
 	return storage.ConfigDir()
 }
 
+func ProvideASTCache() (cache.Cache, error) {
+	return cache.NewLRUCache(100) // Cache up to 100 flows
+}
+
 func ProvideAI(configDir string) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
 	copilotAuth := ai.NewCopilotAuth()
 	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth)
@@ -39,8 +44,11 @@ var ServiceModule = fx.Options(
 		ProvideDocumentProvider,
 		ProvideSettingsStore,
 		ProvideConfigDir,
+		ProvideASTCache,
 		ProvideAI,
-		service.NewSystemService,
+		func(settings *storage.SettingsStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
+			return service.NewSystemService(settings, notifier, backend)
+		},
 		service.NewFlowService,
 		service.NewAnalysisService,
 		service.NewExportService,

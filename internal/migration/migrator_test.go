@@ -83,6 +83,22 @@ func (m *memBackend) LoadSettings(_ context.Context) (*interfaces.AppSettings, e
 	return &cp, nil
 }
 
+func (m *memBackend) SaveUserSettings(_ context.Context, _ string, s *interfaces.AppSettings) error {
+	return m.SaveSettings(nil, s)
+}
+
+func (m *memBackend) LoadUserSettings(_ context.Context, _ string) (*interfaces.AppSettings, error) {
+	return m.LoadSettings(nil)
+}
+
+func (m *memBackend) SaveOrgSettings(_ context.Context, _ string, s *interfaces.AppSettings) error {
+	return m.SaveSettings(nil, s)
+}
+
+func (m *memBackend) LoadOrgSettings(_ context.Context, _ string) (*interfaces.AppSettings, error) {
+	return m.LoadSettings(nil)
+}
+
 func (m *memBackend) SaveConversation(_ context.Context, flowID, scope string, msgs []interfaces.ChatMessage) error {
 	return nil
 }
