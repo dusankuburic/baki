@@ -1,4 +1,4 @@
-import {InspectorTabs, DetailsTab} from '@/components/inspector'
+import {InspectorTabs, DetailsTab, MetricsTab} from '@/components/inspector'
 import AITab from '@/components/chat/AITab'
 import {FindingsTab} from '@/components/findings'
 import {SharingTab} from '@/components/inspector/SharingTab'
@@ -19,6 +19,7 @@ export default function InspectorPanel() {
                     </ResizableChatPanel>
                 )}
                 {tab === 'findings' && <FindingsTab />}
+                {tab === 'metrics' && <MetricsTab />}
                 {tab === 'sharing' && <SharingTab />}
             </div>
         </div>

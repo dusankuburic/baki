@@ -1,6 +1,6 @@
 import {request} from './client'
 import {createAdapter} from '@/platform/adapters'
-import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview, SourceFileInfo} from '@/types/domain'
+import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview} from '@/types/domain'
 
 export const chatApi = {
   streamChatMessage: (req: ChatRequest): Promise<string> =>
@@ -25,7 +25,7 @@ export const chatApi = {
     request('/api/chat/suggested-prompts', {hasBlock, hasFindings: hasFindings ?? false}),
 
   getDemoRemaining: (): Promise<number> =>
-    request('/api/chat/demo-remaining'),
+    request('/api/chat/demo-remaining', undefined, 'GET'),
 
   previewContext: (req: ChatRequest): Promise<ContextPreview> =>
     request('/api/chat/preview-context', req),
@@ -37,9 +37,6 @@ export const chatApi = {
     if (!path) return
     await request('/api/chat/export', {flowId, provider, path})
   },
-
-  getSourceFiles: (): Promise<SourceFileInfo[]> =>
-    request('/api/flow/source-files'),
 
   readSourceFiles: (files: string[]): Promise<Record<string, string>> =>
     request('/api/flow/read-sources', {files}),

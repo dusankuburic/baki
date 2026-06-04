@@ -18,25 +18,25 @@ export const providersApi = {
     request('/api/providers/test', { provider }),
 
   startGitHubAuth: (): Promise<DeviceAuthResponse> =>
-    request('/api/providers/github/start', undefined, 'GET'),
+    request('/api/providers/github/start'),
 
   pollGitHubAuth: (deviceCode: string): Promise<GitHubAuthResult> =>
     request('/api/providers/github/poll', { deviceCode }),
 
   revokeGitHubAuth: (): Promise<void> =>
-    request('/api/providers/github/revoke', undefined, 'GET'),
+    request('/api/providers/github/revoke'),
 
   getGitHubUser: (): Promise<GitHubUser | null> =>
     request('/api/providers/github/user', undefined, 'GET'),
 
   startCopilotAuth: (): Promise<DeviceAuthResponse> =>
-    request('/api/providers/copilot/start', undefined, 'GET'),
+    request('/api/providers/copilot/start'),
 
   pollCopilotAuth: (deviceCode: string): Promise<GitHubAuthResult> =>
     request('/api/providers/copilot/poll', { deviceCode }),
 
   revokeCopilotAuth: (): Promise<void> =>
-    request('/api/providers/copilot/revoke', undefined, 'GET'),
+    request('/api/providers/copilot/revoke'),
 
   getCopilotUser: (): Promise<GitHubUser | null> =>
     request('/api/providers/copilot/user', undefined, 'GET'),

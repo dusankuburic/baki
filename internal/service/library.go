@@ -64,6 +64,24 @@ func (s *LibraryService) ResolveOwnerName(ctx context.Context, ownerID string) s
 	return ""
 }
 
+// ResolveOwnerNames resolves many owner IDs to display names (emails) in a
+// single backend round trip, avoiding the N+1 pattern when building list
+// responses. Unknown/empty IDs are simply absent from the returned map.
+func (s *LibraryService) ResolveOwnerNames(ctx context.Context, ownerIDs []string) map[string]string {
+	names := make(map[string]string, len(ownerIDs))
+	if s.storage == nil || len(ownerIDs) == 0 {
+		return names
+	}
+	users, err := s.storage.LoadUsersByIDs(ctx, ownerIDs)
+	if err != nil {
+		return names
+	}
+	for id, u := range users {
+		names[id] = u.Email
+	}
+	return names
+}
+
 // ListLibraryFlows returns flows visible to the requesting user.
 func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID, query string, limit, offset int) (docs []*storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.ListLibraryFlows", &err)
@@ -76,6 +94,7 @@ func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID, qu
 		Query:          query,
 		Limit:          limit,
 		Offset:         offset,
+		MetadataOnly:   true, // list view needs metadata only, not full content
 	})
 }
 

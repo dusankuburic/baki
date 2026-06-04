@@ -19,10 +19,7 @@ func (r *UnusedVariableRule) Check(block *models.Block, ctx *RuleContext) []mode
 
 	// block.Variables contains *referenced* variables from %...% expressions.
 	// The declared (output) variable is stored in Properties["_output"] or "_var".
-	declaredVar := block.Properties["_output"]
-	if declaredVar == "" {
-		declaredVar = block.Properties["_var"]
-	}
+	declaredVar := outputVar(block)
 	if declaredVar == "" {
 		return nil
 	}
@@ -39,6 +36,6 @@ func (r *UnusedVariableRule) Check(block *models.Block, ctx *RuleContext) []mode
 		BlockID:    block.ID,
 		SubflowID:  block.SubflowID,
 		Suggestion: "Remove the unused variable or add a reference to it.",
-		Metadata:   map[string]interface{}{"variable": declaredVar},
+		Metadata:   map[string]any{"variable": declaredVar},
 	}}
 }

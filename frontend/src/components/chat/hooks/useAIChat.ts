@@ -2,7 +2,7 @@ import {useState, useCallback, useRef, useEffect, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {chatApi} from '@/api'
+import {chatApi, flowApi} from '@/api'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import type {ChatMessage, ContextPreview, SourceFileInfo} from '@/types/domain'
 
@@ -87,7 +87,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       setSourceFiles(EMPTY_SOURCE_FILES)
       return
     }
-    chatApi.getSourceFiles().then((files: any) => {
+    flowApi.getSourceFiles().then((files: any) => {
       const list: SourceFileInfo[] = (files || []).map((f: any) => ({
         filename: f.filename || '',
         subflowId: f.subflowId || '',

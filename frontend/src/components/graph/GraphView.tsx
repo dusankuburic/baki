@@ -4,6 +4,7 @@ import cytoscape from 'cytoscape'
 import dagre from 'cytoscape-dagre'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
+import {useAnalysisStore} from '@/stores/analysisStore'
 import {blocksToElements, countSubflowNodes} from './graphElements'
 import {resolveGraphTokens, buildGraphStyle} from './graphStyle'
 import type {GraphTokenColors} from './graphStyle'
@@ -180,6 +181,27 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       })
     })
   }, [selectedVariable, subflow?.id])
+
+  // Annotate nodes with finding severity borders
+  useEffect(() => {
+    if (!cyRef.current || !flowDoc) return
+    const cy = cyRef.current
+
+    const report = useAnalysisStore.getState().reports.get(flowDoc.id)
+    cy.batch(() => {
+      cy.nodes().removeClass('finding-error finding-warning finding-info')
+      if (!report) return
+      for (const f of report.findings) {
+        const node = cy.getElementById(f.blockId)
+        if (node.length > 0) {
+          const cls = f.severity === 'error' ? 'finding-error'
+            : f.severity === 'warning' ? 'finding-warning'
+            : 'finding-info'
+          node.addClass(cls)
+        }
+      }
+    })
+  }, [flowDoc, useAnalysisStore(s => s.reports), subflow?.id])
 
   if (!flowDoc) {
     return (

@@ -1,10 +1,34 @@
 package search
 
 import (
+	"fmt"
 	"testing"
 
 	"pad-analyzer/internal/models"
 )
+
+// BenchmarkSearchFuzzy exercises the fuzzy fallback over a large token index.
+// The length pre-filter skips the Levenshtein DP for tokens whose length is too
+// far from the query token, which dominates cost on a big index.
+func BenchmarkSearchFuzzy(b *testing.B) {
+	blocks := make([]models.Block, 0, 2000)
+	for i := 0; i < 2000; i++ {
+		blocks = append(blocks, models.Block{
+			ID:      fmt.Sprintf("b%d", i),
+			Name:    fmt.Sprintf("Action variant %d alpha beta gamma delta", i),
+			Type:    models.BlockTypeAction,
+			RawType: fmt.Sprintf("WebAutomation.Operation%d", i),
+		})
+	}
+	doc := &models.FlowDocument{ID: "bench", Subflows: []models.Subflow{{ID: "sf", Name: "Main", Blocks: blocks}}}
+	idx := NewSearchIndex(doc.ID, doc)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = idx.Search(models.SearchQuery{Text: "actionx", Fuzzy: true, MaxResults: 10})
+	}
+}
 
 func makeTestDoc() *models.FlowDocument {
 	return &models.FlowDocument{

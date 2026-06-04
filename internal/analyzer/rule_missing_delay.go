@@ -27,15 +27,9 @@ func (r *MissingDelayRule) Check(block *models.Block, ctx *RuleContext) []models
 		return nil
 	}
 
-	myIdx := -1
-	for i, s := range siblings {
-		if s.ID == block.ID {
-			myIdx = i
-			break
-		}
-	}
-
-	if myIdx <= 0 {
+	// Use the precomputed sibling index instead of an O(siblings) self-scan.
+	myIdx, ok := ctx.BlockIndex[block.ID]
+	if !ok || myIdx <= 0 {
 		return nil
 	}
 

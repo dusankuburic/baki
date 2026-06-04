@@ -1,0 +1,94 @@
+package analyzer
+
+import (
+	"strings"
+
+	"pad-analyzer/internal/models"
+)
+
+var timeoutRequiredPrefixes = []string{
+	"WebAutomation.",
+	"UIAutomation.",
+	"Http.",
+	"Ftp.",
+	"Database.",
+	"Outlook.SendEmail",
+	"Email.SendEmail",
+	"SharePoint.",
+	"OneDrive.",
+}
+
+type MissingTimeoutRule struct{}
+
+func (r *MissingTimeoutRule) ID() string                    { return "missing-timeout" }
+func (r *MissingTimeoutRule) Name() string                   { return "Network operation without timeout" }
+func (r *MissingTimeoutRule) Description() string            { return "Network/UI automation actions that may hang because no explicit timeout is configured." }
+func (r *MissingTimeoutRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
+func (r *MissingTimeoutRule) Category() string               { return "Reliability" }
+
+func (r *MissingTimeoutRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
+	if block.Type != models.BlockTypeAction {
+		return nil
+	}
+
+	if !requiresTimeout(block.RawType) {
+		return nil
+	}
+
+	if hasTimeoutConfigured(block) {
+		return nil
+	}
+
+	return []models.Finding{{
+		RuleID:      r.ID(),
+		Severity:    r.DefaultSeverity(),
+		Title:       "Network operation without timeout",
+		Description: "This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.",
+		BlockID:     block.ID,
+		SubflowID:   block.SubflowID,
+		Suggestion:  "Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.",
+		Metadata:    map[string]interface{}{"rawType": block.RawType},
+	}}
+}
+
+func requiresTimeout(rawType string) bool {
+	for _, prefix := range timeoutRequiredPrefixes {
+		if strings.HasPrefix(rawType, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTimeoutConfigured(block *models.Block) bool {
+	if block.Properties == nil {
+		return false
+	}
+
+	timeoutKeys := []string{
+		"timeout",
+		"timeoutInSeconds",
+		"timeoutSeconds",
+		"timeoutMs",
+		"connectionTimeout",
+		"readTimeout",
+		"_timeout",
+	}
+
+	for _, key := range timeoutKeys {
+		for k, v := range block.Properties {
+			if strings.EqualFold(k, key) && v != "" && v != "0" {
+				return true
+			}
+		}
+	}
+
+	for k, v := range block.Properties {
+		kl := strings.ToLower(k)
+		if (strings.Contains(kl, "timeout") || strings.Contains(kl, "wait")) && v != "" && v != "0" {
+			return true
+		}
+	}
+
+	return false
+}

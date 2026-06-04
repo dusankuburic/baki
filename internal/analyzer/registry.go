@@ -15,5 +15,16 @@ func AllRules() []Rule {
 		&EmptyHandlerRule{},
 		&ResourceLeakRule{},
 		&SubflowNoErrorHandlerRule{},
+		&GotoAntipatternRule{},
+		&EmptyBranchRule{},
+		&RedundantActionRule{},
+		&FileOpNoErrorHandlerRule{},
+		&MissingTimeoutRule{},
+		&SensitiveDataExposureRule{},
+		&ErrorSwallowRule{},
+		&MissingRetryRule{},
+		&WideLoopRule{},
+		&SubflowMismatchRule{},
+		&DeadDataRule{},
 	}
 }

@@ -46,3 +46,16 @@ func matchesAny(b *models.Block, patterns []string) bool {
 func isExitLoop(b *models.Block) bool {
 	return matchesAny(b, exitLoopNames)
 }
+
+// outputVar returns the variable a block writes: the _output property, or the
+// _var property as a fallback. Returns "" when the block writes no variable.
+// Centralizes the _output→_var fallback that was duplicated across rules.
+func outputVar(b *models.Block) string {
+	if b.Properties == nil {
+		return ""
+	}
+	if v := b.Properties["_output"]; v != "" {
+		return v
+	}
+	return b.Properties["_var"]
+}

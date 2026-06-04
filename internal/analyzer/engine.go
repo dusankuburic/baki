@@ -24,7 +24,28 @@ type RuleContext struct {
 	BlockIndex   map[string]int
 	TerminatorIndex map[string]int
 	BlockDepth   map[string]int
-	totalBlocks  int
+	// WritersByVar maps a variable name to the IDs of blocks that write it
+	// (via the _output or _var property). ReadersByVar maps a variable name to
+	// the IDs of blocks that read it (variable appears in block.Variables).
+	// Both are built once during collectBlocks so data-flow lookups are O(1)
+	// instead of a full AllBlocks scan per variable (was O(blocks²·vars)).
+	WritersByVar map[string][]string
+	ReadersByVar map[string][]string
+	// sigCache memoizes block content signatures (see blockSig) so the
+	// duplicate-action rule hashes each block at most once instead of O(run²)
+	// times. Safe as a plain map: the analysis walk is single-threaded.
+	sigCache    map[string]string
+	totalBlocks int
+}
+
+// blockSig returns the memoized content signature for b, computing it once.
+func (ctx *RuleContext) blockSig(b *models.Block) string {
+	if s, ok := ctx.sigCache[b.ID]; ok {
+		return s
+	}
+	s := blockSignature(b)
+	ctx.sigCache[b.ID] = s
+	return s
 }
 
 type Rule interface {
@@ -48,6 +69,9 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 		BlockIndex:   make(map[string]int),
 		TerminatorIndex: make(map[string]int),
 		BlockDepth:   make(map[string]int),
+		WritersByVar: make(map[string][]string),
+		ReadersByVar: make(map[string][]string),
+		sigCache:     make(map[string]string),
 		Settings:     settings,
 	}
 
@@ -104,6 +128,21 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 					}
 				}
 			}
+		}
+
+		// Index variable writers (union of the _output and _var properties) and
+		// readers (block.Variables entries) for O(1) data-flow lookups. Built in
+		// traversal order so derived results are deterministic.
+		if b.Properties != nil {
+			if out := b.Properties["_output"]; out != "" {
+				ctx.WritersByVar[out] = append(ctx.WritersByVar[out], b.ID)
+			}
+			if v := b.Properties["_var"]; v != "" {
+				ctx.WritersByVar[v] = append(ctx.WritersByVar[v], b.ID)
+			}
+		}
+		for _, v := range b.Variables {
+			ctx.ReadersByVar[v] = append(ctx.ReadersByVar[v], b.ID)
 		}
 	}
 	ctx.SiblingMap[parentID] = ptrs
@@ -174,8 +213,17 @@ func safeCheck(rule Rule, block *models.Block, ctx *RuleContext) (findings []mod
 	return rule.Check(block, ctx)
 }
 
+// RunAnalysis runs all enabled rules over flow and collects per-rule timing in
+// the returned RuleProfiles. The cached hot path (CachedAnalysis) calls the
+// core with profiling disabled to avoid two time.Now() calls per (block, rule),
+// which on some platforms are syscalls.
 func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
 	onProgress func(current, total int, ruleName string)) *models.AnalysisReport {
+	return runAnalysisCore(flow, rules, settings, onProgress, true)
+}
+
+func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
+	onProgress func(current, total int, ruleName string), profile bool) *models.AnalysisReport {
 
 	start := time.Now()
 	ctx := buildContext(flow, settings)
@@ -211,6 +259,9 @@ func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSe
 	// Findings are bucketed per rule and flattened in rule order afterwards, so
 	// the output order is byte-identical to the previous rule-major loop.
 	buckets := make([][]models.Finding, len(enabledRules))
+	ruleTimers := make([]int64, len(enabledRules))
+	ruleBlocks := make([]int, len(enabledRules))
+
 	walkBlocks(flow, func(block *models.Block) {
 		if block.Type == models.BlockTypeEnd {
 			return
@@ -221,10 +272,26 @@ func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSe
 				onProgress(counter, total, rule.Name())
 			}
 
+			var t0 time.Time
+			if profile {
+				t0 = time.Now()
+			}
 			ruleFindings := safeCheck(rule, block, ctx)
+			if profile {
+				ruleTimers[i] += time.Since(t0).Microseconds()
+			}
+			ruleBlocks[i]++
+
 			if ov := severityOverride[i]; ov != "" {
 				for j := range ruleFindings {
 					ruleFindings[j].Severity = ov
+				}
+			}
+			if rule.Category() != "" {
+				for j := range ruleFindings {
+					if ruleFindings[j].Category == "" {
+						ruleFindings[j].Category = rule.Category()
+					}
 				}
 			}
 			buckets[i] = append(buckets[i], ruleFindings...)
@@ -259,6 +326,20 @@ func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSe
 	for i := range findings {
 		findings[i].ID = fmt.Sprintf("F-%03d", i+1)
 	}
+
+	report.Metrics = ComputeFlowMetrics(flow, report)
+
+	profiles := make([]models.RuleProfile, len(enabledRules))
+	for i, rule := range enabledRules {
+		profiles[i] = models.RuleProfile{
+			RuleID:        rule.ID(),
+			RuleName:      rule.Name(),
+			DurationMs:    ruleTimers[i] / 1000,
+			FindingCount:  len(buckets[i]),
+			BlocksChecked: ruleBlocks[i],
+		}
+	}
+	report.RuleProfiles = profiles
 
 	return report
 }

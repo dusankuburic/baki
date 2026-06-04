@@ -34,27 +34,29 @@ func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []mod
 		return nil
 	}
 
-	myIdx := -1
-	for i, s := range siblings {
-		if s.ID == block.ID {
-			myIdx = i
-			break
-		}
+	// BlockIndex already holds this block's position within its sibling group
+	// (computed once in collectBlocks), so use it instead of re-scanning.
+	myIdx, ok := ctx.BlockIndex[block.ID]
+	if !ok {
+		return nil
 	}
 
-	sig := blockSignature(block)
+	sig := ctx.blockSig(block)
 
+	// The finding is emitted only on the FIRST block of a run. If the previous
+	// sibling shares our signature, we're mid-run — return in O(1) rather than
+	// rescanning the entire run for every member (was O(run²) overall, the
+	// dominant cost in profiling once MD5 was memoized).
+	if myIdx > 0 && ctx.blockSig(siblings[myIdx-1]) == sig {
+		return nil
+	}
+
+	// Count the forward run length from this run-start block. The backward scan
+	// the previous implementation did was always zero here (we're the start),
+	// so it is removed; repeatCount is identical.
 	matching := 1
 	for i := myIdx + 1; i < len(siblings); i++ {
-		if blockSignature(siblings[i]) == sig {
-			matching++
-		} else {
-			break
-		}
-	}
-
-	for i := myIdx - 1; i >= 0; i-- {
-		if blockSignature(siblings[i]) == sig {
+		if ctx.blockSig(siblings[i]) == sig {
 			matching++
 		} else {
 			break
@@ -62,10 +64,6 @@ func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []mod
 	}
 
 	if matching < minRepeats {
-		return nil
-	}
-
-	if myIdx > 0 && blockSignature(siblings[myIdx-1]) == sig {
 		return nil
 	}
 
@@ -77,7 +75,7 @@ func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []mod
 		BlockID:    block.ID,
 		SubflowID:  block.SubflowID,
 		Suggestion: "Consider extracting these repeated actions into a subflow.",
-		Metadata:   map[string]interface{}{"repeatCount": matching},
+		Metadata:   map[string]any{"repeatCount": matching},
 	}}
 }
 

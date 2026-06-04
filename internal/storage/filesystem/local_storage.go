@@ -127,6 +127,9 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 			continue
 		}
 
+		if filter.MetadataOnly {
+			flow.Content = nil // list view needs metadata only
+		}
 		flows = append(flows, flow)
 
 		// Apply limit
@@ -366,6 +369,19 @@ func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*i
 		return u, nil
 	}
 	return nil, interfaces.ErrNotFound
+}
+
+// LoadUsersByIDs resolves multiple users via the in-memory id map (O(len(ids))).
+func (lsb *LocalStorageBackend) LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*interfaces.User, error) {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	out := make(map[string]*interfaces.User, len(ids))
+	for _, id := range ids {
+		if u, ok := lsb.users[id]; ok {
+			out[id] = u
+		}
+	}
+	return out, nil
 }
 
 func (lsb *LocalStorageBackend) CountUsers(ctx context.Context) (int, error) {

@@ -1,6 +1,7 @@
 import type {Finding, FlowDocument} from '@/types/domain'
 import {useFlowStore} from '@/stores/flowStore'
-import {ArrowRight, Sparkles} from 'lucide-react'
+import {useAnalysisStore} from '@/stores/analysisStore'
+import {ArrowRight, Sparkles, EyeOff} from 'lucide-react'
 
 interface Props {
   finding: Finding
@@ -23,20 +24,40 @@ function findBlock(doc: FlowDocument, blockId: string) {
 export default function FindingCard({finding, doc, onFixWithAI}: Props) {
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
+  const suppressFinding = useAnalysisStore(s => s.suppressFinding)
 
   const handleJump = () => {
     selectSubflow(finding.subflowId)
     selectBlock(finding.blockId)
   }
 
+  const handleSuppress = () => {
+    suppressFinding(finding, 'Dismissed by user')
+  }
+
   const loc = findBlock(doc, finding.blockId)
   const blockLabel = loc?.block.name ?? finding.blockId.slice(0, 8)
   const subflowLabel = loc?.subflowName
 
+  const catColors: Record<string, string> = {
+    Security: 'text-red-400 bg-red-500/10',
+    Reliability: 'text-amber-400 bg-amber-500/10',
+    Performance: 'text-orange-400 bg-orange-500/10',
+    Style: 'text-purple-400 bg-purple-500/10',
+    Logic: 'text-cyan-400 bg-cyan-500/10',
+  }
+
   return (
     <div className="px-4 py-2 pl-9 flex items-center gap-3 hover:bg-surface-2/50 transition-colors group">
       <div className="flex-1 min-w-0">
-        <span className="text-xs text-text-primary font-mono truncate">{blockLabel}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-primary font-mono truncate">{blockLabel}</span>
+          {finding.category && (
+            <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${catColors[finding.category] ?? 'text-text-tertiary bg-surface-3'}`}>
+              {finding.category}
+            </span>
+          )}
+        </div>
         {subflowLabel && (
           <span className="text-2xs text-text-tertiary ml-2">in {subflowLabel}</span>
         )}
@@ -59,6 +80,14 @@ export default function FindingCard({finding, doc, onFixWithAI}: Props) {
           Fix with AI
         </button>
       )}
+
+      <button
+        onClick={handleSuppress}
+        className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors shrink-0"
+        title="Suppress this finding"
+      >
+        <EyeOff size={10} />
+      </button>
     </div>
   )
 }

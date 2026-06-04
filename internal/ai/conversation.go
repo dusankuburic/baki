@@ -124,20 +124,40 @@ func evictIfNeeded(messages []models.ChatMessage) ([]models.ChatMessage, error) 
 		return messages, nil
 	}
 
-	data, err := json.Marshal(messages)
-	if err != nil {
-		return messages, err
+	// Marshal each message ONCE to get its serialized length, then derive the
+	// size of any suffix in O(1) from a suffix-sum. Previously this re-marshalled
+	// the shrinking slice on every loop iteration → O(n²) on the save path.
+	n := len(messages)
+	sizes := make([]int, n)
+	for i := range messages {
+		b, err := json.Marshal(messages[i])
+		if err != nil {
+			return messages, err
+		}
+		sizes[i] = len(b)
+	}
+	suffix := make([]int, n+1)
+	for i := n - 1; i >= 0; i-- {
+		suffix[i] = suffix[i+1] + sizes[i]
+	}
+	// marshaledLen(cut) == len(json.Marshal(messages[cut:])): a JSON array is
+	// "[" + elements joined by "," + "]", i.e. 2 brackets + (k-1) commas.
+	marshaledLen := func(cut int) int {
+		k := n - cut
+		if k <= 0 {
+			return 2 // "[]"
+		}
+		return 2 + suffix[cut] + (k - 1)
 	}
 
-	if len(data) <= maxConversationBytes {
+	if marshaledLen(0) <= maxConversationBytes {
 		return messages, nil
 	}
 
 	cut := 0
-	for cut < len(messages)-2 {
+	for cut < n-2 {
 		cut += 2
-		trimmed, _ := json.Marshal(messages[cut:])
-		if len(trimmed) <= maxConversationBytes && len(messages[cut:]) <= maxMessagesPerConv {
+		if marshaledLen(cut) <= maxConversationBytes && (n-cut) <= maxMessagesPerConv {
 			break
 		}
 	}

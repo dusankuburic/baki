@@ -1,5 +1,7 @@
 package models
 
+import "maps"
+
 type ThemeMode string
 
 const (
@@ -92,6 +94,35 @@ type RuleConfig struct {
 	Options   map[string]interface{} `json:"options,omitempty"`
 }
 
+// Clone returns a copy safe for a caller to read (and mutate) without affecting
+// the original. It copies the reference-typed fields (slice + maps) explicitly;
+// all other fields are value types carried by the struct copy. This replaces an
+// earlier json.Marshal/Unmarshal round-trip used on hot read paths.
+func (s *AppSettings) Clone() *AppSettings {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+
+	if s.RecentFiles != nil {
+		cp.RecentFiles = make([]RecentFile, len(s.RecentFiles))
+		copy(cp.RecentFiles, s.RecentFiles)
+	}
+	if s.AI.Providers != nil {
+		cp.AI.Providers = maps.Clone(s.AI.Providers)
+	}
+	if s.Analysis.Rules != nil {
+		cp.Analysis.Rules = make(map[string]RuleConfig, len(s.Analysis.Rules))
+		for k, rc := range s.Analysis.Rules {
+			if rc.Options != nil {
+				rc.Options = maps.Clone(rc.Options)
+			}
+			cp.Analysis.Rules[k] = rc
+		}
+	}
+	return &cp
+}
+
 func DefaultSettings() *AppSettings {
 	return &AppSettings{
 		Version: 1,
@@ -160,19 +191,30 @@ func DefaultSettings() *AppSettings {
 		},
 		Analysis: AnalysisSettings{
 			Rules: map[string]RuleConfig{
-				"unhandled-error":      {Enabled: true, Severity: "warning"},
-				"infinite-loop-risk":   {Enabled: true, Severity: "error"},
-				"deep-nesting":         {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxDepth": 6}},
-				"hardcoded-credential": {Enabled: true, Severity: "error"},
-				"dead-code":            {Enabled: true, Severity: "info"},
-				"missing-delay":        {Enabled: true, Severity: "info"},
-				"duplicate-action":     {Enabled: true, Severity: "info", Options: map[string]interface{}{"minRepeats": 3}},
+				"unhandled-error":         {Enabled: true, Severity: "warning"},
+				"infinite-loop-risk":      {Enabled: true, Severity: "error"},
+				"deep-nesting":            {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxDepth": 6}},
+				"hardcoded-credential":    {Enabled: true, Severity: "error"},
+				"dead-code":               {Enabled: true, Severity: "info"},
+				"missing-delay":           {Enabled: true, Severity: "info"},
+				"duplicate-action":        {Enabled: true, Severity: "info", Options: map[string]interface{}{"minRepeats": 3}},
 				"unused-variable":         {Enabled: true, Severity: "info"},
 				"slow-pattern":            {Enabled: true, Severity: "warning"},
 				"empty-handler":           {Enabled: true, Severity: "warning"},
 				"uninitialized-variable":  {Enabled: true, Severity: "warning"},
 				"resource-leak":           {Enabled: true, Severity: "warning"},
 				"subflow-no-error-handler": {Enabled: true, Severity: "info"},
+				"goto-antipattern":        {Enabled: true, Severity: "warning"},
+				"empty-branch":            {Enabled: true, Severity: "info"},
+				"redundant-action":        {Enabled: true, Severity: "info"},
+				"file-op-no-error-handler": {Enabled: true, Severity: "warning"},
+				"missing-timeout":         {Enabled: true, Severity: "warning"},
+				"sensitive-exposure":      {Enabled: true, Severity: "error"},
+				"error-swallow":           {Enabled: true, Severity: "warning"},
+				"missing-retry":           {Enabled: true, Severity: "info"},
+				"wide-loop":               {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 20}},
+				"subflow-mismatch":        {Enabled: true, Severity: "warning"},
+				"dead-data":               {Enabled: true, Severity: "info"},
 			},
 		},
 	}

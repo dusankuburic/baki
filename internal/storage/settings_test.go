@@ -24,6 +24,39 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// TestSettingsStore_Get_ReturnsIsolatedCopy ensures Get() returns a defensive
+// copy: mutating the returned settings' maps/slices must not leak into the store.
+func TestSettingsStore_Get_ReturnsIsolatedCopy(t *testing.T) {
+	s := newTestStore(t)
+	a := s.Get()
+
+	// Mutate every reference-typed field on the returned copy.
+	a.Analysis.Rules["unhandled-error"] = models.RuleConfig{Enabled: false}
+	a.AI.Providers["claude"] = models.AIProviderConfig{Enabled: false}
+	a.RecentFiles = append(a.RecentFiles, models.RecentFile{Path: "leak"})
+	if rc, ok := a.Analysis.Rules["deep-nesting"]; ok {
+		if rc.Options == nil {
+			rc.Options = map[string]any{}
+		}
+		rc.Options["maxDepth"] = 999
+		a.Analysis.Rules["deep-nesting"] = rc
+	}
+
+	b := s.Get()
+	if !b.Analysis.Rules["unhandled-error"].Enabled {
+		t.Error("rule mutation on returned copy leaked into store")
+	}
+	if !b.AI.Providers["claude"].Enabled {
+		t.Error("provider mutation on returned copy leaked into store")
+	}
+	if len(b.RecentFiles) != 0 {
+		t.Errorf("RecentFiles mutation leaked: got %d entries", len(b.RecentFiles))
+	}
+	if md, _ := b.Analysis.Rules["deep-nesting"].Options["maxDepth"]; md == 999 {
+		t.Error("nested Options mutation on returned copy leaked into store")
+	}
+}
+
 func TestSettingsStore_Update_PersistsAndGet(t *testing.T) {
 	s := newTestStore(t)
 

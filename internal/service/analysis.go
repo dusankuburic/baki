@@ -36,7 +36,7 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 	settings := s.settings.Get()
 	rules := analyzer.AllRules()
 
-	result := analyzer.RunAnalysis(doc, rules, settings, func(current, total int, ruleName string) {
+	result := analyzer.CachedAnalysis(doc, rules, settings, func(current, total int, ruleName string) {
 		s.notifier.Emit("analysis:progress", map[string]any{
 			"current":  current,
 			"total":    total,
@@ -72,9 +72,76 @@ func (s *AnalysisService) GetExecutionGraph(doc *models.FlowDocument) (graph *mo
 		return nil, fmt.Errorf("no flow loaded")
 	}
 
-	// In stateless mode, we don't cache reports. BuildExecutionGraph can
-	// work without a report (it just won't have finding markers on nodes).
 	return analyzer.BuildExecutionGraph(doc, nil), nil
+}
+
+func (s *AnalysisService) GetFlowMetrics(doc *models.FlowDocument) (metrics *models.FlowMetrics, err error) {
+	defer logger.Guard("App.GetFlowMetrics", &err)
+
+	if doc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+
+	return analyzer.ComputeFlowMetrics(doc, nil), nil
+}
+
+func (s *AnalysisService) GetDataFlow(doc *models.FlowDocument) (df *models.DataFlowAnalysis, err error) {
+	defer logger.Guard("App.GetDataFlow", &err)
+
+	if doc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+
+	return analyzer.AnalyzeDataFlow(doc), nil
+}
+
+func (s *AnalysisService) AnalyzeBatch(docs []*models.FlowDocument) (batch *models.BatchAnalysis, err error) {
+	defer logger.Guard("App.AnalyzeBatch", &err)
+
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no flows provided")
+	}
+
+	settings := s.settings.Get()
+	rules := analyzer.AllRules()
+	return analyzer.RunBatchAnalysis(docs, rules, settings), nil
+}
+
+func (s *AnalysisService) DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
+	return analyzer.DiffReports(old, new)
+}
+
+func (s *AnalysisService) GenerateHTMLReport(report *models.AnalysisReport) string {
+	return analyzer.GenerateHTMLReport(report)
+}
+
+func (s *AnalysisService) GenerateBatchHTMLReport(batch *models.BatchAnalysis) string {
+	return analyzer.GenerateBatchHTMLReport(batch)
+}
+
+func (s *AnalysisService) GetDependencyAnalysis() *models.DependencyAnalysis {
+	return analyzer.AnalyzeRuleDependencies()
+}
+
+func (s *AnalysisService) ComputeDashboard() *models.DashboardStats {
+	reports := analyzer.DefaultCache.AllReports()
+	return analyzer.ComputeDashboard(reports)
+}
+
+func (s *AnalysisService) ComputeSubflowHashes(doc *models.FlowDocument) []models.SubflowHash {
+	return analyzer.ComputeSubflowHashes(doc)
+}
+
+func (s *AnalysisService) DeduplicateFindings(report *models.AnalysisReport) ([]models.Finding, []models.FindingGroup) {
+	return analyzer.DeduplicateFindings(report.Findings)
+}
+
+func (s *AnalysisService) FindRelatedFindings(report *models.AnalysisReport, blockID string) []models.Finding {
+	return analyzer.FindRelatedFindings(report.Findings, blockID)
+}
+
+func (s *AnalysisService) CompareFlows(docA, docB *models.FlowDocument) *models.FlowComparison {
+	return analyzer.CompareFlows(docA, docB)
 }
 
 func (s *AnalysisService) GetRules() (result []models.Rule) {

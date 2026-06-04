@@ -8,6 +8,9 @@ import (
 	"pad-analyzer/internal/models"
 )
 
+// fuzzyMaxDistance is the maximum Levenshtein distance for a fuzzy token match.
+const fuzzyMaxDistance = 2
+
 func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
 	start := time.Now()
 	text := strings.ToLower(strings.TrimSpace(query.Text))
@@ -30,7 +33,15 @@ func (idx *SearchIndex) Search(query models.SearchQuery) *models.SearchResults {
 			}
 		} else if query.Fuzzy && len(qt) >= 4 {
 			for token, blockIDs := range idx.tokens {
-				if Levenshtein(qt, token) <= 2 {
+				// Levenshtein distance is at least the length difference, so a
+				// token whose length differs from the query token by more than
+				// the fuzzy threshold can never match — skip the O(len²) DP for
+				// it. This is exact (same results), it just avoids wasted work
+				// across the full token index on every fuzzy query.
+				if d := len(qt) - len(token); d > fuzzyMaxDistance || d < -fuzzyMaxDistance {
+					continue
+				}
+				if Levenshtein(qt, token) <= fuzzyMaxDistance {
 					for _, id := range blockIDs {
 						candidates[id]++
 						fuzzyHits[id]++

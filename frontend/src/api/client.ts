@@ -47,6 +47,40 @@ export function setSessionToken(token: string | null): void {
     sessionToken = token;
 }
 
+// tokenExpired reports whether a JWT access token is at/near its `exp` (with a
+// small clock-skew margin). Non-JWT tokens (the local-mode per-session token)
+// and malformed tokens decode to "not expired" so local mode is unaffected.
+function tokenExpired(token: string | null): boolean {
+    if (!token) return false
+    const parts = token.split('.')
+    if (parts.length !== 3) return false // not a JWT (e.g. local-mode token)
+    try {
+        const payload = JSON.parse(atob(parts[1]))
+        if (typeof payload.exp !== 'number') return false
+        return payload.exp * 1000 <= Date.now() + 5_000 // refresh 5s early
+    } catch {
+        return false
+    }
+}
+
+// ensureFreshToken proactively refreshes an expired access token BEFORE sending
+// a request, so a mid-session token expiry doesn't produce a doomed 401 (and a
+// red console error) on every call before the transparent retry. Shares the
+// same refreshInFlight dedup as the 401 path so concurrent callers refresh once.
+async function ensureFreshToken(path: string): Promise<void> {
+    if (!refreshCallback || AUTH_PATHS.includes(path)) return
+    if (!tokenExpired(sessionToken)) return
+    try {
+        if (!refreshInFlight) {
+            refreshInFlight = refreshCallback().finally(() => { refreshInFlight = null })
+        }
+        await refreshInFlight
+        invalidateConfigCache()
+    } catch {
+        // Refresh failed — let the request proceed and the 401 path handle it.
+    }
+}
+
 async function doFetch(path: string, body: unknown, method: string): Promise<Response> {
     const cfg = await getBackendConfig()
     const token = sessionToken || cfg.token;
@@ -65,6 +99,10 @@ async function doFetch(path: string, body: unknown, method: string): Promise<Res
 const AUTH_PATHS = ['/api/auth/refresh', '/api/auth/login', '/api/auth/register']
 
 export async function request<T>(path: string, body?: unknown, method: string = 'POST'): Promise<T> {
+    // Proactively refresh an already-expired access token so we don't make a
+    // doomed first request (and log a 401) before the retry below.
+    await ensureFreshToken(path)
+
     let response = await doFetch(path, body, method)
 
     // Attempt one token refresh on 401.
@@ -158,6 +196,9 @@ function scheduleReconnect(): void {
 async function connectEvents(): Promise<void> {
     if (!streamActive) return
     setConnectionState(reconnectAttempt === 0 ? 'connecting' : 'reconnecting')
+
+    // Refresh an expired token before connecting so we don't open with a doomed 401.
+    await ensureFreshToken('/api/events')
 
     const cfg = await getBackendConfig()
     const token = sessionToken || cfg.token

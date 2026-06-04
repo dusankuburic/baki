@@ -17,13 +17,25 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"pad-analyzer/internal/storage/interfaces"
 )
+
+// findFlow returns the flow with the given id from a list, or nil.
+func findFlow(flows []*interfaces.FlowDocument, id string) *interfaces.FlowDocument {
+	for _, f := range flows {
+		if f.ID == id {
+			return f
+		}
+	}
+	return nil
+}
 
 // RunSuite executes the cross-backend contract scenarios against b. The
 // suite seeds uuid-prefixed fixtures, so it is safe to re-run against a
@@ -167,7 +179,15 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 	})
 
 	t.Run("SaveUserSettings_then_LoadUserSettings_round_trips", func(t *testing.T) {
-		userID := "contract-user-" + runID
+		userID := "contract-usettings-" + runID
+		// Seed the user first: Postgres enforces user_settings.user_id → users(id)
+		// via a foreign key. (The filesystem backend has no such constraint, but
+		// seeding keeps the test valid on both backends.)
+		if err := b.CreateUser(ctx, &interfaces.User{
+			ID: userID, Email: "usettings-" + runID + "@example.com", Password: "h",
+		}); err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
 		settings := &interfaces.AppSettings{
 			Version: 1,
 			General: interfaces.GeneralSettings{CheckForUpdates: "daily"},
@@ -186,6 +206,12 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 
 	t.Run("SaveOrgSettings_then_LoadOrgSettings_round_trips", func(t *testing.T) {
 		orgID := "contract-org-" + runID
+		// Seed the org first: Postgres enforces org_settings.org_id → organisations(id).
+		if err := b.SaveOrg(ctx, &interfaces.Organisation{
+			ID: orgID, Name: "Contract Org", OwnerID: "contract-owner-" + runID,
+		}); err != nil {
+			t.Fatalf("seed org: %v", err)
+		}
 		settings := &interfaces.AppSettings{
 			Version: 1,
 			General: interfaces.GeneralSettings{CheckForUpdates: "monthly"},
@@ -199,6 +225,86 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 		if got.General.CheckForUpdates != "monthly" {
 			t.Errorf("round-trip: want monthly, got %s", got.General.CheckForUpdates)
+		}
+	})
+
+	t.Run("LoadUsersByIDs_resolves_present_and_skips_missing", func(t *testing.T) {
+		u1 := &interfaces.User{ID: "contract-multi-1-" + runID, Email: "m1-" + runID + "@example.com", Password: "h"}
+		u2 := &interfaces.User{ID: "contract-multi-2-" + runID, Email: "m2-" + runID + "@example.com", Password: "h"}
+		if err := b.CreateUser(ctx, u1); err != nil {
+			t.Fatalf("create u1: %v", err)
+		}
+		if err := b.CreateUser(ctx, u2); err != nil {
+			t.Fatalf("create u2: %v", err)
+		}
+
+		// Includes a duplicate and a missing id; both must be handled cleanly.
+		got, err := b.LoadUsersByIDs(ctx, []string{u1.ID, u2.ID, "missing-" + runID, u1.ID})
+		if err != nil {
+			t.Fatalf("LoadUsersByIDs: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 resolved users, got %d", len(got))
+		}
+		if got[u1.ID] == nil || got[u1.ID].Email != u1.Email {
+			t.Errorf("u1 not resolved correctly: %+v", got[u1.ID])
+		}
+		if got[u2.ID] == nil || got[u2.ID].Email != u2.Email {
+			t.Errorf("u2 not resolved correctly: %+v", got[u2.ID])
+		}
+		if _, ok := got["missing-"+runID]; ok {
+			t.Errorf("missing id should be absent from result map")
+		}
+	})
+
+	t.Run("LoadUsersByIDs_empty_returns_empty_map", func(t *testing.T) {
+		got, err := b.LoadUsersByIDs(ctx, nil)
+		if err != nil {
+			t.Fatalf("LoadUsersByIDs(nil): %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("expected empty map, got %d entries", len(got))
+		}
+	})
+
+	t.Run("ListFlows_MetadataOnly_omits_content_keeps_metadata", func(t *testing.T) {
+		owner := "contract-owner-" + runID
+		flow := &interfaces.FlowDocument{
+			ID:       "contract-flow-meta-" + runID,
+			Name:     "Meta Flow",
+			Content:  json.RawMessage(`{"big":"` + strings.Repeat("x", 1000) + `"}`),
+			Metadata: interfaces.FlowMetadata{BlockCount: 7, SubflowCount: 2},
+			OwnerID:  owner,
+		}
+		if err := b.SaveFlow(ctx, flow); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+
+		metaOnly, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: owner, MetadataOnly: true})
+		if err != nil {
+			t.Fatalf("ListFlows meta-only: %v", err)
+		}
+		found := findFlow(metaOnly, flow.ID)
+		if found == nil {
+			t.Fatalf("flow %s not present in meta-only list", flow.ID)
+		}
+		if len(found.Content) != 0 {
+			t.Errorf("MetadataOnly: expected empty content, got %d bytes", len(found.Content))
+		}
+		if found.Metadata.BlockCount != 7 {
+			t.Errorf("MetadataOnly: metadata lost, BlockCount=%d want 7", found.Metadata.BlockCount)
+		}
+
+		full, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: owner})
+		if err != nil {
+			t.Fatalf("ListFlows full: %v", err)
+		}
+		foundFull := findFlow(full, flow.ID)
+		if foundFull == nil {
+			t.Fatalf("flow %s not present in full list", flow.ID)
+		}
+		if len(foundFull.Content) == 0 {
+			t.Errorf("full list: expected content present, got empty")
 		}
 	})
 }

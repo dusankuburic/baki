@@ -1,14 +1,15 @@
 import clsx from 'clsx'
-import {Info, Sparkles, AlertTriangle, Users} from 'lucide-react'
+import {Info, Sparkles, AlertTriangle, BarChart3, Users} from 'lucide-react'
 import type {LucideIcon} from 'lucide-react'
 import {useUIStore} from '@/stores/uiStore'
 
-type Tab = 'details' | 'ai' | 'findings' | 'sharing'
+type Tab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing'
 
 const tabs: {value: Tab; label: string; icon: LucideIcon}[] = [
     {value: 'details',  label: 'Details',  icon: Info},
     {value: 'ai',       label: 'AI',       icon: Sparkles},
     {value: 'findings', label: 'Findings', icon: AlertTriangle},
+    {value: 'metrics',  label: 'Metrics',  icon: BarChart3},
     {value: 'sharing',  label: 'Sharing',  icon: Users},
 ]
 

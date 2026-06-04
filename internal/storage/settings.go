@@ -41,18 +41,13 @@ func NewSettingsStoreAt(path string) (*SettingsStore, error) {
 	return s, nil
 }
 
+// Get returns a defensive copy of the current settings. The copy is produced by
+// an explicit field/map clone (see AppSettings.Clone) rather than a JSON
+// round-trip, since Get is called on hot paths (every parse, every analyze).
 func (s *SettingsStore) Get() *models.AppSettings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, err := json.Marshal(s.current)
-	if err != nil {
-		return s.current
-	}
-	var cp models.AppSettings
-	if err := json.Unmarshal(data, &cp); err != nil {
-		return s.current
-	}
-	return &cp
+	return s.current.Clone()
 }
 
 func (s *SettingsStore) Update(updated models.AppSettings) error {

@@ -1,7 +1,8 @@
-import {useCallback, useEffect} from 'react'
+import {useCallback, useEffect, useMemo} from 'react'
+import {Download, FileText, Search} from 'lucide-react'
 import {analysisApi} from '@/api'
 import {subscribeToEvents} from '@/api/client'
-import {useAnalysisStore} from '@/stores/analysisStore'
+import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
@@ -20,13 +21,38 @@ export default function FindingsTab() {
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
   const setProgress = useAnalysisStore(s => s.setProgress)
   const severityFilter = useAnalysisStore(s => s.severityFilter)
+  const categoryFilter = useAnalysisStore(s => s.categoryFilter)
   const appendMessage = useChatStore(s => s.appendMessage)
   const createThread = useChatStore(s => s.createThread)
   const updateThread = useChatStore(s => s.updateThread)
   const switchThread = useChatStore(s => s.switchThread)
   const toggleSeverityFilter = useAnalysisStore(s => s.toggleSeverityFilter)
   const setSeverityFilter = useAnalysisStore(s => s.setSeverityFilter)
+  const toggleCategoryFilter = useAnalysisStore(s => s.toggleCategoryFilter)
+  const allCategories: FindingCategory[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
+  const findingSearch = useAnalysisStore(s => s.findingSearch)
+  const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
+  const suppressedFindings = useAnalysisStore(s => s.suppressedFindings)
+
+  const findings = useMemo(() => {
+    if (!report) return []
+    const isSuppressed = (id: string) => suppressedFindings.some(s => s.findingId === id)
+    const q = findingSearch.toLowerCase()
+    return report.findings.filter(f => {
+      if (!severityFilter.has(f.severity)) return false
+      if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
+      if (isSuppressed(f.id)) return false
+      if (q && !f.title.toLowerCase().includes(q) && !f.description.toLowerCase().includes(q) && !f.ruleId.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [report, severityFilter, categoryFilter, findingSearch, suppressedFindings])
+
+  const suppressedCount = useMemo(() => {
+    if (!report) return 0
+    const isSuppressed = (id: string) => suppressedFindings.some(s => s.findingId === id)
+    return report.findings.filter(f => isSuppressed(f.id)).length
+  }, [report, suppressedFindings])
 
   useEffect(() => {
     if (!isAnalyzing) return
@@ -82,6 +108,47 @@ export default function FindingsTab() {
     setInspectorTab('ai')
   }, [appendMessage, createThread, updateThread, switchThread, setInspectorTab, doc])
 
+  const handleExportCSV = useCallback(() => {
+    if (!report) return
+    const rows = [['ID', 'Severity', 'Category', 'Title', 'Description', 'Block ID', 'Subflow ID', 'Suggestion']]
+    for (const f of report.findings) {
+      rows.push([
+        f.id,
+        f.severity,
+        f.category ?? '',
+        `"${f.title.replace(/"/g, '""')}"`,
+        `"${f.description.replace(/"/g, '""')}"`,
+        f.blockId,
+        f.subflowId,
+        f.suggestion ? `"${f.suggestion.replace(/"/g, '""')}"` : '',
+      ])
+    }
+    const csv = rows.map(r => r.join(',')).join('\n')
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'})
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `analysis-${doc?.id ?? 'report'}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [report, doc])
+
+  const handleExportHTML = useCallback(async () => {
+    if (!doc) return
+    try {
+      const html = await analysisApi.exportHTML()
+      const blob = new Blob([html as unknown as string], {type: 'text/html;charset=utf-8;'})
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `analysis-${doc.id}-${new Date().toISOString().slice(0, 10)}.html`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('HTML export failed:', err)
+    }
+  }, [doc])
+
   if (!doc) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-text-tertiary p-4 text-center">
@@ -116,11 +183,9 @@ export default function FindingsTab() {
     )
   }
 
-  const findings = report!.findings.filter(f => severityFilter.has(f.severity))
-
   return (
     <div className="flex flex-col h-full">
-      <FindingsSummary stats={report!.stats} durationMs={report!.durationMs} />
+      <FindingsSummary stats={report!.stats} durationMs={report!.durationMs} healthScore={report!.metrics?.healthScore} />
       <div className="px-3 py-1.5 flex items-center justify-between border-b border-border-subtle gap-2">
         <div className="flex items-center gap-1">
           {([
@@ -141,9 +206,43 @@ export default function FindingsTab() {
               {label}
             </button>
           ))}
-          {severityFilter.size < 3 && (
+          <span className="text-border-subtle mx-0.5">|</span>
+          {allCategories.map(cat => {
+            const catColors: Record<string, string> = {
+              Security: 'text-red-400',
+              Reliability: 'text-amber-400',
+              Performance: 'text-orange-400',
+              Style: 'text-purple-400',
+              Logic: 'text-cyan-400',
+            }
+            const catBg: Record<string, string> = {
+              Security: 'bg-red-500/10',
+              Reliability: 'bg-amber-500/10',
+              Performance: 'bg-orange-500/10',
+              Style: 'bg-purple-500/10',
+              Logic: 'bg-cyan-500/10',
+            }
+            return (
+              <button
+                key={cat}
+                onClick={() => toggleCategoryFilter(cat)}
+                className={clsx(
+                  'text-[9px] font-bold px-2 py-0.5 rounded-full border transition-all',
+                  categoryFilter.has(cat)
+                    ? `${catBg[cat]} ${catColors[cat]} border-transparent`
+                    : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
+                )}
+              >
+                {cat}
+              </button>
+            )
+          })}
+          {(severityFilter.size < 3 || categoryFilter.size < 5) && (
             <button
-              onClick={() => setSeverityFilter(new Set(['error', 'warning', 'info']))}
+              onClick={() => {
+                setSeverityFilter(new Set(['error', 'warning', 'info']))
+                useAnalysisStore.getState().setCategoryFilter(new Set(allCategories))
+              }}
               className="text-[9px] text-text-tertiary hover:text-text-secondary transition-colors ml-1"
             >
               All
@@ -156,7 +255,44 @@ export default function FindingsTab() {
         >
           Re-analyze
         </button>
+        {report!.findings.length > 0 && (
+          <>
+            <button
+              onClick={handleExportCSV}
+              className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+              title="Export as CSV"
+            >
+              <Download size={12} />
+            </button>
+            <button
+              onClick={handleExportHTML}
+              className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+              title="Export as HTML"
+            >
+              <FileText size={12} />
+            </button>
+          </>
+        )}
       </div>
+      {suppressedCount > 0 && (
+        <div className="px-3 py-1 text-2xs text-text-tertiary border-b border-border-subtle">
+          {suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed
+        </div>
+      )}
+      {report!.findings.length > 0 && (
+        <div className="px-3 py-1.5 border-b border-border-subtle">
+          <div className="relative">
+            <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-disabled" />
+            <input
+              type="text"
+              value={findingSearch}
+              onChange={e => setFindingSearch(e.target.value)}
+              placeholder="Search findings..."
+              className="w-full bg-surface-2 border border-border-subtle rounded-md pl-7 pr-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-500/50"
+            />
+          </div>
+        </div>
+      )}
       {findings.length === 0 ? (
         <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
           No findings

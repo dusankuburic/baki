@@ -151,6 +151,250 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+func (h *AnalysisHandler) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	metrics, err := h.analysisSvc.GetFlowMetrics(doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, metrics)
+}
+
+func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	df, err := h.analysisSvc.GetDataFlow(doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, df)
+}
+
+func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FolderPath string `json:"folderPath"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.FolderPath == "" {
+		render.Error(w, fmt.Errorf("folderPath is required"), http.StatusBadRequest)
+		return
+	}
+
+	docs, err := h.flowSvc.LoadAllFromFolder(r.Context(), req.FolderPath)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	batch, err := h.analysisSvc.AnalyzeBatch(docs)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, batch)
+}
+
+func (h *AnalysisHandler) handleDiff(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	newReport, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	oldReport := &models.AnalysisReport{Findings: []models.Finding{}}
+	diff := h.analysisSvc.DiffReports(oldReport, newReport)
+	render.JSON(w, diff)
+}
+
+func (h *AnalysisHandler) handleExportHTML(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	html := h.analysisSvc.GenerateHTMLReport(report)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\"analysis-report.html\"")
+	w.Write([]byte(html))
+}
+
+func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.Request) {
+	result := h.analysisSvc.GetDependencyAnalysis()
+	render.JSON(w, result)
+}
+
+func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
+	result := h.analysisSvc.ComputeDashboard()
+	render.JSON(w, result)
+}
+
+func (h *AnalysisHandler) handleGetSubflowHashes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	hashes := h.analysisSvc.ComputeSubflowHashes(doc)
+	render.JSON(w, hashes)
+}
+
+func (h *AnalysisHandler) handleDeduplicate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	deduped, groups := h.analysisSvc.DeduplicateFindings(report)
+	render.JSON(w, map[string]interface{}{
+		"deduplicated": deduped,
+		"groups":       groups,
+		"originalCount": len(report.Findings),
+		"dedupedCount": len(deduped),
+	})
+}
+
+func (h *AnalysisHandler) handleRelatedFindings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID  string `json:"flowId"`
+		BlockID string `json:"blockId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	related := h.analysisSvc.FindRelatedFindings(report, req.BlockID)
+	render.JSON(w, related)
+}
+
+func (h *AnalysisHandler) handleCompareFlows(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowAID string `json:"flowAId"`
+		FlowBID string `json:"flowBId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	docA, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowAID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	docB, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowBID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	result := h.analysisSvc.CompareFlows(docA, docB)
+	render.JSON(w, result)
+}
+
 func decodeOptional(r io.Reader, v any) error {
 	if r == nil {
 		return nil

@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,85 @@ import (
 
 	"pad-analyzer/internal/models"
 )
+
+// evictReference is the original O(n²) eviction algorithm, kept in the test as
+// an oracle to prove the optimized evictIfNeeded selects the identical cut.
+func evictReference(messages []models.ChatMessage) []models.ChatMessage {
+	if len(messages) <= maxMessagesPerConv {
+		return messages
+	}
+	data, _ := json.Marshal(messages)
+	if len(data) <= maxConversationBytes {
+		return messages
+	}
+	cut := 0
+	for cut < len(messages)-2 {
+		cut += 2
+		trimmed, _ := json.Marshal(messages[cut:])
+		if len(trimmed) <= maxConversationBytes && len(messages[cut:]) <= maxMessagesPerConv {
+			break
+		}
+	}
+	return messages[cut:]
+}
+
+// TestEvictIfNeeded_MatchesReference verifies the optimized single-pass eviction
+// produces byte-identical cuts to the original brute-force version across
+// conversations whose per-message sizes vary (so suffix sums are non-uniform).
+func TestEvictIfNeeded_MatchesReference(t *testing.T) {
+	mk := func(n int, contentLen func(i int) int) []models.ChatMessage {
+		msgs := make([]models.ChatMessage, n)
+		for i := range msgs {
+			msgs[i] = models.ChatMessage{
+				ID:      fmt.Sprintf("m%04d", i),
+				Role:    "user",
+				Content: strings.Repeat("x", contentLen(i)),
+			}
+		}
+		return msgs
+	}
+	cases := map[string][]models.ChatMessage{
+		"uniform_large": mk(60, func(int) int { return 25_000 }),
+		"growing":       mk(80, func(i int) int { return 1_000 + i*500 }),
+		"shrinking":     mk(80, func(i int) int { return 60_000 - i*500 }),
+		"mixed_small_big": mk(120, func(i int) int {
+			if i%3 == 0 {
+				return 40_000
+			}
+			return 500
+		}),
+		"under_limit": mk(10, func(int) int { return 100 }),
+	}
+	for name, msgs := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := evictIfNeeded(msgs)
+			if err != nil {
+				t.Fatalf("evictIfNeeded: %v", err)
+			}
+			want := evictReference(msgs)
+			if len(got) != len(want) {
+				t.Fatalf("cut mismatch: optimized kept %d, reference kept %d", len(got), len(want))
+			}
+			for i := range got {
+				if got[i].ID != want[i].ID {
+					t.Fatalf("message %d mismatch: %s vs %s", i, got[i].ID, want[i].ID)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkEvictIfNeeded(b *testing.B) {
+	msgs := make([]models.ChatMessage, 200)
+	for i := range msgs {
+		msgs[i] = models.ChatMessage{ID: fmt.Sprintf("m%04d", i), Role: "user", Content: strings.Repeat("x", 20_000)}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = evictIfNeeded(msgs)
+	}
+}
 
 // ---- FlowKey ----------------------------------------------------------------
 
@@ -237,7 +318,7 @@ func TestEvictIfNeeded_OverCount_Evicts(t *testing.T) {
 	// evictIfNeeded requires BOTH count > maxMessagesPerConv AND size > maxConversationBytes
 	// to actually trim. Build messages large enough to exceed the 1MB threshold.
 	largeContent := strings.Repeat("x", 25_000) // ~25KB each
-	n := maxMessagesPerConv + 10                  // 60
+	n := maxMessagesPerConv + 10                // 60
 	msgs := make([]models.ChatMessage, n)
 	for i := range msgs {
 		msgs[i] = models.ChatMessage{

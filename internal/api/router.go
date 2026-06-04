@@ -75,6 +75,10 @@ func NewRouter(
 	// the same origin policy as every other route (fixes hardcoded "*").
 	rt.eventManager.SetOriginChecker(rt.isOriginAllowed)
 
+	// Reclaim expired single-use WS tickets in the background so consumeTicket
+	// stays O(1) per connection instead of scanning the whole map each time.
+	go rt.cleanupUsedTickets()
+
 	registerRoutes(rt, rt.mux)
 
 	return rt
@@ -175,6 +179,11 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 const maxUsedTickets = 10_000
 
+// consumeTicket records a single-use WS ticket. It is O(1) on the common path;
+// expired entries are reclaimed by a background sweep (cleanupUsedTickets) rather
+// than scanned on every call. As a safety net, if the cap is hit we do a one-off
+// expired-entry sweep before rejecting, so a backlog of expired tickets can't
+// lock out new connections.
 func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 	if jti == "" {
 		return false
@@ -182,20 +191,45 @@ func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 	rt.usedTicketsMu.Lock()
 	defer rt.usedTicketsMu.Unlock()
 
-	now := time.Now()
-	for id, t := range rt.usedTickets {
-		if t.Before(now) {
-			delete(rt.usedTickets, id)
-		}
-	}
 	if _, seen := rt.usedTickets[jti]; seen {
 		return false
 	}
 	if len(rt.usedTickets) >= maxUsedTickets {
-		return false
+		now := time.Now()
+		for id, t := range rt.usedTickets {
+			if t.Before(now) {
+				delete(rt.usedTickets, id)
+			}
+		}
+		if len(rt.usedTickets) >= maxUsedTickets {
+			return false
+		}
 	}
 	rt.usedTickets[jti] = exp
 	return true
+}
+
+// cleanupUsedTickets periodically evicts expired single-use tickets so the
+// usedTickets map doesn't accumulate stale entries between connections. Stops
+// when the server's shutdown channel is closed.
+func (rt *Router) cleanupUsedTickets() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-rt.shutdownCh:
+			return
+		case <-t.C:
+			now := time.Now()
+			rt.usedTicketsMu.Lock()
+			for id, exp := range rt.usedTickets {
+				if exp.Before(now) {
+					delete(rt.usedTickets, id)
+				}
+			}
+			rt.usedTicketsMu.Unlock()
+		}
+	}
 }
 
 // --- Origin checks ---

@@ -135,5 +135,26 @@ export function buildGraphStyle(t: GraphTokenColors): any[] {
         'background-color': 'rgba(234, 179, 8, 0.05)',
       },
     },
+    {
+      selector: 'node.finding-error',
+      style: {
+        'border-color': '#ef4444',
+        'border-width': 3,
+      },
+    },
+    {
+      selector: 'node.finding-warning',
+      style: {
+        'border-color': '#f59e0b',
+        'border-width': 3,
+      },
+    },
+    {
+      selector: 'node.finding-info',
+      style: {
+        'border-color': '#3b82f6',
+        'border-width': 3,
+      },
+    },
   ]
 }

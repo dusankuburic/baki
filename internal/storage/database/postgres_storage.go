@@ -283,13 +283,20 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 	}
 	args = append(args, limit, filter.Offset)
 
+	// Avoid shipping the (potentially large) content JSONB when the caller only
+	// needs listing metadata — selecting a literal keeps the row shape identical.
+	contentExpr := "content"
+	if filter.MetadataOnly {
+		contentExpr = "'{}'::jsonb AS content"
+	}
+
 	q := fmt.Sprintf(`
-		SELECT id, name, description, content, metadata, owner_id, org_id, created_at, updated_at
+		SELECT id, name, description, %s, metadata, owner_id, org_id, created_at, updated_at
 		FROM flows
 		WHERE %s
 		ORDER BY updated_at DESC
 		LIMIT $%d OFFSET $%d`,
-		strings.Join(where, " AND "), n, n+1)
+		contentExpr, strings.Join(where, " AND "), n, n+1)
 
 	rows, err := b.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -310,6 +317,12 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 		flow.Content = contentRaw
+		if filter.MetadataOnly {
+			// Keep Content nil (not the "{}" placeholder we selected) so the
+			// result shape matches the filesystem backend and callers can rely
+			// on "MetadataOnly ⇒ empty Content" regardless of backend.
+			flow.Content = nil
+		}
 		if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
 			return nil, fmt.Errorf("unmarshal metadata: %w", err)
 		}
@@ -590,6 +603,49 @@ func (b *PostgresStorageBackend) LoadUserByID(ctx context.Context, id string) (*
 	}
 	user.Role = auth.Role(roleStr)
 	return &user, nil
+}
+
+// LoadUsersByIDs resolves multiple users in a single query, avoiding the N+1
+// pattern when decorating lists with owner info. Duplicate IDs are de-duplicated.
+func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*interfaces.User, error) {
+	out := make(map[string]*interfaces.User, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	// De-duplicate and build an IN ($1,$2,...) placeholder list (driver-agnostic;
+	// avoids depending on a Postgres array codec).
+	seen := make(map[string]bool, len(ids))
+	placeholders := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		args = append(args, id)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+	}
+	if len(args) == 0 {
+		return out, nil
+	}
+	q := `SELECT id, email, role, created_at, updated_at FROM users WHERE id IN (` +
+		strings.Join(placeholders, ",") + `)`
+	rows, err := b.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load users by ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var u interfaces.User
+		var roleStr string
+		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		u.Role = auth.Role(roleStr)
+		uu := u
+		out[u.ID] = &uu
+	}
+	return out, rows.Err()
 }
 
 func (b *PostgresStorageBackend) CountUsers(ctx context.Context) (int, error) {
@@ -965,6 +1021,10 @@ CREATE TABLE IF NOT EXISTS flows (
 );
 CREATE INDEX IF NOT EXISTS flows_owner_id_idx ON flows (owner_id);
 CREATE INDEX IF NOT EXISTS flows_org_id_idx   ON flows (org_id);
+-- Supports ORDER BY updated_at DESC on every list query (avoids full-scan sort).
+CREATE INDEX IF NOT EXISTS flows_updated_at_idx ON flows (updated_at DESC);
+-- Supports the per-row collaborator EXISTS subquery in ListFlows and ListCollaborators.
+CREATE INDEX IF NOT EXISTS users_role_idx ON users (role);
 
 CREATE TABLE IF NOT EXISTS app_settings (
 	id         INTEGER     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -974,12 +1034,6 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE TABLE IF NOT EXISTS user_settings (
 	user_id    TEXT        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-	data       JSONB       NOT NULL DEFAULT '{}',
-	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS org_settings (
-	org_id     TEXT        PRIMARY KEY REFERENCES organisations(id) ON DELETE CASCADE,
 	data       JSONB       NOT NULL DEFAULT '{}',
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -1000,6 +1054,15 @@ CREATE TABLE IF NOT EXISTS organisations (
 	updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Must be created after "organisations" (it has a FK to it). Previously this
+-- sat before the organisations table and broke a fresh-database migration
+-- with "relation organisations does not exist".
+CREATE TABLE IF NOT EXISTS org_settings (
+	org_id     TEXT        PRIMARY KEY REFERENCES organisations(id) ON DELETE CASCADE,
+	data       JSONB       NOT NULL DEFAULT '{}',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS org_members (
 	org_id    TEXT        NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
 	user_id   TEXT        NOT NULL,
@@ -1016,6 +1079,9 @@ CREATE TABLE IF NOT EXISTS flow_collaborators (
 	PRIMARY KEY (flow_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS flow_collaborators_flow_id_idx ON flow_collaborators (flow_id);
+-- Composite index for the per-row "is user a collaborator on this flow" EXISTS
+-- subquery used in ListFlows when filtering by UserID.
+CREATE INDEX IF NOT EXISTS flow_collaborators_flow_user_idx ON flow_collaborators (flow_id, user_id);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
 	jti        TEXT        PRIMARY KEY,

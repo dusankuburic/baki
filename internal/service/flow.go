@@ -200,6 +200,49 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 	return doc, nil
 }
 
+func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) ([]*models.FlowDocument, error) {
+	if err := validateUserPath(folderPath); err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read folder: %w", err)
+	}
+
+	var docs []*models.FlowDocument
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if !strings.HasSuffix(name, ".txt") {
+			continue
+		}
+
+		filePath := filepath.Join(folderPath, e.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		info, _ := e.Info()
+		doc, err := parser.ParseText(string(data), e.Name(), info.Size())
+		if err != nil {
+			continue
+		}
+
+		if len(doc.Subflows) > 0 {
+			docs = append(docs, doc)
+		}
+	}
+
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no valid flow files found in folder")
+	}
+	return docs, nil
+}
+
 func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFiles", &err)
 

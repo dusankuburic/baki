@@ -52,6 +52,10 @@ type StorageBackend interface {
 	CreateUser(ctx context.Context, user *User) error
 	LoadUserByEmail(ctx context.Context, email string) (*User, error)
 	LoadUserByID(ctx context.Context, id string) (*User, error)
+	// LoadUsersByIDs resolves many users in one round trip. Missing IDs are
+	// simply absent from the returned map (no error). Used to avoid N+1 lookups
+	// when decorating lists (e.g. owner display names).
+	LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*User, error)
 	CountUsers(ctx context.Context) (int, error)
 	ListUsers(ctx context.Context) ([]*User, error)
 	ListAdmins(ctx context.Context) ([]*User, error)
@@ -110,6 +114,10 @@ type FlowFilter struct {
 	CreatedBefore  *time.Time
 	Limit          int
 	Offset         int
+	// MetadataOnly skips loading each flow's (potentially large) Content when
+	// the caller only needs listing metadata. Backends leave FlowDocument.Content
+	// empty when set. List/library endpoints set this; the migrator does not.
+	MetadataOnly bool
 }
 
 // FlowDocument represents a flow document

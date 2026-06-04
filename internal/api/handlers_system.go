@@ -139,10 +139,15 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 
 func (h *SystemHandler) handleLocalConfig(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		http.NotFound(w, r)
+		// Cloud/JWT mode: there is no local session token. Return 200 with an
+		// explicit "cloud" marker (rather than 404) so the web client can probe
+		// this endpoint at startup without a noisy console error, then fall back
+		// to the login flow because no token is present.
+		render.JSON(w, map[string]string{"mode": "cloud"})
 		return
 	}
 	render.JSON(w, map[string]string{
+		"mode":  "local",
 		"token": h.security.Token,
 	})
 }

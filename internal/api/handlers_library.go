@@ -35,13 +35,16 @@ type libraryFlow struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
-func (h *LibraryHandler) toLibraryFlow(r *http.Request, doc *storageif.FlowDocument, requestingUserID string) libraryFlow {
+// toLibraryFlow builds the list/response DTO. ownerName must be pre-resolved by
+// the caller (use ResolveOwnerName for single items, ResolveOwnerNames for lists)
+// so that list endpoints don't issue one user query per row (N+1).
+func (h *LibraryHandler) toLibraryFlow(doc *storageif.FlowDocument, requestingUserID, ownerName string) libraryFlow {
 	return libraryFlow{
 		ID:               doc.ID,
 		Name:             doc.Name,
 		Description:      doc.Description,
 		OwnerID:          doc.OwnerID,
-		OwnerDisplayName: h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID),
+		OwnerDisplayName: ownerName,
 		IsSharedWithMe:   doc.OwnerID != requestingUserID,
 		BlockCount:       doc.Metadata.BlockCount,
 		SubflowCount:     doc.Metadata.SubflowCount,
@@ -64,9 +67,18 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Resolve all owner display names in ONE backend round trip (avoids N+1).
+	ownerIDs := make([]string, 0, len(docs))
+	for _, d := range docs {
+		if d.OwnerID != "" {
+			ownerIDs = append(ownerIDs, d.OwnerID)
+		}
+	}
+	ownerNames := h.libSvc.ResolveOwnerNames(r.Context(), ownerIDs)
+
 	items := make([]libraryFlow, len(docs))
 	for i, d := range docs {
-		items[i] = h.toLibraryFlow(r, d, userID)
+		items[i] = h.toLibraryFlow(d, userID, ownerNames[d.OwnerID])
 	}
 	render.JSON(w, render.PagedResponse[libraryFlow]{
 		Items:  items,
@@ -109,7 +121,7 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	render.JSON(w, h.toLibraryFlow(r, saved, userID))
+	render.JSON(w, h.toLibraryFlow(saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
 }
 
 func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +133,7 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 		render.Error(w, err, 0)
 		return
 	}
-	render.JSON(w, h.toLibraryFlow(r, doc, userID))
+	render.JSON(w, h.toLibraryFlow(doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID)))
 }
 
 func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {
@@ -187,5 +199,5 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, 0)
 		return
 	}
-	render.JSON(w, h.toLibraryFlow(r, existing, userID))
+	render.JSON(w, h.toLibraryFlow(existing, userID, h.libSvc.ResolveOwnerName(r.Context(), existing.OwnerID)))
 }
