@@ -17,6 +17,11 @@ type Provider interface {
 	EstimateTokens(text string) int
 	ContextLimit() int
 	PricePerMillionTokens() Pricing
+	Embed(ctx context.Context, text []string) ([][]float32, error)
+}
+
+type EmbedResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
 }
 
 type ModelInfo struct {

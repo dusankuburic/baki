@@ -267,9 +267,24 @@ func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, sc
 }
 
 // Ping checks if the storage backend is accessible
-func (lsb *LocalStorageBackend) Ping(ctx context.Context) error {
+func (b *LocalStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
+	// Local storage does not track usage metrics
+	return nil
+}
+
+func (b *LocalStorageBackend) GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error) {
+	return 0, nil
+}
+
+func (b *LocalStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error { return nil }
+func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error { return nil }
+func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) { return nil, nil }
+func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error { return nil }
+func (b *LocalStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) { return nil, nil }
+
+func (b *LocalStorageBackend) Ping(ctx context.Context) error {
 	// Check if data directory is accessible
-	if _, err := os.Stat(lsb.dataDir); err != nil {
+	if _, err := os.Stat(b.dataDir); err != nil {
 		return fmt.Errorf("data directory not accessible: %w", err)
 	}
 	return nil

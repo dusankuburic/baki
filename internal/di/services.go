@@ -1,11 +1,13 @@
 package di
 
 import (
+	"context"
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/cache"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -30,9 +32,12 @@ func ProvideASTCache() (cache.Cache, error) {
 	return cache.NewLRUCache(100) // Cache up to 100 flows
 }
 
-func ProvideAI(configDir string) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
+func ProvideAI(configDir string, backend storageif.StorageBackend) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
 	copilotAuth := ai.NewCopilotAuth()
-	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth)
+	recorder := func(ctx context.Context, metric *storageif.UsageMetric) error {
+		return backend.SaveUsageMetric(ctx, metric)
+	}
+	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth, recorder)
 	auth := ai.NewGitHubAuth()
 	demo := ai.NewDemoLimiter(configDir)
 	return auth, copilotAuth, factory, demo
@@ -46,6 +51,13 @@ var ServiceModule = fx.Options(
 		ProvideConfigDir,
 		ProvideASTCache,
 		ProvideAI,
+		func(backend storageif.StorageBackend, factory *ai.ProviderFactory) *rag.KnowledgeService {
+			// Pass the factory (not a pre-resolved provider) so the embedding
+			// provider is resolved per request in the caller's scope. Resolving
+			// once here with an empty scope fails in cloud mode (keys are
+			// per-user) and never picks up keys added later.
+			return rag.NewKnowledgeService(backend, factory)
+		},
 		func(settings *storage.SettingsStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
 			return service.NewSystemService(settings, notifier, backend)
 		},
@@ -61,8 +73,12 @@ var ServiceModule = fx.Options(
 			settings *storage.SettingsStore,
 			factory *ai.ProviderFactory,
 			demo *ai.DemoLimiter,
+			backend storageif.StorageBackend,
+			knowledge *rag.KnowledgeService,
 		) *service.ChatService {
-			return service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, demo)
+			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, demo, backend)
+			svc.SetKnowledgeService(knowledge)
+			return svc
 		},
 		func(
 			auth *ai.GitHubAuth,

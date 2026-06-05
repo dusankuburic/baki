@@ -33,6 +33,10 @@ func (g *GeminiProvider) PricePerMillionTokens() Pricing {
 	return Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}
 }
 
+func (g *GeminiProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by Gemini provider")
+}
+
 func (g *GeminiProvider) EstimateTokens(text string) int {
 	return EstimateTokensGemini(text)
 }

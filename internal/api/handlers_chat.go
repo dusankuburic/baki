@@ -64,6 +64,23 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	
+	res, err := h.chatSvc.ResumeStream(req.ID)
+	if err != nil {
+		render.Error(w, err, http.StatusNotFound)
+		return
+	}
+	render.JSON(w, res)
+}
+
 func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID   string `json:"flowId"`

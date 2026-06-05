@@ -11,18 +11,41 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/ai/scrubber"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
+	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/storage"
+	storageif "pad-analyzer/internal/storage/interfaces"
 
 	"github.com/google/uuid"
 )
 
 const maxChatStreamDuration = 5 * time.Minute
 
+// resumeRetention is how long a finished stream's buffer is kept so a client
+// that was disconnected when the stream ended can still fetch the final text
+// (and done/error) on reconnect via ResumeStream.
+const resumeRetention = 2 * time.Minute
+
 type streamCtl struct {
-	cancel  context.CancelFunc
-	started chan struct{}
+	cancel    context.CancelFunc
+	started   chan struct{}
+	mu        sync.Mutex
+	buffer    strings.Builder
+	done      bool   // stream finished successfully
+	errMsg    string // non-empty if the stream ended with an error
+	tokensIn  int
+	tokensOut int
+}
+
+// ResumeResult is the buffered state of a stream returned to a reconnecting client.
+type ResumeResult struct {
+	Text      string `json:"text"`
+	Done      bool   `json:"done"`
+	Error     string `json:"error"`
+	TokensIn  int    `json:"tokensIn"`
+	TokensOut int    `json:"tokensOut"`
 }
 
 // ChatService owns chat stream state and operations.
@@ -34,7 +57,13 @@ type ChatService struct {
 	settings      *storage.SettingsStore
 	factory       *ai.ProviderFactory
 	demoLimiter   *ai.DemoLimiter
-	activeStreams sync.Map // map[streamID]*streamCtl
+	backend       storageif.StorageBackend
+	knowledge     *rag.KnowledgeService
+	activeStreams sync.Map // map[streamID]*streamCtl — in-flight streams
+	// finishedStreams holds recently-completed streams for a short grace period
+	// (resumeRetention) so a client that reconnects after a stream ended can
+	// still fetch its final buffer via ResumeStream.
+	finishedStreams sync.Map // map[streamID]*streamCtl
 }
 
 func NewChatService(
@@ -45,6 +74,7 @@ func NewChatService(
 	settings *storage.SettingsStore,
 	factory *ai.ProviderFactory,
 	demoLimiter *ai.DemoLimiter,
+	backend storageif.StorageBackend,
 ) *ChatService {
 	return &ChatService{
 		notifier:      notifier,
@@ -54,7 +84,12 @@ func NewChatService(
 		settings:      settings,
 		factory:       factory,
 		demoLimiter:   demoLimiter,
+		backend:       backend,
 	}
+}
+
+func (s *ChatService) SetKnowledgeService(ks *rag.KnowledgeService) {
+	s.knowledge = ks
 }
 
 func (s *ChatService) GetAuthorizedFlow(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
@@ -84,8 +119,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 
 	go func() {
-		defer s.activeStreams.Delete(streamID)
-		defer cancel()
+		// On exit, remove the stream from the active set (so cancel/begin and
+		// leak-detection see it as gone) and move it to the finished set for a
+		// short grace period, so a client that reconnects after completion can
+		// still fetch the final buffer via ResumeStream instead of hanging.
+		defer func() {
+			cancel()
+			s.activeStreams.Delete(streamID)
+			s.finishedStreams.Store(streamID, ctl)
+			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
+		}()
 
 		provider, err := s.factory.For(scope, req.Provider)
 		if err != nil {
@@ -94,6 +137,20 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}
 			emit("error", map[string]interface{}{"message": err.Error()})
 			return
+		}
+
+		// Enforce daily budget
+		settings := s.settings.Get()
+		if settings != nil && settings.AI.DailyBudget > 0 {
+			// Note: orgID is not yet available in the service call, using user scope.
+			usage, _ := s.backend.GetDailyUsage(ctx, scope, "")
+			if usage >= settings.AI.DailyBudget {
+				if !awaitStart() {
+					return
+				}
+				emit("error", map[string]interface{}{"message": fmt.Sprintf("daily AI budget exceeded ($%.2f / $%.2f)", usage, settings.AI.DailyBudget)})
+				return
+			}
 		}
 
 		if req.Provider == "demo" && s.demoLimiter != nil {
@@ -106,9 +163,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}
 		}
 
+		// Scrub the document before preparing context
+		scrubbedDoc, err := scrubber.ScrubDocument(doc)
+		if err != nil {
+			logger.Error("Failed to scrub document", map[string]interface{}{"error": err})
+			scrubbedDoc = doc // fallback to unscrubbed if copy fails, though regex will catch later
+		}
+
 		// Prepare AI context
 		ctxReq := ai.ContextRequest{
-			Flow:               doc,
+			Flow:               scrubbedDoc,
 			Findings:           nil, // could pass report findings
 			TokenBudget:        4000,
 			Provider:           provider,
@@ -117,23 +181,34 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		if report != nil {
 			ctxReq.Findings = report.Findings
 		}
-		if req.ContextBlockID != "" {
-			ctxReq.SelectedBlock = s.flowCache.FindBlockByID(doc, req.ContextBlockID)
-			ctxReq.SelectedSubflow = s.flowCache.FindSubflowForBlock(doc, req.ContextBlockID)
+		if req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
+			ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
+			ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
 		}
 		
 		sysPrompt, contextText := ai.BuildContext(ctxReq)
-		
+
+		// RAG: Add relevant organizational guidelines
+		if s.knowledge != nil && doc.OrganizationID != "" {
+			guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, req.UserMessage)
+			if err == nil && guidelines != "" {
+				sysPrompt += "\n\n" + guidelines
+			}
+		}
+
+		sysPrompt = scrubber.ScrubText(sysPrompt)
+		contextText = scrubber.ScrubText(contextText)
+
 		messages := make([]ai.Message, len(req.Messages))
 		for i, m := range req.Messages {
-			messages[i] = ai.Message{Role: m.Role, Content: m.Content}
+			messages[i] = ai.Message{Role: m.Role, Content: scrubber.ScrubText(m.Content)}
 		}
 		
 		// Add context and user message
 		if contextText != "" {
 			messages = append(messages, ai.Message{Role: "user", Content: "Context:\n" + contextText})
 		}
-		messages = append(messages, ai.Message{Role: "user", Content: req.UserMessage})
+		messages = append(messages, ai.Message{Role: "user", Content: scrubber.ScrubText(req.UserMessage)})
 
 		aiReq := ai.Request{
 			SystemPrompt: sysPrompt,
@@ -148,20 +223,36 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				return
 			}
 			if chunk.Error != nil {
+				ctl.mu.Lock()
+				ctl.errMsg = chunk.Error.Error()
+				ctl.mu.Unlock()
 				emit("error", map[string]interface{}{"message": chunk.Error.Error()})
 				return
 			}
 			if chunk.Done {
+				ctl.mu.Lock()
+				ctl.done = true
+				ctl.tokensIn = chunk.TokensIn
+				ctl.tokensOut = chunk.TokensOut
+				ctl.mu.Unlock()
 				emit("done", map[string]interface{}{
-					"tokensIn":     chunk.TokensIn,
-					"tokensOut":    chunk.TokensOut,
+					"tokensIn":  chunk.TokensIn,
+					"tokensOut": chunk.TokensOut,
 				})
 				return
 			}
+
+			ctl.mu.Lock()
+			ctl.buffer.WriteString(chunk.Text)
+			ctl.mu.Unlock()
+
 			emit("chunk", map[string]interface{}{"content": chunk.Text})
 		})
-		
+
 		if err != nil {
+			ctl.mu.Lock()
+			ctl.errMsg = err.Error()
+			ctl.mu.Unlock()
 			if !awaitStart() {
 				return
 			}
@@ -195,6 +286,26 @@ func (s *ChatService) CancelAll() {
 		ctl.cancel()
 		return true
 	})
+}
+
+func (s *ChatService) ResumeStream(streamID string) (*ResumeResult, error) {
+	val, ok := s.activeStreams.Load(streamID)
+	if !ok {
+		val, ok = s.finishedStreams.Load(streamID)
+	}
+	if !ok {
+		return nil, fmt.Errorf("stream not found or already completed")
+	}
+	ctl := val.(*streamCtl)
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	return &ResumeResult{
+		Text:      ctl.buffer.String(),
+		Done:      ctl.done,
+		Error:     ctl.errMsg,
+		TokensIn:  ctl.tokensIn,
+		TokensOut: ctl.tokensOut,
+	}, nil
 }
 
 func (lsb *ChatService) GetConversation(doc *models.FlowDocument, provider string) ([]models.ChatMessage, error) {
@@ -285,8 +396,14 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 		return nil, err
 	}
 
+	scrubbedDoc, err := scrubber.ScrubDocument(doc)
+	if err != nil {
+		logger.Error("Failed to scrub document for preview", map[string]interface{}{"error": err})
+		scrubbedDoc = doc
+	}
+
 	ctxReq := ai.ContextRequest{
-		Flow:               doc,
+		Flow:               scrubbedDoc,
 		Findings:           nil,
 		TokenBudget:        4000,
 		Provider:           provider,
@@ -295,19 +412,31 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	if report != nil {
 		ctxReq.Findings = report.Findings
 	}
-	if req.ContextBlockID != "" {
-		ctxReq.SelectedBlock = s.flowCache.FindBlockByID(doc, req.ContextBlockID)
-		ctxReq.SelectedSubflow = s.flowCache.FindSubflowForBlock(doc, req.ContextBlockID)
+	if req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
+		ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
+		ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
 	}
 	
 	sysPrompt, contextText := ai.BuildContext(ctxReq)
 
-	total := provider.EstimateTokens(sysPrompt + contextText + req.UserMessage)
+	// RAG: Include relevant guidelines in preview
+	if s.knowledge != nil && doc.OrganizationID != "" {
+		guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, req.UserMessage)
+		if err == nil && guidelines != "" {
+			sysPrompt += "\n\n" + guidelines
+		}
+	}
+
+	sysPrompt = scrubber.ScrubText(sysPrompt)
+	contextText = scrubber.ScrubText(contextText)
+	scrubbedUserMsg := scrubber.ScrubText(req.UserMessage)
+
+	total := provider.EstimateTokens(sysPrompt + contextText + scrubbedUserMsg)
 
 	return &models.ContextPreview{
 		SystemPrompt:    sysPrompt,
 		ContextText:     contextText,
-		UserMessage:     req.UserMessage,
+		UserMessage:     scrubbedUserMsg,
 		EstimatedTokens: total,
 		ContextLimit:    provider.ContextLimit(),
 	}, nil
@@ -316,14 +445,21 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 func (s *ChatService) GetSuggestedPrompts(hasBlock, hasFindings bool) (prompts []string, err error) {
 	defer logger.Guard("App.GetSuggestedPrompts", &err)
 
-	if hasFindings && hasBlock {
-		prompts = append(prompts, ai.SuggestedPromptsBlockWithFindings...)
+	settings := s.settings.Get()
+	if settings == nil {
+		return nil, fmt.Errorf("settings not found")
+	}
+
+	p := settings.AI.Prompts
+
+	if hasBlock && hasFindings {
+		prompts = append(prompts, p.BlockWithFindings...)
 	} else if hasFindings {
-		prompts = append(prompts, ai.SuggestedPromptsFinding...)
+		prompts = append(prompts, p.Finding...)
 	} else if hasBlock {
-		prompts = append(prompts, ai.SuggestedPromptsBlock...)
+		prompts = append(prompts, p.Block...)
 	} else {
-		prompts = append(prompts, ai.SuggestedPromptsFlow...)
+		prompts = append(prompts, p.Flow...)
 	}
 
 	return prompts, nil

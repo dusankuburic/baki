@@ -155,6 +155,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     }
   }, [updateStreamingMessage])
 
+  const onReplace = useCallback((text: string) => {
+    accumulatedTextRef.current = text
+    updateStreamingMessage(text)
+    setStreamingTokens(Math.ceil(text.length / 4))
+  }, [updateStreamingMessage])
+
   const onDone = useCallback((tokensOut: number, tokensIn: number) => {
     const content = accumulatedTextRef.current
     const curThreadId = streamingThreadIdRef.current
@@ -216,9 +222,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   const handler = useMemo(() => ({
     onChunk,
+    onReplace,
     onDone,
     onError
-  }), [onChunk, onDone, onError])
+  }), [onChunk, onReplace, onDone, onError])
 
   const {registerStream} = useStreamingMessage(handler)
 

@@ -10,17 +10,102 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
+	"pad-analyzer/internal/rag"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 type OrgHandler struct {
-	orgSvc   *collaboration.OrgService
-	backend  storageif.StorageBackend
-	security *SecurityConfig
+	orgSvc    *collaboration.OrgService
+	backend   storageif.StorageBackend
+	knowledge *rag.KnowledgeService
+	security  *SecurityConfig
 }
 
-func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, security *SecurityConfig) *OrgHandler {
-	return &OrgHandler{orgSvc: orgSvc, backend: backend, security: security}
+func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig) *OrgHandler {
+	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security}
+}
+
+// maxKnowledgeUploadBytes caps the decoded document content. The UI advertises
+// 1MB; enforce it server-side so a client can't ingest arbitrary content (which
+// would be chunked and sent to the paid embeddings API).
+const maxKnowledgeUploadBytes = 1 << 20 // 1 MiB
+
+// maxKnowledgeUploadBodyBytes bounds the raw request body. It must be larger
+// than maxKnowledgeUploadBytes because JSON-encoding the content escapes
+// newlines/quotes/control chars, inflating the body well past the content size
+// — so a tight cap would reject legitimate ~1MiB markdown before the precise
+// content-length check below could return a clean 413.
+const maxKnowledgeUploadBodyBytes = 4 << 20 // 4 MiB
+
+func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if h.knowledge == nil {
+		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
+		return
+	}
+	// Only members of the org may read its knowledge base.
+	if !h.orgSvc.IsMember(id, h.security.CallerID(r)) {
+		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		return
+	}
+	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), id)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, docs)
+}
+
+func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if h.knowledge == nil {
+		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
+		return
+	}
+	// Only org admins may modify the knowledge base.
+	if !h.orgSvc.IsAdmin(id, h.security.CallerID(r)) {
+		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		return
+	}
+
+	// Bound the request body before decoding so an oversized payload is rejected
+	// without buffering it all into memory. The precise content limit is enforced
+	// after decoding via len(req.Content) below.
+	r.Body = http.MaxBytesReader(w, r.Body, maxKnowledgeUploadBodyBytes)
+	var req struct {
+		Filename string `json:"filename"`
+		Content  string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if len(req.Content) > maxKnowledgeUploadBytes {
+		render.Error(w, fmt.Errorf("document exceeds %d byte limit", maxKnowledgeUploadBytes), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	if err := h.knowledge.AddDocument(r.Context(), h.security.KeyScope(r), id, req.Filename, req.Content); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	docID := chi.URLParam(r, "docId")
+	// Only org admins may delete, and the delete is scoped to this org so a
+	// docId from another org cannot be removed.
+	if !h.orgSvc.IsAdmin(id, h.security.CallerID(r)) {
+		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		return
+	}
+	if err := h.backend.DeleteKnowledgeDocument(r.Context(), id, docID); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, map[string]string{"status": "ok"})
 }
 
 func (h *OrgHandler) handleOrgList(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +220,7 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
 		return
 	}
-	
+
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("user store not available"), http.StatusServiceUnavailable)
 		return
@@ -170,7 +255,7 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := chi.URLParam(r, "userId")
-	
+
 	if _, err := h.orgSvc.Get(id); err != nil {
 		render.Error(w, err, http.StatusNotFound)
 		return

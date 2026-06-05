@@ -142,6 +142,10 @@ func (d *DemoProvider) PricePerMillionTokens() Pricing {
 	return Pricing{InputCostPerM: 0, OutputCostPerM: 0}
 }
 
+func (d *DemoProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by Demo provider")
+}
+
 func (d *DemoProvider) EstimateTokens(text string) int { return EstimateTokens(text) }
 
 func (d *DemoProvider) Models() []ModelInfo {

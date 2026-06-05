@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +165,158 @@ func (b *PostgresStorageBackend) runAzureTokenRefresh(ctx context.Context) {
 }
 
 // ---- StorageBackend implementation ----
+
+func (b *PostgresStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
+	query := `
+		INSERT INTO usage_metrics (id, user_id, org_id, provider, model, prompt_tokens, completion_tokens, estimated_cost, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`
+	_, err := b.db.ExecContext(ctx, query,
+		metric.ID, metric.UserID, metric.OrgID, metric.Provider, metric.Model,
+		metric.PromptTokens, metric.CompletionTokens, metric.EstimatedCost, metric.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("postgres: insert usage_metric: %w", err)
+	}
+	return nil
+}
+
+// GetDailyUsage returns the total estimated AI spend (in dollars) accrued so far
+// in the current calendar day. When orgID is non-empty it sums the org's usage,
+// otherwise it sums the user's. Used to enforce the per-account/org daily budget.
+func (b *PostgresStorageBackend) GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error) {
+	var (
+		total float64
+		err   error
+	)
+	if orgID != "" {
+		err = b.db.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
+			 WHERE org_id = $1 AND created_at >= date_trunc('day', now())`, orgID).Scan(&total)
+	} else {
+		err = b.db.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
+			 WHERE user_id = $1 AND created_at >= date_trunc('day', now())`, userID).Scan(&total)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("postgres: get daily usage: %w", err)
+	}
+	return total, nil
+}
+
+func (b *PostgresStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error {
+	_, err := b.db.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, $3)`,
+		doc.ID, doc.OrgID, doc.Filename)
+	return err
+}
+
+func (b *PostgresStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error {
+	_, err := b.db.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1 AND org_id = $2`, id, orgID)
+	return err
+}
+
+func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
+	rows, err := b.db.QueryContext(ctx, `SELECT id, org_id, filename, created_at FROM knowledge_documents WHERE org_id = $1`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var docs []*interfaces.KnowledgeDocument
+	for rows.Next() {
+		var d interfaces.KnowledgeDocument
+		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		docs = append(docs, &d)
+	}
+	return docs, nil
+}
+
+func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error {
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO knowledge_chunks (id, doc_id, content, embedding) VALUES ($1, $2, $3, $4)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, c := range chunks {
+		embJSON, _ := json.Marshal(c.Embedding)
+		if _, err := stmt.ExecContext(ctx, c.ID, c.DocID, c.Content, embJSON); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+	// Fetch all chunks for the org and calculate similarity in Go for portability.
+	// In a real production app with millions of chunks, we'd use pgvector.
+	rows, err := b.db.QueryContext(ctx, `
+		SELECT c.id, c.doc_id, c.content, c.embedding 
+		FROM knowledge_chunks c
+		JOIN knowledge_documents d ON c.doc_id = d.id
+		WHERE d.org_id = $1`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []interfaces.KnowledgeChunk
+	for rows.Next() {
+		var c interfaces.KnowledgeChunk
+		var embJSON []byte
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON); err != nil {
+			return nil, err
+		}
+		json.Unmarshal(embJSON, &c.Embedding)
+		chunks = append(chunks, c)
+	}
+
+	// Score each chunk once, then sort by score. Computing similarity inside the
+	// comparator would recompute each chunk's score O(n log n) times.
+	type scored struct {
+		chunk interfaces.KnowledgeChunk
+		sim   float32
+	}
+	scoredChunks := make([]scored, len(chunks))
+	for i, c := range chunks {
+		scoredChunks[i] = scored{chunk: c, sim: cosineSimilarity(c.Embedding, queryEmbedding)}
+	}
+	sort.Slice(scoredChunks, func(i, j int) bool {
+		return scoredChunks[i].sim > scoredChunks[j].sim
+	})
+
+	if len(scoredChunks) > limit {
+		scoredChunks = scoredChunks[:limit]
+	}
+	result := make([]interfaces.KnowledgeChunk, len(scoredChunks))
+	for i, sc := range scoredChunks {
+		result[i] = sc.chunk
+	}
+	return result, nil
+}
+
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) {
+		return 0
+	}
+	var dot, normA, normB float32
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
+}
 
 func (b *PostgresStorageBackend) Ping(ctx context.Context) error {
 	return b.db.PingContext(ctx)
@@ -1099,6 +1253,35 @@ CREATE TABLE IF NOT EXISTS provider_keys (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	PRIMARY KEY (user_id, provider)
 );
+
+CREATE TABLE IF NOT EXISTS usage_metrics (
+	id                TEXT        PRIMARY KEY,
+	user_id           TEXT        NOT NULL,
+	org_id            TEXT        NOT NULL DEFAULT '',
+	provider          TEXT        NOT NULL,
+	model             TEXT        NOT NULL,
+	prompt_tokens     INTEGER     NOT NULL DEFAULT 0,
+	completion_tokens INTEGER     NOT NULL DEFAULT 0,
+	estimated_cost    FLOAT       NOT NULL DEFAULT 0.0,
+	created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS usage_metrics_user_id_idx ON usage_metrics (user_id);
+CREATE INDEX IF NOT EXISTS usage_metrics_org_id_idx ON usage_metrics (org_id);
+
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+	id         TEXT        PRIMARY KEY,
+	org_id     TEXT        NOT NULL,
+	filename   TEXT        NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+	id         TEXT        PRIMARY KEY,
+	doc_id     TEXT        NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+	content    TEXT        NOT NULL,
+	embedding  JSONB       NOT NULL -- Using JSONB for portability if pgvector isn't installed
+);
+CREATE INDEX IF NOT EXISTS knowledge_chunks_doc_id_idx ON knowledge_chunks (doc_id);
 
 -- Migrate a pre-existing provider-only-PK table to the per-user (user_id, provider) PK.
 ALTER TABLE provider_keys ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT '';

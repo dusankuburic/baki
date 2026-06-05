@@ -106,6 +106,35 @@ const defaultSettings: AppSettings = {
     demoMode: {enabled: true, dailyLimit: 5, dailyUsed: 0, resetDate: ''},
     showCostEstimates: true,
     saveConversationHistory: true,
+    dailyBudget: 5.0,
+    prompts: {
+      block: [
+        "Explain this block",
+        "Find issues here",
+        "Suggest improvements",
+        "What does this block do?",
+        "Could this block cause errors?",
+      ],
+      flow: [
+        "Analyze the whole flow",
+        "Find performance issues",
+        "Security audit",
+        "Find potential bugs",
+        "Summarize what this flow does",
+      ],
+      finding: [
+        "How do I fix this issue?",
+        "Is this a false positive?",
+        "Show me similar patterns in the flow",
+      ],
+      blockWithFindings: [
+        "How do I fix the issues on this block?",
+        "Are these findings related?",
+        "Is this a false positive?",
+        "Show me similar patterns in the flow",
+        "Explain what this block does",
+      ],
+    },
   },
   parser: {
     maxFileSizeMB: 50,
@@ -182,6 +211,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             providers: {
               ...defaultSettings.ai.providers,
               ...(loaded.ai?.providers ?? {}),
+            },
+            // Each prompt list falls back to defaults when the server sends
+            // null/undefined — settings persisted before the prompts field
+            // existed come back as Go nil slices (JSON null), and a shallow
+            // spread would let those nulls clobber the defaults, making the
+            // AI Prompts panel map over a null array and crash.
+            prompts: {
+              block:             loaded.ai?.prompts?.block             ?? defaultSettings.ai.prompts.block,
+              flow:              loaded.ai?.prompts?.flow              ?? defaultSettings.ai.prompts.flow,
+              finding:           loaded.ai?.prompts?.finding           ?? defaultSettings.ai.prompts.finding,
+              blockWithFindings: loaded.ai?.prompts?.blockWithFindings ?? defaultSettings.ai.prompts.blockWithFindings,
             },
           },
         }

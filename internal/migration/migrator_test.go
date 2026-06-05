@@ -132,6 +132,17 @@ func (m *memBackend) AddCollaborator(ctx context.Context, flowID string, c *inte
 func (m *memBackend) UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error { return nil }
 func (m *memBackend) RemoveCollaborator(ctx context.Context, flowID, userID string) error { return nil }
 
+// ---- Usage tracking ----
+func (m *memBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error { return nil }
+func (m *memBackend) GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error) { return 0, nil }
+
+// ---- Knowledge Base ----
+func (m *memBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error { return nil }
+func (m *memBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error { return nil }
+func (m *memBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) { return nil, nil }
+func (m *memBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error { return nil }
+func (m *memBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) { return nil, nil }
+
 // --- tests ---
 
 func TestMigrator_MigratesFlows(t *testing.T) {

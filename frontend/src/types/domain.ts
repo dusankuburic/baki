@@ -464,6 +464,13 @@ export interface LayoutSettings {
   chatPanelHeight?: number;
 }
 
+export interface AIPromptsConfig {
+  block: string[];
+  flow: string[];
+  finding: string[];
+  blockWithFindings: string[];
+}
+
 export interface AISettings {
   activeProvider: ProviderID;
   providers: Record<ProviderID, AIProviderConfig>;
@@ -471,6 +478,8 @@ export interface AISettings {
   showCostEstimates: boolean;
   saveConversationHistory: boolean;
   systemPromptSuffix?: string;
+  dailyBudget: number;
+  prompts: AIPromptsConfig;
 }
 
 export interface AIProviderConfig {

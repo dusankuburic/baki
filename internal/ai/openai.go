@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 var openAIBaseURL = providerURL("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
@@ -24,8 +25,8 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	}
 }
 
-func (o *OpenAIProvider) ID() string          { return "openai" }
-func (o *OpenAIProvider) Name() string        { return "OpenAI" }
+func (o *OpenAIProvider) ID() string           { return "openai" }
+func (o *OpenAIProvider) Name() string         { return "OpenAI" }
 func (o *OpenAIProvider) ContextLimit() int    { return 128000 }
 func (o *OpenAIProvider) DefaultModel() string { return "gpt-4o" }
 func (o *OpenAIProvider) FreeModel() string    { return "" }
@@ -59,12 +60,25 @@ func (o *OpenAIProvider) Models() []ModelInfo {
 }
 
 type openAIRequest struct {
-	Model       string          `json:"model"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature float64         `json:"temperature,omitempty"`
-	Messages    []openAIMessage `json:"messages"`
-	Stream      bool            `json:"stream,omitempty"`
+	Model         string          `json:"model"`
+	MaxTokens     int             `json:"max_tokens,omitempty"`
+	Temperature   float64         `json:"temperature,omitempty"`
+	Messages      []openAIMessage `json:"messages"`
+	Stream        bool            `json:"stream,omitempty"`
+	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
 }
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// usageStreamOptions asks the provider to include token-usage accounting on a
+// streaming response (the standard OpenAI `stream_options` field). Without it,
+// OpenAI-compatible streams carry no usage, so the audited provider records a
+// $0 cost and the daily budget can never trip. Supported by OpenAI, xAI, GLM
+// and GitHub Models; intentionally NOT sent to Copilot (which bills at $0 here
+// and whose endpoint may reject the field).
+var usageStreamOptions = &streamOptions{IncludeUsage: true}
 
 type openAIMessage struct {
 	Role    string `json:"role"`
@@ -166,13 +180,59 @@ func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	}, nil
 }
 
+func (o *OpenAIProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	reqBody := map[string]interface{}{
+		"model": "text-embedding-3-small",
+		"input": text,
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	url := strings.Replace(openAIBaseURL, "/chat/completions", "/embeddings", 1)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai embeddings error (status %d)", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	res := make([][]float32, len(parsed.Data))
+	for i, d := range parsed.Data {
+		res[i] = d.Embedding
+	}
+	return res, nil
+}
+
 func (o *OpenAIProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	body := openAIRequest{
-		Model:       req.Model,
-		MaxTokens:   orDefault(req.MaxTokens, 4096),
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Stream:      true,
+		Model:         req.Model,
+		MaxTokens:     orDefault(req.MaxTokens, 4096),
+		Temperature:   req.Temperature,
+		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Stream:        true,
+		StreamOptions: usageStreamOptions,
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {

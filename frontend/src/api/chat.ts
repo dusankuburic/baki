@@ -6,11 +6,14 @@ export const chatApi = {
   streamChatMessage: (req: ChatRequest): Promise<string> =>
     request('/api/chat/stream', req),
 
-  beginStream: (streamId: string): Promise<void> =>
-    request('/api/chat/begin', {streamId}),
+  beginStream: (id: string): Promise<void> =>
+    request('/api/chat/begin', {id}),
 
-  cancelStream: (streamId: string): Promise<void> =>
-    request('/api/chat/cancel', {streamId}),
+  cancelStream: (id: string): Promise<void> =>
+    request('/api/chat/cancel', {id}),
+
+  resumeStream: (id: string): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
+    request('/api/chat/resume', {id}),
 
   getConversation: (flowId: string, provider: string): Promise<ConversationFile> =>
     request('/api/chat/get', {flowId, provider}),

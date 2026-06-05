@@ -12,12 +12,13 @@ import "fmt"
 type ProviderFactory struct {
 	getKey      func(scope, provider string) (string, error)
 	copilotAuth *CopilotAuth
+	recorder    UsageRecorder
 }
 
 // NewProviderFactory returns a factory that resolves API keys via getKey.
 // Typical usage: ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth)
-func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth) *ProviderFactory {
-	return &ProviderFactory{getKey: getKey, copilotAuth: copilotAuth}
+func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth, recorder UsageRecorder) *ProviderFactory {
+	return &ProviderFactory{getKey: getKey, copilotAuth: copilotAuth, recorder: recorder}
 }
 
 // providerCtors maps provider IDs to their constructors.
@@ -45,14 +46,14 @@ func storageKey(providerID string) string {
 // key within scope (the caller's owner namespace; "" = legacy/local).
 func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if providerID == "demo" {
-		return NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(NewDemoProvider()))), nil
+		return NewAuditedProvider(NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(NewDemoProvider()))), f.recorder, scope, providerID), nil
 	}
 	if providerID == "copilot" {
 		p, err := f.forCopilot(scope)
 		if err != nil {
 			return nil, err
 		}
-		return NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(p))), nil
+		return NewAuditedProvider(NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(p))), f.recorder, scope, providerID), nil
 	}
 	ctor, ok := providerCtors[providerID]
 	if !ok {
@@ -72,7 +73,7 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if key == "" {
 		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
 	}
-	return NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(ctor(key)))), nil
+	return NewAuditedProvider(NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(ctor(key)))), f.recorder, scope, providerID), nil
 }
 
 // GetMetadataProvider returns a MetadataProvider suitable for reading provider

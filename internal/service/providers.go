@@ -148,7 +148,7 @@ func (s *ProviderService) StartGitHubAuth(ctx context.Context) (resp *ai.DeviceA
 	return s.auth.StartDeviceFlow(ctx)
 }
 
-func (s *ProviderService) PollGitHubAuth(ctx context.Context, deviceCode string) (result *ai.GitHubAuthResult, err error) {
+func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, deviceCode string) (result *ai.GitHubAuthResult, err error) {
 	defer logger.Guard("App.PollGitHubAuth", &err)
 
 	result, err = s.auth.PollToken(ctx, deviceCode)
@@ -157,7 +157,7 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, deviceCode string)
 	}
 
 	if result.Status == "success" && result.Token != "" {
-		if saveErr := storage.SaveApiKey("github-models-token", result.Token); saveErr != nil {
+		if saveErr := storage.SaveApiKeyScoped(scope, "github-models-token", result.Token); saveErr != nil {
 			logger.Error("failed to save github token", "error", saveErr)
 		}
 		result.Token = ""
@@ -166,15 +166,15 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, deviceCode string)
 	return result, nil
 }
 
-func (s *ProviderService) RevokeGitHubAuth() (err error) {
+func (s *ProviderService) RevokeGitHubAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeGitHubAuth", &err)
-	return storage.DeleteApiKey("github-models-token")
+	return storage.DeleteApiKeyScoped(scope, "github-models-token")
 }
 
-func (s *ProviderService) GetGitHubUser(ctx context.Context) (user *ai.GitHubUser, err error) {
+func (s *ProviderService) GetGitHubUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetGitHubUser", &err)
 
-	token, err := storage.GetApiKey("github-models-token")
+	token, err := storage.GetApiKeyScoped(scope, "github-models-token")
 	if err != nil {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
@@ -189,7 +189,7 @@ func (s *ProviderService) StartCopilotAuth(ctx context.Context) (resp *ai.Device
 	return s.copilotAuth.StartDeviceFlow(ctx)
 }
 
-func (s *ProviderService) PollCopilotAuth(ctx context.Context, deviceCode string) (result *ai.GitHubAuthResult, err error) {
+func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, deviceCode string) (result *ai.GitHubAuthResult, err error) {
 	defer logger.Guard("App.PollCopilotAuth", &err)
 
 	result, err = s.copilotAuth.PollToken(ctx, deviceCode)
@@ -198,7 +198,7 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, deviceCode string
 	}
 
 	if result.Status == "success" && result.Token != "" {
-		if saveErr := storage.SaveApiKey("copilot-oauth-token", result.Token); saveErr != nil {
+		if saveErr := storage.SaveApiKeyScoped(scope, "copilot-oauth-token", result.Token); saveErr != nil {
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
 		}
 		result.Token = ""
@@ -207,18 +207,19 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, deviceCode string
 	return result, nil
 }
 
-func (s *ProviderService) RevokeCopilotAuth() (err error) {
+func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeCopilotAuth", &err)
-	return storage.DeleteApiKey("copilot-oauth-token")
+	return storage.DeleteApiKeyScoped(scope, "copilot-oauth-token")
 }
 
-func (s *ProviderService) GetCopilotUser(ctx context.Context) (user *ai.GitHubUser, err error) {
+func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetCopilotUser", &err)
 
-	token, err := storage.GetApiKey("copilot-oauth-token")
+	token, err := storage.GetApiKeyScoped(scope, "copilot-oauth-token")
 	if err != nil {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
 	}
 	return s.auth.GetUser(ctx, token)
 }
+

@@ -48,6 +48,15 @@ func (cb *CircuitBreakerProvider) Chat(ctx context.Context, req Request) (*Respo
 	return resp, err
 }
 
+func (cb *CircuitBreakerProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	if err := cb.check(); err != nil {
+		return nil, err
+	}
+	res, err := cb.Provider.Embed(ctx, text)
+	cb.record(err)
+	return res, err
+}
+
 func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	if err := cb.check(); err != nil {
 		return err

@@ -74,6 +74,19 @@ type StorageBackend interface {
 	UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error
 	RemoveCollaborator(ctx context.Context, flowID, userID string) error
 
+	// Usage tracking
+	SaveUsageMetric(ctx context.Context, metric *UsageMetric) error
+	GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error)
+
+	// Knowledge Base
+	SaveKnowledgeDocument(ctx context.Context, doc *KnowledgeDocument) error
+	// DeleteKnowledgeDocument removes a document only when it belongs to orgID,
+	// so a caller scoped to one org cannot delete another org's documents.
+	DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error
+	ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*KnowledgeDocument, error)
+	SaveKnowledgeChunks(ctx context.Context, chunks []KnowledgeChunk) error
+	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]KnowledgeChunk, error)
+
 	// Health check
 	Ping(ctx context.Context) error
 	Close() error
@@ -118,6 +131,32 @@ type FlowFilter struct {
 	// the caller only needs listing metadata. Backends leave FlowDocument.Content
 	// empty when set. List/library endpoints set this; the migrator does not.
 	MetadataOnly bool
+}
+
+type UsageMetric struct {
+	ID               string    `json:"id"`
+	UserID           string    `json:"userId"`
+	OrgID            string    `json:"orgId"`
+	Provider         string    `json:"provider"`
+	Model            string    `json:"model"`
+	PromptTokens     int       `json:"promptTokens"`
+	CompletionTokens int       `json:"completionTokens"`
+	EstimatedCost    float64   `json:"estimatedCost"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+type KnowledgeDocument struct {
+	ID        string    `json:"id"`
+	OrgID     string    `json:"orgId"`
+	Filename  string    `json:"filename"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type KnowledgeChunk struct {
+	ID        string    `json:"id"`
+	DocID     string    `json:"docId"`
+	Content   string    `json:"content"`
+	Embedding []float32 `json:"embedding"`
 }
 
 // FlowDocument represents a flow document
@@ -184,6 +223,7 @@ type LayoutSettings struct {
 type AISettings struct {
 	ActiveProvider string
 	DemoMode       DemoModeSettings
+	DailyBudget    float64
 }
 
 type ParserSettings struct {

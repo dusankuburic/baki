@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	
 )
 
 const testToken = "test-secret-token"
@@ -154,4 +152,36 @@ func TestRouter_Emit_DoesNotPanicWithNoClients(t *testing.T) {
 	rt := newLocalTestRouter()
 	// Should be a no-op when no SSE clients are connected
 	rt.eventManager.Emit("test-event", map[string]string{"key": "value"})
+}
+
+// TestIsLocalhostOrigin_TauriWebviewOrigins guards the desktop CORS allowlist.
+// The Windows Tauri v2 webview origin is http://tauri.localhost; missing it
+// meant the production desktop build's requests to the sidecar all failed CORS
+// (preflight 200 but no Access-Control-Allow-Origin) and nothing loaded.
+func TestIsLocalhostOrigin_TauriWebviewOrigins(t *testing.T) {
+	allowed := []string{
+		"http://tauri.localhost",  // Tauri v2 webview on Windows (WebView2)
+		"https://tauri.localhost", // https variant
+		"tauri://localhost",       // Tauri webview on macOS/Linux
+		"http://localhost:5173",   // Vite dev server
+		"http://127.0.0.1:9210",   // ephemeral sidecar port
+	}
+	for _, o := range allowed {
+		if !isLocalhostOrigin(o) {
+			t.Errorf("expected origin %q to be allowed in local mode", o)
+		}
+	}
+
+	rejected := []string{
+		"http://localhost.evil.com",       // look-alike host must NOT match
+		"http://tauri.localhost.evil.com", // look-alike host must NOT match
+		"http://example.com",
+		"https://evil.com",
+		"ftp://localhost",
+	}
+	for _, o := range rejected {
+		if isLocalhostOrigin(o) {
+			t.Errorf("expected origin %q to be rejected", o)
+		}
+	}
 }

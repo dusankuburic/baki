@@ -57,6 +57,10 @@ temp/
 *.tmp
 *.bak
 
+# Runtime conversation store (written by the app/tests when configDir is unset);
+# these are generated data, not source, and should never be committed.
+internal/*/conversations/
+
 # Markdown — ignore all .md files except README.md (any dir) and GRAMMAR.md
 *.md
 !README.md

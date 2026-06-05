@@ -13,8 +13,9 @@ func TestEstimateTokens(t *testing.T) {
 	}{
 		{"", 0, 0},
 		{"Hello", 1, 2},
-		{"Hello world this is a test", 5, 15},
-		{strings.Repeat("a", 350), 95, 105},
+		{"Hello world this is a test", 5, 8},
+		// A long sentence rather than repeated chars to avoid BPE extreme compression
+		{"The quick brown fox jumps over the lazy dog repeatedly to test the token limits of the encoder.", 15, 25},
 	}
 	for _, tt := range tests {
 		got := EstimateTokens(tt.text)
@@ -25,14 +26,19 @@ func TestEstimateTokens(t *testing.T) {
 }
 
 func TestTruncateToTokenLimit(t *testing.T) {
-	text := strings.Repeat("a", 100)
+	text := "This is a slightly longer sentence meant to be truncated at exactly ten tokens."
+	// 14 words, ~15 tokens
 	result := TruncateToTokenLimit(text, 10)
-	maxChars := int(float64(10) * 3.5)
-	if len(result) > maxChars {
-		t.Errorf("truncated text too long: %d > %d", len(result), maxChars)
+	
+	// The result should end with "..."
+	if !strings.HasSuffix(result, "...") {
+		t.Errorf("expected truncated text to end with '...', got: %q", result)
 	}
-	if len(text) <= maxChars {
-		t.Error("should not have truncated short text")
+
+	// The truncated text should be ~10 tokens
+	truncatedTokens := EstimateTokens(result)
+	if truncatedTokens > 10 {
+		t.Errorf("truncated text has too many tokens: got %d, max 10", truncatedTokens)
 	}
 
 	short := "hello"

@@ -43,8 +43,8 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
 	
 	demo := ai.NewDemoLimiter("")
-	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil)
-	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo)
+	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil)
+	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo, backend)
 	
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
@@ -72,7 +72,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 		Auth:     NewAuthHandler(nil, backend, security),
 		Admin:    NewAdminHandler(backend, security),
 		Provider: NewProviderHandler(providerSvc, security),
-		Org:      NewOrgHandler(orgSvc, backend, security),
+		Org:      NewOrgHandler(orgSvc, backend, nil, security),
 		Sharing:  NewSharingHandler(backend, flowSvc, security),
 	}
 

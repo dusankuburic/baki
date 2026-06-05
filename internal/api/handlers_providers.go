@@ -59,7 +59,7 @@ func (h *ProviderHandler) handlePollGitHubAuth(w http.ResponseWriter, r *http.Re
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	res, err := h.providerSvc.PollGitHubAuth(r.Context(), req.DeviceCode)
+	res, err := h.providerSvc.PollGitHubAuth(r.Context(), h.security.KeyScope(r), req.DeviceCode)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -68,7 +68,7 @@ func (h *ProviderHandler) handlePollGitHubAuth(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ProviderHandler) handleRevokeGitHubAuth(w http.ResponseWriter, r *http.Request) {
-	if err := h.providerSvc.RevokeGitHubAuth(); err != nil {
+	if err := h.providerSvc.RevokeGitHubAuth(h.security.KeyScope(r)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -76,7 +76,7 @@ func (h *ProviderHandler) handleRevokeGitHubAuth(w http.ResponseWriter, r *http.
 }
 
 func (h *ProviderHandler) handleGetGitHubUser(w http.ResponseWriter, r *http.Request) {
-	user, err := h.providerSvc.GetGitHubUser(r.Context())
+	user, err := h.providerSvc.GetGitHubUser(r.Context(), h.security.KeyScope(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -101,7 +101,7 @@ func (h *ProviderHandler) handlePollCopilotAuth(w http.ResponseWriter, r *http.R
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	res, err := h.providerSvc.PollCopilotAuth(r.Context(), req.DeviceCode)
+	res, err := h.providerSvc.PollCopilotAuth(r.Context(), h.security.KeyScope(r), req.DeviceCode)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -110,7 +110,7 @@ func (h *ProviderHandler) handlePollCopilotAuth(w http.ResponseWriter, r *http.R
 }
 
 func (h *ProviderHandler) handleRevokeCopilotAuth(w http.ResponseWriter, r *http.Request) {
-	if err := h.providerSvc.RevokeCopilotAuth(); err != nil {
+	if err := h.providerSvc.RevokeCopilotAuth(h.security.KeyScope(r)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -118,10 +118,11 @@ func (h *ProviderHandler) handleRevokeCopilotAuth(w http.ResponseWriter, r *http
 }
 
 func (h *ProviderHandler) handleGetCopilotUser(w http.ResponseWriter, r *http.Request) {
-	user, err := h.providerSvc.GetCopilotUser(r.Context())
+	user, err := h.providerSvc.GetCopilotUser(r.Context(), h.security.KeyScope(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	render.JSON(w, user)
 }
+

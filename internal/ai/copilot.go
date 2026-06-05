@@ -52,11 +52,15 @@ func (p *CopilotProvider) ContextLimit() int    { return 128000 }
 func (p *CopilotProvider) DefaultModel() string { return "gpt-4o" }
 func (p *CopilotProvider) FreeModel() string    { return "" }
 
-func (p *CopilotProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 0, OutputCostPerM: 0}
+func (c *CopilotProvider) PricePerMillionTokens() Pricing {
+	return Pricing{InputCostPerM: 0.0, OutputCostPerM: 0.0}
 }
 
-func (p *CopilotProvider) EstimateTokens(text string) int {
+func (c *CopilotProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by Copilot provider")
+}
+
+func (c *CopilotProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 

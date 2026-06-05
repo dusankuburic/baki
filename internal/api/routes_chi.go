@@ -167,6 +167,11 @@ func registerRoutes(rt *Router, r chi.Router) {
 					r.Put("/role", h.Org.handleOrgMemberRoleUpdate)
 				})
 			})
+			r.Route("/knowledge", func(r chi.Router) {
+				r.Get("/", h.Org.handleKnowledgeList)
+				r.Post("/upload", h.Org.handleKnowledgeUpload)
+				r.Delete("/{docId}", h.Org.handleKnowledgeDelete)
+			})
 		})
 	})
 

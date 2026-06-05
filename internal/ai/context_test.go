@@ -18,6 +18,7 @@ func (stubProvider) DefaultModel() string            { return "" }
 func (stubProvider) FreeModel() string               { return "" }
 func (stubProvider) ContextLimit() int               { return 100_000 }
 func (stubProvider) PricePerMillionTokens() Pricing  { return Pricing{} }
+func (stubProvider) Embed(_ context.Context, _ []string) ([][]float32, error) { return nil, nil }
 func (stubProvider) EstimateTokens(text string) int  { return EstimateTokens(text) }
 func (stubProvider) Chat(_ context.Context, _ Request) (*Response, error) {
 	return nil, nil

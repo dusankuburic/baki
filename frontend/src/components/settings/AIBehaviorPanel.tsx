@@ -63,6 +63,24 @@ export default function AIBehaviorPanel() {
               onChange={(v) => updateAI({showCostEstimates: v})}
             />
           </div>
+
+          <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
+            <div className="flex-1">
+              <span className="text-sm font-medium text-text-primary">Daily AI Budget ($)</span>
+              <p className="text-xs text-text-tertiary mt-0.5">
+                Max spend per day for your account/org. Use 0 for unlimited.
+              </p>
+            </div>
+            <div className="w-24">
+              <Input
+                type="number"
+                step="0.5"
+                min="0"
+                value={ai.dailyBudget}
+                onChange={(e) => updateAI({dailyBudget: parseFloat(e.target.value) || 0})}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="pt-2">

@@ -1,8 +1,43 @@
 package ai
 
-import "unicode/utf8"
+import (
+	"sync"
+	"unicode/utf8"
+
+	"github.com/pkoukk/tiktoken-go"
+	tiktokenloader "github.com/pkoukk/tiktoken-go-loader"
+	"pad-analyzer/internal/logger"
+)
+
+var (
+	tokenizer     *tiktoken.Tiktoken
+	tokenizerOnce sync.Once
+)
+
+func getTokenizer() *tiktoken.Tiktoken {
+	tokenizerOnce.Do(func() {
+		// Use the offline BPE loader so the vocabulary is embedded in the binary.
+		// Without this, tiktoken-go downloads cl100k_base from a remote URL on
+		// first use, which blocks (and fails) in egress-restricted containers.
+		tiktoken.SetBpeLoader(tiktokenloader.NewOfflineLoader())
+		tkm, err := tiktoken.GetEncoding("cl100k_base")
+		if err != nil {
+			logger.Error("Failed to initialize tiktoken, falling back to heuristic", map[string]interface{}{"error": err})
+			tokenizer = nil
+			return
+		}
+		tokenizer = tkm
+	})
+	return tokenizer
+}
 
 func EstimateTokensGeneric(text string) int {
+	tkm := getTokenizer()
+	if tkm != nil {
+		tokens := tkm.Encode(text, nil, nil)
+		return len(tokens)
+	}
+
 	charCount := utf8.RuneCountInString(text)
 	return int(float64(charCount) / 3.5)
 }
@@ -12,6 +47,12 @@ func EstimateTokensClaude(text string) int {
 }
 
 func EstimateTokensOpenAI(text string) int {
+	tkm := getTokenizer()
+	if tkm != nil {
+		tokens := tkm.Encode(text, nil, nil)
+		return len(tokens)
+	}
+
 	charCount := utf8.RuneCountInString(text)
 	return int(float64(charCount) / 4.0)
 }
@@ -29,6 +70,20 @@ func TruncateToTokens(text string, maxTokens int) string {
 }
 
 func TruncateToTokenLimit(text string, maxTokens int) string {
+	tkm := getTokenizer()
+	if tkm != nil {
+		tokens := tkm.Encode(text, nil, nil)
+		if len(tokens) <= maxTokens {
+			return text
+		}
+		if maxTokens <= 3 {
+			return "..."
+		}
+		truncatedTokens := tokens[:maxTokens-3]
+		return tkm.Decode(truncatedTokens) + "..."
+	}
+
+	// Fallback heuristic
 	maxChars := int(float64(maxTokens) * 3.5)
 	if utf8.RuneCountInString(text) <= maxChars {
 		return text

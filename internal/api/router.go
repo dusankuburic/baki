@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -249,17 +250,31 @@ func (rt *Router) isOriginAllowed(origin string) bool {
 	return false
 }
 
+// localhostHosts are the hostnames the desktop (local, no-JWT) build serves
+// from. The Tauri v2 webview origin is "tauri://localhost" on macOS/Linux and
+// "http://tauri.localhost" on Windows (WebView2); the Vite dev server is
+// localhost:5173. Earlier versions missed "http://tauri.localhost", so on
+// Windows every cross-origin request to the sidecar failed CORS (the preflight
+// 200'd but carried no Access-Control-Allow-Origin) and nothing loaded.
+var localhostHosts = map[string]bool{
+	"localhost":       true,
+	"127.0.0.1":       true,
+	"tauri.localhost": true,
+}
+
+// isLocalhostOrigin matches on the parsed scheme+hostname rather than a string
+// prefix, so look-alikes like http://localhost.evil.com are not accepted.
 func isLocalhostOrigin(origin string) bool {
-	for _, prefix := range []string{
-		"http://localhost", "https://localhost",
-		"http://127.0.0.1", "https://127.0.0.1",
-		"tauri://localhost",
-	} {
-		if strings.HasPrefix(origin, prefix) {
-			return true
-		}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
 	}
-	return false
+	switch u.Scheme {
+	case "http", "https", "tauri":
+		return localhostHosts[u.Hostname()]
+	default:
+		return false
+	}
 }
 
 var publicRoutes = map[string]bool{

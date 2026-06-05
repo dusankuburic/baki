@@ -44,6 +44,20 @@ func (tp *TracedProvider) Chat(ctx context.Context, req Request) (*Response, err
 	return resp, nil
 }
 
+func (tp *TracedProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	ctx, span := tp.tracer.Start(ctx, fmt.Sprintf("%s.Embed", tp.ID()), trace.WithAttributes(
+		attribute.String("ai.provider", tp.ID()),
+	))
+	defer span.End()
+
+	res, err := tp.Provider.Embed(ctx, text)
+	if err != nil {
+		span.RecordError(err)
+		return nil, err
+	}
+	return res, nil
+}
+
 func (tp *TracedProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	ctx, span := tp.tracer.Start(ctx, fmt.Sprintf("%s.Stream", tp.ID()), trace.WithAttributes(
 		attribute.String("ai.provider", tp.ID()),

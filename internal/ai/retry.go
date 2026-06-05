@@ -65,6 +65,23 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 	return nil, lastErr
 }
 
+func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	var lastErr error
+	for attempt := range retryMaxAttempts {
+		if attempt > 0 {
+			if err := backoff(ctx, attempt-1); err != nil {
+				return nil, err
+			}
+		}
+		res, err := rp.Provider.Embed(ctx, text)
+		if err == nil || !isRetryable(err) {
+			return res, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // Stream retries only when the underlying provider fails BEFORE emitting any
 // chunk. Once a chunk has been delivered to the caller, a partial stream cannot
 // be safely replayed, so the error is returned as-is.

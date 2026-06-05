@@ -98,6 +98,40 @@ func TestParseOpenAISSE_WithUsageInFinishChunk(t *testing.T) {
 	}
 }
 
+func TestParseOpenAISSE_WithUsageInTrailingChunk(t *testing.T) {
+	// With stream_options.include_usage, OpenAI sends usage in a trailing chunk
+	// whose choices array is empty, AFTER the finish_reason chunk. The Done chunk
+	// must still carry those tokens (previously this usage was dropped).
+	input := "data: {\"choices\": [{\"delta\": {\"content\": \"Hi\"}}]}\n\n" +
+		"data: {\"choices\": [{\"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n" +
+		"data: {\"choices\": [], \"usage\": {\"prompt_tokens\": 11, \"completion_tokens\": 5}}\n\n" +
+		"data: [DONE]\n\n"
+
+	var tokensIn, tokensOut int
+	var doneCount, textCount int
+	err := parseOpenAISSE(strings.NewReader(input), func(chunk Chunk) {
+		if chunk.Done {
+			doneCount++
+			tokensIn = chunk.TokensIn
+			tokensOut = chunk.TokensOut
+		} else if chunk.Text != "" {
+			textCount++
+		}
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if doneCount != 1 {
+		t.Errorf("expected exactly one Done chunk, got %d", doneCount)
+	}
+	if textCount != 1 {
+		t.Errorf("expected 1 text chunk, got %d", textCount)
+	}
+	if tokensIn != 11 || tokensOut != 5 {
+		t.Errorf("expected TokensIn=11 TokensOut=5, got %d/%d", tokensIn, tokensOut)
+	}
+}
+
 func TestParseOpenAISSE_EOF_WithoutDone_ReturnsTruncatedError(t *testing.T) {
 	// Stream ends without `[DONE]` or a non-empty `finish_reason`. Same
 	// rationale as the Claude truncation test above.

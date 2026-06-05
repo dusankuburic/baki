@@ -25,14 +25,18 @@ func NewGLMProvider(apiKey string) *GLMProvider {
 	}
 }
 
-func (g *GLMProvider) ID() string          { return "glm" }
-func (g *GLMProvider) Name() string        { return "GLM (z.ai)" }
-func (g *GLMProvider) ContextLimit() int   { return 200000 }
+func (g *GLMProvider) ID() string           { return "glm" }
+func (g *GLMProvider) Name() string         { return "GLM (z.ai)" }
+func (g *GLMProvider) ContextLimit() int    { return 200000 }
 func (g *GLMProvider) DefaultModel() string { return "glm-5.1" }
 func (g *GLMProvider) FreeModel() string    { return "glm-4.7-flash" }
 
 func (g *GLMProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}
+	return Pricing{InputCostPerM: 0.01, OutputCostPerM: 0.01}
+}
+
+func (g *GLMProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by GLM provider")
 }
 
 func (g *GLMProvider) EstimateTokens(text string) int {
@@ -138,11 +142,12 @@ func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 
 func (g *GLMProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	body := openAIRequest{
-		Model:       req.Model,
-		MaxTokens:   orDefault(req.MaxTokens, 4096),
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Stream:      true,
+		Model:         req.Model,
+		MaxTokens:     orDefault(req.MaxTokens, 4096),
+		Temperature:   req.Temperature,
+		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Stream:        true,
+		StreamOptions: usageStreamOptions,
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {

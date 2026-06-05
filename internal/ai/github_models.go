@@ -24,14 +24,18 @@ func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	}
 }
 
-func (g *GitHubModelsProvider) ID() string          { return "github-models" }
-func (g *GitHubModelsProvider) Name() string        { return "GitHub Models" }
+func (g *GitHubModelsProvider) ID() string           { return "github-models" }
+func (g *GitHubModelsProvider) Name() string         { return "GitHub Models" }
 func (g *GitHubModelsProvider) ContextLimit() int    { return 8192 }
 func (g *GitHubModelsProvider) DefaultModel() string { return "gpt-4o" }
 func (g *GitHubModelsProvider) FreeModel() string    { return "" }
 
 func (g *GitHubModelsProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 0, OutputCostPerM: 0}
+	return Pricing{InputCostPerM: 0.0, OutputCostPerM: 0.0}
+}
+
+func (g *GitHubModelsProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by GitHub Models provider")
 }
 
 func (g *GitHubModelsProvider) EstimateTokens(text string) int {
@@ -142,11 +146,12 @@ func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response
 
 func (g *GitHubModelsProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	body := openAIRequest{
-		Model:       req.Model,
-		MaxTokens:   orDefault(req.MaxTokens, 4096),
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Stream:      true,
+		Model:         req.Model,
+		MaxTokens:     orDefault(req.MaxTokens, 4096),
+		Temperature:   req.Temperature,
+		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Stream:        true,
+		StreamOptions: usageStreamOptions,
 	}
 	jsonBody, _ := json.Marshal(body)
 

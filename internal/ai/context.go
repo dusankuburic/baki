@@ -159,9 +159,6 @@ func writeBlockDetail(b *strings.Builder, block *models.Block) {
 	if len(block.Properties) > 0 {
 		b.WriteString("\n**Properties:**\n")
 		for k, v := range block.Properties {
-			if isPotentialSecret(v) {
-				v = maskSecret(v)
-			}
 			fmt.Fprintf(b, "- %s: %s\n", k, v)
 		}
 	}

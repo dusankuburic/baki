@@ -123,7 +123,24 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	var doneSent bool
+	var (
+		doneSent    bool
+		sawTerminal bool
+		tokensIn    int
+		tokensOut   int
+	)
+
+	// Usage may arrive on the finish chunk or — when stream_options.include_usage
+	// is set — in a trailing chunk whose `choices` array is empty (which the old
+	// code dropped). Stash whatever usage we see and attach it to the single Done
+	// chunk emitted at [DONE]/stream end, so the audited provider can record cost.
+	emitDone := func() {
+		if doneSent {
+			return
+		}
+		doneSent = true
+		onChunk(Chunk{Done: true, TokensIn: tokensIn, TokensOut: tokensOut})
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -134,9 +151,7 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
-			if !doneSent {
-				onChunk(Chunk{Done: true})
-			}
+			emitDone()
 			return nil
 		}
 
@@ -157,20 +172,17 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			continue
 		}
 
+		if parsed.Usage != nil {
+			tokensIn = parsed.Usage.PromptTokens
+			tokensOut = parsed.Usage.CompletionTokens
+		}
+
 		for _, choice := range parsed.Choices {
 			if choice.Delta.Content != "" {
 				onChunk(Chunk{Text: choice.Delta.Content})
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
-				if !doneSent {
-					doneSent = true
-					tokensOut, tokensIn := 0, 0
-					if parsed.Usage != nil {
-						tokensOut = parsed.Usage.CompletionTokens
-						tokensIn = parsed.Usage.PromptTokens
-					}
-					onChunk(Chunk{Done: true, TokensOut: tokensOut, TokensIn: tokensIn})
-				}
+				sawTerminal = true
 			}
 		}
 	}
@@ -179,6 +191,12 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		return fmt.Errorf("reading openai SSE stream: %w", err)
 	}
 
+	// A clean end is either an explicit [DONE] (handled above) or a terminal
+	// finish_reason for servers that omit [DONE]. Anything else is a truncation.
+	if sawTerminal {
+		emitDone()
+		return nil
+	}
 	if !doneSent {
 		return errStreamTruncated("openai")
 	}

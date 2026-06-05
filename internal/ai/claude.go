@@ -35,6 +35,10 @@ func (c *ClaudeProvider) PricePerMillionTokens() Pricing {
 	return Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}
 }
 
+func (c *ClaudeProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by Claude provider")
+}
+
 func (c *ClaudeProvider) EstimateTokens(text string) int {
 	return EstimateTokensClaude(text)
 }

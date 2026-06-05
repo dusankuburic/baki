@@ -52,6 +52,13 @@ type LayoutSettings struct {
 	LastViewMode          string `json:"lastViewMode"`
 }
 
+type AIPromptsConfig struct {
+	Block             []string `json:"block"`
+	Flow              []string `json:"flow"`
+	Finding           []string `json:"finding"`
+	BlockWithFindings []string `json:"blockWithFindings"`
+}
+
 type AISettings struct {
 	ActiveProvider          string                    `json:"activeProvider"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
@@ -59,6 +66,8 @@ type AISettings struct {
 	ShowCostEstimates       bool                      `json:"showCostEstimates"`
 	SaveConversationHistory bool                      `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                    `json:"systemPromptSuffix,omitempty"`
+	DailyBudget             float64                   `json:"dailyBudget"`
+	Prompts                 AIPromptsConfig           `json:"prompts"`
 }
 
 type AIProviderConfig struct {
@@ -182,6 +191,35 @@ func DefaultSettings() *AppSettings {
 			},
 			ShowCostEstimates:       true,
 			SaveConversationHistory: true,
+			DailyBudget:             5.0, // Default $5/day
+			Prompts: AIPromptsConfig{
+				Block: []string{
+					"Explain this block",
+					"Find issues here",
+					"Suggest improvements",
+					"What does this block do?",
+					"Could this block cause errors?",
+				},
+				Flow: []string{
+					"Analyze the whole flow",
+					"Find performance issues",
+					"Security audit",
+					"Find potential bugs",
+					"Summarize what this flow does",
+				},
+				Finding: []string{
+					"How do I fix this issue?",
+					"Is this a false positive?",
+					"Show me similar patterns in the flow",
+				},
+				BlockWithFindings: []string{
+					"How do I fix the issues on this block?",
+					"Are these findings related?",
+					"Is this a false positive?",
+					"Show me similar patterns in the flow",
+					"Explain what this block does",
+				},
+			},
 		},
 		Parser: ParserSettings{
 			MaxFileSizeMB:    50,

@@ -24,14 +24,19 @@ func NewXAIProvider(apiKey string) *XAIProvider {
 	}
 }
 
-func (x *XAIProvider) ID() string          { return "xai" }
-func (x *XAIProvider) Name() string        { return "xAI (Grok)" }
-func (x *XAIProvider) ContextLimit() int   { return 131072 }
+func (x *XAIProvider) ID() string           { return "xai" }
+func (x *XAIProvider) Name() string         { return "xAI (Grok)" }
+func (x *XAIProvider) ContextLimit() int    { return 131072 }
 func (x *XAIProvider) DefaultModel() string { return "grok-3-mini" }
 func (x *XAIProvider) FreeModel() string    { return "" }
 
 func (x *XAIProvider) PricePerMillionTokens() Pricing {
+	// grok-3-mini list pricing (USD per 1M tokens).
 	return Pricing{InputCostPerM: 0.3, OutputCostPerM: 0.5}
+}
+
+func (x *XAIProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embeddings not supported by xAI provider")
 }
 
 func (x *XAIProvider) EstimateTokens(text string) int {
@@ -120,11 +125,12 @@ func (x *XAIProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 
 func (x *XAIProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	body := openAIRequest{
-		Model:       req.Model,
-		MaxTokens:   orDefault(req.MaxTokens, 4096),
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Stream:      true,
+		Model:         req.Model,
+		MaxTokens:     orDefault(req.MaxTokens, 4096),
+		Temperature:   req.Temperature,
+		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Stream:        true,
+		StreamOptions: usageStreamOptions,
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
