@@ -122,6 +122,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	logAudit(r.Context(), h.backend, r, AuditActionLogin, "user", user.ID, nil)
 	render.JSON(w, pair)
 }
 

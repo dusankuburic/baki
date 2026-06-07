@@ -401,6 +401,15 @@
   --block-variable: #ff9e64;
   --block-string: #9ece6a;
   --block-wait: #7dcfff;
+  --block-action-bg:     rgba(122, 162, 247, 0.08);
+  --block-loop-bg:       rgba(224, 175, 104, 0.08);
+  --block-condition-bg:  rgba(158, 206, 106, 0.08);
+  --block-subflow-bg:    rgba(187, 154, 247, 0.08);
+  --block-error-bg:      rgba(247, 118, 142, 0.08);
+  --block-comment-bg:    rgba(86, 95, 137, 0.08);
+  --block-variable-bg:   rgba(255, 158, 100, 0.08);
+  --block-string-bg:     rgba(158, 206, 106, 0.08);
+  --block-wait-bg:       rgba(125, 207, 255, 0.08);
 }
 
 [data-theme="one-dark"] {
@@ -429,6 +438,15 @@
   --block-variable: #d19a66;
   --block-string: #98c379;
   --block-wait: #56b6c2;
+  --block-action-bg:     rgba(97, 175, 239, 0.08);
+  --block-loop-bg:       rgba(209, 154, 102, 0.08);
+  --block-condition-bg:  rgba(152, 195, 121, 0.08);
+  --block-subflow-bg:    rgba(198, 120, 221, 0.08);
+  --block-error-bg:      rgba(224, 108, 117, 0.08);
+  --block-comment-bg:    rgba(92, 99, 112, 0.08);
+  --block-variable-bg:   rgba(209, 154, 102, 0.08);
+  --block-string-bg:     rgba(152, 195, 121, 0.08);
+  --block-wait-bg:       rgba(86, 182, 194, 0.08);
 }
 
 [data-theme="dracula"] {
@@ -457,6 +475,15 @@
   --block-variable: #ffb86c;
   --block-string: #f1fa8c;
   --block-wait: #8be9fd;
+  --block-action-bg:     rgba(139, 233, 253, 0.08);
+  --block-loop-bg:       rgba(255, 184, 108, 0.08);
+  --block-condition-bg:  rgba(80, 250, 123, 0.08);
+  --block-subflow-bg:    rgba(189, 147, 249, 0.08);
+  --block-error-bg:      rgba(255, 85, 85, 0.08);
+  --block-comment-bg:    rgba(98, 114, 164, 0.08);
+  --block-variable-bg:   rgba(255, 184, 108, 0.08);
+  --block-string-bg:     rgba(241, 250, 140, 0.08);
+  --block-wait-bg:       rgba(139, 233, 253, 0.08);
 }
 
 [data-theme="nord"] {
@@ -485,6 +512,15 @@
   --block-variable: #d08770;
   --block-string: #a3be8c;
   --block-wait: #88c0d0;
+  --block-action-bg:     rgba(129, 161, 193, 0.08);
+  --block-loop-bg:       rgba(235, 203, 139, 0.08);
+  --block-condition-bg:  rgba(163, 190, 140, 0.08);
+  --block-subflow-bg:    rgba(180, 142, 173, 0.08);
+  --block-error-bg:      rgba(191, 97, 106, 0.08);
+  --block-comment-bg:    rgba(76, 86, 106, 0.08);
+  --block-variable-bg:   rgba(208, 135, 112, 0.08);
+  --block-string-bg:     rgba(163, 190, 140, 0.08);
+  --block-wait-bg:       rgba(136, 192, 208, 0.08);
 }
 
 /* === GLASS UTILITY === */

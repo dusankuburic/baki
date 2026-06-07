@@ -66,3 +66,17 @@ func TestHandleCancelStream_ValidBodyReturnsOK(t *testing.T) {
 	rr := doRequest(t, rt, http.MethodPost, "/api/chat/cancel", map[string]string{"streamId": "s1"})
 	checkStatus(t, rr, http.StatusOK)
 }
+
+func TestHandleResumeStream_BadBodyReturns400(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/chat/resume")
+	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+// Resuming an unknown stream id reaches the handler (route is registered) and
+// returns 404 — a missing route would surface as 405/404-from-router instead.
+func TestHandleResumeStream_UnknownIDReturns404(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPost, "/api/chat/resume", map[string]string{"id": "nope"})
+	checkStatus(t, rr, http.StatusNotFound)
+}

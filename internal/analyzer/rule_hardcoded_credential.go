@@ -45,6 +45,7 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 					BlockID:     block.ID,
 					SubflowID:   block.SubflowID,
 					Suggestion:  "Move this credential to a secured variable or vault. Hardcoded secrets in flows are a security risk.",
+					AutoFixHint: "Replace the literal value with a %InputVariable% declared as Sensitive in the flow's input properties, or retrieve it at runtime using the 'Get password from CyberArk / Windows Credential Manager' action.",
 					Metadata:    map[string]interface{}{"property": key},
 				})
 				break

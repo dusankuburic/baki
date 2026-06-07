@@ -122,6 +122,8 @@ export default function ConnectionPanel({
       <div className="flex items-center gap-2">
         <div ref={provRef} className="relative flex-1 min-w-0">
           <button
+            aria-haspopup="listbox"
+            aria-expanded={providerOpen}
             className={clsx(
               'flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg text-sm transition-colors border',
               providerOpen
@@ -137,7 +139,7 @@ export default function ConnectionPanel({
             <span className="truncate text-text-secondary font-medium">
               {currentProv?.name || 'Select provider'}
             </span>
-            <ChevronDown size={13} className={clsx('shrink-0 text-text-tertiary transition-transform', providerOpen && 'rotate-180')} />
+            <ChevronDown size={13} className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast', providerOpen && 'rotate-180')} />
           </button>
           {providerOpen && (
             <Portal>
@@ -215,6 +217,8 @@ export default function ConnectionPanel({
       {models.length > 1 && (
         <div ref={modRef} className="relative">
           <button
+            aria-haspopup="listbox"
+            aria-expanded={modelsOpen}
             className={clsx(
               'flex items-center gap-1.5 w-full px-2.5 py-1.5 rounded-lg text-xs transition-colors border',
               modelsOpen
@@ -232,7 +236,7 @@ export default function ConnectionPanel({
                 {(currentMod.contextLimit / 1000)}k
               </span>
             )}
-            <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform ml-auto', modelsOpen && 'rotate-180')} />
+            <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast ml-auto', modelsOpen && 'rotate-180')} />
           </button>
           {modelsOpen && (
             <Portal>

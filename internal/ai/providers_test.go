@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,7 +129,7 @@ func TestClaudeProvider_Chat_429(t *testing.T) {
 		Model:    "claude-sonnet-4-5",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrRateLimited {
+	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
 }

@@ -35,6 +35,7 @@ func (r *ErrorSwallowRule) Check(block *models.Block, ctx *RuleContext) []models
 		BlockID:     block.ID,
 		SubflowID:   block.SubflowID,
 		Suggestion:  "Add logging, set an error variable, re-raise the error, or notify the user. Silent error swallowing hides problems.",
+		AutoFixHint: "Inside the On Error block, add: Variables.Set Variable > Name: ErrorMessage, Value: %LastError%  — then add a Message Box or Write to File action to surface the error.",
 	}}
 }
 

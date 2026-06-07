@@ -39,7 +39,7 @@ export default function TokenRenderer({tokens}: TokenRendererProps) {
             title={token.type === 'subflow' ? `Jump to subflow: ${token.target}` : undefined}
             className={clsx(
               isInteractive && 'cursor-pointer',
-              token.type === 'subflow' && 'inline-flex items-center gap-1 text-block-subflow font-semibold hover:underline decoration-block-subflow/30 underline-offset-2 transition-all',
+              token.type === 'subflow' && 'inline-flex items-center gap-1 text-block-subflow font-semibold hover:underline decoration-block-subflow/30 underline-offset-2 transition-all duration-fast',
               token.type === 'string' && 'text-block-string font-mono italic',
               // whitespace-pre-wrap: preserve leading/trailing spaces that flex
               // layout strips at the start/end of each item's line box.
@@ -152,7 +152,7 @@ function VariableToken({token}: {token: BlockToken}) {
                 <span className="text-text-tertiary">Usages:</span>
                 <span className="text-text-primary font-mono">{info?.usageCount ?? 0}</span>
             </div>
-            <div className="text-[10px] text-text-disabled mt-1 border-t border-white/5 pt-1 italic">
+            <div className="text-2xs text-text-disabled mt-1 border-t border-white/5 pt-1 italic">
                 Click to trace lineage
             </div>
         </div>
@@ -163,7 +163,7 @@ function VariableToken({token}: {token: BlockToken}) {
             <span
                 onClick={handleClick}
                 className={clsx(
-                    'px-1.5 py-0.5 rounded-md font-mono text-[0.9em] border transition-all mx-0.5 leading-none inline-block cursor-pointer',
+                    'px-1.5 py-0.5 rounded-md font-mono text-[0.9em] border transition-all duration-fast mx-0.5 leading-none inline-block cursor-pointer',
                     isSelected 
                         ? 'bg-yellow-400/30 border-yellow-500/50 text-yellow-900 dark:text-yellow-200 shadow-glow-sm' 
                         : 'bg-block-variable-bg text-block-variable border-block-variable/10 hover:bg-block-variable-bg/20 hover:border-block-variable/20'

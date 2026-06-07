@@ -181,7 +181,7 @@ func (d *DemoProvider) Chat(ctx context.Context, req Request) (*Response, error)
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode == 429 {
-		return nil, ErrRateLimited
+		return nil, rateLimitErr(resp)
 	}
 	if resp.StatusCode != http.StatusOK {
 		var demoErr struct {
@@ -235,7 +235,7 @@ func (d *DemoProvider) Stream(ctx context.Context, req Request, onChunk func(Chu
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 429 {
-		return ErrRateLimited
+		return rateLimitErr(resp)
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))

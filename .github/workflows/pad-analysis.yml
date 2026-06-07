@@ -1,0 +1,64 @@
+name: PAD Flow Analysis
+
+on:
+  push:
+    paths:
+      - '**.txt'
+      - '**.pad'
+  pull_request:
+    paths:
+      - '**.txt'
+      - '**.pad'
+  workflow_dispatch:
+    inputs:
+      flow_path:
+        description: 'Path to PAD flow file or folder'
+        default: '.'
+      fail_on:
+        description: 'Minimum severity that causes a non-zero exit: error, warning, info'
+        default: 'error'
+  workflow_call:
+    inputs:
+      flow_path:
+        type: string
+        default: '.'
+      fail_on:
+        type: string
+        default: 'error'
+
+jobs:
+  analyze:
+    name: Analyze PAD Flows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build bakicli
+        run: go build -o bakicli ./cmd/bakicli
+
+      - name: Analyze flows
+        id: analysis
+        run: |
+          FLOW_PATH="${{ inputs.flow_path }}"
+          FAIL_ON="${{ inputs.fail_on }}"
+
+          ./bakicli \
+            -format json \
+            -fail-on "$FAIL_ON" \
+            "$FLOW_PATH" | tee analysis-report.json
+
+      - name: Upload analysis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pad-analysis-report
+          path: analysis-report.json
+          retention-days: 30

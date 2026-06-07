@@ -88,7 +88,7 @@ function ThemeCard({theme, isSelected, onClick}: {theme: typeof themes[0], isSel
     <button
       onClick={onClick}
       className={clsx(
-        'group relative flex flex-col text-left rounded-xl border-2 transition-all overflow-hidden bg-surface-1',
+        'group relative flex flex-col text-left rounded-xl border-2 transition-all duration-fast overflow-hidden bg-surface-1',
         isSelected 
           ? 'border-brand-500 ring-4 ring-brand-500/10' 
           : 'border-border-default hover:border-border-strong hover:bg-surface-2'
@@ -130,7 +130,7 @@ function ThemeCard({theme, isSelected, onClick}: {theme: typeof themes[0], isSel
 
       <div className="p-3">
         <div className="text-xs font-bold text-text-primary mb-0.5 uppercase tracking-wider">{theme.label}</div>
-        <div className="text-[10px] text-text-tertiary leading-tight line-clamp-1">{theme.description}</div>
+        <div className="text-2xs text-text-tertiary leading-tight line-clamp-1">{theme.description}</div>
       </div>
     </button>
   )
@@ -164,7 +164,7 @@ function AccessibilityToggle({label, isChecked, onChange}: {label: string, isChe
         )}
       >
         <div className={clsx(
-          'absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all shadow-sm',
+          'absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all duration-fast shadow-sm',
           isChecked ? 'right-0.5' : 'left-0.5'
         )} />
       </button>

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+	"time"
 )
 
 type Provider interface {
@@ -73,6 +76,55 @@ var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
 	ErrCircuitOpen         = errors.New("provider circuit open: too many recent failures")
 )
+
+// RateLimitError is a rate-limit (HTTP 429) error that carries the server's
+// Retry-After hint. It unwraps to ErrRateLimited so existing errors.Is checks
+// (isRetryable, the circuit breaker) keep working, while the retry backoff can
+// type-assert it to wait at least RetryAfter before the next attempt.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string { return ErrRateLimited.Error() }
+func (e *RateLimitError) Unwrap() error { return ErrRateLimited }
+
+// rateLimitErr builds a *RateLimitError from a 429 response, parsing the
+// Retry-After header (delta-seconds or an HTTP-date). A missing/invalid header
+// yields a zero RetryAfter, so the caller falls back to its default backoff.
+func rateLimitErr(resp *http.Response) error {
+	return &RateLimitError{RetryAfter: parseRetryAfter(resp)}
+}
+
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	v := resp.Header.Get("Retry-After")
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// retryAfterFrom extracts the Retry-After hint from an error chain, if any.
+func retryAfterFrom(err error) time.Duration {
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return rle.RetryAfter
+	}
+	return 0
+}
 
 // MetadataProvider exposes read-only provider information without API credentials.
 // Returned by GetMetadataProvider — it intentionally omits Chat and Stream to

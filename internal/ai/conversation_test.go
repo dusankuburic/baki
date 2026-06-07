@@ -23,7 +23,7 @@ func evictReference(messages []models.ChatMessage) []models.ChatMessage {
 		return messages
 	}
 	cut := 0
-	for cut < len(messages)-2 {
+	for cut+2 <= len(messages)-minRetainedMessages {
 		cut += 2
 		trimmed, _ := json.Marshal(messages[cut:])
 		if len(trimmed) <= maxConversationBytes && len(messages[cut:]) <= maxMessagesPerConv {
@@ -374,6 +374,63 @@ func TestEvictOldConversations_UnderLimit_KeepsFiles(t *testing.T) {
 		}
 		if len(conv.Messages) == 0 {
 			t.Errorf("expected messages for %q to survive eviction", path)
+		}
+	}
+}
+
+// TestEvictIfNeeded_NeverBelowFloor verifies eviction never trims a conversation
+// below minRetainedMessages, even when every retained message still exceeds the
+// byte budget.
+func TestEvictIfNeeded_NeverBelowFloor(t *testing.T) {
+	big := strings.Repeat("x", 300_000) // ~300KB each; 4 of them > 1MB budget
+	n := maxMessagesPerConv + 10         // 60, so the count gate also trips
+	msgs := make([]models.ChatMessage, n)
+	for i := range msgs {
+		msgs[i] = models.ChatMessage{ID: fmt.Sprintf("m%04d", i), Role: "user", Content: big}
+	}
+	got, err := evictIfNeeded(msgs)
+	if err != nil {
+		t.Fatalf("evictIfNeeded: %v", err)
+	}
+	if len(got) < minRetainedMessages {
+		t.Errorf("eviction trimmed below floor: kept %d, floor %d", len(got), minRetainedMessages)
+	}
+	// The most recent message must survive.
+	if got[len(got)-1].ID != msgs[len(msgs)-1].ID {
+		t.Errorf("most recent message not preserved")
+	}
+}
+
+// TestSaveConversation_AtomicReplace verifies a second save replaces the first
+// (latest content loads back) and leaves no stray temp files behind.
+func TestSaveConversation_AtomicReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := "/flow/atomic.txt"
+
+	if err := SaveConversation(dir, path, "flow", makeMessages(2)); err != nil {
+		t.Fatalf("first SaveConversation: %v", err)
+	}
+	if err := SaveConversation(dir, path, "flow", makeMessages(5)); err != nil {
+		t.Fatalf("second SaveConversation: %v", err)
+	}
+
+	conv, err := LoadConversation(dir, path, "flow")
+	if err != nil {
+		t.Fatalf("LoadConversation: %v", err)
+	}
+	if len(conv.Messages) != 5 {
+		t.Errorf("expected latest save (5 messages), got %d", len(conv.Messages))
+	}
+
+	// No leftover .tmp files in the flow directory.
+	flowDir := filepath.Join(ConversationDir(dir), FlowKey(path))
+	entries, err := os.ReadDir(flowDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("stray temp file left behind: %s", e.Name())
 		}
 	}
 }

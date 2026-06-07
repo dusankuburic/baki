@@ -118,3 +118,30 @@ func TestParseOpenAISSE_EmptyLines(t *testing.T) {
 		t.Errorf("unexpected chunks: %v", chunks)
 	}
 }
+
+// TestParseSSE_MalformedEventsReturnError verifies that a stream made entirely
+// of undecodable data events (and no terminal marker) surfaces an error instead
+// of silently looking like a clean empty response.
+func TestParseSSE_MalformedEventsReturnError(t *testing.T) {
+	input := "data: {not valid json\n\n" +
+		"data: also: broken}\n\n"
+
+	t.Run("claude", func(t *testing.T) {
+		err := parseClaudeSSE(strings.NewReader("event: content_block_delta\n"+input), func(Chunk) {})
+		if err == nil {
+			t.Fatal("expected error for all-malformed claude stream")
+		}
+	})
+	t.Run("openai", func(t *testing.T) {
+		err := parseOpenAISSE(strings.NewReader(input), func(Chunk) {})
+		if err == nil {
+			t.Fatal("expected error for all-malformed openai stream")
+		}
+	})
+	t.Run("gemini", func(t *testing.T) {
+		err := parseGeminiSSE(strings.NewReader(input), func(Chunk) {})
+		if err == nil {
+			t.Fatal("expected error for all-malformed gemini stream")
+		}
+	})
+}

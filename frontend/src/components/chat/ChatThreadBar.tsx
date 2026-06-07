@@ -115,7 +115,7 @@ function ThreadTab({thread, isActive, onSelect, onClose, onRename}: {
       )}
       <button
         className={clsx(
-          'shrink-0 p-0.5 rounded transition-all',
+          'shrink-0 p-0.5 rounded transition-all duration-fast',
           isActive ? 'opacity-60 hover:opacity-100 hover:bg-surface-3' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-surface-3'
         )}
         onClick={e => { e.stopPropagation(); onClose(thread.id) }}

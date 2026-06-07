@@ -141,7 +141,7 @@ function ProviderAdvancedSettings({config, onUpdate}: {config: any; onUpdate: (p
           value={config.temperature}
           onChange={(e) => onUpdate({temperature: parseFloat(e.target.value)})}
         />
-        <div className="flex justify-between text-[10px] text-text-tertiary">
+        <div className="flex justify-between text-2xs text-text-tertiary">
           <span>Precise</span>
           <span>Creative</span>
         </div>
@@ -167,7 +167,7 @@ function ProviderAdvancedSettings({config, onUpdate}: {config: any; onUpdate: (p
           value={config.contextTokenBudget}
           onChange={(e) => onUpdate({contextTokenBudget: parseInt(e.target.value) || 4000})}
         />
-        <p className="text-[10px] text-text-tertiary mt-1">
+        <p className="text-2xs text-text-tertiary mt-1">
           Max tokens used for flow context.
         </p>
       </div>

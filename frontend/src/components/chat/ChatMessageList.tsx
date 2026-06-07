@@ -90,7 +90,7 @@ function ChatMessageList({children, isStreaming}: Props) {
       </div>
       {showScrollBtn && (
         <button
-          className="absolute bottom-2 left-1/2 -translate-x-1/2 p-1.5 rounded-full bg-surface-2 border border-border-default shadow-md text-text-secondary hover:text-text-primary hover:bg-surface-3 transition-all animate-fade-in z-10"
+          className="absolute bottom-2 left-1/2 -translate-x-1/2 p-1.5 rounded-full bg-surface-2 border border-border-default shadow-md text-text-secondary hover:text-text-primary hover:bg-surface-3 transition-all duration-fast animate-fade-in z-10"
           onClick={() => scrollToBottom()}
           aria-label="Scroll to bottom"
         >

@@ -20,6 +20,10 @@ const (
 	maxMessagesPerConv     = 50
 	maxConversationBytes   = 1 * 1024 * 1024
 	maxTotalStorageBytes   = 50 * 1024 * 1024
+	// minRetainedMessages is the floor on eviction: never trim a conversation
+	// below this many messages, so even an oversized history keeps enough recent
+	// turns to remain useful as context (rather than collapsing to one message).
+	minRetainedMessages = 4
 )
 
 func ConversationDir(configDir string) string {
@@ -71,7 +75,41 @@ func SaveConversation(configDir, filePath string, scope string, messages []model
 		return fmt.Errorf("marshal conversation: %w", err)
 	}
 
-	return os.WriteFile(convFile, data, 0600)
+	return atomicWriteFile(flowDir, convFile, data)
+}
+
+// atomicWriteFile writes data to a temp file in the same directory and renames
+// it over the destination. A partial/interrupted write (crash, full disk) leaves
+// the temp file behind and the previous conversation intact, rather than
+// truncating the destination into an unparseable state. Rename is atomic on the
+// same filesystem.
+func atomicWriteFile(dir, dest string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, ".conv-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp conversation file: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { os.Remove(tmpName) }
+
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("chmod temp conversation file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("write temp conversation file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp conversation file: %w", err)
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		cleanup()
+		return fmt.Errorf("rename conversation file: %w", err)
+	}
+	return nil
 }
 
 func LoadConversation(configDir, filePath string, scope string) (*models.ConversationFile, error) {
@@ -155,7 +193,9 @@ func evictIfNeeded(messages []models.ChatMessage) ([]models.ChatMessage, error) 
 	}
 
 	cut := 0
-	for cut < n-2 {
+	// Trim oldest pairs until within budget, but never below minRetainedMessages
+	// (the guard ensures n-cut >= minRetainedMessages after each increment).
+	for cut+2 <= n-minRetainedMessages {
 		cut += 2
 		if marshaledLen(cut) <= maxConversationBytes && (n-cut) <= maxMessagesPerConv {
 			break

@@ -197,6 +197,7 @@ export default function Sidebar() {
                         className={clsx(
                             'flex-1 flex items-center justify-center gap-1.5 h-7 px-2 text-xs font-medium',
                             'rounded-md transition-colors duration-fast',
+                            'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-none',
                             sidebarTab === value
                                 ? 'bg-surface-3 text-text-primary shadow-xs'
                                 : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-2'

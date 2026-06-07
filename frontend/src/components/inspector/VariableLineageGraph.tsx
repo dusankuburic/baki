@@ -112,7 +112,7 @@ export default function VariableLineageGraph({events}: Props) {
                                 x={node.x}
                                 y={node.y + 28}
                                 textAnchor="middle"
-                                className="text-[9px] fill-text-tertiary font-mono"
+                                className="text-2xs fill-text-tertiary font-mono"
                             >
                                 L{node.line}
                             </text>

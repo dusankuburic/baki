@@ -11,12 +11,14 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/service"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 type AnalysisHandler struct {
 	analysisSvc *service.AnalysisService
 	flowSvc     *service.FlowService
 	security    *SecurityConfig
+	backend     storageif.StorageBackend
 }
 
 func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, security *SecurityConfig) *AnalysisHandler {
@@ -26,6 +28,8 @@ func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.F
 		security:    security,
 	}
 }
+
+func (h *AnalysisHandler) SetBackend(b storageif.StorageBackend) { h.backend = b }
 
 func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -48,6 +52,7 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, AuditActionFlowAnalyze, "flow", req.FlowID, nil)
 	render.JSON(w, res)
 }
 

@@ -1152,6 +1152,160 @@ func (b *PostgresStorageBackend) RevokeUserRefreshTokens(ctx context.Context, us
 	return nil
 }
 
+// ---- Audit log ----
+
+func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *interfaces.AuditEvent) error {
+	meta, err := json.Marshal(event.Meta)
+	if err != nil {
+		meta = []byte("{}")
+	}
+	_, err = b.db.ExecContext(ctx,
+		`INSERT INTO audit_events (id, user_id, email, action, resource_type, resource_id, ip, meta, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		event.ID, event.UserID, event.Email, event.Action,
+		event.ResourceType, event.ResourceID, event.IP, meta, event.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("save audit event: %w", err)
+	}
+	return nil
+}
+
+func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	args := []any{}
+	where := []string{}
+	i := 1
+	if filter.UserID != "" {
+		where = append(where, fmt.Sprintf("user_id = $%d", i))
+		args = append(args, filter.UserID)
+		i++
+	}
+	if filter.Action != "" {
+		where = append(where, fmt.Sprintf("action = $%d", i))
+		args = append(args, filter.Action)
+		i++
+	}
+	if filter.Since != nil {
+		where = append(where, fmt.Sprintf("created_at >= $%d", i))
+		args = append(args, filter.Since.UTC())
+		i++
+	}
+
+	q := `SELECT id, user_id, email, action, resource_type, resource_id, ip, meta, created_at FROM audit_events`
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", i, i+1)
+	args = append(args, limit, offset)
+
+	rows, err := b.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audit events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*interfaces.AuditEvent
+	for rows.Next() {
+		ev := &interfaces.AuditEvent{}
+		var metaRaw []byte
+		if err := rows.Scan(&ev.ID, &ev.UserID, &ev.Email, &ev.Action,
+			&ev.ResourceType, &ev.ResourceID, &ev.IP, &metaRaw, &ev.CreatedAt); err != nil {
+			return nil, err
+		}
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &ev.Meta)
+		}
+		events = append(events, ev)
+	}
+	if events == nil {
+		events = []*interfaces.AuditEvent{}
+	}
+	return events, rows.Err()
+}
+
+// ---- Flow versioning ----
+
+func (b *PostgresStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
+	meta, err := json.Marshal(v.Metadata)
+	if err != nil {
+		meta = []byte("{}")
+	}
+	content := v.Content
+	if content == nil {
+		content = json.RawMessage("{}")
+	}
+	_, err = b.db.ExecContext(ctx,
+		`INSERT INTO flow_versions (id, flow_id, version, comment, content, metadata, created_by, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (flow_id, version) DO NOTHING`,
+		v.ID, v.FlowID, v.Version, v.Comment, content, meta, v.CreatedBy, v.CreatedAt,
+	)
+	return err
+}
+
+func (b *PostgresStorageBackend) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*interfaces.FlowVersion, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := b.db.QueryContext(ctx,
+		`SELECT id, flow_id, version, comment, metadata, created_by, created_at
+		 FROM flow_versions WHERE flow_id = $1
+		 ORDER BY version DESC LIMIT $2`,
+		flowID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list flow versions: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []*interfaces.FlowVersion
+	for rows.Next() {
+		v := &interfaces.FlowVersion{}
+		var metaRaw []byte
+		if err := rows.Scan(&v.ID, &v.FlowID, &v.Version, &v.Comment,
+			&metaRaw, &v.CreatedBy, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &v.Metadata)
+		}
+		versions = append(versions, v)
+	}
+	if versions == nil {
+		versions = []*interfaces.FlowVersion{}
+	}
+	return versions, rows.Err()
+}
+
+func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) {
+	v := &interfaces.FlowVersion{}
+	var metaRaw []byte
+	err := b.db.QueryRowContext(ctx,
+		`SELECT id, flow_id, version, comment, content, metadata, created_by, created_at
+		 FROM flow_versions WHERE flow_id = $1 AND version = $2`,
+		flowID, version,
+	).Scan(&v.ID, &v.FlowID, &v.Version, &v.Comment, &v.Content, &metaRaw, &v.CreatedBy, &v.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, interfaces.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load flow version: %w", err)
+	}
+	if len(metaRaw) > 0 {
+		_ = json.Unmarshal(metaRaw, &v.Metadata)
+	}
+	return v, nil
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
 	id          TEXT        PRIMARY KEY,
@@ -1316,4 +1470,32 @@ BEGIN
 			FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
 	END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS audit_events (
+	id            TEXT        PRIMARY KEY,
+	user_id       TEXT        NOT NULL DEFAULT '',
+	email         TEXT        NOT NULL DEFAULT '',
+	action        TEXT        NOT NULL,
+	resource_type TEXT        NOT NULL DEFAULT '',
+	resource_id   TEXT        NOT NULL DEFAULT '',
+	ip            TEXT        NOT NULL DEFAULT '',
+	meta          JSONB       NOT NULL DEFAULT '{}',
+	created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS audit_events_user_id_idx    ON audit_events (user_id);
+CREATE INDEX IF NOT EXISTS audit_events_action_idx     ON audit_events (action);
+CREATE INDEX IF NOT EXISTS audit_events_created_at_idx ON audit_events (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS flow_versions (
+	id          TEXT        PRIMARY KEY,
+	flow_id     TEXT        NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+	version     INTEGER     NOT NULL,
+	comment     TEXT        NOT NULL DEFAULT '',
+	content     JSONB       NOT NULL DEFAULT '{}',
+	metadata    JSONB       NOT NULL DEFAULT '{}',
+	created_by  TEXT        NOT NULL DEFAULT '',
+	created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	UNIQUE (flow_id, version)
+);
+CREATE INDEX IF NOT EXISTS flow_versions_flow_id_idx ON flow_versions (flow_id);
 `

@@ -36,6 +36,16 @@ func TestScrubText(t *testing.T) {
 			input:    "Server=myServerAddress;Database=myDataBase;User Id=myUsername;Password=myPassword123;",
 			expected: "Server=myServerAddress;Database=myDataBase;User Id=myUsername;Password=[REDACTED];",
 		},
+		{
+			name:     "Connection String with Pwd alias",
+			input:    "Server=db;Uid=sa;Pwd=hunter2secret;",
+			expected: "Server=db;Uid=sa;Pwd=[REDACTED];",
+		},
+		{
+			name:     "YAML-style key with spaced colon",
+			input:    "api_key : AKIA1234567890ABCDEF",
+			expected: "api_key : [REDACTED]",
+		},
 	}
 
 	for _, tt := range tests {
@@ -136,5 +146,63 @@ func TestScrubDocument_HighEntropyFallback(t *testing.T) {
 	}
 	if b.Properties["Description"] != "Sends the daily summary report to the team" {
 		t.Errorf("expected human-readable Description to be untouched, got %q", b.Properties["Description"])
+	}
+}
+
+// TestScrubDocument_SensitiveFieldNames verifies that a property is masked when
+// its KEY names a credential, even on an action not listed in sensitiveActions
+// and even when the value is short/low-entropy (so the regex and entropy passes
+// would otherwise miss it).
+func TestScrubDocument_SensitiveFieldNames(t *testing.T) {
+	doc := &models.FlowDocument{
+		ID: "flow-1",
+		Subflows: []models.Subflow{
+			{
+				ID: "sf-1",
+				Blocks: []models.Block{
+					{
+						ID:      "b-1",
+						Type:    "ACTION",
+						RawType: "CustomConnector.Invoke", // not enumerated
+						Properties: map[string]string{
+							"Password":     "pw1",          // short, low entropy
+							"Api_Key":      "abc",          // separator + short
+							"AccessToken":  "xyz",
+							"Endpoint":     "https://api.example.com/v1",
+							"RequestName":  "Get daily report",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	scrubbed, err := ScrubDocument(doc)
+	if err != nil {
+		t.Fatalf("ScrubDocument failed: %v", err)
+	}
+	b := scrubbed.Subflows[0].Blocks[0]
+	for _, k := range []string{"Password", "Api_Key", "AccessToken"} {
+		if b.Properties[k] != "[REDACTED]" {
+			t.Errorf("expected credential field %q to be redacted, got %q", k, b.Properties[k])
+		}
+	}
+	if b.Properties["Endpoint"] != "https://api.example.com/v1" {
+		t.Errorf("expected Endpoint URL untouched, got %q", b.Properties["Endpoint"])
+	}
+	if b.Properties["RequestName"] != "Get daily report" {
+		t.Errorf("expected RequestName untouched, got %q", b.Properties["RequestName"])
+	}
+}
+
+func TestNormalizeFieldName(t *testing.T) {
+	cases := map[string]string{
+		"Api_Key": "apikey", "api-key": "apikey", "ApiKey": "apikey",
+		"Connection String": "connectionstring", "PWD": "pwd",
+	}
+	for in, want := range cases {
+		if got := normalizeFieldName(in); got != want {
+			t.Errorf("normalizeFieldName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

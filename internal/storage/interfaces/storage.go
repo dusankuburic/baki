@@ -90,6 +90,15 @@ type StorageBackend interface {
 	// Health check
 	Ping(ctx context.Context) error
 	Close() error
+
+	// Audit log
+	SaveAuditEvent(ctx context.Context, event *AuditEvent) error
+	ListAuditEvents(ctx context.Context, filter AuditFilter) ([]*AuditEvent, error)
+
+	// Flow versioning
+	SaveFlowVersion(ctx context.Context, v *FlowVersion) error
+	ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*FlowVersion, error)
+	LoadFlowVersion(ctx context.Context, flowID string, version int) (*FlowVersion, error)
 }
 
 // Organisation represents a team or workspace that owns shared flows.
@@ -233,4 +242,38 @@ type ParserSettings struct {
 type DemoModeSettings struct {
 	Enabled    bool
 	DailyLimit int
+}
+
+// AuditEvent records a user action for compliance and security visibility.
+type AuditEvent struct {
+	ID           string
+	UserID       string
+	Email        string
+	Action       string
+	ResourceType string
+	ResourceID   string
+	IP           string
+	Meta         map[string]string
+	CreatedAt    time.Time
+}
+
+// AuditFilter controls which audit events are returned.
+type AuditFilter struct {
+	UserID string
+	Action string
+	Limit  int
+	Offset int
+	Since  *time.Time
+}
+
+// FlowVersion stores a snapshot of a flow at a point in time.
+type FlowVersion struct {
+	ID        string
+	FlowID    string
+	Version   int
+	Comment   string
+	Content   json.RawMessage
+	Metadata  FlowMetadata
+	CreatedBy string
+	CreatedAt time.Time
 }

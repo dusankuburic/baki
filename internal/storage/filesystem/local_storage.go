@@ -282,6 +282,25 @@ func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID 
 func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error { return nil }
 func (b *LocalStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) { return nil, nil }
 
+// Audit log — not persisted in local mode.
+func (b *LocalStorageBackend) SaveAuditEvent(ctx context.Context, event *interfaces.AuditEvent) error {
+	return nil
+}
+func (b *LocalStorageBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
+	return []*interfaces.AuditEvent{}, nil
+}
+
+// Flow versioning — not supported in local desktop mode.
+func (b *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
+	return nil
+}
+func (b *LocalStorageBackend) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*interfaces.FlowVersion, error) {
+	return []*interfaces.FlowVersion{}, nil
+}
+func (b *LocalStorageBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) {
+	return nil, interfaces.ErrNotFound
+}
+
 func (b *LocalStorageBackend) Ping(ctx context.Context) error {
 	// Check if data directory is accessible
 	if _, err := os.Stat(b.dataDir); err != nil {

@@ -148,7 +148,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			case resp.StatusCode == 401:
 				return nil, ErrApiKeyInvalid
 			case resp.StatusCode == 429:
-				return nil, ErrRateLimited
+				return nil, rateLimitErr(resp)
 			case resp.StatusCode >= 500:
 				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
@@ -208,7 +208,7 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 			case resp.StatusCode == 401:
 				return ErrApiKeyInvalid
 			case resp.StatusCode == 429:
-				return ErrRateLimited
+				return rateLimitErr(resp)
 			case resp.StatusCode >= 500:
 				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}

@@ -31,7 +31,7 @@ function MiniBar({value, max, color}: {value: number; max: number; color: string
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
   return (
     <div className="h-1.5 w-full bg-surface-3 rounded-full overflow-hidden">
-      <div className={clsx('h-full rounded-full transition-all', color)} style={{width: `${pct}%`}} />
+      <div className={clsx('h-full rounded-full transition-all duration-fast', color)} style={{width: `${pct}%`}} />
     </div>
   )
 }
@@ -43,7 +43,7 @@ function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => vo
   return (
     <button
       onClick={onSelect}
-      className="w-full text-left p-3 rounded-lg border border-border-subtle bg-surface-0 hover:border-brand-500/30 hover:bg-surface-2 transition-all"
+      className="w-full text-left p-3 rounded-lg border border-border-subtle bg-surface-0 hover:border-brand-500/30 hover:bg-surface-2 transition-all duration-fast"
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-text-primary truncate">{m.subflowName}</span>
@@ -52,30 +52,30 @@ function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => vo
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
         <div>
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-[9px] text-text-tertiary uppercase tracking-wider">Cyclomatic</span>
+            <span className="text-2xs text-text-tertiary uppercase tracking-wider">Cyclomatic</span>
             <span className="text-2xs font-mono text-text-secondary tabular-nums">{m.cyclomaticComplexity}</span>
           </div>
           <MiniBar value={m.cyclomaticComplexity} max={30} color={cycloColor} />
         </div>
         <div>
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-[9px] text-text-tertiary uppercase tracking-wider">Cognitive</span>
+            <span className="text-2xs text-text-tertiary uppercase tracking-wider">Cognitive</span>
             <span className="text-2xs font-mono text-text-secondary tabular-nums">{m.cognitiveComplexity}</span>
           </div>
           <MiniBar value={m.cognitiveComplexity} max={40} color={cogColor} />
         </div>
       </div>
       <div className="flex items-center gap-3 mt-2 pt-2 border-t border-border-subtle">
-        <span className="flex items-center gap-1 text-[9px] text-text-tertiary">
+        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
           <ArrowDownToLine size={9} /> Fan-in: {m.fanIn}
         </span>
-        <span className="flex items-center gap-1 text-[9px] text-text-tertiary">
+        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
           <ArrowUpFromLine size={9} /> Fan-out: {m.fanOut}
         </span>
-        <span className="flex items-center gap-1 text-[9px] text-text-tertiary">
+        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
           Depth: {m.maxNestingDepth}
         </span>
-        <span className="flex items-center gap-1 text-[9px] text-text-tertiary">
+        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
           Vars: {m.variableCount}
         </span>
       </div>
@@ -116,14 +116,14 @@ export default function MetricsTab() {
       <div className="p-4 space-y-4">
         <div className={clsx('p-4 rounded-xl border', scoreBg(metrics.healthScore))}>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary">Health Score</span>
+            <span className="text-2xs font-bold uppercase tracking-widest text-text-tertiary">Health Score</span>
             <span className={clsx('text-2xl font-black font-mono tabular-nums', scoreColor(metrics.healthScore))}>
               {metrics.healthScore}
             </span>
           </div>
           <div className="h-2 w-full bg-surface-3 rounded-full overflow-hidden mb-2">
             <div
-              className={clsx('h-full rounded-full transition-all', scoreColor(metrics.healthScore).replace('text-', 'bg-'))}
+              className={clsx('h-full rounded-full transition-all duration-fast', scoreColor(metrics.healthScore).replace('text-', 'bg-'))}
               style={{width: `${metrics.healthScore}%`}}
             />
           </div>
@@ -157,7 +157,7 @@ export default function MetricsTab() {
 
         {ruleProfiles && ruleProfiles.length > 0 && (
           <div>
-            <h3 className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-2">Rule Performance</h3>
+            <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Rule Performance</h3>
             <div className="space-y-1">
               {ruleProfiles
                 .filter(rp => rp.durationMs > 0)
@@ -177,7 +177,7 @@ export default function MetricsTab() {
         )}
 
         <div>
-          <h3 className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-2">Per-Subflow Complexity</h3>
+          <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Per-Subflow Complexity</h3>
           <div className="space-y-2">
             {metrics.subflows.map(sf => (
               <SubflowMetricsRow
@@ -196,7 +196,7 @@ export default function MetricsTab() {
 function StatCard({label, value, warn}: {label: string; value: string | number; warn?: boolean}) {
   return (
     <div className="p-2.5 rounded-lg border border-border-subtle bg-surface-0">
-      <div className="text-[9px] text-text-tertiary uppercase tracking-wider mb-0.5">{label}</div>
+      <div className="text-2xs text-text-tertiary uppercase tracking-wider mb-0.5">{label}</div>
       <div className={clsx('text-sm font-bold font-mono tabular-nums', warn ? 'text-amber-400' : 'text-text-primary')}>
         {value}
       </div>
@@ -220,14 +220,14 @@ function DataFlowInsights() {
 
   return (
     <div>
-      <h3 className="text-[10px] font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
+      <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
         <ShieldAlert size={10} />
         Data Flow Insights
       </h3>
       <div className="space-y-2">
         {dataFlow.taintPaths && dataFlow.taintPaths.length > 0 && (
           <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
-            <div className="text-[10px] font-bold text-amber-400 mb-1">Taint Paths ({dataFlow.taintPaths.length})</div>
+            <div className="text-2xs font-bold text-amber-400 mb-1">Taint Paths ({dataFlow.taintPaths.length})</div>
             <p className="text-2xs text-text-secondary mb-2">
               User input flows to sensitive sinks without validation.
             </p>
@@ -246,7 +246,7 @@ function DataFlowInsights() {
         )}
         {dataFlow.deadData && dataFlow.deadData.length > 0 && (
           <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
-            <div className="text-[10px] font-bold text-text-tertiary mb-1">Dead Data Paths ({dataFlow.deadData.length})</div>
+            <div className="text-2xs font-bold text-text-tertiary mb-1">Dead Data Paths ({dataFlow.deadData.length})</div>
             <p className="text-2xs text-text-secondary">
               Variables set but only consumed by unreachable blocks.
             </p>

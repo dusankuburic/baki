@@ -62,7 +62,7 @@ export default function LoopControlBlock({block, selected = false, onClick}: Pro
                 {label}
             </span>
 
-            <span className="text-[10px] text-text-tertiary ml-auto">
+            <span className="text-2xs text-text-tertiary ml-auto">
                 L{block.lineNumber}
             </span>
         </div>

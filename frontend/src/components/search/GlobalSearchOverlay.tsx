@@ -145,7 +145,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
                 {/* Type filter chips */}
                 <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border-subtle bg-surface-1 flex-wrap">
-                    <span className="text-[10px] text-text-disabled uppercase tracking-wider mr-1 flex-shrink-0">Filter:</span>
+                    <span className="text-2xs text-text-disabled uppercase tracking-wider mr-1 flex-shrink-0">Filter:</span>
                     {FILTER_TYPES.map(({type, label}) => {
                         const active = activeTypes.has(type)
                         return (
@@ -153,7 +153,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                                 key={type}
                                 onClick={() => toggleType(type)}
                                 className={clsx(
-                                    'text-[10px] font-semibold px-2 py-0.5 rounded-full border transition-all duration-fast',
+                                    'text-2xs font-semibold px-2 py-0.5 rounded-full border transition-all duration-fast',
                                     active
                                         ? 'bg-brand-500/20 text-brand-300 border-brand-500/40'
                                         : 'bg-transparent text-text-tertiary border-border-subtle hover:border-border-default hover:text-text-secondary'
@@ -166,7 +166,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                     {activeTypes.size > 0 && (
                         <button
                             onClick={() => setActiveTypes(new Set())}
-                            className="text-[10px] text-text-tertiary hover:text-semantic-error transition-colors ml-1"
+                            className="text-2xs text-text-tertiary hover:text-semantic-error transition-colors ml-1"
                         >
                             Clear
                         </button>
@@ -224,7 +224,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                 </div>
 
                 {/* Footer */}
-                <div className="px-4 py-2 bg-surface-2 border-t border-border-subtle flex items-center justify-between text-[10px] text-text-tertiary uppercase tracking-widest font-semibold">
+                <div className="px-4 py-2 bg-surface-2 border-t border-border-subtle flex items-center justify-between text-2xs text-text-tertiary uppercase tracking-widest font-semibold">
                     <span>{results.length >= 50 ? '50+ results (refine query)' : `${results.length} results`}</span>
                     <div className="flex gap-4">
                         <span><kbd className="bg-surface-3 px-1 rounded border border-border-default mr-1">↑↓</kbd> Navigate</span>

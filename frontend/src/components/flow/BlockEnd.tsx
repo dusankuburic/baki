@@ -30,7 +30,7 @@ export default function BlockEnd({label, parentType}: BlockEndProps) {
                 className="w-1.5 h-1.5 rounded-full flex-shrink-0"
                 style={{backgroundColor: color}}
             />
-            <span className="text-[10px] font-semibold uppercase tracking-wider opacity-60" style={{color}}>
+            <span className="text-2xs font-semibold uppercase tracking-wider opacity-60" style={{color}}>
                 {label || (parentType ? `End ${parentType === 'ERROR_HANDLER' ? 'Error' : parentType}` : 'End')}
             </span>
         </div>

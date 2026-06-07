@@ -70,6 +70,8 @@ export default function SourceFilePicker({files, selected, onSelectionChange}: P
   return (
     <div ref={ref} className="relative px-3">
       <button
+        aria-haspopup="listbox"
+        aria-expanded={open}
         className={clsx(
           'flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg text-xs transition-colors border',
           open ? 'bg-surface-2 border-border-default' : 'hover:bg-surface-2 border-transparent'
@@ -85,7 +87,7 @@ export default function SourceFilePicker({files, selected, onSelectionChange}: P
             {selected.length}
           </span>
         )}
-        <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform', open && 'rotate-180')} />
+        <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast', open && 'rotate-180')} />
       </button>
 
       {open && (

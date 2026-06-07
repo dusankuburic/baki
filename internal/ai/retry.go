@@ -20,12 +20,18 @@ func isRetryable(err error) bool {
 	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrProviderDown)
 }
 
-// backoff sleeps for an exponentially increasing, jittered interval, returning
-// early (with ctx.Err()) if the context is cancelled during the wait.
-func backoff(ctx context.Context, attempt int) error {
+// backoff sleeps before the next retry, returning early (with ctx.Err()) if the
+// context is cancelled during the wait. The base wait is an exponentially
+// increasing, jittered interval; if the previous error carried a server
+// Retry-After hint, the wait is raised to at least that hint so we respect the
+// provider's guidance instead of hammering it on a fixed schedule.
+func backoff(ctx context.Context, attempt int, lastErr error) error {
 	d := retryBaseDelay << attempt // 500ms, 1s, 2s, …
 	// Full jitter: random in [0, d] to avoid thundering-herd alignment.
 	d = time.Duration(rand.Int63n(int64(d) + 1))
+	if hint := retryAfterFrom(lastErr); hint > d {
+		d = hint
+	}
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
@@ -52,7 +58,7 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 	var lastErr error
 	for attempt := range retryMaxAttempts {
 		if attempt > 0 {
-			if err := backoff(ctx, attempt-1); err != nil {
+			if err := backoff(ctx, attempt-1, lastErr); err != nil {
 				return nil, err
 			}
 		}
@@ -69,7 +75,7 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 	var lastErr error
 	for attempt := range retryMaxAttempts {
 		if attempt > 0 {
-			if err := backoff(ctx, attempt-1); err != nil {
+			if err := backoff(ctx, attempt-1, lastErr); err != nil {
 				return nil, err
 			}
 		}
@@ -89,7 +95,7 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 	var lastErr error
 	for attempt := range retryMaxAttempts {
 		if attempt > 0 {
-			if err := backoff(ctx, attempt-1); err != nil {
+			if err := backoff(ctx, attempt-1, lastErr); err != nil {
 				return err
 			}
 		}

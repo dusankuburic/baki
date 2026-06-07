@@ -77,7 +77,7 @@ export default function RegressionDiffView() {
 
           {changeIndices.length > 0 && (
             <div className="flex items-center gap-1 border-l border-border-subtle pl-4 ml-2">
-              <span className="text-[10px] text-text-tertiary mr-2 font-medium">
+              <span className="text-2xs text-text-tertiary mr-2 font-medium">
                 {currentIndex !== -1 ? changeIndices.indexOf(currentIndex) + 1 : 0} / {changeIndices.length} CHANGES
               </span>
               <IconButton 
@@ -97,7 +97,7 @@ export default function RegressionDiffView() {
         </div>
         <button 
           onClick={() => setMainPaneView('block')}
-          className="text-[10px] font-black uppercase tracking-widest text-brand-500 hover:text-brand-400 transition-colors"
+          className="text-2xs font-black uppercase tracking-widest text-brand-500 hover:text-brand-400 transition-colors"
         >
           Exit Diff Mode
         </button>
@@ -114,7 +114,7 @@ export default function RegressionDiffView() {
                 <h3 className="text-sm font-bold text-text-primary">Subflow: {item.data.name}</h3>
                 {item.data.change !== 'none' && (
                   <span className={clsx(
-                    "text-[10px] font-black uppercase px-1.5 py-0.5 rounded",
+                    "text-2xs font-black uppercase px-1.5 py-0.5 rounded",
                     item.data.change === 'added' && "bg-semantic-success/10 text-semantic-success",
                     item.data.change === 'removed' && "bg-semantic-error/10 text-semantic-error",
                     item.data.change === 'modified' && "bg-semantic-warning/10 text-semantic-warning"
@@ -143,7 +143,7 @@ export default function RegressionDiffView() {
               <div className="w-8 flex flex-col items-center shrink-0 border-r border-border-subtle/30 mr-4">
                 {isAdded && <Plus size={12} className="text-semantic-success mt-1" />}
                 {isRemoved && <Minus size={12} className="text-semantic-error mt-1" />}
-                <span className="text-[10px] font-mono text-text-tertiary mt-auto">{block.lineNumber}</span>
+                <span className="text-2xs font-mono text-text-tertiary mt-auto">{block.lineNumber}</span>
               </div>
 
               {/* Indent Spacer */}
@@ -164,7 +164,7 @@ export default function RegressionDiffView() {
                 </span>
                 
                 {item.data.change === 'modified' && (
-                  <span className="text-[10px] text-semantic-warning font-bold bg-semantic-warning/10 px-1.5 rounded ml-auto">
+                  <span className="text-2xs text-semantic-warning font-bold bg-semantic-warning/10 px-1.5 rounded ml-auto">
                     MODIFIED
                   </span>
                 )}

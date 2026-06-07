@@ -176,7 +176,9 @@ export default function App() {
 
     const handleSidebarDrag = useCallback((delta: number) => {
         const base = sidebarLiveWidthRef.current ?? layoutRef.current.sidebarWidth
-        const next = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, base + delta))
+        // Round to whole pixels: clientX deltas are fractional on HiDPI displays,
+        // and the persisted width is an int server-side (decode rejects floats).
+        const next = Math.round(Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, base + delta)))
         sidebarLiveWidthRef.current = next
         setSidebarLiveWidth(next)
     }, [])
@@ -191,7 +193,7 @@ export default function App() {
 
     const handleInspectorDrag = useCallback((delta: number) => {
         const base = inspectorLiveWidthRef.current ?? layoutRef.current.inspectorWidth
-        const next = Math.min(MAX_INSPECTOR, Math.max(MIN_INSPECTOR, base - delta))
+        const next = Math.round(Math.min(MAX_INSPECTOR, Math.max(MIN_INSPECTOR, base - delta)))
         inspectorLiveWidthRef.current = next
         setInspectorLiveWidth(next)
     }, [])

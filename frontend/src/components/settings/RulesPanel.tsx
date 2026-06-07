@@ -97,7 +97,7 @@ export default function RulesPanel() {
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-bold text-text-primary">{rule.name}</h3>
-                  <span className="text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-surface-3 text-text-tertiary">
+                  <span className="text-2xs font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-surface-3 text-text-tertiary">
                     {rule.category}
                   </span>
                 </div>
@@ -111,7 +111,7 @@ export default function RulesPanel() {
 
             {rule.enabled && (
               <div className="flex items-center gap-4 animate-fade-in">
-                <span className="text-[10px] font-bold uppercase text-text-tertiary">Report as:</span>
+                <span className="text-2xs font-bold uppercase text-text-tertiary">Report as:</span>
                 <SegmentedControl
                   size="sm"
                   value={rule.defaultSeverity}

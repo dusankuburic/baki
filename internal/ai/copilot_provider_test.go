@@ -153,7 +153,7 @@ func TestCopilotProvider_Chat_429_ReturnsErrRateLimited(t *testing.T) {
 		Model:    "gpt-4o",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrRateLimited {
+	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
 }

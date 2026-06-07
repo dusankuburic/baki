@@ -79,6 +79,11 @@ func registerRoutes(rt *Router, r chi.Router) {
 			r.Put("/", h.Library.handleLibraryUpdate)
 			r.Delete("/", h.Library.handleLibraryDelete)
 			r.Get("/content", h.Library.handleLibraryGetContent)
+			r.Route("/versions", func(r chi.Router) {
+				r.Get("/", h.Library.handleListFlowVersions)
+				r.Post("/", h.Library.handleSaveFlowVersion)
+				r.Get("/{vn}", h.Library.handleGetFlowVersion)
+			})
 		})
 	})
 
@@ -87,6 +92,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/stream", h.Chat.handleStreamChatMessage)
 		r.Post("/begin", h.Chat.handleBeginStream)
 		r.Post("/cancel", h.Chat.handleCancelStream)
+		r.Post("/resume", h.Chat.handleResumeStream)
 		r.Post("/get", h.Chat.handleGetConversation)
 		r.Post("/save", h.Chat.handleSaveConversation)
 		r.Post("/clear", h.Chat.handleClearConversation)
@@ -190,6 +196,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Put("/users/{id}/role", h.Admin.handleAdminUserRole)
 		r.Post("/migration/start", h.Admin.handleMigrationStart)
 		r.Get("/migration/status", h.Admin.handleMigrationStatus)
+		r.Get("/audit", h.Admin.handleAdminAuditList)
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

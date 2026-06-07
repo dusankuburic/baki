@@ -54,7 +54,7 @@ export default function FlowCard({ flow, onOpen, className }: FlowCardProps) {
       </div>
 
       {flow.isSharedWithMe && (
-        <span className="self-start text-[10px] font-medium px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-400">
+        <span className="self-start text-2xs font-medium px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-400">
           Shared
         </span>
       )}

@@ -267,7 +267,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
       {/* Legend / Stats overlay */}
       {!loading && !error && (
         <div className="absolute bottom-6 left-6 p-4 bg-surface-1/80 backdrop-blur-md border border-border-default rounded-xl shadow-lg pointer-events-none animate-slide-up">
-          <h4 className="text-[10px] font-black uppercase tracking-widest text-text-tertiary mb-3">Subflow Map Legend</h4>
+          <h4 className="text-2xs font-black uppercase tracking-widest text-text-tertiary mb-3">Subflow Map Legend</h4>
           <div className="space-y-2">
             {subflowId && (
               <div className="flex items-center gap-3">

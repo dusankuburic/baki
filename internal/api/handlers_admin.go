@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
@@ -72,7 +73,35 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, AuditActionRoleChange, "user", id, map[string]string{"new_role": req.Role})
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	filter := storageif.AuditFilter{
+		UserID: q.Get("userId"),
+		Action: q.Get("action"),
+		Limit:  limit,
+		Offset: offset,
+	}
+
+	events, err := h.backend.ListAuditEvents(r.Context(), filter)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, events)
 }
 
 func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Request) {

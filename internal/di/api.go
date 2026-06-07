@@ -73,4 +73,8 @@ var APIModule = fx.Options(
 		},
 		api.NewRouter,
 	),
+	fx.Invoke(func(lib *api.LibraryHandler, analysis *api.AnalysisHandler, backend storageif.StorageBackend) {
+		lib.SetBackend(backend)
+		analysis.SetBackend(backend)
+	}),
 )

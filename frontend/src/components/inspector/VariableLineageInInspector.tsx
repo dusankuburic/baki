@@ -41,7 +41,7 @@ export default function VariableLineageInInspector() {
         </h3>
         <button
           onClick={() => useAnalysisStore.getState().setVariableLineage(null)}
-          className="text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+          className="text-2xs text-text-tertiary hover:text-text-secondary transition-colors"
         >
           Clear
         </button>
@@ -57,7 +57,7 @@ export default function VariableLineageInInspector() {
             key={f.id}
             onClick={() => toggleFilter(f.id)}
             className={clsx(
-              'text-[9px] font-bold px-2 py-0.5 rounded-full border transition-all',
+              'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
               filters.has(f.id)
                 ? `${f.bg} ${f.color} border-transparent`
                 : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
@@ -85,21 +85,21 @@ export default function VariableLineageInInspector() {
             </div>
 
             <div
-              className="p-2.5 rounded-lg border border-border-subtle bg-surface-1 hover:border-brand-500/50 hover:bg-surface-2 cursor-pointer transition-all"
+              className="p-2.5 rounded-lg border border-border-subtle bg-surface-1 hover:border-brand-500/50 hover:bg-surface-2 cursor-pointer transition-all duration-fast"
               onClick={() => navigateToBlock(event.blockId)}
             >
               <div className="flex items-center justify-between mb-1">
                 <span className={clsx(
-                  'text-[9px] font-bold uppercase tracking-tighter',
+                  'text-2xs font-bold uppercase tracking-tighter',
                   event.type === 'init'   && 'text-green-500',
                   event.type === 'mutate' && 'text-amber-500',
                   event.type === 'read'   && 'text-blue-500'
                 )}>
                   {event.type}
                 </span>
-                <span className="text-[9px] font-mono text-text-tertiary">L{event.line}</span>
+                <span className="text-2xs font-mono text-text-tertiary">L{event.line}</span>
               </div>
-              <div className="text-[10px] text-text-secondary truncate">
+              <div className="text-2xs text-text-secondary truncate">
                 {subflowNameMap.get(event.subflowId) ?? event.subflowId}
               </div>
             </div>

@@ -104,7 +104,7 @@ func TestDemoProvider_Chat_429(t *testing.T) {
 		Model:    "demo",
 		Messages: []Message{{Role: "user", Content: "hi"}},
 	})
-	if err != ErrRateLimited {
+	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
 }
@@ -287,7 +287,7 @@ func TestOpenAIProvider_Chat_429(t *testing.T) {
 	_, err := p.Chat(context.Background(), Request{
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrRateLimited {
+	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
 }
@@ -382,7 +382,7 @@ func TestGeminiProvider_Chat_429(t *testing.T) {
 		Model:    "gemini-2.5-pro",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrRateLimited {
+	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
 }

@@ -40,7 +40,9 @@ export default function ResizableChatPanel({
   const resize = useCallback((e: MouseEvent) => {
     if (!isResizingRef.current) return
     const delta = startYRef.current - e.clientY
-    const newHeight = Math.max(minHeight, Math.min(maxHeight, startHeightRef.current + delta))
+    // Round to whole pixels: clientY is fractional on HiDPI displays and the
+    // persisted chatPanelHeight is an int server-side (decode rejects floats).
+    const newHeight = Math.round(Math.max(minHeight, Math.min(maxHeight, startHeightRef.current + delta)))
     pendingHeightRef.current = newHeight
     if (containerRef.current) {
       containerRef.current.style.height = newHeight + 'px'
@@ -124,7 +126,7 @@ export default function ResizableChatPanel({
     >
       {/* Pop-out button */}
       <button
-        className="absolute top-2 right-2 z-10 p-1.5 rounded-lg bg-surface-2/80 backdrop-blur border border-border-subtle hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-all opacity-0 group-hover:opacity-100"
+        className="absolute top-2 right-2 z-10 p-1.5 rounded-lg bg-surface-2/80 backdrop-blur border border-border-subtle hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-all duration-fast opacity-0 group-hover:opacity-100"
         onClick={togglePopOut}
         title="Pop out to floating panel"
       >

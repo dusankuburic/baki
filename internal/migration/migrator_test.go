@@ -143,6 +143,15 @@ func (m *memBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) (
 func (m *memBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error { return nil }
 func (m *memBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) { return nil, nil }
 
+// ---- Audit log ----
+func (m *memBackend) SaveAuditEvent(ctx context.Context, event *interfaces.AuditEvent) error { return nil }
+func (m *memBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) { return []*interfaces.AuditEvent{}, nil }
+
+// ---- Flow versioning ----
+func (m *memBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error { return nil }
+func (m *memBackend) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*interfaces.FlowVersion, error) { return []*interfaces.FlowVersion{}, nil }
+func (m *memBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) { return nil, interfaces.ErrNotFound }
+
 // --- tests ---
 
 func TestMigrator_MigratesFlows(t *testing.T) {

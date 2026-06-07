@@ -107,7 +107,7 @@ export default function LibraryTab() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-semibold text-text-primary truncate">{f.name}</div>
-                    {f.description && <div className="text-[10px] text-text-tertiary truncate">{f.description}</div>}
+                    {f.description && <div className="text-2xs text-text-tertiary truncate">{f.description}</div>}
                   </div>
                   <button
                     onClick={(e) => handleDelete(e, f.id)}
@@ -116,7 +116,7 @@ export default function LibraryTab() {
                     <Trash2 size={12} />
                   </button>
                 </div>
-                <div className="mt-1.5 flex items-center gap-2 text-[10px] text-text-muted">
+                <div className="mt-1.5 flex items-center gap-2 text-2xs text-text-muted">
                   <span className="flex items-center gap-0.5">
                     <FolderOpen size={10} />
                     {f.blockCount}

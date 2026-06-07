@@ -115,7 +115,7 @@ func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 			case resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code):
 				return nil, ErrInsufficientBalance
 			case resp.StatusCode == 429:
-				return nil, ErrRateLimited
+				return nil, rateLimitErr(resp)
 			case resp.StatusCode >= 500:
 				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
@@ -179,7 +179,7 @@ func (g *GLMProvider) Stream(ctx context.Context, req Request, onChunk func(Chun
 			case resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code):
 				return ErrInsufficientBalance
 			case resp.StatusCode == 429:
-				return ErrRateLimited
+				return rateLimitErr(resp)
 			case resp.StatusCode >= 500:
 				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}

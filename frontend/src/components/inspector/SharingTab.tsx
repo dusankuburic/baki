@@ -124,7 +124,7 @@ export const SharingTab: React.FC = () => {
               {isAdding ? 'Inviting...' : 'Invite'}
             </button>
           </div>
-          {error && <p className="text-[10px] text-red-500 font-medium">{error}</p>}
+          {error && <p className="text-2xs text-red-500 font-medium">{error}</p>}
         </form>
       </div>
 
@@ -140,7 +140,7 @@ export const SharingTab: React.FC = () => {
               <div key={c.userId} className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border-subtle/50 group">
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-medium text-text-primary truncate">{c.email}</span>
-                  <span className="text-[10px] text-text-tertiary flex items-center gap-1">
+                  <span className="text-2xs text-text-tertiary flex items-center gap-1">
                     {c.permission === 'admin' ? <Shield size={10} /> : 
                      c.permission === 'editor' ? <Edit3 size={10} /> : <Eye size={10} />}
                     <span className="capitalize">{c.permission}</span>
@@ -151,7 +151,7 @@ export const SharingTab: React.FC = () => {
                      <select
                         value={c.permission}
                         onChange={(e) => handleUpdatePermission(c.userId, e.target.value as Permission)}
-                        className="bg-transparent border-none text-[10px] text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
+                        className="bg-transparent border-none text-2xs text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
                       >
                         <option value="viewer">Viewer</option>
                         <option value="editor">Editor</option>

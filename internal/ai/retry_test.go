@@ -3,7 +3,9 @@ package ai
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 )
 
 // retryStub lets a test script a sequence of Chat/Stream outcomes.
@@ -113,5 +115,56 @@ func TestRetry_Stream_RetriesWhenFailedBeforeAnyChunk(t *testing.T) {
 	}
 	if stub.streamCall != 2 {
 		t.Errorf("expected 2 Stream calls (1 retry), got %d", stub.streamCall)
+	}
+}
+
+func TestRateLimitError_UnwrapsAndIsRetryable(t *testing.T) {
+	err := &RateLimitError{RetryAfter: 2 * time.Second}
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatal("RateLimitError should unwrap to ErrRateLimited")
+	}
+	if !isRetryable(err) {
+		t.Fatal("RateLimitError should be retryable")
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	mk := func(v string) *http.Response {
+		h := http.Header{}
+		if v != "" {
+			h.Set("Retry-After", v)
+		}
+		return &http.Response{Header: h}
+	}
+	if got := parseRetryAfter(mk("2")); got != 2*time.Second {
+		t.Errorf("delta-seconds: got %v, want 2s", got)
+	}
+	if got := parseRetryAfter(mk("")); got != 0 {
+		t.Errorf("missing header: got %v, want 0", got)
+	}
+	if got := parseRetryAfter(mk("garbage")); got != 0 {
+		t.Errorf("invalid header: got %v, want 0", got)
+	}
+	if got := parseRetryAfter(mk("-5")); got != 0 {
+		t.Errorf("negative seconds: got %v, want 0", got)
+	}
+	future := time.Now().Add(30 * time.Second).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfter(mk(future)); got <= 0 || got > 31*time.Second {
+		t.Errorf("http-date: got %v, want ~30s", got)
+	}
+	if got := parseRetryAfter(nil); got != 0 {
+		t.Errorf("nil response: got %v, want 0", got)
+	}
+}
+
+func TestBackoff_HonorsRetryAfterFloor(t *testing.T) {
+	start := time.Now()
+	err := backoff(context.Background(), 0, &RateLimitError{RetryAfter: 600 * time.Millisecond})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("backoff returned error: %v", err)
+	}
+	if elapsed < 600*time.Millisecond {
+		t.Errorf("expected wait >= 600ms from Retry-After, got %v", elapsed)
 	}
 }

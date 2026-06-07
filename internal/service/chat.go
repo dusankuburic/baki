@@ -23,6 +23,36 @@ import (
 
 const maxChatStreamDuration = 5 * time.Minute
 
+// contextReserve is the number of tokens kept free for the prompt/context when
+// clamping a caller-supplied MaxTokens against the model's context window.
+const contextReserve = 4000
+
+// normalizeChatParams clamps caller-supplied generation params into safe ranges
+// so an out-of-range value can't reach the provider (some reject Temperature
+// outside [0,2] or a MaxTokens larger than the context window with a 400). It is
+// pure so it can be unit-tested independently of provider wiring. A ctxLimit of
+// 0 (unknown) leaves MaxTokens untouched.
+func normalizeChatParams(temperature float64, maxTokens, ctxLimit int) (float64, int) {
+	if temperature < 0 {
+		temperature = 0
+	} else if temperature > 2 {
+		temperature = 2
+	}
+	if maxTokens < 0 {
+		maxTokens = 0
+	}
+	if ctxLimit > 0 {
+		cap := ctxLimit - contextReserve
+		if cap < 0 {
+			cap = 0
+		}
+		if maxTokens > cap {
+			maxTokens = cap
+		}
+	}
+	return temperature, maxTokens
+}
+
 // resumeRetention is how long a finished stream's buffer is kept so a client
 // that was disconnected when the stream ended can still fetch the final text
 // (and done/error) on reconnect via ResumeStream.
@@ -210,12 +240,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		}
 		messages = append(messages, ai.Message{Role: "user", Content: scrubber.ScrubText(req.UserMessage)})
 
+		temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, provider.ContextLimit())
 		aiReq := ai.Request{
 			SystemPrompt: sysPrompt,
 			Messages:     messages,
 			Model:        req.Model,
-			Temperature:  req.Temperature,
-			MaxTokens:    req.MaxTokens,
+			Temperature:  temperature,
+			MaxTokens:    maxTokens,
 		}
 
 		err = provider.Stream(ctx, aiReq, func(chunk ai.Chunk) {

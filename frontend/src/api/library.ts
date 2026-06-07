@@ -46,6 +46,9 @@ export const libraryApi = {
   create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> =>
     request('/api/library', req),
 
+  update: (id: string, patch: Partial<Pick<LibraryFlow, 'name' | 'description'>>): Promise<LibraryFlow> =>
+    request(`/api/library/${id}`, patch, 'PUT'),
+
   delete: (id: string): Promise<void> =>
     request(`/api/library/${id}`, undefined, 'DELETE'),
 }

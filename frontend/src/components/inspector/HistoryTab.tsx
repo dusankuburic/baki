@@ -1,0 +1,125 @@
+import React, { useState, useEffect, useCallback } from 'react'
+import { History, Plus, Tag } from 'lucide-react'
+import { versionsApi, type FlowVersion } from '@/api/admin'
+import { useFlowStore } from '@/stores/flowStore'
+import { Spinner } from '@/components/shared'
+
+export const HistoryTab: React.FC = () => {
+  const document = useFlowStore(s => s.document)
+  const [versions, setVersions] = useState<FlowVersion[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [comment, setComment] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchVersions = useCallback(async () => {
+    if (!document?.id) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const list = await versionsApi.list(document.id, 50)
+      setVersions(list)
+    } catch {
+      setError('Failed to load versions')
+      setVersions([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [document?.id])
+
+  useEffect(() => {
+    fetchVersions()
+  }, [fetchVersions])
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!document?.id) return
+    setIsSaving(true)
+    setError(null)
+    try {
+      await versionsApi.save(document.id, comment)
+      setComment('')
+      fetchVersions()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save version')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (!document) {
+    return (
+      <div className="p-8 text-center text-text-tertiary">
+        <History size={32} className="mx-auto mb-2 opacity-20" />
+        <p className="text-sm">Open a flow to view version history.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-surface-1 overflow-y-auto">
+      <div className="p-4 border-b border-border-subtle bg-surface-2/50">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3 flex items-center gap-1.5">
+          <Plus size={13} />
+          Save Snapshot
+        </h3>
+        <form onSubmit={handleSave} className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Optional comment…"
+            value={comment}
+            onChange={e => setComment(e.target.value)}
+            className="flex-1 bg-surface-0 border border-border-default rounded-md px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+          />
+          <button
+            type="submit"
+            disabled={isSaving}
+            className="px-3 py-1.5 bg-brand-600 text-white rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors"
+          >
+            {isSaving ? 'Saving…' : 'Save'}
+          </button>
+        </form>
+        {error && <p className="text-2xs text-red-500 mt-1">{error}</p>}
+      </div>
+
+      <div className="flex-1 p-4">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">
+          Version History
+        </h3>
+        {isLoading ? (
+          <div className="flex justify-center p-8"><Spinner size={20} /></div>
+        ) : versions.length === 0 ? (
+          error ? (
+            <div className="text-center py-8 text-red-500 text-xs">{error}</div>
+          ) : (
+            <div className="text-center py-8 text-text-muted text-xs">
+              No versions saved yet. Use &quot;Save Snapshot&quot; above to record the current state.
+            </div>
+          )
+        ) : (
+          <div className="space-y-2">
+            {versions.map(v => (
+              <div key={v.id} className="flex items-start gap-3 p-2.5 rounded-lg bg-surface-2 border border-border-subtle/50">
+                <div className="flex flex-col items-center gap-1 shrink-0">
+                  <Tag size={13} className="text-text-tertiary" />
+                  <span className="text-2xs text-text-tertiary font-mono">v{v.version}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-text-primary truncate">
+                    {v.comment || <span className="text-text-tertiary italic">No comment</span>}
+                  </p>
+                  <p className="text-2xs text-text-tertiary mt-0.5">
+                    {new Date(v.createdAt).toLocaleString()}
+                    {v.metadata?.blockCount != null && (
+                      <span className="ml-2 text-text-muted">{v.metadata.blockCount} blocks</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

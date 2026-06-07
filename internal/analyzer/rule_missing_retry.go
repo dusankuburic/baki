@@ -51,6 +51,7 @@ func (r *MissingRetryRule) Check(block *models.Block, ctx *RuleContext) []models
 		BlockID:     block.ID,
 		SubflowID:   block.SubflowID,
 		Suggestion:  "Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.",
+		AutoFixHint: "Wrap the action: SET %RetryCount% = 0 > LOOP while %RetryCount% < 3 > [action] > ON ERROR: Wait 2s, SET %RetryCount% = %RetryCount% + 1 > END LOOP.",
 		Metadata:    map[string]interface{}{"rawType": block.RawType},
 	}}
 }

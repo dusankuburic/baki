@@ -156,3 +156,33 @@ func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeChatParams(t *testing.T) {
+	cases := []struct {
+		name      string
+		temp      float64
+		maxTok    int
+		ctxLimit  int
+		wantTemp  float64
+		wantMaxTok int
+	}{
+		{"in range untouched", 0.7, 1000, 128000, 0.7, 1000},
+		{"temp below zero clamps to 0", -1, 100, 0, 0, 100},
+		{"temp above two clamps to 2", 5, 100, 0, 2, 100},
+		{"negative maxtokens clamps to 0", 0.5, -10, 0, 0.5, 0},
+		{"maxtokens over context window is capped", 0.5, 999999, 8000, 0.5, 8000 - contextReserve},
+		{"unknown ctxlimit leaves maxtokens", 0.5, 999999, 0, 0.5, 999999},
+		{"tiny context window floors cap at 0", 0.5, 100, 1000, 0.5, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gotTemp, gotMaxTok := normalizeChatParams(c.temp, c.maxTok, c.ctxLimit)
+			if gotTemp != c.wantTemp {
+				t.Errorf("temp = %v, want %v", gotTemp, c.wantTemp)
+			}
+			if gotMaxTok != c.wantMaxTok {
+				t.Errorf("maxTokens = %v, want %v", gotMaxTok, c.wantMaxTok)
+			}
+		})
+	}
+}

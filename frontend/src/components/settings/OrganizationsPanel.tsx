@@ -175,7 +175,7 @@ export default function OrganizationsPanel() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-text-primary truncate">{org.name}</span>
                       {isOwner && (
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">Owner</span>
+                        <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">Owner</span>
                       )}
                     </div>
                     <p className="text-xs text-text-tertiary mt-0.5">

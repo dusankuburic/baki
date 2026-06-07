@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
@@ -17,11 +18,14 @@ import (
 type LibraryHandler struct {
 	libSvc   *service.LibraryService
 	security *SecurityConfig
+	backend  storageif.StorageBackend
 }
 
 func NewLibraryHandler(libSvc *service.LibraryService, security *SecurityConfig) *LibraryHandler {
 	return &LibraryHandler{libSvc: libSvc, security: security}
 }
+
+func (h *LibraryHandler) SetBackend(b storageif.StorageBackend) { h.backend = b }
 
 type libraryFlow struct {
 	ID               string    `json:"id"`
@@ -200,4 +204,106 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	render.JSON(w, h.toLibraryFlow(existing, userID, h.libSvc.ResolveOwnerName(r.Context(), existing.OwnerID)))
+}
+
+// handleListFlowVersions returns the version history for a library flow.
+func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.JSON(w, []storageif.FlowVersion{})
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
+
+	if _, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID); err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	versions, err := h.backend.ListFlowVersions(r.Context(), id, limit)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, versions)
+}
+
+// handleSaveFlowVersion snapshots the current flow content as a new version.
+func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
+
+	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	var req struct {
+		Comment string `json:"comment"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if len(req.Comment) > 500 {
+		render.Error(w, fmt.Errorf("comment must be 500 characters or fewer"), http.StatusBadRequest)
+		return
+	}
+
+	existing, err := h.backend.ListFlowVersions(r.Context(), id, 1)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	nextVersion := 1
+	if len(existing) > 0 {
+		nextVersion = existing[0].Version + 1
+	}
+
+	v := &storageif.FlowVersion{
+		ID:        uuid.NewString(),
+		FlowID:    id,
+		Version:   nextVersion,
+		Comment:   req.Comment,
+		Content:   doc.Content,
+		Metadata:  doc.Metadata,
+		CreatedBy: userID,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := h.backend.SaveFlowVersion(r.Context(), v); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(nextVersion)})
+	w.WriteHeader(http.StatusCreated)
+	render.JSON(w, v)
+}
+
+// handleGetFlowVersion loads a specific historical version.
+func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
+
+	if _, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID); err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
+		return
+	}
+
+	vn, _ := strconv.Atoi(chi.URLParam(r, "vn"))
+	v, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	render.JSON(w, v)
 }

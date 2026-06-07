@@ -1,5 +1,6 @@
 import {useEffect, useState} from 'react'
-import {Check, Loader, User, Shield} from 'lucide-react'
+import {Check, User, Shield} from 'lucide-react'
+import {Spinner} from '@/components/shared'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useAuthStore} from '@/stores/authStore'
@@ -35,7 +36,7 @@ export default function StatusBar() {
                         </span>
                         {isAnalyzing && (
                             <span className="flex items-center gap-1 ml-2">
-                                <Loader size={10} className="animate-spin" />
+                                <Spinner size={10} />
                                 Analyzing... {progress.total > 0 ? Math.round(progress.current / progress.total * 100) : 0}%
                             </span>
                         )}
@@ -47,7 +48,7 @@ export default function StatusBar() {
                     </>
                 ) : isParsing ? (
                     <span className="flex items-center gap-1">
-                        <Loader size={10} className="animate-spin" />
+                        <Spinner size={10} />
                         Parsing... {parseProgress > 0 ? `${parseProgress}%` : ''}
                     </span>
                 ) : (
@@ -60,7 +61,7 @@ export default function StatusBar() {
                         className="flex items-center gap-1 text-semantic-warning"
                         title="Live updates connection"
                     >
-                        <Loader size={10} className="animate-spin" />
+                        <Spinner size={10} />
                         {conn === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
                     </span>
                 )}

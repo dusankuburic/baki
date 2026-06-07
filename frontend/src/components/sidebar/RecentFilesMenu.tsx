@@ -108,7 +108,7 @@ export default function RecentFilesMenu({files, onSelect, onRemove, onClear, onC
                     {folders.length > 0 && (
                         <>
                             <div className="px-3 pt-2 pb-1">
-                                <span className="text-[10px] font-semibold uppercase tracking-wider text-text-disabled">
+                                <span className="text-2xs font-semibold uppercase tracking-wider text-text-disabled">
                                     Folders
                                 </span>
                             </div>
@@ -121,7 +121,7 @@ export default function RecentFilesMenu({files, onSelect, onRemove, onClear, onC
                     {items.length > 0 && (
                         <>
                             <div className={`px-3 pb-1 ${folders.length > 0 ? 'pt-2 border-t border-border-subtle mt-1' : 'pt-2'}`}>
-                                <span className="text-[10px] font-semibold uppercase tracking-wider text-text-disabled">
+                                <span className="text-2xs font-semibold uppercase tracking-wider text-text-disabled">
                                     Files
                                 </span>
                             </div>

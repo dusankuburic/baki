@@ -19,12 +19,26 @@ func errStreamTruncated(provider string) error {
 	return fmt.Errorf("%s stream truncated before terminal marker: %w", provider, io.ErrUnexpectedEOF)
 }
 
+// errStreamMalformed reports a stream that ended without a terminal marker AND
+// had one or more undecodable `data:` events. Previously each parser silently
+// `continue`d past JSON-unmarshal failures, so a fully malformed stream looked
+// like a clean empty response; surfacing it lets the chat service show an error.
+func errStreamMalformed(provider string, n int) error {
+	return fmt.Errorf("%s stream had %d undecodable event(s) and no terminal marker", provider, n)
+}
+
+// Note on cancellation: every provider builds its request with
+// http.NewRequestWithContext, so cancelling the caller's context aborts the body
+// read and ends the scanner loop (surfacing via scanner.Err()). No explicit
+// per-line context check is needed in these parsers.
+
 func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var eventType string
 	var doneSent bool
+	var parseErrors int
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -56,6 +70,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				} `json:"message"`
 			}
 			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
 				continue
 			}
 			if parsed.Message.Usage.InputTokens > 0 {
@@ -70,6 +85,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				} `json:"delta"`
 			}
 			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
 				continue
 			}
 			if parsed.Delta.Type == "text_delta" {
@@ -86,6 +102,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				} `json:"delta"`
 			}
 			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
 				continue
 			}
 			if parsed.Delta.StopReason != "" {
@@ -100,6 +117,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				} `json:"error"`
 			}
 			if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+				parseErrors++
 				continue
 			}
 			onChunk(Chunk{Error: fmt.Errorf("claude stream error: %s", parsed.Error.Message)})
@@ -114,6 +132,9 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	if !doneSent {
+		if parseErrors > 0 {
+			return errStreamMalformed("claude", parseErrors)
+		}
 		return errStreamTruncated("claude")
 	}
 	return nil
@@ -128,6 +149,7 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		sawTerminal bool
 		tokensIn    int
 		tokensOut   int
+		parseErrors int
 	)
 
 	// Usage may arrive on the finish chunk or — when stream_options.include_usage
@@ -169,6 +191,7 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		}
 
 		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+			parseErrors++
 			continue
 		}
 
@@ -198,6 +221,9 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		return nil
 	}
 	if !doneSent {
+		if parseErrors > 0 {
+			return errStreamMalformed("openai", parseErrors)
+		}
 		return errStreamTruncated("openai")
 	}
 	return nil
@@ -208,6 +234,7 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var doneSent bool
+	var parseErrors int
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -234,6 +261,7 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 		}
 
 		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+			parseErrors++
 			continue
 		}
 
@@ -266,6 +294,9 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	if !doneSent {
+		if parseErrors > 0 {
+			return errStreamMalformed("gemini", parseErrors)
+		}
 		return errStreamTruncated("gemini")
 	}
 	return nil

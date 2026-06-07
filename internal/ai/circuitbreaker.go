@@ -4,7 +4,21 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/metrics"
 )
+
+func (s circuitState) String() string {
+	switch s {
+	case circuitOpen:
+		return "open"
+	case circuitHalfOpen:
+		return "half-open"
+	default:
+		return "closed"
+	}
+}
 
 const (
 	cbFailureThreshold = 5              // consecutive retryable failures before opening
@@ -73,7 +87,7 @@ func (cb *CircuitBreakerProvider) check() error {
 	defer cb.mu.Unlock()
 	if cb.state == circuitOpen {
 		if time.Since(cb.lastFailure) >= cbOpenDuration {
-			cb.state = circuitHalfOpen
+			cb.transitionLocked(circuitHalfOpen)
 			return nil
 		}
 		return ErrCircuitOpen
@@ -86,7 +100,7 @@ func (cb *CircuitBreakerProvider) record(err error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	if err == nil {
-		cb.state = circuitClosed
+		cb.transitionLocked(circuitClosed)
 		cb.failures = 0
 		return
 	}
@@ -96,6 +110,22 @@ func (cb *CircuitBreakerProvider) record(err error) {
 	cb.failures++
 	cb.lastFailure = time.Now()
 	if cb.failures >= cbFailureThreshold {
-		cb.state = circuitOpen
+		cb.transitionLocked(circuitOpen)
+	}
+}
+
+// transitionLocked sets the circuit to next, emitting a log line and metric only
+// when the state actually changes. Caller must hold cb.mu.
+func (cb *CircuitBreakerProvider) transitionLocked(next circuitState) {
+	if cb.state == next {
+		return
+	}
+	cb.state = next
+	provider := cb.Provider.ID()
+	metrics.RecordCircuitBreakerTransition(provider, next.String())
+	if next == circuitClosed {
+		logger.Info("AI circuit breaker closed", "provider", provider)
+	} else {
+		logger.Warn("AI circuit breaker transition", "provider", provider, "state", next.String(), "failures", cb.failures)
 	}
 }

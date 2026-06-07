@@ -31,6 +31,7 @@ func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 		BlockID:     block.ID,
 		SubflowID:   block.SubflowID,
 		Suggestion:  "Add an 'Exit loop' action or ensure the loop variable is modified to guarantee termination.",
+		AutoFixHint: "Add an IF block inside the loop that checks a counter or sentinel condition, then use 'Exit loop' to break out. Example: IF %LoopIndex% >= %MaxIterations% THEN Exit loop.",
 	}}
 }
 

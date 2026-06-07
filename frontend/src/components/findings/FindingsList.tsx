@@ -74,7 +74,7 @@ export default function FindingsList({findings, doc, onFixWithAI}: Props) {
               <ChevronRight
                 size={14}
                 className={clsx(
-                  'mt-0.5 shrink-0 text-text-tertiary transition-transform',
+                  'mt-0.5 shrink-0 text-text-tertiary transition-transform duration-fast',
                   !isCollapsed && 'rotate-90'
                 )}
               />

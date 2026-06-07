@@ -27,6 +27,8 @@ func (s *cbStub) Chat(_ context.Context, _ Request) (*Response, error) {
 	return &Response{Content: "ok"}, nil
 }
 
+func (s *cbStub) ID() string { return "stub" }
+
 func newCBStub(errs ...error) *cbStub { return &cbStub{chatErrs: errs} }
 
 func cbCall(t *testing.T, cb *CircuitBreakerProvider) error {

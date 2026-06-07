@@ -197,7 +197,7 @@ export default function FindingsTab() {
               key={s}
               onClick={() => toggleSeverityFilter(s)}
               className={clsx(
-                'text-[9px] font-bold px-2 py-0.5 rounded-full border transition-all',
+                'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
                 severityFilter.has(s)
                   ? `${bg} ${color} border-transparent`
                   : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
@@ -227,7 +227,7 @@ export default function FindingsTab() {
                 key={cat}
                 onClick={() => toggleCategoryFilter(cat)}
                 className={clsx(
-                  'text-[9px] font-bold px-2 py-0.5 rounded-full border transition-all',
+                  'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
                   categoryFilter.has(cat)
                     ? `${catBg[cat]} ${catColors[cat]} border-transparent`
                     : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
@@ -243,7 +243,7 @@ export default function FindingsTab() {
                 setSeverityFilter(new Set(['error', 'warning', 'info']))
                 useAnalysisStore.getState().setCategoryFilter(new Set(allCategories))
               }}
-              className="text-[9px] text-text-tertiary hover:text-text-secondary transition-colors ml-1"
+              className="text-2xs text-text-tertiary hover:text-text-secondary transition-colors ml-1"
             >
               All
             </button>

@@ -38,7 +38,7 @@ export default function PresenceIndicators({
           <UserAvatar key={user.userId} user={user} />
         ))}
         {overflow > 0 && (
-          <div className="w-7 h-7 rounded-full bg-surface-3 border-2 border-surface-2 flex items-center justify-center text-[10px] font-medium text-text-muted z-0">
+          <div className="w-7 h-7 rounded-full bg-surface-3 border-2 border-surface-2 flex items-center justify-center text-2xs font-medium text-text-muted z-0">
             +{overflow}
           </div>
         )}
@@ -52,7 +52,7 @@ function UserAvatar({ user }: { user: PresenceUser }) {
 
   return (
     <Tooltip content={user.displayName ?? user.userId}>
-      <div className="w-7 h-7 rounded-full border-2 border-surface-2 overflow-hidden z-0 hover:z-10 transition-transform hover:scale-110 cursor-default">
+      <div className="w-7 h-7 rounded-full border-2 border-surface-2 overflow-hidden z-0 hover:z-10 transition-transform duration-fast hover:scale-110 cursor-default">
         {user.avatarUrl ? (
           <img
             src={user.avatarUrl}
@@ -61,7 +61,7 @@ function UserAvatar({ user }: { user: PresenceUser }) {
           />
         ) : (
           <div
-            className="w-full h-full flex items-center justify-center text-[10px] font-semibold text-white"
+            className="w-full h-full flex items-center justify-center text-2xs font-semibold text-white"
             style={{ background: userColor(user.userId) }}
           >
             {initials}

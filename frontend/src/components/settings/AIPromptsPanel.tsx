@@ -95,7 +95,7 @@ function PromptList({title, description, items, onChange}: {title: string, descr
             />
             <button 
               onClick={() => handleRemove(i)}
-              className="p-1.5 text-text-tertiary hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+              className="p-1.5 text-text-tertiary hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all duration-fast"
               title="Remove prompt"
             >
               <X className="w-4 h-4" />

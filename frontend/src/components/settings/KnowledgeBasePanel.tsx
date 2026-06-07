@@ -107,7 +107,7 @@ export default function KnowledgeBasePanel() {
             {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Index Document'}
           </Button>
         </div>
-        <p className="text-[10px] text-text-tertiary mt-2">
+        <p className="text-2xs text-text-tertiary mt-2">
           Currently supports .txt and .md files up to 1MB.
         </p>
       </div>

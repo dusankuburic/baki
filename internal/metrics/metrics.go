@@ -61,6 +61,13 @@ var (
 		Name: "sse_clients_connected",
 		Help: "Currently connected Server-Sent Events subscribers.",
 	})
+	circuitBreakerTransitionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ai_circuit_breaker_transitions_total",
+			Help: "AI provider circuit-breaker state transitions, by provider and new state (open/half-open/closed).",
+		},
+		[]string{"provider", "state"},
+	)
 )
 
 // registry is process-local. Tests are hermetic (no leftover series between
@@ -76,6 +83,7 @@ var registry = func() *prometheus.Registry {
 		rateLimitExceededTotal,
 		chatStreamActive,
 		sseClientsConnected,
+		circuitBreakerTransitionsTotal,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -119,3 +127,9 @@ func ChatStreamEnd()   { chatStreamActive.Dec() }
 // SSE-subscriber gauges (called from api.Router SSE handler).
 func SSEClientStart() { sseClientsConnected.Inc() }
 func SSEClientEnd()   { sseClientsConnected.Dec() }
+
+// RecordCircuitBreakerTransition bumps the transition counter for an AI provider
+// circuit breaker. state is "open", "half-open", or "closed".
+func RecordCircuitBreakerTransition(provider, state string) {
+	circuitBreakerTransitionsTotal.WithLabelValues(provider, state).Inc()
+}
