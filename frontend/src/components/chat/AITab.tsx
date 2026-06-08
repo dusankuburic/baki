@@ -50,12 +50,12 @@ export default function AITab() {
     doc, selectedBlockId, activeThreadId, activeThread, activeThreadMessages,
     flowThreads, isCurrentThreadStreaming, showThinking,
     streamingText, streamingMessageId, streamingTokens,
-    sourceFiles, contextPreview, pendingMessage,
+    sourceFiles, contextPreview, pendingMessage, toolStatus,
     switchThread,
     handleSend, handlePreviewContext, handleResend, handleExport,
     handleCreateThread, handleCloseThread, handleRenameThread,
     handleClearContext, handleCompact,
-    setThreadContextBlock, setThreadSourceFiles,
+    setThreadContextBlock, setThreadSourceFiles, setThreadUseTools,
     handleCancelStream,
     clearContextPreview, confirmContextPreview,
   } = useAIChat({selectedModel})
@@ -170,6 +170,8 @@ export default function AITab() {
           onNewChat={handleCreateThread}
           onClearContext={handleClearContext}
           onCompact={handleCompact}
+          useTools={activeThread?.useTools ?? false}
+          onToggleTools={() => setThreadUseTools(!(activeThread?.useTools ?? false))}
         />
       </div>
 
@@ -230,6 +232,12 @@ export default function AITab() {
       {/* Pinned bottom — tokens/progress + input. */}
       {doc && activeThread && (
         <div className="flex-shrink-0">
+          {isCurrentThreadStreaming && toolStatus && (
+            <div className="flex items-center gap-2 px-3 py-1.5 text-2xs text-brand-400">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />
+              <span className="truncate">{toolStatus}…</span>
+            </div>
+          )}
           {isCurrentThreadStreaming && streamingTokens > 0 ? (
             <StreamingProgress
               tokens={streamingTokens}

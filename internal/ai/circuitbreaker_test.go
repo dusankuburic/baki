@@ -44,6 +44,7 @@ func TestCircuitBreaker_StaysClosedBelowThreshold(t *testing.T) {
 	for i := range errs {
 		errs[i] = ErrProviderDown
 	}
+	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold - 1 {
@@ -64,6 +65,7 @@ func TestCircuitBreaker_OpensAtThreshold(t *testing.T) {
 	for i := range errs {
 		errs[i] = ErrProviderDown
 	}
+	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold {
@@ -84,6 +86,7 @@ func TestCircuitBreaker_PermanentErrorsDoNotTrip(t *testing.T) {
 	for i := range errs {
 		errs[i] = ErrApiKeyInvalid
 	}
+	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold * 3 {
@@ -103,6 +106,7 @@ func TestCircuitBreaker_ClosesOnSuccessAfterOpen(t *testing.T) {
 	for i := range errs {
 		errs[i] = ErrProviderDown
 	}
+	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	// Open the circuit.
@@ -114,9 +118,9 @@ func TestCircuitBreaker_ClosesOnSuccessAfterOpen(t *testing.T) {
 	}
 
 	// Fast-forward past the open window.
-	cb.mu.Lock()
-	cb.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
-	cb.mu.Unlock()
+	cb.st.mu.Lock()
+	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.st.mu.Unlock()
 
 	// Probe succeeds → circuit closes.
 	if err := cbCall(t, cb); err != nil {
@@ -135,6 +139,7 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 	for i := range errs {
 		errs[i] = ErrProviderDown
 	}
+	resetBreakerRegistry()
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold {
@@ -142,9 +147,9 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 	}
 
 	// Fast-forward past open window to enter half-open.
-	cb.mu.Lock()
-	cb.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
-	cb.mu.Unlock()
+	cb.st.mu.Lock()
+	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.st.mu.Unlock()
 
 	// Probe fails (stub still has one error queued) → circuit reopens.
 	if err := cbCall(t, cb); !errors.Is(err, ErrProviderDown) {
@@ -154,6 +159,29 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 	// Circuit should be open again.
 	if err := cbCall(t, cb); !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen after failed probe, got %v", err)
+	}
+}
+
+// TestCircuitBreaker_PersistsAcrossInstances verifies that breaker state is
+// shared per provider ID, so failures accumulated through one
+// CircuitBreakerProvider open the circuit for a *separate* instance wrapping the
+// same provider. This mirrors ProviderFactory.For rebuilding the decorator chain
+// on every request: without shared state the breaker could never open.
+func TestCircuitBreaker_PersistsAcrossInstances(t *testing.T) {
+	resetBreakerRegistry()
+
+	// Each "request" gets a fresh chain (new stub + new breaker), all keyed by
+	// the same provider ID ("stub"). Drive cbFailureThreshold failures, one per
+	// fresh instance, exactly as repeated For() calls would.
+	for range cbFailureThreshold {
+		cb := NewCircuitBreakerProvider(newCBStub(ErrProviderDown))
+		cbCall(t, cb) //nolint:errcheck
+	}
+
+	// A brand-new instance must now see the circuit open.
+	cb := NewCircuitBreakerProvider(newCBStub(ErrProviderDown))
+	if err := cbCall(t, cb); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected ErrCircuitOpen on a fresh instance after threshold reached across instances, got %v", err)
 	}
 }
 

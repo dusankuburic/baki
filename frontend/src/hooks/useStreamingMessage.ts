@@ -8,6 +8,9 @@ interface StreamHandler {
   onReplace: (text: string) => void
   onDone: (tokensOut: number, tokensIn: number) => void
   onError: (error: string) => void
+  // onToolStatus is emitted during the read-only tool/agent loop with a short
+  // label for the current step (e.g. "Searching flow"). Optional.
+  onToolStatus?: (label: string) => void
 }
 
 export function useStreamingMessage(handler: StreamHandler) {
@@ -74,6 +77,9 @@ export function useStreamingMessage(handler: StreamHandler) {
           break
         case 'error':
           handlerRef.current.onError(data.message || 'Unknown error')
+          break
+        case 'tool':
+          handlerRef.current.onToolStatus?.(data.label || data.name || 'Using tool')
           break
       }
     })

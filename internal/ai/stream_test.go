@@ -84,6 +84,72 @@ func TestParseGeminiSSE_ContentDeltas(t *testing.T) {
 	}
 }
 
+func TestParseClaudeSSE_ToolUse(t *testing.T) {
+	input := "event: content_block_start\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Let me search\"}}\n\n" +
+		"event: content_block_start\n" +
+		"data: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"search_flow\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"foo\\\"}\"}}\n\n" +
+		"event: message_delta\n" +
+		"data: {\"usage\":{\"output_tokens\":7},\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"
+
+	var text string
+	var done Chunk
+	err := parseClaudeSSE(strings.NewReader(input), func(c Chunk) {
+		if c.Done {
+			done = c
+		} else if c.Text != "" {
+			text += c.Text
+		}
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "Let me search" {
+		t.Errorf("expected streamed text %q, got %q", "Let me search", text)
+	}
+	if len(done.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call on Done, got %d", len(done.ToolCalls))
+	}
+	tc := done.ToolCalls[0]
+	if tc.ID != "toolu_1" || tc.Name != "search_flow" || string(tc.Input) != `{"query":"foo"}` {
+		t.Errorf("unexpected tool call: id=%q name=%q input=%s", tc.ID, tc.Name, string(tc.Input))
+	}
+	if done.FinishReason != "tool_use" {
+		t.Errorf("expected finish reason tool_use, got %q", done.FinishReason)
+	}
+}
+
+func TestParseOpenAISSE_ToolCalls(t *testing.T) {
+	input := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"search_flow\",\"arguments\":\"\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"query\\\":\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"foo\\\"}\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	var done Chunk
+	err := parseOpenAISSE(strings.NewReader(input), func(c Chunk) {
+		if c.Done {
+			done = c
+		}
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(done.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call on Done, got %d", len(done.ToolCalls))
+	}
+	tc := done.ToolCalls[0]
+	if tc.ID != "call_1" || tc.Name != "search_flow" || string(tc.Input) != `{"query":"foo"}` {
+		t.Errorf("unexpected tool call: id=%q name=%q input=%s", tc.ID, tc.Name, string(tc.Input))
+	}
+}
+
 func TestParseClaudeSSE_Error(t *testing.T) {
 	input := "event: error\n" +
 		"data: {\"error\": {\"message\": \"rate limited\"}}\n\n"

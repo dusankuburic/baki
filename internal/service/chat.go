@@ -29,10 +29,15 @@ const contextReserve = 4000
 
 // normalizeChatParams clamps caller-supplied generation params into safe ranges
 // so an out-of-range value can't reach the provider (some reject Temperature
-// outside [0,2] or a MaxTokens larger than the context window with a 400). It is
-// pure so it can be unit-tested independently of provider wiring. A ctxLimit of
-// 0 (unknown) leaves MaxTokens untouched.
-func normalizeChatParams(temperature float64, maxTokens, ctxLimit int) (float64, int) {
+// outside [0,2] or a MaxTokens above the model's limits with a 400). It is pure
+// so it can be unit-tested independently of provider wiring.
+//
+// maxTokens is an *output* cap, so it must be bounded by the model's output
+// ceiling (maxOutput) — not the input context window. We still keep the older
+// ctxLimit-contextReserve guard as a backstop for models whose output ceiling
+// is unknown (maxOutput == 0). A value of 0 for either limit means "unknown" and
+// that particular clamp is skipped.
+func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int) (float64, int) {
 	if temperature < 0 {
 		temperature = 0
 	} else if temperature > 2 {
@@ -41,6 +46,12 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit int) (float64,
 	if maxTokens < 0 {
 		maxTokens = 0
 	}
+	// Prefer the model's real output ceiling when known.
+	if maxOutput > 0 && maxTokens > maxOutput {
+		maxTokens = maxOutput
+	}
+	// Backstop: never let MaxTokens approach the input window (only meaningful
+	// when the output ceiling is unknown, but harmless otherwise).
 	if ctxLimit > 0 {
 		cap := ctxLimit - contextReserve
 		if cap < 0 {
@@ -51,6 +62,19 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit int) (float64,
 		}
 	}
 	return temperature, maxTokens
+}
+
+// dailyUsage returns today's AI spend used for the budget check. The storage
+// backend is nil in local/desktop mode (which has no usage store), so this
+// returns 0 there — leaving the budget effectively unenforced rather than
+// dereferencing a nil backend and panicking. Mirrors the nil-backend guard
+// convention used across SystemService and the API handlers.
+func (s *ChatService) dailyUsage(ctx context.Context, scope, orgID string) float64 {
+	if s.backend == nil {
+		return 0
+	}
+	usage, _ := s.backend.GetDailyUsage(ctx, scope, orgID)
+	return usage
 }
 
 // resumeRetention is how long a finished stream's buffer is kept so a client
@@ -169,12 +193,17 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			return
 		}
 
-		// Enforce daily budget
+		// Org-scoped flows attribute usage and enforce the daily budget at the
+		// org level; personal flows fall back to the per-user total.
+		orgID := ""
+		if doc != nil {
+			orgID = doc.OrganizationID
+		}
+
+		// Enforce daily budget.
 		settings := s.settings.Get()
 		if settings != nil && settings.AI.DailyBudget > 0 {
-			// Note: orgID is not yet available in the service call, using user scope.
-			usage, _ := s.backend.GetDailyUsage(ctx, scope, "")
-			if usage >= settings.AI.DailyBudget {
+			if usage := s.dailyUsage(ctx, scope, orgID); usage >= settings.AI.DailyBudget {
 				if !awaitStart() {
 					return
 				}
@@ -240,13 +269,23 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		}
 		messages = append(messages, ai.Message{Role: "user", Content: scrubber.ScrubText(req.UserMessage)})
 
-		temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, provider.ContextLimit())
+		temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, provider.ContextLimit(), ai.ModelMaxOutputTokens(provider, req.Model))
 		aiReq := ai.Request{
 			SystemPrompt: sysPrompt,
 			Messages:     messages,
 			Model:        req.Model,
 			Temperature:  temperature,
 			MaxTokens:    maxTokens,
+			OrgID:        orgID,
+		}
+
+		// When the caller opted into tools and the provider supports them, run the
+		// read-only agentic tool loop (streamed turns + tool status events). It is
+		// fully self-contained — emits chunk/tool/done/error and updates ctl — so the
+		// normal streaming path below is skipped entirely (zero regression when off).
+		if req.UseTools && provider.SupportsTools() {
+			s.runToolLoop(ctx, provider, aiReq, scrubbedDoc, ctl, awaitStart, emit)
+			return
 		}
 
 		err = provider.Stream(ctx, aiReq, func(chunk ai.Chunk) {
@@ -292,6 +331,125 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}()
 
 	return streamID, nil
+}
+
+// maxToolIterations bounds the read-only agentic loop so a misbehaving model
+// that keeps requesting tools can't run forever.
+const maxToolIterations = 6
+
+// runToolLoop drives the read-only tool/agent loop: it offers the registered
+// tools to the model, executes any tool calls against the (already scrubbed)
+// doc + analysis cache, feeds results back, and repeats until the model returns
+// a final text answer (or the iteration cap is hit). It is self-contained —
+// emits "tool"/"chunk"/"done"/"error" events and updates ctl — so the caller
+// does not run its own streaming/error handling for this path.
+//
+// Token consumption of ctl.started is gated through a single cached
+// ensureStarted so it is consumed at most once (the channel only holds one
+// token), regardless of how many turns/events the loop produces.
+func (s *ChatService) runToolLoop(
+	ctx context.Context,
+	provider ai.Provider,
+	base ai.Request,
+	doc *models.FlowDocument,
+	ctl *streamCtl,
+	awaitStart func() bool,
+	emit func(string, map[string]interface{}),
+) {
+	base.Tools = ai.ToolDefinitions()
+	msgs := base.Messages
+	tctx := ai.ToolContext{Ctx: ctx, Doc: doc, Analysis: s.analysisCache}
+
+	started := false
+	ensureStarted := func() bool {
+		if !started && awaitStart() {
+			started = true
+		}
+		return started
+	}
+	fail := func(msg string) {
+		ctl.mu.Lock()
+		ctl.errMsg = msg
+		ctl.mu.Unlock()
+		if ensureStarted() {
+			emit("error", map[string]interface{}{"message": msg})
+		}
+	}
+
+	var totalIn, totalOut int
+	for i := 0; i < maxToolIterations; i++ {
+		turn := base
+		turn.Messages = msgs
+
+		// Stream the turn: forward assistant text to the client as it arrives, and
+		// capture the tool calls / token usage from the terminal (Done) chunk.
+		var (
+			turnText  strings.Builder
+			turnCalls []ai.ToolCall
+			turnIn    int
+			turnOut   int
+			chunkErr  error
+		)
+		streamErr := provider.Stream(ctx, turn, func(c ai.Chunk) {
+			switch {
+			case c.Error != nil:
+				chunkErr = c.Error
+			case c.Done:
+				turnIn = c.TokensIn
+				turnOut = c.TokensOut
+				turnCalls = c.ToolCalls
+			case c.Text != "":
+				if !ensureStarted() {
+					return
+				}
+				turnText.WriteString(c.Text)
+				ctl.mu.Lock()
+				ctl.buffer.WriteString(c.Text)
+				ctl.mu.Unlock()
+				emit("chunk", map[string]interface{}{"content": c.Text})
+			}
+		})
+		if streamErr != nil {
+			fail(streamErr.Error())
+			return
+		}
+		if chunkErr != nil {
+			fail(chunkErr.Error())
+			return
+		}
+		totalIn += turnIn
+		totalOut += turnOut
+
+		// No tool calls → this turn is the final answer (its text already
+		// streamed above, so there's nothing more to emit but the done event).
+		if len(turnCalls) == 0 {
+			if !ensureStarted() {
+				return
+			}
+			ctl.mu.Lock()
+			ctl.done = true
+			ctl.tokensIn = totalIn
+			ctl.tokensOut = totalOut
+			ctl.mu.Unlock()
+			emit("done", map[string]interface{}{"tokensIn": totalIn, "tokensOut": totalOut})
+			return
+		}
+
+		// Record the assistant turn that issued the calls (including any streamed
+		// preamble text), then run each tool and append its result so the next
+		// turn can see them.
+		msgs = append(msgs, ai.Message{Role: "assistant", Content: turnText.String(), ToolCalls: turnCalls})
+		for _, tc := range turnCalls {
+			if !ensureStarted() {
+				return
+			}
+			emit("tool", map[string]interface{}{"name": tc.Name, "label": ai.ToolLabel(tc.Name)})
+			result := ai.ExecuteTool(tc.Name, tc.Input, tctx)
+			msgs = append(msgs, ai.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+		}
+	}
+
+	fail(fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
 }
 
 func (s *ChatService) BeginStream(streamID string) {
@@ -343,7 +501,10 @@ func (lsb *ChatService) GetConversation(doc *models.FlowDocument, provider strin
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
-	path := filepath.Join(lsb.configDir, "conversations", provider, doc.ID+".json")
+	path, err := convFilePath(lsb.configDir, provider, doc.ID)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -363,8 +524,12 @@ func (lsb *ChatService) SaveConversation(doc *models.FlowDocument, provider stri
 	if doc == nil {
 		return fmt.Errorf("no flow loaded")
 	}
-	path := filepath.Join(lsb.configDir, "conversations", provider, doc.ID+".json")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	path, err := convFilePath(lsb.configDir, provider, doc.ID)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create conversations directory: %w", err)
 	}
 
@@ -373,7 +538,7 @@ func (lsb *ChatService) SaveConversation(doc *models.FlowDocument, provider stri
 		FlowKey:   doc.ID,
 		Scope:     provider,
 		UpdatedAt: time.Now(),
-		Messages:  messages,
+		Messages:  evictConvMessages(messages),
 	}
 
 	data, err := json.MarshalIndent(conv, "", "  ")
@@ -381,18 +546,19 @@ func (lsb *ChatService) SaveConversation(doc *models.FlowDocument, provider stri
 		return fmt.Errorf("failed to marshal conversation: %w", err)
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// Atomic write at 0600: an interrupted write leaves the prior conversation
+	// intact rather than truncating it, and the file isn't world-readable.
+	return atomicWriteConv(dir, path, data)
 }
 
 func (lsb *ChatService) ClearConversation(doc *models.FlowDocument, provider string) error {
 	if doc == nil {
 		return fmt.Errorf("no flow loaded")
 	}
-	path := filepath.Join(lsb.configDir, "conversations", provider, doc.ID+".json")
+	path, err := convFilePath(lsb.configDir, provider, doc.ID)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete conversation file: %w", err)
 	}

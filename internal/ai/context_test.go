@@ -11,6 +11,7 @@ import (
 // stubProvider satisfies the Provider interface with just EstimateTokens.
 type stubProvider struct{}
 
+func (stubProvider) SupportsTools() bool             { return false }
 func (stubProvider) ID() string                      { return "stub" }
 func (stubProvider) Name() string                    { return "Stub" }
 func (stubProvider) Models() []ModelInfo             { return nil }

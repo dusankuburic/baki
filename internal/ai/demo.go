@@ -132,6 +132,8 @@ func NewDemoProvider() *DemoProvider {
 	}
 }
 
+func (d *DemoProvider) SupportsTools() bool  { return false }
+
 func (d *DemoProvider) ID() string          { return "demo" }
 func (d *DemoProvider) Name() string        { return "Demo" }
 func (d *DemoProvider) ContextLimit() int    { return 200000 }

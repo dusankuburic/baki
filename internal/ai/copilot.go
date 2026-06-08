@@ -46,6 +46,8 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 	}
 }
 
+func (p *CopilotProvider) SupportsTools() bool   { return false }
+
 func (p *CopilotProvider) ID() string           { return "copilot" }
 func (p *CopilotProvider) Name() string         { return "GitHub Copilot" }
 func (p *CopilotProvider) ContextLimit() int    { return 128000 }
@@ -64,25 +66,7 @@ func (c *CopilotProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
-func (p *CopilotProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "gpt-4o", DisplayName: "GPT-4o",
-			ContextLimit: 128000,
-			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
-		},
-		{
-			ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini",
-			ContextLimit: 128000,
-			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
-		},
-		{
-			ID: "claude-3.5-sonnet", DisplayName: "Claude 3.5 Sonnet",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
-		},
-	}
-}
+func (p *CopilotProvider) Models() []ModelInfo { return catalogModels("copilot") }
 
 func (p *CopilotProvider) addHeaders(ctx context.Context, req *http.Request) error {
 	token, err := p.tokenFn(ctx)

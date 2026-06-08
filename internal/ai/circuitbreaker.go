@@ -33,6 +33,46 @@ const (
 	circuitHalfOpen
 )
 
+// breakerState is the circuit state for one upstream provider. It is shared,
+// process-wide and keyed by provider ID (see breakerStateFor) so the breaker
+// persists across requests even though ProviderFactory.For rebuilds the whole
+// decorator chain — and therefore a fresh CircuitBreakerProvider — on every
+// call. Without this, the per-instance state reset each request and the breaker
+// could never accumulate enough failures to open.
+type breakerState struct {
+	mu          sync.Mutex
+	state       circuitState
+	failures    int
+	lastFailure time.Time
+}
+
+var (
+	breakerRegistry   = map[string]*breakerState{}
+	breakerRegistryMu sync.Mutex
+)
+
+// breakerStateFor returns the shared circuit state for a provider ID, creating
+// it on first use. State is per upstream provider (not per user/scope): a
+// provider that is down is down for everyone.
+func breakerStateFor(providerID string) *breakerState {
+	breakerRegistryMu.Lock()
+	defer breakerRegistryMu.Unlock()
+	s, ok := breakerRegistry[providerID]
+	if !ok {
+		s = &breakerState{}
+		breakerRegistry[providerID] = s
+	}
+	return s
+}
+
+// resetBreakerRegistry clears all shared breaker state. Test-only — it lets a
+// test start from a known-closed circuit without leaking state into the next.
+func resetBreakerRegistry() {
+	breakerRegistryMu.Lock()
+	defer breakerRegistryMu.Unlock()
+	breakerRegistry = map[string]*breakerState{}
+}
+
 // CircuitBreakerProvider wraps a Provider and opens the circuit after
 // cbFailureThreshold consecutive retryable failures. While open, calls fail
 // immediately with ErrCircuitOpen (which is not retryable) to avoid hammering
@@ -41,16 +81,17 @@ const (
 //
 // Only retryable errors (ErrRateLimited, ErrProviderDown) count toward the
 // threshold; permanent errors like ErrApiKeyInvalid do not trip the circuit.
+//
+// The mutable state lives in a shared *breakerState (keyed by provider ID), so
+// every CircuitBreakerProvider for the same provider — across users and across
+// per-request chain rebuilds — observes the same circuit.
 type CircuitBreakerProvider struct {
 	Provider
-	mu          sync.Mutex
-	state       circuitState
-	failures    int
-	lastFailure time.Time
+	st *breakerState
 }
 
 func NewCircuitBreakerProvider(p Provider) *CircuitBreakerProvider {
-	return &CircuitBreakerProvider{Provider: p}
+	return &CircuitBreakerProvider{Provider: p, st: breakerStateFor(p.ID())}
 }
 
 func (cb *CircuitBreakerProvider) Chat(ctx context.Context, req Request) (*Response, error) {
@@ -83,10 +124,10 @@ func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChu
 // check returns ErrCircuitOpen when the circuit is open and the cooldown has
 // not elapsed yet. In half-open state it allows a single probe through.
 func (cb *CircuitBreakerProvider) check() error {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	if cb.state == circuitOpen {
-		if time.Since(cb.lastFailure) >= cbOpenDuration {
+	cb.st.mu.Lock()
+	defer cb.st.mu.Unlock()
+	if cb.st.state == circuitOpen {
+		if time.Since(cb.st.lastFailure) >= cbOpenDuration {
 			cb.transitionLocked(circuitHalfOpen)
 			return nil
 		}
@@ -97,35 +138,35 @@ func (cb *CircuitBreakerProvider) check() error {
 
 // record updates the failure count and circuit state based on a call outcome.
 func (cb *CircuitBreakerProvider) record(err error) {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
+	cb.st.mu.Lock()
+	defer cb.st.mu.Unlock()
 	if err == nil {
 		cb.transitionLocked(circuitClosed)
-		cb.failures = 0
+		cb.st.failures = 0
 		return
 	}
 	if !isRetryable(err) {
 		return
 	}
-	cb.failures++
-	cb.lastFailure = time.Now()
-	if cb.failures >= cbFailureThreshold {
+	cb.st.failures++
+	cb.st.lastFailure = time.Now()
+	if cb.st.failures >= cbFailureThreshold {
 		cb.transitionLocked(circuitOpen)
 	}
 }
 
 // transitionLocked sets the circuit to next, emitting a log line and metric only
-// when the state actually changes. Caller must hold cb.mu.
+// when the state actually changes. Caller must hold cb.st.mu.
 func (cb *CircuitBreakerProvider) transitionLocked(next circuitState) {
-	if cb.state == next {
+	if cb.st.state == next {
 		return
 	}
-	cb.state = next
+	cb.st.state = next
 	provider := cb.Provider.ID()
 	metrics.RecordCircuitBreakerTransition(provider, next.String())
 	if next == circuitClosed {
 		logger.Info("AI circuit breaker closed", "provider", provider)
 	} else {
-		logger.Warn("AI circuit breaker transition", "provider", provider, "state", next.String(), "failures", cb.failures)
+		logger.Warn("AI circuit breaker transition", "provider", provider, "state", next.String(), "failures", cb.st.failures)
 	}
 }

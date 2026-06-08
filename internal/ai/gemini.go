@@ -23,6 +23,8 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 	}
 }
 
+func (g *GeminiProvider) SupportsTools() bool  { return false }
+
 func (g *GeminiProvider) ID() string          { return "gemini" }
 func (g *GeminiProvider) Name() string        { return "Gemini" }
 func (g *GeminiProvider) ContextLimit() int    { return 1048576 }
@@ -41,20 +43,7 @@ func (g *GeminiProvider) EstimateTokens(text string) int {
 	return EstimateTokensGemini(text)
 }
 
-func (g *GeminiProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro",
-			ContextLimit: 1048576,
-			Pricing:      Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0},
-		},
-		{
-			ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash",
-			ContextLimit: 1048576,
-			Pricing:      Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6},
-		},
-	}
-}
+func (g *GeminiProvider) Models() []ModelInfo { return catalogModels("gemini") }
 
 var geminiURL = defaultGeminiURL
 

@@ -24,6 +24,8 @@ func NewXAIProvider(apiKey string) *XAIProvider {
 	}
 }
 
+func (x *XAIProvider) SupportsTools() bool { return true }
+
 func (x *XAIProvider) ID() string           { return "xai" }
 func (x *XAIProvider) Name() string         { return "xAI (Grok)" }
 func (x *XAIProvider) ContextLimit() int    { return 131072 }
@@ -43,25 +45,7 @@ func (x *XAIProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
-func (x *XAIProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "grok-3", DisplayName: "Grok 3",
-			ContextLimit: 131072,
-			Pricing:      Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0},
-		},
-		{
-			ID: "grok-3-mini", DisplayName: "Grok 3 Mini",
-			ContextLimit: 131072,
-			Pricing:      Pricing{InputCostPerM: 0.3, OutputCostPerM: 0.5},
-		},
-		{
-			ID: "grok-2", DisplayName: "Grok 2",
-			ContextLimit: 131072,
-			Pricing:      Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0},
-		},
-	}
-}
+func (x *XAIProvider) Models() []ModelInfo { return catalogModels("xai") }
 
 func (x *XAIProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	body := openAIRequest{
@@ -69,6 +53,7 @@ func (x *XAIProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 		MaxTokens:   orDefault(req.MaxTokens, 4096),
 		Temperature: req.Temperature,
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:       toOpenAITools(req.Tools),
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -120,6 +105,7 @@ func (x *XAIProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 		TokensIn:     parsed.Usage.PromptTokens,
 		TokensOut:    parsed.Usage.CompletionTokens,
 		FinishReason: parsed.Choices[0].FinishReason,
+		ToolCalls:    openAIToolCallsToNeutral(parsed.Choices[0].Message.ToolCalls),
 	}, nil
 }
 
@@ -129,6 +115,7 @@ func (x *XAIProvider) Stream(ctx context.Context, req Request, onChunk func(Chun
 		MaxTokens:     orDefault(req.MaxTokens, 4096),
 		Temperature:   req.Temperature,
 		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:         toOpenAITools(req.Tools),
 		Stream:        true,
 		StreamOptions: usageStreamOptions,
 	}

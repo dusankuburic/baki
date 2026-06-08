@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,6 +22,10 @@ type Provider interface {
 	ContextLimit() int
 	PricePerMillionTokens() Pricing
 	Embed(ctx context.Context, text []string) ([][]float32, error)
+	// SupportsTools reports whether the provider's Chat path can serialize tool
+	// definitions and return tool calls. The chat service only runs the agentic
+	// tool loop against providers that return true.
+	SupportsTools() bool
 }
 
 type EmbedResponse struct {
@@ -31,7 +36,13 @@ type ModelInfo struct {
 	ID           string  `json:"id"`
 	DisplayName  string  `json:"displayName"`
 	ContextLimit int     `json:"contextLimit"`
-	Pricing      Pricing `json:"pricing"`
+	// MaxOutputTokens is the model's maximum completion length, which is far
+	// smaller than ContextLimit (the input window). Zero means unknown — callers
+	// that clamp MaxTokens against it should leave the value untouched in that
+	// case. Used by the service to keep a caller's MaxTokens under the provider's
+	// real output ceiling so the request doesn't 400.
+	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
+	Pricing         Pricing `json:"pricing"`
 }
 
 type Pricing struct {
@@ -45,11 +56,25 @@ type Request struct {
 	SystemPrompt string    `json:"systemPrompt,omitempty"`
 	Temperature  float64   `json:"temperature,omitempty"`
 	MaxTokens    int       `json:"maxTokens,omitempty"`
+	// Tools, when non-empty and the provider SupportsTools, are offered to the
+	// model so it can request a tool call instead of (or before) a text answer.
+	Tools []ToolDefinition `json:"tools,omitempty"`
+	// OrgID is request metadata (not sent to any provider API) used by the
+	// audited wrapper to attribute usage/cost to an organization, enabling
+	// org-wide daily budgets. Empty for personal/non-org flows.
+	OrgID string `json:"-"`
 }
 
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls is set on an assistant message that requested tool calls; it is
+	// echoed back in the next turn's history so the provider can correlate the
+	// following tool results.
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+	// ToolCallID is set on a Role=="tool" message carrying a tool result; it
+	// references the ToolCall.ID this result answers.
+	ToolCallID string `json:"toolCallId,omitempty"`
 }
 
 type Response struct {
@@ -57,6 +82,24 @@ type Response struct {
 	TokensIn     int    `json:"tokensIn"`
 	TokensOut    int    `json:"tokensOut"`
 	FinishReason string `json:"finishReason"`
+	// ToolCalls is non-empty when the model requested tool execution instead of
+	// returning a final answer; the chat service runs them and continues the loop.
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+}
+
+// ToolDefinition describes a tool offered to the model. InputSchema is a JSON
+// Schema object describing the tool's parameters.
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+// ToolCall is a model request to invoke a tool. Input is the raw JSON arguments.
+type ToolCall struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
 type Chunk struct {
@@ -65,6 +108,13 @@ type Chunk struct {
 	TokensOut int    `json:"tokensOut,omitempty"`
 	Done      bool   `json:"done"`
 	Error     error  `json:"error,omitempty"`
+	// ToolCalls is populated on the terminal (Done) chunk when the model
+	// requested tool execution mid-stream instead of finishing with text. Empty
+	// for a normal text completion. The agentic tool loop reads it to decide
+	// whether to run tools and continue, or finalize the answer.
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+	// FinishReason mirrors the provider stop reason on the Done chunk (optional).
+	FinishReason string `json:"finishReason,omitempty"`
 }
 
 var (
@@ -173,4 +223,16 @@ func ModelContextLimit(p Provider, model string) int {
 		}
 	}
 	return p.ContextLimit()
+}
+
+// ModelMaxOutputTokens returns the maximum completion length for a specific
+// model, or 0 (unknown) when the model is absent from the catalog or its
+// MaxOutputTokens is unset. Callers treat 0 as "don't clamp".
+func ModelMaxOutputTokens(p Provider, model string) int {
+	for _, m := range p.Models() {
+		if m.ID == model {
+			return m.MaxOutputTokens
+		}
+	}
+	return 0
 }

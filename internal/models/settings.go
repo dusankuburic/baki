@@ -155,7 +155,7 @@ func DefaultSettings() *AppSettings {
 			Providers: map[string]AIProviderConfig{
 				"claude": {
 					Enabled:            true,
-					DefaultModel:       "claude-sonnet-4-5",
+					DefaultModel:       "claude-sonnet-4-6",
 					Temperature:        0.3,
 					MaxTokens:          4096,
 					ContextTokenBudget: 4000,

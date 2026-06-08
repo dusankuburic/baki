@@ -24,6 +24,8 @@ func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	}
 }
 
+func (g *GitHubModelsProvider) SupportsTools() bool { return true }
+
 func (g *GitHubModelsProvider) ID() string           { return "github-models" }
 func (g *GitHubModelsProvider) Name() string         { return "GitHub Models" }
 func (g *GitHubModelsProvider) ContextLimit() int    { return 8192 }
@@ -42,49 +44,7 @@ func (g *GitHubModelsProvider) EstimateTokens(text string) int {
 	return EstimateTokens(text)
 }
 
-func (g *GitHubModelsProvider) Models() []ModelInfo {
-	// GitHub Models free tier enforces an 8 192-token request limit for most
-	// models regardless of the model's native context window. These limits
-	// are used to cap the context budget so the API never returns a 413.
-	const ghFreeLimit = 8192
-	return []ModelInfo{
-		{
-			ID: "gpt-4o", DisplayName: "GPT-4o",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0},
-		},
-		{
-			ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6},
-		},
-		{
-			ID: "Meta-Llama-3.3-70B-Instruct", DisplayName: "Llama 3.3 70B",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 0.7, OutputCostPerM: 0.9},
-		},
-		{
-			ID: "Mistral-large-2411", DisplayName: "Mistral Large",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 2.0, OutputCostPerM: 6.0},
-		},
-		{
-			ID: "Phi-4", DisplayName: "Phi-4",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 0.07, OutputCostPerM: 0.14},
-		},
-		{
-			ID: "DeepSeek-V3-0324", DisplayName: "DeepSeek V3",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 0.49, OutputCostPerM: 0.94},
-		},
-		{
-			ID: "ai21-jamba-1.5-large", DisplayName: "Jamba 1.5 Large",
-			ContextLimit: ghFreeLimit,
-			Pricing:      Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0},
-		},
-	}
-}
+func (g *GitHubModelsProvider) Models() []ModelInfo { return catalogModels("github-models") }
 
 func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	body := openAIRequest{
@@ -92,6 +52,7 @@ func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response
 		MaxTokens:   orDefault(req.MaxTokens, 4096),
 		Temperature: req.Temperature,
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:       toOpenAITools(req.Tools),
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -141,6 +102,7 @@ func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response
 		TokensIn:     parsed.Usage.PromptTokens,
 		TokensOut:    parsed.Usage.CompletionTokens,
 		FinishReason: parsed.Choices[0].FinishReason,
+		ToolCalls:    openAIToolCallsToNeutral(parsed.Choices[0].Message.ToolCalls),
 	}, nil
 }
 
@@ -150,6 +112,7 @@ func (g *GitHubModelsProvider) Stream(ctx context.Context, req Request, onChunk 
 		MaxTokens:     orDefault(req.MaxTokens, 4096),
 		Temperature:   req.Temperature,
 		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:         toOpenAITools(req.Tools),
 		Stream:        true,
 		StreamOptions: usageStreamOptions,
 	}

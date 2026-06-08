@@ -25,6 +25,8 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	}
 }
 
+func (o *OpenAIProvider) SupportsTools() bool  { return true }
+
 func (o *OpenAIProvider) ID() string           { return "openai" }
 func (o *OpenAIProvider) Name() string         { return "OpenAI" }
 func (o *OpenAIProvider) ContextLimit() int    { return 128000 }
@@ -39,33 +41,38 @@ func (o *OpenAIProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
-func (o *OpenAIProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "gpt-4o", DisplayName: "GPT-4o",
-			ContextLimit: 128000,
-			Pricing:      Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0},
-		},
-		{
-			ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini",
-			ContextLimit: 128000,
-			Pricing:      Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6},
-		},
-		{
-			ID: "gpt-4-turbo", DisplayName: "GPT-4 Turbo",
-			ContextLimit: 128000,
-			Pricing:      Pricing{InputCostPerM: 10.0, OutputCostPerM: 30.0},
-		},
-	}
-}
+func (o *OpenAIProvider) Models() []ModelInfo { return catalogModels("openai") }
 
 type openAIRequest struct {
 	Model         string          `json:"model"`
 	MaxTokens     int             `json:"max_tokens,omitempty"`
 	Temperature   float64         `json:"temperature,omitempty"`
 	Messages      []openAIMessage `json:"messages"`
+	Tools         []openAITool    `json:"tools,omitempty"`
 	Stream        bool            `json:"stream,omitempty"`
 	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
+}
+
+type openAITool struct {
+	Type     string             `json:"type"` // always "function"
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// openAIToolCall is a function call in an assistant message / response. Arguments
+// is a JSON-encoded string per the OpenAI schema.
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"` // "function"
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 type streamOptions struct {
@@ -81,8 +88,10 @@ type streamOptions struct {
 var usageStreamOptions = &streamOptions{IncludeUsage: true}
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAIResponse struct {
@@ -112,7 +121,55 @@ func toOpenAIMessages(systemPrompt string, msgs []Message) []openAIMessage {
 		out = append(out, openAIMessage{Role: "system", Content: systemPrompt})
 	}
 	for _, m := range msgs {
-		out = append(out, openAIMessage{Role: m.Role, Content: m.Content})
+		om := openAIMessage{Role: m.Role, Content: m.Content}
+		if m.Role == "tool" {
+			om.ToolCallID = m.ToolCallID
+		}
+		for _, tc := range m.ToolCalls {
+			oc := openAIToolCall{ID: tc.ID, Type: "function"}
+			oc.Function.Name = tc.Name
+			oc.Function.Arguments = string(tc.Input)
+			if oc.Function.Arguments == "" {
+				oc.Function.Arguments = "{}"
+			}
+			om.ToolCalls = append(om.ToolCalls, oc)
+		}
+		out = append(out, om)
+	}
+	return out
+}
+
+func toOpenAITools(tools []ToolDefinition) []openAITool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]openAITool, len(tools))
+	for i, t := range tools {
+		out[i] = openAITool{
+			Type: "function",
+			Function: openAIToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		}
+	}
+	return out
+}
+
+// openAIToolCallsToNeutral converts response tool_calls to provider-neutral
+// ToolCalls (arguments string → raw JSON).
+func openAIToolCallsToNeutral(calls []openAIToolCall) []ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]ToolCall, 0, len(calls))
+	for _, c := range calls {
+		args := c.Function.Arguments
+		if args == "" {
+			args = "{}"
+		}
+		out = append(out, ToolCall{ID: c.ID, Name: c.Function.Name, Input: json.RawMessage(args)})
 	}
 	return out
 }
@@ -123,6 +180,7 @@ func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		MaxTokens:   orDefault(req.MaxTokens, 4096),
 		Temperature: req.Temperature,
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:       toOpenAITools(req.Tools),
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -177,6 +235,7 @@ func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		TokensIn:     parsed.Usage.PromptTokens,
 		TokensOut:    parsed.Usage.CompletionTokens,
 		FinishReason: parsed.Choices[0].FinishReason,
+		ToolCalls:    openAIToolCallsToNeutral(parsed.Choices[0].Message.ToolCalls),
 	}, nil
 }
 
@@ -231,6 +290,7 @@ func (o *OpenAIProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		MaxTokens:     orDefault(req.MaxTokens, 4096),
 		Temperature:   req.Temperature,
 		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:         toOpenAITools(req.Tools),
 		Stream:        true,
 		StreamOptions: usageStreamOptions,
 	}

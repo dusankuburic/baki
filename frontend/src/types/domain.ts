@@ -400,6 +400,7 @@ export interface ChatRequest {
   maxTokens?: number;
   demoMode?: boolean;
   excludeContext?: boolean;
+  useTools?: boolean;
 }
 
 export interface SourceFileInfo {

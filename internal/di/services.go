@@ -34,8 +34,15 @@ func ProvideASTCache() (cache.Cache, error) {
 
 func ProvideAI(configDir string, backend storageif.StorageBackend) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
 	copilotAuth := ai.NewCopilotAuth()
-	recorder := func(ctx context.Context, metric *storageif.UsageMetric) error {
-		return backend.SaveUsageMetric(ctx, metric)
+	// The storage backend is nil in local/desktop mode (no usage store). Leave the
+	// recorder nil there — the audited provider guards a nil recorder and skips
+	// recording — rather than handing it a closure that would dereference the nil
+	// backend and panic in the goroutine record() spawns after every completion.
+	var recorder ai.UsageRecorder
+	if backend != nil {
+		recorder = func(ctx context.Context, metric *storageif.UsageMetric) error {
+			return backend.SaveUsageMetric(ctx, metric)
+		}
 	}
 	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth, recorder)
 	auth := ai.NewGitHubAuth()

@@ -28,6 +28,10 @@ type ChatRequest struct {
 	Temperature        float64       `json:"temperature,omitempty"`
 	MaxTokens          int           `json:"maxTokens,omitempty"`
 	DemoMode           bool          `json:"demoMode,omitempty"`
+	// UseTools opts this request into the read-only tool/agent loop. It only
+	// takes effect when the resolved provider supports tools; otherwise the
+	// normal streaming path runs.
+	UseTools           bool          `json:"useTools,omitempty"`
 }
 
 type SourceFileInfo struct {

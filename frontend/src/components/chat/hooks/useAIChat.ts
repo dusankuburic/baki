@@ -58,6 +58,9 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [sourceFiles, setSourceFiles] = useState<SourceFileInfo[]>(EMPTY_SOURCE_FILES)
+  // Transient label for the current tool step (e.g. "Searching flow"), shown as
+  // a status line while the read-only tool loop runs; cleared on done/error.
+  const [toolStatus, setToolStatus] = useState<string | null>(null)
 
   const isStreaming = activeStreamId !== null
 
@@ -161,6 +164,13 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     setStreamingTokens(Math.ceil(text.length / 4))
   }, [updateStreamingMessage])
 
+  // Tool-loop status events (read-only agent mode): surface the current step as
+  // a transient label. Not persisted with the message.
+  const onToolStatus = useCallback((label: string) => {
+    setIsThinking(false)
+    setToolStatus(label)
+  }, [])
+
   const onDone = useCallback((tokensOut: number, tokensIn: number) => {
     const content = accumulatedTextRef.current
     const curThreadId = streamingThreadIdRef.current
@@ -195,6 +205,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
+    setToolStatus(null)
   }, [appendMessage, getMessages, endStream, updateThread])
 
   const onError = useCallback((error: string) => {
@@ -218,14 +229,16 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
+    setToolStatus(null)
   }, [appendMessage, endStream])
 
   const handler = useMemo(() => ({
     onChunk,
     onReplace,
     onDone,
-    onError
-  }), [onChunk, onReplace, onDone, onError])
+    onError,
+    onToolStatus,
+  }), [onChunk, onReplace, onDone, onError, onToolStatus])
 
   const {registerStream} = useStreamingMessage(handler)
 
@@ -253,6 +266,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       temperature: providerConfig?.temperature ?? 0.3,
       maxTokens: providerConfig?.maxTokens ?? 4096,
       excludeContext: excludeContext ?? false,
+      useTools: currentThread?.useTools ?? false,
     }
   }, [doc, activeThread, provider, selectedModel, aiSettings, getMessages])
 
@@ -278,6 +292,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     startStream('pending', msgId)
     setIsThinking(true)
     setStreamingTokens(0)
+    setToolStatus(null)
 
     try {
       const sid = await chatApi.streamChatMessage(req)
@@ -424,6 +439,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (activeThreadId) updateThread(activeThreadId, {selectedSourceFiles: files})
   }, [activeThreadId, updateThread])
 
+  const setThreadUseTools = useCallback((useTools: boolean) => {
+    if (activeThreadId) updateThread(activeThreadId, {useTools})
+  }, [activeThreadId, updateThread])
+
   const handleCancelStream = useCallback(() => {
     if (activeStreamId) {
       chatApi.cancelStream(activeStreamId).catch(() => {})
@@ -452,6 +471,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     sourceFiles,
     contextPreview,
     pendingMessage,
+    toolStatus,
     // thread actions
     switchThread,
     // handlers
@@ -466,6 +486,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     handleCompact,
     setThreadContextBlock,
     setThreadSourceFiles,
+    setThreadUseTools,
     handleCancelStream,
     clearContextPreview: () => { setContextPreview(null); setPendingMessage(null) },
     confirmContextPreview: () => {

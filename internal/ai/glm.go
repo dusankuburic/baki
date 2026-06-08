@@ -25,6 +25,8 @@ func NewGLMProvider(apiKey string) *GLMProvider {
 	}
 }
 
+func (g *GLMProvider) SupportsTools() bool { return true }
+
 func (g *GLMProvider) ID() string           { return "glm" }
 func (g *GLMProvider) Name() string         { return "GLM (z.ai)" }
 func (g *GLMProvider) ContextLimit() int    { return 200000 }
@@ -43,40 +45,7 @@ func (g *GLMProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
-func (g *GLMProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "glm-5.1", DisplayName: "GLM-5.1",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4},
-		},
-		{
-			ID: "glm-5", DisplayName: "GLM-5",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 1.0, OutputCostPerM: 3.2},
-		},
-		{
-			ID: "glm-5-turbo", DisplayName: "GLM-5 Turbo",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 0.8, OutputCostPerM: 2.4},
-		},
-		{
-			ID: "glm-4.7", DisplayName: "GLM-4.7",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 0.6, OutputCostPerM: 2.2},
-		},
-		{
-			ID: "glm-4.7-flashx", DisplayName: "GLM-4.7 FlashX",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 0.2, OutputCostPerM: 0.6},
-		},
-		{
-			ID: "glm-4.7-flash", DisplayName: "GLM-4.7 Flash (Free)",
-			ContextLimit: 200000,
-			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
-		},
-	}
-}
+func (g *GLMProvider) Models() []ModelInfo { return catalogModels("glm") }
 
 func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	body := openAIRequest{
@@ -84,6 +53,7 @@ func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 		MaxTokens:   orDefault(req.MaxTokens, 4096),
 		Temperature: req.Temperature,
 		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:       toOpenAITools(req.Tools),
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -137,6 +107,7 @@ func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) 
 		TokensIn:     parsed.Usage.PromptTokens,
 		TokensOut:    parsed.Usage.CompletionTokens,
 		FinishReason: parsed.Choices[0].FinishReason,
+		ToolCalls:    openAIToolCallsToNeutral(parsed.Choices[0].Message.ToolCalls),
 	}, nil
 }
 
@@ -146,6 +117,7 @@ func (g *GLMProvider) Stream(ctx context.Context, req Request, onChunk func(Chun
 		MaxTokens:     orDefault(req.MaxTokens, 4096),
 		Temperature:   req.Temperature,
 		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
+		Tools:         toOpenAITools(req.Tools),
 		Stream:        true,
 		StreamOptions: usageStreamOptions,
 	}

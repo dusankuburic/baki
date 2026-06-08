@@ -1,13 +1,16 @@
-import {Plus, Trash2, Minimize2, MessageSquare} from 'lucide-react'
+import clsx from 'clsx'
+import {Plus, Trash2, Minimize2, MessageSquare, Wrench} from 'lucide-react'
 
 interface Props {
   messageCount: number
   onNewChat: () => void
   onClearContext: () => void
   onCompact: () => void
+  useTools?: boolean
+  onToggleTools?: () => void
 }
 
-export default function ChatToolbar({messageCount, onNewChat, onClearContext, onCompact}: Props) {
+export default function ChatToolbar({messageCount, onNewChat, onClearContext, onCompact, useTools, onToggleTools}: Props) {
   return (
     <div className="flex items-center gap-1 px-3 py-1">
       <button
@@ -18,6 +21,23 @@ export default function ChatToolbar({messageCount, onNewChat, onClearContext, on
         <Plus size={12} />
         <span>New chat</span>
       </button>
+
+      {onToggleTools && (
+        <button
+          className={clsx(
+            'flex items-center gap-1.5 px-2 py-1 rounded-md text-2xs transition-colors',
+            useTools
+              ? 'text-brand-400 bg-brand-500/10'
+              : 'text-text-tertiary hover:text-brand-400 hover:bg-brand-500/8'
+          )}
+          onClick={onToggleTools}
+          aria-pressed={!!useTools}
+          title="Let the assistant look up flow details on demand (Claude, OpenAI, xAI, GLM, GitHub Models). Off = single-pass answer."
+        >
+          <Wrench size={12} />
+          <span>Tools{useTools ? ' on' : ''}</span>
+        </button>
+      )}
 
       {messageCount > 0 && (
         <>

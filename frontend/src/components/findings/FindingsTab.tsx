@@ -96,6 +96,9 @@ export default function FindingsTab() {
     updateThread(threadId, {
       title: `Fix: ${finding.title}`,
       contextBlockId: finding.blockId,
+      // Fix-with-AI benefits most from grounding, so enable the read-only tool
+      // loop for this thread (no-op on providers that don't support tools).
+      useTools: true,
     })
     appendMessage(threadId, {
       id: crypto.randomUUID(),

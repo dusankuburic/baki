@@ -48,7 +48,7 @@ const defaultSettings: AppSettings = {
     providers: {
       claude: {
         enabled: true,
-        defaultModel: 'claude-sonnet-4-5',
+        defaultModel: 'claude-sonnet-4-6',
         temperature: 0.3,
         maxTokens: 4096,
         contextTokenBudget: 4000,

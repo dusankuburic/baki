@@ -10,6 +10,8 @@ export interface ChatThread {
   selectedSourceFiles: string[]
   tokensIn: number
   tokensOut: number
+  // useTools opts this thread into the read-only tool/agent loop (default off).
+  useTools?: boolean
 }
 
 interface ChatState {
