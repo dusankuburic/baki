@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
+	"net/mail"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/logger"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -38,8 +40,12 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !strings.Contains(req.Email, "@") || len(req.Password) < 8 {
-		render.Error(w, fmt.Errorf("invalid email or password too short"), http.StatusBadRequest)
+	if err := validateEmail(req.Email); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := validatePasswordStrength(req.Password); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
@@ -147,7 +153,11 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 			render.Error(w, fmt.Errorf("invalid or revoked refresh token"), http.StatusUnauthorized)
 			return
 		}
-		_ = h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID)
+		if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
+			logger.Error("failed to revoke old refresh token during refresh", "error", err, "tokenID", claims.ID)
+			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	pair, err := h.security.AuthMgr.Issue(claims.UserID, claims.Email, claims.Role)
@@ -158,7 +168,11 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 
 	if h.tokenStore != nil {
 		expiresAt := time.Now().Add(7 * 24 * time.Hour)
-		_ = h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, expiresAt)
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, expiresAt); err != nil {
+			logger.Error("failed to store new refresh token", "error", err, "userID", claims.UserID)
+			render.Error(w, fmt.Errorf("failed to store token"), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	render.JSON(w, pair)
@@ -194,7 +208,9 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	if req.RefreshToken != "" && h.tokenStore != nil {
 		claims, err := h.security.AuthMgr.VerifyRefresh(req.RefreshToken)
 		if err == nil {
-			_ = h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID)
+			if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
+				logger.Error("failed to revoke refresh token during logout", "error", err, "tokenID", claims.ID)
+			}
 		}
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
@@ -212,6 +228,11 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 		NewPassword string `json:"newPassword"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	if err := validatePasswordStrength(req.NewPassword); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -244,10 +265,63 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 	}
 
 	if h.tokenStore != nil {
-		_ = h.tokenStore.RevokeUserRefreshTokens(r.Context(), user.ID)
+		if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), user.ID); err != nil {
+			logger.Error("failed to revoke user refresh tokens after password change", "error", err, "userID", user.ID)
+			render.Error(w, fmt.Errorf("password changed but failed to invalidate other sessions"), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// validateEmail rejects malformed or over-long addresses. RFC 5321 caps an
+// address at 254 chars; net/mail.ParseAddress catches the structural cases the
+// old `strings.Contains(email, "@")` check let through (e.g. "@", "a@", " @ ").
+func validateEmail(email string) error {
+	if len(email) > 254 {
+		return fmt.Errorf("email too long")
+	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		return fmt.Errorf("invalid email format")
+	}
+	return nil
+}
+
+// validatePasswordStrength enforces a basic password policy. The upper bound is
+// 72 bytes because bcrypt (used by auth.HashPassword) silently ignores anything
+// past 72 — without this cap, the tail of a long password would not actually
+// protect the account.
+func validatePasswordStrength(pw string) error {
+	if len(pw) < 12 {
+		return fmt.Errorf("password must be at least 12 characters")
+	}
+	if len(pw) > 72 {
+		return fmt.Errorf("password must be at most 72 characters")
+	}
+	var hasLower, hasUpper, hasDigit, hasSymbol bool
+	for _, c := range pw {
+		switch {
+		case unicode.IsLower(c):
+			hasLower = true
+		case unicode.IsUpper(c):
+			hasUpper = true
+		case unicode.IsDigit(c):
+			hasDigit = true
+		default:
+			hasSymbol = true
+		}
+	}
+	classes := 0
+	for _, present := range []bool{hasLower, hasUpper, hasDigit, hasSymbol} {
+		if present {
+			classes++
+		}
+	}
+	if classes < 3 {
+		return fmt.Errorf("password must include at least 3 of: lowercase, uppercase, digit, symbol")
+	}
+	return nil
 }
 
 // resolveRegistrationRole returns RoleAdmin for the very first registered user

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 
 	"github.com/google/uuid"
@@ -33,15 +34,24 @@ func NewAuditedProvider(inner Provider, recorder UsageRecorder, scope, providerI
 }
 
 func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, error) {
+	start := time.Now()
 	resp, err := p.inner.Chat(ctx, req)
-	if err == nil && resp != nil {
+	metrics.ObserveAIRequest(p.providerID, time.Since(start).Seconds())
+	if err != nil {
+		metrics.RecordAIError(p.providerID)
+		return resp, err
+	}
+	if resp != nil {
+		metrics.RecordAITokens(p.providerID, resp.TokensIn, resp.TokensOut)
 		p.record(ctx, req.Model, req.OrgID, resp.TokensIn, resp.TokensOut)
 	}
 	return resp, err
 }
 
 func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
+	start := time.Now()
 	var tokensIn, tokensOut int
+	var sawChunkErr bool
 
 	wrappedOnChunk := func(c Chunk) {
 		if c.TokensIn > 0 {
@@ -50,13 +60,22 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		if c.TokensOut > 0 {
 			tokensOut = c.TokensOut
 		}
+		if c.Error != nil {
+			sawChunkErr = true
+		}
 		if c.Done {
+			metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
 			p.record(ctx, req.Model, req.OrgID, tokensIn, tokensOut)
 		}
 		onChunk(c)
 	}
 
-	return p.inner.Stream(ctx, req, wrappedOnChunk)
+	err := p.inner.Stream(ctx, req, wrappedOnChunk)
+	metrics.ObserveAIRequest(p.providerID, time.Since(start).Seconds())
+	if err != nil || sawChunkErr {
+		metrics.RecordAIError(p.providerID)
+	}
+	return err
 }
 
 func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tokensIn, tokensOut int) {

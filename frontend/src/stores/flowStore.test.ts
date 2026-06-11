@@ -130,3 +130,40 @@ describe('navigation history', () => {
         expect(useFlowStore.getState().navigationHistory).toHaveLength(2)
     })
 })
+
+// ---- jump-to-block expands collapsed ancestors (F1 regression) ----
+
+describe('selectBlock ancestor expansion', () => {
+    it('removes collapsed ancestor containers so the target is visible', () => {
+        const child = makeBlock('child', 'sf1')
+        const container: Block = {...makeBlock('loop1', 'sf1'), type: 'LOOP', children: [child]}
+        const doc = makeDoc(makeSubflow('sf1', [container]))
+        useFlowStore.getState().setDocument(doc)
+
+        // User collapses the container (expandedBlockIds is inverted: in-set = collapsed)
+        useFlowStore.getState().toggleBlockExpand('loop1')
+        expect(useFlowStore.getState().expandedBlockIds.has('loop1')).toBe(true)
+
+        // Jumping to the nested child (e.g. from a finding) must un-collapse it
+        useFlowStore.getState().selectBlock('child')
+        const state = useFlowStore.getState()
+        expect(state.selectedBlockId).toBe('child')
+        expect(state.expandedBlockIds.has('loop1')).toBe(false)
+    })
+
+    it('leaves unrelated collapsed containers collapsed', () => {
+        const child = makeBlock('child', 'sf1')
+        const container: Block = {...makeBlock('loop1', 'sf1'), type: 'LOOP', children: [child]}
+        const other: Block = {...makeBlock('loop2', 'sf1'), type: 'LOOP', children: [makeBlock('x', 'sf1')]}
+        const doc = makeDoc(makeSubflow('sf1', [container, other]))
+        useFlowStore.getState().setDocument(doc)
+
+        useFlowStore.getState().toggleBlockExpand('loop1')
+        useFlowStore.getState().toggleBlockExpand('loop2')
+        useFlowStore.getState().selectBlock('child')
+
+        const state = useFlowStore.getState()
+        expect(state.expandedBlockIds.has('loop1')).toBe(false)
+        expect(state.expandedBlockIds.has('loop2')).toBe(true)
+    })
+})

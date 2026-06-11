@@ -32,9 +32,9 @@ export default function ShortcutsPanel() {
         className="mb-4"
       />
 
-      <div className="space-y-6">
+      <div className="columns-1 sm:columns-2 gap-x-8">
         {Array.from(grouped.entries()).map(([category, items]) => (
-          <div key={category}>
+          <div key={category} className="break-inside-avoid mb-6">
             <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-2">{category}</h3>
             <div className="space-y-1">
               {items.map(s => (

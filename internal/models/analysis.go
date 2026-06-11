@@ -26,6 +26,7 @@ type Finding struct {
 
 type AnalysisReport struct {
 	FlowID        string         `json:"flowId"`
+	FlowName      string         `json:"flowName,omitempty"`
 	GeneratedAt   time.Time      `json:"generatedAt"`
 	Findings      []Finding      `json:"findings"`
 	Stats         AnalysisStats  `json:"stats"`
@@ -153,6 +154,9 @@ type AnalysisDiff struct {
 	AddedCount     int      `json:"addedCount"`
 	RemovedCount   int      `json:"removedCount"`
 	PersistedCount int      `json:"persistedCount"`
+	// HasPrevious is false when no earlier analysis run exists to compare
+	// against (the diff is then "everything added" by construction).
+	HasPrevious    bool     `json:"hasPrevious"`
 }
 
 type GraphNode struct {

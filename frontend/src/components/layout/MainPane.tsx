@@ -1,15 +1,19 @@
 import {useCallback, useMemo, useRef, Fragment, lazy, Suspense, useState} from 'react'
-import {X, FolderOpen, XCircle, MinusSquare} from 'lucide-react'
+import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
-import {GraphView} from '@/components/graph'
+import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
 import {Spinner} from '@/components/shared'
 import {UserProfile} from '@/components/auth/UserProfile'
 import {AdminDashboard} from '@/components/admin/AdminDashboard'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import Breadcrumbs from './Breadcrumbs'
 
+// GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
+// its lazy siblings below.
+const GraphView = lazy(() => import('@/components/graph/GraphView'))
 const ExecutionGraphView = lazy(() => import('@/components/flow/ExecutionGraphView'))
 const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffView'))
+const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDashboard'))
 import PaneDivider from '@/components/layout/PaneDivider'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -21,6 +25,7 @@ export default function MainPane() {
     // The profile/admin/empty views are handled by early returns AFTER the hooks.
     const mainPaneView = useUIStore(s => s.mainPaneView)
     const document = useFlowStore(s => s.document)
+    const parseError = useFlowStore(s => s.parseError)
     const groups = useEditorStore(s => s.groups)
     const focusedGroupIndex = useEditorStore(s => s.focusedGroupIndex)
     const groupWidths = useEditorStore(s => s.groupWidths)
@@ -79,16 +84,42 @@ export default function MainPane() {
         )
     }
 
+    if (mainPaneView === 'dashboard') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-y-auto p-4">
+                    <Suspense fallback={<Spinner />}>
+                        <AnalyticsDashboard />
+                    </Suspense>
+                </div>
+            </div>
+        )
+    }
+
     if (!document) {
         return (
             <div className="flex flex-col h-full">
                 <MainPaneToolbar />
                 <div className="flex-1 flex flex-col items-center justify-center">
-                    <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4">
-                        <FolderOpen size={28} className="text-text-tertiary" />
-                    </div>
-                    <div className="text-xl font-medium text-text-secondary mb-2">Open a flow to begin</div>
-                    <div className="text-sm text-text-tertiary">Choose from the sidebar or drag a file here</div>
+                    {parseError ? (
+                        <>
+                            <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
+                                <AlertTriangle size={28} className="text-red-400" />
+                            </div>
+                            <div className="text-xl font-medium text-text-secondary mb-2">Failed to load flow</div>
+                            <div className="text-sm text-red-400/90 max-w-md text-center break-words">{parseError}</div>
+                            <div className="text-sm text-text-tertiary mt-2">Try another file from the sidebar</div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4">
+                                <FolderOpen size={28} className="text-text-tertiary" />
+                            </div>
+                            <div className="text-xl font-medium text-text-secondary mb-2">Open a flow to begin</div>
+                            <div className="text-sm text-text-tertiary">Choose from the sidebar or drag a file here</div>
+                        </>
+                    )}
                 </div>
             </div>
         )
@@ -97,6 +128,7 @@ export default function MainPane() {
     return (
         <div className="flex flex-col h-full">
             <MainPaneToolbar />
+            <ParseErrorsBanner />
             <div ref={containerRef} className="flex-1 flex overflow-hidden">
                 {groups.map((group, gi) => (
                     <Fragment key={`group-${gi}`}>
@@ -154,7 +186,9 @@ export default function MainPane() {
                                             <BlockView subflowId={group.activeTabId} />
                                         </div>
                                     ) : mainPaneView === 'graph' ? (
-                                        <GraphView key={group.activeTabId} subflowId={group.activeTabId} />
+                                        <Suspense fallback={<Spinner />}>
+                                            <GraphView key={group.activeTabId} subflowId={group.activeTabId} />
+                                        </Suspense>
                                     ) : mainPaneView === 'local-map' ? (
                                         <Suspense fallback={<Spinner />}>
                                             <ExecutionGraphView key={`local-map-${group.activeTabId}`} subflowId={group.activeTabId} />

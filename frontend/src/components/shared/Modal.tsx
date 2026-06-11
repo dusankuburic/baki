@@ -8,6 +8,13 @@ type ModalProps = {
     size?: 'sm' | 'md' | 'lg' | 'xl'
     closeOnBackdrop?: boolean
     closeOnEsc?: boolean
+    // 'tall' makes the panel a fixed-height flex column so its size stays
+    // constant regardless of content (avoids the window resizing per tab).
+    // Defaults to 'auto' (height driven by content, capped at 70vh).
+    height?: 'auto' | 'tall'
+    // When false, the body wrapper does not scroll or pad — the child owns the
+    // full area and provides its own single scroll region. Defaults to true.
+    bodyScroll?: boolean
     children: React.ReactNode
     footer?: React.ReactNode
 }
@@ -26,6 +33,8 @@ export default function Modal({
     size = 'md',
     closeOnBackdrop = true,
     closeOnEsc = true,
+    height = 'auto',
+    bodyScroll = true,
     children,
     footer,
 }: ModalProps) {
@@ -85,14 +94,15 @@ export default function Modal({
                 ref={modalRef}
                 className={clsx(
                     'relative w-full mx-4 bg-surface-1 border border-border-default rounded-xl shadow-xl animate-modal',
-                    sizeClasses[size]
+                    sizeClasses[size],
+                    height === 'tall' && 'flex flex-col h-[80vh] max-h-[820px]'
                 )}
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
             >
                 {title && (
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle shrink-0">
                         <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
                         <button
                             onClick={onClose}
@@ -103,11 +113,19 @@ export default function Modal({
                         </button>
                     </div>
                 )}
-                <div className="px-6 py-4 overflow-y-auto max-h-[70vh]">
+                <div
+                    className={clsx(
+                        bodyScroll
+                            ? height === 'tall'
+                                ? 'px-6 py-4 overflow-y-auto flex-1 min-h-0'
+                                : 'px-6 py-4 overflow-y-auto max-h-[70vh]'
+                            : 'flex-1 min-h-0 overflow-hidden'
+                    )}
+                >
                     {children}
                 </div>
                 {footer && (
-                    <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle">
+                    <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle shrink-0">
                         {footer}
                     </div>
                 )}

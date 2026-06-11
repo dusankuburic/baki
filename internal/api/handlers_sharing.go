@@ -127,8 +127,18 @@ func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http
 func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	userID := chi.URLParam(r, "userId")
-	if !requireFlowOwner(w, r, h.backend, h.security, flowID) && h.security.CallerID(r) != userID {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+	// A removal is allowed if the caller owns the flow OR is removing themselves.
+	// Use the side-effect-free isFlowOwner here: requireFlowOwner writes a 403 to
+	// the response on failure, which — combined with the self-removal branch
+	// proceeding — would double-write the response (corrupting it while the row
+	// is still deleted).
+	owner, err := isFlowOwner(r, h.backend, h.security, flowID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	if !owner && h.security.CallerID(r) != userID {
+		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return
 	}
 	if h.backend == nil {

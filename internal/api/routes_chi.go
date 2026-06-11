@@ -111,6 +111,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/dataflow", h.Analysis.handleGetDataFlow)
 		r.Post("/batch", h.Analysis.handleBatchAnalyze)
 		r.Post("/diff", h.Analysis.handleDiff)
+		r.Post("/history", h.Analysis.handleGetHistory)
 		r.Post("/export/html", h.Analysis.handleExportHTML)
 		r.Get("/dependencies", h.Analysis.handleGetDependencies)
 		r.Get("/dashboard", h.Analysis.handleGetDashboard)

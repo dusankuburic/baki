@@ -21,11 +21,9 @@ type LibraryHandler struct {
 	backend  storageif.StorageBackend
 }
 
-func NewLibraryHandler(libSvc *service.LibraryService, security *SecurityConfig) *LibraryHandler {
-	return &LibraryHandler{libSvc: libSvc, security: security}
+func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.StorageBackend, security *SecurityConfig) *LibraryHandler {
+	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend}
 }
-
-func (h *LibraryHandler) SetBackend(b storageif.StorageBackend) { h.backend = b }
 
 type libraryFlow struct {
 	ID               string    `json:"id"`

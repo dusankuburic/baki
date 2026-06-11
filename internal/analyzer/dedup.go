@@ -6,17 +6,31 @@ import (
 
 type FindingGroup = models.FindingGroup
 
+// findingDiscriminator distinguishes findings that share a block and title but
+// concern different subjects — e.g. two uninitialized variables in the same
+// block. Without it, (BlockID, Title) dedup silently drops all but the first.
+func findingDiscriminator(f models.Finding) string {
+	if f.Metadata == nil {
+		return ""
+	}
+	if v, ok := f.Metadata["variable"].(string); ok {
+		return v
+	}
+	return ""
+}
+
 func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []FindingGroup) {
 	type key struct {
 		blockID string
 		title   string
+		subject string
 	}
 	seen := make(map[key]int)
 	var deduped []models.Finding
 	groups := make(map[string][]models.Finding)
 
 	for _, f := range findings {
-		k := key{blockID: f.BlockID, title: f.Title}
+		k := key{blockID: f.BlockID, title: f.Title, subject: findingDiscriminator(f)}
 		groups[f.BlockID] = append(groups[f.BlockID], f)
 
 		if _, exists := seen[k]; exists {
@@ -32,10 +46,11 @@ func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []Finding
 		dups := 0
 		titleSet := make(map[string]bool)
 		for _, f := range blockFindings {
-			if titleSet[f.Title] {
+			tk := f.Title + "\x00" + findingDiscriminator(f)
+			if titleSet[tk] {
 				dups++
 			}
-			titleSet[f.Title] = true
+			titleSet[tk] = true
 		}
 		resultGroups = append(resultGroups, FindingGroup{
 			BlockID:        blockID,

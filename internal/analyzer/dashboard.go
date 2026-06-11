@@ -53,6 +53,7 @@ func ComputeDashboard(reports []*models.AnalysisReport) *models.DashboardStats {
 			}
 			problems = append(problems, models.ProblemFlow{
 				FlowID:       r.FlowID,
+				FlowName:     r.FlowName,
 				FindingCount: len(r.Findings),
 				HealthScore:  hs,
 			})

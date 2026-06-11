@@ -21,16 +21,17 @@ type Event struct {
 type EventManager struct {
 	clients     map[chan Event]bool
 	clientsMu   sync.Mutex
-	sseIPCount  map[string]int // per-IP SSE connection counter
+	sseConnCount map[string]int // per-client SSE connection counter (keyed by clientKey)
 	shutdownCh  <-chan struct{}
-	allowOrigin func(string) bool // injected by Router; nil = deny all cross-origin
+	allowOrigin func(string) bool          // injected by Router; nil = deny all cross-origin
+	clientKey   func(*http.Request) string // injected by Router; nil = fall back to remote IP
 }
 
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
 	return &EventManager{
-		clients:    make(map[chan Event]bool),
-		sseIPCount: make(map[string]int),
-		shutdownCh: shutdownCh,
+		clients:      make(map[chan Event]bool),
+		sseConnCount: make(map[string]int),
+		shutdownCh:   shutdownCh,
 	}
 }
 
@@ -38,6 +39,15 @@ func NewEventManager(shutdownCh chan struct{}) *EventManager {
 // respects the same origin allowlist as every other route.
 func (m *EventManager) SetOriginChecker(fn func(string) bool) {
 	m.allowOrigin = fn
+}
+
+// SetClientKeyFunc injects the router's connection-limit key function. In JWT
+// mode the Router keys per authenticated user; otherwise it keys per
+// proxy-aware client IP. This prevents all clients behind a reverse proxy from
+// collapsing onto a single IP bucket (which would let one user exhaust the
+// shared connection cap for everyone).
+func (m *EventManager) SetClientKeyFunc(fn func(*http.Request) string) {
+	m.clientKey = fn
 }
 
 // Emit satisfies the service.Notifier interface.
@@ -62,14 +72,24 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	// Key the connection cap per authenticated user (JWT mode) or per
+	// proxy-aware client IP, via the Router-injected clientKey. Falling back to
+	// the bare remote IP only when no key func is wired keeps tests and any
+	// uninitialised path working.
+	key := r.RemoteAddr
+	if m.clientKey != nil {
+		key = m.clientKey(r)
+	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		key = host
+	}
+
 	m.clientsMu.Lock()
-	if m.sseIPCount[ip] >= 10 {
+	if m.sseConnCount[key] >= 10 {
 		m.clientsMu.Unlock()
-		http.Error(w, "Too many connections from your IP", http.StatusServiceUnavailable)
+		http.Error(w, "Too many connections", http.StatusServiceUnavailable)
 		return
 	}
-	m.sseIPCount[ip]++
+	m.sseConnCount[key]++
 	ch := make(chan Event, 64)
 	m.clients[ch] = true
 	m.clientsMu.Unlock()
@@ -77,9 +97,9 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		m.clientsMu.Lock()
 		delete(m.clients, ch)
-		m.sseIPCount[ip]--
-		if m.sseIPCount[ip] <= 0 {
-			delete(m.sseIPCount, ip)
+		m.sseConnCount[key]--
+		if m.sseConnCount[key] <= 0 {
+			delete(m.sseConnCount, key)
 		}
 		m.clientsMu.Unlock()
 		metrics.SSEClientEnd()

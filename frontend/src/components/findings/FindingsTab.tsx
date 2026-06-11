@@ -1,15 +1,17 @@
-import {useCallback, useEffect, useMemo} from 'react'
-import {Download, FileText, Search} from 'lucide-react'
+import {useCallback, useEffect, useMemo, useState} from 'react'
+import {Download, FileText, Search, GitCompareArrows} from 'lucide-react'
 import {analysisApi} from '@/api'
 import {subscribeToEvents} from '@/api/client'
 import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
-import {Spinner} from '@/components/shared'
+import {Spinner, useToast} from '@/components/shared'
 import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
-import type {Finding, Severity} from '@/types/domain'
+import AnalysisDiffView from './AnalysisDiffView'
+import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
+import type {AnalysisDiff, Finding, Severity} from '@/types/domain'
 import clsx from 'clsx'
 
 export default function FindingsTab() {
@@ -34,6 +36,14 @@ export default function FindingsTab() {
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
   const suppressedFindings = useAnalysisStore(s => s.suppressedFindings)
+  const toast = useToast()
+  const [diff, setDiff] = useState<AnalysisDiff | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+
+  // Leave the diff view when switching documents or after a fresh analysis.
+  useEffect(() => {
+    setDiff(null)
+  }, [doc?.id, report?.generatedAt])
 
   const findings = useMemo(() => {
     if (!report) return []
@@ -100,10 +110,19 @@ export default function FindingsTab() {
       // loop for this thread (no-op on providers that don't support tools).
       useTools: true,
     })
+    // Ground the AI with everything the analyzer knows about this finding,
+    // including its machine-generated fix hint when one exists.
+    const parts = [
+      `Help me fix this issue: **${finding.title}**`,
+      finding.description,
+      finding.suggestion ? `Suggestion: ${finding.suggestion}` : '',
+      finding.autoFixHint ? `Analyzer fix hint:\n\`\`\`\n${finding.autoFixHint}\n\`\`\`` : '',
+      `Rule: \`${finding.ruleId}\` · Severity: ${finding.severity} · Block: \`${finding.blockId}\``,
+    ].filter(Boolean)
     appendMessage(threadId, {
       id: crypto.randomUUID(),
       role: 'user',
-      content: `Help me fix this issue: **${finding.title}**\n\n${finding.description}\n\n${finding.suggestion ?? ''}`,
+      content: parts.join('\n\n'),
       timestamp: new Date().toISOString(),
       contextBlockId: finding.blockId,
     })
@@ -111,46 +130,31 @@ export default function FindingsTab() {
     setInspectorTab('ai')
   }, [appendMessage, createThread, updateThread, switchThread, setInspectorTab, doc])
 
+  const handleShowDiff = useCallback(async () => {
+    setDiffLoading(true)
+    try {
+      const d = await analysisApi.getDiff()
+      setDiff(d)
+    } catch (err) {
+      toast.error('Diff failed: ' + (err as Error).message)
+    } finally {
+      setDiffLoading(false)
+    }
+  }, [toast])
+
   const handleExportCSV = useCallback(() => {
     if (!report) return
-    const rows = [['ID', 'Severity', 'Category', 'Title', 'Description', 'Block ID', 'Subflow ID', 'Suggestion']]
-    for (const f of report.findings) {
-      rows.push([
-        f.id,
-        f.severity,
-        f.category ?? '',
-        `"${f.title.replace(/"/g, '""')}"`,
-        `"${f.description.replace(/"/g, '""')}"`,
-        f.blockId,
-        f.subflowId,
-        f.suggestion ? `"${f.suggestion.replace(/"/g, '""')}"` : '',
-      ])
-    }
-    const csv = rows.map(r => r.join(',')).join('\n')
-    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'})
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `analysis-${doc?.id ?? 'report'}-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    exportFindingsCSV(report, doc?.id ?? 'report')
   }, [report, doc])
 
   const handleExportHTML = useCallback(async () => {
     if (!doc) return
     try {
-      const html = await analysisApi.exportHTML()
-      const blob = new Blob([html as unknown as string], {type: 'text/html;charset=utf-8;'})
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `analysis-${doc.id}-${new Date().toISOString().slice(0, 10)}.html`
-      a.click()
-      URL.revokeObjectURL(url)
+      await exportFindingsHTML(doc.id)
     } catch (err) {
-      console.error('HTML export failed:', err)
+      toast.error('HTML export failed: ' + (err as Error).message)
     }
-  }, [doc])
+  }, [doc, toast])
 
   if (!doc) {
     return (
@@ -258,6 +262,15 @@ export default function FindingsTab() {
         >
           Re-analyze
         </button>
+        <button
+          onClick={handleShowDiff}
+          disabled={diffLoading}
+          title="Compare with previous run"
+          aria-label="Compare findings with previous analysis run"
+          className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0 disabled:opacity-50"
+        >
+          <GitCompareArrows size={12} />
+        </button>
         {report!.findings.length > 0 && (
           <>
             <button
@@ -278,30 +291,42 @@ export default function FindingsTab() {
         )}
       </div>
       {suppressedCount > 0 && (
-        <div className="px-3 py-1 text-2xs text-text-tertiary border-b border-border-subtle">
-          {suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed
+        <div className="px-3 py-1 flex items-center justify-between text-2xs text-text-tertiary border-b border-border-subtle">
+          <span>{suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed</span>
+          <button
+            onClick={() => useAnalysisStore.getState().clearSuppressed()}
+            className="text-brand-400 hover:text-brand-300 px-1.5 py-0.5 rounded hover:bg-brand-500/10 transition-colors"
+          >
+            Restore all
+          </button>
         </div>
       )}
-      {report!.findings.length > 0 && (
-        <div className="px-3 py-1.5 border-b border-border-subtle">
-          <div className="relative">
-            <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-disabled" />
-            <input
-              type="text"
-              value={findingSearch}
-              onChange={e => setFindingSearch(e.target.value)}
-              placeholder="Search findings..."
-              className="w-full bg-surface-2 border border-border-subtle rounded-md pl-7 pr-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-500/50"
-            />
-          </div>
-        </div>
-      )}
-      {findings.length === 0 ? (
-        <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
-          No findings
-        </div>
+      {diff ? (
+        <AnalysisDiffView diff={diff} doc={doc} onBack={() => setDiff(null)} onFixWithAI={handleFixWithAI} />
       ) : (
-        <FindingsList findings={findings} doc={doc} onFixWithAI={handleFixWithAI} />
+        <>
+          {report!.findings.length > 0 && (
+            <div className="px-3 py-1.5 border-b border-border-subtle">
+              <div className="relative">
+                <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-disabled" />
+                <input
+                  type="text"
+                  value={findingSearch}
+                  onChange={e => setFindingSearch(e.target.value)}
+                  placeholder="Search findings..."
+                  className="w-full bg-surface-2 border border-border-subtle rounded-md pl-7 pr-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-500/50"
+                />
+              </div>
+            </div>
+          )}
+          {findings.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
+              No findings
+            </div>
+          ) : (
+            <FindingsList findings={findings} doc={doc} onFixWithAI={handleFixWithAI} />
+          )}
+        </>
       )}
     </div>
   )

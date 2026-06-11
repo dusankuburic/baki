@@ -4,5 +4,6 @@ export {default as BlockChildren} from './BlockChildren'
 export {default as BlockEnd} from './BlockEnd'
 export {default as BlockView} from './BlockView'
 export {default as MainPaneToolbar} from './MainPaneToolbar'
-export {default as ExecutionGraphView} from './ExecutionGraphView'
-export {default as RegressionDiffView} from './RegressionDiffView'
+// ExecutionGraphView and RegressionDiffView are intentionally NOT re-exported:
+// they are lazy-loaded by path (MainPane) and a static barrel re-export would
+// drag cytoscape into the entry chunk.

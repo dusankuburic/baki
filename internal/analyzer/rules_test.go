@@ -223,7 +223,8 @@ func TestHardcodedCredentialRule(t *testing.T) {
 
 	t.Run("high entropy string emits finding", func(t *testing.T) {
 		b := makeBlock("b1", "Set var", models.BlockTypeAction, "SetVariable.Set", 0)
-		b.Properties = map[string]string{"Value": "aB3dE7fG9hJ2kL5mN8pQrS4tUvW6xYz0AbCdEfGh"}
+		// 48 distinct alphanumerics — clears the 48-char/5.0-bit thresholds.
+		b.Properties = map[string]string{"Value": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV"}
 		b.SubflowID = "sf1"
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
 		ctx := buildContext(flow, nil)

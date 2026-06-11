@@ -123,6 +123,10 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *FlowHandler) handleRecentFiles(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.JSON(w, []string{})
+		return
+	}
 	files, err := h.flowSvc.RecentFiles()
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -132,6 +136,10 @@ func (h *FlowHandler) handleRecentFiles(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.JSON(w, map[string]string{"status": "ok"})
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -147,6 +155,10 @@ func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *FlowHandler) handleClearRecentFiles(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.JSON(w, map[string]string{"status": "ok"})
+		return
+	}
 	if err := h.flowSvc.ClearRecentFiles(); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -232,6 +244,10 @@ func (h *FlowHandler) handleReadSourceFiles(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *FlowHandler) handleOnFileOpenFromSystem(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("opening from local paths is not supported in cloud mode"), http.StatusForbidden)
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}

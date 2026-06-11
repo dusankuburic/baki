@@ -45,6 +45,7 @@ const defaultSettings: AppSettings = {
   },
   ai: {
     activeProvider: 'claude',
+    embeddingProvider: 'openai',
     providers: {
       claude: {
         enabled: true,
@@ -164,28 +165,47 @@ interface SettingsState {
 }
 
 // Persist with a debounce to prevent flooding the backend during rapid UI
-// updates (like window resizing or slider dragging).
+// updates (like window resizing or slider dragging). Rejects on failure so
+// callers can roll back their optimistic update. A superseded persist resolves
+// immediately: the newer call reads the latest state, so it carries this
+// call's changes too (previously the superseded promise never settled).
 let persistTimer: any = null
+let resolveSuperseded: (() => void) | null = null
 async function persist(settings: AppSettings): Promise<void> {
   if (persistTimer) {
     clearTimeout(persistTimer)
+    resolveSuperseded?.()
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    resolveSuperseded = resolve
     persistTimer = setTimeout(async () => {
+      persistTimer = null
+      resolveSuperseded = null
       try {
         await settingsApi.updateSettings(settings as any)
+        resolve()
       } catch (err) {
         console.error('Failed to persist settings', err)
-      } finally {
-        persistTimer = null
-        resolve()
+        reject(err)
       }
     }, 1000) // 1 second debounce
   })
 }
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
+export const useSettingsStore = create<SettingsState>((set, get) => {
+  // Optimistically apply `next`, persist, and restore `prev` if the backend
+  // write fails (persist already logs the error).
+  const applyAndPersist = async (next: AppSettings, prev: AppSettings) => {
+    set({settings: next})
+    try {
+      await persist(next)
+    } catch {
+      set({settings: prev})
+    }
+  }
+
+  return {
   settings: defaultSettings,
   isLoaded: false,
 
@@ -235,56 +255,43 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   updateSettings: async (patch) => {
     const prev = get().settings
-    const next = {...prev, ...patch}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, ...patch}, prev)
   },
 
   updateGeneral: async (general) => {
     const prev = get().settings
-    const next = {...prev, general: {...prev.general, ...general}}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, general: {...prev.general, ...general}}, prev)
   },
 
   updateAppearance: async (appearance) => {
     const prev = get().settings
-    const next = {...prev, appearance: {...prev.appearance, ...appearance}}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, appearance: {...prev.appearance, ...appearance}}, prev)
   },
 
   updateParser: async (parser) => {
     const prev = get().settings
-    const next = {...prev, parser: {...prev.parser, ...parser}}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, parser: {...prev.parser, ...parser}}, prev)
   },
 
   updateLayout: async (layout) => {
     const prev = get().settings
-    const next = {...prev, layout: {...prev.layout, ...layout}}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, layout: {...prev.layout, ...layout}}, prev)
   },
 
   updateAI: async (ai) => {
     const prev = get().settings
-    const next = {...prev, ai: {...prev.ai, ...ai}}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, ai: {...prev.ai, ...ai}}, prev)
   },
 
   updateProvider: async (id, config) => {
     const prev = get().settings
     const providers = {...prev.ai.providers, [id]: {...prev.ai.providers[id], ...config}}
-    const next = {...prev, ai: {...prev.ai, providers}}
-    set({settings: next})
-    await persist(next)
+    await applyAndPersist({...prev, ai: {...prev.ai, providers}}, prev)
   },
 
   resetToDefaults: async () => {
-    set({settings: defaultSettings})
-    await persist(defaultSettings)
+    const prev = get().settings
+    await applyAndPersist(defaultSettings, prev)
   },
-}))
+  }
+})

@@ -176,7 +176,7 @@ export default function BlockCard({
                 'relative rounded-lg cursor-pointer transition-all duration-fast overflow-visible',
                 'border max-w-[450px] w-full',
                 selected
-                    ? 'bg-surface-2 border-brand-500/50 shadow-glow scale-[1.01]'
+                    ? 'bg-surface-2 border-brand-500/50 shadow-glow scale-[1.01] animate-jump-pulse'
                     : 'bg-surface-2 border-border-default shadow-sm',
                 hovered && !selected && 'bg-surface-3 shadow-md',
                 highlighted && 'ring-2 ring-semantic-warning/40',

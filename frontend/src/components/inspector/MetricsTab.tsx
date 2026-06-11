@@ -2,9 +2,33 @@ import React from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
-import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert} from 'lucide-react'
+import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
 import clsx from 'clsx'
-import type {SubflowMetrics} from '@/types/domain'
+import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics} from '@/types/domain'
+
+function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
+  const rows = [
+    ['Subflow', 'Blocks', 'Cyclomatic', 'Cognitive', 'Fan-In', 'Fan-Out', 'Max Depth', 'Variables'],
+    ...metrics.subflows.map(m => [
+      `"${m.subflowName.replace(/"/g, '""')}"`,
+      m.blockCount, m.cyclomaticComplexity, m.cognitiveComplexity,
+      m.fanIn, m.fanOut, m.maxNestingDepth, m.variableCount,
+    ].map(String)),
+    [],
+    ['Health Score', String(metrics.healthScore)],
+    ['Total Blocks', String(metrics.totalBlocks)],
+    ['Total Variables', String(metrics.totalVariables)],
+    ['Avg Cyclomatic', metrics.avgCyclomatic.toFixed(1)],
+  ]
+  const csv = rows.map(r => r.join(',')).join('\n')
+  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'})
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `metrics-${flowId}-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 function scoreColor(score: number): string {
   if (score >= 80) return 'text-green-400'
@@ -116,7 +140,17 @@ export default function MetricsTab() {
       <div className="p-4 space-y-4">
         <div className={clsx('p-4 rounded-xl border', scoreBg(metrics.healthScore))}>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-2xs font-bold uppercase tracking-widest text-text-tertiary">Health Score</span>
+            <span className="text-2xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-2">
+              Health Score
+              <button
+                onClick={() => exportMetricsCSV(metrics, doc.id)}
+                title="Export metrics as CSV"
+                aria-label="Export metrics as CSV"
+                className="text-text-tertiary hover:text-text-secondary p-0.5 rounded hover:bg-surface-3 transition-colors"
+              >
+                <Download size={11} />
+              </button>
+            </span>
             <span className={clsx('text-2xl font-black font-mono tabular-nums', scoreColor(metrics.healthScore))}>
               {metrics.healthScore}
             </span>
@@ -131,6 +165,8 @@ export default function MetricsTab() {
             {scoreLabel(metrics.healthScore)}
           </span>
         </div>
+
+        <HealthTrend />
 
         <div className="grid grid-cols-2 gap-2">
           <StatCard label="Subflows" value={metrics.subflowCount} />
@@ -204,15 +240,91 @@ function StatCard({label, value, warn}: {label: string; value: string | number; 
   )
 }
 
+// HealthTrend renders the persisted analysis snapshots as a health-score
+// sparkline with per-run severity counts on hover. Hidden until there are at
+// least two distinct runs to connect.
+function HealthTrend() {
+  const doc = useFlowStore(s => s.document)
+  const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
+  const [snapshots, setSnapshots] = React.useState<AnalysisSnapshot[]>([])
+  const [hover, setHover] = React.useState<number | null>(null)
+
+  React.useEffect(() => {
+    if (!doc) return
+    analysisApi.getHistory()
+      .then(s => setSnapshots((s ?? []).slice(-20)))
+      .catch(() => {})
+  }, [doc, generatedAt])
+
+  if (snapshots.length < 2) return null
+
+  const W = 280
+  const H = 56
+  const PAD = 6
+  const step = (W - PAD * 2) / (snapshots.length - 1)
+  const y = (score: number) => PAD + (H - PAD * 2) * (1 - Math.max(0, Math.min(100, score)) / 100)
+  const points = snapshots.map((s, i) => `${PAD + i * step},${y(s.healthScore)}`).join(' ')
+  const active = hover != null ? snapshots[hover] : snapshots[snapshots.length - 1]
+
+  return (
+    <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-2xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
+          <TrendingUp size={10} />
+          Health Trend
+        </span>
+        <span className="text-2xs text-text-tertiary tabular-nums">
+          {new Date(active.timestamp).toLocaleString()} · score {active.healthScore} ·{' '}
+          <span className="text-red-400">{active.errors}E</span>{' '}
+          <span className="text-amber-400">{active.warnings}W</span>{' '}
+          <span className="text-blue-400">{active.info}I</span>
+        </span>
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        role="img"
+        aria-label={`Health score trend over ${snapshots.length} analysis runs`}
+        onMouseLeave={() => setHover(null)}
+      >
+        <polyline points={points} fill="none" stroke="var(--brand-500)" strokeWidth="1.5" strokeLinejoin="round" />
+        {snapshots.map((s, i) => (
+          <g key={s.timestamp + i}>
+            {/* invisible wide hit area per point */}
+            <rect
+              x={PAD + i * step - step / 2}
+              y={0}
+              width={step}
+              height={H}
+              fill="transparent"
+              onMouseEnter={() => setHover(i)}
+            />
+            <circle
+              cx={PAD + i * step}
+              cy={y(s.healthScore)}
+              r={hover === i ? 3.5 : 2}
+              fill={s.errors > 0 ? 'var(--error)' : s.warnings > 0 ? 'var(--warning)' : 'var(--success)'}
+              className="transition-all duration-fast"
+            />
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+
 function DataFlowInsights() {
   const doc = useFlowStore(s => s.document)
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
   const [dataFlow, setDataFlow] = React.useState<any>(null)
+  // Re-fetch when a new analysis lands, not just when the document changes —
+  // otherwise these insights show the previous run's data after re-analyze.
+  const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
 
   React.useEffect(() => {
     if (!doc) return
     analysisApi.getDataFlow().then(r => setDataFlow(r as any)).catch(() => {})
-  }, [doc])
+  }, [doc, generatedAt])
 
   if (!dataFlow || ((!dataFlow.taintPaths || dataFlow.taintPaths.length === 0) && (!dataFlow.deadData || dataFlow.deadData.length === 0))) {
     return null

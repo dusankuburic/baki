@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"pad-analyzer/internal/models"
@@ -207,31 +208,49 @@ func TestShannonEntropy_MaxEntropy(t *testing.T) {
 
 func TestIsHighEntropySecret_TooShort(t *testing.T) {
 	if isHighEntropySecret("abc123") {
-		t.Error("expected false for short string (< 32 chars)")
+		t.Error("expected false for short string (< 48 chars)")
 	}
 }
 
 func TestIsHighEntropySecret_NonAlphanumeric(t *testing.T) {
-	// ≥32 chars but contains a dash → not alphanumeric → false.
-	s := "abcdefghij-klmnopqrstuvwxyz01234"
+	// ≥48 chars but contains a dash → not alphanumeric → false.
+	s := "abcdefghij-klmnopqrstuvwxyz0123456789ABCDEFGHIJK"
 	if isHighEntropySecret(s) {
 		t.Error("expected false for string with non-alphanumeric characters")
 	}
 }
 
 func TestIsHighEntropySecret_LowEntropy(t *testing.T) {
-	// ≥32 chars, alphanumeric, but all the same character → entropy ≈ 0.
-	s := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 34 'a's
+	// ≥48 chars, alphanumeric, but all the same character → entropy ≈ 0.
+	s := strings.Repeat("a", 50)
 	if isHighEntropySecret(s) {
 		t.Error("expected false for low-entropy string")
 	}
 }
 
 func TestIsHighEntropySecret_HighEntropy(t *testing.T) {
-	// ≥32 chars, all distinct alphanumeric, high entropy.
-	s := "aB3dE7fG9hJ2kL5mN8pQrS4tUvW6xYz0Ab" // 35 unique-ish chars
+	// ≥48 chars, all distinct alphanumeric → entropy log2(48) ≈ 5.58 > 5.0.
+	s := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV"
 	if !isHighEntropySecret(s) {
 		t.Error("expected true for long, high-entropy alphanumeric string")
+	}
+}
+
+func TestIsHighEntropySecret_HexDigestNotFlagged(t *testing.T) {
+	// A SHA-256 hex digest (64 chars over a 16-symbol alphabet, entropy ≤ 4.0)
+	// is a common non-secret literal and must not be flagged.
+	s := "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	if isHighEntropySecret(s) {
+		t.Error("expected false for hex digest")
+	}
+}
+
+func TestIsHighEntropySecret_ShortMixedCaseIDNotFlagged(t *testing.T) {
+	// Mixed-case Base62 identifiers in the 32-47 char range (record/file IDs)
+	// were the main false-positive source before the 48-char floor.
+	s := "aB3dE7fG9hJ2kL5mN8pQrS4tUvW6xYz0Ab" // 34 chars
+	if isHighEntropySecret(s) {
+		t.Error("expected false for sub-48-char identifier")
 	}
 }
 

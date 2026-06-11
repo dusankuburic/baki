@@ -175,6 +175,69 @@ func TestHandleSharingRemove_OK(t *testing.T) {
 	checkStatus(t, rr, http.StatusOK)
 }
 
+// TestHandleSharingRemove_SelfRemovalByCollaborator is the regression test for
+// the S1 fix: a non-owner collaborator removing THEMSELVES must get a single
+// clean 200. Before the fix, requireFlowOwner wrote a 403 to the response as a
+// side effect, the self-removal branch then proceeded to delete the row, and
+// render.JSON's second WriteHeader was dropped — so the client saw 403 while the
+// removal actually happened. The recorder captures that first (403) write.
+func TestHandleSharingRemove_SelfRemovalByCollaborator(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	ownerToken := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
+	seedUser(t, rt, "u1", "alice@example.com")
+
+	// Owner adds alice as a collaborator.
+	addRR := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", ownerToken, map[string]any{
+		"userId": "u1", "permission": "viewer",
+	})
+	checkStatus(t, addRR, http.StatusOK)
+
+	// Alice (a non-owner) removes herself.
+	aliceToken := jwtBearer(t, rt, "u1", "alice@example.com")
+	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/flows/flow-1/collaborators/u1", aliceToken, nil)
+	checkStatus(t, rr, http.StatusOK)
+
+	// And she's actually gone.
+	collabs, err := rt.security.Backend.ListCollaborators(context.Background(), "flow-1")
+	if err != nil {
+		t.Fatalf("ListCollaborators: %v", err)
+	}
+	if len(collabs) != 0 {
+		t.Errorf("expected collaborator removed, still have %d", len(collabs))
+	}
+}
+
+// TestHandleSharingRemove_OutsiderForbidden confirms a user who is neither the
+// flow owner nor the target collaborator cannot remove anyone, and the target
+// is left intact.
+func TestHandleSharingRemove_OutsiderForbidden(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	ownerToken := jwtBearer(t, rt, "admin", "admin@example.com")
+	seedFlow(t, rt, "flow-1", "admin")
+	seedUser(t, rt, "u1", "alice@example.com")
+	seedUser(t, rt, "u2", "eve@example.com")
+
+	addRR := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", ownerToken, map[string]any{
+		"userId": "u1", "permission": "viewer",
+	})
+	checkStatus(t, addRR, http.StatusOK)
+
+	// Eve (neither owner nor target) tries to remove alice.
+	eveToken := jwtBearer(t, rt, "u2", "eve@example.com")
+	rr := doRequestWithAuth(t, rt, http.MethodDelete, "/api/flows/flow-1/collaborators/u1", eveToken, nil)
+	checkStatus(t, rr, http.StatusForbidden)
+
+	// Alice is still a collaborator.
+	collabs, err := rt.security.Backend.ListCollaborators(context.Background(), "flow-1")
+	if err != nil {
+		t.Fatalf("ListCollaborators: %v", err)
+	}
+	if len(collabs) != 1 {
+		t.Errorf("expected alice to remain, have %d collaborators", len(collabs))
+	}
+}
+
 func TestHandleSharingListAfterAdd(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")

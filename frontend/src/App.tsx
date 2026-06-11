@@ -16,6 +16,7 @@ import {useAnalysisStore} from './stores/analysisStore'
 import {usePresenceStore} from './stores/presenceStore'
 import {useKeyboard} from './hooks/useKeyboard'
 import {useTheme} from './hooks/useTheme'
+import {exportFindingsCSV, exportFindingsHTML} from './lib/findingsExport'
 import {useTauriMenuEvents} from './hooks/useTauriMenuEvents'
 import {useAutoAnalyze} from './hooks/useAutoAnalyze'
 import TitleBar from './components/layout/TitleBar'
@@ -364,6 +365,18 @@ export default function App() {
             'analysis.filter.warnings': () => useAnalysisStore.getState().setSeverityFilter(new Set(['warning'])),
             'analysis.filter.info': () => useAnalysisStore.getState().setSeverityFilter(new Set(['info'])),
             'analysis.filter.all': () => useAnalysisStore.getState().setSeverityFilter(new Set(['error', 'warning', 'info'])),
+            // These two shortcut ids were declared in shortcuts.ts but never
+            // had handlers, so the keys did nothing.
+            'analysis.export.csv': () => {
+                const d = useFlowStore.getState().document
+                const r = d ? useAnalysisStore.getState().reports.get(d.id) : undefined
+                if (d && r) exportFindingsCSV(r, d.id)
+            },
+            'analysis.export.html': async () => {
+                const d = useFlowStore.getState().document
+                if (!d) return
+                try { await exportFindingsHTML(d.id) } catch (e) { console.error('HTML export failed:', e) }
+            },
             'window.reload': () => { window.location.reload() },
             'window.quit': () => {
                 if (!isTauri()) return
@@ -410,12 +423,24 @@ export default function App() {
                     setAnalyzing(false)
                 }
             }},
+            {id: 'analysis.export.csv', label: 'Export Findings as CSV', section: 'Analysis', shortcut: ['mod', 'alt', 'e'], onSelect: () => {
+                const r = document ? useAnalysisStore.getState().reports.get(document.id) : undefined
+                if (document && r) exportFindingsCSV(r, document.id)
+            }},
+            {id: 'analysis.export.html', label: 'Export Findings as HTML', section: 'Analysis', shortcut: ['mod', 'shift', 'h'], onSelect: async () => {
+                if (!document) return
+                try { await exportFindingsHTML(document.id) } catch (e) { console.error('HTML export failed:', e) }
+            }},
+            {id: 'analysis.filter.all', label: 'Findings: Show All Severities', section: 'Analysis', shortcut: ['mod', 'shift', '0'], onSelect: () => {
+                useAnalysisStore.getState().setSeverityFilter(new Set(['error', 'warning', 'info']))
+            }},
             {id: 'file.export.pdf', label: 'Export PDF', section: 'File', shortcut: ['mod', 'e'], onSelect: async () => {
                 try { await exportApi.exportPDF() } catch (e) { console.error('Export PDF failed:', e) }
             }},
             {id: 'file.export.md', label: 'Export Markdown', section: 'File', shortcut: ['mod', 'shift', 'e'], onSelect: async () => {
                 try { await exportApi.exportMarkdown() } catch (e) { console.error('Export Markdown failed:', e) }
             }},
+            {id: 'view.dashboard', label: 'Analysis Dashboard', section: 'Analysis', onSelect: () => setMainPaneView('dashboard')},
             {id: 'nav.profile', label: 'User Profile', section: 'Navigation', onSelect: () => setMainPaneView('profile')},
         ]
 

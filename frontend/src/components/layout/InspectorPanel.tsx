@@ -1,10 +1,15 @@
+import {lazy, Suspense} from 'react'
 import {InspectorTabs, DetailsTab, MetricsTab} from '@/components/inspector'
-import AITab from '@/components/chat/AITab'
 import {FindingsTab} from '@/components/findings'
 import {SharingTab} from '@/components/inspector/SharingTab'
 import {HistoryTab} from '@/components/inspector/HistoryTab'
 import {useUIStore} from '@/stores/uiStore'
+import {Spinner} from '@/components/shared'
 import ResizableChatPanel from '@/components/chat/ResizableChatPanel'
+
+// AITab transitively pulls react-markdown + react-syntax-highlighter; lazy
+// loading keeps that chat-only weight out of the entry chunk.
+const AITab = lazy(() => import('@/components/chat/AITab'))
 
 export default function InspectorPanel() {
     const tab = useUIStore(s => s.inspectorTab)
@@ -16,7 +21,9 @@ export default function InspectorPanel() {
                 {tab === 'details' && <DetailsTab />}
                 {tab === 'ai' && (
                     <ResizableChatPanel>
-                        <AITab />
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Spinner /></div>}>
+                            <AITab />
+                        </Suspense>
                     </ResizableChatPanel>
                 )}
                 {tab === 'findings' && <FindingsTab />}

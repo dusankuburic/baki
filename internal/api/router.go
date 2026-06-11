@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	wshub "pad-analyzer/internal/websocket"
@@ -75,6 +76,10 @@ func NewRouter(
 	// Wire the CORS allowlist into the SSE EventManager so it respects
 	// the same origin policy as every other route (fixes hardcoded "*").
 	rt.eventManager.SetOriginChecker(rt.isOriginAllowed)
+
+	// Wire the per-client connection-limit key so SSE caps don't collapse all
+	// users behind a reverse proxy onto one IP bucket.
+	rt.eventManager.SetClientKeyFunc(rt.sseClientKey)
 
 	// Reclaim expired single-use WS tickets in the background so consumeTicket
 	// stays O(1) per connection instead of scanning the whole map each time.
@@ -231,6 +236,16 @@ func (rt *Router) cleanupUsedTickets() {
 			rt.usedTicketsMu.Unlock()
 		}
 	}
+}
+
+// sseClientKey returns the key used to bucket SSE connection limits. In JWT
+// mode it keys per authenticated user (so users sharing a proxy/NAT egress IP
+// are limited independently); otherwise it keys per proxy-aware client IP.
+func (rt *Router) sseClientKey(r *http.Request) string {
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		return "user:" + claims.UserID
+	}
+	return "ip:" + middleware.ClientIP(r, rt.trustedProxies)
 }
 
 // --- Origin checks ---

@@ -103,6 +103,8 @@ export interface FlowDocument {
   metadata: FlowMetadata;
   files?: FlowFileInfo[];
   isFolder?: boolean;
+  /** Per-line issues the parser recovered from (backend: parseErrors,omitempty). */
+  parseErrors?: ParseError[];
 }
 
 export interface FlowMetadata {
@@ -173,6 +175,7 @@ export interface AnalysisSnapshot {
 
 export interface AnalysisReport {
   flowId: string;
+  flowName?: string;
   generatedAt: string;
   findings: Finding[];
   stats: AnalysisStats;
@@ -271,6 +274,8 @@ export interface AnalysisDiff {
   addedCount: number;
   removedCount: number;
   persistedCount: number;
+  /** False when there is no earlier run to compare against. */
+  hasPrevious: boolean;
 }
 
 export interface RuleDependency {
@@ -474,6 +479,7 @@ export interface AIPromptsConfig {
 
 export interface AISettings {
   activeProvider: ProviderID;
+  embeddingProvider: ProviderID;
   providers: Record<ProviderID, AIProviderConfig>;
   demoMode: DemoModeSettings;
   showCostEstimates: boolean;

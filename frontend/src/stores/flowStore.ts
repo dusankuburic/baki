@@ -28,6 +28,28 @@ function findBlockInTree(blocks: Block[], id: string): Block | null {
     return null
 }
 
+// findAncestorIds returns the container ids on the path to blockId (not the
+// block itself), used to un-collapse ancestors when jumping to a nested block.
+function findAncestorIds(doc: FlowDocument, blockId: string): string[] {
+    const path: string[] = []
+    const walk = (blocks: Block[]): boolean => {
+        for (const block of blocks) {
+            if (block.id === blockId) return true
+            if (block.children.length > 0) {
+                path.push(block.id)
+                if (walk(block.children)) return true
+                path.pop()
+            }
+        }
+        return false
+    }
+    for (const subflow of doc.subflows) {
+        path.length = 0
+        if (walk(subflow.blocks)) return [...path]
+    }
+    return []
+}
+
 function findLabelBlockInTree(blocks: Block[], labelName: string): Block | null {
     for (const block of blocks) {
         if (block.rawType === 'LABEL' && block.name === labelName) return block
@@ -155,11 +177,22 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       }
     }
 
+    // Un-collapse any collapsed ancestor containers, otherwise the target is
+    // absent from the flattened block list and the jump silently does nothing.
+    // (expandedBlockIds is inverted: ids in the set are collapsed.)
+    let nextExpanded = state.expandedBlockIds
+    const ancestors = findAncestorIds(state.document, blockId)
+    if (ancestors.some(id => nextExpanded.has(id))) {
+      nextExpanded = new Set(nextExpanded)
+      for (const id of ancestors) nextExpanded.delete(id)
+    }
+
     set({
-      selectedBlockId: blockId, 
+      selectedBlockId: blockId,
       selectedSubflowId: subflowId,
       navigationHistory: nextHistory,
-      historyIndex: nextIndex
+      historyIndex: nextIndex,
+      expandedBlockIds: nextExpanded
     })
 
     useEditorStore.getState().openInGroup(subflowId)

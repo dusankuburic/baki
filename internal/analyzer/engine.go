@@ -317,6 +317,7 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 	elapsed := time.Since(start)
 	report := &models.AnalysisReport{
 		FlowID:      flow.ID,
+		FlowName:    flow.Name,
 		GeneratedAt: time.Now(),
 		Findings:    findings,
 		Stats:       stats,

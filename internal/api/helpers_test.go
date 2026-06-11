@@ -39,7 +39,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	
 	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, orgSvc, nil)
 	libSvc := service.NewLibraryService(backend, flowSvc)
-	analysisSvc := service.NewAnalysisService(notifier, settings)
+	analysisSvc := service.NewAnalysisService(notifier, settings, nil)
 	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
 	
 	demo := ai.NewDemoLimiter("")
@@ -65,9 +65,9 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	handlers := Handlers{
 		Sys:      NewSystemHandler(sysSvc, security, backend),
 		Flow:     NewFlowHandler(flowSvc, docProv, backend, security),
-		Library:  NewLibraryHandler(libSvc, security),
+		Library:  NewLibraryHandler(libSvc, backend, security),
 		Chat:     NewChatHandler(chatSvc, flowSvc, security),
-		Analysis: NewAnalysisHandler(analysisSvc, flowSvc, security),
+		Analysis: NewAnalysisHandler(analysisSvc, flowSvc, backend, security),
 		Export:   NewExportHandler(exportSvc, flowSvc, security),
 		Auth:     NewAuthHandler(nil, backend, security),
 		Admin:    NewAdminHandler(backend, security),

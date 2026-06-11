@@ -64,6 +64,18 @@ func (h *HistoryStore) Record(flowID string, report *models.AnalysisReport, doc 
 		json.Unmarshal(data, &snapshots)
 	}
 
+	// Skip duplicate snapshots: re-analyzing unchanged content (cache hits,
+	// repeated clicks) must not flood the trend history with identical points.
+	if n := len(snapshots); n > 0 {
+		last := snapshots[n-1]
+		if last.Hash == snapshot.Hash &&
+			last.Errors == snapshot.Errors &&
+			last.Warnings == snapshot.Warnings &&
+			last.Info == snapshot.Info {
+			return
+		}
+	}
+
 	snapshots = append(snapshots, snapshot)
 	if len(snapshots) > h.maxPerFlow {
 		snapshots = snapshots[len(snapshots)-h.maxPerFlow:]

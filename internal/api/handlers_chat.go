@@ -48,6 +48,9 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
+	if !h.ownsStream(w, r, req.ID) {
+		return
+	}
 	h.chatSvc.BeginStream(req.ID)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
@@ -58,6 +61,9 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if !h.ownsStream(w, r, req.ID) {
 		return
 	}
 	h.chatSvc.CancelStream(req.ID)
@@ -72,13 +78,32 @@ func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+	if !h.ownsStream(w, r, req.ID) {
+		return
+	}
 	res, err := h.chatSvc.ResumeStream(req.ID)
 	if err != nil {
 		render.Error(w, err, http.StatusNotFound)
 		return
 	}
 	render.JSON(w, res)
+}
+
+// ownsStream verifies that the caller owns the given stream ID. In local mode
+// (no JWT) there is only one user so the check is always allowed. In JWT mode
+// the stream's creator scope must match the caller's identity; an unknown stream
+// ID is treated as not-owned to avoid leaking information about other users.
+func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamID string) bool {
+	if !h.common.JWTEnabled {
+		return true
+	}
+	owner := h.chatSvc.OwnerOf(streamID)
+	caller := h.common.CallerID(r)
+	if owner == "" || owner != caller {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Request) {

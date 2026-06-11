@@ -31,7 +31,10 @@ type ChatRequest struct {
 	// UseTools opts this request into the read-only tool/agent loop. It only
 	// takes effect when the resolved provider supports tools; otherwise the
 	// normal streaming path runs.
-	UseTools           bool          `json:"useTools,omitempty"`
+	UseTools      bool `json:"useTools,omitempty"`
+	// ExcludeContext skips injecting flow/block context into the prompt so the
+	// user can ask a free-form question without the document being attached.
+	ExcludeContext bool `json:"excludeContext,omitempty"`
 }
 
 type SourceFileInfo struct {

@@ -200,17 +200,21 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 	return doc, nil
 }
 
-func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) ([]*models.FlowDocument, error) {
+// LoadAllFromFolder parses every .txt flow export in folderPath. Files that
+// fail to read or parse are skipped but reported in loadErrors (filename →
+// reason) so batch analysis can show them instead of silently dropping them.
+func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) ([]*models.FlowDocument, map[string]string, error) {
 	if err := validateUserPath(folderPath); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	entries, err := os.ReadDir(folderPath)
 	if err != nil {
-		return nil, fmt.Errorf("read folder: %w", err)
+		return nil, nil, fmt.Errorf("read folder: %w", err)
 	}
 
 	var docs []*models.FlowDocument
+	loadErrors := make(map[string]string)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -223,24 +227,33 @@ func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) 
 		filePath := filepath.Join(folderPath, e.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
+			loadErrors[e.Name()] = "read failed: " + err.Error()
 			continue
 		}
 
-		info, _ := e.Info()
-		doc, err := parser.ParseText(string(data), e.Name(), info.Size())
+		var size int64
+		if info, err := e.Info(); err == nil {
+			size = info.Size()
+		}
+		doc, err := parser.ParseText(string(data), e.Name(), size)
 		if err != nil {
+			loadErrors[e.Name()] = "parse failed: " + err.Error()
 			continue
 		}
 
-		if len(doc.Subflows) > 0 {
-			docs = append(docs, doc)
+		// The parser wraps loose content in an implicit subflow, so emptiness
+		// shows up as zero blocks rather than zero subflows.
+		if len(doc.Subflows) == 0 || doc.Metadata.BlockCount == 0 {
+			loadErrors[e.Name()] = "no flow content found (not a PAD flow export?)"
+			continue
 		}
+		docs = append(docs, doc)
 	}
 
-	if len(docs) == 0 {
-		return nil, fmt.Errorf("no valid flow files found in folder")
+	if len(docs) == 0 && len(loadErrors) == 0 {
+		return nil, nil, fmt.Errorf("no flow files found in folder")
 	}
-	return docs, nil
+	return docs, loadErrors, nil
 }
 
 func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
@@ -405,6 +418,14 @@ func (s *FlowService) ReadSourceFiles(doc *models.FlowDocument, filenames []stri
 	dir := filepath.Dir(doc.FilePath)
 
 	for _, name := range filenames {
+		// Reject empty/null-byte names before touching the filesystem, matching
+		// the guard the other path-accepting methods (LoadFlowFromPath,
+		// LoadFlowFolder) already apply. Defense-in-depth: this endpoint is
+		// local-mode only, but a misbehaving frontend shouldn't reach os.ReadFile
+		// with malformed input.
+		if err := validateUserPath(name); err != nil {
+			continue
+		}
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {

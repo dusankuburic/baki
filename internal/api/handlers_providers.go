@@ -53,7 +53,7 @@ func (h *ProviderHandler) handleStartGitHubAuth(w http.ResponseWriter, r *http.R
 
 func (h *ProviderHandler) handlePollGitHubAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		DeviceCode string `json:"device_code"`
+		DeviceCode string `json:"deviceCode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -95,7 +95,7 @@ func (h *ProviderHandler) handleStartCopilotAuth(w http.ResponseWriter, r *http.
 
 func (h *ProviderHandler) handlePollCopilotAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		DeviceCode string `json:"device_code"`
+		DeviceCode string `json:"deviceCode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)

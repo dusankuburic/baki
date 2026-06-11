@@ -51,7 +51,7 @@ func TestHandleAuthRegister_ShortPasswordReturns400(t *testing.T) {
 
 func TestHandleAuthRegister_DuplicateReturns409(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	body := map[string]any{"email": "dup@example.com", "password": "password"}
+	body := map[string]any{"email": "dup@example.com", "password": "Password123!"}
 	first := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", body)
 	checkStatus(t, first, http.StatusOK)
 	second := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", body)
@@ -62,7 +62,7 @@ func TestHandleAuthRegister_FirstUserIsAdmin(t *testing.T) {
 	rt := newJWTTestRouter(t)
 
 	first := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
-		"email": "first@example.com", "password": "password",
+		"email": "first@example.com", "password": "Password123!",
 	})
 	checkStatus(t, first, http.StatusOK)
 	var r1 map[string]any
@@ -72,7 +72,7 @@ func TestHandleAuthRegister_FirstUserIsAdmin(t *testing.T) {
 	}
 
 	second := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
-		"email": "second@example.com", "password": "password",
+		"email": "second@example.com", "password": "Password123!",
 	})
 	checkStatus(t, second, http.StatusOK)
 	var r2 map[string]any
@@ -84,7 +84,7 @@ func TestHandleAuthRegister_FirstUserIsAdmin(t *testing.T) {
 
 func TestHandleAuthLogin_ReturnsTokenPair(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	resp := login(t, rt, "user1@example.com", "password")
+	resp := login(t, rt, "user1@example.com", "Password123!")
 
 	for _, field := range []string{"accessToken", "refreshToken", "expiresAt"} {
 		if resp[field] == nil {
@@ -118,7 +118,7 @@ func TestHandleAuthLogin_BadBodyReturns400(t *testing.T) {
 
 func TestHandleAuthRefresh_ValidToken_ReturnsNewPair(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	resp := login(t, rt, "user1@example.com", "password")
+	resp := login(t, rt, "user1@example.com", "Password123!")
 	refreshToken, _ := resp["refreshToken"].(string)
 
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/refresh", "", map[string]any{
@@ -143,7 +143,7 @@ func TestHandleAuthRefresh_InvalidToken_Returns401(t *testing.T) {
 
 func TestHandleAuthMe_ValidJWT_ReturnsClaims(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	resp := login(t, rt, "alice@example.com", "password")
+	resp := login(t, rt, "alice@example.com", "Password123!")
 	accessToken, _ := resp["accessToken"].(string)
 
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/auth/me", "Bearer "+accessToken, nil)
@@ -197,7 +197,7 @@ func TestHandleAuthRegister_ConcurrentFirstUser_ExactlyOneAdmin(t *testing.T) {
 			<-start
 			rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
 				"email":    fmt.Sprintf("user%d@example.com", i),
-				"password": "password",
+				"password": "Password123!",
 			})
 			if rr.Code != http.StatusOK {
 				t.Errorf("register %d: status=%d body=%s", i, rr.Code, rr.Body.String())

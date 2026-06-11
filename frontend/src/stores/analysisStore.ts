@@ -32,7 +32,9 @@ interface AnalysisState {
   setVariableLineage: (h: VariableHistory | null) => void
   setFindingSearch: (q: string) => void
   suppressFinding: (finding: Finding, reason: string) => void
+  suppressMany: (findings: Finding[], reason: string) => void
   unsuppressFinding: (findingId: string) => void
+  clearSuppressed: () => void
   isSuppressed: (findingId: string) => boolean
 }
 
@@ -92,9 +94,21 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }],
   })),
 
+  suppressMany: (findings, reason) => set(state => {
+    const already = new Set(state.suppressedFindings.map(s => s.findingId))
+    const now = new Date().toISOString()
+    const added = findings
+      .filter(f => !already.has(f.id))
+      .map(f => ({findingId: f.id, ruleId: f.ruleId, blockId: f.blockId, reason, suppressedAt: now}))
+    if (added.length === 0) return state
+    return {suppressedFindings: [...state.suppressedFindings, ...added]}
+  }),
+
   unsuppressFinding: (findingId) => set(state => ({
     suppressedFindings: state.suppressedFindings.filter(s => s.findingId !== findingId),
   })),
+
+  clearSuppressed: () => set({suppressedFindings: []}),
 
   isSuppressed: (findingId) => {
     return get().suppressedFindings.some(s => s.findingId === findingId)

@@ -61,6 +61,7 @@ type AIPromptsConfig struct {
 
 type AISettings struct {
 	ActiveProvider          string                    `json:"activeProvider"`
+	EmbeddingProvider       string                    `json:"embeddingProvider"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
 	DemoMode                DemoModeSettings          `json:"demoMode"`
 	ShowCostEstimates       bool                      `json:"showCostEstimates"`
@@ -151,7 +152,8 @@ func DefaultSettings() *AppSettings {
 			LastViewMode:           "block",
 		},
 		AI: AISettings{
-			ActiveProvider: "claude",
+			ActiveProvider:    "claude",
+			EmbeddingProvider: "openai",
 			Providers: map[string]AIProviderConfig{
 				"claude": {
 					Enabled:            true,

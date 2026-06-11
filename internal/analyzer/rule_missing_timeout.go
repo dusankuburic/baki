@@ -65,24 +65,9 @@ func hasTimeoutConfigured(block *models.Block) bool {
 		return false
 	}
 
-	timeoutKeys := []string{
-		"timeout",
-		"timeoutInSeconds",
-		"timeoutSeconds",
-		"timeoutMs",
-		"connectionTimeout",
-		"readTimeout",
-		"_timeout",
-	}
-
-	for _, key := range timeoutKeys {
-		for k, v := range block.Properties {
-			if strings.EqualFold(k, key) && v != "" && v != "0" {
-				return true
-			}
-		}
-	}
-
+	// Single pass: the substring check subsumes the explicit key list this
+	// used to iterate (timeout, timeoutInSeconds, connectionTimeout, ... all
+	// contain "timeout"), so one scan over Properties suffices.
 	for k, v := range block.Properties {
 		kl := strings.ToLower(k)
 		if (strings.Contains(kl, "timeout") || strings.Contains(kl, "wait")) && v != "" && v != "0" {

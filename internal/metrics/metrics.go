@@ -68,6 +68,28 @@ var (
 		},
 		[]string{"provider", "state"},
 	)
+	aiTokensTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ai_tokens_total",
+			Help: "Total AI tokens processed, by provider and direction (input/output).",
+		},
+		[]string{"provider", "direction"},
+	)
+	aiRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ai_request_duration_seconds",
+			Help:    "AI provider request latency (a full Chat call or the lifetime of a Stream), by provider.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"provider"},
+	)
+	aiRequestErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ai_request_errors_total",
+			Help: "AI provider requests that ended in an error, by provider.",
+		},
+		[]string{"provider"},
+	)
 )
 
 // registry is process-local. Tests are hermetic (no leftover series between
@@ -84,6 +106,9 @@ var registry = func() *prometheus.Registry {
 		chatStreamActive,
 		sseClientsConnected,
 		circuitBreakerTransitionsTotal,
+		aiTokensTotal,
+		aiRequestDuration,
+		aiRequestErrorsTotal,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -132,4 +157,28 @@ func SSEClientEnd()   { sseClientsConnected.Dec() }
 // circuit breaker. state is "open", "half-open", or "closed".
 func RecordCircuitBreakerTransition(provider, state string) {
 	circuitBreakerTransitionsTotal.WithLabelValues(provider, state).Inc()
+}
+
+// AI request metrics (called from the audited AI provider wrapper).
+
+// RecordAITokens adds input/output token counts for a completed AI request.
+// Zero-valued directions are skipped so empty results don't create noise.
+func RecordAITokens(provider string, input, output int) {
+	if input > 0 {
+		aiTokensTotal.WithLabelValues(provider, "input").Add(float64(input))
+	}
+	if output > 0 {
+		aiTokensTotal.WithLabelValues(provider, "output").Add(float64(output))
+	}
+}
+
+// ObserveAIRequest records the latency of an AI request (full Chat call or the
+// lifetime of a Stream).
+func ObserveAIRequest(provider string, seconds float64) {
+	aiRequestDuration.WithLabelValues(provider).Observe(seconds)
+}
+
+// RecordAIError increments the error counter for a failed AI request.
+func RecordAIError(provider string) {
+	aiRequestErrorsTotal.WithLabelValues(provider).Inc()
 }

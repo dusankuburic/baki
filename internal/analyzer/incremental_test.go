@@ -83,42 +83,6 @@ func TestComputeSubflowHashes(t *testing.T) {
 	})
 }
 
-func TestRunIncrementalAnalysis(t *testing.T) {
-	rules := AllRules()
-	settings := models.DefaultSettings()
-
-	t.Run("only_analyzes_changed_subflows", func(t *testing.T) {
-		doc := makeFlowDoc("f1", "Test", []models.Subflow{
-			makeSubflow("sf1", "Main",
-				makeBlock("b1", "", models.BlockTypeAction, "Action.Invoke", 0),
-			),
-			makeSubflow("sf2", "Other",
-				makeBlock("b2", "", models.BlockTypeAction, "Action.Invoke", 0),
-			),
-		})
-
-		changed := map[string]bool{"sf1": true}
-		report := RunIncrementalAnalysis(doc, rules, settings, changed)
-
-		if report.Stats.RulesRun != len(rules) {
-			t.Errorf("expected %d rules run, got %d", len(rules), report.Stats.RulesRun)
-		}
-	})
-
-	t.Run("empty_changes_returns_empty", func(t *testing.T) {
-		doc := makeFlowDoc("f1", "Test", []models.Subflow{
-			makeSubflow("sf1", "Main",
-				makeBlock("b1", "", models.BlockTypeAction, "Action.Invoke", 0),
-			),
-		})
-
-		report := RunIncrementalAnalysis(doc, rules, settings, nil)
-		if len(report.Findings) != 0 {
-			t.Errorf("expected no findings, got %d", len(report.Findings))
-		}
-	})
-}
-
 func TestComputeDashboard(t *testing.T) {
 	t.Run("empty_reports", func(t *testing.T) {
 		d := ComputeDashboard(nil)

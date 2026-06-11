@@ -85,43 +85,27 @@ func isSystemVariable(vname string) bool {
 }
 
 func isFirstUsage(vname string, block *models.Block, ctx *RuleContext) bool {
-	// Find the block with the lowest LineNumber that uses this variable.
-	// LineNumber is globally unique within a document so this gives correct
-	// document-order ordering even across nested sibling lists.
+	// Find the reader block with the lowest LineNumber. LineNumber is globally
+	// unique within a document so this gives correct document-order ordering
+	// even across nested sibling lists. ReadersByVar is pre-indexed from
+	// block.Variables, so this is O(readers) instead of an O(blocks) scan.
 	lowestLine := -1
 	lowestID := ""
-	for id, b := range ctx.AllBlocks {
-		for _, v := range b.Variables {
-			if v == vname {
-				if lowestLine < 0 || b.LineNumber < lowestLine {
-					lowestLine = b.LineNumber
-					lowestID = id
-				}
-				break
-			}
+	for _, id := range ctx.ReadersByVar[vname] {
+		b := ctx.AllBlocks[id]
+		if b == nil {
+			continue
+		}
+		if lowestLine < 0 || b.LineNumber < lowestLine {
+			lowestLine = b.LineNumber
+			lowestID = id
 		}
 	}
 	return lowestID == block.ID
 }
 
 func isAssignedAnywhere(vname string, ctx *RuleContext) bool {
-	// Check all blocks in the document to see if any block outputs this variable.
-	for _, b := range ctx.AllBlocks {
-		if b.Properties == nil {
-			continue
-		}
-
-		// Most actions store their output variable name in "_output"
-		if out, ok := b.Properties["_output"]; ok && out == vname {
-			return true
-		}
-		// SET actions often use "_var"
-		if out, ok := b.Properties["_var"]; ok && out == vname {
-			return true
-		}
-		
-		// Some actions might store it in other fields depending on the parser.
-		// For thoroughness, we check if vname is explicitly listed as a primary output.
-	}
-	return false
+	// WritersByVar is pre-indexed from the _output and _var properties — the
+	// same union this function previously derived by scanning every block.
+	return len(ctx.WritersByVar[vname]) > 0
 }

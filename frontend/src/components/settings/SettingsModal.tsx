@@ -44,10 +44,10 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Settings" size="xl">
-      <div className="flex h-full min-h-[500px]">
+    <Modal isOpen={isOpen} onClose={onClose} title="Settings" size="xl" height="tall" bodyScroll={false}>
+      <div className="flex h-full">
         {/* Sidebar */}
-        <div className="w-48 border-r border-border-default pr-4 py-2">
+        <div className="w-48 border-r border-border-default px-4 py-3 overflow-y-auto shrink-0">
           <nav className="space-y-0.5">
             {sections.map((s) => (
               <button
@@ -66,8 +66,8 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
           </nav>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 p-6 overflow-y-auto max-h-[70vh]">
+        {/* Content — the single scroll region */}
+        <div className="flex-1 p-6 overflow-y-auto min-h-0">
           {activeSection === 'general' && <GeneralPanel />}
           {activeSection === 'parser' && <ParserPanel />}
           {activeSection === 'accounts' && <ProvidersPanel />}

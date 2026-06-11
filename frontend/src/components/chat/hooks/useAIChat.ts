@@ -226,6 +226,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     }
     if (curDoc && curThreadId) appendMessage(curThreadId, msg)
     streamingThreadIdRef.current = null
+    accumulatedTextRef.current = ''
+    lastUpdateRef.current = null
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
@@ -318,7 +320,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         return
       }
       startStream(sid, msgId)
-      registerStream(sid)
+      await registerStream(sid)
     } catch (e: any) {
       const errMsg = e?.message || String(e) || 'Failed to send message'
       appendMessage(activeThread.id, {
@@ -331,8 +333,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         finishReason: 'error',
       } as ChatMessage)
       streamingThreadIdRef.current = null
+      accumulatedTextRef.current = ''
+      lastUpdateRef.current = null
       endStream()
       setIsThinking(false)
+      setStreamingTokens(0)
+      setToolStatus(null)
     }
   }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel])
 

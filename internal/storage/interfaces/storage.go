@@ -191,14 +191,22 @@ type FlowMetadata struct {
 	RawLineCount int
 }
 
-// AppSettings represents application settings
+// AppSettings represents application settings.
+//
+// IMPORTANT: this struct's field set and JSON tags MUST stay in parity with
+// models.AppSettings. SystemService.{toModel,fromModel} bridge the two via a
+// JSON round-trip, so any field present on one but missing (or mis-tagged) on
+// the other is silently dropped when settings are persisted in cloud/database
+// mode. service.TestSettingsRoundTrip guards this invariant.
 type AppSettings struct {
-	Version   int
-	General   GeneralSettings
-	Appearance AppearanceSettings
-	Layout     LayoutSettings
-	AI        AISettings
-	Parser    ParserSettings
+	Version     int                `json:"version"`
+	General     GeneralSettings    `json:"general"`
+	Appearance  AppearanceSettings `json:"appearance"`
+	Layout      LayoutSettings     `json:"layout"`
+	AI          AISettings         `json:"ai"`
+	Parser      ParserSettings     `json:"parser"`
+	Analysis    AnalysisSettings   `json:"analysis"`
+	RecentFiles []RecentFile       `json:"recentFiles"`
 }
 
 // ChatMessage represents a chat message
@@ -211,37 +219,92 @@ type ChatMessage struct {
 	TokensOut int
 }
 
-// Settings types
+// Settings types — kept in parity with the matching types in internal/models
+// (same fields, same JSON tags) so the toModel/fromModel JSON bridge is lossless.
 type GeneralSettings struct {
-	FirstRunCompleted bool
-	LastUsedVersion   string
-	CheckForUpdates    string
+	FirstRunCompleted bool   `json:"firstRunCompleted"`
+	LastUsedVersion   string `json:"lastUsedVersion"`
+	CheckForUpdates   string `json:"checkForUpdates"`
+	OpenInNewWindow   bool   `json:"openInNewWindow"`
 }
 
 type AppearanceSettings struct {
-	Theme   string
-	Density string
+	Theme        string `json:"theme"`
+	Density      string `json:"density"`
+	CodeFont     string `json:"codeFont"`
+	UIFont       string `json:"uiFont"`
+	ReduceMotion bool   `json:"reduceMotion"`
+	HighContrast bool   `json:"highContrast"`
 }
 
 type LayoutSettings struct {
-	SidebarWidth    int
-	InspectorWidth  int
-	ChatPanelHeight *int
+	SidebarWidth           int    `json:"sidebarWidth"`
+	InspectorWidth         int    `json:"inspectorWidth"`
+	SidebarCollapsed       bool   `json:"sidebarCollapsed"`
+	InspectorCollapsed     bool   `json:"inspectorCollapsed"`
+	LastActiveInspectorTab string `json:"lastActiveInspectorTab"`
+	LastViewMode           string `json:"lastViewMode"`
+	ChatPanelHeight        *int   `json:"chatPanelHeight,omitempty"`
+}
+
+type AIPromptsConfig struct {
+	Block             []string `json:"block"`
+	Flow              []string `json:"flow"`
+	Finding           []string `json:"finding"`
+	BlockWithFindings []string `json:"blockWithFindings"`
 }
 
 type AISettings struct {
-	ActiveProvider string
-	DemoMode       DemoModeSettings
-	DailyBudget    float64
+	ActiveProvider          string                      `json:"activeProvider"`
+	EmbeddingProvider       string                      `json:"embeddingProvider"`
+	Providers               map[string]AIProviderConfig `json:"providers"`
+	DemoMode                DemoModeSettings            `json:"demoMode"`
+	ShowCostEstimates       bool                        `json:"showCostEstimates"`
+	SaveConversationHistory bool                        `json:"saveConversationHistory"`
+	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
+	DailyBudget             float64                     `json:"dailyBudget"`
+	Prompts                 AIPromptsConfig             `json:"prompts"`
+}
+
+type AIProviderConfig struct {
+	Enabled            bool    `json:"enabled"`
+	DefaultModel       string  `json:"defaultModel"`
+	Temperature        float64 `json:"temperature"`
+	MaxTokens          int     `json:"maxTokens"`
+	ContextTokenBudget int     `json:"contextTokenBudget"`
 }
 
 type ParserSettings struct {
-	MaxFileSizeMB int
+	MaxFileSizeMB     int  `json:"maxFileSizeMB"`
+	PreserveComments  bool `json:"preserveComments"`
+	TreatTabsAsSpaces bool `json:"treatTabsAsSpaces"`
+	SpacesPerIndent   int  `json:"spacesPerIndent"`
+}
+
+type AnalysisSettings struct {
+	Rules             map[string]RuleConfig `json:"rules"`
+	AutoAnalyzeOnOpen bool                  `json:"autoAnalyzeOnOpen"`
+}
+
+type RuleConfig struct {
+	Enabled  bool                   `json:"enabled"`
+	Severity string                 `json:"severity"`
+	Options  map[string]interface{} `json:"options,omitempty"`
+}
+
+type RecentFile struct {
+	Path     string    `json:"path"`
+	Name     string    `json:"name"`
+	Size     int64     `json:"size"`
+	LastOpen time.Time `json:"lastOpen"`
+	IsFolder bool      `json:"isFolder"`
 }
 
 type DemoModeSettings struct {
-	Enabled    bool
-	DailyLimit int
+	Enabled    bool   `json:"enabled"`
+	DailyLimit int    `json:"dailyLimit"`
+	DailyUsed  int    `json:"dailyUsed"`
+	ResetDate  string `json:"resetDate"`
 }
 
 // AuditEvent records a user action for compliance and security visibility.

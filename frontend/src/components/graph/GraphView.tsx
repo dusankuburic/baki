@@ -182,15 +182,25 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     })
   }, [selectedVariable, subflow?.id])
 
-  // Annotate nodes with finding severity borders
+  // Annotate nodes with finding severity borders and a count badge in the
+  // label ("⚠ n"), so density is readable at a glance without opening the tab.
   useEffect(() => {
     if (!cyRef.current || !flowDoc) return
     const cy = cyRef.current
 
     const report = useAnalysisStore.getState().reports.get(flowDoc.id)
     cy.batch(() => {
-      cy.nodes().removeClass('finding-error finding-warning finding-info')
+      // Reset classes and restore the pristine label (stashed in scratch so
+      // repeated runs of this effect stay idempotent).
+      cy.nodes().forEach(node => {
+        node.removeClass('finding-error finding-warning finding-info')
+        const base = node.scratch('_baseLabel') ?? node.data('fullLabel')
+        node.scratch('_baseLabel', base)
+        if (node.data('fullLabel') !== base) node.data('fullLabel', base)
+      })
       if (!report) return
+
+      const counts = new Map<string, number>()
       for (const f of report.findings) {
         const node = cy.getElementById(f.blockId)
         if (node.length > 0) {
@@ -198,7 +208,12 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
             : f.severity === 'warning' ? 'finding-warning'
             : 'finding-info'
           node.addClass(cls)
+          counts.set(f.blockId, (counts.get(f.blockId) ?? 0) + 1)
         }
+      }
+      for (const [blockId, count] of counts) {
+        const node = cy.getElementById(blockId)
+        node.data('fullLabel', `${node.scratch('_baseLabel')}\n⚠ ${count} issue${count !== 1 ? 's' : ''}`)
       }
     })
   }, [flowDoc, useAnalysisStore(s => s.reports), subflow?.id])

@@ -67,7 +67,8 @@ export const shortcuts: Shortcut[] = [
 
   {id: 'analysis.run', keys: 'mod+shift+r', description: 'Run analysis', category: 'Analysis', scope: 'global', allowInInputs: false},
   {id: 'analysis.export.html', keys: 'mod+shift+h', description: 'Export findings as HTML', category: 'Analysis', scope: 'global'},
-  {id: 'analysis.export.csv', keys: 'mod+shift+e', description: 'Export findings as CSV', category: 'Analysis', scope: 'global'},
+  // mod+alt+e: mod+shift+e belongs to file.export.md (declared in App.tsx).
+  {id: 'analysis.export.csv', keys: 'mod+alt+e', description: 'Export findings as CSV', category: 'Analysis', scope: 'global'},
   {id: 'analysis.filter.errors', keys: 'mod+shift+1', description: 'Filter errors only', category: 'Analysis', scope: 'global'},
   {id: 'analysis.filter.warnings', keys: 'mod+shift+2', description: 'Filter warnings only', category: 'Analysis', scope: 'global'},
   {id: 'analysis.filter.info', keys: 'mod+shift+3', description: 'Filter info only', category: 'Analysis', scope: 'global'},

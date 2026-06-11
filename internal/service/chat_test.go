@@ -64,6 +64,61 @@ func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
 	}
 }
 
+// TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns is a regression test
+// for the "context canceled" bug: the create-request's context (r.Context())
+// must NOT abort the stream, since the stream outlives that request (begin is a
+// separate call). We cancel the parent immediately — as net/http does when the
+// create handler returns — then begin the stream and assert it still ran (an
+// error event is emitted). Before the fix (stream ctx derived from r.Context()),
+// the parent cancel propagated, awaitStart() saw ctx.Done() and bailed, so no
+// event was emitted; this manifested as Copilot's token exchange failing with
+// "context canceled" on a cold token cache.
+func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
+	notifier := &countingNotifier{}
+
+	factory := ai.NewProviderFactory(
+		func(scope, provider string) (string, error) {
+			return "", fmt.Errorf("no key configured")
+		},
+		nil,
+		nil,
+	)
+
+	svc := &ChatService{
+		notifier:      notifier,
+		flowCache:     &FlowService{},
+		analysisCache: &AnalysisService{},
+		factory:       factory,
+	}
+
+	// Simulate the HTTP create handler: it passes its request context, then
+	// returns — which cancels that context.
+	parent, cancelParent := context.WithCancel(context.Background())
+	id, err := svc.StreamChatMessage(parent, "test", nil, nil, models.ChatRequest{Provider: "unknown"})
+	if err != nil {
+		t.Fatalf("StreamChatMessage: %v", err)
+	}
+	cancelParent()
+
+	svc.BeginStream(id)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if _, ok := svc.activeStreams.Load(id); !ok {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("stream goroutine did not exit within 2s after BeginStream")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if got := atomic.LoadInt64(&notifier.count); got == 0 {
+		t.Errorf("expected an error event after BeginStream despite parent cancel, got 0 (stream context inherited request cancellation)")
+	}
+}
+
 // TestStreamChatMessage_CancelAfterBegin_EmitsError verifies the normal
 // cancellation path.
 func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {

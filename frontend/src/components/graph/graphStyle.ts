@@ -6,6 +6,9 @@ export interface GraphTokenColors {
   textPrimary: string
   textSecondary: string
   brand500: string
+  error: string
+  warning: string
+  info: string
   blockAction: string
   blockLoop: string
   blockCondition: string
@@ -27,6 +30,9 @@ export function resolveGraphTokens(): GraphTokenColors {
     textPrimary: get('--text-primary'),
     textSecondary: get('--text-secondary'),
     brand500: get('--brand-500'),
+    error: get('--error') || '#ef4444',
+    warning: get('--warning') || '#f59e0b',
+    info: get('--info') || '#3b82f6',
     blockAction: get('--block-action'),
     blockLoop: get('--block-loop'),
     blockCondition: get('--block-condition'),
@@ -138,21 +144,21 @@ export function buildGraphStyle(t: GraphTokenColors): any[] {
     {
       selector: 'node.finding-error',
       style: {
-        'border-color': '#ef4444',
+        'border-color': t.error,
         'border-width': 3,
       },
     },
     {
       selector: 'node.finding-warning',
       style: {
-        'border-color': '#f59e0b',
+        'border-color': t.warning,
         'border-width': 3,
       },
     },
     {
       selector: 'node.finding-info',
       style: {
-        'border-color': '#3b82f6',
+        'border-color': t.info,
         'border-width': 3,
       },
     },

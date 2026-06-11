@@ -59,7 +59,7 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 				RuleID:      r.ID(),
 				Severity:    r.DefaultSeverity(),
 				Title:       "High-entropy string detected",
-				Description: "A property value has high Shannon entropy (>4.5), suggesting a hardcoded secret or key.",
+				Description: "A property value has high Shannon entropy, suggesting a hardcoded secret or key.",
 				BlockID:     block.ID,
 				SubflowID:   block.SubflowID,
 				Suggestion:  "Move this credential to a secured variable or vault. Hardcoded secrets in flows are a security risk.",
@@ -101,14 +101,20 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 	return findings
 }
 
+// isHighEntropySecret flags long random-looking alphanumeric literals. The
+// thresholds are deliberately conservative: hex digests top out at 4.0 bits
+// so they never match, and mixed-case Base62 identifiers (file/record IDs,
+// typically 22-43 chars) fall under the 48-char floor — those were the main
+// false-positive source. Labeled secrets shorter than this are still caught
+// by the credentialPatterns regexes above.
 func isHighEntropySecret(s string) bool {
-	if len(s) < 32 {
+	if len(s) < 48 {
 		return false
 	}
 	if !isAlphanumeric(s) {
 		return false
 	}
-	return shannonEntropy(s) > 4.5
+	return shannonEntropy(s) > 5.0
 }
 
 func isAlphanumeric(s string) bool {

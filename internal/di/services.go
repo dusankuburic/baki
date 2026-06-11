@@ -2,9 +2,12 @@ package di
 
 import (
 	"context"
+	"path/filepath"
+
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/analyzer"
 	"pad-analyzer/internal/cache"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/rag"
@@ -32,6 +35,12 @@ func ProvideASTCache() (cache.Cache, error) {
 	return cache.NewLRUCache(100) // Cache up to 100 flows
 }
 
+// ProvideHistoryStore persists per-flow analysis trend snapshots under the
+// app config dir (HistoryStore treats an empty dir as a no-op).
+func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
+	return analyzer.NewHistoryStore(filepath.Join(configDir, "analysis-history"))
+}
+
 func ProvideAI(configDir string, backend storageif.StorageBackend) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
@@ -57,13 +66,14 @@ var ServiceModule = fx.Options(
 		ProvideSettingsStore,
 		ProvideConfigDir,
 		ProvideASTCache,
+		ProvideHistoryStore,
 		ProvideAI,
-		func(backend storageif.StorageBackend, factory *ai.ProviderFactory) *rag.KnowledgeService {
+		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings *storage.SettingsStore) *rag.KnowledgeService {
 			// Pass the factory (not a pre-resolved provider) so the embedding
 			// provider is resolved per request in the caller's scope. Resolving
 			// once here with an empty scope fails in cloud mode (keys are
 			// per-user) and never picks up keys added later.
-			return rag.NewKnowledgeService(backend, factory)
+			return rag.NewKnowledgeService(backend, factory, settings)
 		},
 		func(settings *storage.SettingsStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
 			return service.NewSystemService(settings, notifier, backend)

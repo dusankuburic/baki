@@ -4,6 +4,7 @@ import {useState, useCallback, memo} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types/domain'
+import CodeBlock from './CodeBlock'
 
 interface Props {
   message: ChatMessageType
@@ -21,6 +22,89 @@ function formatTime(ts: string): string {
   } catch {
     return ''
   }
+}
+
+const MentionPill = ({ path }: { path: string }) => {
+  const parts = path.split(/[/\\]/)
+  const filename = parts[parts.length - 1]
+  return (
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20 font-medium text-[0.9em] mx-0.5 select-none">
+      @{filename}
+    </span>
+  )
+}
+
+function renderContent(content: string, isUser: boolean, isStreaming?: boolean) {
+  // Regex to match @mentions (support paths with backslashes)
+  const mentionRegex = /@([a-zA-Z0-9_./\\\-]+)/g
+
+  if (isUser) {
+    const parts = content.split(mentionRegex)
+    const matches = content.match(mentionRegex) || []
+    
+    return (
+      <div className="whitespace-pre-wrap break-words">
+        {parts.map((part, i) => (
+          <span key={i}>
+            {part}
+            {matches[i] && <MentionPill path={matches[i].slice(1)} />}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
+  // For AI messages, we use ReactMarkdown but we need to handle the mentions.
+  // One way is to pre-process the content to wrap mentions in a custom syntax or just replace them after rendering if possible.
+  // A cleaner way for ReactMarkdown is to split the text nodes.
+  
+  return (
+    <div className="prose-chat break-words">
+      <ReactMarkdown 
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({node, inline, className, children, ...props}: any) {
+            const match = /language-(\w+)/.exec(className || '')
+            return !inline ? (
+              <CodeBlock
+                language={match ? match[1] : ''}
+                value={String(children).replace(/\n$/, '')}
+                {...props}
+              />
+            ) : (
+              <code className="px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]" {...props}>
+                {children}
+              </code>
+            )
+          },
+          // Custom renderer for text to handle mentions
+          text({ children }: any) {
+            const text = String(children)
+            if (!text.includes('@')) return <>{text}</>
+            
+            const parts = text.split(mentionRegex)
+            const matches = text.match(mentionRegex) || []
+            
+            return (
+              <>
+                {parts.map((part, i) => (
+                  <span key={i}>
+                    {part}
+                    {matches[i] && <MentionPill path={matches[i].slice(1)} />}
+                  </span>
+                ))}
+              </>
+            )
+          }
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+      {isStreaming && (
+        <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
+      )}
+    </div>
+  )
 }
 
 function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onRegenerate, onRetry}: Props) {
@@ -93,18 +177,7 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
           isStreaming && 'border-brand-500/20'
         )}
       >
-        {isUser ? (
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
-        ) : (
-          <div className="prose-chat break-words">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
-            {isStreaming && (
-              <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
-            )}
-          </div>
-        )}
+        {renderContent(message.content, isUser, isStreaming)}
       </div>
 
       {!isStreaming && (
@@ -149,6 +222,9 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.isStreaming === nextProps.isStreaming &&
-    prevProps.isThinking === nextProps.isThinking
+    prevProps.isThinking === nextProps.isThinking &&
+    prevProps.isLastAssistant === nextProps.isLastAssistant &&
+    prevProps.onRegenerate === nextProps.onRegenerate &&
+    prevProps.onRetry === nextProps.onRetry
   )
 })

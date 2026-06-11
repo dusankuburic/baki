@@ -85,7 +85,10 @@ export function useStreamingMessage(handler: StreamHandler) {
     })
 
     unregisterRef.current = unsub
-    chatApi.beginStream(streamId).catch(() => {})
+    // If beginStream fails the backend goroutine blocks on awaitStart() until its
+    // 5-minute context timeout fires — with no event emitted afterward. Propagate
+    // the error so the caller (executeSend) can clean up the streaming state.
+    await chatApi.beginStream(streamId)
   }, [])
 
   const cancel = useCallback(() => {

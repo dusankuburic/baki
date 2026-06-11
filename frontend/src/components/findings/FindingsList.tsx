@@ -1,8 +1,9 @@
 import {useState, useMemo} from 'react'
-import {ChevronRight} from 'lucide-react'
+import {ChevronRight, EyeOff} from 'lucide-react'
 import clsx from 'clsx'
 import type {Finding, Severity} from '@/types/domain'
 import type {FlowDocument} from '@/types/domain'
+import {useAnalysisStore} from '@/stores/analysisStore'
 import FindingCard from './FindingCard'
 
 interface Props {
@@ -43,6 +44,7 @@ function groupByRule(findings: Finding[]): RuleGroup[] {
 
 export default function FindingsList({findings, doc, onFixWithAI}: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const suppressMany = useAnalysisStore(s => s.suppressMany)
 
   const groups = useMemo(() => groupByRule(findings), [findings])
 
@@ -67,27 +69,39 @@ export default function FindingsList({findings, doc, onFixWithAI}: Props) {
         const isCollapsed = collapsed.has(group.ruleId)
         return (
           <div key={group.ruleId} className={clsx('border-b border-border-subtle', sevColor[group.severity], 'border-l-2')}>
-            <button
-              onClick={() => toggle(group.ruleId)}
-              className="w-full px-3 py-2.5 flex items-start gap-2 text-left hover:bg-surface-2 transition-colors"
-            >
-              <ChevronRight
-                size={14}
-                className={clsx(
-                  'mt-0.5 shrink-0 text-text-tertiary transition-transform duration-fast',
-                  !isCollapsed && 'rotate-90'
-                )}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-text-primary truncate">{group.title}</span>
-                  <span className="text-2xs text-text-tertiary shrink-0">{group.findings.length}×</span>
+            <div className="w-full px-3 py-2.5 flex items-start gap-2 hover:bg-surface-2 transition-colors group/header">
+              <button
+                onClick={() => toggle(group.ruleId)}
+                aria-expanded={!isCollapsed}
+                className="flex-1 flex items-start gap-2 text-left min-w-0"
+              >
+                <ChevronRight
+                  size={14}
+                  className={clsx(
+                    'mt-0.5 shrink-0 text-text-tertiary transition-transform duration-fast',
+                    !isCollapsed && 'rotate-90'
+                  )}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-text-primary truncate">{group.title}</span>
+                    <span className="text-2xs text-text-tertiary shrink-0">{group.findings.length}×</span>
+                  </div>
+                  {!isCollapsed && (
+                    <p className="text-2xs text-text-secondary mt-1 leading-relaxed">{group.description}</p>
+                  )}
                 </div>
-                {!isCollapsed && (
-                  <p className="text-2xs text-text-secondary mt-1 leading-relaxed">{group.description}</p>
-                )}
-              </div>
-            </button>
+              </button>
+              <button
+                onClick={() => suppressMany(group.findings, `Suppressed all "${group.title}" findings`)}
+                aria-label={`Suppress all ${group.findings.length} findings of this rule`}
+                title="Suppress all findings in this group"
+                className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
+              >
+                <EyeOff size={12} />
+                <span className="hidden sm:inline">All</span>
+              </button>
+            </div>
 
             {!isCollapsed && group.findings.map(f => (
               <FindingCard

@@ -91,6 +91,7 @@ type streamCtl struct {
 	errMsg    string // non-empty if the stream ended with an error
 	tokensIn  int
 	tokensOut int
+	ownerID   string // caller identity (scope) that created this stream
 }
 
 // ResumeResult is the buffered state of a stream returned to a reconnecting client.
@@ -150,12 +151,88 @@ func (s *ChatService) GetAuthorizedFlow(ctx context.Context, flowID, userID, min
 	return s.flowCache.GetAuthorized(ctx, flowID, userID, minPerm)
 }
 
+// buildScrubbedContext scrubs the document, builds the system prompt and context
+// text, augments the system prompt with RAG knowledge-base guidelines, and
+// scrubs both strings. It also returns the scrubbed document so the caller can
+// hand it to the tool loop. Shared by StreamChatMessage and PreviewContext so
+// the two context-preparation paths cannot drift apart.
+func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText string) {
+	scrubbedDoc, err := scrubber.ScrubDocument(doc)
+	if err != nil {
+		// Fall back to the unscrubbed doc rather than failing the request; the
+		// per-string ScrubText calls below still redact obvious secrets in output.
+		logger.Error("Failed to scrub document", map[string]interface{}{"error": err})
+		scrubbedDoc = doc
+	}
+
+	ctxReq := ai.ContextRequest{
+		Flow:               scrubbedDoc,
+		TokenBudget:        4000,
+		Provider:           provider,
+		SystemPromptSuffix: req.SystemPrompt,
+	}
+	if report != nil {
+		ctxReq.Findings = report.Findings
+	}
+	if req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
+		ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
+		ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
+	}
+
+	sysPrompt, contextText = ai.BuildContext(ctxReq)
+
+	// RAG: add relevant organizational guidelines to the system prompt.
+	if s.knowledge != nil && doc != nil && doc.OrganizationID != "" {
+		if guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, req.UserMessage); err == nil && guidelines != "" {
+			sysPrompt += "\n\n" + guidelines
+		}
+	}
+
+	return scrubbedDoc, scrubber.ScrubText(sysPrompt), scrubber.ScrubText(contextText)
+}
+
+// buildMessages assembles the provider message list: prior history (scrubbed)
+// followed by a single user turn. Flow context is merged INTO that user turn
+// rather than appended as a separate user message — two consecutive user-role
+// messages are rejected by many providers (400). ExcludeContext or empty
+// context skips the merge.
+func buildMessages(req models.ChatRequest, contextText string) []ai.Message {
+	messages := make([]ai.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		messages[i] = ai.Message{Role: m.Role, Content: scrubber.ScrubText(m.Content)}
+	}
+	userContent := scrubber.ScrubText(req.UserMessage)
+	if !req.ExcludeContext && contextText != "" {
+		userContent = "Context:\n" + contextText + "\n\n" + userContent
+	}
+	return append(messages, ai.Message{Role: "user", Content: userContent})
+}
+
+// enforceBudget returns an error when the day's AI spend has reached the
+// configured DailyBudget. A budget of 0 (or absent settings) means unlimited.
+func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) error {
+	settings := s.settings.Get()
+	if settings == nil || settings.AI.DailyBudget <= 0 {
+		return nil
+	}
+	if usage := s.dailyUsage(ctx, scope, orgID); usage >= settings.AI.DailyBudget {
+		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f)", usage, settings.AI.DailyBudget)
+	}
+	return nil
+}
+
 func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (streamID string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
 
 	streamID = uuid.NewString()
-	ctx, cancel := context.WithTimeout(ctx, maxChatStreamDuration)
-	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}, 1)}
+	// The stream deliberately outlives the HTTP request that created it (begin/
+	// cancel/resume are separate requests; chunks are delivered over SSE), so it
+	// must NOT inherit r.Context() — net/http cancels that the instant the create
+	// handler returns, which would abort the provider call (notably Copilot's
+	// session-token exchange on a cold cache) with "context canceled". Cancellation
+	// is handled explicitly via ctl.cancel() (CancelStream) and the timeout below.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxChatStreamDuration)
+	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}, 1), ownerID: scope}
 	s.activeStreams.Store(streamID, ctl)
 
 	emit := func(eventType string, data map[string]interface{}) {
@@ -184,12 +261,21 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
 		}()
 
+		// fail stores the error in the stream buffer AND emits the SSE event so
+		// both live SSE clients and reconnecting clients (via resumeStream) see it.
+		fail := func(msg string) {
+			ctl.mu.Lock()
+			ctl.errMsg = msg
+			ctl.mu.Unlock()
+			emit("error", map[string]interface{}{"message": msg})
+		}
+
 		provider, err := s.factory.For(scope, req.Provider)
 		if err != nil {
 			if !awaitStart() {
 				return
 			}
-			emit("error", map[string]interface{}{"message": err.Error()})
+			fail(err.Error())
 			return
 		}
 
@@ -200,16 +286,12 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			orgID = doc.OrganizationID
 		}
 
-		// Enforce daily budget.
-		settings := s.settings.Get()
-		if settings != nil && settings.AI.DailyBudget > 0 {
-			if usage := s.dailyUsage(ctx, scope, orgID); usage >= settings.AI.DailyBudget {
-				if !awaitStart() {
-					return
-				}
-				emit("error", map[string]interface{}{"message": fmt.Sprintf("daily AI budget exceeded ($%.2f / $%.2f)", usage, settings.AI.DailyBudget)})
+		if err := s.enforceBudget(ctx, scope, orgID); err != nil {
+			if !awaitStart() {
 				return
 			}
+			fail(err.Error())
+			return
 		}
 
 		if req.Provider == "demo" && s.demoLimiter != nil {
@@ -217,62 +299,17 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				if !awaitStart() {
 					return
 				}
-				emit("error", map[string]interface{}{"message": err.Error()})
+				fail(err.Error())
 				return
 			}
 		}
 
-		// Scrub the document before preparing context
-		scrubbedDoc, err := scrubber.ScrubDocument(doc)
-		if err != nil {
-			logger.Error("Failed to scrub document", map[string]interface{}{"error": err})
-			scrubbedDoc = doc // fallback to unscrubbed if copy fails, though regex will catch later
-		}
-
-		// Prepare AI context
-		ctxReq := ai.ContextRequest{
-			Flow:               scrubbedDoc,
-			Findings:           nil, // could pass report findings
-			TokenBudget:        4000,
-			Provider:           provider,
-			SystemPromptSuffix: req.SystemPrompt,
-		}
-		if report != nil {
-			ctxReq.Findings = report.Findings
-		}
-		if req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
-			ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
-			ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
-		}
-		
-		sysPrompt, contextText := ai.BuildContext(ctxReq)
-
-		// RAG: Add relevant organizational guidelines
-		if s.knowledge != nil && doc.OrganizationID != "" {
-			guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, req.UserMessage)
-			if err == nil && guidelines != "" {
-				sysPrompt += "\n\n" + guidelines
-			}
-		}
-
-		sysPrompt = scrubber.ScrubText(sysPrompt)
-		contextText = scrubber.ScrubText(contextText)
-
-		messages := make([]ai.Message, len(req.Messages))
-		for i, m := range req.Messages {
-			messages[i] = ai.Message{Role: m.Role, Content: scrubber.ScrubText(m.Content)}
-		}
-		
-		// Add context and user message
-		if contextText != "" {
-			messages = append(messages, ai.Message{Role: "user", Content: "Context:\n" + contextText})
-		}
-		messages = append(messages, ai.Message{Role: "user", Content: scrubber.ScrubText(req.UserMessage)})
+		scrubbedDoc, sysPrompt, contextText := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
 
 		temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, provider.ContextLimit(), ai.ModelMaxOutputTokens(provider, req.Model))
 		aiReq := ai.Request{
 			SystemPrompt: sysPrompt,
-			Messages:     messages,
+			Messages:     buildMessages(req, contextText),
 			Model:        req.Model,
 			Temperature:  temperature,
 			MaxTokens:    maxTokens,
@@ -477,6 +514,18 @@ func (s *ChatService) CancelAll() {
 	})
 }
 
+// OwnerOf returns the scope/caller that created the given stream, or "" if the
+// stream is unknown. It checks both active and recently-finished streams.
+func (s *ChatService) OwnerOf(streamID string) string {
+	if val, ok := s.activeStreams.Load(streamID); ok {
+		return val.(*streamCtl).ownerID
+	}
+	if val, ok := s.finishedStreams.Load(streamID); ok {
+		return val.(*streamCtl).ownerID
+	}
+	return ""
+}
+
 func (s *ChatService) ResumeStream(streamID string) (*ResumeResult, error) {
 	val, ok := s.activeStreams.Load(streamID)
 	if !ok {
@@ -593,39 +642,7 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 		return nil, err
 	}
 
-	scrubbedDoc, err := scrubber.ScrubDocument(doc)
-	if err != nil {
-		logger.Error("Failed to scrub document for preview", map[string]interface{}{"error": err})
-		scrubbedDoc = doc
-	}
-
-	ctxReq := ai.ContextRequest{
-		Flow:               scrubbedDoc,
-		Findings:           nil,
-		TokenBudget:        4000,
-		Provider:           provider,
-		SystemPromptSuffix: req.SystemPrompt,
-	}
-	if report != nil {
-		ctxReq.Findings = report.Findings
-	}
-	if req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
-		ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
-		ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
-	}
-	
-	sysPrompt, contextText := ai.BuildContext(ctxReq)
-
-	// RAG: Include relevant guidelines in preview
-	if s.knowledge != nil && doc.OrganizationID != "" {
-		guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, req.UserMessage)
-		if err == nil && guidelines != "" {
-			sysPrompt += "\n\n" + guidelines
-		}
-	}
-
-	sysPrompt = scrubber.ScrubText(sysPrompt)
-	contextText = scrubber.ScrubText(contextText)
+	_, sysPrompt, contextText := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
 	scrubbedUserMsg := scrubber.ScrubText(req.UserMessage)
 
 	total := provider.EstimateTokens(sysPrompt + contextText + scrubbedUserMsg)

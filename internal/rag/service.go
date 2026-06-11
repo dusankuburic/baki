@@ -6,35 +6,45 @@ import (
 	"strings"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/storage/interfaces"
 
 	"github.com/google/uuid"
 )
 
-// embedProvider is the provider used to generate embeddings. OpenAI is the only
-// provider that implements Embed today; documents and queries must use the same
-// model so their vectors are comparable.
-const embedProvider = "openai"
-
-type KnowledgeService struct {
-	store   interfaces.StorageBackend
-	factory *ai.ProviderFactory
+// SettingsProvider returns the current application settings.
+type SettingsProvider interface {
+	Get() *models.AppSettings
 }
 
-// NewKnowledgeService takes the provider factory rather than a pre-resolved
-// provider so the embedding provider (and its API key) is resolved lazily, per
-// request, in the caller's scope. Resolving once at startup with an empty scope
-// would fail in cloud mode (keys are per-user) and never pick up keys added
-// later without a restart.
-func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFactory) *KnowledgeService {
-	return &KnowledgeService{store: store, factory: factory}
+type KnowledgeService struct {
+	store    interfaces.StorageBackend
+	factory  *ai.ProviderFactory
+	settings SettingsProvider
+}
+
+// NewKnowledgeService takes the provider factory and settings store rather than
+// a pre-resolved provider so the embedding provider (and its API key) is
+// resolved lazily, per request, in the caller's scope. Resolving once at
+// startup with an empty scope would fail in cloud mode (keys are per-user) and
+// never pick up keys added later without a restart.
+func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFactory, settings SettingsProvider) *KnowledgeService {
+	return &KnowledgeService{store: store, factory: factory, settings: settings}
 }
 
 func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
 	if s.factory == nil {
 		return nil, fmt.Errorf("embedding provider not configured")
 	}
-	return s.factory.For(scope, embedProvider)
+
+	providerID := "openai" // fallback
+	if s.settings != nil {
+		if settings := s.settings.Get(); settings != nil && settings.AI.EmbeddingProvider != "" {
+			providerID = settings.AI.EmbeddingProvider
+		}
+	}
+
+	return s.factory.For(scope, providerID)
 }
 
 // AddDocument chunks content, generates embeddings in the caller's scope, then
@@ -48,7 +58,7 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 
 	provider, err := s.embedder(scope)
 	if err != nil {
-		return fmt.Errorf("embedding provider unavailable (configure an %s API key): %w", embedProvider, err)
+		return fmt.Errorf("embedding provider unavailable: %w", err)
 	}
 
 	chunks := chunkText(content, 1000) // ~1000 runes per chunk

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"pad-analyzer/internal/analyzer"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/models"
@@ -21,15 +22,14 @@ type AnalysisHandler struct {
 	backend     storageif.StorageBackend
 }
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, security *SecurityConfig) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, backend storageif.StorageBackend, security *SecurityConfig) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
 		security:    security,
+		backend:     backend,
 	}
 }
-
-func (h *AnalysisHandler) SetBackend(b storageif.StorageBackend) { h.backend = b }
 
 func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -122,12 +122,22 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
+	// The frontend sends "ruleId"; "id" is kept for compatibility. Decoding
+	// only "id" made every toggle silently write to rule "" (never matching).
 	var req struct {
 		ID      string `json:"id"`
+		RuleID  string `json:"ruleId"`
 		Enabled bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.RuleID != "" {
+		req.ID = req.RuleID
+	}
+	if req.ID == "" {
+		render.Error(w, fmt.Errorf("ruleId is required"), http.StatusBadRequest)
 		return
 	}
 	if err := h.analysisSvc.SetRuleEnabled(req.ID, req.Enabled); err != nil {
@@ -141,12 +151,21 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
+	// Same id/ruleId compatibility shim as handleSetRuleEnabled.
 	var req struct {
 		ID     string            `json:"id"`
+		RuleID string            `json:"ruleId"`
 		Config models.RuleConfig `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.RuleID != "" {
+		req.ID = req.RuleID
+	}
+	if req.ID == "" {
+		render.Error(w, fmt.Errorf("ruleId is required"), http.StatusBadRequest)
 		return
 	}
 	if err := h.analysisSvc.UpdateRuleConfig(req.ID, req.Config); err != nil {
@@ -217,17 +236,28 @@ func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	docs, err := h.flowSvc.LoadAllFromFolder(r.Context(), req.FolderPath)
+	docs, loadErrors, err := h.flowSvc.LoadAllFromFolder(r.Context(), req.FolderPath)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 
-	batch, err := h.analysisSvc.AnalyzeBatch(docs)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
+	// A folder where every file failed still yields a useful batch result
+	// (all error rows) rather than an HTTP error.
+	var batch *models.BatchAnalysis
+	if len(docs) > 0 {
+		batch, err = h.analysisSvc.AnalyzeBatch(docs)
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+	} else {
+		batch = &models.BatchAnalysis{Results: []models.BatchResult{}}
 	}
+	for name, msg := range loadErrors {
+		batch.Results = append(batch.Results, models.BatchResult{FlowName: name, Error: msg})
+	}
+	batch.TotalFlows = len(batch.Results)
 	render.JSON(w, batch)
 }
 
@@ -253,9 +283,38 @@ func (h *AnalysisHandler) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oldReport := &models.AnalysisReport{Findings: []models.Finding{}}
+	// Diff against the previous distinct run. With no prior run the diff is
+	// "everything added" by construction; HasPrevious lets the UI say so.
+	oldReport, hasPrevious := h.analysisSvc.PreviousReport(doc)
+	if oldReport == nil {
+		oldReport = &models.AnalysisReport{Findings: []models.Finding{}}
+	}
 	diff := h.analysisSvc.DiffReports(oldReport, newReport)
+	diff.HasPrevious = hasPrevious
 	render.JSON(w, diff)
+}
+
+func (h *AnalysisHandler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	snapshots := h.analysisSvc.History(doc)
+	if snapshots == nil {
+		snapshots = []analyzer.AnalysisSnapshot{}
+	}
+	render.JSON(w, snapshots)
 }
 
 func (h *AnalysisHandler) handleExportHTML(w http.ResponseWriter, r *http.Request) {

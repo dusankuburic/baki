@@ -3,7 +3,6 @@ package analyzer
 import (
 	"fmt"
 	"sort"
-	"time"
 
 	"pad-analyzer/internal/models"
 )
@@ -190,74 +189,6 @@ func (f *fnvHasher) sum() string {
 	return fmt.Sprintf("%08x", f.h)
 }
 
-func RunIncrementalAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, changedSubflows map[string]bool) *models.AnalysisReport {
-	if len(changedSubflows) == 0 {
-		return &models.AnalysisReport{
-			FlowID:    doc.ID,
-			Findings:  []models.Finding{},
-			Stats:     models.AnalysisStats{},
-		}
-	}
-
-	ctx := buildContext(doc, settings)
-
-	var enabledRules []Rule
-	for _, r := range rules {
-		if settings != nil {
-			if rc, ok := settings.Analysis.Rules[r.ID()]; ok && !rc.Enabled {
-				continue
-			}
-		}
-		enabledRules = append(enabledRules, r)
-	}
-
-	var findings []models.Finding
-	for i := range doc.Subflows {
-		sf := &doc.Subflows[i]
-		if !changedSubflows[sf.ID] {
-			continue
-		}
-		walkSubflowBlocks(sf, func(block *models.Block) {
-			if block.Type == models.BlockTypeEnd {
-				return
-			}
-			for _, rule := range enabledRules {
-				f := safeCheck(rule, block, ctx)
-				for j := range f {
-					f[j].Category = rule.Category()
-				}
-				findings = append(findings, f...)
-			}
-		})
-	}
-
-	if findings == nil {
-		findings = []models.Finding{}
-	}
-
-	stats := computeStats(findings)
-	stats.BlocksAnalyzed = countBlocks(doc, changedSubflows)
-	stats.RulesRun = len(enabledRules)
-
-	return &models.AnalysisReport{
-		FlowID:      doc.ID,
-		GeneratedAt: time.Now(),
-		Findings:    findings,
-		Stats:       stats,
-	}
-}
-
-func countBlocks(doc *models.FlowDocument, subflows map[string]bool) int {
-	count := 0
-	for i := range doc.Subflows {
-		if !subflows[doc.Subflows[i].ID] {
-			continue
-		}
-		walkSubflowBlocks(&doc.Subflows[i], func(b *models.Block) {
-			if b.Type != models.BlockTypeEnd {
-				count++
-			}
-		})
-	}
-	return count
-}
+// RunIncrementalAnalysis (subflow-scoped partial re-analysis) was removed as
+// dead code: it was never wired into any caller, and the cache in cache.go
+// (content hash + settings digest) already makes full re-analysis cheap.

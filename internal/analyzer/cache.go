@@ -136,8 +136,45 @@ func cacheKey(flowID, hash string) string {
 
 var DefaultCache = NewAnalysisCache(50)
 
+// analyzerVersion participates in the analysis cache key (not FlowHash, which
+// history.go uses for pure content identity). Bump when rule logic or parser
+// output changes so stale cached reports are not served after an upgrade.
+const analyzerVersion = "2"
+
+// settingsDigest folds the analysis-relevant settings (rule enabled/severity/
+// options) into the cache key. Without it the key is content-only, so toggling
+// a rule or changing a threshold would keep serving the report computed under
+// the old configuration (nothing calls Invalidate on settings changes).
+func settingsDigest(settings *models.AppSettings) string {
+	if settings == nil || len(settings.Analysis.Rules) == 0 {
+		return "default"
+	}
+	h := sha256.New()
+	ids := make([]string, 0, len(settings.Analysis.Rules))
+	for id := range settings.Analysis.Rules {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		rc := settings.Analysis.Rules[id]
+		fmt.Fprintf(h, "%s|%t|%s|", id, rc.Enabled, rc.Severity)
+		if rc.Options != nil {
+			keys := make([]string, 0, len(rc.Options))
+			for k := range rc.Options {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(h, "%s=%v;", k, rc.Options[k])
+			}
+		}
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))[:8]
+}
+
 func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
-	hash := FlowHash(doc)
+	hash := analyzerVersion + ":" + FlowHash(doc) + ":" + settingsDigest(settings)
 	if cached := DefaultCache.Get(doc.ID, hash); cached != nil {
 		return cached
 	}

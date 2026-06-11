@@ -109,16 +109,25 @@ func (s *SystemService) UpdateOrgSettings(orgID string, settings models.AppSetti
 	return nil
 }
 
+// toModel/fromModel bridge the storage-layer and domain settings structs, which
+// are intentionally kept JSON-compatible, via a marshal round-trip. The errors
+// effectively never fire for these mirror structs, but they're logged rather
+// than discarded so a future field-type mismatch surfaces instead of silently
+// dropping data. TestSettingsRoundTrip guards against the structs drifting apart.
 func (s *SystemService) toModel(is *storageif.AppSettings) *models.AppSettings {
 	if is == nil {
 		return models.DefaultSettings()
 	}
-	// Convert storageif.AppSettings to models.AppSettings
-	// Since they are JSON-compatible, we can use JSON marshal/unmarshal for simplicity
-	// if we haven't matched all fields yet.
-	data, _ := json.Marshal(is)
+	data, err := json.Marshal(is)
+	if err != nil {
+		logger.Warn("SystemService.toModel: marshal storage settings", "error", err)
+		return models.DefaultSettings()
+	}
 	var m models.AppSettings
-	json.Unmarshal(data, &m)
+	if err := json.Unmarshal(data, &m); err != nil {
+		logger.Warn("SystemService.toModel: unmarshal into model settings", "error", err)
+		return models.DefaultSettings()
+	}
 	return &m
 }
 
@@ -126,9 +135,16 @@ func (s *SystemService) fromModel(m *models.AppSettings) *storageif.AppSettings 
 	if m == nil {
 		return nil
 	}
-	data, _ := json.Marshal(m)
+	data, err := json.Marshal(m)
+	if err != nil {
+		logger.Warn("SystemService.fromModel: marshal model settings", "error", err)
+		return nil
+	}
 	var is storageif.AppSettings
-	json.Unmarshal(data, &is)
+	if err := json.Unmarshal(data, &is); err != nil {
+		logger.Warn("SystemService.fromModel: unmarshal into storage settings", "error", err)
+		return nil
+	}
 	return &is
 }
 

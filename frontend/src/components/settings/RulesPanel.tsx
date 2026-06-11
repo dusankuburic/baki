@@ -5,6 +5,7 @@ import {Switch} from '@/components/shared'
 import {Shield, AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useToast} from '@/components/shared/Toast'
 import clsx from 'clsx'
 
 export default function RulesPanel() {
@@ -13,6 +14,7 @@ export default function RulesPanel() {
   const settings = useSettingsStore(s => s.settings)
   const updateSettings = useSettingsStore(s => s.updateSettings)
   const autoAnalyzeOnOpen = settings.analysis.autoAnalyzeOnOpen
+  const toast = useToast()
 
   useEffect(() => {
     analysisApi.getRules().then(res => {
@@ -22,18 +24,13 @@ export default function RulesPanel() {
   }, [])
 
   const handleToggle = async (ruleId: string, enabled: boolean) => {
-    const rule = rules.find(r => r.id === ruleId)
-    if (!rule) return
-    
     try {
-      const config: RuleConfig = {
-        enabled,
-        severity: rule.defaultSeverity // Use current or default
-      }
-      await analysisApi.updateRuleConfig(ruleId, config)
+      // Dedicated toggle endpoint: preserves the configured severity override
+      // and option thresholds, unlike a full-config replace.
+      await analysisApi.setRuleEnabled(ruleId, enabled)
       setRules(prev => prev.map(r => r.id === ruleId ? {...r, enabled} : r))
     } catch (err) {
-      console.error('Failed to update rule:', err)
+      toast.error('Failed to update rule: ' + (err as Error).message)
     }
   }
 
@@ -49,7 +46,7 @@ export default function RulesPanel() {
       await analysisApi.updateRuleConfig(ruleId, config)
       setRules(prev => prev.map(r => r.id === ruleId ? {...r, defaultSeverity: severity} : r))
     } catch (err) {
-      console.error('Failed to update rule severity:', err)
+      toast.error('Failed to update rule severity: ' + (err as Error).message)
     }
   }
 
@@ -110,7 +107,7 @@ export default function RulesPanel() {
             </div>
 
             {rule.enabled && (
-              <div className="flex items-center gap-4 animate-fade-in">
+              <div className="flex items-center gap-4 animate-fade-in" title="Severity changes apply to the next analysis run">
                 <span className="text-2xs font-bold uppercase text-text-tertiary">Report as:</span>
                 <SegmentedControl
                   size="sm"
@@ -132,7 +129,7 @@ export default function RulesPanel() {
       <div className="p-4 bg-brand-500/5 border border-brand-500/10 rounded-lg flex gap-3">
         <Info className="text-brand-500 shrink-0" size={18} />
         <p className="text-xs text-text-secondary leading-relaxed">
-          <strong>Tip:</strong> Elevate rules like <code className="text-brand-400">missing-delay</code> to <strong>Error</strong> when debugging UI synchronization issues to make them stand out in the findings list.
+          <strong>Tip:</strong> Elevate rules like <code className="text-brand-400">missing-delay</code> to <strong>Error</strong> when debugging UI synchronization issues to make them stand out in the findings list. Severity changes apply to the <strong>next</strong> analysis run.
         </p>
       </div>
     </div>
