@@ -2,13 +2,8 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
-# VITE_API_URL is baked into the JS bundle at build time by Vite.
-# Pass it as a build arg so the image targets the correct backend host:
-#   docker build --build-arg VITE_API_URL=https://your-backend.azurewebsites.net .
-# Omitting it falls back to window.location.origin (same-host, correct when
-# the Go server also serves the SPA from the same container/port).
 ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
@@ -17,31 +12,20 @@ RUN npm run build
 FROM golang:1.25-alpine AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN go install github.com/swaggo/swag/cmd/swag@latest
+RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
 RUN swag init -g main.go --parseDependency --parseInternal
-# CGO_ENABLED=0 produces a fully static binary that does not depend on glibc.
-# Without this, the binary built on golang:1.25-alpine links against musl libc
-# via cgo, then fails or behaves unpredictably when copied into the final
-# alpine:latest stage (which has musl + libc6-compat shim). A static binary
-# also lets the image run on distroless or scratch bases later if desired.
-# -trimpath strips build-machine paths; -ldflags -s -w drops debug symbols
-# for a ~30% smaller binary.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o baki-backend main.go
+ARG GIT_COMMIT=dev
+ARG VERSION=0.1.0
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X main.GitCommit=${GIT_COMMIT} -X main.Version=${VERSION}" \
+    -o baki-backend main.go
 
 # Stage 3: Final lean image
-FROM alpine:latest
-# ca-certificates: HTTPS to AI providers and Azure endpoints
-# wget:            HEALTHCHECK probe (alpine doesn't ship curl by default)
-# NOTE: libc6-compat is intentionally NOT installed — the backend binary is built
-# with CGO_ENABLED=0 (static) and does not need glibc shims.
+FROM alpine:3.21
 RUN apk add --no-cache ca-certificates wget
 
-# Run as non-root. A compromised app process cannot then modify system files
-# or escape to other tenants on a shared host.
-# Alpine adduser -S does not create the home directory.  Create it explicitly
-# so os.UserConfigDir() (used by the settings store) works for the pad user.
 RUN addgroup -g 1000 -S pad && adduser -u 1000 -S pad -G pad \
     && mkdir -p /home/pad \
     && chown pad:pad /home/pad
@@ -50,11 +34,6 @@ WORKDIR /app
 COPY --from=backend-builder --chown=pad:pad /app/baki-backend .
 COPY --from=frontend-builder --chown=pad:pad /app/frontend/dist ./frontend/dist
 
-# Default environment variables for cloud-style deployment.
-# NOTE: PAD_BEHIND_PROXY=true assumes a TLS-terminating reverse proxy
-# (Caddy, nginx, an ingress controller) is in front. If you serve this
-# image directly without a proxy, set PAD_TLS_CERT/PAD_TLS_KEY instead;
-# otherwise the binary will refuse to start (plaintext-credentials guard).
 ENV PAD_MODE=cloud
 ENV PAD_HOST=0.0.0.0
 ENV PAD_PORT=8080
@@ -63,9 +42,6 @@ ENV PAD_STORAGE=database
 ENV PAD_AUTH_ENABLED=true
 ENV PAD_BEHIND_PROXY=true
 
-# Liveness check: hit the unauthenticated /healthz endpoint. Returns 200
-# whenever the process is up; does NOT touch the DB (that's /readyz, which
-# the orchestrator should probe separately for readiness gating).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- "http://localhost:${PAD_PORT}/healthz" >/dev/null || exit 1
 

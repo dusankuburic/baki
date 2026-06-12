@@ -47,10 +47,3 @@ func TestTruncateToTokenLimit(t *testing.T) {
 	}
 }
 
-func TestTruncateToTokens(t *testing.T) {
-	text := "hello world"
-	result := TruncateToTokens(text, 1000)
-	if result != text {
-		t.Errorf("should not truncate short text")
-	}
-}

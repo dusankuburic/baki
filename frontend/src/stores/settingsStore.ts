@@ -169,7 +169,7 @@ interface SettingsState {
 // callers can roll back their optimistic update. A superseded persist resolves
 // immediately: the newer call reads the latest state, so it carries this
 // call's changes too (previously the superseded promise never settled).
-let persistTimer: any = null
+let persistTimer: ReturnType<typeof setTimeout> | null = null
 let resolveSuperseded: (() => void) | null = null
 async function persist(settings: AppSettings): Promise<void> {
   if (persistTimer) {
@@ -183,7 +183,7 @@ async function persist(settings: AppSettings): Promise<void> {
       persistTimer = null
       resolveSuperseded = null
       try {
-        await settingsApi.updateSettings(settings as any)
+        await settingsApi.updateSettings(settings)
         resolve()
       } catch (err) {
         console.error('Failed to persist settings', err)
@@ -211,7 +211,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   loadFromBackend: async () => {
     try {
-      const loaded = await settingsApi.getSettings() as any as AppSettings
+      const loaded = await settingsApi.getSettings()
       if (loaded) {
         // Deep-merge server response with defaults so Go zero-values (0 for
         // int fields like sidebarWidth/inspectorWidth) don't clobber the

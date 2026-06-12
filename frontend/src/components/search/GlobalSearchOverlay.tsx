@@ -182,6 +182,8 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                                 return (
                                     <div
                                         key={`${res.blockId}-${idx}`}
+                                        role="option"
+                                        aria-selected={idx === activeIndex}
                                         data-active={idx === activeIndex}
                                         className={clsx(
                                             'group flex flex-col px-4 py-3 cursor-pointer rounded-lg transition-colors duration-fast border border-transparent',

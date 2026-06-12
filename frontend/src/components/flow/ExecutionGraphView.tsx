@@ -74,7 +74,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
           rankSep: subflowId ? 160 : 120,
           animate: true,
           animationDuration: 500
-        } as any).run()
+        } as cytoscape.LayoutOptions).run()
         
         cy.fit(undefined, 50)
         setGraphZoom(cy.zoom())

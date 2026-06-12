@@ -4,28 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
-
-// TestChunkText_ReassemblyInvariant is the most important property: chunking
-// must never lose or reorder content — concatenating the chunks must reproduce
-// the original text exactly, for inputs of every length relative to size.
-func TestChunkText_ReassemblyInvariant(t *testing.T) {
-	cases := []string{
-		"",
-		"a",
-		"exactly-ten",                    // arbitrary
-		strings.Repeat("x", 10),          // exact multiple of size=10
-		strings.Repeat("y", 25),          // non-multiple
-		"héllo wörld — unicode ☃ test 🚀", // multi-byte runes
-	}
-	const size = 10
-	for _, in := range cases {
-		chunks := chunkText(in, size)
-		if got := strings.Join(chunks, ""); got != in {
-			t.Errorf("reassembly mismatch:\n in=%q\n got=%q", in, got)
-		}
-	}
-}
 
 func TestChunkText_Empty(t *testing.T) {
 	if chunks := chunkText("", 10); len(chunks) != 0 {
@@ -40,49 +20,77 @@ func TestChunkText_ShorterThanSize(t *testing.T) {
 	}
 }
 
-func TestChunkText_ExactMultiple(t *testing.T) {
-	chunks := chunkText(strings.Repeat("x", 30), 10)
-	if len(chunks) != 3 {
-		t.Fatalf("exact multiple: want 3 chunks, got %d", len(chunks))
-	}
-	for i, c := range chunks {
-		if len([]rune(c)) != 10 {
-			t.Errorf("chunk %d: want 10 runes, got %d", i, len([]rune(c)))
-		}
-	}
-}
-
-func TestChunkText_NonMultipleRemainder(t *testing.T) {
-	chunks := chunkText(strings.Repeat("x", 25), 10)
-	if len(chunks) != 3 {
-		t.Fatalf("non-multiple: want 3 chunks, got %d", len(chunks))
-	}
-	if got := len([]rune(chunks[2])); got != 5 {
-		t.Errorf("final chunk: want 5-rune remainder, got %d", got)
-	}
-}
-
-// TestChunkText_SplitsByRunesNotBytes guards against corrupting multi-byte
-// characters: every chunk must be at most `size` runes and remain valid text
-// (no rune is split across a chunk boundary).
-func TestChunkText_SplitsByRunesNotBytes(t *testing.T) {
-	in := strings.Repeat("☃", 25) // each snowman is 3 bytes, 1 rune
+func TestChunkText_ExactSize(t *testing.T) {
+	in := strings.Repeat("x", 10)
 	chunks := chunkText(in, 10)
-	if len(chunks) != 3 {
-		t.Fatalf("want 3 chunks, got %d", len(chunks))
+	if len(chunks) != 1 || chunks[0] != in {
+		t.Errorf("exact size: want 1 chunk, got %d (%q)", len(chunks), chunks)
+	}
+}
+
+func TestChunkText_RespectsParagraphBoundaries(t *testing.T) {
+	in := "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+	chunks := chunkText(in, 1000)
+	if len(chunks) != 1 {
+		t.Errorf("all paragraphs fit: want 1 chunk, got %d", len(chunks))
+	}
+}
+
+func TestChunkText_SplitsLongParagraphsAtSentences(t *testing.T) {
+	sentences := make([]string, 20)
+	for i := range sentences {
+		sentences[i] = "This is sentence number " + string(rune('0'+i)) + "."
+	}
+	in := strings.Join(sentences, " ")
+	chunks := chunkText(in, 100)
+	if len(chunks) < 2 {
+		t.Errorf("long input should split into multiple chunks, got %d", len(chunks))
+	}
+}
+
+func TestChunkText_SplitsByRunesNotBytes(t *testing.T) {
+	in := strings.Repeat("☃", 25)
+	chunks := chunkText(in, 10)
+	if len(chunks) < 2 {
+		t.Errorf("want multiple chunks for 25 snowmen with size 10, got %d", len(chunks))
 	}
 	for i, c := range chunks {
 		if n := len([]rune(c)); n > 10 {
 			t.Errorf("chunk %d exceeds size in runes: %d", i, n)
 		}
-		if !strings.HasPrefix(strings.Repeat("☃", 10), c) && i < 2 {
-			t.Errorf("chunk %d corrupted a multi-byte rune: %q", i, c)
+	}
+}
+
+func TestChunkText_PacksMultiByteParagraphsByRunes(t *testing.T) {
+	para := strings.Repeat("ж", 20)
+	in := para + "\n\n" + para + "\n\n" + strings.Repeat("ж", 60)
+	chunks := chunkText(in, 50)
+	if len(chunks) == 0 {
+		t.Fatal("expected chunks")
+	}
+	// Two 20-rune paragraphs fit a 50-rune chunk together (20+2+20); counting
+	// their 40-byte UTF-8 length instead would wrongly split them.
+	if first := chunks[0]; first != para+"\n\n"+para {
+		t.Errorf("want first chunk to pack both short paragraphs, got %q", first)
+	}
+	for i, c := range chunks {
+		if n := utf8.RuneCountInString(c); n > 50 {
+			t.Errorf("chunk %d exceeds size in runes: %d", i, n)
 		}
 	}
 }
 
-// TestAddDocument_EmptyContent verifies the cheap up-front guard rejects empty
-// documents before any (network-bound) embedding work is attempted.
+func TestChunkText_NoContentLoss(t *testing.T) {
+	in := "First paragraph with some content.\n\nSecond paragraph with more content.\n\nThird one here."
+	chunks := chunkText(in, 50)
+	allContent := strings.Join(chunks, " ")
+	for _, word := range []string{"First", "paragraph", "Second", "Third"} {
+		if !strings.Contains(allContent, word) {
+			t.Errorf("content lost: %q not found in chunks", word)
+		}
+	}
+}
+
 func TestAddDocument_EmptyContent(t *testing.T) {
 	svc := NewKnowledgeService(nil, nil, nil)
 	err := svc.AddDocument(context.Background(), "scope", "org", "f.txt", "   \n\t ")
@@ -91,8 +99,6 @@ func TestAddDocument_EmptyContent(t *testing.T) {
 	}
 }
 
-// TestAddDocument_NoProvider verifies a missing embedding provider surfaces a
-// clean error (not a panic) when content is otherwise valid.
 func TestAddDocument_NoProvider(t *testing.T) {
 	svc := NewKnowledgeService(nil, nil, nil)
 	err := svc.AddDocument(context.Background(), "scope", "org", "f.txt", "real content")
@@ -101,8 +107,6 @@ func TestAddDocument_NoProvider(t *testing.T) {
 	}
 }
 
-// TestSearch_NoProvider verifies Search fails gracefully (error, no panic) when
-// no embedding provider is configured.
 func TestSearch_NoProvider(t *testing.T) {
 	svc := NewKnowledgeService(nil, nil, nil)
 	out, err := svc.Search(context.Background(), "scope", "org", "query")

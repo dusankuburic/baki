@@ -338,8 +338,12 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	var doneSent bool
-	var parseErrors int
+	var (
+		doneSent     bool
+		parseErrors  int
+		toolCallsIdx int
+		toolCalls    []ToolCall
+	)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -353,9 +357,7 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 		var parsed struct {
 			Candidates []struct {
 				Content struct {
-					Parts []struct {
-						Text string `json:"text"`
-					} `json:"parts"`
+					Parts []geminiPart `json:"parts"`
 				} `json:"content"`
 				FinishReason string `json:"finishReason"`
 			} `json:"candidates"`
@@ -375,11 +377,19 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 				if part.Text != "" {
 					onChunk(Chunk{Text: part.Text})
 				}
+				if part.FunctionCall != nil {
+					args, _ := json.Marshal(part.FunctionCall.Args)
+					if len(args) == 0 {
+						args = []byte("{}")
+					}
+					toolCalls = append(toolCalls, ToolCall{
+						ID:    fmt.Sprintf("call_%d", toolCallsIdx),
+						Name:  part.FunctionCall.Name,
+						Input: json.RawMessage(args),
+					})
+					toolCallsIdx++
+				}
 			}
-			// Any non-empty FinishReason is terminal — STOP, MAX_TOKENS,
-			// SAFETY, RECITATION, OTHER. Previously only STOP was treated
-			// as terminal, so a MAX_TOKENS-capped response was reported as
-			// truncated even though it was a clean end from the provider.
 			if cand.FinishReason != "" {
 				if !doneSent {
 					doneSent = true
@@ -388,7 +398,13 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 						tokensOut = parsed.UsageMetadata.CandidatesTokenCount
 						tokensIn = parsed.UsageMetadata.PromptTokenCount
 					}
-					onChunk(Chunk{Done: true, TokensOut: tokensOut, TokensIn: tokensIn})
+					onChunk(Chunk{
+						Done:         true,
+						TokensOut:    tokensOut,
+						TokensIn:     tokensIn,
+						ToolCalls:    toolCalls,
+						FinishReason: cand.FinishReason,
+					})
 				}
 			}
 		}

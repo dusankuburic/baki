@@ -34,7 +34,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 		docProv = service.NewCloudDocumentProvider(backend)
 	}
 	
-	authMgr := auth.NewManager(testToken)
+	authMgr := auth.NewManager(testToken, nil)
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
 	
 	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, orgSvc, nil)
@@ -43,7 +43,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
 	
 	demo := ai.NewDemoLimiter("")
-	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil)
+	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil, nil)
 	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo, backend)
 	
 	ghAuth := ai.NewGitHubAuth()
@@ -51,13 +51,14 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory)
 	
 	security := &SecurityConfig{
-		JWTEnabled:  jwtEnabled,
-		LocalUserID: "local",
-		LocalName:   "You",
-		Token:       testToken,
-		AuthMgr:     authMgr,
-		Backend:     backend,
-		OrgSvc:      orgSvc,
+		JWTEnabled:     jwtEnabled,
+		LocalUserID:    "local",
+		LocalName:      "You",
+		Token:          testToken,
+		AuthMgr:        authMgr,
+		Backend:        backend,
+		OrgSvc:         orgSvc,
+		TrustedProxies: cfg.Server.TrustedProxies,
 	}
 	
 	eventManager := NewEventManager(make(chan struct{}))
@@ -76,7 +77,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 		Sharing:  NewSharingHandler(backend, flowSvc, security),
 	}
 
-	return NewRouter(security, eventManager, handlers, cfg, make(chan struct{}))
+	return NewRouter(security, eventManager, handlers, cfg, make(chan struct{}), nil)
 }
 
 func newJWTTestRouter(t *testing.T) *Router {

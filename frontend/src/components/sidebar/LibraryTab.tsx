@@ -4,6 +4,7 @@ import { libraryApi, type LibraryFlow } from '@/api/library'
 import { useFlowStore } from '@/stores/flowStore'
 import { useUIStore } from '@/stores/uiStore'
 import { Spinner } from '@/components/shared'
+import type { FlowDocument } from '@/types/domain'
 
 export default function LibraryTab() {
   const [flows, setFlows] = useState<LibraryFlow[]>([])
@@ -32,7 +33,7 @@ export default function LibraryTab() {
   const handleOpen = async (id: string) => {
     try {
       const fullDoc = await libraryApi.getContent(id)
-      setDocument(fullDoc as any)
+      setDocument(fullDoc as FlowDocument)
       setMainPaneView('block')
     } catch (err) {
       alert('Failed to load flow: ' + (err instanceof Error ? err.message : 'Unknown error'))
@@ -58,7 +59,7 @@ export default function LibraryTab() {
     try {
       await libraryApi.create({
         name,
-        content: currentDoc as any
+        content: currentDoc as FlowDocument
       })
       fetchLibrary()
     } catch (err) {

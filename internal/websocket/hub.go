@@ -3,6 +3,8 @@ package websocket
 import (
 	"sync"
 	"time"
+
+	"pad-analyzer/internal/metrics"
 )
 
 // Hub manages all active WebSocket rooms.
@@ -36,6 +38,8 @@ func (h *Hub) Join(flowID string, c *Client) {
 	r.clients[c] = true
 	h.mu.Unlock()
 
+	metrics.RecordWSConnectionChange(+1)
+
 	// Notify all clients in the room (including the joiner) about the new presence.
 	h.Broadcast(flowID, c.UserID, Envelope{
 		Type:      EventPresenceJoin,
@@ -61,6 +65,8 @@ func (h *Hub) Leave(flowID string, c *Client) {
 		}
 	}
 	h.mu.Unlock()
+
+	metrics.RecordWSConnectionChange(-1)
 
 	// Notify others that the user left
 	h.Broadcast(flowID, c.UserID, Envelope{

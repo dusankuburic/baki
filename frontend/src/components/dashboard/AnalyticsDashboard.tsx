@@ -5,6 +5,7 @@ import {
   ShieldAlert, Activity, FileWarning,
 } from 'lucide-react'
 import {analysisApi} from '@/api'
+import {logger} from '@/lib/logger'
 import {createAdapter} from '@/platform/adapters'
 import {useToast} from '@/components/shared'
 import type {BatchAnalysis, DashboardStats} from '@/types/domain'
@@ -70,7 +71,7 @@ export default function AnalyticsDashboard() {
   const [batchRunning, setBatchRunning] = useState(false)
 
   const refresh = useCallback(() => {
-    analysisApi.getDashboard().then(s => setStats(s)).catch(() => {})
+    analysisApi.getDashboard().then(s => setStats(s)).catch((err) => { logger.warn('Failed to load dashboard stats', err) })
   }, [])
 
   useEffect(() => { refresh() }, [refresh])

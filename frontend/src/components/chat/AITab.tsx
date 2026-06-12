@@ -3,6 +3,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useProviderSetup} from './hooks/useProviderSetup'
 import {useAIChat} from './hooks/useAIChat'
+import {logger} from '@/lib/logger'
 import {
   MessageBubble, ChatMessageList, SuggestedPrompts, ChatInput,
   ApiKeyMissingState, ContextChip, ConnectionPanel, TokenCounter,
@@ -13,6 +14,7 @@ import {useState, useEffect, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import StreamingProgress from './StreamingProgress'
+import type {ProviderID} from '@/types/domain'
 import ConnectionStatus from './ConnectionStatus'
 import EmptyChatState from './EmptyChatState'
 
@@ -40,6 +42,7 @@ export default function AITab() {
     return null
   }, [_document, _selectedBlockId])
   const aiSettings = useSettingsStore(s => s.settings.ai)
+  const provider = useChatStore(s => s.selectedProvider)
 
   const {
     configured, providers, selectedModel, setSelectedModel,
@@ -70,9 +73,9 @@ export default function AITab() {
   }, [contextBlockId, _analysisReport])
 
   useEffect(() => {
-    chatApi.getSuggestedPrompts(!!selectedBlockId, hasFindings).then((ps: any) => {
+    chatApi.getSuggestedPrompts(!!selectedBlockId, hasFindings).then((ps: string[] | null) => {
       setSuggestedPrompts(ps || [])
-    }).catch(() => {})
+    }).catch((err) => { logger.warn('Failed to load suggested prompts', err) })
   }, [selectedBlockId, hasFindings])
 
   if (!configured) {
@@ -96,12 +99,12 @@ export default function AITab() {
       <div className="flex-shrink-0 border-b border-border-subtle">
         <ConnectionPanel
           providers={configuredProviders.map(p => ({
-            id: p.id as any,
+            id: p.id as ProviderID,
             name: p.name,
             configured: p.configured,
             authType: p.authType,
           }))}
-          selectedProvider={activeThread ? (activeThread as any).provider ?? undefined : undefined}
+          selectedProvider={provider}
           onSelectProvider={handleSetProvider}
           models={currentModels}
           selectedModel={selectedModel}

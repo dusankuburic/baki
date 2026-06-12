@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 )
 
 var copilotBaseURL = providerURL("COPILOT_API_URL", "https://api.githubcopilot.com/chat/completions")
+var copilotModelsURL = providerURL("COPILOT_MODELS_API_URL", "https://api.githubcopilot.com/models")
 
 const (
 	copilotIntegrationID = "vscode-chat"
@@ -26,6 +29,10 @@ func setCopilotHeaders(h http.Header) {
 type CopilotProvider struct {
 	tokenFn func(ctx context.Context) (string, error)
 	client  *http.Client
+
+	mu          sync.Mutex
+	cached      []ModelInfo
+	cacheExpiry time.Time
 }
 
 // NewCopilotProvider creates a provider that uses a static token (manual PAT).
@@ -66,7 +73,79 @@ func (c *CopilotProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
-func (p *CopilotProvider) Models() []ModelInfo { return catalogModels("copilot") }
+func (p *CopilotProvider) Models(ctx context.Context) ([]ModelInfo, error) {
+	p.mu.Lock()
+	if time.Now().Before(p.cacheExpiry) {
+		res := make([]ModelInfo, len(p.cached))
+		copy(res, p.cached)
+		p.mu.Unlock()
+		return res, nil
+	}
+	p.mu.Unlock()
+
+	// If tokenFn returns an empty token, we can't fetch from the API.
+	// Return the catalog-hardcoded models as a sensible fallback for
+	// unauthenticated callers (e.g. GetMetadataProvider or initial UI load).
+	token, _ := p.tokenFn(ctx)
+	if token == "" {
+		return catalogModels("copilot"), nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", copilotModelsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	// addHeaders will re-call p.tokenFn, which is slightly redundant but safe.
+	if err := p.addHeaders(ctx, req); err != nil {
+		return nil, err
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch copilot models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("copilot models API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			ContextLimit int    `json:"context_limit"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode copilot models: %w, body: %s", err, string(body))
+	}
+
+	models := make([]ModelInfo, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		// Use a safe default for ContextLimit if not provided by the API
+		limit := m.ContextLimit
+		if limit <= 0 {
+			limit = 128000
+		}
+		models = append(models, ModelInfo{
+			ID:           m.ID,
+			DisplayName:  m.Name,
+			ContextLimit: limit,
+			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
+		})
+	}
+
+	p.mu.Lock()
+	p.cached = models
+	p.cacheExpiry = time.Now().Add(1 * time.Hour)
+	res := make([]ModelInfo, len(p.cached))
+	copy(res, p.cached)
+	p.mu.Unlock()
+
+	return res, nil
+}
 
 func (p *CopilotProvider) addHeaders(ctx context.Context, req *http.Request) error {
 	token, err := p.tokenFn(ctx)

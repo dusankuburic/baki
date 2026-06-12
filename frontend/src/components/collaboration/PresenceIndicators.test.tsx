@@ -3,10 +3,11 @@ import { render, screen } from '@testing-library/react'
 import PresenceIndicators from './PresenceIndicators'
 import { usePresenceStore } from '@/stores/presenceStore'
 import type { ConnectionStatus } from '@/services/collaboration/CollaborationService'
+import type { PresenceUser } from '@/stores/presenceStore'
 
 const initialState = usePresenceStore.getState()
 
-function setPresence(users: Record<string, any>, status: ConnectionStatus = 'connected') {
+function setPresence(users: Record<string, PresenceUser>, status: ConnectionStatus = 'connected') {
   usePresenceStore.setState({ ...initialState, users, status }, true)
 }
 
@@ -39,7 +40,7 @@ describe('PresenceIndicators', () => {
   })
 
   it('shows overflow badge when users exceed maxVisible', () => {
-    const users: Record<string, any> = {}
+    const users: Record<string, PresenceUser> = {}
     for (let i = 0; i < 6; i++) {
       users[`u${i}`] = { userId: `u${i}`, displayName: `User${i}` }
     }

@@ -159,7 +159,7 @@ func TestParseRetryAfter(t *testing.T) {
 
 func TestBackoff_HonorsRetryAfterFloor(t *testing.T) {
 	start := time.Now()
-	err := backoff(context.Background(), 0, &RateLimitError{RetryAfter: 600 * time.Millisecond})
+	err := backoff(context.Background(), 0, &RateLimitError{RetryAfter: 600 * time.Millisecond}, retryBaseDelay)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("backoff returned error: %v", err)

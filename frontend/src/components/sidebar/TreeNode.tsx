@@ -1,4 +1,4 @@
-import {useCallback, useRef} from 'react'
+import React, {useCallback, useRef} from 'react'
 import clsx from 'clsx'
 import {
     ChevronRight, Box, Repeat, GitBranch,
@@ -85,7 +85,7 @@ function highlightText(text: string, query: string | undefined, highlights?: Hig
     )
 }
 
-export default function TreeNode({
+function TreeNode({
     row,
     isSelected,
     isExpanded,
@@ -172,3 +172,5 @@ export default function TreeNode({
         </div>
     )
 }
+
+export default React.memo(TreeNode)

@@ -26,6 +26,9 @@ on:
         type: string
         default: 'error'
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze PAD Flows

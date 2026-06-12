@@ -3,10 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"sync"
 
+	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/metrics"
 )
@@ -76,11 +76,9 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	// proxy-aware client IP, via the Router-injected clientKey. Falling back to
 	// the bare remote IP only when no key func is wired keeps tests and any
 	// uninitialised path working.
-	key := r.RemoteAddr
+	key := middleware.ClientIP(r, nil)
 	if m.clientKey != nil {
 		key = m.clientKey(r)
-	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		key = host
 	}
 
 	m.clientsMu.Lock()
@@ -90,7 +88,10 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.sseConnCount[key]++
-	ch := make(chan Event, 64)
+	// Big enough to absorb bursts (e.g. analysis progress storms) without
+	// letting a slow client pin megabytes of buffered events; Emit drops
+	// events for a client whose buffer is full.
+	ch := make(chan Event, 512)
 	m.clients[ch] = true
 	m.clientsMu.Unlock()
 

@@ -16,14 +16,29 @@ var ErrNotFound = errors.New("not found")
 // already exists. The caller should map this to HTTP 409.
 var ErrEmailExists = errors.New("email already in use")
 
+// ErrOrgInviteExists is returned when creating an org invite for an
+// org+email pair that already has an active (unaccepted) invite. The caller
+// should map this to HTTP 409.
+var ErrOrgInviteExists = errors.New("an active invite for this email already exists")
+
 // User represents a system user in the storage backend.
 type User struct {
+	ID          string    `json:"id"`
+	Email       string    `json:"email"`
+	Password    string    `json:"-"` // Bcrypt hash — never serialized to clients
+	Role        auth.Role `json:"role"`
+	DisplayName string    `json:"displayName"`
+	AvatarURL   string    `json:"avatarUrl"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// RefreshTokenInfo describes a single issued refresh token, surfaced to users
+// as an "active session" in profile/session-management UIs.
+type RefreshTokenInfo struct {
 	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Password  string    `json:"-"` // Bcrypt hash — never serialized to clients
-	Role      auth.Role `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 // StorageBackend defines the interface for storage implementations
@@ -57,10 +72,16 @@ type StorageBackend interface {
 	// when decorating lists (e.g. owner display names).
 	LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*User, error)
 	CountUsers(ctx context.Context) (int, error)
-	ListUsers(ctx context.Context) ([]*User, error)
+	// ListUsers returns up to limit users starting at offset, ordered by
+	// created_at descending. A non-positive limit returns all users (used by
+	// callers that only need to check for emptiness, e.g. first-admin bootstrap).
+	ListUsers(ctx context.Context, limit, offset int) ([]*User, error)
 	ListAdmins(ctx context.Context) ([]*User, error)
 	UpdateUserRole(ctx context.Context, id string, role auth.Role) error
 	UpdateUserPassword(ctx context.Context, id string, passwordHash string) error
+	// UpdateUserProfile updates the user's display name and avatar URL. Either
+	// value may be empty (to clear it).
+	UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error
 
 	// Organisation operations
 	SaveOrg(ctx context.Context, org *Organisation) error
@@ -116,6 +137,21 @@ type OrgMember struct {
 	UserID   string    `json:"userId"`
 	Role     auth.Role `json:"role"`
 	JoinedAt time.Time `json:"joinedAt"`
+}
+
+// OrgInvite represents a pending (or resolved) invitation for a user to join
+// an organisation. The raw invite token is never persisted — only its SHA-256
+// hash (TokenHash), so a database read alone cannot be used to join the org.
+type OrgInvite struct {
+	ID         string     `json:"id"`
+	OrgID      string     `json:"orgId"`
+	Email      string     `json:"email"`
+	Role       auth.Role  `json:"role"`
+	InvitedBy  string     `json:"invitedBy"`
+	TokenHash  string     `json:"-"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	AcceptedAt *time.Time `json:"acceptedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
 }
 
 // Collaborator represents a user with access to a specific flow.

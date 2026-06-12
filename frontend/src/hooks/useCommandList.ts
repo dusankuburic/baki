@@ -1,0 +1,144 @@
+import {useMemo} from 'react'
+import {useUIStore} from '@/stores/uiStore'
+import {useFlowStore} from '@/stores/flowStore'
+import {useEditorStore} from '@/stores/editorStore'
+import {useAnalysisStore} from '@/stores/analysisStore'
+import {flowApi, analysisApi, exportApi} from '@/api'
+import {isTauri} from '@/platform/guards'
+import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
+import type {FlowDocument as DomainFlowDocument, RecentFile, AnalysisReport, Block} from '@/types/domain'
+import type {useToast} from '@/components/shared'
+
+function extractBlockCommands(doc: DomainFlowDocument) {
+    const cmds: {id: string; label: string; section: string; onSelect: () => void}[] = []
+    const collectBlocks = (blocks: Block[], subflowId: string) => {
+        for (const block of blocks) {
+            cmds.push({
+                id: `block:${block.id}`,
+                label: block.name,
+                section: 'Blocks',
+                onSelect: () => {
+                    useFlowStore.getState().selectBlock(block.id)
+                    useFlowStore.getState().selectSubflow(subflowId)
+                },
+            })
+            if (block.children?.length) {
+                collectBlocks(block.children, subflowId)
+            }
+        }
+    }
+    for (const sf of doc.subflows) {
+        collectBlocks(sf.blocks, sf.id)
+    }
+    return cmds
+}
+
+export type CommandItem = {id: string; label: string; section: string; shortcut?: string[]; onSelect: () => void}
+
+export function useCommandList(deps: {
+    openDocument: (doc: DomainFlowDocument | null) => void
+    toggleSidebar: () => void
+    toggleInspector: () => void
+    toggleSettings: () => void
+    setMainPaneView: (v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard') => void
+    requestSearchFocus: () => void
+    recentFiles: RecentFile[]
+    sidebarCollapsed: boolean
+    document: DomainFlowDocument | null
+    user: { role?: string } | null
+    toast: ReturnType<typeof useToast>
+}): CommandItem[] {
+    const {
+        openDocument, toggleSidebar, toggleInspector, toggleSettings,
+        setMainPaneView, requestSearchFocus, recentFiles, sidebarCollapsed,
+        document, user, toast,
+    } = deps
+
+    return useMemo(() => {
+        const cmds: CommandItem[] = [
+            {id: 'file.open', label: 'Open Flow File', section: 'File', shortcut: ['mod', 'o'], onSelect: async () => {
+                const doc = await flowApi.openFlowFile()
+                if (doc) openDocument(doc as DomainFlowDocument)
+            }},
+            {id: 'file.open.folder', label: 'Open Folder', section: 'File', shortcut: ['mod', 'shift', 'o'], onSelect: async () => {
+                const doc = await flowApi.openFlowFolder()
+                if (doc) openDocument(doc as DomainFlowDocument)
+            }},
+            {id: 'view.toggle-sidebar', label: 'Toggle Sidebar', section: 'View', shortcut: ['mod', 'b'], onSelect: toggleSidebar},
+            {id: 'view.toggle-inspector', label: 'Toggle Inspector', section: 'View', shortcut: ['mod', 'i'], onSelect: toggleInspector},
+            {id: 'view.block', label: 'Block View', section: 'View', onSelect: () => setMainPaneView('block')},
+            {id: 'view.graph', label: 'Graph View', section: 'View', onSelect: () => setMainPaneView('graph')},
+            {id: 'view.local-map', label: 'Local Subflow Map', section: 'View', shortcut: ['mod', 'shift', 'm'], onSelect: () => setMainPaneView('local-map')},
+            {id: 'view.map', label: 'Subflow Map', section: 'View', shortcut: ['mod', 'm'], onSelect: () => setMainPaneView('map')},
+            {id: 'view.split', label: 'Split Editor Right', section: 'View', shortcut: ['mod', '\\'], onSelect: () => useEditorStore.getState().splitRight()},
+            {id: 'settings', label: 'Open Settings', section: 'Navigation', shortcut: ['mod', ','], onSelect: toggleSettings},
+            {id: 'search.focus', label: 'Focus Search', section: 'Search', shortcut: ['/'], onSelect: () => {
+                if (sidebarCollapsed) toggleSidebar()
+                requestSearchFocus()
+            }},
+            {id: 'analysis.run', label: 'Run Analysis', section: 'Analysis', shortcut: ['mod', 'shift', 'r'], onSelect: async () => {
+                if (!document) return
+                const setAnalyzing = useAnalysisStore.getState().setAnalyzing
+                const setReport = useAnalysisStore.getState().setReport
+                const setInspectorTab = useUIStore.getState().setInspectorTab
+                setInspectorTab('findings')
+                setAnalyzing(true)
+                try {
+                    const r = await analysisApi.analyzeFlow()
+                    if (r) setReport(document.id, r as AnalysisReport)
+                } catch (e) {
+                    console.error('analysis failed:', e)
+                    toast.error('Analysis failed', {description: String(e)})
+                } finally {
+                    setAnalyzing(false)
+                }
+            }},
+            {id: 'analysis.export.csv', label: 'Export Findings as CSV', section: 'Analysis', shortcut: ['mod', 'alt', 'e'], onSelect: () => {
+                const r = document ? useAnalysisStore.getState().reports.get(document.id) : undefined
+                if (document && r) exportFindingsCSV(r, document.id)
+            }},
+            {id: 'analysis.export.html', label: 'Export Findings as HTML', section: 'Analysis', shortcut: ['mod', 'shift', 'h'], onSelect: async () => {
+                if (!document) return
+                try { await exportFindingsHTML(document.id) } catch (e) { console.error('HTML export failed:', e) }
+            }},
+            {id: 'analysis.filter.all', label: 'Findings: Show All Severities', section: 'Analysis', shortcut: ['mod', 'shift', '0'], onSelect: () => {
+                useAnalysisStore.getState().setSeverityFilter(new Set(['error', 'warning', 'info']))
+            }},
+            {id: 'file.export.pdf', label: 'Export PDF', section: 'File', shortcut: ['mod', 'e'], onSelect: async () => {
+                try { await exportApi.exportPDF() } catch (e) { console.error('Export PDF failed:', e) }
+            }},
+            {id: 'file.export.md', label: 'Export Markdown', section: 'File', shortcut: ['mod', 'shift', 'e'], onSelect: async () => {
+                try { await exportApi.exportMarkdown() } catch (e) { console.error('Export Markdown failed:', e) }
+            }},
+            {id: 'view.dashboard', label: 'Analysis Dashboard', section: 'Analysis', onSelect: () => setMainPaneView('dashboard')},
+            {id: 'nav.profile', label: 'User Profile', section: 'Navigation', onSelect: () => setMainPaneView('profile')},
+        ]
+
+        if (user?.role === 'admin') {
+            cmds.push({id: 'nav.admin', label: 'Admin Dashboard', section: 'Navigation', onSelect: () => setMainPaneView('admin')})
+        }
+
+        if (isTauri()) {
+            for (const f of recentFiles.slice(0, 5)) {
+                cmds.push({
+                    id: `recent:${f.path}`,
+                    label: f.name,
+                    section: 'Recent Files',
+                    onSelect: async () => {
+                        const doc = await flowApi.loadFlowFromPath(f.path)
+                        if (doc) openDocument(doc as DomainFlowDocument)
+                    },
+                })
+            }
+        }
+
+        if (document) {
+            const blockCmds = extractBlockCommands(document)
+            for (const bc of blockCmds.slice(0, 20)) {
+                cmds.push(bc)
+            }
+        }
+
+        return cmds
+    }, [toggleSidebar, toggleInspector, toggleSettings, setMainPaneView, openDocument, recentFiles, requestSearchFocus, sidebarCollapsed, document, user?.role, toast])
+}

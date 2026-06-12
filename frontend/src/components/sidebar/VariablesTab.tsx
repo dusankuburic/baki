@@ -3,7 +3,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
-import type {VariableHistory} from '@/types/domain'
+import type {VariableHistory, Block} from '@/types/domain'
 import clsx from 'clsx'
 import {Variable} from 'lucide-react'
 
@@ -19,7 +19,7 @@ export default function VariablesTab() {
     const subflow = document.subflows.find(s => s.id === selectedSubflowId) ?? document.subflows[0]
     if (!subflow) return []
     const vars = new Set<string>()
-    const walk = (blocks: any[]) => {
+    const walk = (blocks: Block[]) => {
       for (const b of blocks) {
         if (b.variables) {
           for (const v of b.variables) vars.add(v)

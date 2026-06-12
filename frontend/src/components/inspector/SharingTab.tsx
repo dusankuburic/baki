@@ -3,7 +3,7 @@ import { Users, UserPlus, Trash2, Shield, Eye, Edit3 } from 'lucide-react'
 import { sharingApi, type Collaborator, type Permission } from '@/api/sharing'
 import { useFlowStore } from '@/stores/flowStore'
 import { useAuthStore } from '@/stores/authStore'
-import { Spinner } from '@/components/shared'
+import { EmptyState, Spinner } from '@/components/shared'
 
 export const SharingTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -172,9 +172,10 @@ export const SharingTab: React.FC = () => {
             ))}
           </div>
         ) : (
-          <div className="text-center py-8 text-text-muted text-xs">
-            No collaborators yet.
-          </div>
+          <EmptyState
+            title="No collaborators"
+            description="Share this flow to invite team members."
+          />
         )}
       </div>
     </div>

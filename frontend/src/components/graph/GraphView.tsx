@@ -102,7 +102,7 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
         nodeSep: 40,
         rankSep: 60,
         animate: false,
-      } as any).run()
+      } as cytoscape.LayoutOptions).run()
     }
 
     c.fit(undefined, 40)
@@ -121,7 +121,7 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     const tokens = resolveGraphTokens()
     setGraphTokens(tokens)
     if (!cyRef.current) return
-    cyRef.current.style().fromJson(buildGraphStyle(tokens) as any).update()
+    cyRef.current.style().fromJson(buildGraphStyle(tokens)).update()
   }, [resolvedTheme])
 
   // Sync zoom from toolbar controls (±/fit buttons) to Cytoscape.
@@ -182,13 +182,12 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     })
   }, [selectedVariable, subflow?.id])
 
-  // Annotate nodes with finding severity borders and a count badge in the
-  // label ("⚠ n"), so density is readable at a glance without opening the tab.
+  const reports = useAnalysisStore(s => s.reports)
   useEffect(() => {
     if (!cyRef.current || !flowDoc) return
     const cy = cyRef.current
 
-    const report = useAnalysisStore.getState().reports.get(flowDoc.id)
+    const report = reports.get(flowDoc.id)
     cy.batch(() => {
       // Reset classes and restore the pristine label (stashed in scratch so
       // repeated runs of this effect stay idempotent).
@@ -216,7 +215,7 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
         node.data('fullLabel', `${node.scratch('_baseLabel')}\n⚠ ${count} issue${count !== 1 ? 's' : ''}`)
       }
     })
-  }, [flowDoc, useAnalysisStore(s => s.reports), subflow?.id])
+  }, [flowDoc, reports, subflow?.id])
 
   if (!flowDoc) {
     return (

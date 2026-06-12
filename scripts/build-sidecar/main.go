@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
 
 func main() {
-	// Get target triple
 	out, err := exec.Command("rustc", "-vV").Output()
 	if err != nil {
 		fmt.Printf("Error getting rustc version: %v\n", err)
@@ -30,21 +30,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create bin directory
-	err = os.MkdirAll("src-tauri/bin", 0755)
+	binDir := "src-tauri/bin"
+	err = os.MkdirAll(binDir, 0755)
 	if err != nil {
 		fmt.Printf("Error creating bin directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Build Go binary
 	exeName := "pad-backend-" + triple
 	if runtime.GOOS == "windows" {
 		exeName += ".exe"
 	}
 
+	pattern := filepath.Join(binDir, "pad-backend-*")
+	matches, _ := filepath.Glob(pattern)
+	for _, m := range matches {
+		if filepath.Base(m) != exeName {
+			os.Remove(m)
+		}
+	}
+
 	fmt.Printf("Building sidecar: %s\n", exeName)
-	cmd := exec.Command("go", "build", "-o", "src-tauri/bin/"+exeName, ".")
+	cmd := exec.Command("go", "build",
+		"-trimpath",
+		"-ldflags=-s -w",
+		"-o", filepath.Join(binDir, exeName),
+		".")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()

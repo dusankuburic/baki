@@ -65,7 +65,7 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     const offsetX = pad + ((width - pad * 2) - graphW * scale) / 2
     const offsetY = pad + ((height - pad * 2) - graphH * scale) / 2
 
-    nodes.forEach((node: any) => {
+    nodes.forEach((node: cytoscape.NodeSingular) => {
       const pos = node.position()
       const x = (pos.x - bounds.x1) * scale + offsetX - 2
       const y = (pos.y - bounds.y1) * scale + offsetY - 2

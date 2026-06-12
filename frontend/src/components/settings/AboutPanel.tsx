@@ -1,15 +1,18 @@
 import {useEffect, useState} from 'react'
 import {systemApi} from '@/api'
+import type {AppInfo} from '@/types/domain'
 
 export default function AboutPanel() {
-  const [info, setInfo] = useState<{version: string; platform: string; arch: string} | null>(null)
+  const [info, setInfo] = useState<AppInfo | null>(null)
 
   useEffect(() => {
-    systemApi.appInfo().then((i: any) => setInfo({
+    systemApi.appInfo().then((i: AppInfo) => setInfo({
       version: i?.version || 'dev',
       platform: i?.platform || '',
       arch: i?.arch || '',
-    })).catch(() => setInfo({version: 'dev', platform: '', arch: ''}))
+      buildDate: i?.buildDate || '',
+      gitCommit: i?.gitCommit || '',
+    })).catch(() => setInfo({version: 'dev', platform: '', arch: '', buildDate: '', gitCommit: ''}))
   }, [])
 
   return (

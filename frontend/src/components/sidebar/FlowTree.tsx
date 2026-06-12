@@ -45,6 +45,7 @@ export default function FlowTree({
 }: FlowTreeProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const [scrollTop, setScrollTop] = useState(0)
+    const [viewportHeight, setViewportHeight] = useState(600)
     const [focusedIndex, setFocusedIndex] = useState(-1)
     const [ctxMenu, setCtxMenu] = useState<{row: TreeRow; x: number; y: number} | null>(null)
 
@@ -53,9 +54,19 @@ export default function FlowTree({
         [document, expandedSubflowIds, expandedBlockIds, visibleTypes, searchQuery, matchedBlockIds]
     )
 
-    const totalHeight = rows.length * ROW_HEIGHT
+    useEffect(() => {
+        const el = containerRef.current
+        if (!el) return
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setViewportHeight(entry.contentRect.height)
+            }
+        })
+        observer.observe(el)
+        return () => observer.disconnect()
+    }, [])
 
-    const viewportHeight = containerRef.current?.clientHeight ?? 600
+    const totalHeight = rows.length * ROW_HEIGHT
 
     useEffect(() => {
         if (!visibleBlockId || !containerRef.current) return

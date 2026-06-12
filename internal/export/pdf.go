@@ -6,11 +6,11 @@ import (
 
 	"pad-analyzer/internal/models"
 
-	"github.com/jung-kurt/gofpdf"
+	"github.com/go-pdf/fpdf"
 )
 
 func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
-	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetAutoPageBreak(true, 20)
 	pdf.AddPage()
 
@@ -90,7 +90,7 @@ func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 	return finishPDF(pdf)
 }
 
-func finishPDF(pdf *gofpdf.Fpdf) ([]byte, error) {
+func finishPDF(pdf *fpdf.Fpdf) ([]byte, error) {
 	var buf bytes.Buffer
 	err := pdf.Output(&buf)
 	if err != nil {

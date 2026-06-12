@@ -2,9 +2,10 @@ import React from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
+import {logger} from '@/lib/logger'
 import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
 import clsx from 'clsx'
-import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics} from '@/types/domain'
+import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics, DataFlowAnalysis, TaintPath} from '@/types/domain'
 
 function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const rows = [
@@ -253,7 +254,7 @@ function HealthTrend() {
     if (!doc) return
     analysisApi.getHistory()
       .then(s => setSnapshots((s ?? []).slice(-20)))
-      .catch(() => {})
+      .catch((err) => { logger.warn('Failed to load history', err) })
   }, [doc, generatedAt])
 
   if (snapshots.length < 2) return null
@@ -316,14 +317,14 @@ function HealthTrend() {
 function DataFlowInsights() {
   const doc = useFlowStore(s => s.document)
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
-  const [dataFlow, setDataFlow] = React.useState<any>(null)
+  const [dataFlow, setDataFlow] = React.useState<DataFlowAnalysis | null>(null)
   // Re-fetch when a new analysis lands, not just when the document changes —
   // otherwise these insights show the previous run's data after re-analyze.
   const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
 
   React.useEffect(() => {
     if (!doc) return
-    analysisApi.getDataFlow().then(r => setDataFlow(r as any)).catch(() => {})
+    analysisApi.getDataFlow().then(r => setDataFlow(r as DataFlowAnalysis)).catch((err) => { logger.warn('Failed to load dataflow analysis', err) })
   }, [doc, generatedAt])
 
   if (!dataFlow || ((!dataFlow.taintPaths || dataFlow.taintPaths.length === 0) && (!dataFlow.deadData || dataFlow.deadData.length === 0))) {
@@ -343,7 +344,7 @@ function DataFlowInsights() {
             <p className="text-2xs text-text-secondary mb-2">
               User input flows to sensitive sinks without validation.
             </p>
-            {dataFlow.taintPaths.slice(0, 5).map((tp: any, i: number) => (
+            {dataFlow.taintPaths.slice(0, 5).map((tp: TaintPath, i: number) => (
               <button
                 key={i}
                 onClick={() => navigateToBlock(tp.sinkBlock)}

@@ -21,9 +21,14 @@ func (s circuitState) String() string {
 }
 
 const (
-	cbFailureThreshold = 5              // consecutive retryable failures before opening
+	cbFailureThreshold = 5                // consecutive retryable failures before opening
 	cbOpenDuration     = 30 * time.Second // minimum time before allowing a probe
 )
+
+type cbConfig struct {
+	FailureThreshold int
+	OpenDuration     time.Duration
+}
 
 type circuitState int
 
@@ -87,11 +92,27 @@ func resetBreakerRegistry() {
 // per-request chain rebuilds — observes the same circuit.
 type CircuitBreakerProvider struct {
 	Provider
-	st *breakerState
+	st               *breakerState
+	failureThreshold int
+	openDuration     time.Duration
 }
 
 func NewCircuitBreakerProvider(p Provider) *CircuitBreakerProvider {
-	return &CircuitBreakerProvider{Provider: p, st: breakerStateFor(p.ID())}
+	return &CircuitBreakerProvider{
+		Provider:         p,
+		st:               breakerStateFor(p.ID()),
+		failureThreshold: cbFailureThreshold,
+		openDuration:     cbOpenDuration,
+	}
+}
+
+func NewCircuitBreakerProviderWithConfig(p Provider, threshold int, openDur time.Duration) *CircuitBreakerProvider {
+	return &CircuitBreakerProvider{
+		Provider:         p,
+		st:               breakerStateFor(p.ID()),
+		failureThreshold: threshold,
+		openDuration:     openDur,
+	}
 }
 
 func (cb *CircuitBreakerProvider) Chat(ctx context.Context, req Request) (*Response, error) {
@@ -127,7 +148,7 @@ func (cb *CircuitBreakerProvider) check() error {
 	cb.st.mu.Lock()
 	defer cb.st.mu.Unlock()
 	if cb.st.state == circuitOpen {
-		if time.Since(cb.st.lastFailure) >= cbOpenDuration {
+		if time.Since(cb.st.lastFailure) >= cb.openDuration {
 			cb.transitionLocked(circuitHalfOpen)
 			return nil
 		}
@@ -150,7 +171,7 @@ func (cb *CircuitBreakerProvider) record(err error) {
 	}
 	cb.st.failures++
 	cb.st.lastFailure = time.Now()
-	if cb.st.failures >= cbFailureThreshold {
+	if cb.st.failures >= cb.failureThreshold {
 		cb.transitionLocked(circuitOpen)
 	}
 }

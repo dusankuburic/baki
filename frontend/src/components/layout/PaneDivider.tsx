@@ -7,28 +7,31 @@ interface PaneDividerProps {
 }
 
 export default function PaneDivider({onDrag, onResizeEnd, onDoubleClick}: PaneDividerProps) {
-    const dragging = useRef(false)
+    const draggingRef = useRef(false)
+    const [dragging, setDragging] = useState(false)
     const lastX = useRef(0)
     const [hovered, setHovered] = useState(false)
     const hoverTimer = useRef<ReturnType<typeof setTimeout>>()
 
     const handlePointerDown = useCallback((e: React.PointerEvent) => {
         e.preventDefault()
-        dragging.current = true
+        draggingRef.current = true
+        setDragging(true)
         lastX.current = e.clientX
         ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
     }, [])
 
     const handlePointerMove = useCallback((e: React.PointerEvent) => {
-        if (!dragging.current) return
+        if (!draggingRef.current) return
         const delta = e.clientX - lastX.current
         lastX.current = e.clientX
         onDrag(delta)
     }, [onDrag])
 
     const handlePointerUp = useCallback(() => {
-        if (dragging.current) {
-            dragging.current = false
+        if (draggingRef.current) {
+            draggingRef.current = false
+            setDragging(false)
             onResizeEnd()
         }
     }, [onResizeEnd])
@@ -46,14 +49,14 @@ export default function PaneDivider({onDrag, onResizeEnd, onDoubleClick}: PaneDi
         return () => clearTimeout(hoverTimer.current)
     }, [])
 
-    const isActive = dragging.current || hovered
+    const isActive = dragging || hovered
 
     return (
         <div
             className="w-[3px] flex-shrink-0 cursor-col-resize group relative bg-transparent"
             style={{
                 backgroundColor: isActive ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
-                transition: dragging.current ? 'none' : 'background-color 120ms var(--ease-out)',
+                transition: dragging ? 'none' : 'background-color 120ms var(--ease-out)',
             }}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}

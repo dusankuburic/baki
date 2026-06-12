@@ -1,18 +1,20 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
-	"time"
 	"unicode"
+	"unicode/utf8"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -31,6 +33,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("registration not available in local mode"), http.StatusForbidden)
 		return
 	}
+	metrics.RecordAuthOp("register")
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -64,10 +67,11 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		ID:       uuid.NewString(),
 		Email:    req.Email,
 		Password: hashed,
-		Role:     auth.RoleMember,
+		// CreateUser atomically promotes the very first user to RoleAdmin
+		// (count + insert in one transaction/lock), so there is always an
+		// initial administrator without a racy check-then-create here.
+		Role: auth.RoleMember,
 	}
-
-	user.Role = resolveRegistrationRole(r.Context(), h.backend)
 
 	if err := h.backend.CreateUser(r.Context(), user); err != nil {
 		render.Error(w, err, http.StatusConflict)
@@ -89,6 +93,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("login not available in local mode"), http.StatusForbidden)
 		return
 	}
+	metrics.RecordAuthOp("login")
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -121,18 +126,18 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.tokenStore != nil {
-		expiresAt := time.Now().Add(7 * 24 * time.Hour)
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, expiresAt); err != nil {
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt); err != nil {
 			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
 	}
 
-	logAudit(r.Context(), h.backend, r, AuditActionLogin, "user", user.ID, nil)
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", user.ID, nil)
 	render.JSON(w, pair)
 }
 
 func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
+	metrics.RecordAuthOp("refresh")
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
@@ -167,8 +172,7 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.tokenStore != nil {
-		expiresAt := time.Now().Add(7 * 24 * time.Hour)
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, expiresAt); err != nil {
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, pair.RefreshExpiresAt); err != nil {
 			logger.Error("failed to store new refresh token", "error", err, "userID", claims.UserID)
 			render.Error(w, fmt.Errorf("failed to store token"), http.StatusInternalServerError)
 			return
@@ -192,18 +196,133 @@ func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	render.JSON(w, map[string]string{
+
+	resp := map[string]string{
 		"id":    claims.UserID,
 		"email": claims.Email,
 		"role":  string(claims.Role),
+	}
+	if h.backend != nil {
+		if user, err := h.backend.LoadUserByID(r.Context(), claims.UserID); err == nil {
+			resp["displayName"] = user.DisplayName
+			resp["avatarUrl"] = user.AvatarURL
+		}
+	}
+	render.JSON(w, resp)
+}
+
+// handleAuthUpdateProfile lets a user set their own display name and avatar
+// URL. Both fields are optional and may be cleared by sending an empty string.
+func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		DisplayName string `json:"displayName"`
+		AvatarURL   string `json:"avatarUrl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(req.DisplayName) > 100 {
+		render.Error(w, fmt.Errorf("display name must be at most 100 characters"), http.StatusBadRequest)
+		return
+	}
+	if len(req.AvatarURL) > 2048 {
+		render.Error(w, fmt.Errorf("avatar URL must be at most 2048 characters"), http.StatusBadRequest)
+		return
+	}
+
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := h.backend.UpdateUserProfile(r.Context(), claims.UserID, req.DisplayName, req.AvatarURL); err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			render.Error(w, err, http.StatusNotFound)
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionProfileUpdate, "user", claims.UserID, nil)
+	render.JSON(w, map[string]string{
+		"id":          claims.UserID,
+		"email":       claims.Email,
+		"role":        string(claims.Role),
+		"displayName": req.DisplayName,
+		"avatarUrl":   req.AvatarURL,
 	})
 }
 
+// handleAuthSessions lists the caller's active sessions (non-revoked,
+// non-expired refresh tokens). In local (non-JWT) mode, or if no token store
+// is configured, it returns an empty list.
+func (h *AuthHandler) handleAuthSessions(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+
+	if h.tokenStore == nil {
+		render.JSON(w, []storageif.RefreshTokenInfo{})
+		return
+	}
+
+	sessions, err := h.tokenStore.ListUserRefreshTokens(r.Context(), claims.UserID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	if sessions == nil {
+		sessions = []storageif.RefreshTokenInfo{}
+	}
+	render.JSON(w, sessions)
+}
+
+// handleAuthSessionRevoke revokes one of the caller's own sessions (refresh
+// tokens) by ID, e.g. to sign out a lost device.
+func (h *AuthHandler) handleAuthSessionRevoke(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+
+	if h.tokenStore == nil {
+		render.Error(w, fmt.Errorf("session management not available"), http.StatusServiceUnavailable)
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	if err := h.tokenStore.RevokeRefreshTokenForUser(r.Context(), id, claims.UserID); err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			render.Error(w, err, http.StatusNotFound)
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSessionRevoke, "session", id, nil)
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
 func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	metrics.RecordAuthOp("logout")
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Warn("logout: failed to decode body, proceeding without refresh token revocation", "error", err)
+	}
 
 	if req.RefreshToken != "" && h.tokenStore != nil {
 		claims, err := h.security.AuthMgr.VerifyRefresh(req.RefreshToken)
@@ -213,6 +332,13 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
+		if claims, err := h.security.AuthMgr.VerifyIgnoreExpiry(tokenStr); err == nil && claims.ID != "" {
+			h.security.AuthMgr.Revoke(claims)
+		}
+	}
+
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -322,15 +448,6 @@ func validatePasswordStrength(pw string) error {
 		return fmt.Errorf("password must include at least 3 of: lowercase, uppercase, digit, symbol")
 	}
 	return nil
-}
-
-// resolveRegistrationRole returns RoleAdmin for the very first registered user
-// (so there is always at least one admin), and RoleMember for everyone after.
-func resolveRegistrationRole(ctx context.Context, backend storageif.StorageBackend) auth.Role {
-	if users, _ := backend.ListUsers(ctx); len(users) == 0 {
-		return auth.RoleAdmin
-	}
-	return auth.RoleMember
 }
 
 func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {

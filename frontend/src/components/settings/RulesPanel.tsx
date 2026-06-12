@@ -18,7 +18,7 @@ export default function RulesPanel() {
 
   useEffect(() => {
     analysisApi.getRules().then(res => {
-      setRules(res as any || [])
+      setRules(res || [])
       setLoading(false)
     })
   }, [])

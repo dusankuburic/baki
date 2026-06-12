@@ -29,12 +29,38 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return
 	}
-	users, err := h.backend.ListUsers(r.Context())
+
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	users, err := h.backend.ListUsers(r.Context(), limit, offset)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, users)
+
+	// Fall back to a page-size approximation when a count query is unavailable.
+	total, err := h.backend.CountUsers(r.Context())
+	if err != nil {
+		total = offset + len(users)
+	}
+
+	render.JSON(w, render.PagedResponse[*storageif.User]{
+		Items:  users,
+		Total:  total,
+		Offset: offset,
+		Limit:  limit,
+	})
 }
 
 func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +99,7 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, AuditActionRoleChange, "user", id, map[string]string{"new_role": req.Role})
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRoleChange, "user", id, map[string]string{"new_role": req.Role})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

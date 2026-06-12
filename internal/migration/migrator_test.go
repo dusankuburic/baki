@@ -114,11 +114,12 @@ func (m *memBackend) LoadUserByEmail(ctx context.Context, email string) (*interf
 func (m *memBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) { return nil, interfaces.ErrNotFound }
 func (m *memBackend) LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*interfaces.User, error) { return map[string]*interfaces.User{}, nil }
 func (m *memBackend) CountUsers(ctx context.Context) (int, error) { return 0, nil }
-func (m *memBackend) ListUsers(ctx context.Context) ([]*interfaces.User, error) { return nil, nil }
+func (m *memBackend) ListUsers(ctx context.Context, limit, offset int) ([]*interfaces.User, error) { return nil, nil }
 
 func (m *memBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) { return nil, nil }
 func (m *memBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error { return nil }
 func (m *memBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error { return nil }
+func (m *memBackend) UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error { return nil }
 
 // ---- Organisation operations ----
 func (m *memBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error { return nil }

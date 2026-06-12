@@ -46,43 +46,6 @@ func isPrivateIP(ipStr string) bool {
 	return false
 }
 
-// metricsClientIP extracts the real client IP, honouring X-Forwarded-For only
-// when the request's immediate peer is one of the trusted-proxy IPs/CIDRs.
-func metricsClientIP(r *http.Request, trustedProxies []string) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if len(trustedProxies) == 0 || !isTrustedProxy(host, trustedProxies) {
-		return host
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-	return host
-}
-
-func isTrustedProxy(remoteIP string, proxies []string) bool {
-	ip := net.ParseIP(remoteIP)
-	if ip == nil {
-		return false
-	}
-	for _, p := range proxies {
-		p = strings.TrimSpace(p)
-		if strings.Contains(p, "/") {
-			if _, cidr, err := net.ParseCIDR(p); err == nil && cidr.Contains(ip) {
-				return true
-			}
-		} else if net.ParseIP(p) != nil && net.ParseIP(p).Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // MetricsGuard returns middleware that restricts access to private/loopback IPs.
 // Requests from public IPs are rejected with 403 Forbidden.
 // Pass cfg.Server.TrustedProxies so X-Forwarded-For is honoured when the
@@ -90,7 +53,7 @@ func isTrustedProxy(remoteIP string, proxies []string) bool {
 func MetricsGuard(trustedProxies []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := metricsClientIP(r, trustedProxies)
+			ip := ClientIP(r, trustedProxies)
 			if !isPrivateIP(ip) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return

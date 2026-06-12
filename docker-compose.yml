@@ -2,28 +2,30 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080"
+      - "${PAD_PORT:-8080}:${PAD_PORT:-8080}"
     environment:
-      - PAD_DATABASE_URL=postgres://postgres:postgres@db:5432/baki?sslmode=disable
-      # Dev-only secret (>=32 chars). Override with a long random value in production.
-      - PAD_AUTH_SECRET=dev-insecure-secret-override-in-prod-2f8b1c4e9a
-      # CORS / WebSocket origin allowlist.  This value is correct for local dev
-      # (the SPA is served by the same container on port 8080).
-      # FOR AZURE DEPLOYMENTS: override with your actual domain, e.g.:
-      #   PAD_ALLOWED_ORIGINS=https://your-app.azurewebsites.net
-      - PAD_ALLOWED_ORIGINS=http://localhost:8080
+      - PAD_DATABASE_URL=${PAD_DATABASE_URL:-postgres://postgres:postgres@db:5432/baki?sslmode=prefer}
+      - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
+      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080}
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${PAD_PORT:-8080}/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
 
   db:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=baki
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-baki}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,6 +33,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
 volumes:
   postgres_data:

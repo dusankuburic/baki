@@ -1,5 +1,6 @@
 import {useEffect} from 'react'
 import {flowApi, exportApi} from '@/api'
+import {logger} from '@/lib/logger'
 import {isTauri} from '@/platform/guards'
 import {useUIStore} from '@/stores/uiStore'
 import {useEditorStore} from '@/stores/editorStore'
@@ -33,19 +34,19 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
         switch (id) {
           case 'file.open': {
             const doc = await flowApi.openFlowFile()
-            if (doc) openDocument(doc as any)
+            if (doc) openDocument(doc)
             break
           }
           case 'file.open.folder': {
             const doc = await flowApi.openFlowFolder()
-            if (doc) openDocument(doc as any)
+            if (doc) openDocument(doc)
             break
           }
           case 'file.export.pdf':
-            exportApi.exportPDF().catch(() => {})
+            exportApi.exportPDF().catch((err) => { logger.warn('PDF export failed', err) })
             break
           case 'file.export.md':
-            exportApi.exportMarkdown().catch(() => {})
+            exportApi.exportMarkdown().catch((err) => { logger.warn('Markdown export failed', err) })
             break
           case 'file.close.tab': {
             const {focusedGroupIndex, groups, closeTab} = useEditorStore.getState()
@@ -93,7 +94,7 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
         )
         if (path) {
           const doc = await flowApi.loadFlowFromPath(path)
-          if (doc) openDocument(doc as any)
+          if (doc) openDocument(doc)
         }
       })
     ).then(fn => { if (!cancelled) unsub = fn; else fn() })

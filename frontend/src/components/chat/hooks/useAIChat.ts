@@ -4,13 +4,14 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, flowApi} from '@/api'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
-import type {ChatMessage, ContextPreview, SourceFileInfo} from '@/types/domain'
+import {logger} from '@/lib/logger'
+import type {ChatMessage, ContextPreview, SourceFileInfo, ChatRequest, ConversationFile} from '@/types/domain'
 
 interface UseAIChatOptions {
   selectedModel: string
 }
 
-const EMPTY_ARRAY: any[] = []
+const EMPTY_ARRAY: ChatMessage[] = []
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
 export function useAIChat({selectedModel}: UseAIChatOptions) {
@@ -45,8 +46,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   )
 
   const flowThreads = useMemo(
-    () => doc ? threads.filter(t => t.flowId === doc.id) : EMPTY_ARRAY as any[],
-    [doc?.id, threads],
+    () => doc ? threads.filter(t => t.flowId === doc.id) : [],
+    [doc, threads],
   )
   const activeThread = useMemo(
     () => threads.find(t => t.id === activeThreadId) ?? null,
@@ -66,23 +67,30 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   // Stable refs for use inside callbacks
   const providerRef = useRef(provider)
-  providerRef.current = provider
+  useEffect(() => { providerRef.current = provider })
   const streamingRef = useRef(streamingText)
-  streamingRef.current = streamingText
+  useEffect(() => { streamingRef.current = streamingText })
   const docRef = useRef(doc)
-  docRef.current = doc
+  useEffect(() => { docRef.current = doc })
   const streamingThreadIdRef = useRef<string | null>(null)
+  const [streamingThreadId, setStreamingThreadIdState] = useState<string | null>(null)
+  // Single setter keeps the ref (read inside stream callbacks, updated
+  // synchronously) and the state (render gating) in lockstep.
+  const setStreamingThreadId = useCallback((id: string | null) => {
+    streamingThreadIdRef.current = id
+    setStreamingThreadIdState(id)
+  }, [])
   const streamingMessageIdRef = useRef(streamingMessageId)
-  streamingMessageIdRef.current = streamingMessageId
+  useEffect(() => { streamingMessageIdRef.current = streamingMessageId })
   const selectedModelRef = useRef(selectedModel)
-  selectedModelRef.current = selectedModel
+  useEffect(() => { selectedModelRef.current = selectedModel })
 
   // Accumulated text to avoid stale state in rapid updates
   const accumulatedTextRef = useRef('')
   // Track last update time for throttling streaming state updates
   const lastUpdateRef = useRef<number | null>(null)
 
-  const isCurrentThreadStreaming = isStreaming && streamingThreadIdRef.current === activeThreadId
+  const isCurrentThreadStreaming = isStreaming && streamingThreadId === activeThreadId
   const showThinking = isCurrentThreadStreaming && isThinking && !streamingText
 
   useEffect(() => {
@@ -90,8 +98,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       setSourceFiles(EMPTY_SOURCE_FILES)
       return
     }
-    flowApi.getSourceFiles().then((files: any) => {
-      const list: SourceFileInfo[] = (files || []).map((f: any) => ({
+    flowApi.getSourceFiles().then((files: SourceFileInfo[] | null) => {
+      const list: SourceFileInfo[] = (files || []).map((f: SourceFileInfo) => ({
         filename: f.filename || '',
         subflowId: f.subflowId || '',
         subflowName: f.subflowName || '',
@@ -99,8 +107,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         lineCount: f.lineCount || 0,
       }))
       setSourceFiles(list)
-    }).catch(() => {})
-  }, [doc?.id])
+    }).catch((err) => { logger.warn('Failed to load source files', err) })
+  }, [doc])
 
   useEffect(() => {
     if (!doc) return
@@ -111,13 +119,13 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       }
       // createThread pre-populates conversations with [], which prevents the
       // load effect from running. Restore the persisted flow conversation here.
-      chatApi.getConversation(doc.id, 'flow').then((conv: any) => {
+      chatApi.getConversation(doc.id, 'flow').then((conv: ConversationFile) => {
         if (conv?.messages?.length > 0) {
           for (const m of conv.messages) {
             appendMessage(id, m as ChatMessage)
           }
         }
-      }).catch(() => {})
+      }).catch((err) => { logger.warn('Failed to load flow conversation', err) })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.id])
@@ -130,14 +138,14 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
     const scope = thread?.contextBlockId || 'flow'
     let cancelled = false
-    chatApi.getConversation(doc.id, scope).then((conv: any) => {
+    chatApi.getConversation(doc.id, scope).then((conv: ConversationFile) => {
       if (cancelled) return
       if (conv?.messages) {
         for (const m of conv.messages) {
           appendMessage(activeThreadId, m as ChatMessage)
         }
       }
-    }).catch(() => {})
+    }).catch((err) => { logger.warn('Failed to load thread conversation', err) })
     return () => { cancelled = true }
   }, [activeThreadId, appendMessage, doc?.id])
 
@@ -194,19 +202,19 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (curDoc && curThreadId) {
       appendMessage(curThreadId, msg)
       const thread = useChatStore.getState().threads.find(t => t.id === curThreadId)
-      chatApi.saveConversation(curDoc.id, thread?.contextBlockId || 'flow', getMessages(curThreadId) as any).catch(() => {})
+      chatApi.saveConversation(curDoc.id, thread?.contextBlockId || 'flow', getMessages(curThreadId) as ChatMessage[]).catch((err) => { logger.warn('Failed to save conversation', err) })
       updateThread(curThreadId, {
         tokensIn: (useChatStore.getState().threads.find(t => t.id === curThreadId)?.tokensIn ?? 0) + tokensIn,
         tokensOut: (useChatStore.getState().threads.find(t => t.id === curThreadId)?.tokensOut ?? 0) + tokensOut,
       })
     }
-    streamingThreadIdRef.current = null
+    setStreamingThreadId(null)
     accumulatedTextRef.current = ''
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
     setToolStatus(null)
-  }, [appendMessage, getMessages, endStream, updateThread])
+  }, [appendMessage, getMessages, endStream, updateThread, updateStreamingMessage, setStreamingThreadId])
 
   const onError = useCallback((error: string) => {
     const content = streamingRef.current || ''
@@ -225,14 +233,14 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       finishReason: 'error',
     }
     if (curDoc && curThreadId) appendMessage(curThreadId, msg)
-    streamingThreadIdRef.current = null
+    setStreamingThreadId(null)
     accumulatedTextRef.current = ''
     lastUpdateRef.current = null
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
     setToolStatus(null)
-  }, [appendMessage, endStream])
+  }, [appendMessage, endStream, setStreamingThreadId])
 
   const handler = useMemo(() => ({
     onChunk,
@@ -275,7 +283,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const executeSend = useCallback(async (text: string, overrideFiles?: string[], excludeContext?: boolean) => {
     if (!doc || !activeThread) return
     if (useChatStore.getState().activeStreamId !== null) return
-    const req: any = buildRequest(text, overrideFiles, excludeContext)
+    const req = buildRequest(text, overrideFiles, excludeContext) as ChatRequest | null
     if (!req) return
 
     const userMsg: ChatMessage = {
@@ -286,10 +294,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       contextBlockId: activeThread.contextBlockId ?? undefined,
     }
     appendMessage(activeThread.id, userMsg)
-    chatApi.saveConversation(doc.id, activeThread.contextBlockId || 'flow', getMessages(activeThread.id) as any).catch(() => {})
+    chatApi.saveConversation(doc.id, activeThread.contextBlockId || 'flow', getMessages(activeThread.id) as ChatMessage[]).catch((err) => { logger.warn('Failed to save conversation', err) })
 
     const msgId = crypto.randomUUID()
-    streamingThreadIdRef.current = activeThread.id
+    setStreamingThreadId(activeThread.id)
     lastUpdateRef.current = null // Reset throttle timer
     startStream('pending', msgId)
     setIsThinking(true)
@@ -299,7 +307,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     try {
       const sid = await chatApi.streamChatMessage(req)
       if (!sid) {
-        streamingThreadIdRef.current = null
+        setStreamingThreadId(null)
         endStream()
         setIsThinking(false)
         appendMessage(activeThread.id, {
@@ -314,15 +322,15 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         return
       }
       if (useChatStore.getState().activeStreamId === null) {
-        chatApi.cancelStream(sid).catch(() => {})
-        streamingThreadIdRef.current = null
+        chatApi.cancelStream(sid).catch((err) => { logger.warn('Failed to cancel stream', err) })
+        setStreamingThreadId(null)
         setIsThinking(false)
         return
       }
       startStream(sid, msgId)
       await registerStream(sid)
-    } catch (e: any) {
-      const errMsg = e?.message || String(e) || 'Failed to send message'
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
       appendMessage(activeThread.id, {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -332,7 +340,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         model: selectedModel,
         finishReason: 'error',
       } as ChatMessage)
-      streamingThreadIdRef.current = null
+      setStreamingThreadId(null)
       accumulatedTextRef.current = ''
       lastUpdateRef.current = null
       endStream()
@@ -340,7 +348,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       setStreamingTokens(0)
       setToolStatus(null)
     }
-  }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel])
+  }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel, setStreamingThreadId])
 
   const handleSend = useCallback((text: string, files: string[], excludeContext?: boolean) => {
     if (files.length > 0 && activeThreadId) {
@@ -351,9 +359,9 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   // Stable refs for the effect to avoid re-triggering it when they change
   const executeSendRef = useRef(executeSend)
-  executeSendRef.current = executeSend
+  useEffect(() => { executeSendRef.current = executeSend })
   const updateThreadRef = useRef(updateThread)
-  updateThreadRef.current = updateThread
+  useEffect(() => { updateThreadRef.current = updateThread })
 
   // React to global pending messages (e.g. from context menus)
   useEffect(() => {
@@ -374,7 +382,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     const req = buildRequest(text, files.length > 0 ? files : undefined, excludeContext)
     if (!req) return
     try {
-      const preview = await chatApi.previewContext(req as any) as any as ContextPreview
+      const preview = await chatApi.previewContext(req as ChatRequest) as ContextPreview
       setContextPreview(preview)
       setPendingMessage(text)
     } catch {
@@ -451,13 +459,13 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   const handleCancelStream = useCallback(() => {
     if (activeStreamId) {
-      chatApi.cancelStream(activeStreamId).catch(() => {})
+      chatApi.cancelStream(activeStreamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
       endStream()
     }
-    streamingThreadIdRef.current = null
+    setStreamingThreadId(null)
     setIsThinking(false)
     setStreamingTokens(0)
-  }, [activeStreamId, endStream])
+  }, [activeStreamId, endStream, setStreamingThreadId])
 
   return {
     // state

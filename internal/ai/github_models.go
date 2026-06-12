@@ -1,26 +1,30 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"strings"
 )
 
 var githubModelsBaseURL = providerURL("GITHUB_MODELS_API_URL", "https://models.inference.ai.azure.com/chat/completions")
 
 type GitHubModelsProvider struct {
-	token  string
-	client *http.Client
+	openaiBase
 }
 
 func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	return &GitHubModelsProvider{
-		token:  token,
-		client: sharedHTTPClient,
+		openaiBase: openaiBase{
+			apiKey:        token,
+			client:        sharedHTTPClient,
+			baseURL:       &githubModelsBaseURL,
+			providerLabel: "github models",
+			extraHeaders: func(req *http.Request, model string) {
+				req.Header.Set("x-ms-model-mesh-model-id", model)
+			},
+		},
 	}
 }
 
@@ -44,115 +48,56 @@ func (g *GitHubModelsProvider) EstimateTokens(text string) int {
 	return EstimateTokens(text)
 }
 
-func (g *GitHubModelsProvider) Models() []ModelInfo { return catalogModels("github-models") }
-
-func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	body := openAIRequest{
-		Model:       req.Model,
-		MaxTokens:   orDefault(req.MaxTokens, 4096),
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Tools:       toOpenAITools(req.Tools),
-	}
-	jsonBody, _ := json.Marshal(body)
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", githubModelsBaseURL, bytes.NewReader(jsonBody))
+func (g *GitHubModelsProvider) Models(ctx context.Context) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", strings.Replace(githubModelsBaseURL, "/chat/completions", "/models", 1), nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
 
-	httpReq.Header.Set("Authorization", "Bearer "+g.token)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-ms-model-mesh-model-id", req.Model)
-
-	resp, err := g.client.Do(httpReq)
+	resp, err := g.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("github models API request: %w", err)
+		return catalogModels("github-models"), nil
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-
 	if resp.StatusCode != http.StatusOK {
-		var apiErr openAIErrorResp
-		if err := json.Unmarshal(respBody, &apiErr); err == nil {
-			switch {
-			case resp.StatusCode == 401:
-				return nil, ErrApiKeyInvalid
-			case resp.StatusCode == 429:
-				return nil, rateLimitErr(resp)
-			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
-			}
-			return nil, fmt.Errorf("github models API: %s", apiErr.Error.Message)
+		return catalogModels("github-models"), nil
+	}
+
+	var parsed []struct {
+		Name         string `json:"name"`
+		ContextLimit int    `json:"context_limit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return catalogModels("github-models"), nil
+	}
+
+	models := make([]ModelInfo, 0, len(parsed))
+	for _, m := range parsed {
+		limit := m.ContextLimit
+		if limit <= 0 {
+			limit = 8192
 		}
-		return nil, fmt.Errorf("github models API error (status %d)", resp.StatusCode)
+		models = append(models, ModelInfo{
+			ID:           m.Name,
+			DisplayName:  m.Name,
+			ContextLimit: limit,
+			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
+		})
 	}
 
-	var parsed openAIResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, fmt.Errorf("parse github models response: %w", err)
-	}
-	if len(parsed.Choices) == 0 {
-		return nil, errors.New("github models returned no choices")
+	if len(models) == 0 {
+		return catalogModels("github-models"), nil
 	}
 
-	return &Response{
-		Content:      parsed.Choices[0].Message.Content,
-		TokensIn:     parsed.Usage.PromptTokens,
-		TokensOut:    parsed.Usage.CompletionTokens,
-		FinishReason: parsed.Choices[0].FinishReason,
-		ToolCalls:    openAIToolCallsToNeutral(parsed.Choices[0].Message.ToolCalls),
-	}, nil
+	return models, nil
+}
+
+func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response, error) {
+	return g.openaiBase.chat(ctx, req)
 }
 
 func (g *GitHubModelsProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	body := openAIRequest{
-		Model:         req.Model,
-		MaxTokens:     orDefault(req.MaxTokens, 4096),
-		Temperature:   req.Temperature,
-		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Tools:         toOpenAITools(req.Tools),
-		Stream:        true,
-		StreamOptions: usageStreamOptions,
-	}
-	jsonBody, _ := json.Marshal(body)
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", githubModelsBaseURL, bytes.NewReader(jsonBody))
-	if err != nil {
-		return err
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+g.token)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-ms-model-mesh-model-id", req.Model)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := g.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-		var apiErr openAIErrorResp
-		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
-			switch {
-			case resp.StatusCode == 401:
-				return ErrApiKeyInvalid
-			case resp.StatusCode == 429:
-				return rateLimitErr(resp)
-			case resp.StatusCode >= 500:
-				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
-			}
-			return fmt.Errorf("github models stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
-		}
-		if resp.StatusCode >= 500 {
-			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
-		}
-		return fmt.Errorf("github models stream error (status %d)", resp.StatusCode)
-	}
-
-	return parseOpenAISSE(resp.Body, onChunk)
+	return g.openaiBase.stream(ctx, req, onChunk)
 }

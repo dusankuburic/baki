@@ -7,6 +7,7 @@ class MockWebSocket {
   static OPEN = 1
   static CLOSING = 2
   static CLOSED = 3
+  static onCreate: ((instance: MockWebSocket) => void) | null = null
 
   readyState = MockWebSocket.OPEN
   onopen: (() => void) | null = null
@@ -16,7 +17,7 @@ class MockWebSocket {
   sent: string[] = []
 
   constructor(public url: string) {
-    // Fire onopen asynchronously to mimic real WS
+    MockWebSocket.onCreate?.(this)
     setTimeout(() => this.onopen?.(), 0)
   }
 
@@ -54,17 +55,14 @@ async function waitConnected() {
 
 beforeEach(() => {
   mockWs = null
-  vi.stubGlobal('WebSocket', class extends MockWebSocket {
-    constructor(url: string) {
-      super(url)
-      mockWs = this
-    }
-  })
+  MockWebSocket.onCreate = (instance) => { mockWs = instance }
+  vi.stubGlobal('WebSocket', MockWebSocket)
   // Reset the service between tests by disconnecting
   collaborationService.disconnect()
 })
 
 afterEach(() => {
+  MockWebSocket.onCreate = null
   collaborationService.disconnect()
   vi.unstubAllGlobals()
 })

@@ -1,6 +1,6 @@
 import React from 'react'
 import {useFlowStore} from '@/stores/flowStore'
-import type {BlockToken, VariableHistory} from '@/types/domain'
+import type {BlockToken, VariableHistory, Block} from '@/types/domain'
 import clsx from 'clsx'
 
 import {analysisApi} from '@/api'
@@ -97,9 +97,9 @@ function VariableToken({token}: {token: BlockToken}) {
         }
 
         let usageCount = 0
-        const countUsage = (blocks: any[]) => {
+        const countUsage = (blocks: Block[]) => {
             for (const b of blocks) {
-                if (b.variables?.includes(token.target)) usageCount++
+                if (b.variables?.includes(token.target!)) usageCount++
                 if (b.children?.length) countUsage(b.children)
             }
         }

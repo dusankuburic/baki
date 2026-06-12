@@ -66,7 +66,7 @@ export const useOrgStore = create<OrgState>((set, get) => ({
   },
 
   removeMember: async (orgId, userId) => {
-    await request(`/api/orgs/${orgId}/members/${userId}`, undefined, 'DELETE' as any)
+    await request(`/api/orgs/${orgId}/members/${userId}`, undefined, 'DELETE')
     await get().loadOrgs()
   },
 
@@ -76,7 +76,7 @@ export const useOrgStore = create<OrgState>((set, get) => ({
   },
 
   deleteOrg: async (orgId) => {
-    await request(`/api/orgs/${orgId}`, undefined, 'DELETE' as any)
+    await request(`/api/orgs/${orgId}`, undefined, 'DELETE')
     set(s => ({
       organisations: s.organisations.filter(o => o.id !== orgId),
       activeOrgId: s.activeOrgId === orgId ? null : s.activeOrgId,

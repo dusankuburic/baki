@@ -1,3 +1,5 @@
+import cytoscape from 'cytoscape'
+
 export interface GraphTokenColors {
   surface2: string
   surface3: string
@@ -59,8 +61,8 @@ const typeColorMap: Record<string, keyof GraphTokenColors> = {
   DEFAULT: 'blockCondition',
 }
 
-export function buildGraphStyle(t: GraphTokenColors): any[] {
-  const typeStyles: any[] = Object.entries(typeColorMap).map(
+export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
+  const typeStyles: cytoscape.StylesheetJson = Object.entries(typeColorMap).map(
     ([type, key]) => ({
       selector: `node[type="${type}"]`,
       style: {
@@ -80,7 +82,7 @@ export function buildGraphStyle(t: GraphTokenColors): any[] {
         shape: 'round-rectangle',
         width: 210,
         height: 88,
-        padding: 12,
+        padding: 12 as unknown as string,
         // fullLabel contains "TypeLabel\nStrippedName" (two lines)
         label: 'data(fullLabel)',
         color: t.textPrimary,
@@ -90,7 +92,7 @@ export function buildGraphStyle(t: GraphTokenColors): any[] {
         'text-halign': 'center',
         'text-wrap': 'wrap',
         'text-overflow-wrap': 'anywhere',
-        'text-max-width': 180,
+        'text-max-width': 180 as unknown as string,
       },
     },
     ...typeStyles,

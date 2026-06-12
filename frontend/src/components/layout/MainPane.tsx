@@ -157,7 +157,7 @@ export default function MainPane() {
                                 try {
                                     const {fromGroup, subflowId} = JSON.parse(data)
                                     if (fromGroup !== gi) moveTabToGroup(fromGroup, subflowId, gi)
-                                } catch (_e) { /* ignore invalid drop data */ }
+                                } catch { /* ignore invalid drop data */ }
                             }}
                         >
                             <GroupTabStrip

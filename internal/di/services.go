@@ -41,7 +41,7 @@ func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
 	return analyzer.NewHistoryStore(filepath.Join(configDir, "analysis-history"))
 }
 
-func ProvideAI(configDir string, backend storageif.StorageBackend) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
+func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
 	// recorder nil there — the audited provider guards a nil recorder and skips
@@ -53,7 +53,7 @@ func ProvideAI(configDir string, backend storageif.StorageBackend) (*ai.GitHubAu
 			return backend.SaveUsageMetric(ctx, metric)
 		}
 	}
-	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth, recorder)
+	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth, recorder, &cfg.Runtime)
 	auth := ai.NewGitHubAuth()
 	demo := ai.NewDemoLimiter(configDir)
 	return auth, copilotAuth, factory, demo

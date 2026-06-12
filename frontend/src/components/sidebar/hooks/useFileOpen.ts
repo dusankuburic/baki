@@ -3,8 +3,9 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {useUIStore} from '@/stores/uiStore'
 import {flowApi} from '@/api'
+import {logger} from '@/lib/logger'
 import {isTauri} from '@/platform/guards'
-import type {RecentFile, FlowDocument as DomainFlowDocument} from '@/types/domain'
+import type {RecentFile} from '@/types/domain'
 
 export function useFileOpen() {
     const document = useFlowStore(s => s.document)
@@ -27,17 +28,16 @@ export function useFileOpen() {
         if (!isTauri()) return
         flowApi.recentFiles()
             .then((files: RecentFile[]) => { if (files) setRecentFiles(files) })
-            .catch(() => {})
+            .catch((err) => { logger.warn('Failed to load recent files', err) })
     }, [document])
 
     const handleOpenFile = useCallback(async () => {
         try {
             const doc = await flowApi.openFlowFile()
             if (doc) {
-                const domainDoc = doc as any as DomainFlowDocument
-                setDocument(domainDoc)
+                setDocument(doc)
                 setFolderFiles([])
-                setSelectedFilePath(domainDoc.filePath)
+                setSelectedFilePath(doc.filePath)
                 checkView()
             }
         } catch (err) {
@@ -49,11 +49,10 @@ export function useFileOpen() {
         try {
             const doc = await flowApi.openFlowFolder()
             if (doc) {
-                const domainDoc = doc as any as DomainFlowDocument
-                setDocument(domainDoc)
-                if (domainDoc.files && domainDoc.files.length > 0) {
-                    setFolderFiles(domainDoc.files)
-                    setSelectedFilePath(domainDoc.files[0].path)
+                setDocument(doc)
+                if (doc.files && doc.files.length > 0) {
+                    setFolderFiles(doc.files)
+                    setSelectedFilePath(doc.files[0].path)
                 }
                 checkView()
             }
@@ -77,14 +76,14 @@ export function useFileOpen() {
         }
         
         if (!isTauri()) {
-            console.warn('Cannot load subflow from path in web mode')
+            logger.warn('Cannot load subflow from path in web mode')
             return
         }
 
         try {
             const newDoc = await flowApi.loadFlowFromPath(path)
             if (newDoc) {
-                setDocument(newDoc as any as DomainFlowDocument)
+                setDocument(newDoc)
                 checkView()
             }
         } catch (err) {
@@ -100,14 +99,13 @@ export function useFileOpen() {
                 ? await flowApi.loadFlowFolder(path)
                 : await flowApi.loadFlowFromPath(path)
             if (doc) {
-                const domainDoc = doc as any as DomainFlowDocument
-                setDocument(domainDoc)
-                if (domainDoc.isFolder && domainDoc.files) {
-                    setFolderFiles(domainDoc.files)
-                    setSelectedFilePath(domainDoc.files[0].path)
+                setDocument(doc)
+                if (doc.isFolder && doc.files) {
+                    setFolderFiles(doc.files)
+                    setSelectedFilePath(doc.files[0].path)
                 } else {
                     setFolderFiles([])
-                    setSelectedFilePath(domainDoc.filePath)
+                    setSelectedFilePath(doc.filePath)
                 }
                 checkView()
             }

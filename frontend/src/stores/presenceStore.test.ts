@@ -218,7 +218,7 @@ describe('status propagation', () => {
     })
 
     await usePresenceStore.getState().connectToFlow('flow-1')
-    ;(capturedHandler as any)?.('connected')
+    ;(capturedHandler as unknown as ((s: ConnectionStatus) => void))?.('connected')
 
     expect(usePresenceStore.getState().status).toBe('connected')
   })

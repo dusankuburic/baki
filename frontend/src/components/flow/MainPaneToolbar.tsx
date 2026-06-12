@@ -6,6 +6,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {exportApi} from '@/api'
 import {useToast} from '@/components/shared/Toast'
+import type {FlowDiff} from '@/types/domain'
 
 export default function MainPaneToolbar() {
     const mainPaneView = useUIStore(s => s.mainPaneView)
@@ -53,7 +54,7 @@ export default function MainPaneToolbar() {
             toast.info('Comparing flows...')
             const diff = await exportApi.compareCurrentWith(path)
             if (diff) {
-                setActiveDiff(diff as any)
+                setActiveDiff(diff as FlowDiff)
                 setMainPaneView('diff')
                 toast.success('Comparison complete')
             }
@@ -150,7 +151,7 @@ export default function MainPaneToolbar() {
                         className={complexityMode ? 'text-semantic-warning bg-semantic-warning/10' : ''}
                     />
                 )}
-                <IconButton icon={Expand} size="sm" label="Fullscreen" onClick={() => { try { window.document.documentElement.requestFullscreen() } catch (_e) { /* fullscreen not supported */ } }} />
+                <IconButton icon={Expand} size="sm" label="Fullscreen" onClick={() => { try { window.document.documentElement.requestFullscreen() } catch { /* fullscreen not supported */ } }} />
                 <IconButton icon={Download} size="sm" label="Export PDF" onClick={() => handleExport('pdf')} />
             </div>
         </div>

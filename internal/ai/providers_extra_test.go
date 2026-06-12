@@ -69,8 +69,10 @@ func TestOpenAIProvider_Identity(t *testing.T) {
 
 func TestOpenAIProvider_Models_NonEmpty(t *testing.T) {
 	p := NewOpenAIProvider("key")
-	models := p.Models()
-	if len(models) == 0 {
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Errorf("Models() error: %v", err)
+	} else if len(models) == 0 {
 		t.Error("Models() must return at least one model")
 	}
 	for _, m := range models {
@@ -225,8 +227,10 @@ func TestXAIProvider_Identity(t *testing.T) {
 
 func TestXAIProvider_Models_NonEmpty(t *testing.T) {
 	p := NewXAIProvider("key")
-	models := p.Models()
-	if len(models) == 0 {
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Errorf("Models() error: %v", err)
+	} else if len(models) == 0 {
 		t.Error("Models() must return at least one model")
 	}
 }
@@ -355,8 +359,10 @@ func TestGLMProvider_Identity(t *testing.T) {
 
 func TestGLMProvider_Models_NonEmpty(t *testing.T) {
 	p := NewGLMProvider("key")
-	models := p.Models()
-	if len(models) == 0 {
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Errorf("Models() error: %v", err)
+	} else if len(models) == 0 {
 		t.Error("Models() must return at least one model")
 	}
 }
@@ -479,8 +485,10 @@ func TestGitHubModelsProvider_Identity(t *testing.T) {
 
 func TestGitHubModelsProvider_Models_NonEmpty(t *testing.T) {
 	p := NewGitHubModelsProvider("token")
-	models := p.Models()
-	if len(models) == 0 {
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Errorf("Models() error: %v", err)
+	} else if len(models) == 0 {
 		t.Error("Models() must return at least one model")
 	}
 }

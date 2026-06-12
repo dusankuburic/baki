@@ -1,6 +1,9 @@
 package ai
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestProviderCatalogConsistency locks the invariants whose violation produced
 // the model-drift bugs (T1.2/T1.3): a provider's advertised default/free model
@@ -22,7 +25,10 @@ func TestProviderCatalogConsistency(t *testing.T) {
 				t.Fatalf("GetMetadataProvider(%q) returned nil", id)
 			}
 
-			models := p.Models()
+			models, err := p.Models(context.Background())
+			if err != nil {
+				t.Fatalf("%s.Models() error: %v", id, err)
+			}
 			if len(models) == 0 {
 				t.Fatalf("%s advertises no models", id)
 			}

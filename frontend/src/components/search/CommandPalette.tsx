@@ -117,6 +117,8 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
                                     return (
                                         <div
                                             key={cmd.id}
+                                            role="option"
+                                            aria-selected={idx === activeIndex}
                                             data-active={idx === activeIndex}
                                             className={clsx(
                                                 'flex items-center px-4 py-2 cursor-pointer text-sm transition-colors duration-fast',

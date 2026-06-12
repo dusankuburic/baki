@@ -58,7 +58,7 @@ func requireFlowOwner(w http.ResponseWriter, r *http.Request, backend storageif.
 		return false
 	}
 	if !owner {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		render.Error(w, fmt.Errorf("forbidden: only the flow owner can perform this action"), http.StatusForbidden)
 		return false
 	}
 	return true

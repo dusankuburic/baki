@@ -7,20 +7,22 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/api"
-	"pad-analyzer/internal/api/middleware"
+	apimw "pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/di"
 	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/metrics"
+	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
@@ -56,6 +58,7 @@ func main() {
 			initLogger,
 			initTelemetry,
 			initStorageSecrets,
+			initAuditPool,
 			startServer,
 		),
 	).Run()
@@ -107,24 +110,29 @@ func provideShutdownCh(lc fx.Lifecycle) chan struct{} {
 	return ch
 }
 
-func provideAuthManager(cfg *config.Config) *auth.Manager {
+func provideAuthManager(lc fx.Lifecycle, cfg *config.Config) *auth.Manager {
 	token := cfg.Auth.Secret
 	if token == "" {
-		// Cloud mode with auth enabled: Validate() would have already rejected
-		// a missing secret, so this branch only runs for local/no-auth mode.
-		// The generated UUID is ephemeral (per-run); it is printed in the startup
-		// JSON so the Tauri front-end can authenticate.
 		if cfg.Mode == config.ModeCloud && cfg.Auth.Enabled {
-			// Defence-in-depth: Validate() should have prevented this, but refuse
-			// to auto-generate a secret that would change on every restart in a
-			// multi-replica deployment, invalidating all existing sessions.
 			fmt.Fprintln(os.Stderr, "fatal: PAD_AUTH_SECRET must be set in cloud mode (auto-generation disabled)")
 			os.Exit(1)
 		}
 		token = uuid.NewString()
-		cfg.Auth.Secret = token // Ensure it's available for local-mode startup output
+		cfg.Auth.Secret = token
 	}
-	return auth.NewManager(token)
+
+	var blacklist *auth.TokenBlacklist
+	if cfg.Auth.Enabled {
+		blacklist = auth.NewTokenBlacklist()
+		lc.Append(fx.Hook{
+			OnStop: func(ctx context.Context) error {
+				blacklist.Stop()
+				return nil
+			},
+		})
+	}
+
+	return auth.NewManager(token, blacklist)
 }
 
 func provideOrgService(backend storageif.StorageBackend) *collaboration.OrgService {
@@ -146,14 +154,21 @@ func initLogger(cfg *config.Config) {
 	}
 }
 
-func initTelemetry(lc fx.Lifecycle) {
+func initTelemetry(lc fx.Lifecycle, cfg *config.Config) {
+	var shutdown func()
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			otelShutdown, otelErr := telemetry.Init(ctx, "baki-backend", Version)
+			otelShutdown, otelErr := telemetry.Init(ctx, "baki-backend", Version, cfg.Runtime.OTLPEndpoint)
 			if otelErr != nil {
 				fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", otelErr)
 			} else {
-				_ = otelShutdown
+				shutdown = otelShutdown
+			}
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			if shutdown != nil {
+				shutdown()
 			}
 			return nil
 		},
@@ -203,7 +218,7 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 					case <-ctx.Done():
 						return
 					case <-t.C:
-						metrics.ObservePostgresPool(pgBackend.DB())
+						padmetrics.ObservePostgresPool(pgBackend.DB())
 					}
 				}
 			}()
@@ -233,26 +248,57 @@ func initStorageSecrets(cfg *config.Config, backend storageif.StorageBackend) {
 	}
 }
 
+func initAuditPool(lc fx.Lifecycle, backend storageif.StorageBackend) {
+	api.InitAuditPool(backend)
+	lc.Append(fx.Hook{
+		OnStop: func(ctx context.Context) error {
+			api.ShutdownAuditPool()
+			return nil
+		},
+	})
+}
+
 func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService) {
 	var routerWithLimits http.Handler = router
-	var rateLimiters []*middleware.RateLimiter
+	var rateLimiters []*apimw.RateLimiter
 
 	if cfg.Mode == config.ModeCloud {
-		generalRl := middleware.NewRateLimiter(60, 20, cfg.Server.TrustedProxies).SetGroup("general")
-		authRl := middleware.NewRateLimiter(5.0/60.0, 5, cfg.Server.TrustedProxies).SetGroup("auth")
-		rateLimiters = append(rateLimiters, generalRl, authRl)
+		generalRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst, cfg.Server.TrustedProxies).SetGroup("general")
+		authRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitAuthRPS, cfg.Runtime.RateLimitAuthBurst, cfg.Server.TrustedProxies).SetGroup("auth")
+		analysisRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst, cfg.Server.TrustedProxies).SetGroup("analysis")
+		chatRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst, cfg.Server.TrustedProxies).SetGroup("chat")
+		uploadRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst, cfg.Server.TrustedProxies).SetGroup("upload")
+		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl)
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/refresh" || r.URL.Path == "/api/auth/register" {
+			path := r.URL.Path
+			if path == "/api/auth/login" || path == "/api/auth/refresh" || path == "/api/auth/register" {
 				authRl.Limit(router).ServeHTTP(w, r)
+			} else if r.Method == "POST" && strings.HasPrefix(path, "/api/analysis/") {
+				analysisRl.Limit(router).ServeHTTP(w, r)
+			} else if r.Method == "POST" && path == "/api/chat/stream" {
+				chatRl.Limit(router).ServeHTTP(w, r)
+			} else if r.Method == "POST" && path == "/api/flow/upload" {
+				uploadRl.Limit(router).ServeHTTP(w, r)
 			} else {
 				generalRl.Limit(router).ServeHTTP(w, r)
 			}
 		})
 	}
 
+	timeoutDur := 30 * time.Second
+	if d, err := time.ParseDuration(cfg.Runtime.RequestTimeout); err == nil {
+		timeoutDur = d
+	}
+
 	handler := otelhttp.NewHandler(
-		middleware.Recovery(middleware.AccessLog(middleware.Metrics(routerWithLimits))),
+		apimw.Recovery(
+			apimw.RequestTimeout(timeoutDur)(
+				middleware.Compress(5)(
+					apimw.AccessLog(cfg.Server.TrustedProxies)(apimw.Metrics(routerWithLimits)),
+				),
+			),
+		),
 		"http.server",
 	)
 
@@ -279,7 +325,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			"token": cfg.Auth.Secret,
 		}
 		infoJSON, _ := json.Marshal(startupInfo)
-		fmt.Println(string(infoJSON))
+		fmt.Printf("CONFIG:%s\n", string(infoJSON))
 	}
 
 	server := &http.Server{

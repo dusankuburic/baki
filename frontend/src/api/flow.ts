@@ -1,6 +1,6 @@
 import {request} from './client'
 import { createAdapter } from '@/platform/adapters'
-import type {FlowDocument, RecentFile, SearchQuery, SearchResults} from '@/types/domain'
+import type {FlowDocument, RecentFile, SearchQuery, SearchResults, SourceFileInfo} from '@/types/domain'
 
 export const flowApi = {
   openFlowFile: async (): Promise<FlowDocument | null> => {
@@ -17,7 +17,7 @@ export const flowApi = {
         if (data && data.__is_web_upload__) {
           return request('/api/flow/upload', data)
         }
-      } catch (e) {
+      } catch (_e) {
         // Not a JSON string, must be a path
       }
     }
@@ -38,7 +38,7 @@ export const flowApi = {
         if (data && data.__is_web_upload__) {
           return request('/api/flow/upload', data)
         }
-      } catch (e) {
+      } catch (_e) {
         // Not a JSON string, must be a path
       }
     }
@@ -70,6 +70,6 @@ export const flowApi = {
   revealInFileManager: (path: string): Promise<void> =>
     request('/api/flow/reveal', {path}),
 
-  getSourceFiles: (): Promise<any[]> =>
+  getSourceFiles: (): Promise<SourceFileInfo[]> =>
     request('/api/flow/source-files', undefined, 'GET'),
 }

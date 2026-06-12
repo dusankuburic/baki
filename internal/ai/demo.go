@@ -150,10 +150,10 @@ func (d *DemoProvider) Embed(ctx context.Context, text []string) ([][]float32, e
 
 func (d *DemoProvider) EstimateTokens(text string) int { return EstimateTokens(text) }
 
-func (d *DemoProvider) Models() []ModelInfo {
+func (d *DemoProvider) Models(_ context.Context) ([]ModelInfo, error) {
 	return []ModelInfo{
 		{ID: "demo", DisplayName: "Demo Mode", ContextLimit: 200000},
-	}
+	}, nil
 }
 
 func (d *DemoProvider) Chat(ctx context.Context, req Request) (*Response, error) {

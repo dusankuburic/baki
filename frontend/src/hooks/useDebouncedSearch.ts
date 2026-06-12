@@ -8,7 +8,7 @@ type UseDebouncedSearchOptions = {
 export function useDebouncedSearch({delay = 150, onSearch}: UseDebouncedSearchOptions) {
     const timerRef = useRef<ReturnType<typeof setTimeout>>()
     const onSearchRef = useRef(onSearch)
-    onSearchRef.current = onSearch
+    useEffect(() => { onSearchRef.current = onSearch })
 
     const search = useCallback((query: string) => {
         if (timerRef.current) {

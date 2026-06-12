@@ -6,12 +6,12 @@ import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
-import {Spinner, useToast} from '@/components/shared'
+import {EmptyState, Spinner, useToast} from '@/components/shared'
 import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
 import AnalysisDiffView from './AnalysisDiffView'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
-import type {AnalysisDiff, Finding, Severity} from '@/types/domain'
+import type {AnalysisDiff, Finding, Severity, AnalysisReport} from '@/types/domain'
 import clsx from 'clsx'
 
 export default function FindingsTab() {
@@ -73,11 +73,11 @@ export default function FindingsTab() {
     let cancelled = false
     subscribeToEvents((ev) => {
       if (ev.name !== 'analysis:progress') return
-      const data = ev.data
+      const data = ev.data as Record<string, unknown>
       setProgress({
-        current: data.current ?? 0,
-        total: data.total ?? 0,
-        ruleName: data.ruleName ?? '',
+        current: (data.current as number) ?? 0,
+        total: (data.total as number) ?? 0,
+        ruleName: (data.ruleName as string) ?? '',
       })
     }).then(fn => { if (!cancelled) unsub = fn; else fn() })
     return () => { cancelled = true; unsub?.() }
@@ -91,7 +91,7 @@ export default function FindingsTab() {
     try {
       const r = await analysisApi.analyzeFlow()
       if (r) {
-        setReport(doc.id, r as any)
+        setReport(doc.id, r as AnalysisReport)
       }
     } catch (err) {
       console.error('analysis failed:', err)
@@ -140,7 +140,7 @@ export default function FindingsTab() {
     } finally {
       setDiffLoading(false)
     }
-  }, [toast])
+  }, [setDiffLoading, setDiff])
 
   const handleExportCSV = useCallback(() => {
     if (!report) return
@@ -320,9 +320,16 @@ export default function FindingsTab() {
             </div>
           )}
           {findings.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
-              No findings
-            </div>
+            report!.findings.length === 0 ? (
+              <EmptyState
+                title="No findings"
+                description="The analysis didn't detect any issues. Your flow looks good!"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
+                No matching findings
+              </div>
+            )
           ) : (
             <FindingsList findings={findings} doc={doc} onFixWithAI={handleFixWithAI} />
           )}

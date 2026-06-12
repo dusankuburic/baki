@@ -1,18 +1,16 @@
 [package]
-name = "app"
+name = "pad-analyzer"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "PAD Analyzer desktop application"
+authors = ["Baki Team"]
 license = "MIT"
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
@@ -25,7 +23,6 @@ tauri = { version = "2.11.2", features = [] }
 tauri-plugin-log = "2.0.1"
 tauri-plugin-shell = "2.0.1"
 tauri-plugin-dialog = "2.0.1"
-tokio = { version = "1", features = ["full"] }
-tauri-plugin-fs = "2.0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tauri-plugin-single-instance = "2.4.2"
 tauri-plugin-window-state = "2.4.1"

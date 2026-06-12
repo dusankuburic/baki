@@ -1,6 +1,7 @@
 import {Github, Check, Loader2} from 'lucide-react'
 import {useState, useEffect, useRef, useCallback} from 'react'
 import {createAdapter} from '@/platform/adapters'
+import {logger} from '@/lib/logger'
 import type {DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types/domain'
 
 /**
@@ -46,7 +47,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           setState('configured')
         }
       })
-      .catch(() => {})
+      .catch((err) => { logger.warn('Failed to check existing auth', err) })
     return () => {
       pollingRef.current = false
       clearTimeout(timeoutRef.current)
@@ -84,15 +85,15 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
             setErrorMsg(result.error || 'Authentication failed')
             return
           }
-        } catch (_e) { /* polling error — retry on next interval */ }
+        } catch { /* polling error — retry on next interval */ }
         if (pollingRef.current) {
           timeoutRef.current = setTimeout(poll, interval)
         }
       }
       timeoutRef.current = setTimeout(poll, interval)
-    } catch (e: any) {
+    } catch (e: unknown) {
       setState('error')
-      setErrorMsg(e?.message || 'Failed to start auth')
+      setErrorMsg(e instanceof Error ? e.message : String(e) || 'Failed to start auth')
     }
   }, [provider, onAuthComplete])
 

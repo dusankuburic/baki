@@ -58,21 +58,24 @@ type Manager struct {
 	refreshTTL time.Duration
 	issuer     string
 	audience   string
+	blacklist  *TokenBlacklist
 }
 
 // NewManager creates a Manager using the provided HMAC-SHA256 secret.
-func NewManager(secret string) *Manager {
-	return NewManagerWithTTL(secret, defaultAccessTTL, defaultRefreshTTL, "pad-analyzer", "pad-client")
+// blacklist may be nil to disable token revocation.
+func NewManager(secret string, blacklist *TokenBlacklist) *Manager {
+	return NewManagerWithTTL(secret, defaultAccessTTL, defaultRefreshTTL, "pad-analyzer", "pad-client", blacklist)
 }
 
 // NewManagerWithTTL creates a Manager with explicit TTL values (useful for tests).
-func NewManagerWithTTL(secret string, accessTTL, refreshTTL time.Duration, issuer, audience string) *Manager {
+func NewManagerWithTTL(secret string, accessTTL, refreshTTL time.Duration, issuer, audience string, blacklist *TokenBlacklist) *Manager {
 	return &Manager{
 		secret:     []byte(secret),
 		accessTTL:  accessTTL,
 		refreshTTL: refreshTTL,
 		issuer:     issuer,
 		audience:   audience,
+		blacklist:  blacklist,
 	}
 }
 
@@ -86,6 +89,7 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 		Email:  email,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			Subject:   userID,
@@ -187,6 +191,10 @@ func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 		return nil, errors.New("auth: invalid token claims")
 	}
 
+	if m.blacklist != nil && claims.ID != "" && m.blacklist.IsRevoked(claims.ID) {
+		return nil, errors.New("auth: token revoked")
+	}
+
 	return claims, nil
 }
 
@@ -206,7 +214,24 @@ func (m *Manager) VerifyIgnoreExpiry(tokenStr string) (*Claims, error) {
 		return nil, errors.New("auth: invalid token claims")
 	}
 
+	if m.blacklist != nil && claims.ID != "" && m.blacklist.IsRevoked(claims.ID) {
+		return nil, errors.New("auth: token revoked")
+	}
+
 	return claims, nil
+}
+
+// Revoke adds the token's JTI to the blacklist so it cannot be used again.
+// If the Manager has no blacklist or the claims carry no ID this is a no-op.
+func (m *Manager) Revoke(claims *Claims) {
+	if m.blacklist == nil || claims.ID == "" {
+		return
+	}
+	ttl := time.Until(claims.ExpiresAt.Time)
+	if ttl <= 0 {
+		return
+	}
+	m.blacklist.Add(claims.ID, ttl)
 }
 
 // VerifyRefresh parses and validates a refresh token.
@@ -231,9 +256,15 @@ func (m *Manager) keyFunc(token *jwt.Token) (any, error) {
 	return m.secret, nil
 }
 
+// bcryptCost trades hash strength against login/registration latency: cost 12
+// keeps hashing in the tens of milliseconds on typical server hardware while
+// staying above the OWASP minimum of 10. Existing hashes created at a higher
+// cost keep verifying (bcrypt embeds the cost in the hash).
+const bcryptCost = 12
+
 // HashPassword returns the bcrypt hash of the password.
 func HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	return string(bytes), err
 }
 

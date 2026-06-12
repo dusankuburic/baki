@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import React, {useState} from 'react'
 import clsx from 'clsx'
 import type {Finding, FlowDocument} from '@/types/domain'
 import {useFlowStore} from '@/stores/flowStore'
@@ -23,7 +23,7 @@ function findBlock(doc: FlowDocument, blockId: string) {
   return null
 }
 
-export default function FindingCard({finding, doc, onFixWithAI}: Props) {
+function FindingCard({finding, doc, onFixWithAI}: Props) {
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const suppressFinding = useAnalysisStore(s => s.suppressFinding)
@@ -116,3 +116,5 @@ export default function FindingCard({finding, doc, onFixWithAI}: Props) {
     </div>
   )
 }
+
+export default React.memo(FindingCard)

@@ -13,7 +13,7 @@ func TestProviderFactory_For_Copilot_WithOAuthToken(t *testing.T) {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, auth, nil)
+	}, auth, nil, nil)
 
 	p, err := f.For("", "copilot")
 	if err != nil {
@@ -36,7 +36,7 @@ func TestProviderFactory_For_Copilot_OAuthTakesPriorityOverPAT(t *testing.T) {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, auth, nil)
+	}, auth, nil, nil)
 
 	p, err := f.For("", "copilot")
 	if err != nil {
@@ -57,7 +57,7 @@ func TestProviderFactory_For_Copilot_FallbackToPAT(t *testing.T) {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, nil, nil) // nil copilotAuth — PAT path doesn't need it
+	}, nil, nil, nil) // nil copilotAuth — PAT path doesn't need it
 
 	p, err := f.For("", "copilot")
 	if err != nil {
@@ -71,7 +71,7 @@ func TestProviderFactory_For_Copilot_FallbackToPAT(t *testing.T) {
 func TestProviderFactory_For_Copilot_NeitherConfigured(t *testing.T) {
 	f := NewProviderFactory(func(_, k string) (string, error) {
 		return "", fmt.Errorf("key %q not found", k)
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	_, err := f.For("", "copilot")
 	if err == nil {
@@ -90,7 +90,7 @@ func TestProviderFactory_For_Copilot_EmptyOAuthTokenFallsBackToPAT(t *testing.T)
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, NewCopilotAuth(), nil)
+	}, NewCopilotAuth(), nil, nil)
 
 	p, err := f.For("", "copilot")
 	if err != nil {
@@ -114,7 +114,7 @@ func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) 
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, nil, nil) // nil copilotAuth
+	}, nil, nil, nil) // nil copilotAuth
 
 	p, err := f.For("", "copilot")
 	if err != nil {
@@ -133,7 +133,7 @@ func TestProviderFactory_For_Copilot_OnlyOAuthNoAuth_Error(t *testing.T) {
 			return v, nil
 		}
 		return "", fmt.Errorf("key %q not found", k)
-	}, nil, nil) // nil copilotAuth — OAuth path skipped, PAT not found
+	}, nil, nil, nil) // nil copilotAuth — OAuth path skipped, PAT not found
 
 	_, err := f.For("", "copilot")
 	if err == nil {

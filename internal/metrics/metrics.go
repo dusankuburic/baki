@@ -90,6 +90,28 @@ var (
 		},
 		[]string{"provider"},
 	)
+	analysisRuns = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pad_analysis_runs_total",
+		Help: "Number of analysis runs",
+	})
+	wsConnectionsActive = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "pad_ws_connections_active",
+		Help: "Number of active WebSocket connections",
+	})
+	flowOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_flow_operations_total",
+			Help: "Number of flow operations by type",
+		},
+		[]string{"op"},
+	)
+	authOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_auth_operations_total",
+			Help: "Number of auth operations by type",
+		},
+		[]string{"op"},
+	)
 )
 
 // registry is process-local. Tests are hermetic (no leftover series between
@@ -109,6 +131,10 @@ var registry = func() *prometheus.Registry {
 		aiTokensTotal,
 		aiRequestDuration,
 		aiRequestErrorsTotal,
+		analysisRuns,
+		wsConnectionsActive,
+		flowOps,
+		authOps,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -181,4 +207,28 @@ func ObserveAIRequest(provider string, seconds float64) {
 // RecordAIError increments the error counter for a failed AI request.
 func RecordAIError(provider string) {
 	aiRequestErrorsTotal.WithLabelValues(provider).Inc()
+}
+
+// RecordAnalysisRun increments the analysis-runs counter. Called at the start
+// of every AnalyzeFlow run.
+func RecordAnalysisRun() {
+	analysisRuns.Inc()
+}
+
+// RecordWSConnectionChange adjusts the active-WebSocket-connections gauge by
+// delta (+1 on join, -1 on leave).
+func RecordWSConnectionChange(delta int64) {
+	wsConnectionsActive.Add(float64(delta))
+}
+
+// RecordFlowOp increments the flow-operations counter for the given op type
+// (e.g. "upload", "load_path", "load_folder").
+func RecordFlowOp(op string) {
+	flowOps.WithLabelValues(op).Inc()
+}
+
+// RecordAuthOp increments the auth-operations counter for the given op type
+// (e.g. "login", "register", "logout", "refresh").
+func RecordAuthOp(op string) {
+	authOps.WithLabelValues(op).Inc()
 }

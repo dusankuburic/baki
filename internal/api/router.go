@@ -45,6 +45,7 @@ type Router struct {
 	trustedProxies []string
 	staticDir      string
 	hub            *wshub.Hub
+	flowChecker    wshub.FlowAccessChecker
 
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
@@ -59,6 +60,7 @@ func NewRouter(
 	handlers Handlers,
 	cfg *config.Config,
 	shutdownCh chan struct{},
+	flowChecker wshub.FlowAccessChecker,
 ) *Router {
 	rt := &Router{
 		security:       security,
@@ -68,6 +70,7 @@ func NewRouter(
 		trustedProxies: cfg.Server.TrustedProxies,
 		staticDir:      cfg.Server.StaticDir,
 		hub:            wshub.NewHub(),
+		flowChecker:    flowChecker,
 		usedTickets:    make(map[string]time.Time),
 		shutdownCh:     shutdownCh,
 		mux:            chi.NewRouter(),
@@ -178,7 +181,7 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins)(w, r)
+	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins, rt.flowChecker)(w, r)
 }
 
 // --- Ticket store ---

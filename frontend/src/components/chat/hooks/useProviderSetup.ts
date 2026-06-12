@@ -2,7 +2,8 @@ import {useState, useEffect, useRef, useCallback, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, providersApi} from '@/api'
-import type {ProviderID, ModelDetail} from '@/types/domain'
+import {logger} from '@/lib/logger'
+import type {ProviderID, ModelDetail, ProviderInfo} from '@/types/domain'
 
 export interface ProviderOption {
   id: string
@@ -25,20 +26,20 @@ export function useProviderSetup() {
   const [demoRemaining, setDemoRemaining] = useState<number | null>(null)
 
   const providerRef = useRef(provider)
-  providerRef.current = provider
+  useEffect(() => { providerRef.current = provider })
   const aiSettingsProvidersRef = useRef(aiSettings.providers)
-  aiSettingsProvidersRef.current = aiSettings.providers
+  useEffect(() => { aiSettingsProvidersRef.current = aiSettings.providers })
 
   useEffect(() => {
     let cancelled = false
-    providersApi.listProviders().then((ps: any) => {
+    providersApi.listProviders().then((ps: ProviderInfo[]) => {
       if (cancelled) return
-      const list: ProviderOption[] = (ps || []).map((p: any) => ({
+      const list: ProviderOption[] = (ps || []).map((p: ProviderInfo) => ({
         id: p.id || '',
         name: p.name || '',
         configured: !!p.configured,
         authType: p.authType || '',
-        models: (p.models || []).map((m: any) => ({
+        models: (p.models || []).map((m: ModelDetail) => ({
           id: m.id || '',
           displayName: m.displayName || m.id || '',
           contextLimit: m.contextLimit || 0,
@@ -63,7 +64,7 @@ export function useProviderSetup() {
       } else {
         setConfigured(false)
       }
-    }).catch(() => {})
+    }).catch((err) => { logger.warn('Failed to check provider status', err) })
     return () => { cancelled = true }
   }, [setProvider, updateAI])
 
@@ -88,7 +89,7 @@ export function useProviderSetup() {
   }, [setProvider, updateAI])
 
   const currentProvider = useMemo(() => providers.find(p => p.id === provider), [providers, provider])
-  const currentModels = currentProvider?.models ?? []
+  const currentModels = useMemo(() => currentProvider?.models ?? [], [currentProvider])
   const currentModelDetail = useMemo(
     () => currentModels.find(m => m.id === selectedModel),
     [currentModels, selectedModel],

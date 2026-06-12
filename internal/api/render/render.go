@@ -67,6 +67,10 @@ func statusCode(status int) string {
 	}
 }
 
+func NoContent(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Error writes a structured JSON error response. Pass code=0 to auto-map
 // domain errors (ErrNotFound → 404, ErrPermissionDenied → 403, etc.).
 func Error(w http.ResponseWriter, err error, code int) {

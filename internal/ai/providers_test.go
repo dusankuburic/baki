@@ -24,7 +24,10 @@ func TestClaudeProvider_ID(t *testing.T) {
 
 func TestClaudeProvider_Models(t *testing.T) {
 	p := NewClaudeProvider("test-key")
-	models := p.Models()
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models() error: %v", err)
+	}
 	if len(models) != 3 {
 		t.Fatalf("expected 3 models, got %d", len(models))
 	}
@@ -319,7 +322,10 @@ func TestGeminiProvider_Chat_Success(t *testing.T) {
 
 func TestGeminiProvider_Models(t *testing.T) {
 	p := NewGeminiProvider("test-key")
-	models := p.Models()
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models() error: %v", err)
+	}
 	if len(models) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(models))
 	}

@@ -1,6 +1,7 @@
 package collaboration
 
 import (
+	"context"
 	"testing"
 
 	"pad-analyzer/internal/auth"
@@ -12,7 +13,7 @@ func newSvc() *OrgService { return NewOrgService(NewMemOrgStore()) }
 
 func TestCreate_ReturnsOrgWithOwnerAsAdmin(t *testing.T) {
 	svc := newSvc()
-	org, err := svc.Create("Acme Corp", "owner-1")
+	org, err := svc.Create(context.Background(), "Acme Corp", "owner-1")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -28,14 +29,14 @@ func TestCreate_ReturnsOrgWithOwnerAsAdmin(t *testing.T) {
 }
 
 func TestCreate_EmptyNameReturnsError(t *testing.T) {
-	_, err := newSvc().Create("", "u1")
+	_, err := newSvc().Create(context.Background(), "", "u1")
 	if err == nil {
 		t.Error("expected error for empty name")
 	}
 }
 
 func TestCreate_EmptyOwnerReturnsError(t *testing.T) {
-	_, err := newSvc().Create("Test", "")
+	_, err := newSvc().Create(context.Background(), "Test", "")
 	if err == nil {
 		t.Error("expected error for empty owner")
 	}
@@ -45,9 +46,9 @@ func TestCreate_EmptyOwnerReturnsError(t *testing.T) {
 
 func TestGet_ExistingOrg(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "u1")
+	org, _ := svc.Create(context.Background(), "Test", "u1")
 
-	got, err := svc.Get(org.ID)
+	got, err := svc.Get(context.Background(), org.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestGet_ExistingOrg(t *testing.T) {
 }
 
 func TestGet_NotFoundReturnsError(t *testing.T) {
-	_, err := newSvc().Get("nonexistent")
+	_, err := newSvc().Get(context.Background(), "nonexistent")
 	if err != ErrOrgNotFound {
 		t.Errorf("expected ErrOrgNotFound, got %v", err)
 	}
@@ -67,11 +68,11 @@ func TestGet_NotFoundReturnsError(t *testing.T) {
 
 func TestListForUser_ReturnsOnlyUserOrgs(t *testing.T) {
 	svc := newSvc()
-	svc.Create("Org A", "alice")
-	svc.Create("Org B", "bob")
-	orgC, _ := svc.Create("Org C", "alice")
+	svc.Create(context.Background(), "Org A", "alice")
+	svc.Create(context.Background(), "Org B", "bob")
+	orgC, _ := svc.Create(context.Background(), "Org C", "alice")
 
-	list := svc.ListForUser("alice")
+	list, _ := svc.ListForUser(context.Background(), "alice")
 	if len(list) != 2 {
 		t.Errorf("expected 2 orgs for alice, got %d", len(list))
 	}
@@ -82,23 +83,23 @@ func TestListForUser_ReturnsOnlyUserOrgs(t *testing.T) {
 
 func TestAddMember_Success(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
+	org, _ := svc.Create(context.Background(), "Test", "owner")
 
-	if err := svc.AddMember(org.ID, "new-user", auth.RoleViewer); err != nil {
+	if err := svc.AddMember(context.Background(), org.ID, "new-user", auth.RoleViewer); err != nil {
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	if !svc.IsMember(org.ID, "new-user") {
+	if !svc.IsMember(context.Background(), org.ID, "new-user") {
 		t.Error("new-user should be a member")
 	}
 }
 
 func TestAddMember_DuplicateReturnsError(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
-	svc.AddMember(org.ID, "u2", auth.RoleMember)
+	org, _ := svc.Create(context.Background(), "Test", "owner")
+	svc.AddMember(context.Background(), org.ID, "u2", auth.RoleMember)
 
-	err := svc.AddMember(org.ID, "u2", auth.RoleMember)
+	err := svc.AddMember(context.Background(), org.ID, "u2", auth.RoleMember)
 	if err != ErrAlreadyMember {
 		t.Errorf("expected ErrAlreadyMember, got %v", err)
 	}
@@ -106,8 +107,8 @@ func TestAddMember_DuplicateReturnsError(t *testing.T) {
 
 func TestAddMember_InvalidRoleReturnsError(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
-	if err := svc.AddMember(org.ID, "u2", "superuser"); err == nil {
+	org, _ := svc.Create(context.Background(), "Test", "owner")
+	if err := svc.AddMember(context.Background(), org.ID, "u2", "superuser"); err == nil {
 		t.Error("expected error for invalid role")
 	}
 }
@@ -116,22 +117,22 @@ func TestAddMember_InvalidRoleReturnsError(t *testing.T) {
 
 func TestRemoveMember_Success(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
-	svc.AddMember(org.ID, "u2", auth.RoleMember)
+	org, _ := svc.Create(context.Background(), "Test", "owner")
+	svc.AddMember(context.Background(), org.ID, "u2", auth.RoleMember)
 
-	if err := svc.RemoveMember(org.ID, "u2"); err != nil {
+	if err := svc.RemoveMember(context.Background(), org.ID, "u2"); err != nil {
 		t.Fatalf("RemoveMember: %v", err)
 	}
-	if svc.IsMember(org.ID, "u2") {
+	if svc.IsMember(context.Background(), org.ID, "u2") {
 		t.Error("u2 should no longer be a member")
 	}
 }
 
 func TestRemoveMember_LastAdminBlocked(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
+	org, _ := svc.Create(context.Background(), "Test", "owner")
 
-	err := svc.RemoveMember(org.ID, "owner")
+	err := svc.RemoveMember(context.Background(), org.ID, "owner")
 	if err != ErrLastAdmin {
 		t.Errorf("expected ErrLastAdmin, got %v", err)
 	}
@@ -139,9 +140,9 @@ func TestRemoveMember_LastAdminBlocked(t *testing.T) {
 
 func TestRemoveMember_NotFoundReturnsError(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
+	org, _ := svc.Create(context.Background(), "Test", "owner")
 
-	err := svc.RemoveMember(org.ID, "ghost")
+	err := svc.RemoveMember(context.Background(), org.ID, "ghost")
 	if err != ErrMemberNotFound {
 		t.Errorf("expected ErrMemberNotFound, got %v", err)
 	}
@@ -151,14 +152,14 @@ func TestRemoveMember_NotFoundReturnsError(t *testing.T) {
 
 func TestSetRole_Success(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
-	svc.AddMember(org.ID, "u2", auth.RoleMember)
+	org, _ := svc.Create(context.Background(), "Test", "owner")
+	svc.AddMember(context.Background(), org.ID, "u2", auth.RoleMember)
 
-	if err := svc.SetRole(org.ID, "u2", auth.RoleAdmin); err != nil {
+	if err := svc.SetRole(context.Background(), org.ID, "u2", auth.RoleAdmin); err != nil {
 		t.Fatalf("SetRole: %v", err)
 	}
 
-	role, _ := svc.MemberRole(org.ID, "u2")
+	role, _ := svc.MemberRole(context.Background(), org.ID, "u2")
 	if role != auth.RoleAdmin {
 		t.Errorf("expected admin, got %q", role)
 	}
@@ -166,9 +167,9 @@ func TestSetRole_Success(t *testing.T) {
 
 func TestSetRole_DemoteLastAdminBlocked(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
+	org, _ := svc.Create(context.Background(), "Test", "owner")
 
-	err := svc.SetRole(org.ID, "owner", auth.RoleMember)
+	err := svc.SetRole(context.Background(), org.ID, "owner", auth.RoleMember)
 	if err != ErrLastAdmin {
 		t.Errorf("expected ErrLastAdmin, got %v", err)
 	}
@@ -176,10 +177,10 @@ func TestSetRole_DemoteLastAdminBlocked(t *testing.T) {
 
 func TestSetRole_TwoAdmins_DemoteOneIsAllowed(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
-	svc.AddMember(org.ID, "u2", auth.RoleAdmin)
+	org, _ := svc.Create(context.Background(), "Test", "owner")
+	svc.AddMember(context.Background(), org.ID, "u2", auth.RoleAdmin)
 
-	if err := svc.SetRole(org.ID, "u2", auth.RoleMember); err != nil {
+	if err := svc.SetRole(context.Background(), org.ID, "u2", auth.RoleMember); err != nil {
 		t.Fatalf("should be able to demote when a second admin exists: %v", err)
 	}
 }
@@ -188,18 +189,18 @@ func TestSetRole_TwoAdmins_DemoteOneIsAllowed(t *testing.T) {
 
 func TestDelete_RemovesOrg(t *testing.T) {
 	svc := newSvc()
-	org, _ := svc.Create("Test", "owner")
+	org, _ := svc.Create(context.Background(), "Test", "owner")
 
-	if err := svc.Delete(org.ID); err != nil {
+	if err := svc.Delete(context.Background(), org.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := svc.Get(org.ID); err != ErrOrgNotFound {
+	if _, err := svc.Get(context.Background(), org.ID); err != ErrOrgNotFound {
 		t.Error("expected org to be gone after Delete")
 	}
 }
 
 func TestDelete_NotFoundReturnsError(t *testing.T) {
-	if err := newSvc().Delete("ghost"); err != ErrOrgNotFound {
+	if err := newSvc().Delete(context.Background(), "ghost"); err != ErrOrgNotFound {
 		t.Errorf("expected ErrOrgNotFound, got %v", err)
 	}
 }

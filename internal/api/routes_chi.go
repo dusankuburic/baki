@@ -153,8 +153,11 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/login", h.Auth.handleAuthLogin)
 		r.Post("/refresh", h.Auth.handleAuthRefresh)
 		r.Get("/me", h.Auth.handleAuthMe)
+		r.Put("/profile", h.Auth.handleAuthUpdateProfile)
 		r.Post("/logout", h.Auth.handleAuthLogout)
 		r.Post("/change-password", h.Auth.handleAuthChangePassword)
+		r.Get("/sessions", h.Auth.handleAuthSessions)
+		r.Delete("/sessions/{id}", h.Auth.handleAuthSessionRevoke)
 	})
 	r.Post("/api/ws-ticket", h.Auth.handleWSTicket)
 
@@ -179,7 +182,16 @@ func registerRoutes(rt *Router, r chi.Router) {
 				r.Post("/upload", h.Org.handleKnowledgeUpload)
 				r.Delete("/{docId}", h.Org.handleKnowledgeDelete)
 			})
+			r.Route("/invites", func(r chi.Router) {
+				r.Get("/", h.Org.handleOrgInviteList)
+				r.Post("/", h.Org.handleOrgInviteCreate)
+				r.Delete("/{inviteId}", h.Org.handleOrgInviteRevoke)
+			})
 		})
+	})
+
+	r.Route("/api/invites", func(r chi.Router) {
+		r.Post("/{token}/accept", h.Org.handleInviteAccept)
 	})
 
 	r.Route("/api/flows/{flowId}/collaborators", func(r chi.Router) {

@@ -12,7 +12,7 @@ const testSecret = "test-super-secret-key-for-tests"
 
 func newTestManager() *Manager {
 	// Short TTLs so expiry tests run quickly
-	return NewManagerWithTTL(testSecret, 2*time.Second, 5*time.Second, "test-issuer", "test-audience")
+	return NewManagerWithTTL(testSecret, 2*time.Second, 5*time.Second, "test-issuer", "test-audience", nil)
 }
 
 // ---- Roles ----
@@ -96,7 +96,7 @@ func TestManager_WSTicketIsNotAValidAccessToken(t *testing.T) {
 
 func TestManager_WSTicketWrongSecretRejected(t *testing.T) {
 	mgr1 := newTestManager()
-	mgr2 := NewManagerWithTTL("a-different-secret-value", 2*time.Second, 5*time.Second, "test-issuer", "test-audience")
+	mgr2 := NewManagerWithTTL("a-different-secret-value", 2*time.Second, 5*time.Second, "test-issuer", "test-audience", nil)
 
 	ticket, _, _ := mgr1.IssueWSTicket("u1", "a@b.com", RoleViewer)
 	if _, err := mgr2.VerifyWSTicket(ticket); err == nil {
@@ -134,7 +134,7 @@ func TestManager_Issue_And_Verify(t *testing.T) {
 
 func TestManager_Verify_WrongSecret(t *testing.T) {
 	mgr1 := newTestManager()
-	mgr2 := NewManager("completely-different-secret")
+	mgr2 := NewManager("completely-different-secret", nil)
 
 	pair, _ := mgr1.Issue("u1", "a@b.com", RoleViewer)
 	_, err := mgr2.Verify(pair.AccessToken)
@@ -158,7 +158,7 @@ func TestManager_Verify_TamperedToken(t *testing.T) {
 
 func TestManager_Verify_ExpiredToken(t *testing.T) {
 	// Issue a token with a 1ms TTL
-	mgr := NewManagerWithTTL(testSecret, time.Millisecond, time.Second, "test-issuer", "test-audience")
+	mgr := NewManagerWithTTL(testSecret, time.Millisecond, time.Second, "test-issuer", "test-audience", nil)
 	pair, _ := mgr.Issue("u1", "a@b.com", RoleViewer)
 	time.Sleep(10 * time.Millisecond)
 
@@ -202,35 +202,35 @@ func TestManager_AccessTokenIsNotValidAsRefresh(t *testing.T) {
 
 func TestRequire_NoClaimsReturnsUnauthorized(t *testing.T) {
 	ctx := context.Background()
-	if err := Require(ctx, PermFlowRead); err != ErrUnauthorized {
+	if err := require(ctx, PermFlowRead); err != ErrUnauthorized {
 		t.Errorf("expected ErrUnauthorized, got %v", err)
 	}
 }
 
 func TestRequire_InsufficientRoleReturnsForbidden(t *testing.T) {
 	ctx := WithClaims(context.Background(), &Claims{Role: RoleGuest})
-	if err := Require(ctx, PermFlowWrite); err != ErrForbidden {
+	if err := require(ctx, PermFlowWrite); err != ErrForbidden {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
 
 func TestRequire_SufficientRoleReturnsNil(t *testing.T) {
 	ctx := WithClaims(context.Background(), &Claims{Role: RoleAdmin})
-	if err := Require(ctx, PermOrgDelete); err != nil {
+	if err := require(ctx, PermOrgDelete); err != nil {
 		t.Errorf("expected nil, got %v", err)
 	}
 }
 
 func TestRequireAny_MatchesFirstPermission(t *testing.T) {
 	ctx := WithClaims(context.Background(), &Claims{Role: RoleViewer})
-	if err := RequireAny(ctx, PermFlowRead, PermFlowWrite); err != nil {
-		t.Errorf("viewer has flow:read — RequireAny should pass: %v", err)
+	if err := requireAny(ctx, PermFlowRead, PermFlowWrite); err != nil {
+		t.Errorf("viewer has flow:read — requireAny should pass: %v", err)
 	}
 }
 
 func TestRequireAny_NoMatchReturnsForbidden(t *testing.T) {
 	ctx := WithClaims(context.Background(), &Claims{Role: RoleViewer})
-	if err := RequireAny(ctx, PermFlowWrite, PermFlowDelete); err != ErrForbidden {
+	if err := requireAny(ctx, PermFlowWrite, PermFlowDelete); err != ErrForbidden {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }

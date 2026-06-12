@@ -31,7 +31,7 @@ func getTokenizer() *tiktoken.Tiktoken {
 	return tokenizer
 }
 
-func EstimateTokensGeneric(text string) int {
+func estimateTokensGeneric(text string) int {
 	tkm := getTokenizer()
 	if tkm != nil {
 		tokens := tkm.Encode(text, nil, nil)
@@ -43,7 +43,7 @@ func EstimateTokensGeneric(text string) int {
 }
 
 func EstimateTokensClaude(text string) int {
-	return EstimateTokensGeneric(text)
+	return estimateTokensGeneric(text)
 }
 
 func EstimateTokensOpenAI(text string) int {
@@ -58,15 +58,11 @@ func EstimateTokensOpenAI(text string) int {
 }
 
 func EstimateTokensGemini(text string) int {
-	return EstimateTokensGeneric(text)
+	return estimateTokensGeneric(text)
 }
 
 func EstimateTokens(text string) int {
-	return EstimateTokensGeneric(text)
-}
-
-func TruncateToTokens(text string, maxTokens int) string {
-	return TruncateToTokenLimit(text, maxTokens)
+	return estimateTokensGeneric(text)
 }
 
 func TruncateToTokenLimit(text string, maxTokens int) string {

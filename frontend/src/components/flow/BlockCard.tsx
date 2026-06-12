@@ -1,4 +1,4 @@
-import {useState, useMemo, useCallback} from 'react'
+import React, {useState, useMemo, useCallback} from 'react'
 import clsx from 'clsx'
 import {AlertTriangle, ChevronDown, ChevronRight, Copy, Search, Clock, Brain, Sparkles, FileText, ExternalLink, type LucideIcon} from 'lucide-react'
 import {getBlockIcon, getBlockColor, resolveTypeLabel, stripBlockKeywords} from '@/lib/blocks'
@@ -25,7 +25,7 @@ type BlockCardProps = {
 }
 
 
-export default function BlockCard({
+export default React.memo(function BlockCard({
     block,
     selected = false,
     highlighted = false,
@@ -274,4 +274,4 @@ export default function BlockCard({
             </div>
         </div>
     )
-}
+})

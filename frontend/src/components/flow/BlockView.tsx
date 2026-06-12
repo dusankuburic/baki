@@ -8,10 +8,11 @@ import BlockEnd, {isContainerType} from './BlockEnd'
 import LoopControlBlock from './LoopControlBlock'
 import {isLoopControl} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
+import {logger} from '@/lib/logger'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
 import {useKeyboard} from '@/hooks/useKeyboard'
-import type {Severity, BlockType} from '@/types/domain'
+import type {Severity, BlockType, Block} from '@/types/domain'
 
 function BlockItemWrapperComponent({
     item,
@@ -78,7 +79,7 @@ function BlockItemWrapperComponent({
     )
 }
 
-function areEqual(prev: any, next: any) {
+function areEqual(prev: {item: FlatBlock; findingCounts: Map<string, number>; findingSeverities: Map<string, Severity>}, next: {item: FlatBlock; findingCounts: Map<string, number>; findingSeverities: Map<string, Severity>}) {
     if (!prev.item || !next.item) return false
     if (prev.findingCounts !== next.findingCounts) return false
     if (prev.findingSeverities !== next.findingSeverities) return false
@@ -187,7 +188,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
             },
             'edit.copy.name': () => {
                 const block = useFlowStore.getState().selectedBlock()
-                if (block) navigator.clipboard.writeText(block.name).catch(() => {})
+                if (block) navigator.clipboard.writeText(block.name).catch((err) => { logger.warn('Clipboard write failed', err) })
             },
             'edit.copy.path': () => {
                 const {document: doc, selectedBlockId: bid} = useFlowStore.getState()
@@ -195,7 +196,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
                 let path = ''
                 for (const sf of doc.subflows) {
                     const trail: string[] = []
-                    const found = (function search(blocks: any[]): boolean {
+                    const found = (function search(blocks: Block[]): boolean {
                         for (const b of blocks) {
                             trail.push(b.name)
                             if (b.id === bid) return true
@@ -206,7 +207,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
                     })(sf.blocks)
                     if (found) { path = `${sf.name} > ${trail.join(' > ')}`; break }
                 }
-                if (path) navigator.clipboard.writeText(path).catch(() => {})
+                if (path) navigator.clipboard.writeText(path).catch((err) => { logger.warn('Clipboard write failed', err) })
             },
             'edit.clear.selection': () => useFlowStore.getState().selectBlock(null),
         },

@@ -74,7 +74,7 @@ func (s *FlowService) GetAuthorized(ctx context.Context, flowID, userID, minPerm
 
 	// 3. Check org membership
 	if doc.OrganizationID != "" && s.orgSvc != nil {
-		if role, err := s.orgSvc.MemberRole(doc.OrganizationID, userID); err == nil {
+		if role, err := s.orgSvc.MemberRole(ctx, doc.OrganizationID, userID); err == nil {
 			if orgRoleToPermRank(role) >= permRank(minPerm) {
 				return doc, nil
 			}

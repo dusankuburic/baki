@@ -153,7 +153,9 @@ export async function getWsTicket(): Promise<string> {
 
 export type EventConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting'
 
-const listeners = new Set<(event: { name: string; data: any }) => void>()
+export type EventCallback = (event: { name: string; data: unknown }) => void
+
+const listeners = new Set<EventCallback>()
 const connectionListeners = new Set<(state: EventConnectionState) => void>()
 
 let connectionState: EventConnectionState = 'idle'
@@ -253,14 +255,14 @@ async function connectEvents(): Promise<void> {
         // Stream ended (server closed the connection) — reconnect if still wanted.
         if (eventAbortController === controller) eventAbortController = null
         scheduleReconnect()
-    } catch (err: any) {
+    } catch (err: unknown) {
         if (eventAbortController === controller) eventAbortController = null
-        if (err?.name === 'AbortError') return // intentional close, no reconnect
+        if (err instanceof DOMException && err.name === 'AbortError') return // intentional close, no reconnect
         scheduleReconnect()
     }
 }
 
-export async function subscribeToEvents(callback: (event: { name: string; data: any }) => void) {
+export async function subscribeToEvents(callback: EventCallback) {
     listeners.add(callback)
 
     if (!streamActive) {

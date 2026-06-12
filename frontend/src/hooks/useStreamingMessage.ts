@@ -1,6 +1,7 @@
 import {useEffect, useRef, useCallback} from 'react'
 import {chatApi} from '@/api'
-import {subscribeToEvents, subscribeConnectionState, EventConnectionState} from '@/api/client'
+import {logger} from '@/lib/logger'
+import {subscribeToEvents, subscribeConnectionState, EventConnectionState, getEventConnectionState} from '@/api/client'
 import {useChatStore} from '@/stores/chatStore'
 
 interface StreamHandler {
@@ -17,9 +18,13 @@ export function useStreamingMessage(handler: StreamHandler) {
   const unregisterRef = useRef<(() => void) | null>(null)
   const unregisterConnRef = useRef<(() => void) | null>(null)
   const handlerRef = useRef(handler)
-  handlerRef.current = handler
+  useEffect(() => {
+    handlerRef.current = handler
+  }, [handler])
+
   const activeStreamId = useChatStore(s => s.activeStreamId)
   const streamIdRef = useRef<string | null>(null)
+  const isCanceledRef = useRef(false)
 
   const registerStream = useCallback(async (streamId: string) => {
     if (unregisterRef.current) {
@@ -31,6 +36,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       unregisterConnRef.current = null
     }
     streamIdRef.current = streamId
+    isCanceledRef.current = false
 
     let wasReconnecting = false
 
@@ -60,31 +66,50 @@ export function useStreamingMessage(handler: StreamHandler) {
       }
     })
 
-    const unsub = await subscribeToEvents((event: any) => {
+    const unsub = await subscribeToEvents((event: { name: string; data: unknown }) => {
       if (event.name !== 'chat:event') return
-      const payload = event.data || {}
-      if (payload.streamId !== streamId) return
+      const payload = event.data as Record<string, unknown> | null
+      if (!payload || payload.streamId !== streamId) return
 
-      const type = payload.type
-      const data = payload.data || {}
+      const type = payload.type as string
+      const data = (payload.data as Record<string, unknown>) || {}
 
       switch (type) {
         case 'chunk':
-          handlerRef.current.onChunk(data.content || '')
+          handlerRef.current.onChunk((data.content as string) || '')
           break
         case 'done':
-          handlerRef.current.onDone(data.tokensOut || 0, data.tokensIn || 0)
+          handlerRef.current.onDone((data.tokensOut as number) || 0, (data.tokensIn as number) || 0)
           break
         case 'error':
-          handlerRef.current.onError(data.message || 'Unknown error')
+          handlerRef.current.onError((data.message as string) || 'Unknown error')
           break
         case 'tool':
-          handlerRef.current.onToolStatus?.(data.label || data.name || 'Using tool')
+          handlerRef.current.onToolStatus?.((data.label as string) || (data.name as string) || 'Using tool')
           break
       }
     })
 
     unregisterRef.current = unsub
+
+    // Wait for the SSE connection to be fully 'open' before signaling the backend
+    // to begin emitting chunks. If beginStream is called while the connection is
+    // still establishing (connecting/reconnecting), the backend's EventManager
+    // has no client for this user yet and the initial chunks will be dropped.
+    if (getEventConnectionState() !== 'open') {
+      await new Promise<void>((resolve) => {
+        const check = (state: EventConnectionState) => {
+          if (state === 'open' || isCanceledRef.current) {
+            unsubConn()
+            resolve()
+          }
+        }
+        const unsubConn = subscribeConnectionState(check)
+      })
+    }
+
+    if (isCanceledRef.current) return
+
     // If beginStream fails the backend goroutine blocks on awaitStart() until its
     // 5-minute context timeout fires — with no event emitted afterward. Propagate
     // the error so the caller (executeSend) can clean up the streaming state.
@@ -92,8 +117,9 @@ export function useStreamingMessage(handler: StreamHandler) {
   }, [])
 
   const cancel = useCallback(() => {
+    isCanceledRef.current = true
     if (activeStreamId) {
-      chatApi.cancelStream(activeStreamId).catch(() => {})
+      chatApi.cancelStream(activeStreamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
     }
     if (unregisterRef.current) {
       unregisterRef.current()

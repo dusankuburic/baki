@@ -31,6 +31,7 @@ func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
 	)
 
 	svc := &ChatService{
@@ -82,6 +83,7 @@ func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
 	)
 
 	svc := &ChatService{
@@ -130,6 +132,7 @@ func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
 		},
 		nil,
 		nil,
+		nil,
 	)
 
 	svc := &ChatService{
@@ -167,6 +170,7 @@ func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 	notifier := &countingNotifier{}
 	factory := ai.NewProviderFactory(
 		func(scope, provider string) (string, error) {return "", fmt.Errorf("no key")},
+		nil,
 		nil,
 		nil,
 	)

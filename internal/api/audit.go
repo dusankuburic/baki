@@ -4,16 +4,20 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/auth"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// Audit action constants — keep them stable; admin UIs and SIEM rules filter by these.
 const (
+	auditQueueSize = 256
+	auditWorkers   = 8
+	auditWriteTTL  = 5 * time.Second
+
 	AuditActionLogin          = "auth.login"
 	AuditActionLogout         = "auth.logout"
 	AuditActionRegister       = "auth.register"
@@ -29,11 +33,52 @@ const (
 	AuditActionChatStream     = "chat.stream"
 	AuditActionSettingsChange = "settings.change"
 	AuditActionKeysSave       = "keys.save"
+	AuditActionOrgInviteCreate = "org.invite_create"
+	AuditActionOrgInviteRevoke = "org.invite_revoke"
+	AuditActionOrgInviteAccept = "org.invite_accept"
+	AuditActionProfileUpdate   = "user.profile_update"
+	AuditActionSessionRevoke   = "auth.session_revoke"
 )
 
-// logAudit records an event to the backend in a background goroutine so it
-// never blocks the request path. Failures are logged but not surfaced.
-func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Request, action, resourceType, resourceID string, meta map[string]string) {
+var (
+	auditCh   chan *storageif.AuditEvent
+	auditWg   sync.WaitGroup
+	auditOnce sync.Once
+)
+
+func InitAuditPool(backend storageif.StorageBackend) {
+	if backend == nil {
+		return
+	}
+	auditOnce.Do(func() {
+		auditCh = make(chan *storageif.AuditEvent, auditQueueSize)
+		auditWg.Add(auditWorkers)
+		for i := 0; i < auditWorkers; i++ {
+			go auditWorker(backend)
+		}
+	})
+}
+
+func ShutdownAuditPool() {
+	if auditCh == nil {
+		return
+	}
+	close(auditCh)
+	auditWg.Wait()
+}
+
+func auditWorker(backend storageif.StorageBackend) {
+	defer auditWg.Done()
+	for event := range auditCh {
+		ctx, cancel := context.WithTimeout(context.Background(), auditWriteTTL)
+		if err := backend.SaveAuditEvent(ctx, event); err != nil {
+			slog.Warn("audit log write failed", "action", event.Action, "err", err)
+		}
+		cancel()
+	}
+}
+
+func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Request, trustedProxies []string, action, resourceType, resourceID string, meta map[string]string) {
 	if backend == nil {
 		return
 	}
@@ -43,7 +88,7 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		userID = claims.UserID
 		email = claims.Email
 	}
-	ip := clientIP(r)
+	ip := middleware.ClientIP(r, trustedProxies)
 	event := &storageif.AuditEvent{
 		ID:           uuid.NewString(),
 		UserID:       userID,
@@ -55,23 +100,17 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		Meta:         meta,
 		CreatedAt:    time.Now().UTC(),
 	}
+	if auditCh != nil {
+		select {
+		case auditCh <- event:
+		default:
+			slog.Warn("audit pool full, dropping event", "action", action)
+		}
+		return
+	}
 	go func() {
 		if err := backend.SaveAuditEvent(context.Background(), event); err != nil {
 			slog.Warn("audit log write failed", "action", action, "err", err)
 		}
 	}()
-}
-
-func clientIP(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.SplitN(xff, ",", 2)[0]
-	}
-	host := r.RemoteAddr
-	if colon := strings.LastIndex(host, ":"); colon != -1 {
-		host = host[:colon]
-	}
-	return host
 }

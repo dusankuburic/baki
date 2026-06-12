@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -424,12 +425,25 @@ func (lsb *LocalStorageBackend) CountUsers(ctx context.Context) (int, error) {
 	return len(lsb.users), nil
 }
 
-func (lsb *LocalStorageBackend) ListUsers(ctx context.Context) ([]*interfaces.User, error) {
+func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int) ([]*interfaces.User, error) {
 	lsb.usersMu.Lock()
 	defer lsb.usersMu.Unlock()
 	users := make([]*interfaces.User, 0, len(lsb.users))
 	for _, u := range lsb.users {
 		users = append(users, u)
+	}
+	// Keep a stable, newest-first ordering to match the postgres backend.
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].CreatedAt.After(users[j].CreatedAt)
+	})
+	if offset > 0 && offset >= len(users) {
+		return users[:0], nil
+	}
+	if offset > 0 {
+		users = users[offset:]
+	}
+	if limit > 0 && limit < len(users) {
+		users = users[:limit]
 	}
 	return users, nil
 }
@@ -462,6 +476,18 @@ func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id strin
 	defer lsb.usersMu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		u.Password = passwordHash
+		u.UpdatedAt = time.Now().UTC()
+		return nil
+	}
+	return interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error {
+	lsb.usersMu.Lock()
+	defer lsb.usersMu.Unlock()
+	if u, ok := lsb.users[id]; ok {
+		u.DisplayName = displayName
+		u.AvatarURL = avatarURL
 		u.UpdatedAt = time.Now().UTC()
 		return nil
 	}
@@ -501,6 +527,14 @@ func (lsb *LocalStorageBackend) DeleteOrg(ctx context.Context, id string) error 
 		return nil
 	}
 	return interfaces.ErrNotFound
+}
+
+func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {
+	org, ok := lsb.orgs[id]
+	if !ok {
+		return interfaces.ErrNotFound
+	}
+	return fn(org)
 }
 
 // ---- Sharing operations ----

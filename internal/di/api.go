@@ -1,23 +1,49 @@
 package di
 
 import (
+	"context"
+
 	"go.uber.org/fx"
 	"pad-analyzer/internal/api"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	wshub "pad-analyzer/internal/websocket"
 )
+
+type storageFlowChecker struct {
+	backend storageif.StorageBackend
+}
+
+func (c *storageFlowChecker) FlowExists(ctx context.Context, flowID string) (bool, error) {
+	_, err := c.backend.LoadFlow(ctx, flowID)
+	if err == storageif.ErrNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ProvideFlowAccessChecker(backend storageif.StorageBackend) wshub.FlowAccessChecker {
+	if backend == nil {
+		return nil
+	}
+	return &storageFlowChecker{backend: backend}
+}
 
 func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend storageif.StorageBackend, orgSvc *collaboration.OrgService) *api.SecurityConfig {
 	return &api.SecurityConfig{
-		JWTEnabled:  cfg.Auth.Enabled,
-		LocalUserID: "local",
-		LocalName:   "You",
-		Token:       cfg.Auth.Secret,
-		AuthMgr:     authMgr,
-		Backend:     backend,
-		OrgSvc:      orgSvc,
+		JWTEnabled:     cfg.Auth.Enabled,
+		LocalUserID:    "local",
+		LocalName:      "You",
+		Token:          cfg.Auth.Secret,
+		AuthMgr:        authMgr,
+		Backend:        backend,
+		OrgSvc:         orgSvc,
+		TrustedProxies: cfg.Server.TrustedProxies,
 	}
 }
 
@@ -53,6 +79,7 @@ var APIModule = fx.Options(
 	fx.Provide(
 		ProvideSecurityConfig,
 		ProvideHandlers,
+		ProvideFlowAccessChecker,
 		api.NewEventManager,
 		api.NewSystemHandler,
 		api.NewFlowHandler,

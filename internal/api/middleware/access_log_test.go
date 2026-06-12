@@ -24,7 +24,7 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 func TestAccessLog_GeneratesRequestIDWhenMissing(t *testing.T) {
 	_ = captureSlog(t)
 
-	handler := AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLog(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The handler should see the generated ID on the context.
 		if RequestIDFromContext(r.Context()) == "" {
 			t.Error("expected non-empty request ID on context")
@@ -46,7 +46,7 @@ func TestAccessLog_PreservesUpstreamRequestID(t *testing.T) {
 	const upstream = "lb-deadbeef-1234"
 
 	var seen string
-	handler := AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLog(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -69,7 +69,7 @@ func TestAccessLog_OverlongUpstreamIDReplacedToBoundLogLineSize(t *testing.T) {
 	tooLong := strings.Repeat("a", 200)
 
 	var seen string
-	handler := AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLog(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -90,7 +90,7 @@ func TestAccessLog_OverlongUpstreamIDReplacedToBoundLogLineSize(t *testing.T) {
 func TestAccessLog_EmitsStructuredLineWithStatusAndLatency(t *testing.T) {
 	logs := captureSlog(t)
 
-	handler := AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLog(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("hello"))
 	}))
@@ -118,7 +118,7 @@ func TestAccessLog_EmitsStructuredLineWithStatusAndLatency(t *testing.T) {
 func TestAccessLog_LevelDemotionForHealthProbes(t *testing.T) {
 	logs := captureSlog(t)
 
-	handler := AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AccessLog(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

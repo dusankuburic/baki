@@ -27,6 +27,17 @@ export interface RefreshResponse {
   refreshToken?: string
 }
 
+export interface UpdateProfileRequest {
+  displayName: string
+  avatarUrl: string
+}
+
+export interface SessionInfo {
+  id: string
+  createdAt: string
+  expiresAt: string
+}
+
 export const authApi = {
   login: (credentials: LoginRequest): Promise<LoginResponse> =>
     request('/api/auth/login', credentials),
@@ -43,6 +54,15 @@ export const authApi = {
   me: (): Promise<AuthUser> =>
     request('/api/auth/me', undefined, 'GET'),
 
+  updateProfile: (profile: UpdateProfileRequest): Promise<AuthUser> =>
+    request('/api/auth/profile', profile, 'PUT'),
+
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
     request('/api/auth/change-password', { currentPassword, newPassword }),
+
+  listSessions: (): Promise<SessionInfo[]> =>
+    request('/api/auth/sessions', undefined, 'GET'),
+
+  revokeSession: (id: string): Promise<void> =>
+    request(`/api/auth/sessions/${id}`, undefined, 'DELETE'),
 }

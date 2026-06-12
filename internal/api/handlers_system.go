@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -14,6 +15,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 )
+
+var validProviders = map[string]bool{
+	"openai":       true,
+	"claude":       true,
+	"gemini":       true,
+	"xai":          true,
+	"glm":          true,
+	"github-models": true,
+	"copilot":      true,
+	"demo":         true,
+}
 
 type SystemHandler struct {
 	sysSvc   *service.SystemService
@@ -99,6 +111,10 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
+	if req.Provider == "" || !validProviders[req.Provider] {
+		render.Error(w, fmt.Errorf("invalid or unsupported provider: %q", req.Provider), http.StatusBadRequest)
+		return
+	}
 	if err := h.sysSvc.SaveApiKey(h.security.KeyScope(r), req.Provider, req.Key); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -128,6 +144,10 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.Provider == "" || !validProviders[req.Provider] {
+		render.Error(w, fmt.Errorf("invalid or unsupported provider: %q", req.Provider), http.StatusBadRequest)
 		return
 	}
 	if err := h.sysSvc.DeleteApiKey(h.security.KeyScope(r), req.Provider); err != nil {

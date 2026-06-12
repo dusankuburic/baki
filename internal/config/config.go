@@ -24,6 +24,7 @@ type Config struct {
 	Server  ServerConfig
 	Storage StorageConfig
 	Auth    AuthConfig
+	Runtime RuntimeConfig
 	Log     models.LogConfig
 }
 
@@ -67,7 +68,50 @@ type StorageConfig struct {
 	DBConnMaxLifetime string // duration string, e.g. "1h"
 }
 
-// AuthConfig holds authentication settings
+type RuntimeConfig struct {
+	RateLimitGeneralRPS    float64
+	RateLimitGeneralBurst  float64
+	RateLimitAuthRPS       float64
+	RateLimitAuthBurst     float64
+	RateLimitExpensiveRPS  float64
+	RateLimitExpensiveBurst float64
+	RateLimitChatRPS       float64
+	RateLimitChatBurst     float64
+	RateLimitUploadRPS     float64
+	RateLimitUploadBurst   float64
+	CircuitBreakerFailures int
+	CircuitBreakerOpenDur  string
+	RetryMaxAttempts       int
+	RetryBaseDelay         string
+	JWTAccessTTL           string
+	JWTRefreshTTL          string
+	OTLPEndpoint           string
+	RequestTimeout         string
+}
+
+func DefaultRuntimeConfig() RuntimeConfig {
+	return RuntimeConfig{
+		RateLimitGeneralRPS:    1.0,
+		RateLimitGeneralBurst:  20,
+		RateLimitAuthRPS:       5.0 / 60.0,
+		RateLimitAuthBurst:     5,
+		RateLimitExpensiveRPS:  2,
+		RateLimitExpensiveBurst: 5,
+		RateLimitChatRPS:       3,
+		RateLimitChatBurst:     10,
+		RateLimitUploadRPS:     1,
+		RateLimitUploadBurst:   3,
+		CircuitBreakerFailures: 5,
+		CircuitBreakerOpenDur:  "30s",
+		RetryMaxAttempts:       3,
+		RetryBaseDelay:         "500ms",
+		JWTAccessTTL:           "15m",
+		JWTRefreshTTL:          "24h",
+		OTLPEndpoint:           "",
+		RequestTimeout:         "30s",
+	}
+}
+
 type AuthConfig struct {
 	// Enabled controls whether auth middleware is enforced
 	Enabled bool
@@ -78,7 +122,8 @@ type AuthConfig struct {
 // Default returns a sensible local-mode configuration
 func Default() *Config {
 	return &Config{
-		Mode: ModeLocal,
+		Mode:    ModeLocal,
+		Runtime: DefaultRuntimeConfig(),
 		Server: ServerConfig{
 			Host: "localhost",
 			Port: 0, // 0 = OS-assigned ephemeral port (current behaviour)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
 
 	"github.com/google/uuid"
@@ -57,7 +58,7 @@ func ParseText(text, fileName string, fileSize int64) (*models.FlowDocument, err
 }
 
 func ParseFolder(folderPath string) (*models.FlowDocument, error) {
-	fmt.Printf("Go: ParseFolder started for %s\n", folderPath)
+	logger.Debug("ParseFolder started", "path", folderPath)
 	entries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, fmt.Errorf("read folder: %w", err)
@@ -69,7 +70,7 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 			txtFiles = append(txtFiles, e)
 		}
 	}
-	fmt.Printf("Go: Found %d .txt files\n", len(txtFiles))
+	logger.Debug("Found .txt files", "count", len(txtFiles))
 	if len(txtFiles) == 0 {
 		return nil, fmt.Errorf("no .txt files found in %s", folderPath)
 	}
@@ -98,7 +99,7 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 
 	for _, entry := range txtFiles {
 		filePath := filepath.Join(folderPath, entry.Name())
-		fmt.Printf("Go: Parsing file %s\n", entry.Name())
+		logger.Debug("Parsing file", "name", entry.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
@@ -135,7 +136,7 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 		totalLines += doc.Metadata.RawLineCount
 	}
 
-	fmt.Printf("Go: Building final document\n")
+	logger.Debug("Building final document")
 	doc := &models.FlowDocument{
 		ID:          uuid.NewString(),
 		Name:        folderName,
@@ -165,7 +166,7 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 		}
 	}
 
-	fmt.Printf("Go: ParseFolder finished\n")
+	logger.Debug("ParseFolder finished")
 	return doc, nil
 }
 

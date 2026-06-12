@@ -4,6 +4,8 @@ import AITab from './AITab'
 import { chatApi, providersApi, flowApi } from '@/api'
 import { useFlowStore } from '@/stores/flowStore'
 import { useChatStore } from '@/stores/chatStore'
+import type { ConversationFile } from '@/types/domain'
+import type { ProviderInfo } from '@/types/domain'
 
 // Prevent real network calls from all API modules.
 vi.mock('@/api', () => ({
@@ -40,7 +42,7 @@ beforeEach(() => {
   vi.mocked(providersApi.listProviders).mockResolvedValue([])
   vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue([])
   vi.mocked(chatApi.getDemoRemaining).mockResolvedValue(5)
-  vi.mocked(chatApi.getConversation).mockResolvedValue({ messages: [] } as any)
+  vi.mocked(chatApi.getConversation).mockResolvedValue({ messages: [] } as unknown as ConversationFile)
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
 })
 
@@ -58,7 +60,7 @@ describe('AITab', () => {
         models: [{ id: 'claude-3', displayName: 'Claude 3', contextLimit: 200000, inputCostPerM: 3, outputCostPerM: 15 }],
         defaultModel: 'claude-3',
       },
-    ] as any)
+    ] as ProviderInfo[])
 
     render(<AITab />)
 

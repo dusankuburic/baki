@@ -25,8 +25,8 @@ func isRetryable(err error) bool {
 // increasing, jittered interval; if the previous error carried a server
 // Retry-After hint, the wait is raised to at least that hint so we respect the
 // provider's guidance instead of hammering it on a fixed schedule.
-func backoff(ctx context.Context, attempt int, lastErr error) error {
-	d := retryBaseDelay << attempt // 500ms, 1s, 2s, …
+func backoff(ctx context.Context, attempt int, lastErr error, baseDelay time.Duration) error {
+	d := baseDelay << attempt // 500ms, 1s, 2s, …
 	// Full jitter: random in [0, d] to avoid thundering-herd alignment.
 	d = time.Duration(rand.Int63n(int64(d) + 1))
 	if hint := retryAfterFrom(lastErr); hint > d {
@@ -47,18 +47,31 @@ func backoff(ctx context.Context, attempt int, lastErr error) error {
 // factory chain.
 type RetryingProvider struct {
 	Provider
+	maxAttempts int
+	baseDelay   time.Duration
 }
 
-// NewRetryingProvider wraps p so transient failures are retried.
 func NewRetryingProvider(p Provider) *RetryingProvider {
-	return &RetryingProvider{Provider: p}
+	return &RetryingProvider{
+		Provider:    p,
+		maxAttempts: retryMaxAttempts,
+		baseDelay:   retryBaseDelay,
+	}
+}
+
+func NewRetryingProviderWithConfig(p Provider, maxAttempts int, baseDelay time.Duration) *RetryingProvider {
+	return &RetryingProvider{
+		Provider:    p,
+		maxAttempts: maxAttempts,
+		baseDelay:   baseDelay,
+	}
 }
 
 func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	var lastErr error
-	for attempt := range retryMaxAttempts {
+	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
-			if err := backoff(ctx, attempt-1, lastErr); err != nil {
+			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return nil, err
 			}
 		}
@@ -73,9 +86,9 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 
 func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	var lastErr error
-	for attempt := range retryMaxAttempts {
+	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
-			if err := backoff(ctx, attempt-1, lastErr); err != nil {
+			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return nil, err
 			}
 		}
@@ -93,9 +106,9 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 // be safely replayed, so the error is returned as-is.
 func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	var lastErr error
-	for attempt := range retryMaxAttempts {
+	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
-			if err := backoff(ctx, attempt-1, lastErr); err != nil {
+			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return err
 			}
 		}

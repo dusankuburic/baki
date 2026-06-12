@@ -208,7 +208,10 @@ func TestDemoProvider_EstimateTokens(t *testing.T) {
 
 func TestDemoProvider_Models_NonEmpty(t *testing.T) {
 	d := NewDemoProvider()
-	models := d.Models()
+	models, err := d.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models() error: %v", err)
+	}
 	if len(models) == 0 {
 		t.Fatal("Models() must return at least one entry")
 	}

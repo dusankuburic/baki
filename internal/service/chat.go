@@ -240,9 +240,14 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			map[string]interface{}{"streamId": streamID, "type": eventType, "data": data})
 	}
 
+	started := false
 	awaitStart := func() bool {
+		if started {
+			return true
+		}
 		select {
 		case <-ctl.started:
+			started = true
 			return true
 		case <-ctx.Done():
 			return false
@@ -306,7 +311,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 
 		scrubbedDoc, sysPrompt, contextText := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
 
-		temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, provider.ContextLimit(), ai.ModelMaxOutputTokens(provider, req.Model))
+		temperature, maxTokens := normalizeChatParams(req.Temperature, req.MaxTokens, provider.ContextLimit(), ai.ModelMaxOutputTokens(ctx, provider, req.Model))
 		aiReq := ai.Request{
 			SystemPrompt: sysPrompt,
 			Messages:     buildMessages(req, contextText),

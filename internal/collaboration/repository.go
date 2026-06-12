@@ -3,6 +3,7 @@ package collaboration
 import (
 	"context"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -15,16 +16,29 @@ type OrgStore interface {
 	LoadOrg(ctx context.Context, id string) (*interfaces.Organisation, error)
 	ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
 	DeleteOrg(ctx context.Context, id string) error
+	MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error
+
+	// Invite operations
+	SaveOrgInvite(ctx context.Context, invite *interfaces.OrgInvite) error
+	ListOrgInvites(ctx context.Context, orgID string) ([]*interfaces.OrgInvite, error)
+	GetOrgInvite(ctx context.Context, orgID, inviteID string) (*interfaces.OrgInvite, error)
+	GetOrgInviteByTokenHash(ctx context.Context, tokenHash string) (*interfaces.OrgInvite, error)
+	DeleteOrgInvite(ctx context.Context, orgID, inviteID string) error
+	MarkOrgInviteAccepted(ctx context.Context, inviteID string, acceptedAt time.Time) error
 }
 
 // NewMemOrgStore returns an in-memory OrgStore.
 func NewMemOrgStore() OrgStore {
-	return &memOrgStore{orgs: make(map[string]*interfaces.Organisation)}
+	return &memOrgStore{
+		orgs:    make(map[string]*interfaces.Organisation),
+		invites: make(map[string]*interfaces.OrgInvite),
+	}
 }
 
 type memOrgStore struct {
-	mu   sync.RWMutex
-	orgs map[string]*interfaces.Organisation
+	mu      sync.RWMutex
+	orgs    map[string]*interfaces.Organisation
+	invites map[string]*interfaces.OrgInvite
 }
 
 func (s *memOrgStore) SaveOrg(_ context.Context, org *interfaces.Organisation) error {
@@ -75,5 +89,95 @@ func (s *memOrgStore) DeleteOrg(_ context.Context, id string) error {
 		return ErrOrgNotFound
 	}
 	delete(s.orgs, id)
+	return nil
+}
+
+func (s *memOrgStore) MutateOrg(_ context.Context, id string, fn func(*interfaces.Organisation) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	org, ok := s.orgs[id]
+	if !ok {
+		return ErrOrgNotFound
+	}
+	if err := fn(org); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ---- Invite operations ----
+
+func (s *memOrgStore) SaveOrgInvite(_ context.Context, invite *interfaces.OrgInvite) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.invites {
+		if existing.ID == invite.ID {
+			continue
+		}
+		if existing.OrgID == invite.OrgID && existing.Email == invite.Email && existing.AcceptedAt == nil {
+			return interfaces.ErrOrgInviteExists
+		}
+	}
+	stored := *invite
+	s.invites[invite.ID] = &stored
+	return nil
+}
+
+func (s *memOrgStore) ListOrgInvites(_ context.Context, orgID string) ([]*interfaces.OrgInvite, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []*interfaces.OrgInvite
+	for _, inv := range s.invites {
+		if inv.OrgID == orgID {
+			clone := *inv
+			result = append(result, &clone)
+		}
+	}
+	return result, nil
+}
+
+func (s *memOrgStore) GetOrgInvite(_ context.Context, orgID, inviteID string) (*interfaces.OrgInvite, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	inv, ok := s.invites[inviteID]
+	if !ok || inv.OrgID != orgID {
+		return nil, ErrInviteNotFound
+	}
+	clone := *inv
+	return &clone, nil
+}
+
+func (s *memOrgStore) GetOrgInviteByTokenHash(_ context.Context, tokenHash string) (*interfaces.OrgInvite, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inv := range s.invites {
+		if inv.TokenHash == tokenHash {
+			clone := *inv
+			return &clone, nil
+		}
+	}
+	return nil, ErrInviteNotFound
+}
+
+func (s *memOrgStore) DeleteOrgInvite(_ context.Context, orgID, inviteID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inv, ok := s.invites[inviteID]
+	if !ok || inv.OrgID != orgID {
+		return ErrInviteNotFound
+	}
+	delete(s.invites, inviteID)
+	return nil
+}
+
+func (s *memOrgStore) MarkOrgInviteAccepted(_ context.Context, inviteID string, acceptedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inv, ok := s.invites[inviteID]
+	if !ok {
+		return ErrInviteNotFound
+	}
+	at := acceptedAt
+	inv.AcceptedAt = &at
 	return nil
 }

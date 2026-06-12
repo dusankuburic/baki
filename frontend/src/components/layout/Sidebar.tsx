@@ -18,7 +18,7 @@ import {useToast} from '@/components/shared/Toast'
 import {useFileOpen} from '@/components/sidebar/hooks/useFileOpen'
 import {useSidebarSearch} from '@/components/sidebar/hooks/useSidebarSearch'
 import {analysisApi} from '@/api'
-import type {BlockType} from '@/types/domain'
+import type {BlockType, AnalysisReport, Block} from '@/types/domain'
 
 const BLOCK_TYPE_LABELS: Record<string, string> = {
     ACTION: 'Actions',
@@ -138,7 +138,7 @@ export default function Sidebar() {
         setAnalysisProgress({current: 0, total: 0, ruleName: ''})
         try {
             const r = await analysisApi.analyzeFlow()
-            if (r) setReport(document.id, r as any)
+            if (r) setReport(document.id, r as AnalysisReport)
         } catch (err) {
             toast.error('Analysis failed: ' + (err as Error).message)
         } finally {
@@ -281,7 +281,7 @@ export default function Sidebar() {
     )
 }
 
-function countTypes(blocks: any[], counts: Map<string, number>) {
+function countTypes(blocks: Block[], counts: Map<string, number>) {
     for (const block of blocks) {
         counts.set(block.type, (counts.get(block.type) ?? 0) + 1)
         if (block.children?.length) countTypes(block.children, counts)

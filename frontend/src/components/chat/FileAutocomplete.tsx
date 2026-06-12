@@ -1,5 +1,6 @@
 import {useState, useEffect, useMemo} from 'react'
 import {flowApi} from '@/api'
+import {logger} from '@/lib/logger'
 import type {SourceFileInfo} from '@/types/domain'
 import {FileText} from 'lucide-react'
 
@@ -13,7 +14,7 @@ export default function FileAutocomplete({query, onSelect}: Props) {
   const [files, setFiles] = useState<SourceFileInfo[]>([])
 
   useEffect(() => {
-    flowApi.getSourceFiles().then(setFiles).catch(() => {})
+    flowApi.getSourceFiles().then(setFiles).catch((err) => { logger.warn('Failed to load source files', err) })
   }, [])
 
   const filtered = useMemo(() => {

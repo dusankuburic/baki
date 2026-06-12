@@ -13,7 +13,7 @@ export function useTheme() {
         const resolved = resolveTheme(theme)
         document.documentElement.dataset.theme = resolved
         if (resolved !== 'system') setResolvedTheme(resolved)
-        try { localStorage.setItem('pad-theme', resolved) } catch (_e) { /* localStorage unavailable */ }
+        try { localStorage.setItem('pad-theme', resolved) } catch { /* localStorage unavailable */ }
     }, [theme, setResolvedTheme])
 
     useEffect(() => {

@@ -18,7 +18,7 @@ func NewProviderHandler(providerSvc *service.ProviderService, security *Security
 }
 
 func (h *ProviderHandler) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	providers, err := h.providerSvc.ListProviders(h.security.KeyScope(r))
+	providers, err := h.providerSvc.ListProviders(r.Context(), h.security.KeyScope(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

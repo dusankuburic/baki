@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,7 +12,7 @@ import (
 type Provider interface {
 	ID() string
 	Name() string
-	Models() []ModelInfo
+	Models(ctx context.Context) ([]ModelInfo, error)
 	DefaultModel() string
 	FreeModel() string
 	Chat(ctx context.Context, req Request) (*Response, error)
@@ -182,7 +181,7 @@ func retryAfterFrom(err error) time.Duration {
 type MetadataProvider interface {
 	ID() string
 	Name() string
-	Models() []ModelInfo
+	Models(ctx context.Context) ([]ModelInfo, error)
 	DefaultModel() string
 	FreeModel() string
 	ContextLimit() int
@@ -210,14 +209,14 @@ type messageRole struct {
 	Content string `json:"content"`
 }
 
-func ProviderError(provider string, code int, msg string) error {
-	return fmt.Errorf("%s API status %d: %s", provider, code, msg)
-}
-
 // ModelContextLimit returns the context limit for a specific model, falling
 // back to the provider-wide limit when the model is not in the model list.
-func ModelContextLimit(p Provider, model string) int {
-	for _, m := range p.Models() {
+func ModelContextLimit(ctx context.Context, p Provider, model string) int {
+	models, err := p.Models(ctx)
+	if err != nil {
+		return p.ContextLimit()
+	}
+	for _, m := range models {
 		if m.ID == model && m.ContextLimit > 0 {
 			return m.ContextLimit
 		}
@@ -228,8 +227,12 @@ func ModelContextLimit(p Provider, model string) int {
 // ModelMaxOutputTokens returns the maximum completion length for a specific
 // model, or 0 (unknown) when the model is absent from the catalog or its
 // MaxOutputTokens is unset. Callers treat 0 as "don't clamp".
-func ModelMaxOutputTokens(p Provider, model string) int {
-	for _, m := range p.Models() {
+func ModelMaxOutputTokens(ctx context.Context, p Provider, model string) int {
+	models, err := p.Models(ctx)
+	if err != nil {
+		return 0
+	}
+	for _, m := range models {
 		if m.ID == model {
 			return m.MaxOutputTokens
 		}

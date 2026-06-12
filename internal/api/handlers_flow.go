@@ -7,6 +7,7 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -32,6 +33,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
+	metrics.RecordFlowOp("upload")
 	var req struct {
 		Name  string            `json:"name"`
 		Files map[string]string `json:"files"`
@@ -87,6 +89,7 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 		render.Error(w, fmt.Errorf("loading from local paths is not supported in cloud mode. use upload instead"), http.StatusForbidden)
 		return
 	}
+	metrics.RecordFlowOp("load_path")
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -107,6 +110,7 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("loading from local folders is not supported in cloud mode. use upload instead"), http.StatusForbidden)
 		return
 	}
+	metrics.RecordFlowOp("load_folder")
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -168,7 +172,7 @@ func (h *FlowHandler) handleClearRecentFiles(w http.ResponseWriter, r *http.Requ
 
 func (h *FlowHandler) handleRevealInFileManager(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		http.Error(w, "Forbidden in cloud mode", http.StatusForbidden)
+		render.Error(w, fmt.Errorf("forbidden in cloud mode"), http.StatusForbidden)
 		return
 	}
 	var req struct {

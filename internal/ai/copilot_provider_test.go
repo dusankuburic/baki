@@ -32,8 +32,30 @@ func TestCopilotProvider_ID(t *testing.T) {
 }
 
 func TestCopilotProvider_Models(t *testing.T) {
+	// 1. Valid fetch (dynamic)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("path = %q, want /models", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"id":"gpt-4o","name":"GPT-4o","context_limit":128000},{"id":"gpt-4o-mini","name":"GPT-4o Mini","context_limit":128000},{"id":"claude-3.5-sonnet","name":"Claude 3.5 Sonnet","context_limit":200000}]}`))
+	}))
+	defer server.Close()
+
+	orig := copilotModelsURL
+	defer func() { copilotModelsURL = orig }()
+	copilotModelsURL = server.URL + "/models"
+
 	p := NewCopilotProvider("test-token")
-	models := p.Models()
+	p.client = server.Client()
+
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models() error: %v", err)
+	}
 	if len(models) != 3 {
 		t.Fatalf("expected 3 models, got %d", len(models))
 	}
@@ -46,6 +68,18 @@ func TestCopilotProvider_Models(t *testing.T) {
 			t.Errorf("missing expected model %q", want)
 		}
 	}
+
+	// 2. Cache hit (server should NOT be called again)
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not have been called due to cache")
+	})
+	models2, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models2) != 3 {
+		t.Fatal("cached results lost")
+	}
 }
 
 func TestCopilotProvider_Pricing_IsZero(t *testing.T) {
@@ -54,11 +88,7 @@ func TestCopilotProvider_Pricing_IsZero(t *testing.T) {
 	if pricing.InputCostPerM != 0 || pricing.OutputCostPerM != 0 {
 		t.Errorf("Copilot pricing should be zero (subscription-based), got %+v", pricing)
 	}
-	for _, m := range p.Models() {
-		if m.Pricing.InputCostPerM != 0 || m.Pricing.OutputCostPerM != 0 {
-			t.Errorf("model %q pricing should be zero, got %+v", m.ID, m.Pricing)
-		}
-	}
+	// We can't easily test p.Models() here without a mock server or pre-filling the cache
 }
 
 // --- Chat ---

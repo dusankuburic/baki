@@ -23,7 +23,7 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 	}
 }
 
-func (g *GeminiProvider) SupportsTools() bool  { return false }
+func (g *GeminiProvider) SupportsTools() bool { return true }
 
 func (g *GeminiProvider) ID() string          { return "gemini" }
 func (g *GeminiProvider) Name() string        { return "Gemini" }
@@ -43,18 +43,14 @@ func (g *GeminiProvider) EstimateTokens(text string) int {
 	return EstimateTokensGemini(text)
 }
 
-func (g *GeminiProvider) Models() []ModelInfo { return catalogModels("gemini") }
+func (g *GeminiProvider) Models(_ context.Context) ([]ModelInfo, error) {
+	return catalogModels("gemini"), nil
+}
 
 var geminiURL = defaultGeminiURL
 
-// geminiBaseHost is the Gemini API hostname, overridable via GEMINI_API_URL
-// for proxy endpoints. The path is always constructed by defaultGeminiURL.
 var geminiBaseHost = providerURL("GEMINI_API_URL", "https://generativelanguage.googleapis.com")
 
-// defaultGeminiURL builds the request URL. The API key is NOT placed in the
-// query string (it would leak into proxy/access logs); it is sent via the
-// x-goog-api-key header at the call site instead. The apiKey parameter is
-// retained only so tests can override geminiURL with the same signature.
 func defaultGeminiURL(model, _ /*apiKey*/, action string) string {
 	base := fmt.Sprintf("%s/v1beta/models/%s:%s", geminiBaseHost, model, action)
 	if action == "streamGenerateContent" {
@@ -64,9 +60,10 @@ func defaultGeminiURL(model, _ /*apiKey*/, action string) string {
 }
 
 type geminiRequest struct {
-	Contents         []geminiContent   `json:"contents"`
+	Contents          []geminiContent  `json:"contents"`
 	SystemInstruction *geminiContent   `json:"systemInstruction,omitempty"`
-	GenerationConfig *geminiGenConfig  `json:"generationConfig,omitempty"`
+	GenerationConfig  *geminiGenConfig `json:"generationConfig,omitempty"`
+	Tools             []geminiToolDecl `json:"tools,omitempty"`
 }
 
 type geminiContent struct {
@@ -75,7 +72,19 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Text string `json:"text"`
+	Text             string                  `json:"text,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+type geminiFunctionCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string      `json:"name"`
+	Response interface{} `json:"response"`
 }
 
 type geminiGenConfig struct {
@@ -83,13 +92,21 @@ type geminiGenConfig struct {
 	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
 }
 
+type geminiFunctionDecl struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type geminiToolDecl struct {
+	FunctionDeclarations []geminiFunctionDecl `json:"functionDeclarations"`
+}
+
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-			Role string `json:"role"`
+			Parts []geminiPart `json:"parts"`
+			Role  string       `json:"role"`
 		} `json:"content"`
 		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
@@ -109,18 +126,78 @@ type geminiErrorResp struct {
 }
 
 func toGeminiContents(msgs []Message) []geminiContent {
-	out := make([]geminiContent, len(msgs))
-	for i, m := range msgs {
-		role := "user"
-		if m.Role == "assistant" {
-			role = "model"
+	callNames := map[string]string{}
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			callNames[tc.ID] = tc.Name
 		}
-		out[i] = geminiContent{
-			Role:  role,
-			Parts: []geminiPart{{Text: m.Content}},
+	}
+
+	var out []geminiContent
+	for _, m := range msgs {
+		switch {
+		case m.Role == "tool":
+			name := callNames[m.ToolCallID]
+			resp := map[string]string{"result": m.Content}
+			out = append(out, geminiContent{
+				Role: "user",
+				Parts: []geminiPart{{
+					FunctionResponse: &geminiFunctionResponse{
+						Name:     name,
+						Response: resp,
+					},
+				}},
+			})
+
+		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			parts := make([]geminiPart, 0, 1+len(m.ToolCalls))
+			if m.Content != "" {
+				parts = append(parts, geminiPart{Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var args map[string]interface{}
+				if len(tc.Input) > 0 {
+					json.Unmarshal(tc.Input, &args)
+				}
+				parts = append(parts, geminiPart{
+					FunctionCall: &geminiFunctionCall{
+						Name: tc.Name,
+						Args: args,
+					},
+				})
+			}
+			out = append(out, geminiContent{
+				Role:  "model",
+				Parts: parts,
+			})
+
+		default:
+			role := "user"
+			if m.Role == "assistant" {
+				role = "model"
+			}
+			out = append(out, geminiContent{
+				Role:  role,
+				Parts: []geminiPart{{Text: m.Content}},
+			})
 		}
 	}
 	return out
+}
+
+func toGeminiTools(tools []ToolDefinition) []geminiToolDecl {
+	if len(tools) == 0 {
+		return nil
+	}
+	decls := make([]geminiFunctionDecl, len(tools))
+	for i, t := range tools {
+		decls[i] = geminiFunctionDecl{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  t.InputSchema,
+		}
+	}
+	return []geminiToolDecl{{FunctionDeclarations: decls}}
 }
 
 func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, error) {
@@ -130,6 +207,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			Temperature:     req.Temperature,
 			MaxOutputTokens: orDefault(req.MaxTokens, 4096),
 		},
+		Tools: toGeminiTools(req.Tools),
 	}
 	if req.SystemPrompt != "" {
 		body.SystemInstruction = &geminiContent{
@@ -175,7 +253,33 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("parse gemini response: %w", err)
 	}
-	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
+	if len(parsed.Candidates) == 0 {
+		return nil, errors.New("gemini returned no content")
+	}
+
+	parts := parsed.Candidates[0].Content.Parts
+	var text string
+	var toolCalls []ToolCall
+	for i, p := range parts {
+		if p.Text != "" {
+			text += p.Text
+		}
+		if p.FunctionCall != nil {
+			// A nil Args map marshals to the literal `null`, which is not a
+			// valid tool-arguments object; send `{}` like the OpenAI provider.
+			args := []byte("{}")
+			if p.FunctionCall.Args != nil {
+				args, _ = json.Marshal(p.FunctionCall.Args)
+			}
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    fmt.Sprintf("call_%d", i),
+				Name:  p.FunctionCall.Name,
+				Input: json.RawMessage(args),
+			})
+		}
+	}
+
+	if text == "" && len(toolCalls) == 0 {
 		return nil, errors.New("gemini returned no content")
 	}
 
@@ -186,10 +290,11 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	}
 
 	return &Response{
-		Content:      parsed.Candidates[0].Content.Parts[0].Text,
+		Content:      text,
 		TokensIn:     tokensIn,
 		TokensOut:    tokensOut,
 		FinishReason: parsed.Candidates[0].FinishReason,
+		ToolCalls:    toolCalls,
 	}, nil
 }
 
@@ -200,6 +305,7 @@ func (g *GeminiProvider) Stream(ctx context.Context, req Request, onChunk func(C
 			Temperature:     req.Temperature,
 			MaxOutputTokens: orDefault(req.MaxTokens, 4096),
 		},
+		Tools: toGeminiTools(req.Tools),
 	}
 	if req.SystemPrompt != "" {
 		body.SystemInstruction = &geminiContent{

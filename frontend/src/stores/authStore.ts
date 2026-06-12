@@ -16,6 +16,7 @@ interface AuthState {
   logout: () => Promise<void>
   refresh: () => Promise<boolean>
   loadFromStorage: () => Promise<void>
+  updateUser: (patch: Partial<AuthUser>) => void
   clearError: () => void
 }
 
@@ -187,6 +188,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: null, accessToken: null, isAuthenticated: false, isLoading: false })
     }
   },
+
+  updateUser: (patch) => set(s => ({ user: s.user ? { ...s.user, ...patch } : s.user })),
 
   clearError: () => set({ error: null }),
 }))

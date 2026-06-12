@@ -14,20 +14,24 @@ export function renderComponent(ui: ReactElement, options?: RenderOptions) {
 // Platform helpers
 // ---------------------------------------------------------------------------
 
+interface TauriWindow extends Window {
+  __TAURI__?: Record<string, unknown>
+}
+
 /**
  * Simulate running inside Tauri desktop by injecting __TAURI__ on window.
  * Returns a cleanup function that removes it.
  */
 export function simulateTauri(): () => void {
-  ;(window as any).__TAURI__ = {}
-  return () => delete (window as any).__TAURI__
+  ;(window as TauriWindow).__TAURI__ = {}
+  return () => delete (window as TauriWindow).__TAURI__
 }
 
 /**
  * Simulate running in a plain web browser (the default).
  */
 export function simulateWeb(): void {
-  delete (window as any).__TAURI__
+  delete (window as TauriWindow).__TAURI__
 }
 
 // ---------------------------------------------------------------------------

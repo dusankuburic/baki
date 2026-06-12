@@ -20,7 +20,7 @@ import (
 // It sets up the OTLP exporter if APPLICATIONINSIGHTS_CONNECTION_STRING or
 // OTEL_EXPORTER_OTLP_ENDPOINT is provided.
 // Returns a shutdown function to be called on application exit.
-func Init(ctx context.Context, serviceName, version string) (func(), error) {
+func Init(ctx context.Context, serviceName, version, otlpEndpoint string) (func(), error) {
 	// 1. Create Resource
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
@@ -44,7 +44,10 @@ func Init(ctx context.Context, serviceName, version string) (func(), error) {
 	// 3. Setup Exporter
 	// We check for OTEL_EXPORTER_OTLP_ENDPOINT (standard)
 	// Azure Application Insights can be configured to receive OTLP via this endpoint.
-	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	endpoint := otlpEndpoint
+	if endpoint == "" {
+		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
 	if endpoint != "" {
 		slog.Info("telemetry: initializing OTLP exporter", "endpoint", endpoint)
 		exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpoint(endpoint))

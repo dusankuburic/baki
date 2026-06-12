@@ -18,7 +18,9 @@ export default function StatusBar() {
     const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
     const [conn, setConn] = useState<EventConnectionState>('idle')
-    useEffect(() => subscribeConnectionState(setConn), [])
+    useEffect(() => {
+        return subscribeConnectionState(setConn)
+    }, [])
 
     const blockCount = document?.metadata?.blockCount ?? 0
     const subflowCount = document?.metadata?.subflowCount ?? 0

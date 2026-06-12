@@ -50,7 +50,7 @@ func sendEnvelope(t *testing.T, conn *websocket.Conn, env Envelope) {
 // newTestServer creates a WebSocket test server backed by a Hub.
 // allowedOrigins is nil in tests, meaning all origins are rejected unless empty.
 func newTestServer(hub *Hub, userID, displayName string) *httptest.Server {
-	return httptest.NewServer(Handler(hub, userID, displayName, nil))
+	return httptest.NewServer(Handler(hub, userID, displayName, nil, nil))
 }
 
 // ---- Hub tests ----
@@ -123,7 +123,7 @@ func TestHub_Leave_RoomDeletedWhenEmpty(t *testing.T) {
 
 func TestHub_MissingFlowID_Returns400(t *testing.T) {
 	hub := NewHub()
-	srv := httptest.NewServer(Handler(hub, "u1", "Alice", nil))
+	srv := httptest.NewServer(Handler(hub, "u1", "Alice", nil, nil))
 	defer srv.Close()
 
 	u := "ws" + strings.TrimPrefix(srv.URL, "http") // no ?flowId

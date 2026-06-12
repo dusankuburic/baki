@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useSettingsStore } from './settingsStore'
 
 // Stub out the API layer so tests don't need a real backend
@@ -19,6 +19,8 @@ const mockUpdate = settingsApi.updateSettings as ReturnType<typeof vi.fn>
 const initialState = useSettingsStore.getState()
 
 beforeEach(() => {
+  // Use fake timers so the 1-second persist debounce doesn't slow down the suite.
+  vi.useFakeTimers()
   // Full replacement so no settings bleed from previous test
   useSettingsStore.setState(initialState, true)
   // Reset mock call history AND implementation back to defaults
@@ -26,6 +28,16 @@ beforeEach(() => {
   mockGet.mockResolvedValue(null)
   mockUpdate.mockResolvedValue(undefined)
 })
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+// Advance fake clock past the 1-second debounce and flush the resulting
+// microtasks so the persist promise settles before assertions run.
+async function flushPersist() {
+  await vi.advanceTimersByTimeAsync(1000)
+}
 
 // ---- loadFromBackend ----
 
@@ -56,12 +68,16 @@ describe('loadFromBackend', () => {
 
 describe('updateAppearance', () => {
   it('updates the appearance theme optimistically', async () => {
-    await useSettingsStore.getState().updateAppearance({ theme: 'midnight' })
+    const p = useSettingsStore.getState().updateAppearance({ theme: 'midnight' })
+    await flushPersist()
+    await p
     expect(useSettingsStore.getState().settings.appearance.theme).toBe('midnight')
   })
 
   it('persists the new settings to the backend', async () => {
-    await useSettingsStore.getState().updateAppearance({ theme: 'nord' })
+    const p = useSettingsStore.getState().updateAppearance({ theme: 'nord' })
+    await flushPersist()
+    await p
     expect(mockUpdate).toHaveBeenCalledOnce()
   })
 
@@ -69,7 +85,9 @@ describe('updateAppearance', () => {
     const originalTheme = useSettingsStore.getState().settings.appearance.theme
     mockUpdate.mockRejectedValue(new Error('disk full'))
 
-    await useSettingsStore.getState().updateAppearance({ theme: 'dracula' })
+    const p = useSettingsStore.getState().updateAppearance({ theme: 'dracula' })
+    await flushPersist()
+    await p.catch(() => {})
     expect(useSettingsStore.getState().settings.appearance.theme).toBe(originalTheme)
   })
 })
@@ -78,13 +96,17 @@ describe('updateAppearance', () => {
 
 describe('updateLayout', () => {
   it('updates sidebar width', async () => {
-    await useSettingsStore.getState().updateLayout({ sidebarWidth: 350 })
+    const p = useSettingsStore.getState().updateLayout({ sidebarWidth: 350 })
+    await flushPersist()
+    await p
     expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(350)
   })
 
   it('does not touch other layout fields', async () => {
     const orig = useSettingsStore.getState().settings.layout.inspectorWidth
-    await useSettingsStore.getState().updateLayout({ sidebarWidth: 400 })
+    const p = useSettingsStore.getState().updateLayout({ sidebarWidth: 400 })
+    await flushPersist()
+    await p
     expect(useSettingsStore.getState().settings.layout.inspectorWidth).toBe(orig)
   })
 })
@@ -93,7 +115,9 @@ describe('updateLayout', () => {
 
 describe('updateProvider', () => {
   it('updates only the specified provider', async () => {
-    await useSettingsStore.getState().updateProvider('openai', { enabled: true })
+    const p = useSettingsStore.getState().updateProvider('openai', { enabled: true })
+    await flushPersist()
+    await p
     const ai = useSettingsStore.getState().settings.ai
     expect(ai.providers.openai.enabled).toBe(true)
     // Other providers should be unchanged
@@ -102,7 +126,9 @@ describe('updateProvider', () => {
 
   it('merges provider config rather than replacing it', async () => {
     const origTokens = useSettingsStore.getState().settings.ai.providers.claude.maxTokens
-    await useSettingsStore.getState().updateProvider('claude', { temperature: 0.9 })
+    const p = useSettingsStore.getState().updateProvider('claude', { temperature: 0.9 })
+    await flushPersist()
+    await p
     expect(useSettingsStore.getState().settings.ai.providers.claude.temperature).toBe(0.9)
     expect(useSettingsStore.getState().settings.ai.providers.claude.maxTokens).toBe(origTokens)
   })
@@ -113,13 +139,19 @@ describe('updateProvider', () => {
 describe('resetToDefaults', () => {
   it('restores the default theme', async () => {
     const defaultTheme = initialState.settings.appearance.theme
-    await useSettingsStore.getState().updateAppearance({ theme: 'tokyo-night' })
-    await useSettingsStore.getState().resetToDefaults()
+    const p1 = useSettingsStore.getState().updateAppearance({ theme: 'tokyo-night' })
+    await flushPersist()
+    await p1
+    const p2 = useSettingsStore.getState().resetToDefaults()
+    await flushPersist()
+    await p2
     expect(useSettingsStore.getState().settings.appearance.theme).toBe(defaultTheme)
   })
 
   it('calls persist with default settings', async () => {
-    await useSettingsStore.getState().resetToDefaults()
+    const p = useSettingsStore.getState().resetToDefaults()
+    await flushPersist()
+    await p
     expect(mockUpdate).toHaveBeenCalledOnce()
   })
 })

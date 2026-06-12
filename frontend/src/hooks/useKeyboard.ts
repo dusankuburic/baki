@@ -15,8 +15,9 @@ export function useKeyboard({scope, handlers, enabled = true, containerRef}: Use
     )
 
     const handlersRef = useRef(handlers)
-    handlersRef.current = handlers
-
+    useEffect(() => {
+        handlersRef.current = handlers
+    })
     useEffect(() => {
         if (!enabled) return
 

@@ -30,7 +30,7 @@ export default function ShareDialog({ flowId, flowName, open, onClose }: ShareDi
     setIsLoading(true)
     sharingApi.listCollaborators(flowId)
       .then(setCollaborators)
-      .catch(e => setError(e.message))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setIsLoading(false))
   }, [flowId, open])
 
@@ -48,8 +48,8 @@ export default function ShareDialog({ flowId, flowName, open, onClose }: ShareDi
       })
       setCollaborators(prev => [...prev, added])
       setInviteEmail('')
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setIsInviting(false)
     }
@@ -59,8 +59,8 @@ export default function ShareDialog({ flowId, flowName, open, onClose }: ShareDi
     try {
       const updated = await sharingApi.updatePermission({ flowId, userId, permission })
       setCollaborators(prev => prev.map(c => c.userId === userId ? updated : c))
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -68,8 +68,8 @@ export default function ShareDialog({ flowId, flowName, open, onClose }: ShareDi
     try {
       await sharingApi.removeCollaborator(flowId, userId)
       setCollaborators(prev => prev.filter(c => c.userId !== userId))
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 

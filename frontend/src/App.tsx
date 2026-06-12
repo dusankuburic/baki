@@ -1,5 +1,5 @@
-import {useCallback, useEffect, useRef, useState, useMemo, lazy, Suspense} from 'react'
-import {ErrorBoundary, ToastProvider} from './components/shared'
+import {useCallback, useEffect, useRef, useState, lazy, Suspense} from 'react'
+import {ErrorBoundary, ToastProvider, useToast} from './components/shared'
 import CommandPalette from './components/search/CommandPalette'
 import GlobalSearchOverlay from './components/search/GlobalSearchOverlay'
 import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
@@ -7,35 +7,35 @@ import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'))
 import {useSettingsStore, onSettingsLoaded} from './stores/settingsStore'
 import {useUIStore} from './stores/uiStore'
+import {logger} from './lib/logger'
 import {useAuthStore} from './stores/authStore'
 import {useFlowStore} from './stores/flowStore'
-import {useEditorStore} from './stores/editorStore'
 import {useChatStore} from './stores/chatStore'
 import {useSearchStore} from './stores/searchStore'
-import {useAnalysisStore} from './stores/analysisStore'
 import {usePresenceStore} from './stores/presenceStore'
-import {useKeyboard} from './hooks/useKeyboard'
 import {useTheme} from './hooks/useTheme'
-import {exportFindingsCSV, exportFindingsHTML} from './lib/findingsExport'
 import {useTauriMenuEvents} from './hooks/useTauriMenuEvents'
 import {useAutoAnalyze} from './hooks/useAutoAnalyze'
+import {useAppShortcuts} from './hooks/useAppShortcuts'
+import {useCommandList} from './hooks/useCommandList'
+import {useAppEvents} from './hooks/useAppEvents'
 import TitleBar from './components/layout/TitleBar'
 import Sidebar from './components/layout/Sidebar'
 import MainPane from './components/layout/MainPane'
 import InspectorPanel from './components/layout/InspectorPanel'
 import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
-import {flowApi, analysisApi, exportApi, systemApi} from '@/api'
-import {subscribeToEvents} from '@/api/client'
+import {flowApi, systemApi} from '@/api'
 import {isTauri} from '@/platform/guards'
-import type {FlowDocument as DomainFlowDocument, RecentFile} from './types/domain'
+import type {FlowDocument as DomainFlowDocument, RecentFile, ProviderID} from './types/domain'
 
 const MIN_SIDEBAR = 200
 const MAX_SIDEBAR = 480
 const MIN_INSPECTOR = 280
 const MAX_INSPECTOR = 560
 
-export default function App() {
+function AppInner() {
+    const toast = useToast()
     const layout = useSettingsStore(s => s.settings.layout)
     const updateLayout = useSettingsStore(s => s.updateLayout)
     const loadFromBackend = useSettingsStore(s => s.loadFromBackend)
@@ -73,12 +73,12 @@ export default function App() {
     const inspectorLiveWidthRef = useRef<number | null>(null)
     // Stable ref so drag callbacks can read the current layout without closing over stale values
     const layoutRef = useRef(layout)
-    layoutRef.current = layout
+    useEffect(() => { layoutRef.current = layout })
 
     useEffect(() => {
         flowApi.recentFiles()
             .then((files: RecentFile[]) => { if (files) setRecentFiles(files) })
-            .catch(() => {})
+            .catch((err) => { logger.warn('Failed to load recent files', err) })
     }, [document])
 
     // Real-time collaboration: join the presence channel for the open flow.
@@ -96,7 +96,7 @@ export default function App() {
             if (s.layout?.lastActiveInspectorTab) useUIStore.getState().setInspectorTab(s.layout.lastActiveInspectorTab)
             if (s.layout?.sidebarCollapsed !== undefined) useUIStore.getState().setSidebarCollapsed(s.layout.sidebarCollapsed)
             if (s.layout?.inspectorCollapsed !== undefined) useUIStore.getState().setInspectorCollapsed(s.layout.inspectorCollapsed)
-            if (s.ai?.activeProvider) useChatStore.getState().setProvider(s.ai.activeProvider as any)
+            if (s.ai?.activeProvider) useChatStore.getState().setProvider(s.ai.activeProvider as ProviderID)
         })
         loadFromBackend()
         return unsub
@@ -112,11 +112,11 @@ export default function App() {
             ) {
                 // Only persist core flow views, not transient management screens
                 const lastViewMode = ['block', 'graph', 'map', 'local-map', 'diff'].includes(state.mainPaneView)
-                    ? state.mainPaneView as any
+                    ? state.mainPaneView as 'block' | 'graph' | 'map' | 'local-map' | 'diff'
                     : undefined
                 
                 const lastActiveInspectorTab = ['details', 'ai', 'findings'].includes(state.inspectorTab)
-                    ? state.inspectorTab as any
+                    ? state.inspectorTab as 'details' | 'ai' | 'findings'
                     : undefined
 
                 updateLayout({
@@ -130,26 +130,7 @@ export default function App() {
         return unsub
     }, [updateLayout])
 
-    useEffect(() => {
-        // Use a cancelled flag + sync unsub ref so cleanup is synchronous (React
-        // does not await async cleanup functions). openDocument is in deps so the
-        // handler always calls the current version after login/store resets.
-        let unsub: (() => void) | null = null
-        let cancelled = false
-        subscribeToEvents((ev) => {
-            if (ev.name === 'flow:parse-progress') {
-                useFlowStore.setState({parseProgress: ev.data.percent ?? 0, isParsing: true})
-            } else if (ev.name === 'flow:loaded') {
-                if (ev.data) openDocument(ev.data as any)
-            } else if (ev.name === 'flow:load-error') {
-                useFlowStore.getState().setParseError(ev.data?.error ?? 'Unknown error')
-            }
-        }).then(fn => { if (!cancelled) unsub = fn; else fn() })
-        return () => {
-            cancelled = true
-            unsub?.()
-        }
-    }, [openDocument])
+    useAppEvents({openDocument})
 
     const {toggleTheme} = useTheme()
 
@@ -234,10 +215,10 @@ export default function App() {
             if (!file) return
             try {
                 if (isTauri()) {
-                    const path = (file as any).path as string
+                    const path = (file as File & {path?: string}).path
                     if (path) {
                         const doc = await flowApi.loadFlowFromPath(path)
-                        if (doc) openDocument(doc as any)
+                        if (doc) openDocument(doc)
                     }
                 } else {
                     // Web mode: read content and upload
@@ -247,260 +228,35 @@ export default function App() {
                         reader.readAsText(file)
                     })
                     const doc = await flowApi.uploadFlow(file.name, {[file.name]: content})
-                    if (doc) openDocument(doc as any)
+                    if (doc) openDocument(doc)
                 }
             } catch (err) {
                 console.error('Failed to open dropped file:', err)
+                toast.error('Failed to open file', {description: String(err)})
             }
         }
     }, [openDocument])
 
-    useKeyboard({
-        scope: 'global',
-        handlers: {
-            'nav.palette': () => setCommandPaletteOpen(v => !v),
-            'nav.search': () => {
-                // mod+f: focus the sidebar search bar (mirrors VS Code behaviour)
-                if (sidebarCollapsed) toggleSidebar()
-                requestSearchFocus()
-            },
-            'nav.search.global': () => setGlobalSearchOpen(v => !v),
-            'view.toggle.sidebar': () => toggleSidebar(),
-            'view.toggle.inspector': () => toggleInspector(),
-            'nav.settings': () => toggleSettings(),
-            'help.shortcuts': () => setShortcutsHelpOpen(true),
-            'view.split.toggle': () => useEditorStore.getState().splitRight(),
-            'view.toggle.mode': () => {
-                const current = useUIStore.getState().mainPaneView
-                setMainPaneView(current === 'block' ? 'graph' : 'block')
-            },
-            'view.tab.details': () => {
-                useUIStore.getState().setInspectorTab('details')
-                if (useUIStore.getState().inspectorCollapsed) toggleInspector()
-            },
-            'view.tab.ai': () => {
-                useUIStore.getState().setInspectorTab('ai')
-                if (useUIStore.getState().inspectorCollapsed) toggleInspector()
-            },
-            'view.tab.findings': () => {
-                useUIStore.getState().setInspectorTab('findings')
-                if (useUIStore.getState().inspectorCollapsed) toggleInspector()
-            },
-            'analysis.run': async () => {
-                if (!useFlowStore.getState().document) return
-                const {setAnalyzing, setReport} = useAnalysisStore.getState()
-                useUIStore.getState().setInspectorTab('findings')
-                if (useUIStore.getState().inspectorCollapsed) toggleInspector()
-                setAnalyzing(true)
-                try {
-                    const r = await analysisApi.analyzeFlow()
-                    const doc = useFlowStore.getState().document
-                    if (r && doc) setReport(doc.id, r as any)
-                } catch (e) {
-                    console.error('analysis failed:', e)
-                } finally {
-                    setAnalyzing(false)
-                }
-            },
-            'file.close.tab': () => {
-                const {focusedGroupIndex, groups, closeTab} = useEditorStore.getState()
-                const group = groups[focusedGroupIndex]
-                if (group?.activeTabId) closeTab(focusedGroupIndex, group.activeTabId)
-            },
-            'file.close.others': () => {
-                const {focusedGroupIndex, groups, closeOtherTabs} = useEditorStore.getState()
-                const group = groups[focusedGroupIndex]
-                if (group?.activeTabId) closeOtherTabs(focusedGroupIndex, group.activeTabId)
-            },
-            'file.close.all': () => {
-                const {focusedGroupIndex, closeAllTabs} = useEditorStore.getState()
-                closeAllTabs(focusedGroupIndex)
-            },
-            'view.group.1': () => useEditorStore.getState().focusGroup(0),
-            'view.group.2': () => useEditorStore.getState().focusGroup(1),
-            'view.group.3': () => useEditorStore.getState().focusGroup(2),
-            'view.group.4': () => useEditorStore.getState().focusGroup(3),
-            'view.move.group.right': () => {
-                const s = useEditorStore.getState()
-                const {focusedGroupIndex, groups} = s
-                const activeTabId = groups[focusedGroupIndex]?.activeTabId
-                if (activeTabId && focusedGroupIndex < groups.length - 1) {
-                    s.moveTabToGroup(focusedGroupIndex, activeTabId, focusedGroupIndex + 1)
-                }
-            },
-            'view.move.group.left': () => {
-                const s = useEditorStore.getState()
-                const {focusedGroupIndex, groups} = s
-                const activeTabId = groups[focusedGroupIndex]?.activeTabId
-                if (activeTabId && focusedGroupIndex > 0) {
-                    s.moveTabToGroup(focusedGroupIndex, activeTabId, focusedGroupIndex - 1)
-                }
-            },
-            'nav.search.quick': () => {
-                if (sidebarCollapsed) toggleSidebar()
-                requestSearchFocus()
-            },
-            'view.map': () => setMainPaneView('map'),
-            'view.local-map': () => setMainPaneView('local-map'),
-            'nav.up.subflow': () => useFlowStore.getState().drillUp(),
-            'view.fullscreen': async () => {
-                if (!isTauri()) return
-                const { getCurrentWindow } = await import('@tauri-apps/api/window')
-                const win = getCurrentWindow()
-                const isFs = await win.isFullscreen()
-                if (isFs) { win.setFullscreen(false) } else { win.setFullscreen(true) }
-            },
-            'view.theme.toggle': () => toggleTheme(),
-            'file.open': async () => {
-                const doc = await flowApi.openFlowFile()
-                if (doc) openDocument(doc as any)
-            },
-            'file.open.folder': async () => {
-                const doc = await flowApi.openFlowFolder()
-                if (doc) openDocument(doc as any)
-            },
-            'file.export.pdf': async () => { try { await exportApi.exportPDF() } catch { /* ignore */ } },
-            'file.export.md': async () => { try { await exportApi.exportMarkdown() } catch { /* ignore */ } },
-            'analysis.filter.errors': () => useAnalysisStore.getState().setSeverityFilter(new Set(['error'])),
-            'analysis.filter.warnings': () => useAnalysisStore.getState().setSeverityFilter(new Set(['warning'])),
-            'analysis.filter.info': () => useAnalysisStore.getState().setSeverityFilter(new Set(['info'])),
-            'analysis.filter.all': () => useAnalysisStore.getState().setSeverityFilter(new Set(['error', 'warning', 'info'])),
-            // These two shortcut ids were declared in shortcuts.ts but never
-            // had handlers, so the keys did nothing.
-            'analysis.export.csv': () => {
-                const d = useFlowStore.getState().document
-                const r = d ? useAnalysisStore.getState().reports.get(d.id) : undefined
-                if (d && r) exportFindingsCSV(r, d.id)
-            },
-            'analysis.export.html': async () => {
-                const d = useFlowStore.getState().document
-                if (!d) return
-                try { await exportFindingsHTML(d.id) } catch (e) { console.error('HTML export failed:', e) }
-            },
-            'window.reload': () => { window.location.reload() },
-            'window.quit': () => {
-                if (!isTauri()) return
-                import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().close())
-            },
-        },
+    useAppShortcuts({openDocument, toggleTheme, toast, setShortcutsHelpOpen})
+
+    const commands = useCommandList({
+        openDocument,
+        toggleSidebar,
+        toggleInspector,
+        toggleSettings,
+        setMainPaneView,
+        requestSearchFocus,
+        recentFiles,
+        sidebarCollapsed,
+        document,
+        user,
+        toast,
     })
 
-    const commands = useMemo(() => {
-        const cmds: {id: string; label: string; section: string; shortcut?: string[]; onSelect: () => void}[] = [
-            {id: 'file.open', label: 'Open Flow File', section: 'File', shortcut: ['mod', 'o'], onSelect: async () => {
-                const doc = await flowApi.openFlowFile()
-                if (doc) openDocument(doc as DomainFlowDocument)
-            }},
-            {id: 'file.open.folder', label: 'Open Folder', section: 'File', shortcut: ['mod', 'shift', 'o'], onSelect: async () => {
-                const doc = await flowApi.openFlowFolder()
-                if (doc) openDocument(doc as DomainFlowDocument)
-            }},
-            {id: 'view.toggle-sidebar', label: 'Toggle Sidebar', section: 'View', shortcut: ['mod', 'b'], onSelect: toggleSidebar},
-            {id: 'view.toggle-inspector', label: 'Toggle Inspector', section: 'View', shortcut: ['mod', 'i'], onSelect: toggleInspector},
-            {id: 'view.block', label: 'Block View', section: 'View', onSelect: () => setMainPaneView('block')},
-            {id: 'view.graph', label: 'Graph View', section: 'View', onSelect: () => setMainPaneView('graph')},
-            {id: 'view.local-map', label: 'Local Subflow Map', section: 'View', shortcut: ['mod', 'shift', 'm'], onSelect: () => setMainPaneView('local-map')},
-            {id: 'view.map', label: 'Subflow Map', section: 'View', shortcut: ['mod', 'm'], onSelect: () => setMainPaneView('map')},
-            {id: 'view.split', label: 'Split Editor Right', section: 'View', shortcut: ['mod', '\\'], onSelect: () => useEditorStore.getState().splitRight()},
-            {id: 'settings', label: 'Open Settings', section: 'Navigation', shortcut: ['mod', ','], onSelect: toggleSettings},
-            {id: 'search.focus', label: 'Focus Search', section: 'Search', shortcut: ['/'], onSelect: () => {
-                if (sidebarCollapsed) toggleSidebar()
-                requestSearchFocus()
-            }},
-            {id: 'analysis.run', label: 'Run Analysis', section: 'Analysis', shortcut: ['mod', 'shift', 'r'], onSelect: async () => {
-                if (!document) return
-                const setAnalyzing = useAnalysisStore.getState().setAnalyzing
-                const setReport = useAnalysisStore.getState().setReport
-                const setInspectorTab = useUIStore.getState().setInspectorTab
-                setInspectorTab('findings')
-                setAnalyzing(true)
-                try {
-                    const r = await analysisApi.analyzeFlow()
-                    if (r) setReport(document.id, r as any)
-                } catch (e) {
-                    console.error('analysis failed:', e)
-                } finally {
-                    setAnalyzing(false)
-                }
-            }},
-            {id: 'analysis.export.csv', label: 'Export Findings as CSV', section: 'Analysis', shortcut: ['mod', 'alt', 'e'], onSelect: () => {
-                const r = document ? useAnalysisStore.getState().reports.get(document.id) : undefined
-                if (document && r) exportFindingsCSV(r, document.id)
-            }},
-            {id: 'analysis.export.html', label: 'Export Findings as HTML', section: 'Analysis', shortcut: ['mod', 'shift', 'h'], onSelect: async () => {
-                if (!document) return
-                try { await exportFindingsHTML(document.id) } catch (e) { console.error('HTML export failed:', e) }
-            }},
-            {id: 'analysis.filter.all', label: 'Findings: Show All Severities', section: 'Analysis', shortcut: ['mod', 'shift', '0'], onSelect: () => {
-                useAnalysisStore.getState().setSeverityFilter(new Set(['error', 'warning', 'info']))
-            }},
-            {id: 'file.export.pdf', label: 'Export PDF', section: 'File', shortcut: ['mod', 'e'], onSelect: async () => {
-                try { await exportApi.exportPDF() } catch (e) { console.error('Export PDF failed:', e) }
-            }},
-            {id: 'file.export.md', label: 'Export Markdown', section: 'File', shortcut: ['mod', 'shift', 'e'], onSelect: async () => {
-                try { await exportApi.exportMarkdown() } catch (e) { console.error('Export Markdown failed:', e) }
-            }},
-            {id: 'view.dashboard', label: 'Analysis Dashboard', section: 'Analysis', onSelect: () => setMainPaneView('dashboard')},
-            {id: 'nav.profile', label: 'User Profile', section: 'Navigation', onSelect: () => setMainPaneView('profile')},
-        ]
-
-        if (user?.role === 'admin') {
-            cmds.push({id: 'nav.admin', label: 'Admin Dashboard', section: 'Navigation', onSelect: () => setMainPaneView('admin')})
-        }
-
-        if (isTauri()) {
-            for (const f of recentFiles.slice(0, 5)) {
-                cmds.push({
-                    id: `recent:${f.path}`,
-                    label: f.name,
-                    section: 'Recent Files',
-                    onSelect: async () => {
-                        const doc = await flowApi.loadFlowFromPath(f.path)
-                        if (doc) openDocument(doc as DomainFlowDocument)
-                    },
-                })
-            }
-        }
-
-        if (document) {
-            const blockCmds = extractBlockCommands(document)
-            for (const bc of blockCmds.slice(0, 20)) {
-                cmds.push(bc)
-            }
-        }
-
-        return cmds
-    }, [toggleSidebar, toggleInspector, toggleSettings, setMainPaneView, setDocument, recentFiles, requestSearchFocus, sidebarCollapsed, document, user?.role])
-
-function extractBlockCommands(doc: DomainFlowDocument) {
-    const cmds: {id: string; label: string; section: string; onSelect: () => void}[] = []
-    const collectBlocks = (blocks: any[], subflowId: string) => {
-        for (const block of blocks) {
-            cmds.push({
-                id: `block:${block.id}`,
-                label: block.name,
-                section: 'Blocks',
-                onSelect: () => {
-                    useFlowStore.getState().selectBlock(block.id)
-                    useFlowStore.getState().selectSubflow(subflowId)
-                },
-            })
-            if (block.children?.length) {
-                collectBlocks(block.children, subflowId)
-            }
-        }
-    }
-    for (const sf of doc.subflows) {
-        collectBlocks(sf.blocks, sf.id)
-    }
-    return cmds
-}
-
     return (
-        <ErrorBoundary>
-            <ToastProvider>
-                <div
-                    ref={dropRef}
+        <>
+        <div
+            ref={dropRef}
                     className={`flex flex-col h-screen w-screen overflow-hidden bg-surface-0 text-text-primary ${dragOver ? 'ring-2 ring-brand-500 ring-inset' : ''}`}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
@@ -514,7 +270,9 @@ function extractBlockCommands(doc: DomainFlowDocument) {
                                     className="flex-shrink-0 overflow-hidden border-r border-border-subtle"
                                     style={{width: sidebarLiveWidth ?? layout.sidebarWidth}}
                                 >
-                                    <Sidebar />
+                                    <ErrorBoundary fallback={<div className="p-4 text-text-muted">Sidebar error — try reloading</div>}>
+                                        <Sidebar />
+                                    </ErrorBoundary>
                                 </div>
                                 <PaneDivider
                                     onDrag={handleSidebarDrag}
@@ -524,7 +282,9 @@ function extractBlockCommands(doc: DomainFlowDocument) {
                             </>
                         )}
                         <div className="flex-1 overflow-hidden">
-                            <MainPane />
+                            <ErrorBoundary fallback={<div className="p-4 text-text-muted">Main pane error — try reloading</div>}>
+                                <MainPane />
+                            </ErrorBoundary>
                         </div>
                         {!inspectorCollapsed && (
                             <>
@@ -537,7 +297,9 @@ function extractBlockCommands(doc: DomainFlowDocument) {
                                     className="flex-shrink-0 overflow-hidden border-l border-border-subtle"
                                     style={{width: inspectorLiveWidth ?? layout.inspectorWidth}}
                                 >
-                                    <InspectorPanel />
+                                    <ErrorBoundary fallback={<div className="p-4 text-text-muted">Inspector error — try reloading</div>}>
+                                        <InspectorPanel />
+                                    </ErrorBoundary>
                                 </div>
                             </>
                         )}
@@ -570,6 +332,15 @@ function extractBlockCommands(doc: DomainFlowDocument) {
                     isOpen={shortcutsHelpOpen}
                     onClose={() => setShortcutsHelpOpen(false)}
                 />
+        </>
+    )
+}
+
+export default function App() {
+    return (
+        <ErrorBoundary>
+            <ToastProvider>
+                <AppInner />
             </ToastProvider>
         </ErrorBoundary>
     )

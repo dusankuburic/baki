@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/models"
@@ -125,15 +126,101 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	return sb.String(), nil
 }
 
+// chunkText splits text into chunks of at most size runes (not bytes, so
+// multi-byte scripts don't blow past the limit), preferring paragraph and
+// sentence boundaries.
 func chunkText(text string, size int) []string {
-	var chunks []string
-	runes := []rune(text)
-	for i := 0; i < len(runes); i += size {
-		end := i + size
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunks = append(chunks, string(runes[i:end]))
+	if strings.TrimSpace(text) == "" {
+		return nil
 	}
+
+	if utf8.RuneCountInString(text) <= size {
+		return []string{text}
+	}
+
+	paragraphs := strings.Split(text, "\n\n")
+	var chunks []string
+	var current strings.Builder
+	currentRunes := 0
+
+	flush := func() {
+		chunks = append(chunks, current.String())
+		current.Reset()
+		currentRunes = 0
+	}
+
+	for _, para := range paragraphs {
+		trimmed := strings.TrimSpace(para)
+		if trimmed == "" {
+			continue
+		}
+		paraRunes := utf8.RuneCountInString(trimmed)
+
+		if currentRunes > 0 && currentRunes+paraRunes+2 > size {
+			flush()
+		}
+
+		if paraRunes > size {
+			if currentRunes > 0 {
+				flush()
+			}
+			sentences := splitSentences(trimmed, size)
+			for _, sent := range sentences {
+				sentRunes := utf8.RuneCountInString(sent)
+				if currentRunes > 0 && currentRunes+sentRunes+1 > size {
+					flush()
+				}
+				if currentRunes > 0 {
+					current.WriteByte(' ')
+					currentRunes++
+				}
+				current.WriteString(sent)
+				currentRunes += sentRunes
+			}
+		} else {
+			if currentRunes > 0 {
+				current.WriteString("\n\n")
+				currentRunes += 2
+			}
+			current.WriteString(trimmed)
+			currentRunes += paraRunes
+		}
+	}
+
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+
 	return chunks
+}
+
+func splitSentences(text string, size int) []string {
+	var sentences []string
+	var current strings.Builder
+	for _, r := range text {
+		current.WriteRune(r)
+		if r == '.' || r == '!' || r == '?' {
+			sentences = append(sentences, strings.TrimSpace(current.String()))
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		remainder := strings.TrimSpace(current.String())
+		if remainder != "" {
+			sentences = append(sentences, remainder)
+		}
+	}
+	if len(sentences) <= 1 {
+		sentences = nil
+		runes := []rune(text)
+		for len(runes) > 0 {
+			end := size
+			if end > len(runes) {
+				end = len(runes)
+			}
+			sentences = append(sentences, string(runes[:end]))
+			runes = runes[end:]
+		}
+	}
+	return sentences
 }

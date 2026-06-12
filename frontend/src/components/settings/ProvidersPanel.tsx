@@ -3,6 +3,7 @@ import ApiKeyInput from './ApiKeyInput'
 import GitHubLoginButton from '@/components/chat/GitHubLoginButton'
 import CopilotLoginButton from '@/components/chat/CopilotLoginButton'
 import {providersApi} from '@/api'
+import {logger} from '@/lib/logger'
 
 interface ProviderEntry {
   id: string
@@ -17,16 +18,16 @@ export default function ProvidersPanel() {
   const [copilotUser, setCopilotUser] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
-    providersApi.listProviders().then((ps: any) => {
-      setProviders((ps || []).map((p: any) => ({
+    providersApi.listProviders().then((ps: {id?: string; name?: string; configured?: boolean; authType?: string}[] | null) => {
+      setProviders((ps || []).map((p: {id?: string; name?: string; configured?: boolean; authType?: string}) => ({
         id: p.id || '',
         name: p.name || '',
         configured: !!p.configured,
         authType: p.authType || '',
       })))
     }).catch(() => {})
-    providersApi.getGitHubUser().then((u: any) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
-    providersApi.getCopilotUser().then((u: any) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
+    providersApi.getGitHubUser().then((u: {login?: string} | null) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
+    providersApi.getCopilotUser().then((u: {login?: string} | null) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -66,7 +67,7 @@ export default function ProvidersPanel() {
                 <span className="text-sm text-text-secondary">Connected as <strong className="text-text-primary">@{githubUser}</strong></span>
                 <button
                   className="text-xs text-red-400 hover:text-red-300"
-                  onClick={() => providersApi.revokeGitHubAuth().then(() => refresh()).catch(() => {})}
+                  onClick={() => providersApi.revokeGitHubAuth().then(() => refresh()).catch((err) => { logger.warn('Failed to revoke GitHub auth', err) })}
                 >
                   Disconnect
                 </button>
@@ -88,7 +89,7 @@ export default function ProvidersPanel() {
                 <span className="text-sm text-text-secondary">Connected as <strong className="text-text-primary">@{copilotUser}</strong></span>
                 <button
                   className="text-xs text-red-400 hover:text-red-300"
-                  onClick={() => providersApi.revokeCopilotAuth().then(() => refresh()).catch(() => {})}
+                  onClick={() => providersApi.revokeCopilotAuth().then(() => refresh()).catch((err) => { logger.warn('Failed to revoke Copilot auth', err) })}
                 >
                   Disconnect
                 </button>

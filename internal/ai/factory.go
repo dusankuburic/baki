@@ -1,6 +1,11 @@
 package ai
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+
+	"pad-analyzer/internal/config"
+)
 
 // ProviderFactory creates Provider instances using a caller-supplied key-fetching function.
 // This keeps the ai package free of storage dependencies.
@@ -13,12 +18,11 @@ type ProviderFactory struct {
 	getKey      func(scope, provider string) (string, error)
 	copilotAuth *CopilotAuth
 	recorder    UsageRecorder
+	rtCfg       *config.RuntimeConfig
 }
 
-// NewProviderFactory returns a factory that resolves API keys via getKey.
-// Typical usage: ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth)
-func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth, recorder UsageRecorder) *ProviderFactory {
-	return &ProviderFactory{getKey: getKey, copilotAuth: copilotAuth, recorder: recorder}
+func NewProviderFactory(getKey func(scope, provider string) (string, error), copilotAuth *CopilotAuth, recorder UsageRecorder, rtCfg *config.RuntimeConfig) *ProviderFactory {
+	return &ProviderFactory{getKey: getKey, copilotAuth: copilotAuth, recorder: recorder, rtCfg: rtCfg}
 }
 
 // providerCtors maps provider IDs to their constructors.
@@ -42,26 +46,53 @@ func storageKey(providerID string) string {
 	return providerID
 }
 
-// For returns an initialised Provider for the given providerID, resolving its
-// key within scope (the caller's owner namespace; "" = legacy/local).
+func (f *ProviderFactory) wrapChain(p Provider, scope, providerID string) Provider {
+	var cb Provider
+	var rp Provider
+
+	if f.rtCfg != nil {
+		threshold := f.rtCfg.CircuitBreakerFailures
+		if threshold <= 0 {
+			threshold = cbFailureThreshold
+		}
+		openDur := cbOpenDuration
+		if d, err := time.ParseDuration(f.rtCfg.CircuitBreakerOpenDur); err == nil && d > 0 {
+			openDur = d
+		}
+		cb = NewCircuitBreakerProviderWithConfig(p, threshold, openDur)
+
+		maxAttempts := f.rtCfg.RetryMaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = retryMaxAttempts
+		}
+		baseDelay := retryBaseDelay
+		if d, err := time.ParseDuration(f.rtCfg.RetryBaseDelay); err == nil && d > 0 {
+			baseDelay = d
+		}
+		rp = NewRetryingProviderWithConfig(cb, maxAttempts, baseDelay)
+	} else {
+		cb = NewCircuitBreakerProvider(p)
+		rp = NewRetryingProvider(cb)
+	}
+
+	return NewAuditedProvider(NewTracedProvider(rp), f.recorder, scope, providerID)
+}
+
 func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if providerID == "demo" {
-		return NewAuditedProvider(NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(NewDemoProvider()))), f.recorder, scope, providerID), nil
+		return f.wrapChain(NewDemoProvider(), scope, providerID), nil
 	}
 	if providerID == "copilot" {
 		p, err := f.forCopilot(scope)
 		if err != nil {
 			return nil, err
 		}
-		return NewAuditedProvider(NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(p))), f.recorder, scope, providerID), nil
+		return f.wrapChain(p, scope, providerID), nil
 	}
 	ctor, ok := providerCtors[providerID]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerID)
 	}
-	// github-models is authenticated via the GitHub device flow, whose token is
-	// not yet per-user; resolve it in the global scope. All other providers use
-	// the caller's manual, per-user key.
 	keyScope := scope
 	if providerID == "github-models" {
 		keyScope = ""
@@ -73,7 +104,7 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if key == "" {
 		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
 	}
-	return NewAuditedProvider(NewTracedProvider(NewRetryingProvider(NewCircuitBreakerProvider(ctor(key)))), f.recorder, scope, providerID), nil
+	return f.wrapChain(ctor(key), scope, providerID), nil
 }
 
 // GetMetadataProvider returns a MetadataProvider suitable for reading provider

@@ -24,8 +24,8 @@ export default function LibraryBrowser({ orgId, onFlowOpen, className }: Library
     try {
       const result = await libraryApi.list(filter)
       setFlows(result)
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setIsLoading(false)
     }

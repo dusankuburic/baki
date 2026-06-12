@@ -181,7 +181,80 @@ func applyEnvVars(cfg *Config) error {
 		cfg.Storage.DBMaxIdleConns = n
 	}
 	if v := os.Getenv("PAD_DB_CONN_MAX_LIFETIME"); v != "" {
-		cfg.Storage.DBConnMaxLifetime = v // validated at DB init time via time.ParseDuration
+		cfg.Storage.DBConnMaxLifetime = v
+	}
+	// Runtime tuning parameters
+	if v := os.Getenv("PAD_RATE_LIMIT_GENERAL_RPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitGeneralRPS = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_GENERAL_BURST"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitGeneralBurst = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_AUTH_RPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitAuthRPS = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_AUTH_BURST"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitAuthBurst = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_EXPENSIVE_RPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitExpensiveRPS = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_EXPENSIVE_BURST"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitExpensiveBurst = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_CHAT_RPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitChatRPS = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_CHAT_BURST"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitChatBurst = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_UPLOAD_RPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitUploadRPS = f
+		}
+	}
+	if v := os.Getenv("PAD_RATE_LIMIT_UPLOAD_BURST"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Runtime.RateLimitUploadBurst = f
+		}
+	}
+	if v := os.Getenv("PAD_CB_FAILURES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Runtime.CircuitBreakerFailures = n
+		}
+	}
+	if v := os.Getenv("PAD_CB_OPEN_DURATION"); v != "" {
+		cfg.Runtime.CircuitBreakerOpenDur = v
+	}
+	if v := os.Getenv("PAD_RETRY_MAX_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Runtime.RetryMaxAttempts = n
+		}
+	}
+	if v := os.Getenv("PAD_RETRY_BASE_DELAY"); v != "" {
+		cfg.Runtime.RetryBaseDelay = v
+	}
+	if v := os.Getenv("PAD_OTLP_ENDPOINT"); v != "" {
+		cfg.Runtime.OTLPEndpoint = v
+	}
+	if v := os.Getenv("PAD_REQUEST_TIMEOUT"); v != "" {
+		cfg.Runtime.RequestTimeout = v
 	}
 	return nil
 }

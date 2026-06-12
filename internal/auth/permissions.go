@@ -28,9 +28,7 @@ func ClaimsFromContext(ctx context.Context) *Claims {
 	return c
 }
 
-// Require returns ErrUnauthorized if no claims are present, or ErrForbidden if
-// the authenticated user does not hold the requested permission.
-func Require(ctx context.Context, p Permission) error {
+func require(ctx context.Context, p Permission) error {
 	claims := ClaimsFromContext(ctx)
 	if claims == nil {
 		return ErrUnauthorized
@@ -41,8 +39,7 @@ func Require(ctx context.Context, p Permission) error {
 	return nil
 }
 
-// RequireAny returns nil if the user holds at least one of the given permissions.
-func RequireAny(ctx context.Context, perms ...Permission) error {
+func requireAny(ctx context.Context, perms ...Permission) error {
 	claims := ClaimsFromContext(ctx)
 	if claims == nil {
 		return ErrUnauthorized

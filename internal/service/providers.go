@@ -22,7 +22,7 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 	return &ProviderService{auth: auth, copilotAuth: copilotAuth, factory: factory}
 }
 
-func (s *ProviderService) ListProviders(scope string) (providers []models.ProviderInfo, err error) {
+func (s *ProviderService) ListProviders(ctx context.Context, scope string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
 	for _, meta := range ai.AvailableProviders() {
@@ -47,7 +47,20 @@ func (s *ProviderService) ListProviders(scope string) (providers []models.Provid
 			configured = ok
 		}
 
-		modelInfos := p.Models()
+		modelInfos, mErr := p.Models(ctx)
+		if mErr != nil {
+			logger.Warn("list provider models", "provider", meta.ID, "error", mErr)
+		}
+		if configured {
+			if realProvider, err := s.factory.For(scope, meta.ID); err == nil {
+				if dynamicModels, err := realProvider.Models(ctx); err == nil {
+					modelInfos = dynamicModels
+				} else {
+					logger.Warn("list dynamic provider models", "provider", meta.ID, "error", err)
+				}
+			}
+		}
+
 		modelDetails := make([]models.ModelDetail, len(modelInfos))
 		for i, m := range modelInfos {
 			modelDetails[i] = models.ModelDetail{

@@ -14,7 +14,7 @@ type stubProvider struct{}
 func (stubProvider) SupportsTools() bool             { return false }
 func (stubProvider) ID() string                      { return "stub" }
 func (stubProvider) Name() string                    { return "Stub" }
-func (stubProvider) Models() []ModelInfo             { return nil }
+func (stubProvider) Models(_ context.Context) ([]ModelInfo, error) { return nil, nil }
 func (stubProvider) DefaultModel() string            { return "" }
 func (stubProvider) FreeModel() string               { return "" }
 func (stubProvider) ContextLimit() int               { return 100_000 }

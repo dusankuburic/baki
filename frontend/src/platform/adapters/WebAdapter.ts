@@ -9,6 +9,7 @@ import type {
   FileSaveOptions,
   NotificationOptions,
 } from '../types';
+import {logger} from '@/lib/logger';
 
 /**
  * Web adapter for browser-specific operations
@@ -108,7 +109,6 @@ export class WebAdapter implements PlatformAdapter {
     return new Promise((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
-      // @ts-ignore - webkitdirectory is non-standard but widely supported
       input.webkitdirectory = true;
       input.style.display = 'none';
 
@@ -169,7 +169,7 @@ export class WebAdapter implements PlatformAdapter {
    * Save file using browser download
    */
   async fileSave(_options: FileSaveOptions): Promise<string | null> {
-    console.warn('File save dialogs not supported in web browsers. Use download instead.');
+    logger.warn('File save dialogs not supported in web browsers. Use download instead.');
     return null;
   }
 
@@ -178,7 +178,7 @@ export class WebAdapter implements PlatformAdapter {
    */
   async fileReveal(_path: string): Promise<void> {
     // Revealing a file in the OS file manager has no browser equivalent — no-op.
-    console.warn('File reveal is not supported in web browsers');
+    logger.warn('File reveal is not supported in web browsers');
   }
 
   /**
@@ -209,7 +209,7 @@ export class WebAdapter implements PlatformAdapter {
         });
       }
     } else {
-      console.warn('Notifications not supported in this browser');
+      logger.warn('Notifications not supported in this browser');
     }
   }
 
@@ -221,7 +221,7 @@ export class WebAdapter implements PlatformAdapter {
       if (navigator.clipboard && navigator.clipboard.readText) {
         return await navigator.clipboard.readText();
       } else {
-        console.warn('Clipboard API not available');
+        logger.warn('Clipboard API not available');
         return '';
       }
     } catch (error) {
@@ -238,7 +238,7 @@ export class WebAdapter implements PlatformAdapter {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
       } else {
-        console.warn('Clipboard API not available');
+        logger.warn('Clipboard API not available');
         throw new Error('Clipboard API not available');
       }
     } catch (error) {

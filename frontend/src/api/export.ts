@@ -14,7 +14,7 @@ export const exportApi = {
       path = p
     }
 
-    const res: any = await request('/api/export/pdf', {path})
+    const res: {data: string} = await request('/api/export/pdf', {path})
     
     if (!isTauri() && res.data) {
       const link = document.createElement('a')
@@ -37,7 +37,7 @@ export const exportApi = {
       path = p
     }
 
-    const res: any = await request('/api/export/markdown', {path})
+    const res: {data: string} = await request('/api/export/markdown', {path})
     
     if (!isTauri() && res.data) {
       const link = document.createElement('a')

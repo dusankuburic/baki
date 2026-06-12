@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { History, Plus, Tag } from 'lucide-react'
 import { versionsApi, type FlowVersion } from '@/api/admin'
 import { useFlowStore } from '@/stores/flowStore'
-import { Spinner } from '@/components/shared'
+import { EmptyState, Spinner } from '@/components/shared'
 
 export const HistoryTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -25,7 +25,7 @@ export const HistoryTab: React.FC = () => {
     } finally {
       setIsLoading(false)
     }
-  }, [document?.id])
+  }, [document])
 
   useEffect(() => {
     fetchVersions()
@@ -92,9 +92,10 @@ export const HistoryTab: React.FC = () => {
           error ? (
             <div className="text-center py-8 text-red-500 text-xs">{error}</div>
           ) : (
-            <div className="text-center py-8 text-text-muted text-xs">
-              No versions saved yet. Use &quot;Save Snapshot&quot; above to record the current state.
-            </div>
+            <EmptyState
+              title="No history yet"
+              description="Run analysis to create snapshots over time."
+            />
           )
         ) : (
           <div className="space-y-2">

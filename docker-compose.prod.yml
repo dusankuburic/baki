@@ -1,0 +1,23 @@
+# Production overlay — use: docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+services:
+  app:
+    image: ghcr.io/${GHCR_REPO:-pad-analyzer/baki}:${PAD_VERSION:-latest}
+    environment:
+      - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
+      - PAD_BEHIND_PROXY=true
+      - PAD_MODE=cloud
+      - PAD_AUTH_ENABLED=true
+      - PAD_STORAGE=database
+      - PAD_DATABASE_URL=${PAD_DATABASE_URL:?PAD_DATABASE_URL must be set}
+      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:?PAD_ALLOWED_ORIGINS must be set}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  db:
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G

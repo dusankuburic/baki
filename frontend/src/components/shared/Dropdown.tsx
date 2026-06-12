@@ -24,7 +24,7 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
     const menuRef = useRef<HTMLDivElement>(null)
     const [position, setPosition] = useState({top: 0, left: 0})
 
-    const flattenedItems = flattenItems(items)
+    const flattenedItems = flattenItems(items) as FlattenedDropdownItem[]
 
     const updatePosition = useCallback(() => {
         if (!triggerRef.current || !menuRef.current) return
@@ -116,8 +116,10 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
     )
 }
 
-function flattenItems(items: DropdownItem[]): (DropdownItem & {_index: number})[] {
-    const result: (DropdownItem & {_index: number})[] = []
+type FlattenedDropdownItem = DropdownItem & {_index: number}
+
+function flattenItems(items: DropdownItem[]): FlattenedDropdownItem[] {
+    const result: FlattenedDropdownItem[] = []
     let idx = 0
     function walk(list: DropdownItem[]) {
         for (const item of list) {
@@ -133,7 +135,7 @@ function flattenItems(items: DropdownItem[]): (DropdownItem & {_index: number})[
     return result
 }
 
-function renderItems(items: DropdownItem[], activeIndex: number, close: () => void): React.ReactNode {
+function renderItems(items: (DropdownItem & {_index?: number})[], activeIndex: number, close: () => void): React.ReactNode {
     return items.map((item, i) => {
         if (item.type === 'separator') {
             return <div key={i} className="my-1 mx-2 h-px bg-border-subtle" />
@@ -149,7 +151,7 @@ function renderItems(items: DropdownItem[], activeIndex: number, close: () => vo
             )
         }
         const Icon = item.icon
-        const isActive = (item as any)._index === activeIndex
+        const isActive = item._index === activeIndex
         return (
             <button
                 key={i}

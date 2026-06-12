@@ -15,21 +15,25 @@ import (
 type UsageRecorder func(ctx context.Context, metric *interfaces.UsageMetric) error
 
 type auditedProvider struct {
-	inner      Provider
-	recorder   UsageRecorder
-	scope      string // the user ID (key scope)
-	providerID string // e.g. "openai", "claude"
+	inner       Provider
+	recorder    UsageRecorder
+	scope       string
+	providerID  string
+	recordSem   chan struct{}
 }
 
 // NewAuditedProvider wraps an existing provider and intercepts Chat and Stream
 // calls to record cost metrics when they finish. scope is the caller's key
 // scope (user ID); providerID identifies which provider generated the usage.
+const maxConcurrentRecords = 16
+
 func NewAuditedProvider(inner Provider, recorder UsageRecorder, scope, providerID string) Provider {
 	return &auditedProvider{
 		inner:      inner,
 		recorder:   recorder,
 		scope:      scope,
 		providerID: providerID,
+		recordSem:  make(chan struct{}, maxConcurrentRecords),
 	}
 }
 
@@ -89,10 +93,13 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	// priced — recording $0 would silently let the daily budget never trip for
 	// that model. The fallback is logged so the catalog gap is visible.
 	pricing, found := Pricing{}, false
-	for _, m := range p.inner.Models() {
-		if m.ID == modelID {
-			pricing, found = m.Pricing, true
-			break
+	models, err := p.inner.Models(ctx)
+	if err == nil {
+		for _, m := range models {
+			if m.ID == modelID {
+				pricing, found = m.Pricing, true
+				break
+			}
 		}
 	}
 	if !found {
@@ -121,8 +128,12 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 
 	// Asynchronously record the usage so it doesn't block the caller
 	go func() {
-		// Use a detached context because the request context might be canceled
-		_ = p.recorder(context.Background(), &metric)
+		p.recordSem <- struct{}{}
+		defer func() { <-p.recordSem }()
+		if err := p.recorder(context.Background(), &metric); err != nil {
+			logger.Warn("AI usage recording failed",
+				"provider", p.providerID, "model", modelID, "error", err)
+		}
 	}()
 }
 
@@ -136,6 +147,8 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 	return p.inner.Embed(ctx, text)
 }
 func (p *auditedProvider) EstimateTokens(t string) int { return p.inner.EstimateTokens(t) }
-func (p *auditedProvider) Models() []ModelInfo     { return p.inner.Models() }
+func (p *auditedProvider) Models(ctx context.Context) ([]ModelInfo, error) {
+	return p.inner.Models(ctx)
+}
 func (p *auditedProvider) DefaultModel() string    { return p.inner.DefaultModel() }
 func (p *auditedProvider) FreeModel() string       { return p.inner.FreeModel() }

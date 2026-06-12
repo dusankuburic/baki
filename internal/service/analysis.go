@@ -12,6 +12,7 @@ import (
 
 	"pad-analyzer/internal/analyzer"
 	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/storage"
 )
@@ -64,6 +65,8 @@ func NewAnalysisService(notifier Notifier, settings *storage.SettingsStore, hist
 
 func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
+
+	metrics.RecordAnalysisRun()
 
 	// Trace the analysis run so its (potentially long, CPU-bound) duration is
 	// attributable within the request trace. No-op when no OTLP exporter is

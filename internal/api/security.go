@@ -11,13 +11,14 @@ import (
 )
 
 type SecurityConfig struct {
-	JWTEnabled  bool
-	LocalUserID string
-	LocalName   string
-	Token       string
-	AuthMgr     *auth.Manager
-	Backend     storageif.StorageBackend
-	OrgSvc      *collaboration.OrgService
+	JWTEnabled     bool
+	LocalUserID    string
+	LocalName      string
+	Token          string
+	AuthMgr        *auth.Manager
+	Backend        storageif.StorageBackend
+	OrgSvc         *collaboration.OrgService
+	TrustedProxies []string
 }
 
 func (c *SecurityConfig) CallerID(r *http.Request) string {

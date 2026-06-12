@@ -247,7 +247,10 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 	var req struct {
 		Comment string `json:"comment"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, fmt.Errorf("invalid request body: %w", err), http.StatusBadRequest)
+		return
+	}
 
 	if len(req.Comment) > 500 {
 		render.Error(w, fmt.Errorf("comment must be 500 characters or fewer"), http.StatusBadRequest)
@@ -278,7 +281,7 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(nextVersion)})
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(nextVersion)})
 	w.WriteHeader(http.StatusCreated)
 	render.JSON(w, v)
 }

@@ -2,6 +2,7 @@ import {useState, useCallback, useEffect} from 'react'
 import Input from '@/components/shared/Input'
 import Button from '@/components/shared/Button'
 import {providersApi} from '@/api'
+import type {ProviderTestResult} from '@/types/domain'
 
 interface Props {
   provider: string
@@ -54,7 +55,7 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await providersApi.testProviderConnection(provider) as any
+      const result = await providersApi.testProviderConnection(provider) as ProviderTestResult
       setTestResult(result?.ok ? 'valid' : 'invalid')
     } catch {
       setTestResult('invalid')

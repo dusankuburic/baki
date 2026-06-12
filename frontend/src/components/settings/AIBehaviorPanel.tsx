@@ -3,7 +3,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import SegmentedControl from '@/components/shared/SegmentedControl'
-import type {ProviderID} from '@/types/domain'
+import type {ProviderID, AIProviderConfig} from '@/types/domain'
 
 export default function AIBehaviorPanel() {
   const {settings, updateAI, updateProvider} = useSettingsStore()
@@ -140,7 +140,7 @@ function CustomInstructionsInput() {
   )
 }
 
-function ProviderAdvancedSettings({config, onUpdate}: {config: any; onUpdate: (patch: any) => void}) {
+function ProviderAdvancedSettings({config, onUpdate}: {config: AIProviderConfig; onUpdate: (patch: Partial<AIProviderConfig>) => void}) {
   if (!config) return null
 
   return (

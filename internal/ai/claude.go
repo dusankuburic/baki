@@ -47,7 +47,9 @@ func (c *ClaudeProvider) EstimateTokens(text string) int {
 	return EstimateTokensClaude(text)
 }
 
-func (c *ClaudeProvider) Models() []ModelInfo { return catalogModels("claude") }
+func (c *ClaudeProvider) Models(_ context.Context) ([]ModelInfo, error) {
+	return catalogModels("claude"), nil
+}
 
 type claudeRequest struct {
 	Model       string              `json:"model"`

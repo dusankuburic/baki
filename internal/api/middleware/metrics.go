@@ -25,7 +25,7 @@ func RecordRateLimitExceeded(group string) { metrics.RecordRateLimitExceeded(gro
 // reflects the final response after later layers have run.
 func Metrics(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		sr := NewResponseRecorder(w)
 		start := time.Now()
 		h.ServeHTTP(maybeHijackable(sr), r)
 		route := normalizeRoute(r.URL.Path)

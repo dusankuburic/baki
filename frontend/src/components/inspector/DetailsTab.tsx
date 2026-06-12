@@ -9,8 +9,9 @@ import VariableLineageInInspector from './VariableLineageInInspector'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
+import type {FlowDocument, Block, VariableHistory} from '@/types/domain'
 
-function findBlockAndSubflow(doc: any, blockId: string): {block: any; subflowName: string} | null {
+function findBlockAndSubflow(doc: FlowDocument, blockId: string): {block: Block; subflowName: string} | null {
     for (const sf of doc.subflows) {
         const found = findInTree(sf.blocks, blockId)
         if (found) return {block: found, subflowName: sf.name}
@@ -18,7 +19,7 @@ function findBlockAndSubflow(doc: any, blockId: string): {block: any; subflowNam
     return null
 }
 
-function findInTree(blocks: any[], id: string): any {
+function findInTree(blocks: Block[], id: string): Block | null {
     for (const b of blocks) {
         if (b.id === id) return b
         if (b.children?.length) {
@@ -55,7 +56,7 @@ export default function DetailsTab() {
         if (!document) return
         try {
             const h = await analysisApi.getVariableLineage(name)
-            useAnalysisStore.getState().setVariableLineage(h as any)
+            useAnalysisStore.getState().setVariableLineage(h as unknown as VariableHistory)
         } catch (err) {
             console.error('Failed to get lineage:', err)
         }

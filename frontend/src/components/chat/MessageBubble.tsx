@@ -4,6 +4,7 @@ import {useState, useCallback, memo} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types/domain'
+import {logger} from '@/lib/logger'
 import CodeBlock from './CodeBlock'
 
 interface Props {
@@ -34,9 +35,23 @@ const MentionPill = ({ path }: { path: string }) => {
   )
 }
 
+interface MarkdownPreProps {
+  children?: React.ReactNode
+}
+
+interface MarkdownCodeProps {
+  node?: unknown
+  inline?: boolean
+  className?: string
+  children?: React.ReactNode
+}
+
+interface MarkdownTextProps {
+  children?: React.ReactNode
+}
+
 function renderContent(content: string, isUser: boolean, isStreaming?: boolean) {
-  // Regex to match @mentions (support paths with backslashes)
-  const mentionRegex = /@([a-zA-Z0-9_./\\\-]+)/g
+  const mentionRegex = /@([a-zA-Z0-9_./\\-]+)/g
 
   if (isUser) {
     const parts = content.split(mentionRegex)
@@ -54,31 +69,34 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
     )
   }
 
-  // For AI messages, we use ReactMarkdown but we need to handle the mentions.
-  // One way is to pre-process the content to wrap mentions in a custom syntax or just replace them after rendering if possible.
-  // A cleaner way for ReactMarkdown is to split the text nodes.
-  
   return (
     <div className="prose-chat break-words">
       <ReactMarkdown 
         remarkPlugins={[remarkGfm]}
         components={{
-          code({node, inline, className, children, ...props}: any) {
-            const match = /language-(\w+)/.exec(className || '')
-            return !inline ? (
-              <CodeBlock
-                language={match ? match[1] : ''}
-                value={String(children).replace(/\n$/, '')}
-                {...props}
-              />
-            ) : (
-              <code className="px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]" {...props}>
+          pre({ children }: MarkdownPreProps) {
+            let codeProps: Record<string, unknown> = {}
+            if (children && typeof children === 'object' && 'props' in (children as object)) {
+              codeProps = (children as {props: Record<string, unknown>}).props
+            } else if (Array.isArray(children) && children[0] && typeof children[0] === 'object' && 'props' in children[0]) {
+              codeProps = (children[0] as {props: Record<string, unknown>}).props
+            }
+            
+            const className = (codeProps.className as string) || ''
+            const match = /language-(\w+)/.exec(className)
+            const language = match ? match[1] : ''
+            const value = String(codeProps.children || '').replace(/\n$/, '')
+            
+            return <CodeBlock language={language} value={value} />
+          },
+          code({inline: _inline, className, children, ...props}: MarkdownCodeProps) {
+            return (
+              <code className={clsx("px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]", className)} {...props}>
                 {children}
               </code>
             )
           },
-          // Custom renderer for text to handle mentions
-          text({ children }: any) {
+          text({ children }: MarkdownTextProps) {
             const text = String(children)
             if (!text.includes('@')) return <>{text}</>
             
@@ -117,7 +135,7 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
     navigator.clipboard.writeText(message.content).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {})
+    }).catch((err) => { logger.warn('Clipboard write failed', err) })
   }, [message.content])
 
   const time = formatTime(message.timestamp)

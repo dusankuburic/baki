@@ -1,12 +1,8 @@
 package ai
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -14,14 +10,23 @@ import (
 var glmBaseURL = providerURL("GLM_API_URL", "https://api.z.ai/api/paas/v4/chat/completions")
 
 type GLMProvider struct {
-	apiKey string
-	client *http.Client
+	openaiBase
 }
 
 func NewGLMProvider(apiKey string) *GLMProvider {
 	return &GLMProvider{
-		apiKey: apiKey,
-		client: sharedHTTPClient,
+		openaiBase: openaiBase{
+			apiKey:        apiKey,
+			client:        sharedHTTPClient,
+			baseURL:       &glmBaseURL,
+			providerLabel: "glm",
+			handle429: func(_ *http.Response, apiErr openAIErrorResp) error {
+				if isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code) {
+					return ErrInsufficientBalance
+				}
+				return nil
+			},
+		},
 	}
 }
 
@@ -45,129 +50,18 @@ func (g *GLMProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
-func (g *GLMProvider) Models() []ModelInfo { return catalogModels("glm") }
+func (g *GLMProvider) Models(_ context.Context) ([]ModelInfo, error) {
+	return catalogModels("glm"), nil
+}
 
 func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	body := openAIRequest{
-		Model:       req.Model,
-		MaxTokens:   orDefault(req.MaxTokens, 4096),
-		Temperature: req.Temperature,
-		Messages:    toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Tools:       toOpenAITools(req.Tools),
-	}
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", glmBaseURL, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := g.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("glm API request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-
-	if resp.StatusCode != http.StatusOK {
-		var apiErr openAIErrorResp
-		if err := json.Unmarshal(respBody, &apiErr); err == nil {
-			switch {
-			case resp.StatusCode == 401:
-				return nil, ErrApiKeyInvalid
-			case resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code):
-				return nil, ErrInsufficientBalance
-			case resp.StatusCode == 429:
-				return nil, rateLimitErr(resp)
-			case resp.StatusCode >= 500:
-				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
-			}
-			return nil, fmt.Errorf("glm API: %s", apiErr.Error.Message)
-		}
-		return nil, fmt.Errorf("glm API error (status %d)", resp.StatusCode)
-	}
-
-	var parsed openAIResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, fmt.Errorf("parse glm response: %w", err)
-	}
-	if len(parsed.Choices) == 0 {
-		return nil, errors.New("glm returned no choices")
-	}
-
-	return &Response{
-		Content:      parsed.Choices[0].Message.Content,
-		TokensIn:     parsed.Usage.PromptTokens,
-		TokensOut:    parsed.Usage.CompletionTokens,
-		FinishReason: parsed.Choices[0].FinishReason,
-		ToolCalls:    openAIToolCallsToNeutral(parsed.Choices[0].Message.ToolCalls),
-	}, nil
+	return g.openaiBase.chat(ctx, req)
 }
 
 func (g *GLMProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	body := openAIRequest{
-		Model:         req.Model,
-		MaxTokens:     orDefault(req.MaxTokens, 4096),
-		Temperature:   req.Temperature,
-		Messages:      toOpenAIMessages(req.SystemPrompt, req.Messages),
-		Tools:         toOpenAITools(req.Tools),
-		Stream:        true,
-		StreamOptions: usageStreamOptions,
-	}
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", glmBaseURL, bytes.NewReader(jsonBody))
-	if err != nil {
-		return err
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := g.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-		var apiErr openAIErrorResp
-		if err := json.Unmarshal(errBody, &apiErr); err == nil && apiErr.Error.Message != "" {
-			switch {
-			case resp.StatusCode == 401:
-				return ErrApiKeyInvalid
-			case resp.StatusCode == 429 && isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code):
-				return ErrInsufficientBalance
-			case resp.StatusCode == 429:
-				return rateLimitErr(resp)
-			case resp.StatusCode >= 500:
-				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
-			}
-			return fmt.Errorf("glm stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
-		}
-		if resp.StatusCode >= 500 {
-			return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
-		}
-		return fmt.Errorf("glm stream error (status %d)", resp.StatusCode)
-	}
-
-	return parseOpenAISSE(resp.Body, onChunk)
+	return g.openaiBase.stream(ctx, req, onChunk)
 }
 
-// isGLMBalanceError reports whether a 429 response is an insufficient-balance
-// error rather than a true rate-limit. z.ai uses the same status code for both.
 func isGLMBalanceError(msg, code string) bool {
 	if code == "1113" {
 		return true
