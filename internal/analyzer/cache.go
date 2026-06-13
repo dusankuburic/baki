@@ -3,6 +3,7 @@ package analyzer
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -37,33 +38,30 @@ func NewAnalysisCache(maxSize int) *AnalysisCache {
 func FlowHash(doc *models.FlowDocument) string {
 	h := sha256.New()
 	for _, sf := range doc.Subflows {
-		h.Write([]byte(sf.Name))
+		io.WriteString(h, sf.Name)
 		h.Write([]byte{0})
 		walkSubflowBlocks(&sf, func(b *models.Block) {
-			h.Write([]byte(b.ID))
+			io.WriteString(h, b.ID)
 			h.Write([]byte{0})
-			h.Write([]byte(b.RawType))
+			io.WriteString(h, b.RawType)
 			h.Write([]byte{0})
-			h.Write([]byte(b.Name))
+			io.WriteString(h, b.Name)
 			h.Write([]byte{0})
 			if b.Properties != nil {
 				keys := make([]string, 0, len(b.Properties))
 				for k := range b.Properties {
 					keys = append(keys, k)
 				}
-				// Sort for a deterministic hash — Go randomizes map iteration
-				// order, so without this the same flow hashes differently on
-				// each call and the analysis cache never hits.
 				sort.Strings(keys)
 				for _, k := range keys {
-					h.Write([]byte(k))
+					io.WriteString(h, k)
 					h.Write([]byte{'='})
-					h.Write([]byte(b.Properties[k]))
+					io.WriteString(h, b.Properties[k])
 					h.Write([]byte{0})
 				}
 			}
 			for _, v := range b.Variables {
-				h.Write([]byte(v))
+				io.WriteString(h, v)
 				h.Write([]byte{0})
 			}
 		})

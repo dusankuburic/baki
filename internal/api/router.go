@@ -76,6 +76,12 @@ func NewRouter(
 		mux:            chi.NewRouter(),
 	}
 
+	// Wire the WebSocket hub as a flow-change notifier so that library
+	// saves broadcast to all connected viewers.
+	if handlers.Library != nil {
+		handlers.Library.SetFlowNotifier(rt.hub)
+	}
+
 	// Wire the CORS allowlist into the SSE EventManager so it respects
 	// the same origin policy as every other route (fixes hardcoded "*").
 	rt.eventManager.SetOriginChecker(rt.isOriginAllowed)
@@ -300,6 +306,13 @@ var publicRoutes = map[string]bool{
 	"/api/auth/login":    true,
 	"/api/auth/refresh":  true,
 	"/api/auth/logout":   true,
+	// SSO endpoints are pre-authentication by definition: the browser hits
+	// start/callback before it has any token, and exchange carries its own
+	// single-use ticket credential.
+	"/api/auth/sso/info":     true,
+	"/api/auth/sso/start":    true,
+	"/api/auth/sso/callback": true,
+	"/api/auth/sso/exchange": true,
 	"/api/local-config":  true,
 	"/healthz":           true,
 	"/readyz":            true,

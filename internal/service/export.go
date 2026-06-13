@@ -64,6 +64,9 @@ func (s *ExportService) ExportMarkdown(doc *models.FlowDocument, report *models.
 	content = []byte(md)
 
 	if path != "" {
+		if err = validateUserPath(path); err != nil {
+			return nil, err
+		}
 		if err = os.WriteFile(path, content, 0644); err != nil {
 			return nil, fmt.Errorf("write file: %w", err)
 		}
@@ -89,6 +92,9 @@ func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.Analy
 	}
 
 	if path != "" {
+		if err = validateUserPath(path); err != nil {
+			return nil, err
+		}
 		if err = os.WriteFile(path, pdfBytes, 0644); err != nil {
 			return nil, fmt.Errorf("write file: %w", err)
 		}

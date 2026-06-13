@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,15 +25,29 @@ const (
 
 // Client represents a single WebSocket connection.
 type Client struct {
-	UserID          string
-	DisplayName     string
-	SelectedBlockID string
+	UserID      string
+	DisplayName string
+
+	blockMu         sync.Mutex
+	selectedBlockID string
 
 	hub          *Hub
 	flowID       string
 	conn         *websocket.Conn
 	send         chan Envelope
 	disconnected atomic.Bool // set once when Send or Run tears down the connection
+}
+
+func (c *Client) SetSelectedBlockID(id string) {
+	c.blockMu.Lock()
+	c.selectedBlockID = id
+	c.blockMu.Unlock()
+}
+
+func (c *Client) GetSelectedBlockID() string {
+	c.blockMu.Lock()
+	defer c.blockMu.Unlock()
+	return c.selectedBlockID
 }
 
 // NewClient wraps an already-upgraded WebSocket connection.
@@ -173,7 +188,7 @@ func (c *Client) handleIncoming(env Envelope) {
 
 	case EventPresenceUpdate:
 		if p, ok := parsePayload[PresencePayload](env.Payload); ok {
-			c.SelectedBlockID = p.SelectedBlockID
+			c.SetSelectedBlockID(p.SelectedBlockID)
 		}
 		c.hub.Broadcast(c.flowID, c.UserID, env, c)
 

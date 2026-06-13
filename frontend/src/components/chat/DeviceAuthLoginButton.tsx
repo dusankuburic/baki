@@ -107,7 +107,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   const disconnect = useCallback(async () => {
     try {
       await provider.revokeAuth()
-    } catch (e) { console.error(`Revoke ${provider.name} auth failed:`, e) }
+    } catch (e) { logger.warn(`Revoke ${provider.name} auth failed:`, e) }
     setState('unconfigured')
     setUsername('')
   }, [provider])

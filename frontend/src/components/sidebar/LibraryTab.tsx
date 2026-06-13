@@ -1,42 +1,66 @@
-import React, { useState, useEffect } from 'react'
-import { Library, Search, Trash2, FolderOpen, Save } from 'lucide-react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { Library, Search, Trash2, FolderOpen, Save, RefreshCw } from 'lucide-react'
 import { libraryApi, type LibraryFlow } from '@/api/library'
+import { VersionConflictError } from '@/api/client'
 import { useFlowStore } from '@/stores/flowStore'
 import { useUIStore } from '@/stores/uiStore'
-import { Spinner } from '@/components/shared'
+import { useOrgStore } from '@/stores/orgStore'
+import { Spinner, useToast } from '@/components/shared'
 import type { FlowDocument } from '@/types/domain'
+import {logger} from '@/lib/logger'
 
 export default function LibraryTab() {
   const [flows, setFlows] = useState<LibraryFlow[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
   const setDocument = useFlowStore(s => s.setDocument)
   const currentDoc = useFlowStore(s => s.document)
+  const libraryFlowId = useFlowStore(s => s.libraryFlowId)
+  const libraryVersion = useFlowStore(s => s.libraryVersion)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const activeOrgId = useOrgStore(s => s.activeOrgId)
+  const toast = useToast()
+  const abortRef = useRef<AbortController | null>(null)
 
-  const fetchLibrary = async () => {
+  const fetchLibrary = useCallback(async () => {
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setIsLoading(true)
     try {
-      const list = await libraryApi.list({ query: search })
+      const list = await libraryApi.list({ query: search, orgId: activeOrgId ?? undefined })
+      if (ac.signal.aborted) return
       setFlows(list)
     } catch (err) {
-      console.error('Failed to fetch library', err)
+      if (ac.signal.aborted) return
+      logger.warn('Failed to fetch library', err)
     } finally {
-      setIsLoading(false)
+      if (!ac.signal.aborted) {
+        setIsLoading(false)
+      }
     }
-  }
+  }, [search, activeOrgId])
 
   useEffect(() => {
     fetchLibrary()
-  }, [search])
+    return () => { abortRef.current?.abort() }
+  }, [fetchLibrary])
 
   const handleOpen = async (id: string) => {
     try {
       const fullDoc = await libraryApi.getContent(id)
+      const meta = flows.find(f => f.id === id)
       setDocument(fullDoc as FlowDocument)
+      useFlowStore.setState({
+        libraryFlowId: id,
+        libraryVersion: meta?.version ?? 0,
+      })
       setMainPaneView('block')
     } catch (err) {
-      alert('Failed to load flow: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      toast.error('Failed to load flow', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
     }
   }
 
@@ -47,23 +71,84 @@ export default function LibraryTab() {
       await libraryApi.delete(id)
       setFlows(prev => prev.filter(f => f.id !== id))
     } catch (err) {
-      alert('Failed to delete: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      toast.error('Failed to delete', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    }
+  }
+
+  const reloadFromLibrary = async (id: string) => {
+    try {
+      const [fullDoc, meta] = await Promise.all([
+        libraryApi.getContent(id),
+        libraryApi.get(id),
+      ])
+      setDocument(fullDoc as FlowDocument)
+      useFlowStore.setState({ libraryVersion: meta.version })
+      toast.success('Reloaded latest version')
+    } catch (err) {
+      toast.error('Failed to reload', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
     }
   }
 
   const handleSaveCurrent = async () => {
     if (!currentDoc) return
+
+    if (libraryFlowId) {
+      setIsSaving(true)
+      try {
+        const updated = await libraryApi.update(libraryFlowId, {
+          content: currentDoc,
+          version: libraryVersion,
+        })
+        useFlowStore.setState({ libraryVersion: updated.version })
+        toast.success('Flow updated')
+        fetchLibrary()
+      } catch (err) {
+        if (err instanceof VersionConflictError) {
+          toast.warning('Flow was modified by another user', {
+            description: 'Reload the latest version to see their changes.',
+            duration: 15000,
+            action: {
+              label: 'Reload',
+              onClick: () => reloadFromLibrary(libraryFlowId),
+            },
+          })
+        } else {
+          toast.error('Failed to update flow', {
+            description: err instanceof Error ? err.message : 'Unknown error',
+          })
+        }
+      } finally {
+        setIsSaving(false)
+      }
+      return
+    }
+
     const name = prompt('Enter name for the library flow:', currentDoc.name)
     if (!name) return
-    
+
+    setIsSaving(true)
     try {
-      await libraryApi.create({
+      const created = await libraryApi.create({
         name,
-        content: currentDoc as FlowDocument
+        orgId: activeOrgId ?? undefined,
+        content: currentDoc as FlowDocument,
       })
+      useFlowStore.setState({
+        libraryFlowId: created.id,
+        libraryVersion: created.version,
+      })
+      toast.success('Flow saved to library')
       fetchLibrary()
     } catch (err) {
-      alert('Failed to save to library: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      toast.error('Failed to save to library', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -84,10 +169,15 @@ export default function LibraryTab() {
         {currentDoc && (
           <button
             onClick={handleSaveCurrent}
-            className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-brand-600 text-white rounded-md text-xs font-medium hover:bg-brand-700 transition-colors shadow-sm"
+            disabled={isSaving}
+            className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-brand-600 text-white rounded-md text-xs font-medium hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-50"
           >
-            <Save size={12} />
-            Save current to library
+            {isSaving ? (
+              <RefreshCw size={12} className="animate-spin" />
+            ) : (
+              <Save size={12} />
+            )}
+            {libraryFlowId ? 'Update library flow' : 'Save current to library'}
           </button>
         )}
       </div>
@@ -110,12 +200,14 @@ export default function LibraryTab() {
                     <div className="text-xs font-semibold text-text-primary truncate">{f.name}</div>
                     {f.description && <div className="text-2xs text-text-tertiary truncate">{f.description}</div>}
                   </div>
-                  <button
-                    onClick={(e) => handleDelete(e, f.id)}
-                    className="p-1 text-text-tertiary hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Trash2 size={12} />
-                  </button>
+                  {(f.canDelete ?? !f.isSharedWithMe) && (
+                    <button
+                      onClick={(e) => handleDelete(e, f.id)}
+                      className="p-1 text-text-tertiary hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
                 </div>
                 <div className="mt-1.5 flex items-center gap-2 text-2xs text-text-muted">
                   <span className="flex items-center gap-0.5">

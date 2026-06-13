@@ -78,6 +78,7 @@ var ServiceModule = fx.Options(
 		func(settings *storage.SettingsStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
 			return service.NewSystemService(settings, notifier, backend)
 		},
+		service.NewAuthzService,
 		service.NewFlowService,
 		service.NewAnalysisService,
 		service.NewExportService,

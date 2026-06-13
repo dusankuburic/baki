@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import { useOrgStore } from '@/stores/orgStore'
 import { isTauri } from '@/platform/guards'
 import LoginForm from './LoginForm'
 import Spinner from '@/components/shared/Spinner'
@@ -15,12 +16,19 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const isLoading = useAuthStore(s => s.isLoading)
   const loadFromStorage = useAuthStore(s => s.loadFromStorage)
+  const loadOrgs = useOrgStore(s => s.loadOrgs)
 
   useEffect(() => {
     if (!isTauri()) {
       loadFromStorage()
     }
   }, [loadFromStorage])
+
+  useEffect(() => {
+    if (!isTauri() && isAuthenticated) {
+      loadOrgs()
+    }
+  }, [isAuthenticated, loadOrgs])
 
   // Desktop: skip auth gate
   if (isTauri()) {

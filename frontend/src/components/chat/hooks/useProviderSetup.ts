@@ -76,11 +76,15 @@ export function useProviderSetup() {
   }, [provider, providers, aiSettings.providers])
 
   useEffect(() => {
-    if (provider === 'demo') {
-      chatApi.getDemoRemaining().then(r => setDemoRemaining(r)).catch(() => setDemoRemaining(null))
-    } else {
+    if (provider !== 'demo') {
       setDemoRemaining(null)
+      return
     }
+    let cancelled = false
+    chatApi.getDemoRemaining()
+      .then(r => { if (!cancelled) setDemoRemaining(r) })
+      .catch(() => { if (!cancelled) setDemoRemaining(null) })
+    return () => { cancelled = true }
   }, [provider])
 
   const handleSetProvider = useCallback((p: ProviderID) => {

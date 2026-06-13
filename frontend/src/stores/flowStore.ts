@@ -1,65 +1,12 @@
 import {create} from 'zustand'
 import type {FlowDocument, Block, Subflow, BlockType, FlowFileInfo} from '@/types/domain'
 import {useEditorStore} from './editorStore'
-
-function findBlockById(doc: FlowDocument, blockId: string): Block | null {
-  for (const subflow of doc.subflows) {
-    const found = findBlockInTree(subflow.blocks, blockId)
-    if (found) return found
-  }
-  return null
-}
-
-function findSubflowIdByBlock(doc: FlowDocument, blockId: string): string | null {
-  for (const subflow of doc.subflows) {
-    if (findBlockInTree(subflow.blocks, blockId)) return subflow.id
-  }
-  return null
-}
-
-function findBlockInTree(blocks: Block[], id: string): Block | null {
-    for (const block of blocks) {
-        if (block.id === id) return block
-        if (block.children.length > 0) {
-            const found = findBlockInTree(block.children, id)
-            if (found) return found
-        }
-    }
-    return null
-}
-
-// findAncestorIds returns the container ids on the path to blockId (not the
-// block itself), used to un-collapse ancestors when jumping to a nested block.
-function findAncestorIds(doc: FlowDocument, blockId: string): string[] {
-    const path: string[] = []
-    const walk = (blocks: Block[]): boolean => {
-        for (const block of blocks) {
-            if (block.id === blockId) return true
-            if (block.children.length > 0) {
-                path.push(block.id)
-                if (walk(block.children)) return true
-                path.pop()
-            }
-        }
-        return false
-    }
-    for (const subflow of doc.subflows) {
-        path.length = 0
-        if (walk(subflow.blocks)) return [...path]
-    }
-    return []
-}
-
-function findLabelBlockInTree(blocks: Block[], labelName: string): Block | null {
-    for (const block of blocks) {
-        if (block.rawType === 'LABEL' && block.name === labelName) return block
-        if (block.children.length > 0) {
-            const found = findLabelBlockInTree(block.children, labelName)
-            if (found) return found
-        }
-    }
-    return null
-}
+import {useSearchStore} from './searchStore'
+import {useAnalysisStore} from './analysisStore'
+import {
+  findBlockInDoc, findSubflowIdByBlock, findAncestorIds, findLabelBlock,
+} from '@/lib/tree'
+import {toggleSetMember} from '@/lib/collections'
 
 export const ALL_TYPES: BlockType[] = ['ACTION', 'LOOP', 'CONDITION', 'SUBFLOW', 'ERROR_HANDLER', 'COMMENT', 'VARIABLE', 'WAIT', 'BLOCK', 'SWITCH', 'ELSE', 'CASE', 'DEFAULT', 'END', 'UNKNOWN']
 
@@ -77,6 +24,9 @@ interface FlowState {
   parseError: string | null
   folderFiles: FlowFileInfo[] | null
   selectedFilePath: string | null
+
+  libraryFlowId: string | null
+  libraryVersion: number
 
   navigationHistory: {blockId: string | null, subflowId: string | null}[]
   historyIndex: number
@@ -121,6 +71,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   parseError: null,
   folderFiles: null,
   selectedFilePath: null,
+  libraryFlowId: null,
+  libraryVersion: 0,
   navigationHistory: [],
   historyIndex: -1,
 
@@ -140,6 +92,12 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       navigationHistory: firstId ? [{blockId: null, subflowId: firstId}] : [],
       historyIndex: firstId ? 0 : -1,
     })
+
+    // Clear search results and analysis UI state from the previous flow
+    // so the user doesn't see stale data that belongs to another document.
+    useSearchStore.getState().clear()
+    useAnalysisStore.getState().setVariableLineage(null)
+    useAnalysisStore.getState().setFindingSearch('')
 
     if (firstId) {
       useEditorStore.getState().openInGroup(firstId, 0)
@@ -248,17 +206,13 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     return {drilledSubflowPath: path, selectedSubflowId: path[path.length - 1] ?? null}
   }),
 
-  toggleSubflowExpand: (id) => set(state => {
-    const next = new Set(state.expandedSubflowIds)
-    if (next.has(id)) { next.delete(id) } else { next.add(id) }
-    return {expandedSubflowIds: next}
-  }),
+  toggleSubflowExpand: (id) => set(state => ({
+    expandedSubflowIds: toggleSetMember(state.expandedSubflowIds, id),
+  })),
 
-  toggleBlockExpand: (id) => set(state => {
-    const next = new Set(state.expandedBlockIds)
-    if (next.has(id)) { next.delete(id) } else { next.add(id) }
-    return {expandedBlockIds: next}
-  }),
+  toggleBlockExpand: (id) => set(state => ({
+    expandedBlockIds: toggleSetMember(state.expandedBlockIds, id),
+  })),
 
   setVisibleTypes: (types) => set({visibleTypes: types}),
   setParsing: (parsing) => set({isParsing: parsing}),
@@ -282,12 +236,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   navigateToLabelByName: (labelName) => {
     const doc = get().document
     if (!doc) return
-    for (const sf of doc.subflows) {
-      const label = findLabelBlockInTree(sf.blocks, labelName)
-      if (label) {
-        get().selectBlock(label.id)
-        return
-      }
+    const label = findLabelBlock(doc, labelName)
+    if (label) {
+      get().selectBlock(label.id)
     }
   },
 
@@ -297,14 +248,18 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       drilledSubflowPath: [], expandedSubflowIds: new Set(),
       expandedBlockIds: new Set(), parseError: null,
       folderFiles: null, selectedFilePath: null,
+      libraryFlowId: null, libraryVersion: 0,
     })
+    useSearchStore.getState().clear()
+    useAnalysisStore.getState().setVariableLineage(null)
+    useAnalysisStore.getState().setFindingSearch('')
     useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [100]})
   },
 
   selectedBlock: () => {
     const {document, selectedBlockId} = get()
     if (!document || !selectedBlockId) return null
-    return findBlockById(document, selectedBlockId)
+    return findBlockInDoc(document, selectedBlockId)?.block ?? null
   },
 
   selectedSubflow: () => {

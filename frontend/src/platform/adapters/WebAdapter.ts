@@ -76,6 +76,11 @@ export class WebAdapter implements PlatformAdapter {
         }
 
         const file = files[0];
+        const maxBytes = 100 * 1024 * 1024;
+        if (file.size > maxBytes) {
+          resolve(null);
+          return;
+        }
         const reader = new FileReader();
         reader.onload = (e) => {
           const content = e.target?.result as string;
@@ -129,6 +134,8 @@ export class WebAdapter implements PlatformAdapter {
               directoryName = file.webkitRelativePath.split('/')[0];
             }
             return new Promise<void>((res) => {
+              const maxBytes = 100 * 1024 * 1024;
+              if (file.size > maxBytes) { res(); return; }
               const reader = new FileReader();
               reader.onload = (e) => {
                 fileMap[file.name] = e.target?.result as string;
@@ -225,7 +232,7 @@ export class WebAdapter implements PlatformAdapter {
         return '';
       }
     } catch (error) {
-      console.error('Failed to read clipboard:', error);
+      logger.warn('Failed to read clipboard:', error);
       return '';
     }
   }
@@ -242,7 +249,7 @@ export class WebAdapter implements PlatformAdapter {
         throw new Error('Clipboard API not available');
       }
     } catch (error) {
-      console.error('Failed to write to clipboard:', error);
+      logger.warn('Failed to write to clipboard:', error);
       throw error;
     }
   }

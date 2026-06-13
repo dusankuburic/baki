@@ -4,26 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/models"
+	"pad-analyzer/internal/testutil"
 )
-
-// countingNotifier records how many events it sees, so a test can assert that
-// a cancelled-before-begin stream emits nothing.
-type countingNotifier struct{count int64}
-
-func (n *countingNotifier) Emit(name string, data any) {atomic.AddInt64(&n.count, 1)}
 
 // TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine verifies that a
 // stream which the client never starts (no /api/chat/begin) is released when
 // it is explicitly cancelled, instead of blocking on `<-ctl.started` until the
 // 5-minute upper-bound timeout.
 func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
-	notifier := &countingNotifier{}
+	notifier := &testutil.CountingNotifier{}
 
 	factory := ai.NewProviderFactory(
 		func(scope, provider string) (string, error) {
@@ -60,7 +54,7 @@ func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
 		}
 	}
 
-	if got := atomic.LoadInt64(&notifier.count); got != 0 {
+	if got := notifier.Count(); got != 0 {
 		t.Errorf("expected 0 events emitted for cancelled-before-begin stream, got %d", got)
 	}
 }
@@ -75,7 +69,7 @@ func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
 // event was emitted; this manifested as Copilot's token exchange failing with
 // "context canceled" on a cold token cache.
 func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
-	notifier := &countingNotifier{}
+	notifier := &testutil.CountingNotifier{}
 
 	factory := ai.NewProviderFactory(
 		func(scope, provider string) (string, error) {
@@ -116,7 +110,7 @@ func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 		}
 	}
 
-	if got := atomic.LoadInt64(&notifier.count); got == 0 {
+	if got := notifier.Count(); got == 0 {
 		t.Errorf("expected an error event after BeginStream despite parent cancel, got 0 (stream context inherited request cancellation)")
 	}
 }
@@ -124,7 +118,7 @@ func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 // TestStreamChatMessage_CancelAfterBegin_EmitsError verifies the normal
 // cancellation path.
 func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
-	notifier := &countingNotifier{}
+	notifier := &testutil.CountingNotifier{}
 
 	factory := ai.NewProviderFactory(
 		func(scope, provider string) (string, error) {
@@ -161,13 +155,13 @@ func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
 		}
 	}
 
-	if got := atomic.LoadInt64(&notifier.count); got == 0 {
+	if got := notifier.Count(); got == 0 {
 		t.Errorf("expected at least one error event after BeginStream, got 0")
 	}
 }
 
 func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
-	notifier := &countingNotifier{}
+	notifier := &testutil.CountingNotifier{}
 	factory := ai.NewProviderFactory(
 		func(scope, provider string) (string, error) {return "", fmt.Errorf("no key")},
 		nil,

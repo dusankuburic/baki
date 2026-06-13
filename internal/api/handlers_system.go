@@ -38,17 +38,6 @@ func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, b
 }
 
 func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	orgID := chi.URLParam(r, "id")
-	if orgID != "" {
-		settings, err := h.sysSvc.GetOrgSettings(orgID)
-		if err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		render.JSON(w, settings)
-		return
-	}
-
 	userID := h.security.CallerID(r)
 	settings, err := h.sysSvc.GetUserSettings(userID)
 	if err != nil {
@@ -59,19 +48,9 @@ func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 }
 
 func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
-	orgID := chi.URLParam(r, "id")
 	var req models.AppSettings
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	if orgID != "" {
-		if err := h.sysSvc.UpdateOrgSettings(orgID, req); err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		render.JSON(w, map[string]string{"status": "ok"})
 		return
 	}
 
@@ -80,6 +59,42 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// handleGetOrgSettings returns org-wide settings. Reading requires org
+// membership — settings carry operational details (budgets, provider
+// configuration) that must not leak across tenants.
+func (h *SystemHandler) handleGetOrgSettings(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "id")
+	if !requireOrgMember(w, r, h.security, orgID) {
+		return
+	}
+	settings, err := h.sysSvc.GetOrgSettings(orgID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, settings)
+}
+
+// handleUpdateOrgSettings overwrites org-wide settings. Writing requires org
+// admin.
+func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "id")
+	if !requireOrgAdmin(w, r, h.security, orgID) {
+		return
+	}
+	var req models.AppSettings
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := h.sysSvc.UpdateOrgSettings(orgID, req); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSettingsChange, "org", orgID, nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

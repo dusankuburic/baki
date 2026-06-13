@@ -86,7 +86,7 @@ func Error(w http.ResponseWriter, err error, code int) {
 			code = http.StatusForbidden
 		case errors.Is(err, service.ErrInvalidInput) || errors.Is(err, service.ErrUninitialized):
 			code = http.StatusBadRequest
-		case errors.Is(err, service.ErrConflict):
+		case errors.Is(err, service.ErrConflict) || errors.Is(err, storageif.ErrEmailExists) || errors.Is(err, storageif.ErrOrgInviteExists) || errors.Is(err, storageif.ErrVersionConflict):
 			code = http.StatusConflict
 		case errors.Is(err, service.ErrNotImplemented):
 			code = http.StatusNotImplemented

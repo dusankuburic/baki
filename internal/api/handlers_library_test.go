@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"pad-analyzer/internal/auth"
 )
 
 // --- No-storage (nil backend) baseline tests ---
@@ -147,5 +149,103 @@ func TestHandleLibraryUpdate_OwnerCanUpdate(t *testing.T) {
 	decodeJSON(t, rr, &resp)
 	if resp["name"] != "renamed" {
 		t.Errorf("expected name=renamed, got %v", resp["name"])
+	}
+}
+
+// --- Org scoping tests (H1: enumeration, H4: spoofing) ---
+
+func TestLibraryList_OrgNonMemberForbidden(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	orgID := seedOrg(t, rt, "acme", "alice")
+	seedOrgFlow(t, rt, "org-flow", "alice", orgID)
+	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library/?orgId="+orgID, bearer, nil)
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+func TestLibraryList_OrgMemberSeesOrgFlows(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	orgID := seedOrg(t, rt, "acme", "alice")
+	addOrgMember(t, rt, orgID, "bob", auth.RoleMember)
+	seedOrgFlow(t, rt, "org-flow", "alice", orgID)
+	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library/?orgId="+orgID, bearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+
+	var resp struct {
+		Items []map[string]any `json:"items"`
+	}
+	decodeJSON(t, rr, &resp)
+	found := false
+	for _, it := range resp.Items {
+		if it["id"] == "org-flow" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("org member should see org flow in list, got %v", resp.Items)
+	}
+}
+
+func TestLibraryCreate_OrgNonMemberForbidden(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	orgID := seedOrg(t, rt, "acme", "alice")
+	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/library", bearer, map[string]any{
+		"name":  "intruder flow",
+		"orgId": orgID,
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+func TestLibraryCreate_OrgViewerForbidden(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	orgID := seedOrg(t, rt, "acme", "alice")
+	addOrgMember(t, rt, orgID, "carol", auth.RoleViewer)
+	bearer := jwtBearer(t, rt, "carol", "carol@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/library", bearer, map[string]any{
+		"name":  "viewer flow",
+		"orgId": orgID,
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+func TestLibraryCreate_OrgMemberAllowed(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	orgID := seedOrg(t, rt, "acme", "alice")
+	addOrgMember(t, rt, orgID, "bob", auth.RoleMember)
+	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/library", bearer, map[string]any{
+		"name":  "team flow",
+		"orgId": orgID,
+	})
+	checkStatus(t, rr, http.StatusCreated)
+}
+
+func TestLibraryList_TotalReflectsAllMatches(t *testing.T) {
+	rt, seed := newLibraryTestRouter(t)
+	seed("flow1", "alice")
+	seed("flow2", "alice")
+	seed("flow3", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library/?limit=2", bearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+
+	var resp struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	decodeJSON(t, rr, &resp)
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items with limit=2, got %d", len(resp.Items))
+	}
+	if resp.Total != 3 {
+		t.Errorf("expected total=3 across all pages, got %d", resp.Total)
 	}
 }

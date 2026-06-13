@@ -2,17 +2,18 @@ import {useState, useCallback, useRef, useEffect, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {chatApi, flowApi} from '@/api'
+import {chatApi} from '@/api'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {logger} from '@/lib/logger'
-import type {ChatMessage, ContextPreview, SourceFileInfo, ChatRequest, ConversationFile} from '@/types/domain'
+import {useChatConversations} from './useChatConversations'
+import {useChatThreads} from './useChatThreads'
+import type {ChatMessage, ContextPreview, ChatRequest} from '@/types/domain'
 
 interface UseAIChatOptions {
   selectedModel: string
 }
 
 const EMPTY_ARRAY: ChatMessage[] = []
-const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
 export function useAIChat({selectedModel}: UseAIChatOptions) {
   const doc = useFlowStore(s => s.document)
@@ -27,12 +28,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const getMessages = useChatStore(s => s.getMessages)
   const appendMessage = useChatStore(s => s.appendMessage)
   const removeMessage = useChatStore(s => s.removeMessage)
-  const clearThreadMessages = useChatStore(s => s.clearThreadMessages)
-  const compactThread = useChatStore(s => s.compactThread)
   const updateThread = useChatStore(s => s.updateThread)
-  const createThread = useChatStore(s => s.createThread)
-  const switchThread = useChatStore(s => s.switchThread)
-  const closeThread = useChatStore(s => s.closeThread)
   const updateStreamingMessage = useChatStore(s => s.updateStreamingMessage)
   const startStream = useChatStore(s => s.startStream)
   const endStream = useChatStore(s => s.endStream)
@@ -54,18 +50,17 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     [threads, activeThreadId],
   )
 
+  const {sourceFiles} = useChatConversations({doc, flowThreads, activeThreadId})
+  const threadActions = useChatThreads({doc, activeThreadId, sourceFiles})
+
   const [isThinking, setIsThinking] = useState(false)
   const [streamingTokens, setStreamingTokens] = useState(0)
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
-  const [sourceFiles, setSourceFiles] = useState<SourceFileInfo[]>(EMPTY_SOURCE_FILES)
-  // Transient label for the current tool step (e.g. "Searching flow"), shown as
-  // a status line while the read-only tool loop runs; cleared on done/error.
   const [toolStatus, setToolStatus] = useState<string | null>(null)
 
   const isStreaming = activeStreamId !== null
 
-  // Stable refs for use inside callbacks
   const providerRef = useRef(provider)
   useEffect(() => { providerRef.current = provider })
   const streamingRef = useRef(streamingText)
@@ -74,8 +69,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   useEffect(() => { docRef.current = doc })
   const streamingThreadIdRef = useRef<string | null>(null)
   const [streamingThreadId, setStreamingThreadIdState] = useState<string | null>(null)
-  // Single setter keeps the ref (read inside stream callbacks, updated
-  // synchronously) and the state (render gating) in lockstep.
   const setStreamingThreadId = useCallback((id: string | null) => {
     streamingThreadIdRef.current = id
     setStreamingThreadIdState(id)
@@ -85,75 +78,15 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel })
 
-  // Accumulated text to avoid stale state in rapid updates
   const accumulatedTextRef = useRef('')
-  // Track last update time for throttling streaming state updates
   const lastUpdateRef = useRef<number | null>(null)
 
   const isCurrentThreadStreaming = isStreaming && streamingThreadId === activeThreadId
   const showThinking = isCurrentThreadStreaming && isThinking && !streamingText
 
-  useEffect(() => {
-    if (!doc) {
-      setSourceFiles(EMPTY_SOURCE_FILES)
-      return
-    }
-    flowApi.getSourceFiles().then((files: SourceFileInfo[] | null) => {
-      const list: SourceFileInfo[] = (files || []).map((f: SourceFileInfo) => ({
-        filename: f.filename || '',
-        subflowId: f.subflowId || '',
-        subflowName: f.subflowName || '',
-        blockCount: f.blockCount || 0,
-        lineCount: f.lineCount || 0,
-      }))
-      setSourceFiles(list)
-    }).catch((err) => { logger.warn('Failed to load source files', err) })
-  }, [doc])
-
-  useEffect(() => {
-    if (!doc) return
-    if (flowThreads.length === 0) {
-      const id = createThread(doc.id)
-      if (sourceFiles.length > 0) {
-        updateThread(id, {selectedSourceFiles: sourceFiles.map(f => f.filename)})
-      }
-      // createThread pre-populates conversations with [], which prevents the
-      // load effect from running. Restore the persisted flow conversation here.
-      chatApi.getConversation(doc.id, 'flow').then((conv: ConversationFile) => {
-        if (conv?.messages?.length > 0) {
-          for (const m of conv.messages) {
-            appendMessage(id, m as ChatMessage)
-          }
-        }
-      }).catch((err) => { logger.warn('Failed to load flow conversation', err) })
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.id])
-
-  useEffect(() => {
-    if (!activeThreadId || !doc?.id) return
-    // Only load from backend if the thread has no messages yet in the store
-    const existing = useChatStore.getState().conversations.get(activeThreadId)
-    if (existing !== undefined) return
-    const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
-    const scope = thread?.contextBlockId || 'flow'
-    let cancelled = false
-    chatApi.getConversation(doc.id, scope).then((conv: ConversationFile) => {
-      if (cancelled) return
-      if (conv?.messages) {
-        for (const m of conv.messages) {
-          appendMessage(activeThreadId, m as ChatMessage)
-        }
-      }
-    }).catch((err) => { logger.warn('Failed to load thread conversation', err) })
-    return () => { cancelled = true }
-  }, [activeThreadId, appendMessage, doc?.id])
-
   const onChunk = useCallback((text: string) => {
     setIsThinking(prev => prev ? false : prev)
     accumulatedTextRef.current += text
-
-    // Throttle state updates to prevent excessive re-renders (update every 80ms max)
     const now = Date.now()
     if (!lastUpdateRef.current) {
       lastUpdateRef.current = now
@@ -172,8 +105,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     setStreamingTokens(Math.ceil(text.length / 4))
   }, [updateStreamingMessage])
 
-  // Tool-loop status events (read-only agent mode): surface the current step as
-  // a transient label. Not persisted with the message.
   const onToolStatus = useCallback((label: string) => {
     setIsThinking(false)
     setToolStatus(label)
@@ -184,7 +115,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     const curThreadId = streamingThreadIdRef.current
     const curDoc = docRef.current
 
-    // Final update to ensure complete text is displayed
     updateStreamingMessage(content)
     lastUpdateRef.current = null
 
@@ -243,11 +173,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   }, [appendMessage, endStream, setStreamingThreadId])
 
   const handler = useMemo(() => ({
-    onChunk,
-    onReplace,
-    onDone,
-    onError,
-    onToolStatus,
+    onChunk, onReplace, onDone, onError, onToolStatus,
   }), [onChunk, onReplace, onDone, onError, onToolStatus])
 
   const {registerStream} = useStreamingMessage(handler)
@@ -256,15 +182,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (!doc || !activeThread) return null
     const history = getMessages(activeThread.id)
     const providerConfig = aiSettings.providers[provider as keyof typeof aiSettings.providers]
-
-    // Always use the latest state from the store to avoid stale closures
     const currentThread = useChatStore.getState().threads.find(t => t.id === activeThread.id)
     let filesToUse = currentThread?.selectedSourceFiles || []
-
     if (overrideFiles !== undefined && overrideFiles.length > 0) {
       filesToUse = overrideFiles
     }
-
     return {
       flowId: doc.id,
       provider,
@@ -298,7 +220,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
     const msgId = crypto.randomUUID()
     setStreamingThreadId(activeThread.id)
-    lastUpdateRef.current = null // Reset throttle timer
+    lastUpdateRef.current = null
     startStream('pending', msgId)
     setIsThinking(true)
     setStreamingTokens(0)
@@ -357,13 +279,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     executeSend(text, files.length > 0 ? files : undefined, excludeContext)
   }, [executeSend, activeThreadId, updateThread])
 
-  // Stable refs for the effect to avoid re-triggering it when they change
   const executeSendRef = useRef(executeSend)
   useEffect(() => { executeSendRef.current = executeSend })
   const updateThreadRef = useRef(updateThread)
   useEffect(() => { updateThreadRef.current = updateThread })
 
-  // React to global pending messages (e.g. from context menus)
   useEffect(() => {
     if (globalPendingMessage && doc && activeThreadId) {
       const {text, contextBlockId} = globalPendingMessage
@@ -413,50 +333,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     await chatApi.exportConversation(doc.id, activeThread.id)
   }, [doc, activeThread])
 
-  const handleCreateThread = useCallback(() => {
-    if (!doc) return
-    const id = createThread(doc.id)
-    if (sourceFiles.length > 0) {
-      updateThread(id, {selectedSourceFiles: sourceFiles.map(f => f.filename)})
-    }
-  }, [doc, createThread, sourceFiles, updateThread])
-
-  const handleCloseThread = useCallback((threadId: string) => {
-    closeThread(threadId)
-  }, [closeThread])
-
-  const handleRenameThread = useCallback((threadId: string, title: string) => {
-    updateThread(threadId, {title})
-  }, [updateThread])
-
-  const handleClearContext = useCallback(() => {
-    if (!activeThreadId) return
-    clearThreadMessages(activeThreadId)
-    updateThread(activeThreadId, {
-      contextBlockId: null,
-      selectedSourceFiles: sourceFiles.length > 0 ? sourceFiles.map(f => f.filename) : [],
-      tokensIn: 0,
-      tokensOut: 0,
-    })
-  }, [activeThreadId, clearThreadMessages, updateThread, sourceFiles])
-
-  const handleCompact = useCallback(() => {
-    if (!activeThreadId) return
-    compactThread(activeThreadId, 3)
-  }, [activeThreadId, compactThread])
-
-  const setThreadContextBlock = useCallback((blockId: string | null) => {
-    if (activeThreadId) updateThread(activeThreadId, {contextBlockId: blockId})
-  }, [activeThreadId, updateThread])
-
-  const setThreadSourceFiles = useCallback((files: string[]) => {
-    if (activeThreadId) updateThread(activeThreadId, {selectedSourceFiles: files})
-  }, [activeThreadId, updateThread])
-
-  const setThreadUseTools = useCallback((useTools: boolean) => {
-    if (activeThreadId) updateThread(activeThreadId, {useTools})
-  }, [activeThreadId, updateThread])
-
   const handleCancelStream = useCallback(() => {
     if (activeStreamId) {
       chatApi.cancelStream(activeStreamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
@@ -468,7 +344,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   }, [activeStreamId, endStream, setStreamingThreadId])
 
   return {
-    // state
     doc,
     selectedBlockId,
     activeThreadId,
@@ -486,21 +361,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     contextPreview,
     pendingMessage,
     toolStatus,
-    // thread actions
-    switchThread,
-    // handlers
+    ...threadActions,
     handleSend,
     handlePreviewContext,
     handleResend,
     handleExport,
-    handleCreateThread,
-    handleCloseThread,
-    handleRenameThread,
-    handleClearContext,
-    handleCompact,
-    setThreadContextBlock,
-    setThreadSourceFiles,
-    setThreadUseTools,
     handleCancelStream,
     clearContextPreview: () => { setContextPreview(null); setPendingMessage(null) },
     confirmContextPreview: () => {

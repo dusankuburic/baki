@@ -4,6 +4,7 @@ import { sharingApi, type Collaborator, type Permission } from '@/api/sharing'
 import { useFlowStore } from '@/stores/flowStore'
 import { useAuthStore } from '@/stores/authStore'
 import { EmptyState, Spinner } from '@/components/shared'
+import {logger} from '@/lib/logger'
 
 export const SharingTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -15,6 +16,8 @@ export const SharingTab: React.FC = () => {
   const [isAdding, setIsAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const canManage = collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
+
   const fetchCollaborators = useCallback(async () => {
     if (!document) return
     setIsLoading(true)
@@ -23,16 +26,24 @@ export const SharingTab: React.FC = () => {
       const list = await sharingApi.listCollaborators(document.id)
       setCollaborators(list)
     } catch (err) {
-      console.error('Failed to fetch collaborators', err)
+      logger.warn('Failed to fetch collaborators', err)
       setError('Failed to load collaborators')
     } finally {
       setIsLoading(false)
     }
-  }, [document])
+  }, [document?.id])
 
   useEffect(() => {
-    fetchCollaborators()
-  }, [fetchCollaborators])
+    let cancelled = false
+    if (!document) return
+    setIsLoading(true)
+    setError(null)
+    sharingApi.listCollaborators(document.id)
+      .then(list => { if (!cancelled) setCollaborators(list) })
+      .catch((err) => { if (!cancelled) { logger.warn('Failed to fetch collaborators', err); setError('Failed to load collaborators') } })
+      .finally(() => { if (!cancelled) setIsLoading(false) })
+    return () => { cancelled = true }
+  }, [document?.id])
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -92,41 +103,43 @@ export const SharingTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-surface-1 overflow-y-auto">
-      <div className="p-4 border-b border-border-subtle bg-surface-2/50">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3 flex items-center gap-1.5">
-          <UserPlus size={14} />
-          Invite Collaborator
-        </h3>
-        <form onSubmit={handleAdd} className="space-y-3">
-          <input
-            type="email"
-            placeholder="User email address..."
-            value={newEmail}
-            onChange={e => setNewEmail(e.target.value)}
-            required
-            className="w-full bg-surface-0 border border-border-default rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50"
-          />
-          <div className="flex gap-2">
-            <select
-              value={newPermission}
-              onChange={e => setNewPermission(e.target.value as Permission)}
-              className="flex-1 bg-surface-0 border border-border-default rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/50"
-            >
-              <option value="viewer">Viewer (Read Only)</option>
-              <option value="editor">Editor (Read/Write)</option>
-              <option value="admin">Admin (Full Control)</option>
-            </select>
-            <button
-              type="submit"
-              disabled={isAdding || !newEmail}
-              className="px-4 py-1 bg-brand-600 text-white rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              {isAdding ? 'Inviting...' : 'Invite'}
-            </button>
-          </div>
-          {error && <p className="text-2xs text-red-500 font-medium">{error}</p>}
-        </form>
-      </div>
+      {canManage && (
+        <div className="p-4 border-b border-border-subtle bg-surface-2/50">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3 flex items-center gap-1.5">
+            <UserPlus size={14} />
+            Invite Collaborator
+          </h3>
+          <form onSubmit={handleAdd} className="space-y-3">
+            <input
+              type="email"
+              placeholder="User email address..."
+              value={newEmail}
+              onChange={e => setNewEmail(e.target.value)}
+              required
+              className="w-full bg-surface-0 border border-border-default rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+            />
+            <div className="flex gap-2">
+              <select
+                value={newPermission}
+                onChange={e => setNewPermission(e.target.value as Permission)}
+                className="flex-1 bg-surface-0 border border-border-default rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+              >
+                <option value="viewer">Viewer (Read Only)</option>
+                <option value="editor">Editor (Read/Write)</option>
+                <option value="admin">Admin (Full Control)</option>
+              </select>
+              <button
+                type="submit"
+                disabled={isAdding || !newEmail}
+                className="px-4 py-1 bg-brand-600 text-white rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors shadow-sm"
+              >
+                {isAdding ? 'Inviting...' : 'Invite'}
+              </button>
+            </div>
+            {error && <p className="text-2xs text-red-500 font-medium">{error}</p>}
+          </form>
+        </div>
+      )}
 
       <div className="flex-1 p-4">
         <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">
@@ -146,35 +159,37 @@ export const SharingTab: React.FC = () => {
                     <span className="capitalize">{c.permission}</span>
                   </span>
                 </div>
-                <div className="flex items-center gap-1">
-                   {c.userId !== currentUser?.id && (
-                     <select
-                        value={c.permission}
-                        onChange={(e) => handleUpdatePermission(c.userId, e.target.value as Permission)}
-                        className="bg-transparent border-none text-2xs text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
+                {canManage && (
+                  <div className="flex items-center gap-1">
+                     {c.userId !== currentUser?.id && (
+                       <select
+                          value={c.permission}
+                          onChange={(e) => handleUpdatePermission(c.userId, e.target.value as Permission)}
+                          className="bg-transparent border-none text-2xs text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
+                        >
+                          <option value="viewer">Viewer</option>
+                          <option value="editor">Editor</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                     )}
+                     {c.userId !== currentUser?.id && (
+                      <button
+                        onClick={() => handleRemove(c.userId)}
+                        className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Remove access"
                       >
-                        <option value="viewer">Viewer</option>
-                        <option value="editor">Editor</option>
-                        <option value="admin">Admin</option>
-                      </select>
-                   )}
-                   {c.userId !== currentUser?.id && (
-                    <button
-                      onClick={() => handleRemove(c.userId)}
-                      className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="Remove access"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                   )}
-                </div>
+                        <Trash2 size={14} />
+                      </button>
+                     )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         ) : (
           <EmptyState
             title="No collaborators"
-            description="Share this flow to invite team members."
+            description={canManage ? "Share this flow to invite team members." : "This flow has no additional collaborators."}
           />
         )}
       </div>

@@ -49,6 +49,13 @@ const (
 	// wsTicketAudience tags tickets so they cannot be used as API access tokens
 	// (and access tokens cannot be used as tickets).
 	wsTicketAudience = "pad-ws-ticket"
+	// ssoTicketTTL bounds how long an SSO login exchange ticket is valid. The
+	// ticket rides the OIDC callback redirect (URL fragment) and is exchanged
+	// for a token pair immediately by the SPA, so the window stays small.
+	ssoTicketTTL = 60 * time.Second
+	// ssoTicketAudience tags SSO exchange tickets so they are not usable as
+	// access tokens, refresh tokens, or WS tickets (and vice versa).
+	ssoTicketAudience = "pad-sso-ticket"
 )
 
 // Manager handles JWT issuance and verification.
@@ -58,17 +65,17 @@ type Manager struct {
 	refreshTTL time.Duration
 	issuer     string
 	audience   string
-	blacklist  *TokenBlacklist
+	blacklist  BlacklistStore
 }
 
 // NewManager creates a Manager using the provided HMAC-SHA256 secret.
 // blacklist may be nil to disable token revocation.
-func NewManager(secret string, blacklist *TokenBlacklist) *Manager {
+func NewManager(secret string, blacklist BlacklistStore) *Manager {
 	return NewManagerWithTTL(secret, defaultAccessTTL, defaultRefreshTTL, "pad-analyzer", "pad-client", blacklist)
 }
 
 // NewManagerWithTTL creates a Manager with explicit TTL values (useful for tests).
-func NewManagerWithTTL(secret string, accessTTL, refreshTTL time.Duration, issuer, audience string, blacklist *TokenBlacklist) *Manager {
+func NewManagerWithTTL(secret string, accessTTL, refreshTTL time.Duration, issuer, audience string, blacklist BlacklistStore) *Manager {
 	return &Manager{
 		secret:     []byte(secret),
 		accessTTL:  accessTTL,
@@ -176,6 +183,54 @@ func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+// IssueSSOTicket creates a short-lived, single-use ticket that carries an
+// authenticated SSO identity from the OIDC callback redirect to the SPA,
+// which exchanges it for a real token pair. This keeps access/refresh tokens
+// out of redirect URLs entirely.
+func (m *Manager) IssueSSOTicket(userID, email string, role Role) (string, error) {
+	now := time.Now()
+	claims := Claims{
+		UserID: userID,
+		Email:  email,
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ssoTicketTTL)),
+			Subject:   userID,
+			Issuer:    m.issuer,
+			Audience:  jwt.ClaimStrings{ssoTicketAudience},
+		},
+	}
+	ticket, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	if err != nil {
+		return "", fmt.Errorf("auth: sign sso ticket: %w", err)
+	}
+	return ticket, nil
+}
+
+// ConsumeSSOTicket verifies an SSO exchange ticket and immediately revokes its
+// jti via the blacklist, making the ticket single-use. A second exchange with
+// the same ticket fails.
+func (m *Manager) ConsumeSSOTicket(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
+		jwt.WithAudience(ssoTicketAudience))
+	if err != nil {
+		return nil, fmt.Errorf("auth: verify sso ticket: %w", err)
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, errors.New("auth: invalid sso ticket claims")
+	}
+	if m.blacklist != nil && claims.ID != "" {
+		ttl := time.Until(claims.ExpiresAt.Time)
+		if ttl <= 0 || !m.blacklist.AddIfAbsent(claims.ID, ttl) {
+			return nil, errors.New("auth: sso ticket already used")
+		}
+	}
+	return claims, nil
+}
+
 // Verify parses and validates an access token, returning its claims. It
 // enforces the client audience so a WebSocket ticket cannot be used as an
 // access token for ordinary API calls.
@@ -236,7 +291,8 @@ func (m *Manager) Revoke(claims *Claims) {
 
 // VerifyRefresh parses and validates a refresh token.
 func (m *Manager) VerifyRefresh(tokenStr string) (*RefreshClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &RefreshClaims{}, m.keyFunc)
+	token, err := jwt.ParseWithClaims(tokenStr, &RefreshClaims{}, m.keyFunc,
+		jwt.WithAudience(m.audience))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify refresh token: %w", err)
 	}

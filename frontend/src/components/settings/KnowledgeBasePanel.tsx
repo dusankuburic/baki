@@ -1,8 +1,11 @@
 import {useState, useEffect, useMemo} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
+import {useAuthStore} from '@/stores/authStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 import {request} from '@/api/client'
 import {Trash2, FileText, Loader2, Upload} from 'lucide-react'
 import Button from '@/components/shared/Button'
+import {logger} from '@/lib/logger'
 
 interface KnowledgeDoc {
   id: string
@@ -12,15 +15,23 @@ interface KnowledgeDoc {
 
 export default function KnowledgeBasePanel() {
   const {organisations, activeOrgId} = useOrgStore()
+  const currentUser = useAuthStore(s => s.user)
   const activeOrg = useMemo(() => 
     organisations.find(o => o.id === activeOrgId), 
     [organisations, activeOrgId]
   )
+  const canManage = useMemo(() => {
+    if (!activeOrg || !currentUser) return false
+    const membership = activeOrg.members.find(m => m.userId === currentUser.id)
+    return membership?.role === 'admin' || membership?.role === 'member'
+  }, [activeOrg, currentUser])
   
   const [docs, setDocs] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const maxFileSizeMB = useSettingsStore(s => s.settings.parser.maxFileSizeMB)
 
   const loadDocs = async () => {
     if (!activeOrgId) return
@@ -29,18 +40,31 @@ export default function KnowledgeBasePanel() {
       const res = await request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
       setDocs(res || [])
     } catch (e) {
-      console.error(e)
+      logger.warn(e)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadDocs()
+    let cancelled = false
+    if (!activeOrgId) return
+    setLoading(true)
+    request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
+      .then(res => { if (!cancelled) setDocs(res || []) })
+      .catch(e => { if (!cancelled) logger.warn(e) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [activeOrgId])
 
   const handleUpload = async () => {
     if (!activeOrgId || !selectedFile) return
+    setUploadError(null)
+    const maxBytes = maxFileSizeMB * 1024 * 1024
+    if (selectedFile.size > maxBytes) {
+      setUploadError(`File is ${(selectedFile.size / 1024 / 1024).toFixed(1)}MB — limit is ${maxFileSizeMB}MB`)
+      return
+    }
     setUploading(true)
     try {
       const content = await selectedFile.text()
@@ -51,7 +75,7 @@ export default function KnowledgeBasePanel() {
       setSelectedFile(null)
       loadDocs()
     } catch (e) {
-      alert('Upload failed: ' + e)
+      setUploadError('Upload failed: ' + e)
     } finally {
       setUploading(false)
     }
@@ -63,7 +87,7 @@ export default function KnowledgeBasePanel() {
       await request(`/api/orgs/${activeOrgId}/knowledge/${docId}`, {}, 'DELETE')
       loadDocs()
     } catch (e) {
-      console.error(e)
+      logger.warn(e)
     }
   }
 
@@ -84,33 +108,38 @@ export default function KnowledgeBasePanel() {
         Upload organizational guidelines, SOPs, or coding standards. The AI will use these to contextualize its analysis.
       </p>
 
-      <div className="bg-surface-2 rounded-lg border border-border-default p-4 mb-8">
-        <h3 className="text-sm font-medium text-text-primary mb-3">Upload SOP</h3>
-        <div className="flex items-center gap-3">
-          <label className="flex-1 flex items-center gap-2 px-3 py-2 bg-surface-3 border border-border-default rounded-md cursor-pointer hover:bg-surface-4 transition-colors overflow-hidden">
-            <Upload className="w-4 h-4 text-text-secondary shrink-0" />
-            <span className="text-sm text-text-primary truncate">
-              {selectedFile ? selectedFile.name : 'Select text or markdown file...'}
-            </span>
-            <input 
-              type="file" 
-              className="hidden" 
-              accept=".txt,.md" 
-              onChange={e => setSelectedFile(e.target.files?.[0] || null)}
-            />
-          </label>
-          <Button 
-            variant="primary" 
-            disabled={!selectedFile || uploading}
-            onClick={handleUpload}
-          >
-            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Index Document'}
-          </Button>
+      {canManage && (
+        <div className="bg-surface-2 rounded-lg border border-border-default p-4 mb-8">
+          <h3 className="text-sm font-medium text-text-primary mb-3">Upload SOP</h3>
+          <div className="flex items-center gap-3">
+            <label className="flex-1 flex items-center gap-2 px-3 py-2 bg-surface-3 border border-border-default rounded-md cursor-pointer hover:bg-surface-4 transition-colors overflow-hidden">
+              <Upload className="w-4 h-4 text-text-secondary shrink-0" />
+              <span className="text-sm text-text-primary truncate">
+                {selectedFile ? selectedFile.name : 'Select text or markdown file...'}
+              </span>
+              <input 
+                type="file" 
+                className="hidden" 
+                accept=".txt,.md" 
+                onChange={e => { setSelectedFile(e.target.files?.[0] || null); setUploadError(null) }}
+              />
+            </label>
+            <Button 
+              variant="primary" 
+              disabled={!selectedFile || uploading}
+              onClick={handleUpload}
+            >
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Index Document'}
+            </Button>
+          </div>
+          <p className="text-2xs text-text-tertiary mt-2">
+            Currently supports .txt and .md files up to {maxFileSizeMB}MB.
+          </p>
+          {uploadError && (
+            <p className="text-xs text-red-400 mt-2">{uploadError}</p>
+          )}
         </div>
-        <p className="text-2xs text-text-tertiary mt-2">
-          Currently supports .txt and .md files up to 1MB.
-        </p>
-      </div>
+      )}
 
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-text-primary">Indexed Documents</h3>
@@ -133,12 +162,14 @@ export default function KnowledgeBasePanel() {
                     <div className="text-xs text-text-tertiary">Indexed on {new Date(doc.createdAt).toLocaleDateString()}</div>
                   </div>
                 </div>
-                <button 
-                  onClick={() => handleDelete(doc.id)}
-                  className="p-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {canManage && (
+                  <button 
+                    onClick={() => handleDelete(doc.id)}
+                    className="p-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             ))}
           </div>

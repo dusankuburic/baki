@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,18 +16,6 @@ func newTestManager() *Manager {
 
 // ---- Roles ----
 
-func TestRole_Has(t *testing.T) {
-	if !RoleAdmin.Has(PermOrgDelete) {
-		t.Error("admin should have org:delete")
-	}
-	if RoleViewer.Has(PermFlowWrite) {
-		t.Error("viewer should NOT have flow:write")
-	}
-	if !RoleMember.Has(PermFlowWrite) {
-		t.Error("member should have flow:write")
-	}
-}
-
 func TestRole_IsValid(t *testing.T) {
 	for _, r := range []Role{RoleAdmin, RoleMember, RoleViewer, RoleGuest} {
 		if !r.IsValid() {
@@ -37,14 +24,6 @@ func TestRole_IsValid(t *testing.T) {
 	}
 	if Role("superuser").IsValid() {
 		t.Error("unknown role should not be valid")
-	}
-}
-
-func TestRole_Permissions_NotEmpty(t *testing.T) {
-	for _, r := range []Role{RoleAdmin, RoleMember, RoleViewer, RoleGuest} {
-		if len(r.Permissions()) == 0 {
-			t.Errorf("role %q has no permissions", r)
-		}
 	}
 }
 
@@ -195,43 +174,6 @@ func TestManager_AccessTokenIsNotValidAsRefresh(t *testing.T) {
 	rc, _ := mgr.VerifyRefresh(pair.RefreshToken)
 	if rc == nil {
 		t.Error("valid refresh token should verify successfully")
-	}
-}
-
-// ---- Permissions helper ----
-
-func TestRequire_NoClaimsReturnsUnauthorized(t *testing.T) {
-	ctx := context.Background()
-	if err := require(ctx, PermFlowRead); err != ErrUnauthorized {
-		t.Errorf("expected ErrUnauthorized, got %v", err)
-	}
-}
-
-func TestRequire_InsufficientRoleReturnsForbidden(t *testing.T) {
-	ctx := WithClaims(context.Background(), &Claims{Role: RoleGuest})
-	if err := require(ctx, PermFlowWrite); err != ErrForbidden {
-		t.Errorf("expected ErrForbidden, got %v", err)
-	}
-}
-
-func TestRequire_SufficientRoleReturnsNil(t *testing.T) {
-	ctx := WithClaims(context.Background(), &Claims{Role: RoleAdmin})
-	if err := require(ctx, PermOrgDelete); err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
-}
-
-func TestRequireAny_MatchesFirstPermission(t *testing.T) {
-	ctx := WithClaims(context.Background(), &Claims{Role: RoleViewer})
-	if err := requireAny(ctx, PermFlowRead, PermFlowWrite); err != nil {
-		t.Errorf("viewer has flow:read — requireAny should pass: %v", err)
-	}
-}
-
-func TestRequireAny_NoMatchReturnsForbidden(t *testing.T) {
-	ctx := WithClaims(context.Background(), &Claims{Role: RoleViewer})
-	if err := requireAny(ctx, PermFlowWrite, PermFlowDelete); err != ErrForbidden {
-		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
 

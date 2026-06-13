@@ -99,7 +99,10 @@ func TestPostgres_ListFlows(t *testing.T) {
 
 	ids := []string{"list-flow-a", "list-flow-b"}
 	for _, id := range ids {
-		f := &interfaces.FlowDocument{ID: id, Name: id, Content: []byte("{}")}
+		// Owner is set so the flows match a tenant-scoped filter: ListFlows
+		// deliberately returns nothing for an empty filter (the flowFilterWhere
+		// "1=0" guard against dumping every row).
+		f := &interfaces.FlowDocument{ID: id, Name: id, OwnerID: "list-owner", Content: []byte("{}")}
 		if err := b.SaveFlow(ctx, f); err != nil {
 			t.Fatalf("SaveFlow %q: %v", id, err)
 		}
@@ -110,7 +113,7 @@ func TestPostgres_ListFlows(t *testing.T) {
 		}
 	})
 
-	list, err := b.ListFlows(ctx, interfaces.FlowFilter{Limit: 10})
+	list, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: "list-owner", Limit: 10})
 	if err != nil {
 		t.Fatalf("ListFlows: %v", err)
 	}

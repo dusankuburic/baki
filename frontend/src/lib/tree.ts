@@ -169,3 +169,95 @@ export function flattenTreeRows(doc: FlowDocument, options: FlattenTreeOptions):
     }
     return rows
 }
+
+// ---- Canonical tree-walking API ----
+// These consolidate the ~10 re-implementations that were spread across
+// flowStore, DetailsTab, FindingCard, Breadcrumbs, and BlockView.
+
+/** Find a block by id within a single block tree (recursive DFS). */
+export function findBlockInTree(blocks: Block[], id: string): Block | null {
+    for (const block of blocks) {
+        if (block.id === id) return block
+        if (block.children.length > 0) {
+            const found = findBlockInTree(block.children, id)
+            if (found) return found
+        }
+    }
+    return null
+}
+
+/** Find a block and its containing subflow info, searching all subflows. */
+export function findBlockInDoc(doc: FlowDocument, blockId: string): {block: Block; subflowId: string; subflowName: string} | null {
+    for (const sf of doc.subflows) {
+        const found = findBlockInTree(sf.blocks, blockId)
+        if (found) return {block: found, subflowId: sf.id, subflowName: sf.name}
+    }
+    return null
+}
+
+/** Return the id of the subflow that contains blockId, or null. */
+export function findSubflowIdByBlock(doc: FlowDocument, blockId: string): string | null {
+    for (const sf of doc.subflows) {
+        if (findBlockInTree(sf.blocks, blockId)) return sf.id
+    }
+    return null
+}
+
+/** Return the ancestor path (including the target block) as Block[], or null. */
+export function findBlockPath(blocks: Block[], targetId: string): Block[] | null {
+    for (const block of blocks) {
+        if (block.id === targetId) return [block]
+        if (block.children.length > 0) {
+            const subPath = findBlockPath(block.children, targetId)
+            if (subPath) return [block, ...subPath]
+        }
+    }
+    return null
+}
+
+/** Return the ancestor ids on the path to blockId (not including blockId itself). */
+export function findAncestorIds(doc: FlowDocument, blockId: string): string[] {
+    for (const sf of doc.subflows) {
+        const path = findBlockPath(sf.blocks, blockId)
+        if (path) return path.slice(0, -1).map(b => b.id)
+    }
+    return []
+}
+
+/** Find a LABEL block by name across all subflows. */
+export function findLabelBlock(doc: FlowDocument, labelName: string): Block | null {
+    for (const sf of doc.subflows) {
+        const found = findLabelInTree(sf.blocks, labelName)
+        if (found) return found
+    }
+    return null
+}
+
+function findLabelInTree(blocks: Block[], labelName: string): Block | null {
+    for (const block of blocks) {
+        if (block.rawType === 'LABEL' && block.name === labelName) return block
+        if (block.children.length > 0) {
+            const found = findLabelInTree(block.children, labelName)
+            if (found) return found
+        }
+    }
+    return null
+}
+
+/** Walk every block in the document, calling visitor for each. */
+export function walkBlocks(doc: FlowDocument, visitor: (block: Block, subflowId: string) => void): void {
+    function walk(blocks: Block[], sfId: string) {
+        for (const block of blocks) {
+            visitor(block, sfId)
+            if (block.children.length > 0) walk(block.children, sfId)
+        }
+    }
+    for (const sf of doc.subflows) walk(sf.blocks, sf.id)
+}
+
+/** Count blocks matching a predicate across the entire document. */
+export function countBlocks(doc: FlowDocument, predicate: (block: Block) => boolean): number {
+    let n = 0
+    walkBlocks(doc, b => { if (predicate(b)) n++ })
+    return n
+}

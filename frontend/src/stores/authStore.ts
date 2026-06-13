@@ -13,6 +13,7 @@ interface AuthState {
 
   login: (credentials: LoginRequest, remember?: boolean) => Promise<void>
   register: (credentials: LoginRequest, remember?: boolean) => Promise<void>
+  loginWithSSOTicket: (ticket: string) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<boolean>
   loadFromStorage: () => Promise<void>
@@ -78,6 +79,8 @@ function clearTokens(): void {
   }
 }
 
+let refreshInFlight: Promise<boolean> | null = null
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   accessToken: null,
@@ -86,6 +89,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   error: null,
 
   login: async (credentials, remember = false) => {
+    if (get().isLoading) return
     set({ isLoading: true, error: null })
     try {
       const res = await authApi.login(credentials)
@@ -107,6 +111,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   register: async (credentials, remember = false) => {
+    if (get().isLoading) return
     set({ isLoading: true, error: null })
     try {
       const res = await authApi.register(credentials)
@@ -127,6 +132,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  loginWithSSOTicket: async (ticket) => {
+    if (get().isLoading) return
+    set({ isLoading: true, error: null })
+    try {
+      const res = await authApi.ssoExchange(ticket)
+      // SSO sessions persist like "remember me" — the user already chose a
+      // long-lived session at their identity provider.
+      writeRefresh(res.refreshToken, true)
+      setSessionToken(res.accessToken)
+      // The exchange response carries only the token pair; resolve the
+      // profile explicitly so the UI has email/role immediately.
+      const user = res.user ?? await authApi.me()
+      set({
+        user,
+        accessToken: res.accessToken,
+        isAuthenticated: true,
+        isLoading: false,
+      })
+    } catch (err) {
+      set({
+        isLoading: false,
+        error: err instanceof Error ? err.message : 'SSO login failed',
+      })
+      throw err
+    }
+  },
+
   logout: async () => {
     set({ isLoading: true })
     try {
@@ -140,28 +172,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   refresh: async () => {
-    const refreshToken = readRefresh()
-    if (!refreshToken) {
-      clearTokens()
-      set({ user: null, accessToken: null, isAuthenticated: false })
-      return false
-    }
+    if (refreshInFlight) return refreshInFlight
 
-    try {
-      const res = await authApi.refresh(refreshToken)
-      setSessionToken(res.accessToken)
-      // With rotation the server returns a fresh refresh token; persist it to the
-      // same store the old one came from so the next refresh uses the new token.
-      if (res.refreshToken) {
-        writeRefresh(res.refreshToken, isPersistent())
+    refreshInFlight = (async () => {
+      const refreshToken = readRefresh()
+      if (!refreshToken) {
+        clearTokens()
+        set({ user: null, accessToken: null, isAuthenticated: false })
+        return false
       }
-      set({ accessToken: res.accessToken })
-      return true
-    } catch {
-      clearTokens()
-      set({ user: null, accessToken: null, isAuthenticated: false })
-      return false
-    }
+
+      try {
+        const res = await authApi.refresh(refreshToken)
+        setSessionToken(res.accessToken)
+        // With rotation the server returns a fresh refresh token; persist it to the
+        // same store the old one came from so the next refresh uses the new token.
+        if (res.refreshToken) {
+          writeRefresh(res.refreshToken, isPersistent())
+        }
+        set({ accessToken: res.accessToken })
+        return true
+      } catch {
+        clearTokens()
+        set({ user: null, accessToken: null, isAuthenticated: false })
+        return false
+      }
+    })().finally(() => { refreshInFlight = null })
+
+    return refreshInFlight
   },
 
   loadFromStorage: async () => {

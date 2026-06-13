@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
@@ -178,6 +179,10 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 }
 
 func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Request) {
+	if h.common.JWTEnabled {
+		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		return
+	}
 	var req struct {
 		FlowID   string `json:"flowId"`
 		Provider string `json:"provider"`

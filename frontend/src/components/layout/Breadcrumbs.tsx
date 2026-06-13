@@ -1,7 +1,7 @@
 import {useMemo} from 'react'
 import {ChevronRight, Home} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
-import type {Block} from '@/types/domain'
+import {findBlockPath} from '@/lib/tree'
 
 export default function Breadcrumbs() {
     const document = useFlowStore(s => s.document)
@@ -65,15 +65,4 @@ export default function Breadcrumbs() {
             ))}
         </div>
     )
-}
-
-function findBlockPath(blocks: Block[], targetId: string): Block[] | null {
-    for (const block of blocks) {
-        if (block.id === targetId) return [block]
-        if (block.children?.length) {
-            const subPath = findBlockPath(block.children, targetId)
-            if (subPath) return [block, ...subPath]
-        }
-    }
-    return null
 }

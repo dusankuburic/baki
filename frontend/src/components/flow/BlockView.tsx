@@ -3,12 +3,12 @@ import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
 import BlockCard from './BlockCard'
 import BlockConnector from './BlockConnector'
 import BlockCaseSeparator from './BlockCaseSeparator'
+import {writeClipboard} from '@/lib/clipboard'
 import BlockElseSeparator from './BlockElseSeparator'
 import BlockEnd, {isContainerType} from './BlockEnd'
 import LoopControlBlock from './LoopControlBlock'
 import {isLoopControl} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
-import {logger} from '@/lib/logger'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
 import {useKeyboard} from '@/hooks/useKeyboard'
@@ -188,7 +188,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
             },
             'edit.copy.name': () => {
                 const block = useFlowStore.getState().selectedBlock()
-                if (block) navigator.clipboard.writeText(block.name).catch((err) => { logger.warn('Clipboard write failed', err) })
+                if (block) writeClipboard(block.name).catch(() => {})
             },
             'edit.copy.path': () => {
                 const {document: doc, selectedBlockId: bid} = useFlowStore.getState()
@@ -207,7 +207,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
                     })(sf.blocks)
                     if (found) { path = `${sf.name} > ${trail.join(' > ')}`; break }
                 }
-                if (path) navigator.clipboard.writeText(path).catch((err) => { logger.warn('Clipboard write failed', err) })
+                if (path) writeClipboard(path).catch(() => {})
             },
             'edit.clear.selection': () => useFlowStore.getState().selectBlock(null),
         },

@@ -1,3 +1,4 @@
+import {memo} from 'react'
 import { FileCode, Users, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import type { LibraryFlow } from '@/api/library'
@@ -8,7 +9,7 @@ interface FlowCardProps {
   className?: string
 }
 
-export default function FlowCard({ flow, onOpen, className }: FlowCardProps) {
+function FlowCard({ flow, onOpen, className }: FlowCardProps) {
   const updatedDate = new Date(flow.updatedAt).toLocaleDateString(undefined, {
     month: 'short', day: 'numeric', year: 'numeric',
   })
@@ -61,3 +62,5 @@ export default function FlowCard({ flow, onOpen, className }: FlowCardProps) {
     </button>
   )
 }
+
+export default memo(FlowCard)

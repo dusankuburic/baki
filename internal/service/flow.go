@@ -13,9 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/cache"
-	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/parser"
@@ -30,7 +28,7 @@ type FlowService struct {
 	settings    *storage.SettingsStore
 	docProvider DocumentProvider
 	storage     storageif.StorageBackend
-	orgSvc      *collaboration.OrgService
+	authz       *AuthzService
 	astCache    cache.Cache
 
 	// idxCache memoises built search indexes by flow ID. Building an index walks
@@ -42,81 +40,34 @@ type FlowService struct {
 	idxCache map[string]*search.SearchIndex
 }
 
-func NewFlowService(notifier Notifier, settings *storage.SettingsStore, docProvider DocumentProvider, storage storageif.StorageBackend, orgSvc *collaboration.OrgService, astCache cache.Cache) *FlowService {
+func NewFlowService(notifier Notifier, settings *storage.SettingsStore, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
 	return &FlowService{
 		notifier:    notifier,
 		settings:    settings,
 		docProvider: docProvider,
 		storage:     storage,
-		orgSvc:      orgSvc,
+		authz:       authz,
 		astCache:    astCache,
 		idxCache:    make(map[string]*search.SearchIndex),
 	}
 }
 
 // GetAuthorized loads a flow and verifies the user has at least minPerm access.
-// minPerm is "viewer", "editor", or "admin".
+// minPerm is "viewer", "editor", or "admin". All policy lives in AuthzService.
 func (s *FlowService) GetAuthorized(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
 	if s.storage == nil { // Local mode
 		return s.docProvider.ResolveDoc(ctx, flowID)
 	}
 
-	// 1. Load the doc metadata/header from storage to check permissions
 	doc, err := s.docProvider.ResolveDoc(ctx, flowID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Check ownership
-	if doc.OwnerID == "" || doc.OwnerID == userID {
-		return doc, nil
+	if err := s.authz.CheckFlowAccess(ctx, flowID, doc.OwnerID, doc.OrganizationID, userID, minPerm); err != nil {
+		return nil, err
 	}
-
-	// 3. Check org membership
-	if doc.OrganizationID != "" && s.orgSvc != nil {
-		if role, err := s.orgSvc.MemberRole(ctx, doc.OrganizationID, userID); err == nil {
-			if orgRoleToPermRank(role) >= permRank(minPerm) {
-				return doc, nil
-			}
-		}
-	}
-
-	// 4. Check collaborators
-	collabs, err := s.storage.ListCollaborators(ctx, flowID)
-	if err == nil {
-		need := permRank(minPerm)
-		for _, c := range collabs {
-			if c.UserID == userID && permRank(c.Permission) >= need {
-				return doc, nil
-			}
-		}
-	}
-
-	return nil, ErrPermissionDenied
-}
-
-func permRank(p string) int {
-	switch p {
-	case "admin":
-		return 30
-	case "editor":
-		return 20
-	case "viewer":
-		return 10
-	default:
-		return 0
-	}
-}
-
-func orgRoleToPermRank(role auth.Role) int {
-	switch role {
-	case auth.RoleAdmin:
-		return 30
-	case auth.RoleMember:
-		return 20
-	default:
-		return 10
-	}
+	return doc, nil
 }
 
 func (s *FlowService) DocProvider() DocumentProvider {

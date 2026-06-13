@@ -5,11 +5,16 @@ export interface LibraryFlow {
   id: string
   name: string
   description?: string
+  ownerId: string
   ownerDisplayName?: string
   blockCount: number
   subflowCount: number
   updatedAt: string
+  version: number
   isSharedWithMe: boolean
+  canEdit: boolean
+  canDelete: boolean
+  canShare: boolean
 }
 
 export interface LibraryFilter {
@@ -24,6 +29,13 @@ export interface CreateLibraryFlowRequest {
   description?: string
   orgId?: string
   content: FlowDocument
+}
+
+export interface UpdateLibraryFlowRequest {
+  name?: string
+  description?: string
+  content?: unknown
+  version: number
 }
 
 export const libraryApi = {
@@ -46,8 +58,8 @@ export const libraryApi = {
   create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> =>
     request('/api/library', req),
 
-  update: (id: string, patch: Partial<Pick<LibraryFlow, 'name' | 'description'>>): Promise<LibraryFlow> =>
-    request(`/api/library/${id}`, patch, 'PUT'),
+  update: (id: string, req: UpdateLibraryFlowRequest): Promise<LibraryFlow> =>
+    request(`/api/library/${id}`, req, 'PUT'),
 
   delete: (id: string): Promise<void> =>
     request(`/api/library/${id}`, undefined, 'DELETE'),

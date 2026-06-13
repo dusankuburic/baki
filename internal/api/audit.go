@@ -38,6 +38,9 @@ const (
 	AuditActionOrgInviteAccept = "org.invite_accept"
 	AuditActionProfileUpdate   = "user.profile_update"
 	AuditActionSessionRevoke   = "auth.session_revoke"
+	AuditActionSSOLogin        = "auth.sso_login"
+	AuditActionLoginFailure    = "auth.login_failure"
+	AuditActionAccountLock     = "auth.account_lock"
 )
 
 var (

@@ -69,11 +69,13 @@ func TestLocalStorageBackend_ListFlows(t *testing.T) {
 	storage, _ := NewLocalStorageBackend(ts.GetTempDir())
 	ctx := context.Background()
 
-	// Create multiple test flows
+	owner := "test-user"
+
+	// Create multiple test flows owned by the test user
 	flows := []*interfaces.FlowDocument{
-		createTestFlow("flow-1"),
-		createTestFlow("flow-2"),
-		createTestFlow("flow-3"),
+		{ID: "flow-1", Name: "Test Flow", Description: "A test flow document", Content: []byte(`{"test": "content"}`), Metadata: interfaces.FlowMetadata{BlockCount: 10, SubflowCount: 2, MaxDepth: 3}, OwnerID: owner},
+		{ID: "flow-2", Name: "Test Flow", Description: "A test flow document", Content: []byte(`{"test": "content"}`), Metadata: interfaces.FlowMetadata{BlockCount: 10, SubflowCount: 2, MaxDepth: 3}, OwnerID: owner},
+		{ID: "flow-3", Name: "Test Flow", Description: "A test flow document", Content: []byte(`{"test": "content"}`), Metadata: interfaces.FlowMetadata{BlockCount: 10, SubflowCount: 2, MaxDepth: 3}, OwnerID: owner},
 	}
 
 	// Save flows
@@ -82,15 +84,50 @@ func TestLocalStorageBackend_ListFlows(t *testing.T) {
 		testutil.AssertNoError(t, err, "Failed to save flow")
 	}
 
-	// List all flows
-	listedFlows, err := storage.ListFlows(ctx, interfaces.FlowFilter{})
+	// List flows owned by the test user
+	listedFlows, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner})
 	testutil.AssertNoError(t, err, "Failed to list flows")
 	testutil.AssertEqual(t, len(flows), len(listedFlows), "Flow count mismatch")
 
 	// List with limit
-	limitedFlows, err := storage.ListFlows(ctx, interfaces.FlowFilter{Limit: 2})
+	limitedFlows, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner, Limit: 2})
 	testutil.AssertNoError(t, err, "Failed to list flows with limit")
 	testutil.AssertEqual(t, 2, len(limitedFlows), "Limited flow count mismatch")
+}
+
+// TestLocalStorageBackend_ListFlows_AllFlows locks the enumeration contract the
+// migrator depends on: an unscoped filter must match nothing (defense-in-depth),
+// while AllFlows must return every flow regardless of owner — including flows
+// owned by different users or with no owner at all. Without this, the
+// filesystem→cloud migration silently copies zero flows.
+func TestLocalStorageBackend_ListFlows_AllFlows(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorageBackend: %v", err)
+	}
+	ctx := context.Background()
+
+	flows := []*interfaces.FlowDocument{
+		{ID: "flow-a", Name: "A", Content: []byte(`{}`), OwnerID: "user-1"},
+		{ID: "flow-b", Name: "B", Content: []byte(`{}`), OwnerID: "user-2"},
+		{ID: "flow-c", Name: "C", Content: []byte(`{}`), OwnerID: ""},
+	}
+	for _, f := range flows {
+		if err := storage.SaveFlow(ctx, f); err != nil {
+			t.Fatalf("SaveFlow %s: %v", f.ID, err)
+		}
+	}
+
+	// Unscoped filter must match nothing — the guard the migrator would
+	// accidentally trip if it didn't set AllFlows.
+	none, err := storage.ListFlows(ctx, interfaces.FlowFilter{})
+	testutil.AssertNoError(t, err, "ListFlows empty filter")
+	testutil.AssertEqual(t, 0, len(none), "empty filter must match no flows")
+
+	// AllFlows must enumerate every flow regardless of owner.
+	all, err := storage.ListFlows(ctx, interfaces.FlowFilter{AllFlows: true})
+	testutil.AssertNoError(t, err, "ListFlows AllFlows")
+	testutil.AssertEqual(t, len(flows), len(all), "AllFlows must return every flow")
 }
 
 // TestLocalStorageBackend_DeleteFlow tests deleting flow documents

@@ -1,11 +1,28 @@
-import { useState } from 'react'
-import { Mail, Lock, LogIn, UserPlus } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Mail, Lock, LogIn, UserPlus, KeyRound } from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
 import { useAuthStore } from '@/stores/authStore'
+import { authApi, type SSOInfo } from '@/api/auth'
+import { getBackendConfig } from '@/api/client'
 
 interface LoginFormProps {
   onSuccess?: () => void
+}
+
+// readSSOHash pulls ssoTicket / ssoError out of the URL fragment placed there
+// by the OIDC callback redirect, and strips it from the address bar so the
+// single-use ticket never lingers in history.
+function readSSOHash(): { ticket?: string; error?: string } {
+  const hash = window.location.hash.replace(/^#/, '')
+  if (!hash.includes('ssoTicket=') && !hash.includes('ssoError=')) return {}
+  const params = new URLSearchParams(hash)
+  const out = {
+    ticket: params.get('ssoTicket') ?? undefined,
+    error: params.get('ssoError') ?? undefined,
+  }
+  history.replaceState(null, '', window.location.pathname + window.location.search)
+  return out
 }
 
 export default function LoginForm({ onSuccess }: LoginFormProps) {
@@ -14,11 +31,34 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [remember, setRemember] = useState(false)
+  const [sso, setSso] = useState<SSOInfo | null>(null)
+  const [ssoError, setSsoError] = useState<string | null>(null)
   const login = useAuthStore(s => s.login)
   const register = useAuthStore(s => s.register)
+  const loginWithSSOTicket = useAuthStore(s => s.loginWithSSOTicket)
   const isLoading = useAuthStore(s => s.isLoading)
   const error = useAuthStore(s => s.error)
   const clearError = useAuthStore(s => s.clearError)
+
+  useEffect(() => {
+    authApi.ssoInfo().then(setSso).catch(() => setSso(null))
+
+    const { ticket, error: hashError } = readSSOHash()
+    if (hashError) setSsoError(hashError)
+    if (ticket) {
+      loginWithSSOTicket(ticket).then(() => onSuccess?.()).catch(() => {
+        // error message lands in the store's `error` field
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function handleSSOStart() {
+    clearError()
+    setSsoError(null)
+    const cfg = await getBackendConfig()
+    window.location.href = `${cfg.apiUrl}/api/auth/sso/start`
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -54,9 +94,9 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
           </p>
         </div>
 
-        {error && (
+        {(error || ssoError) && (
           <div className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
-            {error}
+            {error || ssoError}
           </div>
         )}
 
@@ -116,6 +156,26 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
         >
           {isRegister ? 'Sign up' : 'Sign in'}
         </Button>
+
+        {sso?.enabled && (
+          <>
+            <div className="flex items-center gap-3 text-xs text-text-muted">
+              <div className="flex-1 h-px bg-border-default" />
+              or
+              <div className="flex-1 h-px bg-border-default" />
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              fullWidth
+              icon={KeyRound}
+              disabled={isLoading}
+              onClick={handleSSOStart}
+            >
+              Continue with {sso.provider || 'SSO'}
+            </Button>
+          </>
+        )}
 
         <div className="text-center text-sm text-text-muted">
           {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}

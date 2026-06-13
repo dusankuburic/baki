@@ -3,6 +3,7 @@ import Input from '@/components/shared/Input'
 import Button from '@/components/shared/Button'
 import {providersApi} from '@/api'
 import type {ProviderTestResult} from '@/types/domain'
+import {logger} from '@/lib/logger'
 
 interface Props {
   provider: string
@@ -48,7 +49,7 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
       setHasKey(false)
       setTestResult(null)
       onConfigured?.()
-    } catch (e) { console.error('Delete API key failed:', e) }
+    } catch (e) { logger.warn('Delete API key failed:', e) }
   }, [provider, onConfigured])
 
   const handleTest = useCallback(async () => {

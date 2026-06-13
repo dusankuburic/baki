@@ -113,7 +113,7 @@ func (h *Hub) Presence(flowID string) []PresencePayload {
 		result = append(result, PresencePayload{
 			UserID:          c.UserID,
 			DisplayName:     c.DisplayName,
-			SelectedBlockID: c.SelectedBlockID,
+			SelectedBlockID: c.GetSelectedBlockID(),
 		})
 	}
 	return result
@@ -135,4 +135,15 @@ func (h *Hub) ClientCount() int {
 		n += len(r.clients)
 	}
 	return n
+}
+
+// NotifyFlowChanged broadcasts a flow.changed event to every client in the
+// room, signalling that the flow was saved via HTTP and they should reload.
+func (h *Hub) NotifyFlowChanged(flowID string, version int) {
+	h.Broadcast(flowID, "", Envelope{
+		Type:      EventFlowChanged,
+		FlowID:    flowID,
+		Timestamp: time.Now(),
+		Payload:   FlowChangedPayload{Version: version},
+	}, nil)
 }

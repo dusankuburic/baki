@@ -3,6 +3,7 @@ import {createAdapter} from '@/platform/adapters'
 import {isTauri} from '@/platform/guards'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
+import OrgSwitcher from './OrgSwitcher'
 
 const platform = createAdapter()
 
@@ -37,6 +38,7 @@ export default function TitleBar() {
             </span>
             <div className="flex-1 h-full pointer-events-none" />
             <div className="flex items-center gap-1">
+                <OrgSwitcher />
                 <button
                     onClick={toggleSettings}
                     className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"

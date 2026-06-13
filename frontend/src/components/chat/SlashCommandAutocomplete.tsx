@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import {Terminal, Info, Zap, Trash2, HelpCircle} from 'lucide-react'
-import {useState, useEffect, useCallback} from 'react'
+import {useEffect} from 'react'
+import {useListNavigation} from '@/hooks/useListNavigation'
 
 export interface SlashCommand {
   id: string
@@ -24,38 +25,26 @@ interface Props {
 }
 
 export default function SlashCommandAutocomplete({query, onSelect, onClose}: Props) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
-
   const filtered = COMMANDS.filter(c =>
     c.id.toLowerCase().includes(query.toLowerCase()) ||
     c.label.toLowerCase().includes(query.toLowerCase())
   )
 
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [query])
-
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      setSelectedIndex(i => (i + 1) % filtered.length)
-      e.preventDefault()
-    } else if (e.key === 'ArrowUp') {
-      setSelectedIndex(i => (i - 1 + filtered.length) % filtered.length)
-      e.preventDefault()
-    } else if (e.key === 'Enter' || e.key === 'Tab') {
-      if (filtered[selectedIndex]) {
-        onSelect(filtered[selectedIndex].id)
-        e.preventDefault()
-      }
-    } else if (e.key === 'Escape') {
-      onClose()
-      e.preventDefault()
-    }
-  }, [filtered, selectedIndex, onSelect, onClose])
+  const {activeIndex: selectedIndex, setActiveIndex, handleKeyDown} = useListNavigation({
+    count: filtered.length,
+    onSelect: (i) => { if (filtered[i]) onSelect(filtered[i].id) },
+    onClose,
+    mode: 'wrap',
+    extraSelectKeys: ['Tab'],
+  })
 
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
+    setActiveIndex(0)
+  }, [query, setActiveIndex])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown as (e: KeyboardEvent) => void, true)
+    return () => window.removeEventListener('keydown', handleKeyDown as (e: KeyboardEvent) => void, true)
   }, [handleKeyDown])
 
   if (filtered.length === 0) return null

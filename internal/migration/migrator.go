@@ -113,8 +113,9 @@ func (m *Migrator) migrateFlows(ctx context.Context, res *Result) error {
 	offset := 0
 	for {
 		batch, err := m.src.ListFlows(ctx, interfaces.FlowFilter{
-			Limit:  m.batchSize,
-			Offset: offset,
+			AllFlows: true, // operational enumeration: copy every flow, unscoped
+			Limit:    m.batchSize,
+			Offset:   offset,
 		})
 		if err != nil {
 			return fmt.Errorf("list flows (offset %d): %w", offset, err)

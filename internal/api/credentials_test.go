@@ -19,7 +19,7 @@ func TestValidateEmail(t *testing.T) {
 		strings.Repeat("a", 250) + "@example.com", // > 254 chars
 	}
 	for _, e := range reject {
-		if err := validateEmail(e); err == nil {
+		if _, err := validateEmail(e); err == nil {
 			t.Errorf("validateEmail(%q): expected rejection, got nil", e)
 		}
 	}
@@ -29,7 +29,7 @@ func TestValidateEmail(t *testing.T) {
 		"user.name+tag@sub.example.co",
 	}
 	for _, e := range accept {
-		if err := validateEmail(e); err != nil {
+		if _, err := validateEmail(e); err != nil {
 			t.Errorf("validateEmail(%q): expected accept, got %v", e, err)
 		}
 	}

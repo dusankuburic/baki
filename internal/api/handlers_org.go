@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
@@ -26,6 +25,40 @@ func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBa
 	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security}
 }
 
+// requireMember verifies the caller is a member of the org identified by the
+// "id" URL parameter. On success it returns the org; on failure it writes the
+// appropriate error response and returns nil (the caller must bail out).
+func (h *OrgHandler) requireMember(w http.ResponseWriter, r *http.Request) *storageif.Organisation {
+	id := chi.URLParam(r, "id")
+	if !h.orgSvc.IsMember(r.Context(), id, h.security.CallerID(r)) {
+		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		return nil
+	}
+	org, err := h.orgSvc.Get(r.Context(), id)
+	if err != nil {
+		render.Error(w, err, http.StatusNotFound)
+		return nil
+	}
+	return org
+}
+
+// requireAdmin verifies the caller is an admin of the org identified by the
+// "id" URL parameter. On success it returns the org; on failure it writes the
+// appropriate error response and returns nil (the caller must bail out).
+func (h *OrgHandler) requireAdmin(w http.ResponseWriter, r *http.Request) *storageif.Organisation {
+	id := chi.URLParam(r, "id")
+	org, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, h.security.CallerID(r))
+	if err != nil {
+		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
+			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+			return nil
+		}
+		render.Error(w, err, http.StatusNotFound)
+		return nil
+	}
+	return org
+}
+
 // maxKnowledgeUploadBytes caps the decoded document content. The UI advertises
 // 1MB; enforce it server-side so a client can't ingest arbitrary content (which
 // would be chunked and sent to the paid embeddings API).
@@ -39,17 +72,14 @@ const maxKnowledgeUploadBytes = 1 << 20 // 1 MiB
 const maxKnowledgeUploadBodyBytes = 4 << 20 // 4 MiB
 
 func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
 	if h.knowledge == nil {
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
-	// Only members of the org may read its knowledge base.
-	if !h.orgSvc.IsMember(r.Context(), id, h.security.CallerID(r)) {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+	if h.requireMember(w, r) == nil {
 		return
 	}
-	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), id)
+	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -58,20 +88,14 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
 	if h.knowledge == nil {
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
-	// Only org admins may modify the knowledge base.
-	if !h.orgSvc.IsAdmin(r.Context(), id, h.security.CallerID(r)) {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
 
-	// Bound the request body before decoding so an oversized payload is rejected
-	// without buffering it all into memory. The precise content limit is enforced
-	// after decoding via len(req.Content) below.
 	r.Body = http.MaxBytesReader(w, r.Body, maxKnowledgeUploadBodyBytes)
 	var req struct {
 		Filename string `json:"filename"`
@@ -86,7 +110,7 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.knowledge.AddDocument(r.Context(), h.security.KeyScope(r), id, req.Filename, req.Content); err != nil {
+	if err := h.knowledge.AddDocument(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"), req.Filename, req.Content); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -94,15 +118,11 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
 	docID := chi.URLParam(r, "docId")
-	// Only org admins may delete, and the delete is scoped to this org so a
-	// docId from another org cannot be removed.
-	if !h.orgSvc.IsAdmin(r.Context(), id, h.security.CallerID(r)) {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
-	if err := h.backend.DeleteKnowledgeDocument(r.Context(), id, docID); err != nil {
+	if err := h.backend.DeleteKnowledgeDocument(r.Context(), chi.URLParam(r, "id"), docID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -133,22 +153,14 @@ func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OrgHandler) handleOrgGet(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	// Only members of the org may view its details.
-	if !h.orgSvc.IsMember(r.Context(), id, h.security.CallerID(r)) {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-		return
-	}
-	org, err := h.orgSvc.Get(r.Context(), id)
-	if err != nil {
-		render.Error(w, err, http.StatusNotFound)
+	org := h.requireMember(w, r)
+	if org == nil {
 		return
 	}
 	render.JSON(w, org)
 }
 
 func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -157,16 +169,10 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
-	updated, err := h.orgSvc.Update(r.Context(), id, req.Name)
+	updated, err := h.orgSvc.Update(r.Context(), chi.URLParam(r, "id"), req.Name)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -175,18 +181,10 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	userID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
-	if err := h.orgSvc.Delete(r.Context(), id); err != nil {
+	if err := h.orgSvc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -195,13 +193,7 @@ func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 
 func (h *OrgHandler) handleOrgMemberList(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	// Only members of the org may view its member list.
-	if !h.orgSvc.IsMember(r.Context(), id, h.security.CallerID(r)) {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-		return
-	}
-	if _, err := h.orgSvc.Get(r.Context(), id); err != nil {
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireMember(w, r) == nil {
 		return
 	}
 	members, err := h.orgSvc.ListMembers(r.Context(), id)
@@ -224,14 +216,7 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check if org exists and caller is admin
-	userID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
 
@@ -256,7 +241,7 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.orgSvc.AddMember(r.Context(), id, targetID, auth.Role(req.Role)); err != nil {
-		if strings.Contains(err.Error(), "already a member") {
+		if errors.Is(err, collaboration.ErrAlreadyMember) {
 			render.Error(w, err, http.StatusConflict)
 			return
 		}
@@ -284,7 +269,7 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.orgSvc.RemoveMember(r.Context(), id, userID); err != nil {
-		if strings.Contains(err.Error(), "last admin") {
+		if errors.Is(err, collaboration.ErrLastAdmin) {
 			render.Error(w, err, http.StatusConflict)
 			return
 		}
@@ -298,13 +283,7 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 // organisation. Only org admins may view the invite list.
 func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	userID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
 	invites, err := h.orgSvc.ListInvites(r.Context(), id)
@@ -323,12 +302,7 @@ func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request)
 func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
 
@@ -340,7 +314,8 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	if err := validateEmail(req.Email); err != nil {
+	email, err := validateEmail(req.Email)
+	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -353,7 +328,7 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	invite, token, err := h.orgSvc.CreateInvite(r.Context(), id, req.Email, role, userID, collaboration.DefaultInviteTTL)
+	invite, token, err := h.orgSvc.CreateInvite(r.Context(), id, email, role, userID, collaboration.DefaultInviteTTL)
 	if err != nil {
 		if errors.Is(err, storageif.ErrOrgInviteExists) {
 			render.Error(w, err, http.StatusConflict)
@@ -363,7 +338,7 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgInviteCreate, "org", id, map[string]string{"email": req.Email, "role": string(role)})
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgInviteCreate, "org", id, map[string]string{"email": email, "role": string(role)})
 
 	render.JSON(w, map[string]any{
 		"invite": invite,
@@ -376,13 +351,7 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 func (h *OrgHandler) handleOrgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	inviteID := chi.URLParam(r, "inviteId")
-	userID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
 
@@ -434,13 +403,7 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	callerID := h.security.CallerID(r)
-	if _, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, callerID); err != nil {
-		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-			return
-		}
-		render.Error(w, err, http.StatusNotFound)
+	if h.requireAdmin(w, r) == nil {
 		return
 	}
 	if err := h.orgSvc.SetRole(r.Context(), id, userID, auth.Role(req.Role)); err != nil {

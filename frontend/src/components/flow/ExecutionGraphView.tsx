@@ -26,11 +26,12 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
 
   const loadGraph = async () => {
     if (!flowDoc) return
+    const inst = cyRef.current
     setLoading(true)
     setError(null)
     try {
       const data = await analysisApi.getExecutionGraph()
-      if (data && cyRef.current) {
+      if (data && cyRef.current && cyRef.current === inst) {
         let nodes = data.nodes
         let edges = data.edges
 
@@ -80,9 +81,9 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         setGraphZoom(cy.zoom())
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (cyRef.current === inst) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (cyRef.current === inst) setLoading(false)
     }
   }
 

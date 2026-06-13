@@ -2,36 +2,46 @@ package di
 
 import (
 	"context"
+	"errors"
 
 	"go.uber.org/fx"
 	"pad-analyzer/internal/api"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/service"
+	"pad-analyzer/internal/sso"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	wshub "pad-analyzer/internal/websocket"
 )
 
-type storageFlowChecker struct {
-	backend storageif.StorageBackend
+// authzFlowChecker gates WebSocket room joins on read access to the flow,
+// using the same AuthzService policy as the HTTP API. It translates
+// service-layer errors into the websocket package's sentinels so that package
+// stays decoupled from the service layer.
+type authzFlowChecker struct {
+	authz *service.AuthzService
 }
 
-func (c *storageFlowChecker) FlowExists(ctx context.Context, flowID string) (bool, error) {
-	_, err := c.backend.LoadFlow(ctx, flowID)
-	if err == storageif.ErrNotFound {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func ProvideFlowAccessChecker(backend storageif.StorageBackend) wshub.FlowAccessChecker {
-	if backend == nil {
+func (c *authzFlowChecker) CheckAccess(ctx context.Context, flowID, userID string) error {
+	err := c.authz.CheckFlowAccessByID(ctx, flowID, userID, "viewer")
+	switch {
+	case err == nil:
 		return nil
+	case errors.Is(err, storageif.ErrNotFound):
+		return wshub.ErrFlowNotFound
+	case errors.Is(err, service.ErrPermissionDenied):
+		return wshub.ErrAccessDenied
+	default:
+		return err
 	}
-	return &storageFlowChecker{backend: backend}
+}
+
+func ProvideFlowAccessChecker(authz *service.AuthzService, backend storageif.StorageBackend) wshub.FlowAccessChecker {
+	if backend == nil {
+		return nil // local mode: single desktop user, no room authz needed
+	}
+	return &authzFlowChecker{authz: authz}
 }
 
 func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend storageif.StorageBackend, orgSvc *collaboration.OrgService) *api.SecurityConfig {
@@ -95,6 +105,21 @@ var APIModule = fx.Options(
 		func(backend storageif.StorageBackend) api.RefreshTokenStore {
 			if ts, ok := backend.(api.RefreshTokenStore); ok {
 				return ts
+			}
+			return nil
+		},
+		// SSO wiring: both are nil unless OIDC is configured and the backend
+		// can persist identity links (Postgres). The auth handler treats a nil
+		// pair as "SSO disabled".
+		func(cfg *config.Config) api.SSOClient {
+			if !cfg.Auth.SSO.Enabled() {
+				return nil
+			}
+			return sso.NewClient(cfg.Auth.SSO)
+		},
+		func(backend storageif.StorageBackend) api.IdentityStore {
+			if is, ok := backend.(api.IdentityStore); ok {
+				return is
 			}
 			return nil
 		},

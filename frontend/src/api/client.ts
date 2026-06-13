@@ -1,4 +1,19 @@
 import { createAdapter } from '@/platform/adapters'
+import {logger} from '@/lib/logger'
+
+export class PermissionDeniedError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = 'PermissionDeniedError'
+    }
+}
+
+export class VersionConflictError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = 'VersionConflictError'
+    }
+}
 
 interface ResolvedConfig {
     apiUrl: string
@@ -16,6 +31,11 @@ export async function getBackendConfig(): Promise<ResolvedConfig> {
         configCache = { apiUrl: cfg.apiUrl, token: cfg.token ?? '' }
         configPromise = null
         return configCache
+    }).catch(err => {
+        // Reset so the next caller can retry instead of receiving the same
+        // rejected promise forever.
+        configPromise = null
+        throw err
     })
 
     return configPromise
@@ -124,7 +144,14 @@ export async function request<T>(path: string, body?: unknown, method: string = 
 
     if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Request failed' }))
-        throw new Error((error as { error?: string }).error || 'Request failed')
+        const msg = (error as { error?: string }).error || 'Request failed'
+        if (response.status === 403) {
+            throw new PermissionDeniedError(msg)
+        }
+        if (response.status === 409) {
+            throw new VersionConflictError(msg)
+        }
+        throw new Error(msg)
     }
 
     // Wrap the success-path JSON parse in a .catch() so a misconfigured proxy
@@ -247,7 +274,7 @@ async function connectEvents(): Promise<void> {
                         const data = JSON.parse(line.slice(6))
                         listeners.forEach(l => l(data))
                     } catch (err) {
-                        console.error('SSE JSON error', err)
+                        logger.warn('SSE JSON error', err)
                     }
                 }
             }

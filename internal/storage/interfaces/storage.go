@@ -21,10 +21,28 @@ var ErrEmailExists = errors.New("email already in use")
 // should map this to HTTP 409.
 var ErrOrgInviteExists = errors.New("an active invite for this email already exists")
 
+// ErrVersionConflict is returned by SaveFlow when the expected version does
+// not match the current row version (optimistic concurrency check failed).
+// The caller should map this to HTTP 409.
+var ErrVersionConflict = errors.New("version conflict: the flow was modified by another user")
+
+// IdentityLink ties an external IdP identity (provider + stable subject ID)
+// to a local user account, enabling OIDC single sign-on.
+type IdentityLink struct {
+	Provider  string    `json:"provider"`
+	Subject   string    `json:"subject"`
+	UserID    string    `json:"userId"`
+	Email     string    `json:"email,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 // User represents a system user in the storage backend.
 type User struct {
 	ID          string    `json:"id"`
 	Email       string    `json:"email"`
+	EmailVerified bool    `json:"emailVerified"`
+	FailedLoginAttempts int `json:"-"`
+	LockedUntil *time.Time `json:"-"`
 	Password    string    `json:"-"` // Bcrypt hash — never serialized to clients
 	Role        auth.Role `json:"role"`
 	DisplayName string    `json:"displayName"`
@@ -46,8 +64,15 @@ type RefreshTokenInfo struct {
 type StorageBackend interface {
 	// Flow document operations
 	SaveFlow(ctx context.Context, flow *FlowDocument) error
+	// TransferFlowOwner changes owner_id and org_id on a flow. This is the
+	// ONLY way to reassign ownership — SaveFlow's ON CONFLICT intentionally
+	// preserves the original owner_id/org_id to prevent hijacking.
+	TransferFlowOwner(ctx context.Context, flowID, newOwnerID, newOrgID string) error
 	LoadFlow(ctx context.Context, id string) (*FlowDocument, error)
 	ListFlows(ctx context.Context, filter FlowFilter) ([]*FlowDocument, error)
+	// CountFlows returns the total number of flows matching the filter,
+	// ignoring Limit/Offset — used for list pagination totals.
+	CountFlows(ctx context.Context, filter FlowFilter) (int, error)
 	DeleteFlow(ctx context.Context, id string) error
 
 	// Settings operations
@@ -91,6 +116,7 @@ type StorageBackend interface {
 
 	// Sharing operations
 	ListCollaborators(ctx context.Context, flowID string) ([]*Collaborator, error)
+	ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*Collaborator, error)
 	AddCollaborator(ctx context.Context, flowID string, c *Collaborator) error
 	UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error
 	RemoveCollaborator(ctx context.Context, flowID, userID string) error
@@ -167,7 +193,6 @@ type FlowFilter struct {
 	UserID         string
 	OrganizationID string
 	Query          string
-	IsPublic       *bool
 	CreatedAfter   *time.Time
 	CreatedBefore  *time.Time
 	Limit          int
@@ -176,6 +201,14 @@ type FlowFilter struct {
 	// the caller only needs listing metadata. Backends leave FlowDocument.Content
 	// empty when set. List/library endpoints set this; the migrator does not.
 	MetadataOnly bool
+	// AllFlows is an explicit opt-in for operational enumeration (e.g. the
+	// filesystem→cloud migrator) that bypasses owner/org scoping and returns
+	// every flow. Without it, a filter that sets neither UserID nor
+	// OrganizationID matches nothing — a defense-in-depth guard so a caller
+	// who forgets to scope cannot accidentally dump the whole table. This flag
+	// is set only by server-side operational code and must never be bound from
+	// user-controlled input.
+	AllFlows bool
 }
 
 type UsageMetric struct {
@@ -206,15 +239,16 @@ type KnowledgeChunk struct {
 
 // FlowDocument represents a flow document
 type FlowDocument struct {
-	ID             string
-	Name           string
-	Description    string
-	Content        json.RawMessage
-	Metadata       FlowMetadata
-	OwnerID        string
-	OrganizationID string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Content        json.RawMessage `json:"content"`
+	Metadata       FlowMetadata    `json:"metadata"`
+	OwnerID        string          `json:"ownerId"`
+	OrganizationID string          `json:"organizationId"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+	Version        int             `json:"version"`
 }
 
 // FlowMetadata contains metadata about a flow

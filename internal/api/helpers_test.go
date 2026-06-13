@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,10 +19,43 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-type mockNotifier struct{}
-func (m *mockNotifier) Emit(name string, data any) {}
+type mockNotifier = service.NilNotifier
+
+// memIdentityStore is an in-memory IdentityStore for SSO handler tests (the
+// filesystem backend used by the test router doesn't persist identity links).
+type memIdentityStore struct {
+	links map[string]*storageif.IdentityLink // key: provider + "\x00" + subject
+}
+
+func newMemIdentityStore() *memIdentityStore {
+	return &memIdentityStore{links: map[string]*storageif.IdentityLink{}}
+}
+
+func (m *memIdentityStore) SaveIdentityLink(_ context.Context, link *storageif.IdentityLink) error {
+	key := link.Provider + "\x00" + link.Subject
+	if _, exists := m.links[key]; exists {
+		return fmt.Errorf("identity link already exists")
+	}
+	cp := *link
+	m.links[key] = &cp
+	return nil
+}
+
+func (m *memIdentityStore) LoadIdentityLink(_ context.Context, provider, subject string) (*storageif.IdentityLink, error) {
+	if link, ok := m.links[provider+"\x00"+subject]; ok {
+		cp := *link
+		return &cp, nil
+	}
+	return nil, storageif.ErrNotFound
+}
 
 func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
+	return newTestRouterSSO(backend, jwtEnabled, nil, nil)
+}
+
+// newTestRouterSSO is newTestRouter with SSO collaborators injected into the
+// auth handler (nil/nil = SSO disabled, the common case).
+func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClient SSOClient, identityStore IdentityStore) *Router {
 	cfg := config.Default()
 	cfg.Auth.Enabled = jwtEnabled
 	cfg.Auth.Secret = testToken
@@ -34,11 +68,19 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 		docProv = service.NewCloudDocumentProvider(backend)
 	}
 	
-	authMgr := auth.NewManager(testToken, nil)
+	// Cloud mode always runs with a blacklist (main.go creates one whenever
+	// auth is enabled); single-use SSO tickets and logout revocation depend
+	// on it, so the test router mirrors that.
+	var blacklist auth.BlacklistStore
+	if jwtEnabled {
+		blacklist = auth.NewTokenBlacklist()
+	}
+	authMgr := auth.NewManager(testToken, blacklist)
 	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
-	
-	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, orgSvc, nil)
-	libSvc := service.NewLibraryService(backend, flowSvc)
+	authzSvc := service.NewAuthzService(backend, orgSvc)
+
+	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil)
+	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc)
 	analysisSvc := service.NewAnalysisService(notifier, settings, nil)
 	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
 	
@@ -70,7 +112,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 		Chat:     NewChatHandler(chatSvc, flowSvc, security),
 		Analysis: NewAnalysisHandler(analysisSvc, flowSvc, backend, security),
 		Export:   NewExportHandler(exportSvc, flowSvc, security),
-		Auth:     NewAuthHandler(nil, backend, security),
+		Auth:     NewAuthHandler(nil, backend, security, ssoClient, identityStore),
 		Admin:    NewAdminHandler(backend, security),
 		Provider: NewProviderHandler(providerSvc, security),
 		Org:      NewOrgHandler(orgSvc, backend, nil, security),
@@ -159,6 +201,39 @@ func newRecorder(t *testing.T, rt *Router, req *http.Request) *httptest.Response
 	rr := httptest.NewRecorder()
 	rt.ServeHTTP(rr, req)
 	return rr
+}
+
+// seedOrg creates an org owned by ownerID (who becomes its sole admin) and
+// returns the org ID.
+func seedOrg(t *testing.T, rt *Router, name, ownerID string) string {
+	t.Helper()
+	org, err := rt.security.OrgSvc.Create(context.Background(), name, ownerID)
+	if err != nil {
+		t.Fatalf("seed org %s: %v", name, err)
+	}
+	return org.ID
+}
+
+// addOrgMember adds userID to the org with the given role.
+func addOrgMember(t *testing.T, rt *Router, orgID, userID string, role auth.Role) {
+	t.Helper()
+	if err := rt.security.OrgSvc.AddMember(context.Background(), orgID, userID, role); err != nil {
+		t.Fatalf("add org member %s: %v", userID, err)
+	}
+}
+
+// seedOrgFlow inserts a flow that belongs to an org directly via the backend.
+func seedOrgFlow(t *testing.T, rt *Router, id, ownerID, orgID string) {
+	t.Helper()
+	doc := &storageif.FlowDocument{
+		ID:             id,
+		Name:           "test",
+		OwnerID:        ownerID,
+		OrganizationID: orgID,
+	}
+	if err := rt.security.Backend.SaveFlow(context.Background(), doc); err != nil {
+		t.Fatalf("seed org flow %s: %v", id, err)
+	}
 }
 
 // seedUserWithRole inserts a user with the given role directly via the backend.

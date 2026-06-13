@@ -27,6 +27,8 @@ func TestError(t *testing.T) {
 		{"ErrPermissionDenied auto-maps to 403", service.ErrPermissionDenied, 0, http.StatusForbidden, "FORBIDDEN", false},
 		{"ErrInvalidInput auto-maps to 400", service.ErrInvalidInput, 0, http.StatusBadRequest, "BAD_REQUEST", false},
 		{"ErrConflict auto-maps to 409", service.ErrConflict, 0, http.StatusConflict, "CONFLICT", false},
+		{"ErrVersionConflict auto-maps to 409", storageif.ErrVersionConflict, 0, http.StatusConflict, "CONFLICT", false},
+		{"ErrEmailExists auto-maps to 409", storageif.ErrEmailExists, 0, http.StatusConflict, "CONFLICT", false},
 		{"ErrNotImplemented auto-maps to 501", service.ErrNotImplemented, 0, http.StatusNotImplemented, "NOT_IMPLEMENTED", true},
 		{"ErrUninitialized auto-maps to 400", service.ErrUninitialized, 0, http.StatusBadRequest, "BAD_REQUEST", false},
 		{"explicit 400 overrides mapping", errors.New("some error"), http.StatusBadRequest, http.StatusBadRequest, "BAD_REQUEST", false},

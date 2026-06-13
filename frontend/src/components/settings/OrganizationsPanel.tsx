@@ -74,17 +74,29 @@ export default function OrganizationsPanel() {
   const handleRemoveMember = async (userId: string) => {
     if (!selected) return
     if (!window.confirm('Remove this member from the organization?')) return
-    await removeMember(selected.id, userId)
+    try {
+      await removeMember(selected.id, userId)
+    } catch {
+      // error surfaces via store.error
+    }
   }
 
   const handleRoleChange = async (userId: string, role: OrgRole) => {
     if (!selected) return
-    await setMemberRole(selected.id, userId, role)
+    try {
+      await setMemberRole(selected.id, userId, role)
+    } catch {
+      // error surfaces via store.error
+    }
   }
 
   const handleDeleteOrg = async (org: Organisation) => {
     if (!window.confirm(`Delete organization "${org.name}"? This cannot be undone.`)) return
-    await deleteOrg(org.id)
+    try {
+      await deleteOrg(org.id)
+    } catch {
+      // error surfaces via store.error
+    }
   }
 
   return (
@@ -158,6 +170,8 @@ export default function OrganizationsPanel() {
         <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">
           {organisations.map((org) => {
             const isOwner = currentUser?.id === org.ownerId
+            const isAdmin = org.members.find(m => m.userId === currentUser?.id)?.role === 'admin'
+            const canManageMembers = isOwner || isAdmin
             const isActive = org.id === activeOrgId
             return (
               <div
@@ -217,30 +231,37 @@ export default function OrganizationsPanel() {
                                   <p className="text-xs text-text-tertiary truncate">{m.user.email}</p>
                                 )}
                               </div>
-                              <select
-                                value={m.role}
-                                onChange={(e) => void handleRoleChange(m.userId, e.target.value as OrgRole)}
-                                disabled={m.userId === org.ownerId}
-                                className="px-2 py-1 rounded-md bg-surface-2 border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-500 disabled:opacity-50"
-                              >
-                                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                              </select>
-                              <button
-                                onClick={() => void handleRemoveMember(m.userId)}
-                                disabled={m.userId === org.ownerId}
-                                className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
-                                title={m.userId === org.ownerId ? 'Owner cannot be removed' : 'Remove member'}
-                              >
-                                <X size={14} />
-                              </button>
+                              {canManageMembers ? (
+                                <select
+                                  value={m.role}
+                                  onChange={(e) => void handleRoleChange(m.userId, e.target.value as OrgRole)}
+                                  disabled={m.userId === org.ownerId}
+                                  className="px-2 py-1 rounded-md bg-surface-2 border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-500 disabled:opacity-50"
+                                >
+                                  {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                </select>
+                              ) : (
+                                <span className="px-2 py-1 text-xs text-text-tertiary capitalize">{m.role}</span>
+                              )}
+                              {canManageMembers ? (
+                                <button
+                                  onClick={() => void handleRemoveMember(m.userId)}
+                                  disabled={m.userId === org.ownerId}
+                                  className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
+                                  title={m.userId === org.ownerId ? 'Owner cannot be removed' : 'Remove member'}
+                                >
+                                  <X size={14} />
+                                </button>
+                              ) : null}
                             </div>
                           ))
                         )}
                       </div>
                     </div>
 
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Invite</h4>
+                    {canManageMembers && (
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Invite</h4>
                       <div className="flex gap-2">
                         <input
                           value={inviteEmail}
@@ -266,7 +287,8 @@ export default function OrganizationsPanel() {
                           {inviteBusy ? 'Inviting…' : 'Invite'}
                         </button>
                       </div>
-                    </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

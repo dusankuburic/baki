@@ -3,6 +3,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
+import {logger} from '@/lib/logger'
 import type {AnalysisReport} from '@/types/domain'
 
 /**
@@ -30,7 +31,7 @@ export function useAutoAnalyze(): void {
     if (analysis.isAnalyzing) return         // something else is running
 
     inflightRef.current = docId
-    analysis.setAnalyzing(true)
+    const gen = analysis.beginAnalyzing()
     analysis.setProgress({current: 0, total: 0, ruleName: ''})
 
     analysisApi.analyzeFlow()
@@ -38,10 +39,12 @@ export function useAutoAnalyze(): void {
         if (r) useAnalysisStore.getState().setReport(docId, r as unknown as AnalysisReport)
       })
       .catch((err) => {
-        console.error('auto-analyze failed:', err)
+        logger.warn('auto-analyze failed:', err)
       })
       .finally(() => {
-        useAnalysisStore.getState().setAnalyzing(false)
+        if (useAnalysisStore.getState().analyzingGen === gen) {
+          useAnalysisStore.getState().setAnalyzing(false)
+        }
         if (inflightRef.current === docId) inflightRef.current = null
       })
   }, [docId, autoAnalyze, settingsLoaded])

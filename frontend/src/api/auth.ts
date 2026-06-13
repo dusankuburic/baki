@@ -38,6 +38,11 @@ export interface SessionInfo {
   expiresAt: string
 }
 
+export interface SSOInfo {
+  enabled: boolean
+  provider?: string
+}
+
 export const authApi = {
   login: (credentials: LoginRequest): Promise<LoginResponse> =>
     request('/api/auth/login', credentials),
@@ -65,4 +70,12 @@ export const authApi = {
 
   revokeSession: (id: string): Promise<void> =>
     request(`/api/auth/sessions/${id}`, undefined, 'DELETE'),
+
+  ssoInfo: (): Promise<SSOInfo> =>
+    request('/api/auth/sso/info', undefined, 'GET'),
+
+  // Exchanges the single-use ticket from the OIDC callback redirect for a
+  // regular token pair (same shape as login).
+  ssoExchange: (ticket: string): Promise<LoginResponse> =>
+    request('/api/auth/sso/exchange', { ticket }),
 }

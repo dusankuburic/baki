@@ -41,7 +41,7 @@ export function useFileOpen() {
                 checkView()
             }
         } catch (err) {
-            console.error('Failed to open file:', err)
+            logger.warn('Failed to open file:', err)
         }
     }, [setDocument, setFolderFiles, setSelectedFilePath, checkView])
 
@@ -57,7 +57,7 @@ export function useFileOpen() {
                 checkView()
             }
         } catch (err) {
-            console.error('Failed to open folder:', err)
+            logger.warn('Failed to open folder:', err)
         }
     }, [setDocument, setFolderFiles, setSelectedFilePath, checkView])
 
@@ -87,7 +87,7 @@ export function useFileOpen() {
                 checkView()
             }
         } catch (err) {
-            console.error('Failed to load file:', err)
+            logger.warn('Failed to load file:', err)
         }
     }, [setDocument, setSelectedFilePath, openInGroup, checkView])
 
@@ -110,7 +110,7 @@ export function useFileOpen() {
                 checkView()
             }
         } catch (err) {
-            console.error('Failed to load recent item:', err)
+            logger.warn('Failed to load recent item:', err)
         }
     }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView])
 
@@ -119,7 +119,7 @@ export function useFileOpen() {
             await flowApi.removeRecentFile(path)
             setRecentFiles(prev => prev.filter(f => f.path !== path))
         } catch (err) {
-            console.error('Failed to remove recent file:', err)
+            logger.warn('Failed to remove recent file:', err)
         }
     }, [])
 
@@ -128,7 +128,7 @@ export function useFileOpen() {
             await flowApi.clearRecentFiles()
             setRecentFiles([])
         } catch (err) {
-            console.error('Failed to clear recent files:', err)
+            logger.warn('Failed to clear recent files:', err)
         }
     }, [])
 

@@ -1,6 +1,7 @@
 import {useRef, useState, useCallback, useEffect, ReactNode} from 'react'
 import {Maximize2, Minimize2} from 'lucide-react'
 import {useSettingsStore} from '@/stores/settingsStore'
+import clsx from 'clsx'
 
 interface Props {
   children: ReactNode
@@ -165,8 +166,4 @@ export default function ResizableChatPanel({
       </div>
     </div>
   )
-}
-
-function clsx(...classes: (string | boolean | undefined | null)[]) {
-  return classes.filter(Boolean).join(' ')
 }

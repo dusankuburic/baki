@@ -8,6 +8,7 @@ export type EventType =
   | 'block.update'
   | 'block.create'
   | 'block.delete'
+  | 'flow.changed'
   | 'error'
   | 'ping'
   | 'pong'
@@ -43,6 +44,10 @@ export interface BlockPayload {
 export interface ErrorPayload {
   code: string
   message: string
+}
+
+export interface FlowChangedPayload {
+  version: number
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'

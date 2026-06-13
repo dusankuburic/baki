@@ -152,6 +152,21 @@ func applyEnvVars(cfg *Config) error {
 	if v := os.Getenv("PAD_AUTH_SECRET"); v != "" {
 		cfg.Auth.Secret = v
 	}
+	if v := os.Getenv("PAD_SSO_ISSUER"); v != "" {
+		cfg.Auth.SSO.IssuerURL = v
+	}
+	if v := os.Getenv("PAD_SSO_CLIENT_ID"); v != "" {
+		cfg.Auth.SSO.ClientID = v
+	}
+	if v := os.Getenv("PAD_SSO_CLIENT_SECRET"); v != "" {
+		cfg.Auth.SSO.ClientSecret = v
+	}
+	if v := os.Getenv("PAD_SSO_REDIRECT_URL"); v != "" {
+		cfg.Auth.SSO.RedirectURL = v
+	}
+	if v := os.Getenv("PAD_SSO_PROVIDER_NAME"); v != "" {
+		cfg.Auth.SSO.ProviderName = v
+	}
 	if v := os.Getenv("PAD_TLS_CERT"); v != "" {
 		cfg.Server.TLSCert = v
 	}
@@ -182,6 +197,12 @@ func applyEnvVars(cfg *Config) error {
 	}
 	if v := os.Getenv("PAD_DB_CONN_MAX_LIFETIME"); v != "" {
 		cfg.Storage.DBConnMaxLifetime = v
+	}
+	if v := os.Getenv("PAD_AZURE_STORAGE_ACCOUNT"); v != "" {
+		cfg.Storage.AzureStorageAccount = v
+	}
+	if v := os.Getenv("PAD_AZURE_STORAGE_CONTAINER"); v != "" {
+		cfg.Storage.AzureStorageContainer = v
 	}
 	// Runtime tuning parameters
 	if v := os.Getenv("PAD_RATE_LIMIT_GENERAL_RPS"); v != "" {
@@ -305,6 +326,21 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Storage.Backend == StorageDatabase && cfg.Storage.DatabaseURL == "" {
 		return errors.New("config: storage.database_url is required when storage.backend is database")
+	}
+	// Azure Blob Storage must be fully configured or not at all.
+	if (cfg.Storage.AzureStorageAccount != "" || cfg.Storage.AzureStorageContainer != "") &&
+		(cfg.Storage.AzureStorageAccount == "" || cfg.Storage.AzureStorageContainer == "") {
+		return errors.New("config: PAD_AZURE_STORAGE_ACCOUNT and PAD_AZURE_STORAGE_CONTAINER must both be set to enable blob storage")
+	}
+	// SSO must be fully configured or not at all — a partial config (e.g. issuer
+	// without redirect URL) silently failing at first login is worse than a
+	// startup error.
+	sso := cfg.Auth.SSO
+	if (sso.IssuerURL != "" || sso.ClientID != "" || sso.RedirectURL != "") && !sso.Enabled() {
+		return errors.New("config: PAD_SSO_ISSUER, PAD_SSO_CLIENT_ID, and PAD_SSO_REDIRECT_URL must all be set to enable SSO (client secret is optional for PKCE-only public clients)")
+	}
+	if sso.Enabled() && !cfg.Auth.Enabled {
+		return errors.New("config: SSO requires PAD_AUTH_ENABLED=true")
 	}
 	if err := validateTrustedProxies(cfg.Server.TrustedProxies); err != nil {
 		return err

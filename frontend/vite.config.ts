@@ -9,10 +9,20 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-dom/client'],
+          'graph': ['cytoscape', 'cytoscape-dagre'],
+          'markdown': ['react-markdown', 'remark-gfm'],
+        },
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/testing/setup.ts'],
-    // Keep explicit vitest imports — no globals injection needed
     globals: false,
   },
 })

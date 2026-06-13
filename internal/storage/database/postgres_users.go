@@ -23,16 +23,19 @@ func (b *PostgresStorageBackend) SaveUser(ctx context.Context, user *interfaces.
 	user.UpdatedAt = now
 
 	_, err := b.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, password, role, display_name, avatar_url, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO users (id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO UPDATE SET
-			email        = EXCLUDED.email,
-			password     = EXCLUDED.password,
-			role         = EXCLUDED.role,
-			display_name = EXCLUDED.display_name,
-			avatar_url   = EXCLUDED.avatar_url,
-			updated_at   = EXCLUDED.updated_at`,
-		user.ID, user.Email, user.Password, string(user.Role), user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
+			email                 = EXCLUDED.email,
+			password              = EXCLUDED.password,
+			role                  = EXCLUDED.role,
+			email_verified        = EXCLUDED.email_verified,
+			failed_login_attempts = EXCLUDED.failed_login_attempts,
+			locked_until          = EXCLUDED.locked_until,
+			display_name          = EXCLUDED.display_name,
+			avatar_url            = EXCLUDED.avatar_url,
+			updated_at            = EXCLUDED.updated_at`,
+		user.ID, user.Email, user.Password, string(user.Role), user.EmailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
 	)
 	if err != nil {
 		if isPgErrCode(err, pgErrUniqueViolation) {
@@ -87,9 +90,9 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO users (id, email, password, role, display_name, avatar_url, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		user.ID, user.Email, user.Password, string(role), user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
+		INSERT INTO users (id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		user.ID, user.Email, user.Password, string(role), user.EmailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
 	); err != nil {
 		if isPgErrCode(err, pgErrUniqueViolation) {
 			return interfaces.ErrEmailExists
@@ -106,12 +109,13 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 }
 
 func (b *PostgresStorageBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) {
+	email = strings.ToLower(email)
 	var user interfaces.User
 	var roleStr string
 	err := b.db.QueryRowContext(ctx,
-		`SELECT id, email, password, role, display_name, avatar_url, created_at, updated_at FROM users WHERE email = $1`,
+		`SELECT id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at FROM users WHERE email = $1`,
 		email,
-	).Scan(&user.ID, &user.Email, &user.Password, &roleStr, &user.DisplayName, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.Password, &roleStr, &user.EmailVerified, &user.FailedLoginAttempts, &user.LockedUntil, &user.DisplayName, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, interfaces.ErrNotFound
@@ -127,9 +131,9 @@ func (b *PostgresStorageBackend) LoadUserByID(ctx context.Context, id string) (*
 	var user interfaces.User
 	var roleStr string
 	err := b.db.QueryRowContext(ctx,
-		`SELECT id, email, password, role, display_name, avatar_url, created_at, updated_at FROM users WHERE id = $1`,
+		`SELECT id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at FROM users WHERE id = $1`,
 		id,
-	).Scan(&user.ID, &user.Email, &user.Password, &roleStr, &user.DisplayName, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.Password, &roleStr, &user.EmailVerified, &user.FailedLoginAttempts, &user.LockedUntil, &user.DisplayName, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, interfaces.ErrNotFound
@@ -164,7 +168,7 @@ func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []strin
 	if len(args) == 0 {
 		return out, nil
 	}
-	q := `SELECT id, email, role, created_at, updated_at FROM users WHERE id IN (` +
+	q := `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE id IN (` +
 		strings.Join(placeholders, ",") + `)`
 	rows, err := b.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -174,7 +178,7 @@ func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []strin
 	for rows.Next() {
 		var u interfaces.User
 		var roleStr string
-		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.EmailVerified, &u.FailedLoginAttempts, &u.LockedUntil, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		u.Role = auth.Role(roleStr)
@@ -197,9 +201,9 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 	var rows *sql.Rows
 	var err error
 	if limit > 0 {
-		rows, err = b.db.QueryContext(ctx, `SELECT id, email, role, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+		rows, err = b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	} else {
-		rows, err = b.db.QueryContext(ctx, `SELECT id, email, role, created_at, updated_at FROM users ORDER BY created_at DESC`)
+		rows, err = b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC`)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
@@ -210,7 +214,7 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 	for rows.Next() {
 		var u interfaces.User
 		var roleStr string
-		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.EmailVerified, &u.FailedLoginAttempts, &u.LockedUntil, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		u.Role = auth.Role(roleStr)
@@ -220,7 +224,7 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 }
 
 func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
-	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, created_at, updated_at FROM users WHERE role = 'admin'`)
+	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE role = 'admin'`)
 	if err != nil {
 		return nil, fmt.Errorf("list admins: %w", err)
 	}
@@ -230,7 +234,7 @@ func (b *PostgresStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.
 	for rows.Next() {
 		var u interfaces.User
 		var roleStr string
-		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &roleStr, &u.EmailVerified, &u.FailedLoginAttempts, &u.LockedUntil, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan admin: %w", err)
 		}
 		u.Role = auth.Role(roleStr)
@@ -245,7 +249,7 @@ func (b *PostgresStorageBackend) UpdateUserRole(ctx context.Context, id string, 
 }
 
 func (b *PostgresStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
-	_, err := b.db.ExecContext(ctx, `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`, passwordHash, id)
+	_, err := b.db.ExecContext(ctx, `UPDATE users SET password = $1, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $2`, passwordHash, id)
 	return err
 }
 

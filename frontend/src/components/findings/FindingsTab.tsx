@@ -21,6 +21,8 @@ export default function FindingsTab() {
   const progress = useAnalysisStore(s => s.progress)
   const setReport = useAnalysisStore(s => s.setReport)
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
+  const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
+  const analyzingGen = useAnalysisStore(s => s.analyzingGen)
   const setProgress = useAnalysisStore(s => s.setProgress)
   const severityFilter = useAnalysisStore(s => s.severityFilter)
   const categoryFilter = useAnalysisStore(s => s.categoryFilter)
@@ -85,7 +87,7 @@ export default function FindingsTab() {
 
   const handleAnalyze = useCallback(async () => {
     if (!doc) return
-    setAnalyzing(true)
+    const gen = beginAnalyzing()
     setProgress({current: 0, total: 0, ruleName: ''})
 
     try {
@@ -94,11 +96,11 @@ export default function FindingsTab() {
         setReport(doc.id, r as AnalysisReport)
       }
     } catch (err) {
-      console.error('analysis failed:', err)
+      toast.error('Analysis failed', {description: String(err)})
     } finally {
-      setAnalyzing(false)
+      if (analyzingGen === gen) setAnalyzing(false)
     }
-  }, [doc, setReport, setAnalyzing, setProgress])
+  }, [doc, setReport, setAnalyzing, beginAnalyzing, analyzingGen, setProgress])
 
   const handleFixWithAI = useCallback((finding: Finding) => {
     if (!doc) return

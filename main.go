@@ -110,7 +110,7 @@ func provideShutdownCh(lc fx.Lifecycle) chan struct{} {
 	return ch
 }
 
-func provideAuthManager(lc fx.Lifecycle, cfg *config.Config) *auth.Manager {
+func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) *auth.Manager {
 	token := cfg.Auth.Secret
 	if token == "" {
 		if cfg.Mode == config.ModeCloud && cfg.Auth.Enabled {
@@ -121,15 +121,27 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config) *auth.Manager {
 		cfg.Auth.Secret = token
 	}
 
-	var blacklist *auth.TokenBlacklist
+	var blacklist auth.BlacklistStore
 	if cfg.Auth.Enabled {
-		blacklist = auth.NewTokenBlacklist()
-		lc.Append(fx.Hook{
-			OnStop: func(ctx context.Context) error {
-				blacklist.Stop()
-				return nil
-			},
-		})
+		if pgBackend, ok := backend.(*storagedb.PostgresStorageBackend); ok && pgBackend != nil {
+			pgBl := storagedb.NewPostgresBlacklist(pgBackend.DB())
+			blacklist = pgBl
+			lc.Append(fx.Hook{
+				OnStop: func(ctx context.Context) error {
+					pgBl.Stop()
+					return nil
+				},
+			})
+		} else {
+			memBl := auth.NewTokenBlacklist()
+			blacklist = memBl
+			lc.Append(fx.Hook{
+				OnStop: func(ctx context.Context) error {
+					memBl.Stop()
+					return nil
+				},
+			})
+		}
 	}
 
 	return auth.NewManager(token, blacklist)
@@ -202,12 +214,19 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 		dbCfg.ConnMaxLifetime = d
 	}
 
+	// Apply Azure Blob Storage config if available
+	if cfg.Storage.AzureStorageAccount != "" && cfg.Storage.AzureStorageContainer != "" {
+		dbCfg.AzureStorageAccount = cfg.Storage.AzureStorageAccount
+		dbCfg.AzureStorageContainer = cfg.Storage.AzureStorageContainer
+	}
+
 	pgBackend, err := storagedb.New(context.Background(), dbCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to connect to database: %v\n", err)
 		os.Exit(1)
 	}
 
+	poolStop := make(chan struct{})
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go func() {
@@ -215,7 +234,7 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 				defer t.Stop()
 				for {
 					select {
-					case <-ctx.Done():
+					case <-poolStop:
 						return
 					case <-t.C:
 						padmetrics.ObservePostgresPool(pgBackend.DB())
@@ -225,6 +244,7 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
+			close(poolStop)
 			return pgBackend.Close()
 		},
 	})

@@ -6,6 +6,7 @@ import type {
 } from '@/types/domain'
 
 import {settingsApi} from '@/api'
+import {logger} from '@/lib/logger'
 
 type SettingsListener = (settings: AppSettings) => void
 const listeners: SettingsListener[] = []
@@ -186,7 +187,7 @@ async function persist(settings: AppSettings): Promise<void> {
         await settingsApi.updateSettings(settings)
         resolve()
       } catch (err) {
-        console.error('Failed to persist settings', err)
+        logger.warn('Failed to persist settings', err)
         reject(err)
       }
     }, 1000) // 1 second debounce

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -63,7 +64,7 @@ func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Or
 }
 
 func (b *PostgresStorageBackend) LoadOrg(ctx context.Context, id string) (*interfaces.Organisation, error) {
-	row := b.db.QueryRowContext(ctx,
+	row := b.query(ctx).QueryRowContext(ctx,
 		`SELECT id, name, owner_id, created_at, updated_at FROM organisations WHERE id = $1`, id)
 
 	var org interfaces.Organisation
@@ -74,7 +75,7 @@ func (b *PostgresStorageBackend) LoadOrg(ctx context.Context, id string) (*inter
 		return nil, fmt.Errorf("scan org: %w", err)
 	}
 
-	rows, err := b.db.QueryContext(ctx,
+	rows, err := b.query(ctx).QueryContext(ctx,
 		`SELECT user_id, role, joined_at FROM org_members WHERE org_id = $1`, id)
 	if err != nil {
 		return nil, fmt.Errorf("query members: %w", err)
@@ -98,7 +99,7 @@ func (b *PostgresStorageBackend) LoadOrg(ctx context.Context, id string) (*inter
 }
 
 func (b *PostgresStorageBackend) ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error) {
-	rows, err := b.db.QueryContext(ctx, `
+	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT o.id, o.name, o.owner_id, o.created_at, o.updated_at
 		FROM organisations o
 		JOIN org_members m ON o.id = m.org_id
@@ -127,7 +128,7 @@ func (b *PostgresStorageBackend) ListOrgsForUser(ctx context.Context, userID str
 }
 
 func (b *PostgresStorageBackend) DeleteOrg(ctx context.Context, id string) error {
-	_, err := b.db.ExecContext(ctx, `DELETE FROM organisations WHERE id = $1`, id)
+	_, err := b.query(ctx).ExecContext(ctx, `DELETE FROM organisations WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete org: %w", err)
 	}
@@ -170,12 +171,14 @@ func (b *PostgresStorageBackend) loadOrgForUpdate(ctx context.Context, tx *sql.T
 	defer rows.Close()
 	for rows.Next() {
 		var m interfaces.OrgMember
-		if err := rows.Scan(&m.UserID, &m.Role, &m.JoinedAt); err != nil {
+		var roleStr string
+		if err := rows.Scan(&m.UserID, &roleStr, &m.JoinedAt); err != nil {
 			return nil, fmt.Errorf("scan org member: %w", err)
 		}
+		m.Role = auth.Role(roleStr)
 		org.Members = append(org.Members, m)
 	}
-	return &org, nil
+	return &org, rows.Err()
 }
 
 func (b *PostgresStorageBackend) saveOrgInTx(ctx context.Context, tx *sql.Tx, org *interfaces.Organisation) error {
@@ -190,7 +193,7 @@ func (b *PostgresStorageBackend) saveOrgInTx(ctx context.Context, tx *sql.Tx, or
 	}
 	for _, m := range org.Members {
 		_, err := tx.ExecContext(ctx, `INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES ($1, $2, $3, $4)`,
-			org.ID, m.UserID, m.Role, m.JoinedAt)
+			org.ID, m.UserID, string(m.Role), m.JoinedAt)
 		if err != nil {
 			return fmt.Errorf("insert org member in tx: %w", err)
 		}
@@ -201,18 +204,18 @@ func (b *PostgresStorageBackend) saveOrgInTx(ctx context.Context, tx *sql.Tx, or
 // ---- Knowledge base operations ----
 
 func (b *PostgresStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error {
-	_, err := b.db.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, $3)`,
+	_, err := b.query(ctx).ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, $3)`,
 		doc.ID, doc.OrgID, doc.Filename)
 	return err
 }
 
 func (b *PostgresStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error {
-	_, err := b.db.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1 AND org_id = $2`, id, orgID)
+	_, err := b.query(ctx).ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1 AND org_id = $2`, id, orgID)
 	return err
 }
 
 func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
-	rows, err := b.db.QueryContext(ctx, `SELECT id, org_id, filename, created_at FROM knowledge_documents WHERE org_id = $1`, orgID)
+	rows, err := b.query(ctx).QueryContext(ctx, `SELECT id, org_id, filename, created_at FROM knowledge_documents WHERE org_id = $1`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +228,7 @@ func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, org
 		}
 		docs = append(docs, &d)
 	}
-	return docs, nil
+	return docs, rows.Err()
 }
 
 func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error {
@@ -251,13 +254,17 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks
 }
 
 func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
-	// Fetch all chunks for the org and calculate similarity in Go for portability.
-	// In a real production app with millions of chunks, we'd use pgvector.
-	rows, err := b.db.QueryContext(ctx, `
+	// Cap the number of chunks loaded from DB to avoid OOM on large
+	// knowledge bases. The cosine similarity sort and final truncation
+	// still happens in Go for portability (no pgvector dependency).
+	// TODO: migrate to pgvector for server-side similarity search.
+	const maxChunks = 500
+	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT c.id, c.doc_id, c.content, c.embedding 
 		FROM knowledge_chunks c
 		JOIN knowledge_documents d ON c.doc_id = d.id
-		WHERE d.org_id = $1`, orgID)
+		WHERE d.org_id = $1
+		LIMIT $2`, orgID, maxChunks)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +277,13 @@ func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID stri
 		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON); err != nil {
 			return nil, err
 		}
-		json.Unmarshal(embJSON, &c.Embedding)
+		if err := json.Unmarshal(embJSON, &c.Embedding); err != nil {
+			logger.Warn("corrupt embedding JSON", "chunk_id", c.ID, "error", err)
+		}
 		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate knowledge chunks: %w", err)
 	}
 
 	// Score each chunk once, then sort by score. Computing similarity inside the

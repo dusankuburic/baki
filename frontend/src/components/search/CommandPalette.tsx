@@ -1,6 +1,7 @@
-import {useState, useCallback, useMemo, useRef, useEffect} from 'react'
+import {useState, useMemo, useRef, useEffect} from 'react'
 import clsx from 'clsx'
 import {Kbd} from '@/components/shared'
+import {useListNavigation} from '@/hooks/useListNavigation'
 
 type Command = {
     id: string
@@ -18,17 +19,8 @@ type CommandPaletteProps = {
 
 export default function CommandPalette({isOpen, onClose, commands = []}: CommandPaletteProps) {
     const [query, setQuery] = useState('')
-    const [activeIndex, setActiveIndex] = useState(0)
     const inputRef = useRef<HTMLInputElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
-
-    useEffect(() => {
-        if (isOpen) {
-            setQuery('')
-            setActiveIndex(0)
-            requestAnimationFrame(() => inputRef.current?.focus())
-        }
-    }, [isOpen])
 
     const grouped = useMemo(() => {
         const lower = query.toLowerCase()
@@ -53,31 +45,28 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
         return items
     }, [grouped])
 
+    const {activeIndex, setActiveIndex, handleKeyDown} = useListNavigation({
+        count: flatItems.length,
+        onSelect: (i) => { flatItems[i]?.onSelect(); onClose() },
+        onClose,
+    })
+
+    useEffect(() => {
+        if (isOpen) {
+            setQuery('')
+            setActiveIndex(0)
+            requestAnimationFrame(() => inputRef.current?.focus())
+        }
+    }, [isOpen, setActiveIndex])
+
     useEffect(() => {
         setActiveIndex(0)
-    }, [query])
+    }, [query, setActiveIndex])
 
     useEffect(() => {
         const active = listRef.current?.querySelector('[data-active="true"]')
         active?.scrollIntoView({block: 'nearest'})
     }, [activeIndex])
-
-    const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-        if (e.key === 'ArrowDown') {
-            e.preventDefault()
-            setActiveIndex(prev => Math.min(prev + 1, flatItems.length - 1))
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault()
-            setActiveIndex(prev => Math.max(prev - 1, 0))
-        } else if (e.key === 'Enter' && flatItems[activeIndex]) {
-            e.preventDefault()
-            flatItems[activeIndex].onSelect()
-            onClose()
-        } else if (e.key === 'Escape') {
-            e.preventDefault()
-            onClose()
-        }
-    }, [flatItems, activeIndex, onClose])
 
     if (!isOpen) return null
 

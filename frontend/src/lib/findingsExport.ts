@@ -1,15 +1,6 @@
 import {analysisApi} from '@/api'
 import type {AnalysisReport} from '@/types/domain'
-
-function downloadBlob(content: string, mime: string, filename: string) {
-  const blob = new Blob([content], {type: mime})
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
+import {csvCell, downloadBlob} from '@/lib/csv'
 
 // exportFindingsCSV serializes the report's findings; shared by the
 // FindingsTab toolbar button and the analysis.export.csv command.
@@ -17,14 +8,14 @@ export function exportFindingsCSV(report: AnalysisReport, docId: string) {
   const rows = [['ID', 'Severity', 'Category', 'Title', 'Description', 'Block ID', 'Subflow ID', 'Suggestion']]
   for (const f of report.findings) {
     rows.push([
-      f.id,
-      f.severity,
-      f.category ?? '',
-      `"${f.title.replace(/"/g, '""')}"`,
-      `"${f.description.replace(/"/g, '""')}"`,
-      f.blockId,
-      f.subflowId,
-      f.suggestion ? `"${f.suggestion.replace(/"/g, '""')}"` : '',
+      csvCell(f.id),
+      csvCell(f.severity),
+      csvCell(f.category ?? ''),
+      csvCell(f.title),
+      csvCell(f.description),
+      csvCell(f.blockId),
+      csvCell(f.subflowId),
+      csvCell(f.suggestion ?? ''),
     ])
   }
   const csv = rows.map(r => r.join(',')).join('\n')

@@ -19,6 +19,10 @@ const (
 	EventBlockCreate EventType = "block.create"
 	EventBlockDelete EventType = "block.delete"
 
+	// Server-pushed notification that a flow was saved via HTTP and all
+	// viewers should reload to pick up the new content + version.
+	EventFlowChanged EventType = "flow.changed"
+
 	// System events
 	EventError EventType = "error"
 	EventPing  EventType = "ping"
@@ -56,11 +60,17 @@ type BlockPayload struct {
 	SubflowID  string         `json:"subflowId"`
 	Properties map[string]any `json:"properties,omitempty"`
 	// Version is the optimistic-concurrency version number.
-	Version int64 `json:"version"`
+	Version int `json:"version"`
 }
 
 // ErrorPayload is sent to a single client when a request cannot be fulfilled.
 type ErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// FlowChangedPayload is broadcast to all clients in a room after a flow is
+// saved via HTTP, so they can reload the content and sync the new version.
+type FlowChangedPayload struct {
+	Version int `json:"version"`
 }

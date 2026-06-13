@@ -4,7 +4,7 @@ import {FindingsTab} from '@/components/findings'
 import {SharingTab} from '@/components/inspector/SharingTab'
 import {HistoryTab} from '@/components/inspector/HistoryTab'
 import {useUIStore} from '@/stores/uiStore'
-import {Spinner} from '@/components/shared'
+import {Spinner, ErrorBoundary} from '@/components/shared'
 import ResizableChatPanel from '@/components/chat/ResizableChatPanel'
 
 // AITab transitively pulls react-markdown + react-syntax-highlighter; lazy
@@ -21,9 +21,11 @@ export default function InspectorPanel() {
                 {tab === 'details' && <DetailsTab />}
                 {tab === 'ai' && (
                     <ResizableChatPanel>
+                        <ErrorBoundary>
                         <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Spinner /></div>}>
                             <AITab />
                         </Suspense>
+                        </ErrorBoundary>
                     </ResizableChatPanel>
                 )}
                 {tab === 'findings' && <FindingsTab />}

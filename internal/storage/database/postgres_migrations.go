@@ -49,10 +49,16 @@ CREATE TABLE IF NOT EXISTS users (
 	email       TEXT        UNIQUE NOT NULL,
 	password    TEXT        NOT NULL,
 	role        TEXT        NOT NULL,
+	email_verified BOOLEAN    NOT NULL DEFAULT FALSE,
+	failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+	locked_until TIMESTAMPTZ,
 	created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- Profile fields (added post-1.0; ALTER for existing deployments).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT '';
 
@@ -65,8 +71,11 @@ CREATE TABLE IF NOT EXISTS flows (
 	owner_id    TEXT        NOT NULL DEFAULT '',
 	org_id      TEXT        NOT NULL DEFAULT '',
 	created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-	updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	version     INTEGER     NOT NULL DEFAULT 0
 );
+-- OCC version column (added post-1.0; ALTER for existing deployments).
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS flows_owner_id_idx ON flows (owner_id);
 CREATE INDEX IF NOT EXISTS flows_org_id_idx   ON flows (org_id);
 -- Supports ORDER BY updated_at DESC on every list query (avoids full-scan sort).
@@ -157,6 +166,24 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens (user_id);
 
+CREATE TABLE IF NOT EXISTS token_blacklist (
+	jti        TEXT        PRIMARY KEY,
+	expires_at TIMESTAMPTZ NOT NULL
+);
+
+-- identity_links maps external IdP identities (OIDC provider + subject) to
+-- local users for SSO login. A user may have links from several providers;
+-- one external identity maps to exactly one local user.
+CREATE TABLE IF NOT EXISTS identity_links (
+	provider   TEXT        NOT NULL,
+	subject    TEXT        NOT NULL,
+	user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	email      TEXT        NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (provider, subject)
+);
+CREATE INDEX IF NOT EXISTS identity_links_user_id_idx ON identity_links (user_id);
+
 CREATE TABLE IF NOT EXISTS provider_keys (
 	user_id    TEXT        NOT NULL DEFAULT '',
 	provider   TEXT        NOT NULL,
@@ -228,6 +255,51 @@ BEGIN
 	END IF;
 END $$;
 
+-- Purge orphaned rows before adding FKs (existing deployments may have stale data).
+DELETE FROM flow_collaborators c WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = c.user_id);
+
+DO $$
+BEGIN
+	-- flow_collaborators.user_id → users.id  ON DELETE CASCADE
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_constraint
+		WHERE conrelid = 'flow_collaborators'::regclass AND contype = 'f'
+		  AND conname = 'flow_collaborators_user_id_fkey'
+	) THEN
+		ALTER TABLE flow_collaborators
+			ADD CONSTRAINT flow_collaborators_user_id_fkey
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+	END IF;
+
+END $$;
+
+-- NOTE: flows.org_id and flows.owner_id intentionally have NO foreign key.
+-- Both use '' as a sentinel ("no org" / "ownerless, read-only"), and '' matches
+-- no row in organisations(id)/users(id), so a FK would reject every personal-flow
+-- insert; ON DELETE SET NULL also cannot null a NOT NULL column. These
+-- relationships are enforced at the service layer. Drop the constraints if an
+-- earlier build installed the (broken) versions.
+ALTER TABLE flows DROP CONSTRAINT IF EXISTS flows_org_id_fkey;
+ALTER TABLE flows DROP CONSTRAINT IF EXISTS flows_owner_id_fkey;
+
+-- NOTE: conversations.flow_id intentionally has NO foreign key to flows. A
+-- conversation can exist for a flow that was never persisted to the library
+-- (e.g. chatting about an uploaded/unsaved flow), which the storage contract
+-- requires both backends to support. A FK (and the matching startup orphan
+-- purge) would reject those saves and silently delete legitimate rows. Drop the
+-- constraint if an earlier build installed it.
+ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_flow_id_fkey;
+
+-- Composite indexes for sorted tenant queries (list flows by owner/org, ordered by recency).
+CREATE INDEX IF NOT EXISTS flows_owner_updated_idx ON flows (owner_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS flows_org_updated_idx    ON flows (org_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS knowledge_docs_org_idx   ON knowledge_documents (org_id);
+
+-- Drop redundant indexes (covered by PK or UNIQUE constraint).
+DROP INDEX IF EXISTS flow_collaborators_flow_id_idx;
+DROP INDEX IF EXISTS flow_collaborators_flow_user_idx;
+DROP INDEX IF EXISTS flow_versions_flow_id_idx;
+
 CREATE TABLE IF NOT EXISTS audit_events (
 	id            TEXT        PRIMARY KEY,
 	user_id       TEXT        NOT NULL DEFAULT '',
@@ -255,4 +327,142 @@ CREATE TABLE IF NOT EXISTS flow_versions (
 	UNIQUE (flow_id, version)
 );
 CREATE INDEX IF NOT EXISTS flow_versions_flow_id_idx ON flow_versions (flow_id);
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- Row-Level Security (defense-in-depth)
+--
+-- RLS policies supplement the Go-layer authz checks. If a code path
+-- accidentally omits a WHERE clause, RLS prevents cross-tenant data leaks at
+-- the database level. The policies read the session variable set by the RLS
+-- middleware (app.current_user_id). When the variable is empty (migrations,
+-- local mode, superuser), all rows are visible so existing operations are not
+-- disrupted.
+-- ──────────────────────────────────────────────────────────────────────────────
+
+-- app_current_user_id() returns the per-request user id the Go RLS middleware
+-- installs via set_config('app.current_user_id', ...). It is NULL/'' when unset.
+CREATE OR REPLACE FUNCTION app_current_user_id() RETURNS text
+    LANGUAGE sql STABLE AS $fn$ SELECT current_setting('app.current_user_id', true) $fn$;
+
+-- app_rls_active() is true only when a non-empty user context is set; every
+-- policy short-circuits to "allow" when it is false (migrations, local mode,
+-- background jobs, superuser). This MUST be a coalesce()-based check rather than
+-- an inline current_setting(...) = '' comparison: an unset GUC returns NULL, and
+-- NULL = '' is NULL, which RLS treats as deny — so the naive form would hide
+-- every row on any pooled query that runs without a user context.
+CREATE OR REPLACE FUNCTION app_rls_active() RETURNS boolean
+    LANGUAGE sql STABLE AS $fn$ SELECT coalesce(current_setting('app.current_user_id', true), '') <> '' $fn$;
+
+-- Enable AND force RLS on every tenant-scoped table. FORCE is required because
+-- the application connects as the role that owns these tables, and a table owner
+-- bypasses non-forced RLS entirely.
+ALTER TABLE flows               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flows               FORCE  ROW LEVEL SECURITY;
+ALTER TABLE conversations       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations       FORCE  ROW LEVEL SECURITY;
+ALTER TABLE flow_versions       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_versions       FORCE  ROW LEVEL SECURITY;
+ALTER TABLE knowledge_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_documents FORCE  ROW LEVEL SECURITY;
+ALTER TABLE knowledge_chunks    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_chunks    FORCE  ROW LEVEL SECURITY;
+
+-- flow_collaborators is a GRANT table (like org_members): every other table's
+-- policy reads it to test "is the caller a collaborator?". Giving it its own RLS
+-- policy makes flows ⇄ flow_collaborators mutually recursive, which Postgres
+-- rejects at query time ("infinite recursion detected in policy"). It also would
+-- be self-defeating — a policy hiding the very rows the membership check needs.
+-- So it is deliberately left WITHOUT RLS; access is gated at the service layer.
+ALTER TABLE flow_collaborators  DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS rls_flow_collaborators_visible ON flow_collaborators;
+
+-- Policies are dropped and recreated on every migration so that body changes
+-- always take effect. (CREATE POLICY has no OR REPLACE form, and an earlier
+-- IF NOT EXISTS guard would pin stale bodies on already-migrated deployments.)
+
+-- ── flows: owner, collaborator, or org member ──
+DROP POLICY IF EXISTS rls_flows_visible ON flows;
+CREATE POLICY rls_flows_visible ON flows FOR ALL USING (
+    NOT app_rls_active()
+    OR owner_id = app_current_user_id()
+    OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = flows.id AND fc.user_id = app_current_user_id())
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = flows.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR owner_id = app_current_user_id()
+    OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = flows.id AND fc.user_id = app_current_user_id())
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = flows.org_id AND om.user_id = app_current_user_id())
+);
+
+-- ── conversations: inherit the parent flow's visibility ──
+DROP POLICY IF EXISTS rls_conversations_visible ON conversations;
+CREATE POLICY rls_conversations_visible ON conversations FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = conversations.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = conversations.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+);
+
+-- ── flow_versions: inherit the parent flow's visibility ──
+DROP POLICY IF EXISTS rls_flow_versions_visible ON flow_versions;
+CREATE POLICY rls_flow_versions_visible ON flow_versions FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_versions.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_versions.flow_id
+          AND ( f.owner_id = app_current_user_id()
+             OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+             OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()) )
+    )
+);
+
+-- ── knowledge_documents: org-scoped ──
+DROP POLICY IF EXISTS rls_knowledge_docs_visible ON knowledge_documents;
+CREATE POLICY rls_knowledge_docs_visible ON knowledge_documents FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = knowledge_documents.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = knowledge_documents.org_id AND om.user_id = app_current_user_id())
+);
+
+-- ── knowledge_chunks: inherit the parent document's org ──
+DROP POLICY IF EXISTS rls_knowledge_chunks_visible ON knowledge_chunks;
+CREATE POLICY rls_knowledge_chunks_visible ON knowledge_chunks FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM knowledge_documents kd
+        WHERE kd.id = knowledge_chunks.doc_id
+          AND EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = kd.org_id AND om.user_id = app_current_user_id())
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM knowledge_documents kd
+        WHERE kd.id = knowledge_chunks.doc_id
+          AND EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = kd.org_id AND om.user_id = app_current_user_id())
+    )
+);
 `

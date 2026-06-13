@@ -1,5 +1,6 @@
 import {create} from 'zustand'
 import type {AnalysisReport, Severity, Finding, VariableHistory} from '@/types/domain'
+import {toggleSetMember} from '@/lib/collections'
 
 export type FindingCategory = 'Security' | 'Reliability' | 'Performance' | 'Style' | 'Logic'
 
@@ -14,6 +15,7 @@ export interface SuppressedFinding {
 interface AnalysisState {
   reports: Map<string, AnalysisReport>
   isAnalyzing: boolean
+  analyzingGen: number
   progress: {current: number; total: number; ruleName: string}
   severityFilter: Set<Severity>
   categoryFilter: Set<FindingCategory>
@@ -23,6 +25,7 @@ interface AnalysisState {
 
   setReport: (flowId: string, report: AnalysisReport) => void
   setAnalyzing: (b: boolean) => void
+  beginAnalyzing: () => number
   setProgress: (p: {current: number; total: number; ruleName: string}) => void
   toggleSeverityFilter: (s: Severity) => void
   setSeverityFilter: (s: Set<Severity>) => void
@@ -41,6 +44,7 @@ interface AnalysisState {
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   reports: new Map(),
   isAnalyzing: false,
+  analyzingGen: 0,
   progress: {current: 0, total: 0, ruleName: ''},
   severityFilter: new Set(['error', 'warning', 'info']),
   categoryFilter: new Set<FindingCategory>(['Security', 'Reliability', 'Performance', 'Style', 'Logic']),
@@ -56,21 +60,23 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setAnalyzing: (b) => set({isAnalyzing: b}),
 
+  beginAnalyzing: () => {
+    const gen = get().analyzingGen + 1
+    set({isAnalyzing: true, analyzingGen: gen})
+    return gen
+  },
+
   setProgress: (p) => set({progress: p}),
 
-  toggleSeverityFilter: (s) => set(state => {
-    const next = new Set(state.severityFilter)
-    if (next.has(s)) { next.delete(s) } else { next.add(s) }
-    return {severityFilter: next}
-  }),
+  toggleSeverityFilter: (s) => set(state => ({
+    severityFilter: toggleSetMember(state.severityFilter, s),
+  })),
 
   setSeverityFilter: (s) => set({severityFilter: new Set(s)}),
 
-  toggleCategoryFilter: (c) => set(state => {
-    const next = new Set(state.categoryFilter)
-    if (next.has(c)) { next.delete(c) } else { next.add(c) }
-    return {categoryFilter: next}
-  }),
+  toggleCategoryFilter: (c) => set(state => ({
+    categoryFilter: toggleSetMember(state.categoryFilter, c),
+  })),
 
   setCategoryFilter: (c) => set({categoryFilter: new Set(c)}),
 

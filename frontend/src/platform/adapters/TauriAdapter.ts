@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import {logger} from '@/lib/logger';
 import type {
   PlatformAdapter,
   BackendConfig,
@@ -58,7 +59,7 @@ export class TauriAdapter implements PlatformAdapter {
 
       return result || null;
     } catch (error) {
-      console.error('File open failed:', error);
+      logger.warn('File open failed:', error);
       return null;
     }
   }
@@ -72,7 +73,7 @@ export class TauriAdapter implements PlatformAdapter {
       if (!result) return null;
       return Array.isArray(result) ? result[0] : result;
     } catch (error) {
-      console.error('Directory open failed:', error);
+      logger.warn('Directory open failed:', error);
       return null;
     }
   }
@@ -88,7 +89,7 @@ export class TauriAdapter implements PlatformAdapter {
       });
       return result || null;
     } catch (error) {
-      console.error('File save failed:', error);
+      logger.warn('File save failed:', error);
       return null;
     }
   }
@@ -100,7 +101,7 @@ export class TauriAdapter implements PlatformAdapter {
     try {
       await shellOpen(path);
     } catch (error) {
-      console.error('Failed to reveal file:', error);
+      logger.warn('Failed to reveal file:', error);
       throw error;
     }
   }
@@ -112,7 +113,7 @@ export class TauriAdapter implements PlatformAdapter {
     try {
       await shellOpen(url);
     } catch (error) {
-      console.error('Failed to open URL:', error);
+      logger.warn('Failed to open URL:', error);
       throw error;
     }
   }

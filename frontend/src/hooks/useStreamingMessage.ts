@@ -136,6 +136,10 @@ export function useStreamingMessage(handler: StreamHandler) {
     return () => {
       if (unregisterRef.current) unregisterRef.current()
       if (unregisterConnRef.current) unregisterConnRef.current()
+      if (streamIdRef.current) {
+        chatApi.cancelStream(streamIdRef.current).catch(() => {})
+        useChatStore.getState().endStream()
+      }
     }
   }, [])
 

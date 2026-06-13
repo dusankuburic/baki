@@ -66,6 +66,10 @@ type StorageConfig struct {
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
 	DBConnMaxLifetime string // duration string, e.g. "1h"
+
+	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
+	AzureStorageAccount   string
+	AzureStorageContainer string
 }
 
 type RuntimeConfig struct {
@@ -117,6 +121,34 @@ type AuthConfig struct {
 	Enabled bool
 	// Secret is the JWT signing key (required when Enabled == true)
 	Secret string
+	// SSO configures account-level OIDC login (cloud mode only)
+	SSO SSOConfig
+}
+
+// SSOConfig holds OIDC single-sign-on settings. SSO is enabled when
+// IssuerURL, ClientID, and RedirectURL are all set (and auth is enabled).
+// Works with any OIDC-compliant IdP via discovery: Microsoft Entra ID,
+// Google, Okta, Keycloak, etc.
+type SSOConfig struct {
+	// IssuerURL is the OIDC issuer, e.g.
+	// https://login.microsoftonline.com/{tenant}/v2.0 or https://accounts.google.com.
+	// The discovery document is fetched from {IssuerURL}/.well-known/openid-configuration.
+	IssuerURL string
+	// ClientID is the OAuth2 client ID from the IdP app registration.
+	ClientID string
+	// ClientSecret is optional — leave empty for public clients using PKCE only.
+	ClientSecret string
+	// RedirectURL is the absolute callback URL registered with the IdP,
+	// e.g. https://app.example.com/api/auth/sso/callback.
+	RedirectURL string
+	// ProviderName is the display label and the identity_links.provider key.
+	// Defaults to "sso". Changing it after users have linked breaks their links.
+	ProviderName string
+}
+
+// Enabled reports whether SSO is fully configured.
+func (s SSOConfig) Enabled() bool {
+	return s.IssuerURL != "" && s.ClientID != "" && s.RedirectURL != ""
 }
 
 // Default returns a sensible local-mode configuration

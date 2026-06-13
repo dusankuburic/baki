@@ -9,26 +9,9 @@ import VariableLineageInInspector from './VariableLineageInInspector'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
-import type {FlowDocument, Block, VariableHistory} from '@/types/domain'
-
-function findBlockAndSubflow(doc: FlowDocument, blockId: string): {block: Block; subflowName: string} | null {
-    for (const sf of doc.subflows) {
-        const found = findInTree(sf.blocks, blockId)
-        if (found) return {block: found, subflowName: sf.name}
-    }
-    return null
-}
-
-function findInTree(blocks: Block[], id: string): Block | null {
-    for (const b of blocks) {
-        if (b.id === id) return b
-        if (b.children?.length) {
-            const found = findInTree(b.children, id)
-            if (found) return found
-        }
-    }
-    return null
-}
+import {findBlockInDoc} from '@/lib/tree'
+import {logger} from '@/lib/logger'
+import type {VariableHistory} from '@/types/domain'
 
 export default function DetailsTab() {
     const document = useFlowStore(s => s.document)
@@ -48,7 +31,7 @@ export default function DetailsTab() {
         )
     }
 
-    const result = findBlockAndSubflow(document, selectedBlockId)
+    const result = findBlockInDoc(document, selectedBlockId)
     if (!result) return null
     const {block, subflowName} = result
 
@@ -58,7 +41,7 @@ export default function DetailsTab() {
             const h = await analysisApi.getVariableLineage(name)
             useAnalysisStore.getState().setVariableLineage(h as unknown as VariableHistory)
         } catch (err) {
-            console.error('Failed to get lineage:', err)
+            logger.warn('Failed to get lineage:', err)
         }
     }
 

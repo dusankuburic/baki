@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Search, RefreshCw } from 'lucide-react'
 import { libraryApi, type LibraryFlow, type LibraryFilter } from '@/api/library'
+import { useOrgStore } from '@/stores/orgStore'
 import FlowCard from './FlowCard'
 import Input from '@/components/shared/Input'
 import Button from '@/components/shared/Button'
@@ -12,7 +13,11 @@ interface LibraryBrowserProps {
   className?: string
 }
 
-export default function LibraryBrowser({ orgId, onFlowOpen, className }: LibraryBrowserProps) {
+export default function LibraryBrowser({ orgId: orgIdProp, onFlowOpen, className }: LibraryBrowserProps) {
+  // An explicit prop wins (embedded usages); otherwise follow the global
+  // org switcher. null/undefined means the personal library.
+  const storeOrgId = useOrgStore(s => s.activeOrgId)
+  const orgId = orgIdProp ?? storeOrgId ?? undefined
   const [flows, setFlows] = useState<LibraryFlow[]>([])
   const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -49,6 +51,10 @@ type azureRefreshState struct {
 type PostgresStorageBackend struct {
 	db           *sql.DB
 	azureRefresh *azureRefreshState // non-nil when using Azure Managed Identity
+	stopCh       chan struct{}
+
+	blobClient *azblob.Client
+	container  string
 }
 
 // Config holds the connection settings for the PostgreSQL backend.
@@ -57,6 +63,10 @@ type Config struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+
+	// Azure Blob Storage configuration (optional)
+	AzureStorageAccount   string
+	AzureStorageContainer string
 }
 
 // DefaultConfig returns conservative connection-pool defaults.
@@ -79,7 +89,23 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
 
-	b := &PostgresStorageBackend{}
+	b := &PostgresStorageBackend{stopCh: make(chan struct{})}
+
+	// Initialize Azure Blob Storage if configured
+	if cfg.AzureStorageAccount != "" && cfg.AzureStorageContainer != "" {
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, fmt.Errorf("azure: failed to obtain credential for blob storage: %w", err)
+		}
+		serviceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", cfg.AzureStorageAccount)
+		client, err := azblob.NewClient(serviceURL, cred, nil)
+		if err != nil {
+			return nil, fmt.Errorf("azure: failed to create blob client: %w", err)
+		}
+		b.blobClient = client
+		b.container = cfg.AzureStorageContainer
+		slog.Info("azure: blob storage enabled", "account", cfg.AzureStorageAccount, "container", cfg.AzureStorageContainer)
+	}
 
 	connStr := stdlib.RegisterConnConfig(pgxCfg)
 
@@ -123,7 +149,7 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	}
 
 	if b.azureRefresh != nil {
-		go b.runAzureTokenRefresh(ctx)
+		go b.runAzureTokenRefresh()
 	}
 
 	return b, nil
@@ -137,15 +163,15 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 //
 // The pgxCfg.Password field is mutated under azureRefresh.mu because pgx may
 // read it concurrently when opening new pooled connections.
-func (b *PostgresStorageBackend) runAzureTokenRefresh(ctx context.Context) {
+func (b *PostgresStorageBackend) runAzureTokenRefresh() {
 	ticker := time.NewTicker(20 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-b.stopCh:
 			return
 		case <-ticker.C:
-			token, err := b.azureRefresh.provider.GetToken(ctx)
+			token, err := b.azureRefresh.provider.GetToken(context.Background())
 			if err != nil {
 				slog.Error("azure: managed identity token refresh failed", "err", err)
 				continue
@@ -163,6 +189,7 @@ func (b *PostgresStorageBackend) Ping(ctx context.Context) error {
 }
 
 func (b *PostgresStorageBackend) Close() error {
+	close(b.stopCh)
 	return b.db.Close()
 }
 

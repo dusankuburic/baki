@@ -620,6 +620,9 @@ func (lsb *ChatService) ClearConversation(doc *models.FlowDocument, provider str
 }
 
 func (lsb *ChatService) ExportConversation(doc *models.FlowDocument, provider string, path string) error {
+	if err := validateUserPath(path); err != nil {
+		return err
+	}
 	msgs, err := lsb.GetConversation(doc, provider)
 	if err != nil {
 		return err

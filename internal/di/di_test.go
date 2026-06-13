@@ -1,10 +1,17 @@
 package di
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/service"
+	"pad-analyzer/internal/storage/filesystem"
+	storageif "pad-analyzer/internal/storage/interfaces"
+	wshub "pad-analyzer/internal/websocket"
 )
 
 func TestProvideDocumentProvider(t *testing.T) {
@@ -98,8 +105,55 @@ func TestProvideASTCache(t *testing.T) {
 func TestProvideFlowAccessChecker_NilBackend(t *testing.T) {
 	t.Parallel()
 
-	got := ProvideFlowAccessChecker(nil)
+	got := ProvideFlowAccessChecker(nil, nil)
 	if got != nil {
 		t.Fatalf("expected nil when backend is nil, got %T", got)
+	}
+}
+
+// TestFlowAccessChecker_TranslatesServiceErrors verifies the DI adapter maps
+// service-layer authz errors onto the websocket package's sentinels.
+func TestFlowAccessChecker_TranslatesServiceErrors(t *testing.T) {
+	t.Parallel()
+
+	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+	orgSvc := collaboration.NewOrgService(collaboration.NewMemOrgStore())
+	authz := service.NewAuthzService(fs, orgSvc)
+	checker := ProvideFlowAccessChecker(authz, fs)
+	if checker == nil {
+		t.Fatal("expected non-nil checker with backend")
+	}
+
+	ctx := context.Background()
+	doc := &storageif.FlowDocument{ID: "f1", Name: "f", OwnerID: "alice"}
+	if err := fs.SaveFlow(ctx, doc); err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
+	org, err := orgSvc.Create(ctx, "acme", "alice")
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	orgDoc := &storageif.FlowDocument{ID: "f2", Name: "f", OwnerID: "alice", OrganizationID: org.ID}
+	if err := fs.SaveFlow(ctx, orgDoc); err != nil {
+		t.Fatalf("seed org flow: %v", err)
+	}
+	if err := orgSvc.AddMember(ctx, org.ID, "bob", auth.RoleViewer); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	if err := checker.CheckAccess(ctx, "f1", "alice"); err != nil {
+		t.Errorf("owner should join: %v", err)
+	}
+	if err := checker.CheckAccess(ctx, "f2", "bob"); err != nil {
+		t.Errorf("org member should join: %v", err)
+	}
+	if err := checker.CheckAccess(ctx, "f1", "mallory"); !errors.Is(err, wshub.ErrAccessDenied) {
+		t.Errorf("expected ErrAccessDenied for stranger, got %v", err)
+	}
+	if err := checker.CheckAccess(ctx, "missing", "alice"); !errors.Is(err, wshub.ErrFlowNotFound) {
+		t.Errorf("expected ErrFlowNotFound for missing flow, got %v", err)
 	}
 }

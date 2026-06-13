@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,14 +16,28 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
+// FlowNotifier broadcasts a flow-changed notification to connected WebSocket
+// clients after a library flow is saved. In local mode (no WebSocket hub)
+// the value is nil and the notification is skipped.
+type FlowNotifier interface {
+	NotifyFlowChanged(flowID string, version int)
+}
+
 type LibraryHandler struct {
 	libSvc   *service.LibraryService
 	security *SecurityConfig
 	backend  storageif.StorageBackend
+	notifier FlowNotifier
 }
 
 func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.StorageBackend, security *SecurityConfig) *LibraryHandler {
 	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend}
+}
+
+// SetFlowNotifier wires the WebSocket hub so that library saves broadcast
+// a flow.changed event to all connected viewers.
+func (h *LibraryHandler) SetFlowNotifier(n FlowNotifier) {
+	h.notifier = n
 }
 
 type libraryFlow struct {
@@ -32,15 +47,22 @@ type libraryFlow struct {
 	OwnerID          string    `json:"ownerId"`
 	OwnerDisplayName string    `json:"ownerDisplayName,omitempty"`
 	IsSharedWithMe   bool      `json:"isSharedWithMe"`
+	CanEdit          bool      `json:"canEdit"`
+	CanDelete        bool      `json:"canDelete"`
+	CanShare         bool      `json:"canShare"`
 	BlockCount       int       `json:"blockCount"`
 	SubflowCount     int       `json:"subflowCount"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	Version          int       `json:"version"`
 }
 
-// toLibraryFlow builds the list/response DTO. ownerName must be pre-resolved by
-// the caller (use ResolveOwnerName for single items, ResolveOwnerNames for lists)
-// so that list endpoints don't issue one user query per row (N+1).
-func (h *LibraryHandler) toLibraryFlow(doc *storageif.FlowDocument, requestingUserID, ownerName string) libraryFlow {
+func (h *LibraryHandler) toLibraryFlow(ctx context.Context, doc *storageif.FlowDocument, requestingUserID, ownerName string) libraryFlow {
+	canEdit, canDelete, canShare := true, true, true
+	if h.security != nil && h.security.JWTEnabled {
+		// One pass instead of three separate CheckFlowAccess calls per flow.
+		canEdit, canDelete, canShare = h.libSvc.FlowPermissions(ctx, doc, requestingUserID)
+	}
+
 	return libraryFlow{
 		ID:               doc.ID,
 		Name:             doc.Name,
@@ -48,9 +70,31 @@ func (h *LibraryHandler) toLibraryFlow(doc *storageif.FlowDocument, requestingUs
 		OwnerID:          doc.OwnerID,
 		OwnerDisplayName: ownerName,
 		IsSharedWithMe:   doc.OwnerID != requestingUserID,
+		CanEdit:          canEdit,
+		CanDelete:        canDelete,
+		CanShare:         canShare,
 		BlockCount:       doc.Metadata.BlockCount,
 		SubflowCount:     doc.Metadata.SubflowCount,
 		UpdatedAt:        doc.UpdatedAt,
+		Version:          doc.Version,
+	}
+}
+
+func (h *LibraryHandler) toLibraryFlowWithPerms(doc *storageif.FlowDocument, requestingUserID, ownerName string, perms service.PermFlags) libraryFlow {
+	return libraryFlow{
+		ID:               doc.ID,
+		Name:             doc.Name,
+		Description:      doc.Description,
+		OwnerID:          doc.OwnerID,
+		OwnerDisplayName: ownerName,
+		IsSharedWithMe:   doc.OwnerID != requestingUserID,
+		CanEdit:          perms.CanEdit,
+		CanDelete:        perms.CanDelete,
+		CanShare:         perms.CanShare,
+		BlockCount:       doc.Metadata.BlockCount,
+		SubflowCount:     doc.Metadata.SubflowCount,
+		UpdatedAt:        doc.UpdatedAt,
+		Version:          doc.Version,
 	}
 }
 
@@ -65,7 +109,7 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 
 	docs, err := h.libSvc.ListLibraryFlows(r.Context(), userID, orgID, query, limit, offset)
 	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+		render.Error(w, err, 0)
 		return
 	}
 
@@ -78,13 +122,24 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	}
 	ownerNames := h.libSvc.ResolveOwnerNames(r.Context(), ownerIDs)
 
+	// Batch-resolve all per-flow permission flags in O(orgs + 1) queries
+	// instead of O(flows).
+	perms := h.libSvc.BatchFlowPermissions(r.Context(), docs, userID)
+
 	items := make([]libraryFlow, len(docs))
 	for i, d := range docs {
-		items[i] = h.toLibraryFlow(d, userID, ownerNames[d.OwnerID])
+		p := perms[d.ID]
+		items[i] = h.toLibraryFlowWithPerms(d, userID, ownerNames[d.OwnerID], p)
+	}
+
+	total, err := h.libSvc.CountLibraryFlows(r.Context(), userID, orgID, query)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
 	}
 	render.JSON(w, render.PagedResponse[libraryFlow]{
 		Items:  items,
-		Total:  offset + len(items), // approximation; replace when storage adds COUNT
+		Total:  total,
 		Offset: offset,
 		Limit:  limit,
 	})
@@ -119,11 +174,14 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 	}
 	saved, err := h.libSvc.CreateLibraryFlow(r.Context(), userID, req.OrgID, doc)
 	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+		render.Error(w, err, 0)
 		return
 	}
+	if req.OrgID != "" {
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowSave, "flow", saved.ID, map[string]string{"orgId": req.OrgID})
+	}
 	w.WriteHeader(http.StatusCreated)
-	render.JSON(w, h.toLibraryFlow(saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
+	render.JSON(w, h.toLibraryFlow(r.Context(), saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
 }
 
 func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +193,7 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 		render.Error(w, err, 0)
 		return
 	}
-	render.JSON(w, h.toLibraryFlow(doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID)))
+	render.JSON(w, h.toLibraryFlow(r.Context(), doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID)))
 }
 
 func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +207,7 @@ func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Flow-Version", strconv.Itoa(doc.Version))
 	payload := doc.Content
 	if len(payload) == 0 {
 		payload = []byte("null")
@@ -164,6 +223,7 @@ func (h *LibraryHandler) handleLibraryDelete(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, 0)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowDelete, "flow", id, nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -171,7 +231,9 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
 
-	existing, err := h.libSvc.GetLibraryFlow(r.Context(), id)
+	// Read-gate before the write-gate inside UpdateLibraryFlow: callers without
+	// read access get a 403 without learning the flow's name/description.
+	existing, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -181,6 +243,7 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Content     json.RawMessage `json:"content"`
+		Version     int             `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -196,12 +259,18 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	if len(req.Content) > 0 {
 		existing.Content = req.Content
 	}
+	// Use the client's version for OCC (what they loaded). Version 0 means
+	// the client didn't send one — skip the check for backward compatibility.
+	existing.Version = req.Version
 
 	if err := h.libSvc.UpdateLibraryFlow(r.Context(), existing, userID); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	render.JSON(w, h.toLibraryFlow(existing, userID, h.libSvc.ResolveOwnerName(r.Context(), existing.OwnerID)))
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(existing.ID, existing.Version)
+	}
+	render.JSON(w, h.toLibraryFlow(r.Context(), existing, userID, h.libSvc.ResolveOwnerName(r.Context(), existing.OwnerID)))
 }
 
 // handleListFlowVersions returns the version history for a library flow.
@@ -240,6 +309,11 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 
 	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
 	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	if err := h.libSvc.CanWrite(r.Context(), doc, userID); err != nil {
 		render.Error(w, err, 0)
 		return
 	}

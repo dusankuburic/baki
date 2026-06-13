@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import {analysisApi} from '@/api'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
+import {logger} from '@/lib/logger'
 
 import {ExternalLink, Variable as VariableIcon, Hash} from 'lucide-react'
 import {Tooltip} from '@/components/shared'
@@ -121,7 +122,7 @@ function VariableToken({token}: {token: BlockToken}) {
                 setVariablePanelOpen(true)
             }
         } catch (err) {
-            console.error('Failed to get variable lineage:', err)
+            logger.warn('Failed to get variable lineage:', err)
         }
     }
 

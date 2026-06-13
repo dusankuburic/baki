@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -22,10 +24,14 @@ type AuthHandler struct {
 	tokenStore RefreshTokenStore
 	backend    storageif.StorageBackend
 	security   *SecurityConfig
+	// ssoClient and identityStore are nil unless OIDC SSO is configured
+	// (cloud mode with PAD_SSO_* set and a Postgres backend).
+	ssoClient     SSOClient
+	identityStore IdentityStore
 }
 
-func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig) *AuthHandler {
-	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security}
+func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identityStore IdentityStore) *AuthHandler {
+	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security, ssoClient: ssoClient, identityStore: identityStore}
 }
 
 func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +49,8 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := validateEmail(req.Email); err != nil {
+	email, err := validateEmail(req.Email)
+	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -65,7 +72,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 
 	user := &storageif.User{
 		ID:       uuid.NewString(),
-		Email:    req.Email,
+		Email:    email,
 		Password: hashed,
 		// CreateUser atomically promotes the very first user to RoleAdmin
 		// (count + insert in one transaction/lock), so there is always an
@@ -78,6 +85,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRegister, "user", user.ID, nil)
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"user": map[string]any{
@@ -103,20 +111,62 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	email, _ := validateEmail(req.Email) // normalization only here; load handles mismatch
+
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return
 	}
 
-	user, err := h.backend.LoadUserByEmail(r.Context(), req.Email)
+	user, err := h.backend.LoadUserByEmail(r.Context(), email)
 	if err != nil {
+		// Log failed attempt for non-existent user (but return generic error)
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "email", email, map[string]string{"reason": "user_not_found"})
+
+		// SECURITY: perform a dummy check to prevent timing attacks that
+		// leak whether an email exists. bcrypt is expensive; if we
+		// return immediately for non-existent users, attackers can
+		// enumerate your user list.
+		auth.CheckPasswordHash(req.Password, "$2a$12$R.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v")
+
 		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
 		return
 	}
 
+	// SECURITY: check if account is temporarily locked due to brute-force
+	if user.LockedUntil != nil && time.Now().UTC().Before(*user.LockedUntil) {
+		diff := time.Until(*user.LockedUntil).Round(time.Second)
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", user.ID, map[string]string{"reason": "locked"})
+		render.Error(w, fmt.Errorf("account temporarily locked; please try again in %s", diff), http.StatusForbidden)
+		return
+	}
+
 	if !auth.CheckPasswordHash(req.Password, user.Password) {
+		// Increment failed attempts
+		user.FailedLoginAttempts++
+		if user.FailedLoginAttempts >= 5 {
+			// Lock for 15 minutes
+			until := time.Now().UTC().Add(15 * time.Minute)
+			user.LockedUntil = &until
+			logger.Warn("account locked due to too many failed login attempts", "email", user.Email, "userID", user.ID)
+			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAccountLock, "user", user.ID, nil)
+		}
+		if err := h.backend.SaveUser(r.Context(), user); err != nil {
+			logger.Error("failed to update failed login attempts", "error", err, "userID", user.ID)
+		}
+
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", user.ID, map[string]string{"reason": "invalid_password"})
 		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
 		return
+	}
+
+	// Reset failed attempts on successful login
+	if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
+		user.FailedLoginAttempts = 0
+		user.LockedUntil = nil
+		if err := h.backend.SaveUser(r.Context(), user); err != nil {
+			logger.Error("failed to reset failed login attempts", "error", err, "userID", user.ID)
+		}
 	}
 
 	pair, err := h.security.AuthMgr.Issue(user.ID, user.Email, user.Role)
@@ -154,10 +204,23 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 
 	if h.tokenStore != nil {
 		valid, err := h.tokenStore.IsRefreshTokenValid(r.Context(), claims.ID)
-		if err != nil || !valid {
-			render.Error(w, fmt.Errorf("invalid or revoked refresh token"), http.StatusUnauthorized)
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
+		if !valid {
+			// SECURITY: a revoked token was presented. This strongly suggests
+			// a token replay attack (e.g. an attacker stole a token that was
+			// already rotated out). Follow OAuth 2.0 BCPs: assume compromise
+			// and revoke ALL of this user's active sessions.
+			logger.Warn("detected refresh token replay: revoking all sessions", "userID", claims.UserID, "tokenID", claims.ID)
+			if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
+				logger.Error("failed to revoke all sessions after replay detection", "error", err, "userID", claims.UserID)
+			}
+			render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
+			return
+		}
+
 		if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
 			logger.Error("failed to revoke old refresh token during refresh", "error", err, "tokenID", claims.ID)
 			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
@@ -339,6 +402,7 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogout, "", "", nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -398,20 +462,23 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", claims.UserID, nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// validateEmail rejects malformed or over-long addresses. RFC 5321 caps an
-// address at 254 chars; net/mail.ParseAddress catches the structural cases the
-// old `strings.Contains(email, "@")` check let through (e.g. "@", "a@", " @ ").
-func validateEmail(email string) error {
+// validateEmail rejects malformed or over-long addresses and returns a
+// normalized (lowercased) version. RFC 5321 caps an address at 254 chars;
+// net/mail.ParseAddress catches the structural cases the old
+// `strings.Contains(email, "@")` check let through.
+func validateEmail(email string) (string, error) {
 	if len(email) > 254 {
-		return fmt.Errorf("email too long")
+		return "", fmt.Errorf("email too long")
 	}
-	if _, err := mail.ParseAddress(email); err != nil {
-		return fmt.Errorf("invalid email format")
+	addr, err := mail.ParseAddress(email)
+	if err != nil {
+		return "", fmt.Errorf("invalid email format")
 	}
-	return nil
+	return strings.ToLower(addr.Address), nil
 }
 
 // validatePasswordStrength enforces a basic password policy. The upper bound is

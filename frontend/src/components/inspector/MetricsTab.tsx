@@ -3,6 +3,8 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
+import {csvCell, downloadBlob} from '@/lib/csv'
+import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
 import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
 import clsx from 'clsx'
 import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics, DataFlowAnalysis, TaintPath} from '@/types/domain'
@@ -11,7 +13,7 @@ function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const rows = [
     ['Subflow', 'Blocks', 'Cyclomatic', 'Cognitive', 'Fan-In', 'Fan-Out', 'Max Depth', 'Variables'],
     ...metrics.subflows.map(m => [
-      `"${m.subflowName.replace(/"/g, '""')}"`,
+      csvCell(m.subflowName),
       m.blockCount, m.cyclomaticComplexity, m.cognitiveComplexity,
       m.fanIn, m.fanOut, m.maxNestingDepth, m.variableCount,
     ].map(String)),
@@ -22,34 +24,7 @@ function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
     ['Avg Cyclomatic', metrics.avgCyclomatic.toFixed(1)],
   ]
   const csv = rows.map(r => r.join(',')).join('\n')
-  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'})
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `metrics-${flowId}-${new Date().toISOString().slice(0, 10)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-function scoreColor(score: number): string {
-  if (score >= 80) return 'text-green-400'
-  if (score >= 60) return 'text-amber-400'
-  if (score >= 40) return 'text-orange-400'
-  return 'text-red-400'
-}
-
-function scoreBg(score: number): string {
-  if (score >= 80) return 'bg-green-500/10 border-green-500/20'
-  if (score >= 60) return 'bg-amber-500/10 border-amber-500/20'
-  if (score >= 40) return 'bg-orange-500/10 border-orange-500/20'
-  return 'bg-red-500/10 border-red-500/20'
-}
-
-function scoreLabel(score: number): string {
-  if (score >= 80) return 'Good'
-  if (score >= 60) return 'Fair'
-  if (score >= 40) return 'Needs Work'
-  return 'Critical'
+  downloadBlob(csv, 'text/csv;charset=utf-8;', `metrics-${flowId}-${new Date().toISOString().slice(0, 10)}.csv`)
 }
 
 function MiniBar({value, max, color}: {value: number; max: number; color: string}) {
@@ -61,7 +36,7 @@ function MiniBar({value, max, color}: {value: number; max: number; color: string
   )
 }
 
-function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => void}) {
+const SubflowMetricsRow = React.memo(function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => void}) {
   const cycloColor = m.cyclomaticComplexity > 20 ? 'bg-red-500' : m.cyclomaticComplexity > 10 ? 'bg-amber-500' : 'bg-green-500'
   const cogColor = m.cognitiveComplexity > 30 ? 'bg-red-500' : m.cognitiveComplexity > 15 ? 'bg-amber-500' : 'bg-green-500'
 
@@ -106,7 +81,7 @@ function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => vo
       </div>
     </button>
   )
-}
+})
 
 export default function MetricsTab() {
   const doc = useFlowStore(s => s.document)
@@ -252,9 +227,11 @@ function HealthTrend() {
 
   React.useEffect(() => {
     if (!doc) return
+    let cancelled = false
     analysisApi.getHistory()
-      .then(s => setSnapshots((s ?? []).slice(-20)))
-      .catch((err) => { logger.warn('Failed to load history', err) })
+      .then(s => { if (!cancelled) setSnapshots((s ?? []).slice(-20)) })
+      .catch((err) => { if (!cancelled) logger.warn('Failed to load history', err) })
+    return () => { cancelled = true }
   }, [doc, generatedAt])
 
   if (snapshots.length < 2) return null
@@ -324,7 +301,11 @@ function DataFlowInsights() {
 
   React.useEffect(() => {
     if (!doc) return
-    analysisApi.getDataFlow().then(r => setDataFlow(r as DataFlowAnalysis)).catch((err) => { logger.warn('Failed to load dataflow analysis', err) })
+    let cancelled = false
+    analysisApi.getDataFlow()
+      .then(r => { if (!cancelled) setDataFlow(r as DataFlowAnalysis) })
+      .catch((err) => { if (!cancelled) logger.warn('Failed to load dataflow analysis', err) })
+    return () => { cancelled = true }
   }, [doc, generatedAt])
 
   if (!dataFlow || ((!dataFlow.taintPaths || dataFlow.taintPaths.length === 0) && (!dataFlow.deadData || dataFlow.deadData.length === 0))) {

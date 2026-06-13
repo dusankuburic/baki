@@ -11,16 +11,24 @@ import clsx from 'clsx'
 export default function RulesPanel() {
   const [rules, setRules] = useState<Rule[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const settings = useSettingsStore(s => s.settings)
   const updateSettings = useSettingsStore(s => s.updateSettings)
   const autoAnalyzeOnOpen = settings.analysis.autoAnalyzeOnOpen
   const toast = useToast()
 
   useEffect(() => {
+    let cancelled = false
     analysisApi.getRules().then(res => {
+      if (cancelled) return
       setRules(res || [])
       setLoading(false)
+    }).catch(err => {
+      if (cancelled) return
+      setLoadError(err instanceof Error ? err.message : 'Failed to load rules')
+      setLoading(false)
     })
+    return () => { cancelled = true }
   }, [])
 
   const handleToggle = async (ruleId: string, enabled: boolean) => {
@@ -51,6 +59,24 @@ export default function RulesPanel() {
   }
 
   if (loading) return <div className="p-8 text-center text-text-tertiary">Loading rules...</div>
+
+  if (loadError) return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
+          <Shield size={20} className="text-brand-500" />
+          Analysis Rules
+        </h2>
+      </div>
+      <div className="p-4 flex items-start gap-3 border border-red-500/30 bg-red-500/5 rounded-xl">
+        <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={18} />
+        <div>
+          <p className="text-sm font-medium text-red-400">Failed to load rules</p>
+          <p className="text-xs text-text-tertiary mt-1">{loadError}</p>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div className="space-y-6">

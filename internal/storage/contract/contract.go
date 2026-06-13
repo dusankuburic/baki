@@ -307,4 +307,43 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("full list: expected content present, got empty")
 		}
 	})
+
+	t.Run("ListFlows_unscoped_matches_nothing_AllFlows_enumerates", func(t *testing.T) {
+		// Both real backends must agree: an unscoped filter (no UserID, no
+		// OrganizationID, no AllFlows) is a defense-in-depth no-match, while
+		// AllFlows enumerates every flow regardless of owner. The migrator
+		// depends on the latter; the former stops a forgotten scope from
+		// dumping the whole table. Assertions are written to be robust against
+		// a shared/long-lived Postgres DB (no exact-count checks under AllFlows).
+		owner := "contract-allflows-owner-" + runID
+		flow := &interfaces.FlowDocument{
+			ID:      "contract-flow-allflows-" + runID,
+			Name:    "AllFlows Flow",
+			Content: json.RawMessage(`{"k":"v"}`),
+			OwnerID: owner,
+		}
+		if err := b.SaveFlow(ctx, flow); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+
+		// Unscoped: 1=0 / matchesFilter→false. Returns nothing on both backends
+		// regardless of pre-existing rows, so an exact length check is safe.
+		unscoped, err := b.ListFlows(ctx, interfaces.FlowFilter{})
+		if err != nil {
+			t.Fatalf("ListFlows unscoped: %v", err)
+		}
+		if len(unscoped) != 0 {
+			t.Errorf("unscoped filter: expected 0 flows (guard), got %d", len(unscoped))
+		}
+
+		// AllFlows: the seeded flow must be present. Other rows may exist on a
+		// shared DB, so assert presence rather than an exact count.
+		all, err := b.ListFlows(ctx, interfaces.FlowFilter{AllFlows: true})
+		if err != nil {
+			t.Fatalf("ListFlows AllFlows: %v", err)
+		}
+		if findFlow(all, flow.ID) == nil {
+			t.Errorf("AllFlows: seeded flow %s missing from enumeration", flow.ID)
+		}
+	})
 }

@@ -27,10 +27,12 @@ func CompareFlows(docA, docB *models.FlowDocument) *FlowComparison {
 	var allNames []string
 	for name := range sfMapA {
 		allNames = append(allNames, name)
+		seen[name] = true
 	}
 	for name := range sfMapB {
 		if !seen[name] {
 			allNames = append(allNames, name)
+			seen[name] = true
 		}
 	}
 

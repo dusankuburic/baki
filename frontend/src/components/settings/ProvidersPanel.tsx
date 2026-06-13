@@ -25,7 +25,7 @@ export default function ProvidersPanel() {
         configured: !!p.configured,
         authType: p.authType || '',
       })))
-    }).catch(() => {})
+    }).catch((err) => { logger.warn('Failed to load providers', err) })
     providersApi.getGitHubUser().then((u: {login?: string} | null) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
     providersApi.getCopilotUser().then((u: {login?: string} | null) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
   }, [])

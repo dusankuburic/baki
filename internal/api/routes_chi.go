@@ -13,6 +13,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Use(rt.securityHeaders)
 	r.Use(rt.corsHeaders)
 	r.Use(rt.jwtAuth)
+	r.Use(rt.rlsMiddleware)
 
 	h := rt.handlers
 
@@ -41,10 +42,10 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Get("/settings", h.Sys.handleGetSettings)
 		r.Post("/settings", h.Sys.handleUpdateSettings)
 		r.Put("/settings", h.Sys.handleUpdateSettings)
-		r.Get("/settings/user", h.Sys.handleGetSettings) // User-scoped (uses handleGetSettings which already handles scoping)
+		r.Get("/settings/user", h.Sys.handleGetSettings)
 		r.Post("/settings/user", h.Sys.handleUpdateSettings)
-		r.Get("/settings/org/{id}", h.Sys.handleGetSettings) // Org-scoped (placeholder, need to update handler for org)
-		r.Post("/settings/org/{id}", h.Sys.handleUpdateSettings)
+		r.Get("/settings/org/{id}", h.Sys.handleGetOrgSettings)   // member-only
+		r.Post("/settings/org/{id}", h.Sys.handleUpdateOrgSettings) // admin-only
 		r.Get("/info", h.Sys.handleAppInfo)
 		r.Post("/log-error", h.Sys.handleLogError)
 	})
@@ -158,6 +159,12 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/change-password", h.Auth.handleAuthChangePassword)
 		r.Get("/sessions", h.Auth.handleAuthSessions)
 		r.Delete("/sessions/{id}", h.Auth.handleAuthSessionRevoke)
+		r.Route("/sso", func(r chi.Router) {
+			r.Get("/info", h.Auth.handleSSOInfo)
+			r.Get("/start", h.Auth.handleSSOStart)
+			r.Get("/callback", h.Auth.handleSSOCallback)
+			r.Post("/exchange", h.Auth.handleSSOExchange)
+		})
 	})
 	r.Post("/api/ws-ticket", h.Auth.handleWSTicket)
 

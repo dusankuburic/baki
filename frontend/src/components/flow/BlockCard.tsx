@@ -2,6 +2,7 @@ import React, {useState, useMemo, useCallback} from 'react'
 import clsx from 'clsx'
 import {AlertTriangle, ChevronDown, ChevronRight, Copy, Search, Clock, Brain, Sparkles, FileText, ExternalLink, type LucideIcon} from 'lucide-react'
 import {getBlockIcon, getBlockColor, resolveTypeLabel, stripBlockKeywords} from '@/lib/blocks'
+import {writeClipboard} from '@/lib/clipboard'
 import TokenRenderer from './TokenRenderer'
 import {isContainerType} from './BlockEnd'
 import {useFlowStore} from '@/stores/flowStore'
@@ -12,6 +13,7 @@ import {useSearchStore} from '@/stores/searchStore'
 import type {Block, VariableHistory} from '@/types/domain'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import {analysisApi} from '@/api'
+import {logger} from '@/lib/logger'
 
 type BlockCardProps = {
     block: Block
@@ -125,14 +127,14 @@ export default React.memo(function BlockCard({
                 if (block.variables?.length) {
                     md += `\n**Variables:** ${block.variables.join(', ')}\n`
                 }
-                navigator.clipboard.writeText(md)
+                writeClipboard(md)
             }
         },
         {
             label: 'Copy Block ID',
             icon: Copy,
             onClick: () => {
-                navigator.clipboard.writeText(block.id)
+                writeClipboard(block.id)
             }
         },
         {
@@ -163,7 +165,7 @@ export default React.memo(function BlockCard({
                         useUIStore.getState().toggleInspector()
                     }
                 } catch (err) {
-                    console.error('Failed to trace:', err)
+                    logger.warn('Failed to trace:', err)
                 }
             }
         })

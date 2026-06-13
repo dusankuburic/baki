@@ -79,7 +79,7 @@ func TestStress_HighFrequencyBroadcast_100Messages(t *testing.T) {
 			Payload: BlockPayload{
 				BlockID:   "block-stress",
 				SubflowID: "sf1",
-				Version:   int64(i),
+				Version:   i,
 			},
 		})
 	}
@@ -101,7 +101,7 @@ func TestStress_HighFrequencyBroadcast_100Messages(t *testing.T) {
 		if !ok {
 			t.Fatalf("message %d: failed to parse BlockPayload", i)
 		}
-		if block.Version != int64(i) {
+		if block.Version != i {
 			t.Errorf("message %d: expected version %d, got %d", i, i, block.Version)
 		}
 	}

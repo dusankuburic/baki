@@ -7,7 +7,6 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/service"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // resolveFlow loads a flow and verifies the caller has at least minPerm access.
@@ -32,33 +31,50 @@ func resolveFlow(w http.ResponseWriter, r *http.Request, flowSvc *service.FlowSe
 	return doc, true
 }
 
-// isFlowOwner reports whether the caller owns the flow, WITHOUT writing to the
-// response. In local mode (no JWT) the single user is always the owner. Use
-// this when ownership is only one of several acceptable conditions (e.g. a user
-// removing themselves); use requireFlowOwner when ownership is the sole gate,
-// since that variant writes the 403/error itself.
-func isFlowOwner(r *http.Request, backend storageif.StorageBackend, security *SecurityConfig, flowID string) (bool, error) {
+// requireFlowPerm verifies the caller has at least minPerm access to the flow,
+// writing the HTTP error itself. Like resolveFlow but for handlers that don't
+// need the document. Local mode (no JWT) always passes.
+func requireFlowPerm(w http.ResponseWriter, r *http.Request, flowSvc *service.FlowService, security *SecurityConfig, flowID, minPerm string) bool {
 	if !security.JWTEnabled {
-		return true, nil
+		return true
 	}
-	if backend == nil {
-		return false, fmt.Errorf("storage unavailable")
-	}
-	flow, err := backend.LoadFlow(r.Context(), flowID)
-	if err != nil {
-		return false, err
-	}
-	return flow.OwnerID == security.CallerID(r), nil
-}
-
-func requireFlowOwner(w http.ResponseWriter, r *http.Request, backend storageif.StorageBackend, security *SecurityConfig, flowID string) bool {
-	owner, err := isFlowOwner(r, backend, security, flowID)
-	if err != nil {
+	if _, err := flowSvc.GetAuthorized(r.Context(), flowID, security.CallerID(r), minPerm); err != nil {
 		render.Error(w, err, 0)
 		return false
 	}
-	if !owner {
-		render.Error(w, fmt.Errorf("forbidden: only the flow owner can perform this action"), http.StatusForbidden)
+	return true
+}
+
+// requireOrgMember verifies the caller is a member of orgID (any role),
+// writing a 403 itself when not. Local mode (no JWT) always passes.
+// Returns 500 if OrgSvc is not wired (misconfiguration) rather than silently denying.
+func requireOrgMember(w http.ResponseWriter, r *http.Request, security *SecurityConfig, orgID string) bool {
+	if !security.JWTEnabled {
+		return true
+	}
+	if security.OrgSvc == nil {
+		render.Error(w, fmt.Errorf("organization service not available"), http.StatusInternalServerError)
+		return false
+	}
+	if !security.OrgSvc.IsMember(r.Context(), orgID, security.CallerID(r)) {
+		render.Error(w, fmt.Errorf("forbidden: not a member of this organization"), http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// requireOrgAdmin verifies the caller is an admin of orgID, writing a 403
+// itself when not. Local mode (no JWT) always passes.
+func requireOrgAdmin(w http.ResponseWriter, r *http.Request, security *SecurityConfig, orgID string) bool {
+	if !security.JWTEnabled {
+		return true
+	}
+	if security.OrgSvc == nil {
+		render.Error(w, fmt.Errorf("organization service not available"), http.StatusInternalServerError)
+		return false
+	}
+	if !security.OrgSvc.IsAdmin(r.Context(), orgID, security.CallerID(r)) {
+		render.Error(w, fmt.Errorf("forbidden: organization admin required"), http.StatusForbidden)
 		return false
 	}
 	return true

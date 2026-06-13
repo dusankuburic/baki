@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -12,8 +13,21 @@ import (
 
 var flowIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
+// ErrAccessDenied is returned by a FlowAccessChecker when the user is not
+// allowed to join the flow's room. Kept package-local (rather than reusing
+// service errors) so this package stays decoupled from the service layer;
+// adapters translate their domain errors into this sentinel.
+var ErrAccessDenied = errors.New("flow access denied")
+
+// ErrFlowNotFound is returned by a FlowAccessChecker when the flow does not
+// exist.
+var ErrFlowNotFound = errors.New("flow not found")
+
 type FlowAccessChecker interface {
-	FlowExists(ctx context.Context, flowID string) (bool, error)
+	// CheckAccess returns nil if userID may join flowID's room,
+	// ErrFlowNotFound if the flow doesn't exist, and ErrAccessDenied if the
+	// user lacks read access to it.
+	CheckAccess(ctx context.Context, flowID, userID string) error
 }
 
 // Handler returns an http.HandlerFunc that upgrades the connection to WebSocket
@@ -59,14 +73,18 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 		}
 
 		if checker != nil {
-			exists, err := checker.FlowExists(r.Context(), flowID)
-			if err != nil {
+			switch err := checker.CheckAccess(r.Context(), flowID, userID); {
+			case err == nil:
+				// allowed
+			case errors.Is(err, ErrFlowNotFound):
+				http.Error(w, "flow not found", http.StatusNotFound)
+				return
+			case errors.Is(err, ErrAccessDenied):
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			default:
 				slog.Error("websocket: flow access check failed", "flowId", flowID, "error", err)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-			if !exists {
-				http.Error(w, "flow not found", http.StatusNotFound)
 				return
 			}
 		}

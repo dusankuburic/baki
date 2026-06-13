@@ -8,14 +8,9 @@ import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {createAdapter} from '@/platform/adapters'
 import {useToast} from '@/components/shared'
+import {csvCell, downloadBlob} from '@/lib/csv'
+import {scoreColor} from '@/lib/scoring'
 import type {BatchAnalysis, DashboardStats} from '@/types/domain'
-
-function scoreColor(score: number): string {
-  if (score >= 80) return 'text-green-400'
-  if (score >= 60) return 'text-amber-400'
-  if (score >= 40) return 'text-orange-400'
-  return 'text-red-400'
-}
 
 function StatCard({label, value, accent}: {label: string; value: string | number; accent?: string}) {
   return (
@@ -44,21 +39,16 @@ function exportBatchCSV(batch: BatchAnalysis) {
   const rows = [['Flow', 'Errors', 'Warnings', 'Info', 'Health', 'Load Error']]
   for (const r of batch.results) {
     rows.push([
-      `"${r.flowName.replace(/"/g, '""')}"`,
+      csvCell(r.flowName),
       String(r.report?.stats.errors ?? ''),
       String(r.report?.stats.warnings ?? ''),
       String(r.report?.stats.info ?? ''),
       String(r.report?.metrics?.healthScore ?? ''),
-      r.error ? `"${r.error.replace(/"/g, '""')}"` : '',
+      r.error ? csvCell(r.error) : '',
     ])
   }
-  const blob = new Blob([rows.map(r => r.join(',')).join('\n')], {type: 'text/csv;charset=utf-8;'})
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `batch-analysis-${new Date().toISOString().slice(0, 10)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  const csv = rows.map(r => r.join(',')).join('\n')
+  downloadBlob(csv, 'text/csv;charset=utf-8;', `batch-analysis-${new Date().toISOString().slice(0, 10)}.csv`)
 }
 
 // AnalyticsDashboard surfaces the session-wide analysis aggregates (the

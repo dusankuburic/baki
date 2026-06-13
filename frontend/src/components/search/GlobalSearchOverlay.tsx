@@ -4,6 +4,9 @@ import {Search, X, ChevronRight, FileCode} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 import {flowApi} from '@/api'
 import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
+import {useListNavigation} from '@/hooks/useListNavigation'
+import {toggleSetMember} from '@/lib/collections'
+import {logger} from '@/lib/logger'
 import type {SearchResult, BlockType} from '@/types/domain'
 
 type GlobalSearchOverlayProps = {
@@ -25,13 +28,24 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
     const [query, setQuery] = useState('')
     const [results, setResults] = useState<SearchResult[]>([])
     const [isSearching, setIsSearching] = useState(false)
-    const [activeIndex, setActiveIndex] = useState(0)
     const [activeTypes, setActiveTypes] = useState<Set<BlockType>>(new Set())
     const inputRef = useRef<HTMLInputElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
     const document = useFlowStore(s => s.document)
     const selectBlock = useFlowStore(s => s.selectBlock)
     const selectSubflow = useFlowStore(s => s.selectSubflow)
+
+    const handleSelect = useCallback((result: SearchResult) => {
+        selectBlock(result.blockId)
+        selectSubflow(result.subflowId)
+        onClose()
+    }, [selectBlock, selectSubflow, onClose])
+
+    const {activeIndex, setActiveIndex, handleKeyDown} = useListNavigation({
+        count: results.length,
+        onSelect: (i) => { if (results[i]) handleSelect(results[i]) },
+        onClose,
+    })
 
     useEffect(() => {
         if (isOpen) {
@@ -41,22 +55,19 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
             setActiveTypes(new Set())
             requestAnimationFrame(() => inputRef.current?.focus())
         }
-    }, [isOpen])
+    }, [isOpen, setActiveIndex])
 
     const toggleType = useCallback((type: BlockType) => {
-        setActiveTypes(prev => {
-            const next = new Set(prev)
-            if (next.has(type)) next.delete(type)
-            else next.add(type)
-            return next
-        })
+        setActiveTypes(prev => toggleSetMember(prev, type))
     }, [])
 
+    const searchReqIdRef = useRef(0)
     const handleSearch = useCallback(async (q: string, types: Set<BlockType>) => {
         if (!document || !q) {
             setResults([])
             return
         }
+        const reqId = ++searchReqIdRef.current
         setIsSearching(true)
         try {
             const res = await flowApi.searchFlow(document.id, {
@@ -65,14 +76,16 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                 maxResults: 50,
                 blockTypes: types.size > 0 ? Array.from(types) : undefined,
             })
+            if (reqId !== searchReqIdRef.current) return
             setResults(res.results as SearchResult[])
             setActiveIndex(0)
         } catch (err) {
-            console.error('Global search failed:', err)
+            if (reqId !== searchReqIdRef.current) return
+            logger.warn('Global search failed:', err)
         } finally {
-            setIsSearching(false)
+            if (reqId === searchReqIdRef.current) setIsSearching(false)
         }
-    }, [document])
+    }, [document, setActiveIndex])
 
     const {search: debouncedSearch} = useDebouncedSearch({
         onSearch: (q) => handleSearch(q, activeTypes),
@@ -88,28 +101,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         const active = listRef.current?.querySelector('[data-active="true"]')
         active?.scrollIntoView({block: 'nearest'})
     }, [activeIndex])
-
-    const handleSelect = useCallback((result: SearchResult) => {
-        selectBlock(result.blockId)
-        selectSubflow(result.subflowId)
-        onClose()
-    }, [selectBlock, selectSubflow, onClose])
-
-    const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-        if (e.key === 'ArrowDown') {
-            e.preventDefault()
-            setActiveIndex(prev => Math.min(prev + 1, results.length - 1))
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault()
-            setActiveIndex(prev => Math.max(prev - 1, 0))
-        } else if (e.key === 'Enter' && results[activeIndex]) {
-            e.preventDefault()
-            handleSelect(results[activeIndex])
-        } else if (e.key === 'Escape') {
-            e.preventDefault()
-            onClose()
-        }
-    }, [results, activeIndex, handleSelect, onClose])
 
     if (!isOpen) return null
 

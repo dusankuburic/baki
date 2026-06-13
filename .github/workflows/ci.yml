@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   go-test:
     name: Go Tests
@@ -22,7 +26,14 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race -count=1 ./internal/...
+        run: go test -race -count=1 -coverprofile=coverage.out ./internal/...
+      - name: Upload coverage
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 7
 
   go-build:
     name: Go Build
@@ -37,6 +48,20 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o baki-backend main.go
       - name: Build CLI
         run: go build -o bakicli ./cmd/bakicli
+
+  go-lint:
+    name: Go Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
 
   frontend:
     name: Frontend
@@ -53,8 +78,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
-      - run: npx eslint src/
+      - run: npx eslint src/ --quiet
       - run: npx vitest run
+      - name: Production build
+        run: npm run build
 
   go-vulncheck:
     name: Go Vulnerability Check

@@ -56,6 +56,11 @@ func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 
 // SaveFlow saves a flow document to the local file system
 func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
+	// Increment version if the flow already exists (no OCC check in local mode)
+	if existing, err := lsb.LoadFlow(ctx, flow.ID); err == nil && existing != nil {
+		flow.Version = existing.Version + 1
+	}
+
 	flowPath := filepath.Join(lsb.dataDir, "flows", flow.ID+".json")
 
 	// Create flows directory if it doesn't exist
@@ -73,6 +78,10 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 	}
 
 	return nil
+}
+
+func (lsb *LocalStorageBackend) TransferFlowOwner(_ context.Context, _, _, _ string) error {
+	return fmt.Errorf("TransferFlowOwner not supported in local mode")
 }
 
 // LoadFlow loads a flow document from the local file system
@@ -133,19 +142,79 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 		}
 		flows = append(flows, flow)
 
-		// Apply limit
-		if filter.Limit > 0 && len(flows) >= filter.Limit {
+		if filter.Limit > 0 && len(flows) >= filter.Limit+filter.Offset {
 			break
 		}
+	}
+
+	if filter.Offset > 0 {
+		if filter.Offset >= len(flows) {
+			return []*interfaces.FlowDocument{}, nil
+		}
+		flows = flows[filter.Offset:]
+	}
+	if filter.Limit > 0 && len(flows) > filter.Limit {
+		flows = flows[:filter.Limit]
 	}
 
 	return flows, nil
 }
 
+// CountFlows returns the total number of flows matching the filter, ignoring
+// Limit/Offset. Uses a lightweight scan that only reads metadata fields rather
+// than deserializing full flow content.
+func (lsb *LocalStorageBackend) CountFlows(ctx context.Context, filter interfaces.FlowFilter) (int, error) {
+	flowsDir := filepath.Join(lsb.dataDir, "flows")
+	if _, err := os.Stat(flowsDir); os.IsNotExist(err) {
+		return 0, nil
+	}
+	files, err := os.ReadDir(flowsDir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read flows directory: %w", err)
+	}
+	count := 0
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(flowsDir, file.Name()))
+		if err != nil {
+			continue
+		}
+		var partial struct {
+			OwnerID string `json:"owner_id"`
+			OrgID   string `json:"org_id"`
+			Name    string `json:"name"`
+		}
+		if err := json.Unmarshal(data, &partial); err != nil {
+			continue
+		}
+		doc := &interfaces.FlowDocument{OwnerID: partial.OwnerID, OrganizationID: partial.OrgID, Name: partial.Name}
+		if lsb.matchesFilter(doc, filter) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // matchesFilter returns true if the flow satisfies all set filter conditions.
 // Flows with no OwnerID are visible to everyone (backwards compatibility with pre-auth files).
+// Note: org filtering here only matches OrganizationID equality — membership of
+// UserID in that org is enforced upstream by the service layer (AuthzService)
+// before the filter reaches storage.
+//
+// DELIBERATE DIVERGENCE: collaborator grants are intentionally not checked here.
+// The local/desktop backend is single-user; sharing/collaborator logic only
+// applies in cloud mode (Postgres). The Postgres flowFilterWhere includes an
+// EXISTS subquery on flow_collaborators — this filesystem implementation does not.
 func (lsb *LocalStorageBackend) matchesFilter(flow *interfaces.FlowDocument, f interfaces.FlowFilter) bool {
-	if f.UserID != "" || f.OrganizationID != "" {
+	// AllFlows is an explicit opt-in for operational enumeration (migration)
+	// that bypasses owner/org scoping. Otherwise an empty scope matches
+	// nothing, mirroring the Postgres backend's defense-in-depth guard.
+	if !f.AllFlows {
+		if f.UserID == "" && f.OrganizationID == "" {
+			return false
+		}
 		ownerMatch := flow.OwnerID == "" || flow.OwnerID == f.UserID
 		orgMatch := f.OrganizationID != "" && flow.OrganizationID == f.OrganizationID
 		if !ownerMatch && !orgMatch {
@@ -350,6 +419,7 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 // ---- User operations ----
 
 func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
+	user.Email = strings.ToLower(user.Email)
 	lsb.usersMu.Lock()
 	defer lsb.usersMu.Unlock()
 	// Reject an email collision with a different user ID to mirror the Postgres
@@ -368,6 +438,7 @@ func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.U
 // the insert are atomic — two concurrent first-time registrations cannot both
 // be promoted to RoleAdmin. Returns ErrEmailExists on email collision.
 func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
+	user.Email = strings.ToLower(user.Email)
 	lsb.usersMu.Lock()
 	defer lsb.usersMu.Unlock()
 
@@ -387,6 +458,7 @@ func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces
 }
 
 func (lsb *LocalStorageBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) {
+	email = strings.ToLower(email)
 	lsb.usersMu.Lock()
 	defer lsb.usersMu.Unlock()
 	for _, u := range lsb.users {
@@ -476,6 +548,8 @@ func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id strin
 	defer lsb.usersMu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		u.Password = passwordHash
+		u.FailedLoginAttempts = 0
+		u.LockedUntil = nil
 		u.UpdatedAt = time.Now().UTC()
 		return nil
 	}
@@ -545,6 +619,16 @@ func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID st
 		return []*interfaces.Collaborator{}, nil
 	}
 	return collabs, nil
+}
+
+func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*interfaces.Collaborator, error) {
+	result := make(map[string][]*interfaces.Collaborator, len(flowIDs))
+	for _, id := range flowIDs {
+		if collabs := lsb.sharing[id]; len(collabs) > 0 {
+			result[id] = collabs
+		}
+	}
+	return result, nil
 }
 
 func (lsb *LocalStorageBackend) AddCollaborator(ctx context.Context, flowID string, c *interfaces.Collaborator) error {

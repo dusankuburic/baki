@@ -3,24 +3,13 @@ import clsx from 'clsx'
 import type {Finding, FlowDocument} from '@/types/domain'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {findBlockInDoc} from '@/lib/tree'
 import {ArrowRight, Sparkles, EyeOff, Wrench, ChevronDown} from 'lucide-react'
 
 interface Props {
   finding: Finding
   doc: FlowDocument
   onFixWithAI?: (finding: Finding) => void
-}
-
-function findBlock(doc: FlowDocument, blockId: string) {
-  for (const sf of doc.subflows) {
-    const stack = [...sf.blocks]
-    while (stack.length) {
-      const b = stack.pop()!
-      if (b.id === blockId) return {block: b, subflowName: sf.name}
-      if (b.children?.length) stack.push(...b.children)
-    }
-  }
-  return null
 }
 
 function FindingCard({finding, doc, onFixWithAI}: Props) {
@@ -38,7 +27,7 @@ function FindingCard({finding, doc, onFixWithAI}: Props) {
     suppressFinding(finding, 'Dismissed by user')
   }
 
-  const loc = findBlock(doc, finding.blockId)
+  const loc = findBlockInDoc(doc, finding.blockId)
   const blockLabel = loc?.block.name ?? finding.blockId.slice(0, 8)
   const subflowLabel = loc?.subflowName
 

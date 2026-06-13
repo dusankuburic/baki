@@ -4,7 +4,7 @@ import {useState, useCallback, memo} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types/domain'
-import {logger} from '@/lib/logger'
+import {useCopy} from '@/hooks/useCopy'
 import CodeBlock from './CodeBlock'
 
 interface Props {
@@ -128,15 +128,12 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
 function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onRegenerate, onRetry}: Props) {
   const isUser = message.role === 'user'
   const isError = message.finishReason === 'error'
-  const [copied, setCopied] = useState(false)
+  const {copied, copy} = useCopy()
   const [showActions, setShowActions] = useState(false)
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }).catch((err) => { logger.warn('Clipboard write failed', err) })
-  }, [message.content])
+    copy(message.content)
+  }, [message.content, copy])
 
   const time = formatTime(message.timestamp)
 

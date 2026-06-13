@@ -6,6 +6,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {flowApi, analysisApi, exportApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
+import {logger} from '@/lib/logger'
 import type {FlowDocument as DomainFlowDocument, RecentFile, AnalysisReport, Block} from '@/types/domain'
 import type {useToast} from '@/components/shared'
 
@@ -87,7 +88,7 @@ export function useCommandList(deps: {
                     const r = await analysisApi.analyzeFlow()
                     if (r) setReport(document.id, r as AnalysisReport)
                 } catch (e) {
-                    console.error('analysis failed:', e)
+                    logger.warn('analysis failed:', e)
                     toast.error('Analysis failed', {description: String(e)})
                 } finally {
                     setAnalyzing(false)
@@ -99,16 +100,16 @@ export function useCommandList(deps: {
             }},
             {id: 'analysis.export.html', label: 'Export Findings as HTML', section: 'Analysis', shortcut: ['mod', 'shift', 'h'], onSelect: async () => {
                 if (!document) return
-                try { await exportFindingsHTML(document.id) } catch (e) { console.error('HTML export failed:', e) }
+                try { await exportFindingsHTML(document.id) } catch (e) { logger.warn('HTML export failed:', e) }
             }},
             {id: 'analysis.filter.all', label: 'Findings: Show All Severities', section: 'Analysis', shortcut: ['mod', 'shift', '0'], onSelect: () => {
                 useAnalysisStore.getState().setSeverityFilter(new Set(['error', 'warning', 'info']))
             }},
             {id: 'file.export.pdf', label: 'Export PDF', section: 'File', shortcut: ['mod', 'e'], onSelect: async () => {
-                try { await exportApi.exportPDF() } catch (e) { console.error('Export PDF failed:', e) }
+                try { await exportApi.exportPDF() } catch (e) { logger.warn('Export PDF failed:', e) }
             }},
             {id: 'file.export.md', label: 'Export Markdown', section: 'File', shortcut: ['mod', 'shift', 'e'], onSelect: async () => {
-                try { await exportApi.exportMarkdown() } catch (e) { console.error('Export Markdown failed:', e) }
+                try { await exportApi.exportMarkdown() } catch (e) { logger.warn('Export Markdown failed:', e) }
             }},
             {id: 'view.dashboard', label: 'Analysis Dashboard', section: 'Analysis', onSelect: () => setMainPaneView('dashboard')},
             {id: 'nav.profile', label: 'User Profile', section: 'Navigation', onSelect: () => setMainPaneView('profile')},

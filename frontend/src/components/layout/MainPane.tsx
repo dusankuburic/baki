@@ -2,7 +2,7 @@ import {useCallback, useMemo, useRef, Fragment, lazy, Suspense, useState} from '
 import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
-import {Spinner} from '@/components/shared'
+import {Spinner, ErrorBoundary} from '@/components/shared'
 import {UserProfile} from '@/components/auth/UserProfile'
 import {AdminDashboard} from '@/components/admin/AdminDashboard'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
@@ -176,9 +176,9 @@ export default function MainPane() {
                             <div className="flex-1 flex flex-col overflow-hidden">
                                 {mainPaneView === 'diff' ? (
                                     gi === 0 && (
-                                        <Suspense fallback={<Spinner />}>
+                                        <ErrorBoundary><Suspense fallback={<Spinner />}>
                                             <RegressionDiffView key="global-diff" />
-                                        </Suspense>
+                                        </Suspense></ErrorBoundary>
                                     )
                                 ) : group.activeTabId && (
                                     mainPaneView === 'block' ? (
@@ -186,17 +186,17 @@ export default function MainPane() {
                                             <BlockView subflowId={group.activeTabId} />
                                         </div>
                                     ) : mainPaneView === 'graph' ? (
-                                        <Suspense fallback={<Spinner />}>
+                                        <ErrorBoundary><Suspense fallback={<Spinner />}>
                                             <GraphView key={group.activeTabId} subflowId={group.activeTabId} />
-                                        </Suspense>
+                                        </Suspense></ErrorBoundary>
                                     ) : mainPaneView === 'local-map' ? (
-                                        <Suspense fallback={<Spinner />}>
+                                        <ErrorBoundary><Suspense fallback={<Spinner />}>
                                             <ExecutionGraphView key={`local-map-${group.activeTabId}`} subflowId={group.activeTabId} />
-                                        </Suspense>
+                                        </Suspense></ErrorBoundary>
                                     ) : mainPaneView === 'map' ? (
-                                        <Suspense fallback={<Spinner />}>
+                                        <ErrorBoundary><Suspense fallback={<Spinner />}>
                                             <ExecutionGraphView key="global-map" />
-                                        </Suspense>
+                                        </Suspense></ErrorBoundary>
                                     ) : null
                                 )}
                             </div>

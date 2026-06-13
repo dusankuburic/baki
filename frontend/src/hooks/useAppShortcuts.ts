@@ -7,6 +7,7 @@ import {useSearchStore} from '@/stores/searchStore'
 import {flowApi, analysisApi, exportApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
+import {logger} from '@/lib/logger'
 import type {FlowDocument as DomainFlowDocument, AnalysisReport} from '@/types/domain'
 import type {useToast} from '@/components/shared'
 
@@ -59,7 +60,7 @@ export function useAppShortcuts(deps: {
                     const doc = useFlowStore.getState().document
                     if (r && doc) setReport(doc.id, r as AnalysisReport)
                 } catch (e) {
-                    console.error('analysis failed:', e)
+                    logger.warn('analysis failed:', e)
                     toast.error('Analysis failed', {description: String(e)})
                 } finally {
                     setAnalyzing(false)
@@ -122,8 +123,8 @@ export function useAppShortcuts(deps: {
                 const doc = await flowApi.openFlowFolder()
                 if (doc) openDocument(doc as DomainFlowDocument)
             },
-            'file.export.pdf': async () => { try { await exportApi.exportPDF() } catch (e) { console.error('Export PDF failed:', e) } },
-            'file.export.md': async () => { try { await exportApi.exportMarkdown() } catch (e) { console.error('Export Markdown failed:', e) } },
+            'file.export.pdf': async () => { try { await exportApi.exportPDF() } catch (e) { logger.warn('Export PDF failed:', e) } },
+            'file.export.md': async () => { try { await exportApi.exportMarkdown() } catch (e) { logger.warn('Export Markdown failed:', e) } },
             'analysis.filter.errors': () => useAnalysisStore.getState().setSeverityFilter(new Set(['error'])),
             'analysis.filter.warnings': () => useAnalysisStore.getState().setSeverityFilter(new Set(['warning'])),
             'analysis.filter.info': () => useAnalysisStore.getState().setSeverityFilter(new Set(['info'])),
@@ -136,7 +137,7 @@ export function useAppShortcuts(deps: {
             'analysis.export.html': async () => {
                 const d = useFlowStore.getState().document
                 if (!d) return
-                try { await exportFindingsHTML(d.id) } catch (e) { console.error('HTML export failed:', e) }
+                try { await exportFindingsHTML(d.id) } catch (e) { logger.warn('HTML export failed:', e) }
             },
             'window.reload': () => { window.location.reload() },
             'window.quit': () => {

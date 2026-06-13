@@ -28,8 +28,16 @@ export const HistoryTab: React.FC = () => {
   }, [document])
 
   useEffect(() => {
-    fetchVersions()
-  }, [fetchVersions])
+    let cancelled = false
+    if (!document?.id) return
+    setIsLoading(true)
+    setError(null)
+    versionsApi.list(document.id, 50)
+      .then(list => { if (!cancelled) setVersions(list) })
+      .catch(() => { if (!cancelled) { setError('Failed to load versions'); setVersions([]) } })
+      .finally(() => { if (!cancelled) setIsLoading(false) })
+    return () => { cancelled = true }
+  }, [document?.id])
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()

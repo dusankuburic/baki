@@ -3,6 +3,7 @@ import {
   collaborationService,
   type ConnectionStatus,
   type PresencePayload,
+  type FlowChangedPayload,
   type Envelope,
 } from '@/services/collaboration/CollaborationService'
 import { syncManager } from '@/services/sync/SyncManager'
@@ -19,15 +20,26 @@ interface PresenceState {
   users: Record<string, PresenceUser>
   status: ConnectionStatus
   flowId: string | null
+  remoteVersion: number
 
   connectToFlow: (flowId: string) => Promise<void>
   disconnect: () => void
   updateSelectedBlock: (blockId: string) => void
 }
 
+let flowChangeListeners: Array<(version: number) => void> = []
 let cleanupHandlers: Array<() => void> = []
+let generation = 0
+
+export function onFlowChanged(cb: (version: number) => void): () => void {
+  flowChangeListeners.push(cb)
+  return () => {
+    flowChangeListeners = flowChangeListeners.filter(fn => fn !== cb)
+  }
+}
 
 function teardown(): void {
+  generation++
   cleanupHandlers.forEach(fn => fn())
   cleanupHandlers = []
 }
@@ -36,15 +48,20 @@ export const usePresenceStore = create<PresenceState>((set) => ({
   users: {},
   status: 'disconnected',
   flowId: null,
+  remoteVersion: 0,
 
   connectToFlow: async (flowId: string) => {
     teardown()
 
+    const gen = generation
     const cfg = await getBackendConfig()
-    set({ flowId, users: {} })
+
+    if (gen !== generation) return
+
+    set({ flowId, users: {}, remoteVersion: 0 })
 
     collaborationService.connect(flowId, cfg.apiUrl, getWsTicket)
-    syncManager.start()
+    syncManager.start(flowId)
 
     cleanupHandlers.push(
       collaborationService.onStatusChange(status => set({ status })),
@@ -56,7 +73,7 @@ export const usePresenceStore = create<PresenceState>((set) => ({
     teardown()
     collaborationService.disconnect()
     syncManager.stop()
-    set({ users: {}, status: 'disconnected', flowId: null })
+    set({ users: {}, status: 'disconnected', flowId: null, remoteVersion: 0 })
   },
 
   updateSelectedBlock: (blockId: string) => {
@@ -101,6 +118,10 @@ function handleEnvelope(env: Envelope): void {
         },
       }
     })
+  } else if (env.type === 'flow.changed') {
+    const p = env.payload as FlowChangedPayload
+    usePresenceStore.setState({ remoteVersion: p.version })
+    flowChangeListeners.forEach(fn => fn(p.version))
   }
 
 }

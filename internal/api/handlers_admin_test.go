@@ -8,16 +8,6 @@ import (
 	"pad-analyzer/internal/auth"
 )
 
-// adminBearer returns an admin bearer token for the given seeded user.
-func adminBearer(t *testing.T, rt *Router, userID, email string) string {
-	t.Helper()
-	pair, err := rt.security.AuthMgr.Issue(userID, email, auth.RoleAdmin)
-	if err != nil {
-		t.Fatalf("issue jwt: %v", err)
-	}
-	return "Bearer " + pair.AccessToken
-}
-
 // TestAdminUserRole_DemotingLastAdmin_Returns409 verifies the N-5 safeguard:
 // when an admin tries to demote themselves (or any admin) while they are the
 // only admin in the system, the request is refused with 409 Conflict and the
@@ -26,7 +16,7 @@ func adminBearer(t *testing.T, rt *Router, userID, email string) string {
 func TestAdminUserRole_DemotingLastAdmin_Returns409(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
-	bearer := adminBearer(t, rt, "admin-1", "admin@example.com")
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
 
 	rr := doRequestWithAuth(t, rt, http.MethodPut,
 		"/api/admin/users/admin-1/role", bearer,
@@ -53,7 +43,7 @@ func TestAdminUserRole_DemotingAdminWithOtherAdmins_Succeeds(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedUserWithRole(t, rt, "admin-1", "admin1@example.com", auth.RoleAdmin)
 	seedUserWithRole(t, rt, "admin-2", "admin2@example.com", auth.RoleAdmin)
-	bearer := adminBearer(t, rt, "admin-1", "admin1@example.com")
+	bearer := jwtBearer(t, rt, "admin-1", "admin1@example.com")
 
 	rr := doRequestWithAuth(t, rt, http.MethodPut,
 		"/api/admin/users/admin-2/role", bearer,
@@ -79,7 +69,7 @@ func TestAdminUserRole_PromotingMember_AlwaysSucceeds(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
 	seedUserWithRole(t, rt, "member-1", "member@example.com", auth.RoleMember)
-	bearer := adminBearer(t, rt, "admin-1", "admin@example.com")
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
 
 	rr := doRequestWithAuth(t, rt, http.MethodPut,
 		"/api/admin/users/member-1/role", bearer,
