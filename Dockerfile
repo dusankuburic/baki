@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o baki-backend main.go
 
 # Stage 3: Final lean image
-FROM alpine:3.21
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates wget
 
 RUN addgroup -g 1000 -S pad && adduser -u 1000 -S pad -G pad \
