@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 

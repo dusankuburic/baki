@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/analyzer"
-	"pad-analyzer/internal/models"
+	"pad-core/analyzer"
+	"pad-core/models"
 )
 
 func makeAnalyzableDoc(id string, blocks ...models.Block) *models.FlowDocument {

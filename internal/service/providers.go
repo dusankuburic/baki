@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/models"
+	"pad-core/logger"
+	"pad-core/models"
 	"pad-analyzer/internal/storage"
 )
 

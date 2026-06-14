@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/models"
+	"pad-core/logger"
+	"pad-core/models"
 )
 
 const CurrentSettingsVersion = 1

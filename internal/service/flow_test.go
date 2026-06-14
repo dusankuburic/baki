@@ -3,9 +3,9 @@ package service
 import (
 	"testing"
 
-	"pad-analyzer/internal/models"
-	"pad-analyzer/internal/parser"
-	"pad-analyzer/internal/search"
+	"pad-core/models"
+	"pad-core/parser"
+	"pad-core/search"
 )
 
 // simpleFlow is minimal valid PAD content used as a test fixture.

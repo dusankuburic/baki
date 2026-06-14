@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )

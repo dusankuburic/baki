@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // TestRuleConfig_ToggleDoesNotWipeOverrides is the B1 regression test for the

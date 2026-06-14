@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 )
 
 const (

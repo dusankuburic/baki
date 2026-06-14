@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )

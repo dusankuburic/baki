@@ -73,5 +73,6 @@ docs/swagger.yaml
 !README.md
 !LICENSE
 !ARCHITECTURE_MIGRATION_PLAN.md
-!internal/parser/GRAMMAR.md
+!core/parser/GRAMMAR.md
+!core/README.md
 !docs/AZURE_PLAN.md

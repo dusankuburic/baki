@@ -5,8 +5,8 @@ import (
 	"math"
 	"sort"
 
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/models"
+	"pad-core/logger"
+	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 

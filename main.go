@@ -21,7 +21,7 @@ import (
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/di"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"

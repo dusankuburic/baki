@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"pad-analyzer/internal/service"
 )
 

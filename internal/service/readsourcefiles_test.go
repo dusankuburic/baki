@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // TestReadSourceFiles_SkipsInvalidNames verifies S4: ReadSourceFiles runs the

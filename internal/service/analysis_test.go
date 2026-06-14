@@ -3,8 +3,8 @@ package service
 import (
 	"testing"
 
-	"pad-analyzer/internal/models"
-	"pad-analyzer/internal/parser"
+	"pad-core/models"
+	"pad-core/parser"
 )
 
 // makeTestAnalysisService parses text into a FlowDocument and returns it alongside

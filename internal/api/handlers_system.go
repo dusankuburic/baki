@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/render"
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"pad-analyzer/internal/ai/scrubber"
-	"pad-analyzer/internal/models"
+	"pad-core/ai/scrubber"
+	"pad-core/models"
 )
 
 // maxToolResultBytes caps a tool result so a single tool call can't blow the

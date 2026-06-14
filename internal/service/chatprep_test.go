@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // TestBuildMessages_MergesContextIntoSingleUserTurn verifies the core invariant

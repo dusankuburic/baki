@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 
 	"github.com/zalando/go-keyring"
 )

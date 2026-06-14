@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // captureSlog swaps slog's default logger for one that writes to buf, and

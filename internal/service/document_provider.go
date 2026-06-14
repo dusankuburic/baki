@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 

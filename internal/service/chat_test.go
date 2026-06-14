@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"pad-analyzer/internal/testutil"
 )
 

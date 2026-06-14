@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"pad-analyzer/internal/export"
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/models"
-	"pad-analyzer/internal/parser"
+	"pad-core/export"
+	"pad-core/logger"
+	"pad-core/models"
+	"pad-core/parser"
 )
 
 // ExportService handles flow diff, markdown, and PDF export operations.

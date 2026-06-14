@@ -6,7 +6,7 @@ import (
 
 	"github.com/pkoukk/tiktoken-go"
 	tiktokenloader "github.com/pkoukk/tiktoken-go-loader"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 )
 
 var (

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/models"
+	"pad-core/logger"
+	"pad-core/models"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )

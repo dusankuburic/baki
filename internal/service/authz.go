@@ -5,7 +5,7 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 

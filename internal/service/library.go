@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 

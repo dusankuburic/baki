@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	"pad-analyzer/internal/storage/interfaces"
 )
 

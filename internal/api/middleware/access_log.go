@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 )
 
 // requestIDKey is the private context key for the per-request ID.

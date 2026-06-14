@@ -1,6 +1,6 @@
 package config
 
-import "pad-analyzer/internal/models"
+import "pad-core/models"
 
 // DeploymentMode indicates how the application is deployed
 type DeploymentMode string

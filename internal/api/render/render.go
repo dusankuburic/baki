@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )

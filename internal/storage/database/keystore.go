@@ -13,7 +13,7 @@ import (
 	"io"
 	"time"
 
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	"pad-analyzer/internal/storage"
 )
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 const maxRecentFiles = 10

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // stubProvider satisfies the Provider interface with just EstimateTokens.

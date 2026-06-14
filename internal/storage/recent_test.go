@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // newTestStore creates a SettingsStore backed by a temp file, bypassing OS paths.

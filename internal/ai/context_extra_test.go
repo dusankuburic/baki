@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // ---- BuildContext: nil flow guard ------------------------------------------

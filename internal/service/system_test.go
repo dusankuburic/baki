@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // TestSettingsRoundTrip guards against the storage-layer and domain settings

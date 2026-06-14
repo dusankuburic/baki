@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 // Per-conversation persistence limits. These (and the helpers below) consolidate

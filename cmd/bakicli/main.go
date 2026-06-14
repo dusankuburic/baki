@@ -23,9 +23,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"pad-analyzer/internal/analyzer"
-	"pad-analyzer/internal/models"
-	"pad-analyzer/internal/parser"
+	"pad-core/analyzer"
+	"pad-core/models"
+	"pad-core/parser"
 )
 
 func main() {

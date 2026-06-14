@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"pad-analyzer/internal/api/middleware"
-	"pad-analyzer/internal/logger"
+	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
 )
 

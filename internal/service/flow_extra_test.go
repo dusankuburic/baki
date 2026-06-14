@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"pad-analyzer/internal/storage"
 )
 

@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/ai/scrubber"
-	"pad-analyzer/internal/logger"
+	"pad-core/ai/scrubber"
+	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"

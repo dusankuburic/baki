@@ -7,8 +7,8 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/analyzer"
-	"pad-analyzer/internal/cache"
+	"pad-core/analyzer"
+	"pad-core/cache"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"

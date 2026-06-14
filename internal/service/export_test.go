@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/models"
-	"pad-analyzer/internal/parser"
+	"pad-core/models"
+	"pad-core/parser"
 )
 
 func TestExportService_ExportMarkdown_NilDoc(t *testing.T) {

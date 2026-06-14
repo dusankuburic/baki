@@ -2,7 +2,7 @@ package ai
 
 import (
 	"fmt"
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"sort"
 	"strings"
 )

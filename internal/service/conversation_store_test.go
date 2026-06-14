@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 )
 
 func TestConvFilePath_RejectsTraversal(t *testing.T) {

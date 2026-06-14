@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	"pad-analyzer/internal/cache"
-	"pad-analyzer/internal/logger"
-	"pad-analyzer/internal/models"
-	"pad-analyzer/internal/parser"
-	"pad-analyzer/internal/search"
+	"pad-core/cache"
+	"pad-core/logger"
+	"pad-core/models"
+	"pad-core/parser"
+	"pad-core/search"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )

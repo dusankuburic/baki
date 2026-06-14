@@ -12,6 +12,7 @@ RUN npm run build
 FROM golang:1.25-alpine AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
+COPY core/go.mod core/go.sum ./core/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6

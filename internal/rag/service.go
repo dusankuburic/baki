@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/models"
+	"pad-core/models"
 	"pad-analyzer/internal/storage/interfaces"
 
 	"github.com/google/uuid"

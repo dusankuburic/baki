@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"pad-analyzer/internal/ai/scrubber"
-	"pad-analyzer/internal/models"
+	"pad-core/ai/scrubber"
+	"pad-core/models"
 )
 
 func toolFixtureDoc() *models.FlowDocument {
