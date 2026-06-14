@@ -68,6 +68,13 @@ var ServiceModule = fx.Options(
 		ProvideASTCache,
 		ProvideHistoryStore,
 		ProvideAI,
+		// Adapter: expose *storage.SettingsStore as service.SettingsProvider
+		// so services depend on the interface, not the concrete filesystem
+		// implementation.
+		func(s *storage.SettingsStore) service.SettingsProvider { return s },
+		// Adapter: expose the global secret store as service.SecretStore so
+		// services can inject it instead of calling package-level globals.
+		func() service.SecretStore { return storage.CurrentSecretStore() },
 		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings *storage.SettingsStore) *rag.KnowledgeService {
 			// Pass the factory (not a pre-resolved provider) so the embedding
 			// provider is resolved per request in the caller's scope. Resolving
@@ -75,8 +82,8 @@ var ServiceModule = fx.Options(
 			// per-user) and never picks up keys added later.
 			return rag.NewKnowledgeService(backend, factory, settings)
 		},
-		func(settings *storage.SettingsStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
-			return service.NewSystemService(settings, notifier, backend)
+		func(settings service.SettingsProvider, secrets service.SecretStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
+			return service.NewSystemService(settings, secrets, notifier, backend)
 		},
 		service.NewAuthzService,
 		service.NewFlowService,
@@ -89,7 +96,7 @@ var ServiceModule = fx.Options(
 			configDir string,
 			flowSvc *service.FlowService,
 			analysisSvc *service.AnalysisService,
-			settings *storage.SettingsStore,
+			settings service.SettingsProvider,
 			factory *ai.ProviderFactory,
 			demo *ai.DemoLimiter,
 			backend storageif.StorageBackend,
@@ -103,8 +110,9 @@ var ServiceModule = fx.Options(
 			auth *ai.GitHubAuth,
 			copilot *ai.CopilotAuth,
 			factory *ai.ProviderFactory,
+			secrets service.SecretStore,
 		) *service.ProviderService {
-			return service.NewProviderService(auth, copilot, factory)
+			return service.NewProviderService(auth, copilot, factory, secrets)
 		},
 	),
 )

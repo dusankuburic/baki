@@ -59,19 +59,27 @@ func newKeystoreAEAD(secret []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// encrypt seals plaintext with a fresh random nonce, returning a
-// base64(nonce||ciphertext) string suitable for text-column storage.
-func (s *EncryptedKeyStore) encrypt(plaintext string) (string, error) {
+// keyAAD returns the AES-GCM associated data that binds a ciphertext to its
+// (scope, provider) row. Authentication fails if a stored ciphertext is moved to
+// a different identity, preventing a row-swap confused-deputy by anyone able to
+// write the provider_keys table.
+func keyAAD(scope, provider string) []byte {
+	return []byte(scope + "\x00" + provider)
+}
+
+// encrypt seals plaintext with a fresh random nonce and binds it to aad,
+// returning a base64(nonce||ciphertext) string suitable for text-column storage.
+func (s *EncryptedKeyStore) encrypt(plaintext string, aad []byte) (string, error) {
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("keystore: nonce: %w", err)
 	}
-	sealed := s.aead.Seal(nonce, nonce, []byte(plaintext), nil)
+	sealed := s.aead.Seal(nonce, nonce, []byte(plaintext), aad)
 	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-// decrypt reverses encrypt.
-func (s *EncryptedKeyStore) decrypt(encoded string) (string, error) {
+// decrypt reverses encrypt; aad must match the value passed to encrypt.
+func (s *EncryptedKeyStore) decrypt(encoded string, aad []byte) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("keystore: decode: %w", err)
@@ -81,7 +89,7 @@ func (s *EncryptedKeyStore) decrypt(encoded string) (string, error) {
 		return "", errors.New("keystore: ciphertext too short")
 	}
 	nonce, ct := raw[:ns], raw[ns:]
-	plaintext, err := s.aead.Open(nil, nonce, ct, nil)
+	plaintext, err := s.aead.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return "", fmt.Errorf("keystore: open: %w", err)
 	}
@@ -91,7 +99,7 @@ func (s *EncryptedKeyStore) decrypt(encoded string) (string, error) {
 // Save upserts the encrypted key for a (scope, provider) pair. An empty scope
 // is the legacy/local namespace (stored as user_id = '').
 func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
-	ct, err := s.encrypt(key)
+	ct, err := s.encrypt(key, keyAAD(scope, provider))
 	if err != nil {
 		return err
 	}
@@ -126,7 +134,7 @@ func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("keystore: get: %w", err)
 	}
-	plaintext, err := s.decrypt(ct)
+	plaintext, err := s.decrypt(ct, keyAAD(scope, provider))
 	if err != nil {
 		// Log so the operator can see that a rotation invalidated stored
 		// keys; don't log scope (user id) at info level — keep it at warn

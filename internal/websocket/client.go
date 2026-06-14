@@ -112,9 +112,11 @@ func (c *Client) Send(env Envelope) {
 
 // readPump reads incoming messages and dispatches them to the hub.
 func (c *Client) readPump() {
-	// NOTE: c.close() is intentionally NOT deferred here. The send channel is
-	// closed in Run()'s deferred func, strictly after hub.Leave(), so no Broadcast
-	// can ever observe a closed channel while the client is still in the hub.
+	// NOTE: readPump does not tear the connection down itself — Run()'s deferred
+	// cleanup does (hub.Leave then conn.Close). The send channel is deliberately
+	// NEVER closed (see Run's comment): a concurrent Send holding an old Broadcast
+	// snapshot must be able to push into c.send without racing a close. writePump
+	// exits on the resulting conn error, not on a channel close.
 
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))

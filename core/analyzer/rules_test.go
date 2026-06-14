@@ -753,3 +753,142 @@ func TestDuplicateActionRule_MultiSubflow_NoPanic(t *testing.T) {
 	report := RunAnalysis(flow, []Rule{&DuplicateActionRule{}}, nil, nil)
 	_ = report
 }
+
+func TestHardcodedURLRule(t *testing.T) {
+	rule := &HardcodedURLRule{}
+
+	t.Run("URL in property emits finding", func(t *testing.T) {
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Web.Call", 0)
+		b.SubflowID = "sf1"
+		b.Properties = map[string]string{"url": "https://api.example.com/v2/users"}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding, got %d", len(got))
+		}
+		if got[0].RuleID != "hardcoded-url" {
+			t.Errorf("ruleID = %q", got[0].RuleID)
+		}
+	})
+
+	t.Run("variable reference in URL emits no finding", func(t *testing.T) {
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Web.Call", 0)
+		b.SubflowID = "sf1"
+		b.Properties = map[string]string{"url": "%ApiBase%/v2/users"}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 0 {
+			t.Fatalf("expected 0 findings for variable URL, got %d", len(got))
+		}
+	})
+
+	t.Run("URL in non-network property emits no finding", func(t *testing.T) {
+		b := makeBlock("b1", "Set variable", models.BlockTypeAction, "SetVariable.Set", 0)
+		b.SubflowID = "sf1"
+		b.Properties = map[string]string{"value": "https://example.com"}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 0 {
+			t.Fatalf("expected 0 findings for non-network property, got %d", len(got))
+		}
+	})
+}
+
+func TestLargeSubflowRule(t *testing.T) {
+	rule := &LargeSubflowRule{}
+
+	t.Run("subflow under threshold emits no finding", func(t *testing.T) {
+		blocks := make([]models.Block, 10)
+		for i := range blocks {
+			blocks[i] = *makeBlock(fmt.Sprintf("b%d", i), fmt.Sprintf("Action %d", i), models.BlockTypeAction, "SetVariable.Set", 0)
+			blocks[i].SubflowID = "sf1"
+		}
+		b := &blocks[0]
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: blocks}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 0 {
+			t.Fatalf("expected 0 findings for small subflow, got %d", len(got))
+		}
+	})
+
+	t.Run("subflow over threshold emits finding", func(t *testing.T) {
+		n := defaultLargeSubflowThreshold + 5
+		blocks := make([]models.Block, n)
+		for i := range blocks {
+			blocks[i] = *makeBlock(fmt.Sprintf("b%d", i), fmt.Sprintf("Action %d", i), models.BlockTypeAction, "SetVariable.Set", 0)
+			blocks[i].SubflowID = "sf1"
+		}
+		b := &blocks[0]
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "BigFlow", Blocks: blocks}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding for large subflow, got %d", len(got))
+		}
+		if got[0].RuleID != "large-subflow" {
+			t.Errorf("ruleID = %q", got[0].RuleID)
+		}
+	})
+
+	t.Run("only emits on first block", func(t *testing.T) {
+		n := defaultLargeSubflowThreshold + 5
+		blocks := make([]models.Block, n)
+		for i := range blocks {
+			blocks[i] = *makeBlock(fmt.Sprintf("b%d", i), fmt.Sprintf("Action %d", i), models.BlockTypeAction, "SetVariable.Set", 0)
+			blocks[i].SubflowID = "sf1"
+		}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "BigFlow", Blocks: blocks}}}
+		ctx := buildContext(flow, nil)
+		b1 := &blocks[1]
+		got := rule.Check(b1, ctx)
+		if len(got) != 0 {
+			t.Fatalf("expected 0 findings for non-first block, got %d", len(got))
+		}
+	})
+}
+
+func TestDisabledBlockRule(t *testing.T) {
+	rule := &DisabledBlockRule{}
+
+	t.Run("DISABLED_ rawtype emits finding", func(t *testing.T) {
+		b := makeBlock("b1", "Call SubA (disabled)", models.BlockTypeSubflow, "DISABLED_CALL", 0)
+		b.SubflowID = "sf1"
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding, got %d", len(got))
+		}
+		if got[0].RuleID != "disabled-block" {
+			t.Errorf("ruleID = %q", got[0].RuleID)
+		}
+	})
+
+	t.Run("normal block emits no finding", func(t *testing.T) {
+		b := makeBlock("b1", "Set variable", models.BlockTypeAction, "SetVariable.Set", 0)
+		b.SubflowID = "sf1"
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 0 {
+			t.Fatalf("expected 0 findings for normal block, got %d", len(got))
+		}
+	})
+}
+
+func TestAllRulesIncludesNewRules(t *testing.T) {
+	rules := AllRules()
+	ids := make(map[string]bool)
+	for _, r := range rules {
+		ids[r.ID()] = true
+	}
+	for _, expected := range []string{"hardcoded-url", "large-subflow", "disabled-block"} {
+		if !ids[expected] {
+			t.Errorf("AllRules() missing rule %q", expected)
+		}
+	}
+}

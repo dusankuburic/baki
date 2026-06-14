@@ -62,7 +62,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, notifier, backend)
+	sysSvc := service.NewSystemService(settings, storage.CurrentSecretStore(), notifier, backend)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
@@ -82,7 +82,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil)
 	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc)
 	analysisSvc := service.NewAnalysisService(notifier, settings, nil)
-	exportSvc := service.NewExportService(context.Background(), notifier, flowSvc, analysisSvc)
+	exportSvc := service.NewExportService(notifier, flowSvc, analysisSvc)
 	
 	demo := ai.NewDemoLimiter("")
 	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil, nil)
@@ -90,7 +90,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
-	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory)
+	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.CurrentSecretStore())
 	
 	security := &SecurityConfig{
 		JWTEnabled:     jwtEnabled,
@@ -113,7 +113,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Chat:      NewChatHandler(chatSvc, flowSvc, security),
 		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security),
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
-		Export:    NewExportHandler(exportSvc, flowSvc, security),
+		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
 		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore),
 		Admin:     NewAdminHandler(backend, security),
 		Provider:  NewProviderHandler(providerSvc, security),
@@ -251,8 +251,6 @@ func seedUserWithRole(t *testing.T, rt *Router, id, email string, role auth.Role
 		t.Fatalf("seed user %s: %v", id, err)
 	}
 }
-
-var badBody = bytes.NewBufferString("not-json")
 
 func newBadBodyRequest(t *testing.T, rt *Router, method, path string) *httptest.ResponseRecorder {
 	t.Helper()

@@ -21,7 +21,7 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 	sb.WriteString(fmt.Sprintf("**Duration:** %dms\n\n", report.DurationMs))
 
 	sb.WriteString("## Summary\n\n")
-	sb.WriteString(fmt.Sprintf("| Metric | Count |\n|---|---|\n"))
+	sb.WriteString("| Metric | Count |\n|---|---|\n")
 	sb.WriteString(fmt.Sprintf("| Blocks analyzed | %d |\n", report.Stats.BlocksAnalyzed))
 	sb.WriteString(fmt.Sprintf("| Rules run | %d |\n", report.Stats.RulesRun))
 	sb.WriteString(fmt.Sprintf("| Errors | %d |\n", report.Stats.Errors))

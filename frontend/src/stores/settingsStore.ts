@@ -220,6 +220,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         const merged: AppSettings = {
           ...defaultSettings,
           ...loaded,
+          general: {
+            ...defaultSettings.general,
+            ...loaded.general,
+          },
+          appearance: {
+            ...defaultSettings.appearance,
+            ...loaded.appearance,
+          },
+          parser: {
+            ...defaultSettings.parser,
+            ...loaded.parser,
+          },
           layout: {
             ...defaultSettings.layout,
             ...loaded.layout,
@@ -243,6 +255,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
               flow:              loaded.ai?.prompts?.flow              ?? defaultSettings.ai.prompts.flow,
               finding:           loaded.ai?.prompts?.finding           ?? defaultSettings.ai.prompts.finding,
               blockWithFindings: loaded.ai?.prompts?.blockWithFindings ?? defaultSettings.ai.prompts.blockWithFindings,
+            },
+          },
+          analysis: {
+            ...defaultSettings.analysis,
+            ...loaded.analysis,
+            rules: {
+              ...defaultSettings.analysis.rules,
+              ...(loaded.analysis?.rules ?? {}),
             },
           },
         }

@@ -206,6 +206,7 @@ func TestMiddleware_ValidToken_PassesThrough(t *testing.T) {
 		claims := ClaimsFromContext(r.Context())
 		if claims == nil {
 			t.Error("expected claims in context")
+			return
 		}
 		if claims.UserID != "u1" {
 			t.Errorf("UserID in context: got %q", claims.UserID)

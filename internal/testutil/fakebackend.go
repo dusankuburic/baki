@@ -97,19 +97,19 @@ func (m *FakeBackend) LoadSettings(_ context.Context) (*interfaces.AppSettings, 
 }
 
 func (m *FakeBackend) SaveUserSettings(_ context.Context, _ string, s *interfaces.AppSettings) error {
-	return m.SaveSettings(nil, s)
+	return m.SaveSettings(context.TODO(), s)
 }
 
 func (m *FakeBackend) LoadUserSettings(_ context.Context, _ string) (*interfaces.AppSettings, error) {
-	return m.LoadSettings(nil)
+	return m.LoadSettings(context.TODO())
 }
 
 func (m *FakeBackend) SaveOrgSettings(_ context.Context, _ string, s *interfaces.AppSettings) error {
-	return m.SaveSettings(nil, s)
+	return m.SaveSettings(context.TODO(), s)
 }
 
 func (m *FakeBackend) LoadOrgSettings(_ context.Context, _ string) (*interfaces.AppSettings, error) {
-	return m.LoadSettings(nil)
+	return m.LoadSettings(context.TODO())
 }
 
 func (m *FakeBackend) SaveConversation(_ context.Context, _, _ string, _ []interfaces.ChatMessage) error {

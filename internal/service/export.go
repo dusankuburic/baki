@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,14 +13,13 @@ import (
 
 // ExportService handles flow diff, markdown, and PDF export operations.
 type ExportService struct {
-	ctx      context.Context
 	notifier Notifier
 	flow     *FlowService
 	analysis *AnalysisService
 }
 
-func NewExportService(ctx context.Context, notifier Notifier, flow *FlowService, analysis *AnalysisService) *ExportService {
-	return &ExportService{ctx: ctx, notifier: notifier, flow: flow, analysis: analysis}
+func NewExportService(notifier Notifier, flow *FlowService, analysis *AnalysisService) *ExportService {
+	return &ExportService{notifier: notifier, flow: flow, analysis: analysis}
 }
 
 func (s *ExportService) CompareCurrentWith(newDoc *models.FlowDocument, oldPath string) (diff *models.FlowDiff, err error) {

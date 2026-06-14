@@ -6,6 +6,7 @@ import VariableChips from './VariableChips'
 import BlockMetadata from './BlockMetadata'
 import ChildrenList from './ChildrenList'
 import VariableLineageInInspector from './VariableLineageInInspector'
+import BlockFindings from './BlockFindings'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
@@ -50,6 +51,7 @@ export default function DetailsTab() {
             <DetailsHeader block={block} />
             <div className="p-4 space-y-4">
                 <PropertiesTable properties={block.properties || {}} />
+                <BlockFindings />
                 {block.variables?.length > 0 && (
                     <CollapsibleSection title={`Variables used (${block.variables.length})`}>
                         <VariableChips variables={block.variables} onVariableClick={handleVariableClick} />

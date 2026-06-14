@@ -8,7 +8,6 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-core/logger"
 	"pad-core/models"
-	"pad-analyzer/internal/storage"
 )
 
 // ProviderService manages AI provider configuration, authentication, and connectivity.
@@ -16,10 +15,11 @@ type ProviderService struct {
 	auth        *ai.GitHubAuth
 	copilotAuth *ai.CopilotAuth
 	factory     *ai.ProviderFactory
+	secrets     SecretStore
 }
 
-func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory) *ProviderService {
-	return &ProviderService{auth: auth, copilotAuth: copilotAuth, factory: factory}
+func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets SecretStore) *ProviderService {
+	return &ProviderService{auth: auth, copilotAuth: copilotAuth, factory: factory, secrets: secrets}
 }
 
 func (s *ProviderService) ListProviders(ctx context.Context, scope string) (providers []models.ProviderInfo, err error) {
@@ -36,14 +36,14 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 		configured := false
 		switch meta.ID {
 		case "github-models":
-			ok, _ := storage.HasApiKeyScoped("", "github-models-token")
+			ok, _ := s.secrets.Has("", "github-models-token")
 			configured = ok
 		case "copilot":
-			oauthOk, _ := storage.HasApiKeyScoped("", "copilot-oauth-token")
-			patOk, _ := storage.HasApiKeyScoped(scope, "copilot")
+			oauthOk, _ := s.secrets.Has("", "copilot-oauth-token")
+			patOk, _ := s.secrets.Has(scope, "copilot")
 			configured = oauthOk || patOk
 		default:
-			ok, _ := storage.HasApiKeyScoped(scope, meta.ID)
+			ok, _ := s.secrets.Has(scope, meta.ID)
 			configured = ok
 		}
 
@@ -170,7 +170,7 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 	}
 
 	if result.Status == "success" && result.Token != "" {
-		if saveErr := storage.SaveApiKeyScoped(scope, "github-models-token", result.Token); saveErr != nil {
+		if saveErr := s.secrets.Save(scope, "github-models-token", result.Token); saveErr != nil {
 			logger.Error("failed to save github token", "error", saveErr)
 		}
 		result.Token = ""
@@ -181,13 +181,13 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 
 func (s *ProviderService) RevokeGitHubAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeGitHubAuth", &err)
-	return storage.DeleteApiKeyScoped(scope, "github-models-token")
+	return s.secrets.Delete(scope, "github-models-token")
 }
 
 func (s *ProviderService) GetGitHubUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetGitHubUser", &err)
 
-	token, err := storage.GetApiKeyScoped(scope, "github-models-token")
+	token, err := s.secrets.Get(scope, "github-models-token")
 	if err != nil {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
@@ -211,7 +211,7 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 	}
 
 	if result.Status == "success" && result.Token != "" {
-		if saveErr := storage.SaveApiKeyScoped(scope, "copilot-oauth-token", result.Token); saveErr != nil {
+		if saveErr := s.secrets.Save(scope, "copilot-oauth-token", result.Token); saveErr != nil {
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
 		}
 		result.Token = ""
@@ -222,13 +222,13 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 
 func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeCopilotAuth", &err)
-	return storage.DeleteApiKeyScoped(scope, "copilot-oauth-token")
+	return s.secrets.Delete(scope, "copilot-oauth-token")
 }
 
 func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetCopilotUser", &err)
 
-	token, err := storage.GetApiKeyScoped(scope, "copilot-oauth-token")
+	token, err := s.secrets.Get(scope, "copilot-oauth-token")
 	if err != nil {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil

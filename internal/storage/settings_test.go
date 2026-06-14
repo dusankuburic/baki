@@ -52,7 +52,7 @@ func TestSettingsStore_Get_ReturnsIsolatedCopy(t *testing.T) {
 	if len(b.RecentFiles) != 0 {
 		t.Errorf("RecentFiles mutation leaked: got %d entries", len(b.RecentFiles))
 	}
-	if md, _ := b.Analysis.Rules["deep-nesting"].Options["maxDepth"]; md == 999 {
+	if md := b.Analysis.Rules["deep-nesting"].Options["maxDepth"]; md == 999 {
 		t.Error("nested Options mutation on returned copy leaked into store")
 	}
 }

@@ -2,31 +2,10 @@ package analyzer
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"pad-core/models"
-	"pad-core/parser"
 )
-
-func loadFixture(t *testing.T, name string) *models.FlowDocument {
-	t.Helper()
-	path := filepath.Join("testdata", name)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat fixture %s: %v", name, err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
-	}
-	doc, err := parser.ParseText(string(data), name, info.Size())
-	if err != nil {
-		t.Fatalf("parse fixture %s: %v", name, err)
-	}
-	return doc
-}
 
 func makeBlock(id, name string, bt models.BlockType, rawType string, indent int) *models.Block {
 	return &models.Block{

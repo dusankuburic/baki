@@ -31,6 +31,13 @@ beforeEach(() => {
 })
 
 describe('AnalyticsDashboard', () => {
+  it('shows loading skeleton during initial fetch', () => {
+    getDashboard.mockReturnValue(new Promise(() => {}))
+    const {container} = renderDash()
+    const skeletons = container.querySelectorAll('.animate-pulse')
+    expect(skeletons.length).toBeGreaterThan(0)
+  })
+
   it('shows the empty state when nothing has been analyzed', async () => {
     getDashboard.mockResolvedValue({
       totalFlowsAnalyzed: 0, totalFindings: 0,

@@ -16,7 +16,6 @@ import (
 	"pad-analyzer/internal/metrics"
 	"pad-core/models"
 	"pad-analyzer/internal/rag"
-	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 
 	"github.com/google/uuid"
@@ -110,7 +109,7 @@ type ChatService struct {
 	configDir     string
 	flowCache     *FlowService
 	analysisCache *AnalysisService
-	settings      *storage.SettingsStore
+	settings      SettingsProvider
 	factory       *ai.ProviderFactory
 	demoLimiter   *ai.DemoLimiter
 	backend       storageif.StorageBackend
@@ -127,7 +126,7 @@ func NewChatService(
 	configDir string,
 	flowCache *FlowService,
 	analysisCache *AnalysisService,
-	settings *storage.SettingsStore,
+	settings SettingsProvider,
 	factory *ai.ProviderFactory,
 	demoLimiter *ai.DemoLimiter,
 	backend storageif.StorageBackend,

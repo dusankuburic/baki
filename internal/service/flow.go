@@ -18,14 +18,13 @@ import (
 	"pad-core/models"
 	"pad-core/parser"
 	"pad-core/search"
-	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // FlowService owns document state, search index, and all file-related operations.
 type FlowService struct {
 	notifier    Notifier
-	settings    *storage.SettingsStore
+	settings    SettingsProvider
 	docProvider DocumentProvider
 	storage     storageif.StorageBackend
 	authz       *AuthzService
@@ -40,7 +39,7 @@ type FlowService struct {
 	idxCache map[string]*search.SearchIndex
 }
 
-func NewFlowService(notifier Notifier, settings *storage.SettingsStore, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
+func NewFlowService(notifier Notifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
 	return &FlowService{
 		notifier:    notifier,
 		settings:    settings,
@@ -144,7 +143,7 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 
 	if s.settings != nil {
 		totalSize := doc.Metadata.FileSize
-		storage.AddRecentFile(s.settings, folderPath, totalSize)
+		s.settings.AddRecentFile(folderPath, totalSize)
 	}
 
 	s.docProvider.SetCurrentDoc(doc)
@@ -259,12 +258,12 @@ func (s *FlowService) RecentFiles() (files []models.RecentFile, err error) {
 
 func (s *FlowService) RemoveRecentFile(path string) (err error) {
 	defer logger.Guard("App.RemoveRecentFile", &err)
-	return storage.RemoveRecentFile(s.settings, path)
+	return s.settings.RemoveRecentFile(path)
 }
 
 func (s *FlowService) ClearRecentFiles() (err error) {
 	defer logger.Guard("App.ClearRecentFiles", &err)
-	return storage.ClearRecentFiles(s.settings)
+	return s.settings.ClearRecentFiles()
 }
 
 func (s *FlowService) RevealInFileManager(path string) (err error) {
@@ -479,7 +478,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	}
 
 	if s.settings != nil {
-		storage.AddRecentFile(s.settings, path, info.Size())
+		s.settings.AddRecentFile(path, info.Size())
 	}
 
 	s.notifier.Emit("flow:loaded", doc)
@@ -491,23 +490,6 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	)
 
 	return doc, nil
-}
-
-func (s *FlowService) readSubflowSource(doc *models.FlowDocument, sf *models.Subflow) string {
-	if sf.SourceFile != "" && doc.FilePath != "" {
-		candidate := filepath.Join(filepath.Dir(doc.FilePath), sf.SourceFile)
-		data, err := os.ReadFile(candidate)
-		if err == nil {
-			return string(data)
-		}
-	}
-	if doc.FilePath != "" {
-		data, err := os.ReadFile(doc.FilePath)
-		if err == nil {
-			return string(data)
-		}
-	}
-	return ""
 }
 
 func searchBlock(blocks []models.Block, id string) *models.Block {

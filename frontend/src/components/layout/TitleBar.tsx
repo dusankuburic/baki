@@ -4,6 +4,7 @@ import {isTauri} from '@/platform/guards'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import OrgSwitcher from './OrgSwitcher'
+import PresenceIndicators from '@/components/collaboration/PresenceIndicators'
 
 const platform = createAdapter()
 
@@ -38,6 +39,7 @@ export default function TitleBar() {
             </span>
             <div className="flex-1 h-full pointer-events-none" />
             <div className="flex items-center gap-1">
+                <PresenceIndicators className="mr-1" />
                 <OrgSwitcher />
                 <button
                     onClick={toggleSettings}

@@ -125,6 +125,21 @@ func (s *SettingsStore) persistLocked() error {
 	return nil
 }
 
+// AddRecentFile records a file/folder in the recent-files list (capped at 10).
+func (s *SettingsStore) AddRecentFile(path string, size int64) error {
+	return AddRecentFile(s, path, size)
+}
+
+// RemoveRecentFile removes a specific path from the recent-files list.
+func (s *SettingsStore) RemoveRecentFile(path string) error {
+	return RemoveRecentFile(s, path)
+}
+
+// ClearRecentFiles empties the recent-files list.
+func (s *SettingsStore) ClearRecentFiles() error {
+	return ClearRecentFiles(s)
+}
+
 var migrations = map[int]func(*models.AppSettings) error{}
 
 func migrate(s *models.AppSettings) error {

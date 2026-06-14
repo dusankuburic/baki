@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/storage/interfaces"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -53,9 +52,9 @@ func BenchmarkBatchFlowPermissions_WithFakeBackend(b *testing.B) {
 	// where BatchFlowPermissions makes 1 LoadOrg + 1 ListCollaboratorsBatch
 	// instead of N*LoadOrg + N*ListCollaborators.
 	authz := NewAuthzService(nil, nil)
-	docs := make([]*interfaces.FlowDocument, 50)
+	docs := make([]*storageif.FlowDocument, 50)
 	for i := range docs {
-		docs[i] = &interfaces.FlowDocument{
+		docs[i] = &storageif.FlowDocument{
 			ID:      "flow-" + string(rune('a'+i)),
 			OwnerID: "user1",
 		}

@@ -52,6 +52,14 @@ func SetSecretStore(s SecretStore) {
 	activeStore = s
 }
 
+// CurrentSecretStore returns the active secret backend. Used by the DI
+// container to inject the SecretStore into services.
+func CurrentSecretStore() SecretStore {
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+	return activeStore
+}
+
 func currentStore() SecretStore {
 	storeMu.RLock()
 	defer storeMu.RUnlock()

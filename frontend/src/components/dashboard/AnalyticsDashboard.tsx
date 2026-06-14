@@ -60,13 +60,16 @@ export default function AnalyticsDashboard() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [batch, setBatch] = useState<BatchAnalysis | null>(null)
   const [batchRunning, setBatchRunning] = useState(false)
 
   const refresh = useCallback(() => {
+    setLoading(true)
+    setError(null)
     analysisApi.getDashboard()
       .then(s => setStats(s))
-      .catch((err) => { logger.warn('Failed to load dashboard stats', err) })
+      .catch((err) => { logger.warn('Failed to load dashboard stats', err); setError(err instanceof Error ? err.message : 'Failed to load') })
       .finally(() => setLoading(false))
   }, [])
 
@@ -137,7 +140,19 @@ export default function AnalyticsDashboard() {
         </button>
       </div>
 
-      {loading ? (
+      {error ? (
+        <div className="flex flex-col items-center justify-center gap-3 py-16 rounded-xl border border-border-subtle bg-surface-0">
+          <AlertTriangle size={22} className="text-red-400" />
+          <span className="text-sm text-text-secondary">Failed to load dashboard</span>
+          <span className="text-sm text-text-tertiary">{error}</span>
+          <button
+            onClick={refresh}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-surface-2 border border-border-subtle text-text-primary hover:bg-surface-3 transition-colors"
+          >
+            <RefreshCw size={14} /> Retry
+          </button>
+        </div>
+      ) : loading ? (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-2">
             {[0, 1, 2].map(i => (

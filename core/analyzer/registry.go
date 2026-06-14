@@ -28,5 +28,8 @@ func AllRules() []Rule {
 		&DeadDataRule{},
 		&HardcodedFilePathRule{},
 		&SqlInjectionRiskRule{},
+		&HardcodedURLRule{},
+		&LargeSubflowRule{},
+		&DisabledBlockRule{},
 	}
 }

@@ -110,6 +110,33 @@ func TestAuthz_CheckFlowAccess_Matrix(t *testing.T) {
 	}
 }
 
+// TestAuthz_OrgFlowExplicitCollaborator covers a user who is NOT a member of the
+// owning org but was granted an explicit per-flow collaborator role. Access must
+// be granted via the collaborator path: a non-member MemberRole lookup
+// (ErrMemberNotFound) must not short-circuit the check. Regression test for the
+// gate diverging from FlowPermissions (UI showed the flow editable while the
+// API returned 403).
+func TestAuthz_OrgFlowExplicitCollaborator(t *testing.T) {
+	authz, backend, orgSvc := newAuthzFixture(t)
+	orgID := seedAuthzOrg(t, orgSvc)
+	seedAuthzFlow(t, backend, "org-shared", "alice", orgID)
+	addAuthzCollab(t, backend, "org-shared", "frank", "editor") // frank is not in org1
+
+	ctx := context.Background()
+	if err := authz.CheckFlowAccess(ctx, "org-shared", "alice", orgID, "frank", "viewer"); err != nil {
+		t.Errorf("non-member collaborator should read an org flow: %v", err)
+	}
+	if err := authz.CheckFlowAccess(ctx, "org-shared", "alice", orgID, "frank", "editor"); err != nil {
+		t.Errorf("non-member editor collaborator should edit an org flow: %v", err)
+	}
+	if err := authz.CheckFlowAccess(ctx, "org-shared", "alice", orgID, "frank", "admin"); err == nil {
+		t.Error("editor collaborator must not have admin on an org flow")
+	}
+	if err := authz.CheckFlowAccess(ctx, "org-shared", "alice", orgID, "mallory", "viewer"); err == nil {
+		t.Error("stranger with no grant must be denied on an org flow")
+	}
+}
+
 func TestAuthz_CheckFlowAccessByID(t *testing.T) {
 	authz, backend, orgSvc := newAuthzFixture(t)
 	orgID := seedAuthzOrg(t, orgSvc)

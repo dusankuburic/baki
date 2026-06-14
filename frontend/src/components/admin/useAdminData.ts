@@ -9,6 +9,7 @@ export function useAdminData(isAdmin: boolean) {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [auditAction, setAuditAction] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetchStatus = useCallback(async () => {
@@ -59,11 +60,14 @@ export function useAdminData(isAdmin: boolean) {
   const startMigration = useCallback(async () => {
     if (!confirm('Start data migration from filesystem to database? This will skip already migrated flows.')) return
     setError(null)
+    setIsStarting(true)
     try {
       await adminApi.startMigration()
       await fetchStatus()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start migration')
+    } finally {
+      setIsStarting(false)
     }
   }, [fetchStatus])
 
@@ -87,7 +91,7 @@ export function useAdminData(isAdmin: boolean) {
 
   return {
     migrationStatus, users, auditEvents, auditAction,
-    isLoading, error,
+    isLoading, isStarting, error,
     fetchAll, startMigration, changeRole, filterAudit,
   }
 }

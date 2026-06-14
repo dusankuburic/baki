@@ -15,8 +15,9 @@ function migrationStatusClass(status?: string) {
 export const DataMigrationSection: React.FC<{
   status: MigrationStatus | null
   isLoading: boolean
+  isStarting?: boolean
   onStart: () => void
-}> = ({status, isLoading, onStart}) => (
+}> = ({status, isLoading, isStarting = false, onStart}) => (
   <section className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
     <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
       <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Data Migration</h2>
@@ -49,7 +50,7 @@ export const DataMigrationSection: React.FC<{
       )}
 
       <div className="flex flex-col gap-2">
-        <Button variant="primary" size="md" onClick={onStart} disabled={status?.status === 'running' || isLoading}>
+        <Button variant="primary" size="md" onClick={onStart} disabled={status?.status === 'running' || isLoading || isStarting} loading={isStarting}>
           Start Migration
         </Button>
         <p className="text-xs text-text-tertiary">

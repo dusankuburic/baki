@@ -15,7 +15,6 @@ import (
 	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
 	"pad-core/models"
-	"pad-analyzer/internal/storage"
 )
 
 // AnalysisService owns analysis report state and all analysis-related operations.
@@ -48,14 +47,14 @@ func analysisHistoryKey(doc *models.FlowDocument) string {
 
 type AnalysisService struct {
 	notifier Notifier
-	settings *storage.SettingsStore
+	settings SettingsProvider
 	history  *analyzer.HistoryStore
 
 	mu      sync.Mutex
 	reports map[string]*reportPair
 }
 
-func NewAnalysisService(notifier Notifier, settings *storage.SettingsStore, history *analyzer.HistoryStore) *AnalysisService {
+func NewAnalysisService(notifier Notifier, settings SettingsProvider, history *analyzer.HistoryStore) *AnalysisService {
 	return &AnalysisService{
 		notifier: notifier,
 		settings: settings,
@@ -145,6 +144,18 @@ func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.Anal
 		return nil, false
 	}
 	return pair.prev, true
+}
+
+// CurrentReport returns the most recent analysis report for the flow, or
+// (nil, false) when no analysis has been run yet.
+func (s *AnalysisService) CurrentReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pair := s.reports[analysisHistoryKey(doc)]
+	if pair == nil || pair.current == nil {
+		return nil, false
+	}
+	return pair.current, true
 }
 
 // History returns the persisted analysis trend snapshots for a flow.

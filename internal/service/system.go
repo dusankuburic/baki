@@ -8,7 +8,6 @@ import (
 
 	"pad-core/logger"
 	"pad-core/models"
-	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -20,13 +19,14 @@ var (
 
 // SystemService handles settings, info, error logging, and API keys.
 type SystemService struct {
-	settings *storage.SettingsStore
+	settings SettingsProvider
+	secrets  SecretStore
 	notifier Notifier
 	backend  storageif.StorageBackend
 }
 
-func NewSystemService(settings *storage.SettingsStore, notifier Notifier, backend storageif.StorageBackend) *SystemService {
-	return &SystemService{settings: settings, notifier: notifier, backend: backend}
+func NewSystemService(settings SettingsProvider, secrets SecretStore, notifier Notifier, backend storageif.StorageBackend) *SystemService {
+	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend}
 }
 
 func (s *SystemService) GetSettings() (settings *models.AppSettings, err error) {
@@ -170,15 +170,15 @@ func (s *SystemService) LogError(payload models.FrontendError) {
 
 func (s *SystemService) SaveApiKey(scope, provider string, key string) (err error) {
 	defer logger.Guard("SystemService.SaveApiKey", &err)
-	return storage.SaveApiKeyScoped(scope, provider, key)
+	return s.secrets.Save(scope, provider, key)
 }
 
 func (s *SystemService) HasApiKey(scope, provider string) (result bool, err error) {
 	defer logger.Guard("SystemService.HasApiKey", &err)
-	return storage.HasApiKeyScoped(scope, provider)
+	return s.secrets.Has(scope, provider)
 }
 
 func (s *SystemService) DeleteApiKey(scope, provider string) (err error) {
 	defer logger.Guard("SystemService.DeleteApiKey", &err)
-	return storage.DeleteApiKeyScoped(scope, provider)
+	return s.secrets.Delete(scope, provider)
 }

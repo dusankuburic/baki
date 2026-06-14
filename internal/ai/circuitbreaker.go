@@ -25,11 +25,6 @@ const (
 	cbOpenDuration     = 30 * time.Second // minimum time before allowing a probe
 )
 
-type cbConfig struct {
-	FailureThreshold int
-	OpenDuration     time.Duration
-}
-
 type circuitState int
 
 const (
@@ -168,10 +163,25 @@ func (cb *CircuitBreakerProvider) record(err error) {
 	cb.st.mu.Lock()
 	defer cb.st.mu.Unlock()
 	if err == nil {
+		// Any success (including the half-open probe) closes the circuit.
 		cb.transitionLocked(circuitClosed)
 		cb.st.failures = 0
 		return
 	}
+	// A failed half-open probe must always resolve the probe — otherwise the
+	// circuit stays half-open and check() rejects every caller forever. Reopen
+	// and restart the cooldown regardless of whether the error is "retryable":
+	// a timeout/cancel means the provider is still unhealthy, and a permanent
+	// error is surfaced to the next admitted probe after the cooldown rather
+	// than wedging the breaker until process restart.
+	if cb.st.state == circuitHalfOpen {
+		cb.st.lastFailure = time.Now()
+		cb.transitionLocked(circuitOpen)
+		return
+	}
+	// Closed circuit: only transient provider conditions count toward tripping.
+	// Permanent errors (bad key, invalid request, user cancellation) must not
+	// open the circuit for everyone.
 	if !isRetryable(err) {
 		return
 	}

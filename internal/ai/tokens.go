@@ -86,7 +86,7 @@ func TruncateToTokenLimit(text string, maxTokens int) string {
 	}
 
 	count := 0
-	for i, _ := range text {
+	for i := range text {
 		if count == maxChars-3 {
 			return text[:i] + "..."
 		}

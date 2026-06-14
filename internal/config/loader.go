@@ -371,7 +371,7 @@ func validateTLSConfig(cfg *Config) error {
 		return errors.New("config: server.tls_cert and server.tls_key must be set together (or both empty)")
 	}
 	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && !hasCert && !cfg.Server.BehindProxy {
-		return errors.New("config: cloud-mode auth requires TLS — set PAD_TLS_CERT/PAD_TLS_KEY to serve HTTPS directly, or PAD_BEHIND_PROXY=true if a TLS-terminating reverse proxy is in front. Without one, JWTs and passwords would be sent in plaintext.")
+		return errors.New("config: cloud-mode auth requires TLS — set PAD_TLS_CERT/PAD_TLS_KEY to serve HTTPS directly, or PAD_BEHIND_PROXY=true if a TLS-terminating reverse proxy is in front (without one, JWTs and passwords would be sent in plaintext)")
 	}
 	return nil
 }

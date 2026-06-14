@@ -230,6 +230,7 @@ func DefaultSettings() *AppSettings {
 			SpacesPerIndent:  4,
 		},
 		Analysis: AnalysisSettings{
+			AutoAnalyzeOnOpen: true,
 			Rules: map[string]RuleConfig{
 				"unhandled-error":         {Enabled: true, Severity: "warning"},
 				"infinite-loop-risk":      {Enabled: true, Severity: "error"},
@@ -257,6 +258,9 @@ func DefaultSettings() *AppSettings {
 				"dead-data":               {Enabled: true, Severity: "info"},
 				"hardcoded-filepath":      {Enabled: true, Severity: "info"},
 				"sql-injection-risk":      {Enabled: true, Severity: "warning"},
+				"hardcoded-url":           {Enabled: true, Severity: "info"},
+				"large-subflow":           {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 50}},
+				"disabled-block":          {Enabled: true, Severity: "info"},
 			},
 		},
 	}

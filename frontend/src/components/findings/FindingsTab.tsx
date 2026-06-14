@@ -1,11 +1,12 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
-import {Download, FileText, Search, GitCompareArrows} from 'lucide-react'
+import {Download, FileText, Search, GitCompareArrows, Layers} from 'lucide-react'
 import {analysisApi} from '@/api'
 import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
 import {EmptyState, Spinner, useToast} from '@/components/shared'
+import {categoryColors, categoryBackgrounds} from '@/lib/findingsColors'
 import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
 import AnalysisDiffView from './AnalysisDiffView'
@@ -39,10 +40,13 @@ export default function FindingsTab() {
   const toast = useToast()
   const [diff, setDiff] = useState<AnalysisDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  const [dedupGroups, setDedupGroups] = useState<Map<string, number> | null>(null)
+  const [dedupLoading, setDedupLoading] = useState(false)
 
   // Leave the diff view when switching documents or after a fresh analysis.
   useEffect(() => {
     setDiff(null)
+    setDedupGroups(null)
   }, [doc?.id, report?.generatedAt])
 
   const findings = useMemo(() => {
@@ -50,13 +54,14 @@ export default function FindingsTab() {
     const isSuppressed = (id: string) => suppressedFindings.some(s => s.findingId === id)
     const q = findingSearch.toLowerCase()
     return report.findings.filter(f => {
+      if (dedupGroups && !dedupGroups.has(f.id)) return false
       if (!severityFilter.has(f.severity)) return false
       if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
       if (isSuppressed(f.id)) return false
       if (q && !f.title.toLowerCase().includes(q) && !f.description.toLowerCase().includes(q) && !f.ruleId.toLowerCase().includes(q)) return false
       return true
     })
-  }, [report, severityFilter, categoryFilter, findingSearch, suppressedFindings])
+  }, [report, severityFilter, categoryFilter, findingSearch, suppressedFindings, dedupGroups])
 
   const suppressedCount = useMemo(() => {
     if (!report) return 0
@@ -125,7 +130,27 @@ export default function FindingsTab() {
     } finally {
       setDiffLoading(false)
     }
-  }, [setDiffLoading, setDiff])
+  }, [setDiffLoading, setDiff, toast])
+
+  const handleToggleDedup = useCallback(async () => {
+    if (dedupGroups) {
+      setDedupGroups(null)
+      return
+    }
+    setDedupLoading(true)
+    try {
+      const result = await analysisApi.deduplicate()
+      const map = new Map<string, number>()
+      for (const f of result.deduplicated) {
+        map.set(f.id, 0)
+      }
+      setDedupGroups(map)
+    } catch (err) {
+      toast.error('Deduplicate failed: ' + (err as Error).message)
+    } finally {
+      setDedupLoading(false)
+    }
+  }, [dedupGroups, toast, setDedupGroups, setDedupLoading])
 
   const handleExportCSV = useCallback(() => {
     if (!report) return
@@ -200,20 +225,6 @@ export default function FindingsTab() {
           ))}
           <span className="text-border-subtle mx-0.5">|</span>
           {allCategories.map(cat => {
-            const catColors: Record<string, string> = {
-              Security: 'text-red-400',
-              Reliability: 'text-amber-400',
-              Performance: 'text-orange-400',
-              Style: 'text-purple-400',
-              Logic: 'text-cyan-400',
-            }
-            const catBg: Record<string, string> = {
-              Security: 'bg-red-500/10',
-              Reliability: 'bg-amber-500/10',
-              Performance: 'bg-orange-500/10',
-              Style: 'bg-purple-500/10',
-              Logic: 'bg-cyan-500/10',
-            }
             return (
               <button
                 key={cat}
@@ -221,7 +232,7 @@ export default function FindingsTab() {
                 className={clsx(
                   'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
                   categoryFilter.has(cat)
-                    ? `${catBg[cat]} ${catColors[cat]} border-transparent`
+                    ? `${categoryBackgrounds[cat] ?? 'bg-surface-3'} ${categoryColors[cat] ?? 'text-text-tertiary'} border-transparent`
                     : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
                 )}
               >
@@ -256,6 +267,20 @@ export default function FindingsTab() {
         >
           <GitCompareArrows size={12} />
         </button>
+        <button
+          onClick={handleToggleDedup}
+          disabled={dedupLoading}
+          title={dedupGroups ? 'Show all findings' : 'Group duplicate findings'}
+          aria-label="Toggle duplicate grouping"
+          className={clsx(
+            'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0 disabled:opacity-50',
+            dedupGroups
+              ? 'text-brand-400 bg-brand-500/10'
+              : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3'
+          )}
+        >
+          <Layers size={12} />
+        </button>
         {report!.findings.length > 0 && (
           <>
             <button
@@ -275,6 +300,17 @@ export default function FindingsTab() {
           </>
         )}
       </div>
+      {dedupGroups && (
+        <div className="px-3 py-1 flex items-center justify-between text-2xs text-brand-400 bg-brand-500/5 border-b border-border-subtle">
+          <span>Grouped: {findings.length} unique findings ({report!.findings.length - findings.length} duplicates folded)</span>
+          <button
+            onClick={() => setDedupGroups(null)}
+            className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
+          >
+            Show all
+          </button>
+        </div>
+      )}
       {suppressedCount > 0 && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-text-tertiary border-b border-border-subtle">
           <span>{suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed</span>

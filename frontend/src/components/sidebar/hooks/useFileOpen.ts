@@ -1,4 +1,4 @@
-import {useState, useCallback, useEffect} from 'react'
+import {useState, useCallback, useEffect, useRef} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
@@ -19,6 +19,7 @@ export function useFileOpen() {
 
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
     const [isLoading, setIsLoading] = useState(false)
+    const loadIdRef = useRef(0)
 
     const checkView = useCallback(() => {
         const view = useUIStore.getState().mainPaneView
@@ -26,6 +27,15 @@ export function useFileOpen() {
             setMainPaneView('block')
         }
     }, [setMainPaneView])
+
+    const beginLoad = useCallback(() => {
+        loadIdRef.current++
+        const myId = loadIdRef.current
+        setIsLoading(true)
+        return () => myId === loadIdRef.current
+    }, [])
+
+    const endLoad = useCallback(() => setIsLoading(false), [])
 
     useEffect(() => {
         if (!isTauri()) return
@@ -35,10 +45,10 @@ export function useFileOpen() {
     }, [document])
 
     const handleOpenFile = useCallback(async () => {
-        setIsLoading(true)
+        const isLatest = beginLoad()
         try {
             const doc = await flowApi.openFlowFile()
-            if (doc) {
+            if (doc && isLatest()) {
                 setDocument(doc)
                 setFolderFiles([])
                 setSelectedFilePath(doc.filePath)
@@ -48,15 +58,15 @@ export function useFileOpen() {
             logger.warn('Failed to open file:', err)
             toast.error('Failed to open file', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            setIsLoading(false)
+            if (isLatest()) endLoad()
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, beginLoad, endLoad])
 
     const handleOpenFolder = useCallback(async () => {
-        setIsLoading(true)
+        const isLatest = beginLoad()
         try {
             const doc = await flowApi.openFlowFolder()
-            if (doc) {
+            if (doc && isLatest()) {
                 setDocument(doc)
                 if (doc.files && doc.files.length > 0) {
                     setFolderFiles(doc.files)
@@ -68,9 +78,9 @@ export function useFileOpen() {
             logger.warn('Failed to open folder:', err)
             toast.error('Failed to open folder', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            setIsLoading(false)
+            if (isLatest()) endLoad()
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, beginLoad, endLoad])
 
     const handleSelectFolderFile = useCallback(async (path: string) => {
         setSelectedFilePath(path)
@@ -87,14 +97,14 @@ export function useFileOpen() {
         }
         
         if (!isTauri()) {
-            logger.warn('Cannot load subflow from path in web mode')
+            toast.error('This action requires the desktop app')
             return
         }
 
-        setIsLoading(true)
+        const isLatest = beginLoad()
         try {
             const newDoc = await flowApi.loadFlowFromPath(path)
-            if (newDoc) {
+            if (newDoc && isLatest()) {
                 setDocument(newDoc)
                 checkView()
             }
@@ -102,19 +112,19 @@ export function useFileOpen() {
             logger.warn('Failed to load file:', err)
             toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            setIsLoading(false)
+            if (isLatest()) endLoad()
         }
-    }, [setDocument, setSelectedFilePath, openInGroup, checkView, toast])
+    }, [setDocument, setSelectedFilePath, openInGroup, checkView, toast, beginLoad, endLoad])
 
     const handleLoadRecent = useCallback(async (path: string) => {
         if (!isTauri()) return
-        setIsLoading(true)
+        const isLatest = beginLoad()
         try {
             const recent = recentFiles.find(f => f.path === path)
-            const doc = recent?.isFolder 
+            const doc = recent?.isFolder
                 ? await flowApi.loadFlowFolder(path)
                 : await flowApi.loadFlowFromPath(path)
-            if (doc) {
+            if (doc && isLatest()) {
                 setDocument(doc)
                 if (doc.isFolder && doc.files) {
                     setFolderFiles(doc.files)
@@ -129,9 +139,9 @@ export function useFileOpen() {
             logger.warn('Failed to load recent item:', err)
             toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            setIsLoading(false)
+            if (isLatest()) endLoad()
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast, beginLoad, endLoad])
 
     const handleRemoveRecent = useCallback(async (path: string) => {
         try {

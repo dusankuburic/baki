@@ -24,7 +24,7 @@ func TestEncryptedKeyStore_EncryptDecryptRoundTrip(t *testing.T) {
 	s := newTestStore(t, "a-sufficiently-long-deployment-secret-123456")
 
 	const plaintext = "sk-test-1234567890abcdef"
-	ct, err := s.encrypt(plaintext)
+	ct, err := s.encrypt(plaintext, nil)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestEncryptedKeyStore_EncryptDecryptRoundTrip(t *testing.T) {
 		t.Fatal("ciphertext must not equal plaintext")
 	}
 
-	got, err := s.decrypt(ct)
+	got, err := s.decrypt(ct, nil)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
@@ -44,11 +44,11 @@ func TestEncryptedKeyStore_EncryptDecryptRoundTrip(t *testing.T) {
 func TestEncryptedKeyStore_NonceIsRandom(t *testing.T) {
 	s := newTestStore(t, "a-sufficiently-long-deployment-secret-123456")
 
-	a, err := s.encrypt("same-value")
+	a, err := s.encrypt("same-value", nil)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	b, err := s.encrypt("same-value")
+	b, err := s.encrypt("same-value", nil)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -59,15 +59,40 @@ func TestEncryptedKeyStore_NonceIsRandom(t *testing.T) {
 
 func TestEncryptedKeyStore_WrongSecretFailsToDecrypt(t *testing.T) {
 	enc := newTestStore(t, "the-original-deployment-secret-aaaaaaaaaaaa")
-	ct, err := enc.encrypt("super-secret-token")
+	ct, err := enc.encrypt("super-secret-token", nil)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 
 	// A store built from a different secret must not be able to decrypt.
 	other := newTestStore(t, "a-completely-different-secret-bbbbbbbbbbbb")
-	if _, err := other.decrypt(ct); err == nil {
+	if _, err := other.decrypt(ct, nil); err == nil {
 		t.Fatal("expected decrypt to fail with a different secret")
+	}
+}
+
+// TestEncryptedKeyStore_AADBindsToRow verifies that a ciphertext sealed for one
+// (scope, provider) cannot be decrypted under a different identity — defending
+// against a row-swap in the provider_keys table.
+func TestEncryptedKeyStore_AADBindsToRow(t *testing.T) {
+	s := newTestStore(t, "a-sufficiently-long-deployment-secret-123456")
+
+	ct, err := s.encrypt("sk-row-bound-token", keyAAD("user-a", "openai"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := s.decrypt(ct, keyAAD("user-b", "openai")); err == nil {
+		t.Fatal("decrypt under a different scope must fail (AAD mismatch)")
+	}
+	if _, err := s.decrypt(ct, keyAAD("user-a", "anthropic")); err == nil {
+		t.Fatal("decrypt under a different provider must fail (AAD mismatch)")
+	}
+	got, err := s.decrypt(ct, keyAAD("user-a", "openai"))
+	if err != nil {
+		t.Fatalf("decrypt with correct AAD: %v", err)
+	}
+	if got != "sk-row-bound-token" {
+		t.Fatalf("round-trip mismatch: %q", got)
 	}
 }
 

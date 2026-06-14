@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,8 +110,9 @@ func (c *AnalysisCache) Put(flowID, hash string, report *models.AnalysisReport) 
 func (c *AnalysisCache) Invalidate(flowID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	prefix := flowID + ":"
 	for k := range c.entries {
-		if len(k) > len(flowID) && k[:len(flowID)] == flowID {
+		if strings.HasPrefix(k, prefix) {
 			delete(c.entries, k)
 		}
 	}

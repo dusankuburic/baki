@@ -162,6 +162,50 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_NonRetryableProbeDoesNotWedge verifies that a half-open
+// probe failing with a NON-retryable error (e.g. a context timeout or cancelled
+// stream) reopens the circuit instead of leaving it stuck half-open forever —
+// which would reject every subsequent call to the provider until restart.
+func TestCircuitBreaker_NonRetryableProbeDoesNotWedge(t *testing.T) {
+	// Trip the circuit with retryable failures, then queue a non-retryable
+	// error for the half-open probe (the stub returns successes afterwards).
+	errs := make([]error, cbFailureThreshold)
+	for i := range errs {
+		errs[i] = ErrProviderDown
+	}
+	errs = append(errs, context.DeadlineExceeded) // the half-open probe
+	resetBreakerRegistry()
+	cb := NewCircuitBreakerProvider(newCBStub(errs...))
+
+	for range cbFailureThreshold {
+		cbCall(t, cb) //nolint:errcheck
+	}
+	if !errors.Is(cbCall(t, cb), ErrCircuitOpen) {
+		t.Fatal("circuit should be open after threshold")
+	}
+
+	// Enter half-open and let the single probe fail with the non-retryable error.
+	cb.st.mu.Lock()
+	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.st.mu.Unlock()
+	if err := cbCall(t, cb); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("half-open probe expected context.DeadlineExceeded, got %v", err)
+	}
+
+	// Before the fix this wedged half-open. It must instead be open (cooling
+	// down): subsequent callers get ErrCircuitOpen, and after the cooldown a
+	// fresh probe is admitted and can recover.
+	if !errors.Is(cbCall(t, cb), ErrCircuitOpen) {
+		t.Fatal("circuit should be open (cooling down) after a failed probe, not wedged half-open")
+	}
+	cb.st.mu.Lock()
+	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.st.mu.Unlock()
+	if err := cbCall(t, cb); err != nil {
+		t.Fatalf("circuit should admit a fresh probe and recover, got %v", err)
+	}
+}
+
 // TestCircuitBreaker_PersistsAcrossInstances verifies that breaker state is
 // shared per provider ID, so failures accumulated through one
 // CircuitBreakerProvider open the circuit for a *separate* instance wrapping the

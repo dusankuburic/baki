@@ -196,19 +196,6 @@ func orDefault(val, def int) int {
 	return val
 }
 
-func convertMessages(msgs []Message, toRoleFn func(string) string) []messageRole {
-	out := make([]messageRole, len(msgs))
-	for i, m := range msgs {
-		out[i] = messageRole{Role: toRoleFn(m.Role), Content: m.Content}
-	}
-	return out
-}
-
-type messageRole struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
 // ModelContextLimit returns the context limit for a specific model, falling
 // back to the provider-wide limit when the model is not in the model list.
 func ModelContextLimit(ctx context.Context, p Provider, model string) int {

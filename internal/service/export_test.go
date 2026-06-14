@@ -10,7 +10,7 @@ import (
 )
 
 func TestExportService_ExportMarkdown_NilDoc(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	_, err := svc.ExportMarkdown(nil, &models.AnalysisReport{}, "")
 	if err == nil {
 		t.Error("expected error for nil doc")
@@ -18,7 +18,7 @@ func TestExportService_ExportMarkdown_NilDoc(t *testing.T) {
 }
 
 func TestExportService_ExportMarkdown_NilReport(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	_, err := svc.ExportMarkdown(&models.FlowDocument{}, nil, "")
 	if err == nil {
 		t.Error("expected error for nil report")
@@ -26,7 +26,7 @@ func TestExportService_ExportMarkdown_NilReport(t *testing.T) {
 }
 
 func TestExportService_ExportMarkdown_GeneratesContent(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 
 	doc := &models.FlowDocument{ID: "test", Name: "Test Flow"}
 	report := &models.AnalysisReport{FlowID: "test", FlowName: "Test Flow"}
@@ -44,7 +44,7 @@ func TestExportService_ExportMarkdown_WritesToFile(t *testing.T) {
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "report.md")
 
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	doc := &models.FlowDocument{ID: "test", Name: "Test Flow"}
 	report := &models.AnalysisReport{FlowID: "test", FlowName: "Test Flow"}
 
@@ -63,7 +63,7 @@ func TestExportService_ExportMarkdown_WritesToFile(t *testing.T) {
 }
 
 func TestExportService_ExportPDF_NilDoc(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	_, err := svc.ExportPDF(nil, &models.AnalysisReport{}, "")
 	if err == nil {
 		t.Error("expected error for nil doc")
@@ -71,7 +71,7 @@ func TestExportService_ExportPDF_NilDoc(t *testing.T) {
 }
 
 func TestExportService_ExportPDF_NilReport(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	_, err := svc.ExportPDF(&models.FlowDocument{}, nil, "")
 	if err == nil {
 		t.Error("expected error for nil report")
@@ -79,7 +79,7 @@ func TestExportService_ExportPDF_NilReport(t *testing.T) {
 }
 
 func TestExportService_CompareCurrentWith_NilDoc(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	_, err := svc.CompareCurrentWith(nil, "/some/path")
 	if err == nil {
 		t.Error("expected error for nil doc")
@@ -87,7 +87,7 @@ func TestExportService_CompareCurrentWith_NilDoc(t *testing.T) {
 }
 
 func TestExportService_CompareCurrentWith_InvalidPath(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	doc := &models.FlowDocument{ID: "test"}
 	_, err := svc.CompareCurrentWith(doc, "")
 	if err == nil {
@@ -96,7 +96,7 @@ func TestExportService_CompareCurrentWith_InvalidPath(t *testing.T) {
 }
 
 func TestExportService_CompareCurrentWith_FileNotFound(t *testing.T) {
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	doc := &models.FlowDocument{ID: "test"}
 	_, err := svc.CompareCurrentWith(doc, "/nonexistent/path/to/file.txt")
 	if err == nil {
@@ -112,7 +112,7 @@ func TestExportService_CompareCurrentWith_ValidFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewExportService(nil, NilNotifier{}, nil, nil)
+	svc := NewExportService(NilNotifier{}, nil, nil)
 	newDoc, err := parser.ParseText(oldContent, "old.txt", int64(len(oldContent)))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)

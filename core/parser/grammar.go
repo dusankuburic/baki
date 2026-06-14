@@ -34,7 +34,6 @@ var (
 	reWaitExpression = regexp.MustCompile(`^(?i)WAIT\s+\(`)
 	reDottedAction   = regexp.MustCompile(`^([A-Z][a-zA-Z0-9]*(?:\.[A-Z][a-zA-Z0-9]*)+)\s+(.*)`)
 	reOutputVar      = regexp.MustCompile(`=>\s*(\w+)\s*$`)
-	rePropertyPair   = regexp.MustCompile(`(\w[\w.]*):\s*`)
 	// Captures anything between % signs as an expression.
 	reVariableRef    = regexp.MustCompile(`%([^%]+)%`)
 	// Captures PAD string literals: $'''...''', '''...''', '...', or "..."

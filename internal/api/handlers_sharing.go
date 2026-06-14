@@ -161,6 +161,3 @@ func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": userID, "action": "remove"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
-
-func (h *SharingHandler) handleSharingRoute(w http.ResponseWriter, r *http.Request) {
-}

@@ -42,6 +42,12 @@ func (a *AuthzService) CheckFlowAccess(ctx context.Context, flowID, ownerID, org
 	}
 
 	need := permRank(minPerm)
+	if need == 0 {
+		// Unrecognised minimum-permission requirement: fail closed rather than
+		// treating it as "no requirement" (which, via the >= need comparisons
+		// below, would otherwise grant any collaborator).
+		return ErrPermissionDenied
+	}
 
 	// Ownerless legacy flows: read-only for everyone.
 	if ownerID == "" {
@@ -55,13 +61,13 @@ func (a *AuthzService) CheckFlowAccess(ctx context.Context, flowID, ownerID, org
 		return nil
 	}
 
-	// Org role grants tiered access to org flows.
+	// Org role grants tiered access to org flows. A non-member (ErrMemberNotFound)
+	// or a transient lookup error must NOT short-circuit the explicit collaborator
+	// grant below — org membership is one access path, not a gate. Grant here only
+	// on a successful lookup meeting the threshold; otherwise fall through (the
+	// trailing return fail-closes), mirroring FlowPermissions/BatchFlowPermissions.
 	if orgID != "" && a.orgSvc != nil {
-		role, err := a.orgSvc.MemberRole(ctx, orgID, userID)
-		if err != nil {
-			return ErrPermissionDenied
-		}
-		if orgRoleToPermRank(role) >= need {
+		if role, err := a.orgSvc.MemberRole(ctx, orgID, userID); err == nil && orgRoleToPermRank(role) >= need {
 			return nil
 		}
 	}

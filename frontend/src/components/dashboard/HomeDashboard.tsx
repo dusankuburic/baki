@@ -32,14 +32,19 @@ export default function HomeDashboard() {
   const toast = useToast()
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
 
+  const loadIdRef = useRef(0)
+
   const load = useCallback(() => {
+    loadIdRef.current++
+    const myId = loadIdRef.current
     dashboardApi.getHome()
-      .then(d => { setData(d); setError(null) })
+      .then(d => { if (myId === loadIdRef.current) { setData(d); setError(null) } })
       .catch(e => {
+        if (myId !== loadIdRef.current) return
         logger.error('dashboard: load failed', e)
         setError(e instanceof Error ? e.message : 'Failed to load dashboard')
       })
-      .finally(() => setLoading(false))
+      .finally(() => { if (myId === loadIdRef.current) setLoading(false) })
   }, [])
 
   const retry = useCallback(() => {

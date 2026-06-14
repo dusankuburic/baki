@@ -26,7 +26,7 @@ export const AdminDashboard: React.FC = () => {
 
   const {
     migrationStatus, users, auditEvents, auditAction,
-    isLoading, error,
+    isLoading, isStarting, error,
     fetchAll, startMigration, changeRole, filterAudit,
   } = useAdminData(isAdmin)
 
@@ -63,7 +63,7 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       <UserManagementSection users={users} onRoleChange={(userId, role) => changeRole(userId, role, currentUser?.id)} />
-      <DataMigrationSection status={migrationStatus} isLoading={isLoading} onStart={startMigration} />
+      <DataMigrationSection status={migrationStatus} isLoading={isLoading} isStarting={isStarting} onStart={startMigration} />
       <AuditLogSection events={auditEvents} action={auditAction} onFilterChange={filterAudit} />
 
       {error && (
