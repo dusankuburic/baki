@@ -97,6 +97,7 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": u.ID, "permission": perm})
 	render.JSON(w, collab)
 }
 
@@ -128,6 +129,7 @@ func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": userID, "permission": req.Permission, "action": "update"})
 	render.JSON(w, map[string]string{"permission": req.Permission})
 }
 
@@ -156,6 +158,7 @@ func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowShare, "flow", flowID, map[string]string{"targetUser": userID, "action": "remove"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

@@ -4,6 +4,11 @@ import { registerRefreshCallback, invalidateConfigCache, setSessionToken } from 
 
 const REFRESH_TOKEN_KEY = 'auth_refresh_token'
 
+// Session epoch: incremented on every logout. The refresh function checks
+// this before writing tokens, preventing an in-flight refresh from
+// resurrecting a logged-out session.
+let sessionEpoch = 0
+
 interface AuthState {
   user: AuthUser | null
   accessToken: string | null
@@ -160,6 +165,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    // Increment epoch so any in-flight refresh won't write new tokens after logout.
+    sessionEpoch++
     set({ isLoading: true })
     try {
       await authApi.logout()
@@ -168,11 +175,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       clearTokens()
       set({ user: null, accessToken: null, isAuthenticated: false, isLoading: false, error: null })
+      // Reset all domain stores to prevent cross-session data leakage.
+      resetAllStores()
     }
   },
 
   refresh: async () => {
     if (refreshInFlight) return refreshInFlight
+    const myEpoch = sessionEpoch
 
     refreshInFlight = (async () => {
       const refreshToken = readRefresh()
@@ -184,9 +194,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       try {
         const res = await authApi.refresh(refreshToken)
+        // Guard against post-logout resurrection: if the user logged out
+        // while this refresh was in flight, discard the new tokens.
+        if (myEpoch !== sessionEpoch) {
+          return false
+        }
         setSessionToken(res.accessToken)
-        // With rotation the server returns a fresh refresh token; persist it to the
-        // same store the old one came from so the next refresh uses the new token.
         if (res.refreshToken) {
           writeRefresh(res.refreshToken, isPersistent())
         }
@@ -237,3 +250,26 @@ registerRefreshCallback(async () => {
   await useAuthStore.getState().refresh()
   invalidateConfigCache()
 })
+
+// resetAllStores clears all domain stores to prevent cross-session data
+// leakage when a user logs out. Lazy imports avoid circular dependencies.
+function resetAllStores() {
+  import('@/stores/flowStore').then(m => m.useFlowStore.getState().reset())
+  import('@/stores/chatStore').then(m => {
+    m.useChatStore.setState({
+      threads: [],
+      activeThreadId: null,
+      conversations: new Map(),
+      activeStreamId: null,
+      streamingMessageId: null,
+      streamingText: '',
+      pendingMessage: null,
+    })
+  })
+  import('@/stores/analysisStore').then(m => {
+    m.useAnalysisStore.setState({ reports: new Map(), suppressedFindings: [] })
+  })
+  import('@/stores/orgStore').then(m => {
+    m.useOrgStore.setState({ organisations: [], activeOrgId: null })
+  })
+}

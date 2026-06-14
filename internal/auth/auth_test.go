@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,9 +127,25 @@ func TestManager_Verify_TamperedToken(t *testing.T) {
 	mgr := newTestManager()
 	pair, _ := mgr.Issue("u1", "a@b.com", RoleAdmin)
 
-	// Flip the last character of the signature
-	token := pair.AccessToken
-	tampered := token[:len(token)-1] + "X"
+	// Tamper with a character in the middle of the signature (not the last
+	// char — base64url trailing bits can be padding-only and flipping them
+	// may not change the decoded signature, causing intermittent false passes).
+	parts := strings.Split(pair.AccessToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWT parts, got %d", len(parts))
+	}
+	sig := parts[2]
+	if len(sig) < 4 {
+		t.Fatal("signature too short to tamper")
+	}
+	mid := len(sig) / 2
+	replacement := byte('Z')
+	if sig[mid] == 'Z' {
+		replacement = 'Y'
+	}
+	tamperedSig := sig[:mid] + string(replacement) + sig[mid+1:]
+	tampered := parts[0] + "." + parts[1] + "." + tamperedSig
+
 	_, err := mgr.Verify(tampered)
 	if err == nil {
 		t.Error("expected error for tampered token")

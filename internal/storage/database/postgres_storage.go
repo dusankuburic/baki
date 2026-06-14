@@ -52,6 +52,7 @@ type PostgresStorageBackend struct {
 	db           *sql.DB
 	azureRefresh *azureRefreshState // non-nil when using Azure Managed Identity
 	stopCh       chan struct{}
+	closeOnce    sync.Once
 
 	blobClient *azblob.Client
 	container  string
@@ -63,19 +64,19 @@ type Config struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 
-	// Azure Blob Storage configuration (optional)
 	AzureStorageAccount   string
 	AzureStorageContainer string
 }
 
-// DefaultConfig returns conservative connection-pool defaults.
 func DefaultConfig(dsn string) Config {
 	return Config{
 		DSN:             dsn,
 		MaxOpenConns:    25,
 		MaxIdleConns:    5,
 		ConnMaxLifetime: time.Hour,
+		ConnMaxIdleTime: 5 * time.Minute,
 	}
 }
 
@@ -136,11 +137,11 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	// Reclaim idle connections after 5 minutes so the pool shrinks during
-	// quiet periods. Without this, every replica holds MaxIdleConns sockets
-	// open forever, multiplying the server-side connection count under
-	// horizontal scaling.
-	db.SetConnMaxIdleTime(5 * time.Minute)
+	idleTime := cfg.ConnMaxIdleTime
+	if idleTime == 0 {
+		idleTime = 5 * time.Minute
+	}
+	db.SetConnMaxIdleTime(idleTime)
 
 	b.db = db
 	if err := b.migrate(ctx); err != nil {
@@ -164,6 +165,11 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 // The pgxCfg.Password field is mutated under azureRefresh.mu because pgx may
 // read it concurrently when opening new pooled connections.
 func (b *PostgresStorageBackend) runAzureTokenRefresh() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("azure token refresh goroutine panicked", "err", r)
+		}
+	}()
 	ticker := time.NewTicker(20 * time.Minute)
 	defer ticker.Stop()
 	for {
@@ -189,7 +195,7 @@ func (b *PostgresStorageBackend) Ping(ctx context.Context) error {
 }
 
 func (b *PostgresStorageBackend) Close() error {
-	close(b.stopCh)
+	b.closeOnce.Do(func() { close(b.stopCh) })
 	return b.db.Close()
 }
 

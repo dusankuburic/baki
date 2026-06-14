@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -23,17 +24,18 @@ import (
 // Handlers groups all feature-specific HTTP handlers.
 // Pass it as a single value to NewRouter instead of 11 separate parameters.
 type Handlers struct {
-	Sys      *SystemHandler
-	Flow     *FlowHandler
-	Library  *LibraryHandler
-	Chat     *ChatHandler
-	Analysis *AnalysisHandler
-	Export   *ExportHandler
-	Auth     *AuthHandler
-	Admin    *AdminHandler
-	Provider *ProviderHandler
-	Org      *OrgHandler
-	Sharing  *SharingHandler
+	Sys       *SystemHandler
+	Flow      *FlowHandler
+	Library   *LibraryHandler
+	Chat      *ChatHandler
+	Analysis  *AnalysisHandler
+	Dashboard *DashboardHandler
+	Export    *ExportHandler
+	Auth      *AuthHandler
+	Admin     *AdminHandler
+	Provider  *ProviderHandler
+	Org       *OrgHandler
+	Sharing   *SharingHandler
 }
 
 type Router struct {
@@ -50,8 +52,9 @@ type Router struct {
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
 
-	shutdownCh chan struct{}
-	mux        *chi.Mux
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
+	mux          *chi.Mux
 }
 
 func NewRouter(
@@ -100,6 +103,7 @@ func NewRouter(
 }
 
 func (rt *Router) Shutdown() {
+	rt.shutdownOnce.Do(func() { close(rt.shutdownCh) })
 }
 
 // ServeHTTP is intentionally thin. All cross-cutting concerns (security
@@ -228,6 +232,11 @@ func (rt *Router) consumeTicket(jti string, exp time.Time) bool {
 // usedTickets map doesn't accumulate stale entries between connections. Stops
 // when the server's shutdown channel is closed.
 func (rt *Router) cleanupUsedTickets() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("cleanupUsedTickets goroutine panicked", "err", r)
+		}
+	}()
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {

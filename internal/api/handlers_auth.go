@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -133,15 +134,21 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SECURITY: check if account is temporarily locked due to brute-force
+	// SECURITY: run bcrypt FIRST so the response time is identical
+	// regardless of whether the account is locked. Without this, a locked
+	// account returns in ~1ms (DB lookup only) while an unlocked account
+	// with a wrong password takes ~50ms (DB + bcrypt), allowing attackers
+	// to distinguish locked from unlocked accounts by timing.
+	passwordValid := auth.CheckPasswordHash(req.Password, user.Password)
+
+	// Check lock status AFTER bcrypt so timing is consistent.
 	if user.LockedUntil != nil && time.Now().UTC().Before(*user.LockedUntil) {
-		diff := time.Until(*user.LockedUntil).Round(time.Second)
 		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", user.ID, map[string]string{"reason": "locked"})
-		render.Error(w, fmt.Errorf("account temporarily locked; please try again in %s", diff), http.StatusForbidden)
+		render.Error(w, fmt.Errorf("account temporarily locked; please try again later"), http.StatusForbidden)
 		return
 	}
 
-	if !auth.CheckPasswordHash(req.Password, user.Password) {
+	if !passwordValid {
 		// Increment failed attempts
 		user.FailedLoginAttempts++
 		if user.FailedLoginAttempts >= 5 {
@@ -203,32 +210,38 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.tokenStore != nil {
-		valid, err := h.tokenStore.IsRefreshTokenValid(r.Context(), claims.ID)
-		if err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		if !valid {
-			// SECURITY: a revoked token was presented. This strongly suggests
-			// a token replay attack (e.g. an attacker stole a token that was
-			// already rotated out). Follow OAuth 2.0 BCPs: assume compromise
-			// and revoke ALL of this user's active sessions.
-			logger.Warn("detected refresh token replay: revoking all sessions", "userID", claims.UserID, "tokenID", claims.ID)
-			if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
-				logger.Error("failed to revoke all sessions after replay detection", "error", err, "userID", claims.UserID)
-			}
-			render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
-			return
-		}
-
+		// Atomically revoke the old token. If the token was already revoked
+		// (concurrent refresh, replay attack), RowsAffected=0 and we detect it
+		// here — no separate check-then-revoke race window.
 		if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
+			if errors.Is(err, storageif.ErrTokenAlreadyRevoked) {
+				logger.Warn("detected refresh token replay: revoking all sessions", "userID", claims.UserID, "tokenID", claims.ID)
+				if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
+					logger.Error("failed to revoke all sessions after replay detection", "error", err, "userID", claims.UserID)
+				}
+				render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
+				return
+			}
 			logger.Error("failed to revoke old refresh token during refresh", "error", err, "tokenID", claims.ID)
 			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
 			return
 		}
 	}
 
-	pair, err := h.security.AuthMgr.Issue(claims.UserID, claims.Email, claims.Role)
+	// Reload the user from the DB so the new token reflects the CURRENT role
+	// and email, not whatever was baked into the refresh-token claims. Without
+	// this, a demoted admin keeps issuing admin-level access tokens until their
+	// refresh token expires (up to 24h).
+	issueRole := claims.Role
+	issueEmail := claims.Email
+	if h.backend != nil {
+		if user, err := h.backend.LoadUserByID(r.Context(), claims.UserID); err == nil {
+			issueRole = user.Role
+			issueEmail = user.Email
+		}
+	}
+
+	pair, err := h.security.AuthMgr.Issue(claims.UserID, issueEmail, issueRole)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -298,6 +311,13 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 	if len(req.AvatarURL) > 2048 {
 		render.Error(w, fmt.Errorf("avatar URL must be at most 2048 characters"), http.StatusBadRequest)
 		return
+	}
+	if req.AvatarURL != "" {
+		parsedURL, err := url.Parse(req.AvatarURL)
+		if err != nil || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") {
+			render.Error(w, fmt.Errorf("avatar URL must be a valid http(s) URL"), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if h.backend == nil {

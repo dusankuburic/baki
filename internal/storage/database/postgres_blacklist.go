@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"database/sql"
+	"log/slog"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -13,8 +15,9 @@ import (
 // replicas in a horizontally-scaled deployment (the in-memory TokenBlacklist
 // is per-process and cannot share state between replicas).
 type PostgresBlacklist struct {
-	db    *sql.DB
-	stop  chan struct{}
+	db       *sql.DB
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 func NewPostgresBlacklist(db *sql.DB) *PostgresBlacklist {
@@ -25,16 +28,21 @@ func NewPostgresBlacklist(db *sql.DB) *PostgresBlacklist {
 
 func (bl *PostgresBlacklist) Add(jti string, ttl time.Duration) {
 	expiresAt := time.Now().Add(ttl).UTC()
-	_, _ = bl.db.ExecContext(context.Background(),
+	if _, err := bl.db.ExecContext(context.Background(),
 		`INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, $2)
 		 ON CONFLICT (jti) DO UPDATE SET expires_at = GREATEST(token_blacklist.expires_at, EXCLUDED.expires_at)`,
-		jti, expiresAt)
+		jti, expiresAt); err != nil {
+		slog.Warn("failed to add token to blacklist", "jti", jti, "err", err)
+	}
 }
 
 func (bl *PostgresBlacklist) IsRevoked(jti string) bool {
 	var tmp int
 	err := bl.db.QueryRowContext(context.Background(),
 		`SELECT 1 FROM token_blacklist WHERE jti = $1 AND expires_at > NOW()`, jti).Scan(&tmp)
+	if err != nil && err != sql.ErrNoRows {
+		slog.Warn("blacklist check failed — treating as not revoked", "jti", jti, "err", err)
+	}
 	return err == nil
 }
 
@@ -53,10 +61,15 @@ func (bl *PostgresBlacklist) AddIfAbsent(jti string, ttl time.Duration) bool {
 }
 
 func (bl *PostgresBlacklist) Stop() {
-	close(bl.stop)
+	bl.stopOnce.Do(func() { close(bl.stop) })
 }
 
 func (bl *PostgresBlacklist) cleanup() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("blacklist cleanup goroutine panicked", "err", r)
+		}
+	}()
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for {

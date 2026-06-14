@@ -304,9 +304,9 @@ func (s *OrgService) RevokeInvite(ctx context.Context, orgID, inviteID string) e
 
 // AcceptInvite validates the given raw invite token and, if valid and not
 // expired or already used, adds userID as a member of the invite's
-// organisation with the role specified in the invite. It returns the
-// resulting organisation.
-func (s *OrgService) AcceptInvite(ctx context.Context, token, userID string) (*interfaces.Organisation, error) {
+// organisation with the role specified in the invite. The caller's email
+// must match the invite email to prevent token sharing attacks.
+func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail string) (*interfaces.Organisation, error) {
 	if token == "" {
 		return nil, ErrInviteNotFound
 	}
@@ -322,6 +322,11 @@ func (s *OrgService) AcceptInvite(ctx context.Context, token, userID string) (*i
 	}
 	if time.Now().UTC().After(invite.ExpiresAt) {
 		return nil, ErrInviteExpired
+	}
+	// Verify the caller's email matches the invite email to prevent
+	// token sharing — only the invited user should be able to accept.
+	if userEmail != "" && invite.Email != userEmail {
+		return nil, ErrInviteNotFound
 	}
 
 	if err := s.AddMember(ctx, invite.OrgID, userID, invite.Role); err != nil && !errors.Is(err, ErrAlreadyMember) {

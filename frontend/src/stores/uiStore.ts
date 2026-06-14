@@ -1,10 +1,19 @@
 import {create} from 'zustand'
 import type {FlowDiff} from '@/types/domain'
 
+export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard'
+
+// "System" views are standalone destinations (don't depend on a loaded flow).
+// Sidebar handlers use isSystemView to know when opening a flow should also
+// transition the main pane back to a flow view ('block') so the new flow
+// becomes visible; staying on a system view would leave the flow off-screen.
+const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set(['home', 'dashboard', 'profile', 'admin'])
+export const isSystemView = (v: MainPaneView): boolean => SYSTEM_VIEWS.has(v)
+
 interface UiState {
   resolvedTheme: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
   sidebarTab: 'explorer' | 'variables' | 'library'
-  mainPaneView: 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard'
+  mainPaneView: MainPaneView
   inspectorTab: 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
   sidebarCollapsed: boolean
   inspectorCollapsed: boolean
@@ -19,7 +28,7 @@ interface UiState {
 
   setResolvedTheme: (t: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord') => void
   setSidebarTab: (t: 'explorer' | 'variables' | 'library') => void
-  setMainPaneView: (v: 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard') => void
+  setMainPaneView: (v: MainPaneView) => void
   setInspectorTab: (t: 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history') => void
   setSidebarCollapsed: (v: boolean) => void
   setInspectorCollapsed: (v: boolean) => void
@@ -39,7 +48,7 @@ interface UiState {
 export const useUIStore = create<UiState>((set) => ({
   resolvedTheme: 'dark',
   sidebarTab: 'explorer',
-  mainPaneView: 'block',
+  mainPaneView: 'home',
   inspectorTab: 'details',
   sidebarCollapsed: false,
   inspectorCollapsed: false,

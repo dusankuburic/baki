@@ -20,6 +20,7 @@ type RuleContext struct {
 	Settings     *models.AppSettings
 	ParentMap    map[string]string
 	SiblingMap   map[string][]*models.Block
+	SiblingKey   map[string]string
 	UsedVariables map[string]bool
 	BlockIndex   map[string]int
 	TerminatorIndex map[string]int
@@ -65,6 +66,7 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 		BlocksByType: make(map[models.BlockType][]*models.Block),
 		ParentMap:    make(map[string]string),
 		SiblingMap:   make(map[string][]*models.Block),
+		SiblingKey:   make(map[string]string),
 		UsedVariables: make(map[string]bool),
 		BlockIndex:   make(map[string]int),
 		TerminatorIndex: make(map[string]int),
@@ -92,9 +94,19 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 		ptrs = append(ptrs, &blocks[i])
 	}
 
+	// Use a unique key for each sibling group: parentID for nested blocks,
+	// subflowID for top-level blocks. Without this, multiple subflows would
+	// overwrite SiblingMap[""] and BlockIndex values from earlier subflows
+	// would index out of range in the last subflow's sibling slice.
+	siblingKey := parentID
+	if siblingKey == "" {
+		siblingKey = subflowID
+	}
+
 	terminatorIdx := -1
 	for i, b := range ptrs {
 		ctx.BlockIndex[b.ID] = i
+		ctx.SiblingKey[b.ID] = siblingKey
 		if terminatorIdx < 0 && isTerminator(b) {
 			terminatorIdx = i
 		}
@@ -145,9 +157,9 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 			ctx.ReadersByVar[v] = append(ctx.ReadersByVar[v], b.ID)
 		}
 	}
-	ctx.SiblingMap[parentID] = ptrs
+	ctx.SiblingMap[siblingKey] = ptrs
 	if terminatorIdx >= 0 {
-		ctx.TerminatorIndex[parentID] = terminatorIdx
+		ctx.TerminatorIndex[siblingKey] = terminatorIdx
 	}
 
 	for i := range blocks {
@@ -346,8 +358,8 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 }
 
 func GetSiblings(ctx *RuleContext, block *models.Block) []*models.Block {
-	parentID := ctx.ParentMap[block.ID]
-	return ctx.SiblingMap[parentID]
+	key := ctx.SiblingKey[block.ID]
+	return ctx.SiblingMap[key]
 }
 
 func GetParent(ctx *RuleContext, block *models.Block) *models.Block {

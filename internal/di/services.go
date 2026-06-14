@@ -81,6 +81,7 @@ var ServiceModule = fx.Options(
 		service.NewAuthzService,
 		service.NewFlowService,
 		service.NewAnalysisService,
+		service.NewDashboardService,
 		service.NewExportService,
 		service.NewLibraryService,
 		func(

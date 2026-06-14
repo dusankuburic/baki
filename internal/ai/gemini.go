@@ -215,7 +215,10 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 		}
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	url := geminiURL(req.Model, g.apiKey, "generateContent")
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
@@ -313,7 +316,10 @@ func (g *GeminiProvider) Stream(ctx context.Context, req Request, onChunk func(C
 		}
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 	url := geminiURL(req.Model, g.apiKey, "streamGenerateContent")
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))

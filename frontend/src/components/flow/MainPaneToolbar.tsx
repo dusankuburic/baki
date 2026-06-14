@@ -1,12 +1,21 @@
-import {List, Network, Map, History, Minus, Plus, Maximize2, Download, Expand, ChevronLeft, ChevronRight, MapPin, Flame} from 'lucide-react'
+import {List, Network, Map, History, Minus, Plus, Maximize2, Download, Expand, ChevronLeft, ChevronRight, MapPin, Flame, LayoutDashboard, BarChart3, User, Shield} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import IconButton from '@/components/shared/IconButton'
-import {useUIStore} from '@/stores/uiStore'
+import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
+import {useAuthStore} from '@/stores/authStore'
 import {exportApi} from '@/api'
 import {useToast} from '@/components/shared/Toast'
 import type {FlowDiff} from '@/types/domain'
+
+type SystemView = 'home' | 'dashboard' | 'profile' | 'admin'
+const SYSTEM_VIEW_TITLES: Record<SystemView, string> = {
+    home: 'Welcome',
+    dashboard: 'Analysis Dashboard',
+    profile: 'User Profile',
+    admin: 'Admin',
+}
 
 export default function MainPaneToolbar() {
     const mainPaneView = useUIStore(s => s.mainPaneView)
@@ -33,6 +42,32 @@ export default function MainPaneToolbar() {
         : []
 
     const toast = useToast()
+    const userRole = useAuthStore(s => s.user?.role)
+
+    if (isSystemView(mainPaneView)) {
+        const systemOptions: {value: SystemView; label: string; icon: typeof LayoutDashboard}[] = [
+            {value: 'home', label: 'Home', icon: LayoutDashboard},
+            {value: 'dashboard', label: 'Analytics', icon: BarChart3},
+            {value: 'profile', label: 'Profile', icon: User},
+        ]
+        if (userRole === 'admin') systemOptions.push({value: 'admin', label: 'Admin', icon: Shield})
+        return (
+            <div className="flex items-center h-12 px-4 border-b border-border-default bg-surface-1 gap-4">
+                <SegmentedControl
+                    value={mainPaneView as SystemView}
+                    onChange={(v) => setMainPaneView(v)}
+                    options={systemOptions}
+                    size="sm"
+                />
+                <div className="flex-1 flex items-center">
+                    <span className="text-sm font-medium text-text-primary">
+                        {SYSTEM_VIEW_TITLES[mainPaneView as SystemView]}
+                    </span>
+                </div>
+                <IconButton icon={Expand} size="sm" label="Fullscreen" onClick={() => { try { window.document.documentElement.requestFullscreen() } catch { /* fullscreen not supported */ } }} />
+            </div>
+        )
+    }
 
     const handleExport = async (format: 'pdf' | 'markdown') => {
         try {

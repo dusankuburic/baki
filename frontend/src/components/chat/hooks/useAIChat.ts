@@ -293,7 +293,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       executeSendRef.current(text)
       setGlobalPendingMessage(null)
     }
-  }, [globalPendingMessage, doc?.id, activeThreadId, setGlobalPendingMessage])
+  }, [globalPendingMessage, doc, activeThreadId, setGlobalPendingMessage])
 
   const handlePreviewContext = useCallback(async (text: string, files: string[], excludeContext?: boolean) => {
     if (files.length > 0 && activeThreadId) {

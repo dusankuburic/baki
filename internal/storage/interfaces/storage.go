@@ -26,6 +26,11 @@ var ErrOrgInviteExists = errors.New("an active invite for this email already exi
 // The caller should map this to HTTP 409.
 var ErrVersionConflict = errors.New("version conflict: the flow was modified by another user")
 
+// ErrTokenAlreadyRevoked is returned by RevokeRefreshToken when the token was
+// already revoked (e.g. by a concurrent refresh). Callers should treat this as
+// evidence of token replay and revoke all of the user's sessions.
+var ErrTokenAlreadyRevoked = errors.New("refresh token already revoked")
+
 // IdentityLink ties an external IdP identity (provider + stable subject ID)
 // to a local user account, enabling OIDC single sign-on.
 type IdentityLink struct {
@@ -125,6 +130,16 @@ type StorageBackend interface {
 	SaveUsageMetric(ctx context.Context, metric *UsageMetric) error
 	GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error)
 
+	// Dashboard
+	// SaveFlowAnalysis upserts a flow's latest analysis summary (best-effort,
+	// called on every analyze) so the welcome dashboard is populated on first
+	// load across sessions/replicas.
+	SaveFlowAnalysis(ctx context.Context, fa *FlowAnalysis) error
+	// FlowDashboardData assembles the owner-scoped welcome-dashboard payload:
+	// overview counts, persisted health/findings aggregates, recent flows, and
+	// a gap-filled `days`-day token-usage series.
+	FlowDashboardData(ctx context.Context, ownerID string, days int) (*DashboardData, error)
+
 	// Knowledge Base
 	SaveKnowledgeDocument(ctx context.Context, doc *KnowledgeDocument) error
 	// DeleteKnowledgeDocument removes a document only when it belongs to orgID,
@@ -221,6 +236,56 @@ type UsageMetric struct {
 	CompletionTokens int       `json:"completionTokens"`
 	EstimatedCost    float64   `json:"estimatedCost"`
 	CreatedAt        time.Time `json:"createdAt"`
+}
+
+// FlowAnalysis is the persisted summary of a flow's most recent analysis run,
+// upserted on every analyze so the welcome dashboard can render health/findings
+// aggregates that survive restarts and span replicas (instead of relying on the
+// in-memory, per-process analyzer cache). ByCategory maps finding category →
+// count. Owner/org scoping is resolved by JOINing flows at read time, so this
+// row intentionally does not denormalize ownership.
+type FlowAnalysis struct {
+	FlowID      string         `json:"flowId"`
+	HealthScore int            `json:"healthScore"`
+	Errors      int            `json:"errors"`
+	Warnings    int            `json:"warnings"`
+	Info        int            `json:"info"`
+	ByCategory  map[string]int `json:"byCategory"`
+	AnalyzedAt  time.Time      `json:"analyzedAt"`
+}
+
+// RecentFlowHealth is one row of the dashboard's "recent flows" list: a flow
+// with its latest persisted health score (nil when the flow has never been
+// analyzed — a LEFT JOIN miss).
+type RecentFlowHealth struct {
+	FlowID      string
+	Name        string
+	HealthScore *int
+	UpdatedAt   time.Time
+}
+
+// DailyTokens is one gap-filled day of AI token usage for the dashboard chart.
+type DailyTokens struct {
+	Date      string
+	TokensIn  int
+	TokensOut int
+}
+
+// DashboardData is the storage-layer aggregate that backs GET /api/dashboard/home
+// in cloud mode. The service maps it to models.DashboardHomeData. Sections that
+// have no data are zero/empty with their availability conveyed by HealthCount
+// (0 ⇒ nothing analyzed yet) and len(TokenUsage).
+type DashboardData struct {
+	TotalFlows    int
+	TotalSubflows int
+	HealthCount   int // number of analyzed flows contributing to AvgHealth
+	AvgHealth     int
+	Errors        int
+	Warnings      int
+	Info          int
+	ByCategory    map[string]int
+	Recent        []RecentFlowHealth
+	TokenUsage    []DailyTokens
 }
 
 type KnowledgeDocument struct {

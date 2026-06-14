@@ -22,6 +22,13 @@ func (n *CountingNotifier) Emit(name string, data any) {
 	n.events = append(n.events, emittedEvent{Name: name, Data: data})
 }
 
+// EmitTo delegates to Emit — CountingNotifier does not distinguish per-user
+// delivery. Tests that need to verify user-scoped delivery should inspect the
+// EventManager directly.
+func (n *CountingNotifier) EmitTo(userID, name string, data any) {
+	n.Emit(name, data)
+}
+
 func (n *CountingNotifier) Count() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()

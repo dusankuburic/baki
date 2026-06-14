@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -91,12 +92,40 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			// upgrader has already written an error response
 			return
 		}
 
+		// Periodic re-authz: if the user's access to this flow is revoked
+		// mid-session (org membership removed, collaborator deleted, account
+		// disabled), close the connection so they stop receiving broadcasts.
+		authzCtx, authzCancel := context.WithCancel(context.Background())
+		if checker != nil {
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Warn("websocket re-authz goroutine panicked", "err", r)
+					}
+				}()
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-authzCtx.Done():
+						return
+					case <-ticker.C:
+						if err := checker.CheckAccess(authzCtx, flowID, userID); err != nil {
+							slog.Info("websocket: disconnecting client after access revoked",
+								"flowId", flowID, "userID", userID)
+							conn.Close()
+							return
+						}
+					}
+				}
+			}()
+		}
+
 		client := NewClient(hub, conn, userID, displayName, flowID)
-		// Run blocks until the connection is closed.
 		client.Run()
+		authzCancel()
 	}
 }

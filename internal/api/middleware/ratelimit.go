@@ -22,10 +22,9 @@ type RateLimiter struct {
 	trustedCIDRs []*net.IPNet
 	mu           sync.Mutex
 	buckets      map[string]*bucket
-	// group labels rate_limit_exceeded_total emissions, so the metrics
-	// scraper can distinguish "general" refusals from "auth" refusals.
-	group string
-	stop  chan struct{}
+	group        string
+	stop         chan struct{}
+	stopOnce     sync.Once
 }
 
 // SetGroup sets the metric label used when refusing requests; defaults to
@@ -69,7 +68,7 @@ func NewRateLimiter(rps, burst float64, trustedProxies []string) *RateLimiter {
 }
 
 func (rl *RateLimiter) Stop() {
-	close(rl.stop)
+	rl.stopOnce.Do(func() { close(rl.stop) })
 }
 
 // cleanup removes stale buckets every minute to prevent unbounded memory growth.

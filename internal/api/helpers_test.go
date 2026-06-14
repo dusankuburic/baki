@@ -105,18 +105,20 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	
 	eventManager := NewEventManager(make(chan struct{}))
 	
+	dashboardSvc := service.NewDashboardService(backend, analysisSvc)
 	handlers := Handlers{
-		Sys:      NewSystemHandler(sysSvc, security, backend),
-		Flow:     NewFlowHandler(flowSvc, docProv, backend, security),
-		Library:  NewLibraryHandler(libSvc, backend, security),
-		Chat:     NewChatHandler(chatSvc, flowSvc, security),
-		Analysis: NewAnalysisHandler(analysisSvc, flowSvc, backend, security),
-		Export:   NewExportHandler(exportSvc, flowSvc, security),
-		Auth:     NewAuthHandler(nil, backend, security, ssoClient, identityStore),
-		Admin:    NewAdminHandler(backend, security),
-		Provider: NewProviderHandler(providerSvc, security),
-		Org:      NewOrgHandler(orgSvc, backend, nil, security),
-		Sharing:  NewSharingHandler(backend, flowSvc, security),
+		Sys:       NewSystemHandler(sysSvc, security, backend),
+		Flow:      NewFlowHandler(flowSvc, docProv, backend, security),
+		Library:   NewLibraryHandler(libSvc, backend, security),
+		Chat:      NewChatHandler(chatSvc, flowSvc, security),
+		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security),
+		Dashboard: NewDashboardHandler(dashboardSvc, security),
+		Export:    NewExportHandler(exportSvc, flowSvc, security),
+		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore),
+		Admin:     NewAdminHandler(backend, security),
+		Provider:  NewProviderHandler(providerSvc, security),
+		Org:       NewOrgHandler(orgSvc, backend, nil, security),
+		Sharing:   NewSharingHandler(backend, flowSvc, security),
 	}
 
 	return NewRouter(security, eventManager, handlers, cfg, make(chan struct{}), nil)

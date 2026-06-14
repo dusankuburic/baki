@@ -256,7 +256,10 @@ func (c *ClaudeProvider) buildBody(req Request, stream bool) claudeRequest {
 
 func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	body := c.buildBody(req, false)
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", claudeAPIURL, bytes.NewReader(jsonBody))
 	if err != nil {
@@ -324,7 +327,10 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 
 func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	body := c.buildBody(req, true)
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", claudeAPIURL, bytes.NewReader(jsonBody))
 	if err != nil {

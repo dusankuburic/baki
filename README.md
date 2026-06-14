@@ -164,10 +164,17 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 ## Features
 
 - **Parsing** — single `.txt` exports or full flow folders (`Main.txt` + subflows); implicit subflow detection.
-- **Static analysis** — 10+ rules: hardcoded credentials, dead code, deep nesting, duplicate actions, empty error handlers, infinite loops, … with Error/Warning/Info severities.
-- **Visualization** — variable lineage across subflows; execution-graph (DAG) view.
-- **AI review** — chat over your flow with the provider of your choice.
-- **Export** — full analysis reports to PDF or Markdown (works in both desktop and browser).
+- **Static analysis** — 15+ rules: hardcoded credentials, dead code, deep nesting, duplicate actions, empty error handlers, infinite loops, resource leaks, uninitialized variables, redundant actions, … with Error/Warning/Info severities and configurable thresholds.
+- **Visualization** — virtualized block view (react-virtuoso); variable lineage graph; execution-graph (DAG) view; flow tree sidebar with breadcrumbs.
+- **AI review** — streaming chat over your flow with GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM, or GitHub Models. Tool-augmented mode for autonomous analysis.
+- **Export** — full analysis reports to PDF or Markdown (works in both desktop and browser); analysis history with regression diffing.
+- **Collaboration** *(web mode)* — organizations with role-based access (admin/member/viewer/guest); real-time presence indicators and block selection sync via WebSocket; flow sharing with per-flow collaborator permissions.
+- **SSO** *(web mode)* — OIDC single sign-on with Microsoft Entra ID, Google, Okta, or any OIDC-compliant IdP. Account linking with automatic JIT provisioning.
+- **Org invites** *(web mode)* — token-based email invites with configurable roles and expiry; pending invite management.
+- **Optimistic concurrency** — version-tracked flow saves prevent silent overwrites; conflict detection with reload prompts.
+- **Offline resilience** — operation queue with localStorage persistence; automatic flush on reconnect; stale-response guards prevent out-of-order overwrites.
+- **Global search** — fuzzy search across all subflows, block properties, and comments (`Ctrl+Shift+F`); command palette (`Ctrl+P`).
+- **Navigation** — breadcrumbs, go-to-definition for subflow calls (Ctrl+Click), navigation history (back/forward), block context menu (Explain with AI, Copy as Markdown, Find Usages, Trace Variable).
 
 ---
 
@@ -191,16 +198,25 @@ npm run lint                           # ESLint
 baki/
 ├── main.go                # Go server entry point (reads PAD_* env / Tauri sidecar)
 ├── internal/              # Go backend packages
-│   ├── api/               #   HTTP router + handlers (auth, library, sharing, org, …)
-│   ├── parser/ analyzer/  #   PAD parsing + static-analysis rules
-│   ├── ai/ export/        #   AI providers + PDF/Markdown export
+│   ├── api/               #   HTTP router (chi), handlers, SSE events, middleware
+│   ├── auth/              #   JWT, bcrypt, token blacklist, RBAC roles
+│   ├── service/           #   FlowService, ChatService, AnalysisService, AuthzService
+│   ├── collaboration/     #   Org CRUD, member management, invites
+│   ├── analyzer/          #   Static-analysis rules engine, cache, history
+│   ├── parser/            #   PAD export text parser (lexer + parser + tree builder)
+│   ├── ai/                #   AI provider abstraction (Claude, OpenAI, Gemini, Copilot…)
+│   ├── websocket/         #   Hub/Client for real-time collaboration
 │   ├── storage/           #   filesystem (local) + database (Postgres) backends
-│   └── config/ manager/   #   config loading + app orchestration
+│   ├── sso/               #   OIDC relying-party client for single sign-on
+│   └── config/            #   config loading + validation
 ├── frontend/              # React + TypeScript (Vite, Tailwind, Zustand)
 │   └── src/
-│       ├── api/           #   shared HTTP/SSE client (client.ts) + endpoint modules
+│       ├── api/           #   shared HTTP/SSE client + endpoint modules
 │       ├── platform/      #   web vs Tauri adapter (the only place Tauri APIs are used)
-│       ├── components/ hooks/ stores/
+│       ├── stores/        #   Zustand stores (flow, chat, auth, org, presence, sync…)
+│       ├── services/      #   SyncManager (offline queue), CollaborationService (WS)
+│       ├── components/    #   flow/, chat/, sidebar/, inspector/, search/, layout/
+│       └── hooks/         #   useAppShortcuts, useFlowChangeSync, useStreamingMessage…
 ├── src-tauri/             # Tauri (Rust) desktop host + tauri.conf.json
 └── scripts/build-sidecar/ # cross-platform Go sidecar build
 ```

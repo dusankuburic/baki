@@ -9,7 +9,7 @@ const sentEnvs: unknown[] = []
 vi.mock('@/services/collaboration/CollaborationService', () => ({
   collaborationService: {
     getStatus: () => mockStatus.value,
-    send: (env: unknown) => { sentEnvs.push(env) },
+    send: (env: unknown) => { sentEnvs.push(env); return true },
     onStatusChange: (cb: (s: string) => void) => {
       mockStatus.cb = cb
       return () => { mockStatus.cb = null }

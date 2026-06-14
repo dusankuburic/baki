@@ -312,6 +312,51 @@ export interface ProblemFlow {
   healthScore: number;
 }
 
+// ---- Welcome ("home") dashboard (GET /api/dashboard/home) ----
+export interface DashboardHomeData {
+  greeting: DashboardGreeting;
+  overview: DashboardOverview;
+  tokenUsage: DailyTokenUsage[];
+  recentFlows: RecentFlowStub[];
+  findings: DashboardFindingsAgg;
+}
+
+export interface DashboardGreeting {
+  userDisplayName: string;
+  activeOrgName?: string;
+}
+
+export interface DashboardOverview {
+  avgHealthScore: number;
+  healthAvailable: boolean;
+  totalFlows: number;
+  totalSubflows: number;
+}
+
+export interface DailyTokenUsage {
+  date: string;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+export interface RecentFlowStub {
+  id: string;
+  name: string;
+  healthScore: number | null;
+  updatedAt: string;
+}
+
+export interface DashboardFindingsAgg {
+  available: boolean;
+  bySeverity: Record<string, number>;
+  byCategory: FindingCategory[];
+}
+
+export interface FindingCategory {
+  category: string;
+  count: number;
+}
+
 export interface FindingGroup {
   blockId: string;
   findings: Finding[];

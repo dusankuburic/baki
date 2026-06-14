@@ -13,9 +13,9 @@ func (r *DeadCodeRule) DefaultSeverity() models.Severity { return models.Severit
 func (r *DeadCodeRule) Category() string     { return "Style" }
 
 func (r *DeadCodeRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	parentID := ctx.ParentMap[block.ID]
-	
-	terminatorIdx, hasTerminator := ctx.TerminatorIndex[parentID]
+	siblingKey := ctx.SiblingKey[block.ID]
+
+	terminatorIdx, hasTerminator := ctx.TerminatorIndex[siblingKey]
 	if !hasTerminator {
 		return nil
 	}

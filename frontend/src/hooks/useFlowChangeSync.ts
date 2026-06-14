@@ -9,6 +9,7 @@ export function useFlowChangeSync(): void {
     const flowId = usePresenceStore(s => s.flowId)
     const status = usePresenceStore(s => s.status)
     const lastVersionRef = useRef(0)
+    const reloadSeqRef = useRef(0)
 
     useEffect(() => {
         if (!flowId || status !== 'connected') return
@@ -20,11 +21,29 @@ export function useFlowChangeSync(): void {
             const currentDoc = useFlowStore.getState().document
             if (!currentDoc || currentDoc.id !== flowId) return
 
-            libraryApi.getContent(flowId)
-                .then((content) => {
+            // Increment the sequence counter so that if two reload requests
+            // fire in rapid succession (v4 then v5), only the latest one's
+            // response is applied — preventing out-of-order overwrites.
+            const seq = ++reloadSeqRef.current
+
+            // Fetch metadata to get the authoritative version, then content.
+            Promise.all([
+                libraryApi.get(flowId),
+                libraryApi.getContent(flowId),
+            ])
+                .then(([meta, content]) => {
+                    // Stale response guard: a newer reload request superseded this one.
+                    if (seq !== reloadSeqRef.current) return
+
+                    // Update version tracking so the next save uses the correct version.
+                    useFlowStore.setState({
+                        libraryVersion: meta.version ?? version,
+                    })
+
                     useFlowStore.getState().setDocument(content as FlowDocument)
                 })
                 .catch((err) => {
+                    if (seq !== reloadSeqRef.current) return
                     logger.warn('Failed to reload flow after remote change', err)
                 })
         })

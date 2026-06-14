@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"pad-analyzer/internal/analyzer"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/models"
@@ -83,8 +84,14 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 	settings := s.settings.Get()
 	rules := analyzer.AllRules()
 
+	// Extract userID for per-user event delivery (prevents cross-tenant leaks).
+	userID := ""
+	if claims := auth.ClaimsFromContext(ctx); claims != nil {
+		userID = claims.UserID
+	}
+
 	result := analyzer.CachedAnalysis(doc, rules, settings, func(current, total int, ruleName string) {
-		s.notifier.Emit("analysis:progress", map[string]any{
+		s.notifier.EmitTo(userID, "analysis:progress", map[string]any{
 			"current":  current,
 			"total":    total,
 			"ruleName": ruleName,
@@ -116,7 +123,7 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 		s.history.Record(key, result, doc)
 	}
 
-	s.notifier.Emit("analysis:complete", result)
+	s.notifier.EmitTo(userID, "analysis:complete", result)
 
 	logger.Info("analysis complete",
 		"flowId", result.FlowID,

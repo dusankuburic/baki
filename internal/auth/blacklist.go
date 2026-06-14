@@ -17,9 +17,10 @@ type BlacklistStore interface {
 }
 
 type TokenBlacklist struct {
-	mu      sync.RWMutex
-	entries map[string]time.Time
-	stopCh  chan struct{}
+	mu       sync.RWMutex
+	entries  map[string]time.Time
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewTokenBlacklist() *TokenBlacklist {
@@ -62,7 +63,7 @@ func (bl *TokenBlacklist) AddIfAbsent(jti string, ttl time.Duration) bool {
 }
 
 func (bl *TokenBlacklist) Stop() {
-	close(bl.stopCh)
+	bl.stopOnce.Do(func() { close(bl.stopCh) })
 }
 
 func (bl *TokenBlacklist) cleanup() {

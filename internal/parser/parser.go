@@ -629,10 +629,8 @@ func tokenizeVariables(text string) []models.BlockToken {
 	// Since % can contain strings and strings can contain %, we need to be careful.
 	// In PAD, %expression% is usually the top level.
 	
-	tokens := make([]models.BlockToken, 0)
-	
-	// First pass: find variables
 	varMatches := reVariableRef.FindAllStringSubmatchIndex(text, -1)
+	tokens := make([]models.BlockToken, 0, len(varMatches)*2+1)
 	
 	lastPos := 0
 	for _, m := range varMatches {
@@ -692,7 +690,7 @@ func tokenizeStrings(text string) []models.BlockToken {
 		return []models.BlockToken{{Type: "text", Value: text}}
 	}
 
-	tokens := make([]models.BlockToken, 0)
+	tokens := make([]models.BlockToken, 0, len(matches)*2+1)
 	lastPos := 0
 	for _, m := range matches {
 		if m[0] > lastPos {

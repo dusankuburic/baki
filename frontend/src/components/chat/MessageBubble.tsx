@@ -50,12 +50,57 @@ interface MarkdownTextProps {
   children?: React.ReactNode
 }
 
-function renderContent(content: string, isUser: boolean, isStreaming?: boolean) {
-  const mentionRegex = /@([a-zA-Z0-9_./\\-]+)/g
+const MENTION_REGEX = /@([a-zA-Z0-9_./\\-]+)/g
 
+const markdownPlugins = [remarkGfm]
+
+const markdownComponents = {
+  pre({ children }: MarkdownPreProps) {
+    let codeProps: Record<string, unknown> = {}
+    if (children && typeof children === 'object' && 'props' in (children as object)) {
+      codeProps = (children as {props: Record<string, unknown>}).props
+    } else if (Array.isArray(children) && children[0] && typeof children[0] === 'object' && 'props' in children[0]) {
+      codeProps = (children[0] as {props: Record<string, unknown>}).props
+    }
+    
+    const className = (codeProps.className as string) || ''
+    const match = /language-(\w+)/.exec(className)
+    const language = match ? match[1] : ''
+    const value = String(codeProps.children || '').replace(/\n$/, '')
+    
+    return <CodeBlock language={language} value={value} />
+  },
+  code({inline: _inline, className, children, ...props}: MarkdownCodeProps) {
+    return (
+      <code className={clsx("px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]", className)} {...props}>
+        {children}
+      </code>
+    )
+  },
+  text({ children }: MarkdownTextProps) {
+    const text = String(children)
+    if (!text.includes('@')) return <>{text}</>
+    
+    const parts = text.split(MENTION_REGEX)
+    const matches = text.match(MENTION_REGEX) || []
+    
+    return (
+      <>
+        {parts.map((part, i) => (
+          <span key={i}>
+            {part}
+            {matches[i] && <MentionPill path={matches[i].slice(1)} />}
+          </span>
+        ))}
+      </>
+    )
+  }
+}
+
+function renderContent(content: string, isUser: boolean, isStreaming?: boolean) {
   if (isUser) {
-    const parts = content.split(mentionRegex)
-    const matches = content.match(mentionRegex) || []
+    const parts = content.split(MENTION_REGEX)
+    const matches = content.match(MENTION_REGEX) || []
     
     return (
       <div className="whitespace-pre-wrap break-words">
@@ -72,49 +117,8 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
   return (
     <div className="prose-chat break-words">
       <ReactMarkdown 
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre({ children }: MarkdownPreProps) {
-            let codeProps: Record<string, unknown> = {}
-            if (children && typeof children === 'object' && 'props' in (children as object)) {
-              codeProps = (children as {props: Record<string, unknown>}).props
-            } else if (Array.isArray(children) && children[0] && typeof children[0] === 'object' && 'props' in children[0]) {
-              codeProps = (children[0] as {props: Record<string, unknown>}).props
-            }
-            
-            const className = (codeProps.className as string) || ''
-            const match = /language-(\w+)/.exec(className)
-            const language = match ? match[1] : ''
-            const value = String(codeProps.children || '').replace(/\n$/, '')
-            
-            return <CodeBlock language={language} value={value} />
-          },
-          code({inline: _inline, className, children, ...props}: MarkdownCodeProps) {
-            return (
-              <code className={clsx("px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]", className)} {...props}>
-                {children}
-              </code>
-            )
-          },
-          text({ children }: MarkdownTextProps) {
-            const text = String(children)
-            if (!text.includes('@')) return <>{text}</>
-            
-            const parts = text.split(mentionRegex)
-            const matches = text.match(mentionRegex) || []
-            
-            return (
-              <>
-                {parts.map((part, i) => (
-                  <span key={i}>
-                    {part}
-                    {matches[i] && <MentionPill path={matches[i].slice(1)} />}
-                  </span>
-                ))}
-              </>
-            )
-          }
-        }}
+        remarkPlugins={markdownPlugins}
+        components={markdownComponents}
       >
         {content}
       </ReactMarkdown>

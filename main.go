@@ -213,6 +213,14 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 		}
 		dbCfg.ConnMaxLifetime = d
 	}
+	if cfg.Storage.DBConnMaxIdleTime != "" {
+		d, err := time.ParseDuration(cfg.Storage.DBConnMaxIdleTime)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid PAD_DB_CONN_MAX_IDLE_TIME %q: %v\n", cfg.Storage.DBConnMaxIdleTime, err)
+			os.Exit(1)
+		}
+		dbCfg.ConnMaxIdleTime = d
+	}
 
 	// Apply Azure Blob Storage config if available
 	if cfg.Storage.AzureStorageAccount != "" && cfg.Storage.AzureStorageContainer != "" {
@@ -292,7 +300,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
-			if path == "/api/auth/login" || path == "/api/auth/refresh" || path == "/api/auth/register" {
+			if path == "/api/auth/login" || path == "/api/auth/refresh" || path == "/api/auth/register" || path == "/api/auth/change-password" {
 				authRl.Limit(router).ServeHTTP(w, r)
 			} else if r.Method == "POST" && strings.HasPrefix(path, "/api/analysis/") {
 				analysisRl.Limit(router).ServeHTTP(w, r)

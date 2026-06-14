@@ -66,6 +66,7 @@ type StorageConfig struct {
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
 	DBConnMaxLifetime string // duration string, e.g. "1h"
+	DBConnMaxIdleTime string // duration string, e.g. "5m"
 
 	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
 	AzureStorageAccount   string

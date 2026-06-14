@@ -81,7 +81,7 @@ func (s *SystemService) UpdateUserSettings(userID string, settings models.AppSet
 	if err := s.backend.SaveUserSettings(context.Background(), userID, s.fromModel(&settings)); err != nil {
 		return err
 	}
-	s.notifier.Emit("settings:changed", settings)
+	s.notifier.EmitTo(userID, "settings:changed", settings)
 	return nil
 }
 

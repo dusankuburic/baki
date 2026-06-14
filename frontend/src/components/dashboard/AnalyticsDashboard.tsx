@@ -1,8 +1,8 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useMemo, useState} from 'react'
 import clsx from 'clsx'
 import {
   BarChart3, RefreshCw, FolderSearch, Download, AlertTriangle,
-  ShieldAlert, Activity, FileWarning,
+  ShieldAlert, Activity, FileWarning, ArrowLeft,
 } from 'lucide-react'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
@@ -10,12 +10,13 @@ import {createAdapter} from '@/platform/adapters'
 import {useToast} from '@/components/shared'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {scoreColor} from '@/lib/scoring'
+import {useUIStore} from '@/stores/uiStore'
 import type {BatchAnalysis, DashboardStats} from '@/types/domain'
 
 function StatCard({label, value, accent}: {label: string; value: string | number; accent?: string}) {
   return (
     <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-      <div className="text-2xs text-text-tertiary uppercase tracking-widest mb-1">{label}</div>
+      <div className="text-sm text-text-tertiary uppercase tracking-widest mb-1">{label}</div>
       <div className={clsx('text-2xl font-black font-mono tabular-nums', accent ?? 'text-text-primary')}>{value}</div>
     </div>
   )
@@ -56,6 +57,7 @@ function exportBatchCSV(batch: BatchAnalysis) {
 // batch analysis with per-file error rows.
 export default function AnalyticsDashboard() {
   const toast = useToast()
+  const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [batch, setBatch] = useState<BatchAnalysis | null>(null)
   const [batchRunning, setBatchRunning] = useState(false)
@@ -86,19 +88,32 @@ export default function AnalyticsDashboard() {
     }
   }, [toast, refresh])
 
-  const ruleEntries = stats
-    ? Object.entries(stats.findingsByRule).sort((a, b) => b[1] - a[1]).slice(0, 10)
-    : []
+  const ruleEntries = useMemo(
+    () => (stats ? Object.entries(stats.findingsByRule).sort((a, b) => b[1] - a[1]).slice(0, 10) : []),
+    [stats],
+  )
   const maxRuleCount = ruleEntries[0]?.[1] ?? 1
   const isEmpty = !stats || stats.totalFlowsAnalyzed === 0
+  const sortedBatchResults = useMemo(
+    () => (batch
+      ? [...batch.results].sort((a, b) => (b.report?.findings.length ?? -1) - (a.report?.findings.length ?? -1))
+      : []),
+    [batch],
+  )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-5">
+    <div className="max-w-4xl mx-auto space-y-5">
+      <button
+        onClick={() => setMainPaneView('home')}
+        className="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-secondary transition-colors"
+      >
+        <ArrowLeft size={14} /> Home
+      </button>
       <div className="flex items-center gap-3">
         <BarChart3 size={20} className="text-brand-500" />
         <div className="flex-1">
-          <h2 className="text-xl font-semibold text-text-primary">Analysis Dashboard</h2>
-          <p className="text-xs text-text-tertiary">Aggregated findings across every flow analyzed this session</p>
+          <h2 className="text-2xl font-bold text-text-primary">Analysis Dashboard</h2>
+          <p className="text-sm text-text-tertiary">Aggregated findings across every flow analyzed this session</p>
         </div>
         <button
           onClick={refresh}
@@ -111,7 +126,7 @@ export default function AnalyticsDashboard() {
         <button
           onClick={handleBatch}
           disabled={batchRunning}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-light transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-light transition-colors disabled:opacity-50"
         >
           <FolderSearch size={13} />
           {batchRunning ? 'Analyzing…' : 'Analyze Folder…'}
@@ -122,7 +137,7 @@ export default function AnalyticsDashboard() {
         <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-border-subtle bg-surface-0">
           <Activity size={22} className="text-text-tertiary" />
           <span className="text-sm text-text-secondary">No analyses yet this session</span>
-          <span className="text-2xs text-text-tertiary">Run an analysis or batch-analyze a folder to populate the dashboard</span>
+          <span className="text-sm text-text-tertiary">Run an analysis or batch-analyze a folder to populate the dashboard</span>
         </div>
       ) : stats && !isEmpty && (
         <>
@@ -138,12 +153,12 @@ export default function AnalyticsDashboard() {
 
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(stats.findingsBySeverity).map(([sev, n]) => (
-              <span key={sev} className={clsx('text-2xs font-bold px-2 py-0.5 rounded-full', sevChip[sev] ?? 'text-text-tertiary bg-surface-3')}>
+              <span key={sev} className={clsx('text-sm font-bold px-2 py-0.5 rounded-full', sevChip[sev] ?? 'text-text-tertiary bg-surface-3')}>
                 {n} {sev}
               </span>
             ))}
             {Object.entries(stats.findingsByCategory).map(([cat, n]) => (
-              <span key={cat} className={clsx('text-2xs font-bold px-2 py-0.5 rounded-full', catChip[cat] ?? 'text-text-tertiary bg-surface-3')}>
+              <span key={cat} className={clsx('text-sm font-bold px-2 py-0.5 rounded-full', catChip[cat] ?? 'text-text-tertiary bg-surface-3')}>
                 {n} {cat}
               </span>
             ))}
@@ -151,18 +166,18 @@ export default function AnalyticsDashboard() {
 
           {ruleEntries.length > 0 && (
             <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-              <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
-                <ShieldAlert size={10} />
+              <h3 className="text-sm font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
+                <ShieldAlert size={14} />
                 Findings by Rule
               </h3>
               <div className="space-y-1.5">
                 {ruleEntries.map(([rule, count]) => (
                   <div key={rule} className="flex items-center gap-2">
-                    <span className="text-2xs text-text-secondary font-mono w-44 truncate shrink-0">{rule}</span>
+                    <span className="text-sm text-text-secondary font-mono w-44 truncate shrink-0">{rule}</span>
                     <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden">
                       <div className="h-full rounded-full bg-brand-500/70" style={{width: `${(count / maxRuleCount) * 100}%`}} />
                     </div>
-                    <span className="text-2xs text-text-tertiary tabular-nums w-8 text-right shrink-0">{count}</span>
+                    <span className="text-sm text-text-tertiary tabular-nums w-8 text-right shrink-0">{count}</span>
                   </div>
                 ))}
               </div>
@@ -171,16 +186,16 @@ export default function AnalyticsDashboard() {
 
           {stats.topProblemFlows?.length > 0 && (
             <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-              <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
-                <FileWarning size={10} />
+              <h3 className="text-sm font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
+                <FileWarning size={14} />
                 Top Problem Flows
               </h3>
               <div className="space-y-1">
                 {stats.topProblemFlows.map(p => (
                   <div key={p.flowId} className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-1">
-                    <span className="text-2xs text-text-primary flex-1 truncate">{p.flowName || p.flowId.slice(0, 8)}</span>
-                    <span className="text-2xs text-text-tertiary tabular-nums">{p.findingCount} findings</span>
-                    <span className={clsx('text-2xs font-bold font-mono tabular-nums', scoreColor(p.healthScore))}>{p.healthScore}</span>
+                    <span className="text-sm text-text-primary flex-1 truncate">{p.flowName || p.flowId.slice(0, 8)}</span>
+                    <span className="text-sm text-text-tertiary tabular-nums">{p.findingCount} findings</span>
+                    <span className={clsx('text-sm font-bold font-mono tabular-nums', scoreColor(p.healthScore))}>{p.healthScore}</span>
                   </div>
                 ))}
               </div>
@@ -192,12 +207,12 @@ export default function AnalyticsDashboard() {
       {batch && (
         <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
-              <FolderSearch size={10} />
+            <h3 className="text-sm font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
+              <FolderSearch size={14} />
               Batch Results
             </h3>
             <div className="flex items-center gap-3">
-              <span className="text-2xs text-text-tertiary tabular-nums">
+              <span className="text-sm text-text-tertiary tabular-nums">
                 {batch.totalFlows} flows · <span className="text-red-400">{batch.totalErrors}E</span>{' '}
                 <span className="text-amber-400">{batch.totalWarnings}W</span>{' '}
                 <span className="text-blue-400">{batch.totalInfo}I</span> · avg health{' '}
@@ -214,9 +229,7 @@ export default function AnalyticsDashboard() {
             </div>
           </div>
           <div className="space-y-1">
-            {[...batch.results]
-              .sort((a, b) => (b.report?.findings.length ?? -1) - (a.report?.findings.length ?? -1))
-              .map((r, i) => (
+            {sortedBatchResults.map((r, i) => (
                 <div
                   key={`${r.flowName}-${i}`}
                   className={clsx(
@@ -225,17 +238,17 @@ export default function AnalyticsDashboard() {
                   )}
                 >
                   {r.error && <AlertTriangle size={11} className="text-red-400 shrink-0" />}
-                  <span className="text-2xs text-text-primary flex-1 truncate">{r.flowName}</span>
+                  <span className="text-sm text-text-primary flex-1 truncate">{r.flowName}</span>
                   {r.error ? (
-                    <span className="text-2xs text-red-400/90 truncate max-w-[50%]">{r.error}</span>
+                    <span className="text-sm text-red-400/90 truncate max-w-[50%]">{r.error}</span>
                   ) : (
                     <>
-                      <span className="text-2xs tabular-nums">
+                      <span className="text-sm tabular-nums">
                         <span className="text-red-400">{r.report?.stats.errors ?? 0}E</span>{' '}
                         <span className="text-amber-400">{r.report?.stats.warnings ?? 0}W</span>{' '}
                         <span className="text-blue-400">{r.report?.stats.info ?? 0}I</span>
                       </span>
-                      <span className={clsx('text-2xs font-bold font-mono tabular-nums w-7 text-right', scoreColor(r.report?.metrics?.healthScore ?? 0))}>
+                      <span className={clsx('text-sm font-bold font-mono tabular-nums w-7 text-right', scoreColor(r.report?.metrics?.healthScore ?? 0))}>
                         {r.report?.metrics?.healthScore ?? '—'}
                       </span>
                     </>

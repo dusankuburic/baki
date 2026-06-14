@@ -55,18 +55,30 @@ func (c *Client) ProviderName() string {
 }
 
 // ensureProvider performs OIDC discovery once and caches the result. On
-// failure nothing is cached, so the next request retries.
+// failure nothing is cached, so the next request retries. The mutex is NOT
+// held during the HTTP discovery call, so concurrent SSO logins don't
+// serialize behind one stuck network round-trip.
 func (c *Client) ensureProvider(ctx context.Context) (*oidc.Provider, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.provider != nil {
-		return c.provider, nil
+		p := c.provider
+		c.mu.Unlock()
+		return p, nil
 	}
+	c.mu.Unlock()
+
 	p, err := oidc.NewProvider(ctx, c.cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("sso: discovery for %s failed: %w", c.cfg.IssuerURL, err)
 	}
-	c.provider = p
+
+	c.mu.Lock()
+	if c.provider == nil {
+		c.provider = p
+	} else {
+		p = c.provider // another caller won the race; use theirs
+	}
+	c.mu.Unlock()
 	return p, nil
 }
 

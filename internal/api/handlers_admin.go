@@ -77,6 +77,11 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if !auth.Role(req.Role).IsValid() {
+		render.Error(w, fmt.Errorf("invalid role: %s", req.Role), http.StatusBadRequest)
+		return
+	}
+
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return

@@ -259,8 +259,14 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	if len(req.Content) > 0 {
 		existing.Content = req.Content
 	}
-	// Use the client's version for OCC (what they loaded). Version 0 means
-	// the client didn't send one — skip the check for backward compatibility.
+	// OCC: in cloud mode, if the flow already has a version (existing.Version > 0
+	// from the DB load), the client MUST send the version they loaded. version=0
+	// on an existing flow means the client is bypassing OCC and could silently
+	// overwrite another user's changes.
+	if h.security.JWTEnabled && existing.Version > 0 && req.Version == 0 {
+		render.Error(w, fmt.Errorf("version is required for updates — reload the flow and try again"), http.StatusConflict)
+		return
+	}
 	existing.Version = req.Version
 
 	if err := h.libSvc.UpdateLibraryFlow(r.Context(), existing, userID); err != nil {

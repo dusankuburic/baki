@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -10,10 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"pad-analyzer/internal/logger"
 	"pad-analyzer/internal/storage"
 )
+
+const keystoreTimeout = 5 * time.Second
 
 // EncryptedKeyStore persists provider API keys in PostgreSQL, encrypted at rest
 // with AES-256-GCM. It implements storage.SecretStore so it can be injected as
@@ -91,7 +95,9 @@ func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO provider_keys (user_id, provider, ciphertext, updated_at)
 		 VALUES ($1, $2, $3, NOW())
 		 ON CONFLICT (user_id, provider) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = NOW()`,
@@ -110,8 +116,10 @@ func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 // rotation as "no key configured" and prompting the user to enter it again
 // indefinitely.
 func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
 	var ct string
-	err := s.db.QueryRow(`SELECT ciphertext FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider).Scan(&ct)
+	err := s.db.QueryRowContext(ctx, `SELECT ciphertext FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider).Scan(&ct)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", storage.ErrSecretNotFound
 	}
@@ -132,8 +140,10 @@ func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 
 // Has reports whether a key row exists for the (scope, provider) pair.
 func (s *EncryptedKeyStore) Has(scope, provider string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
 	var exists bool
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM provider_keys WHERE user_id = $1 AND provider = $2)`, scope, provider,
 	).Scan(&exists)
 	if err != nil {
@@ -144,7 +154,9 @@ func (s *EncryptedKeyStore) Has(scope, provider string) (bool, error) {
 
 // Delete removes a stored provider key. Deleting a missing key is a no-op.
 func (s *EncryptedKeyStore) Delete(scope, provider string) error {
-	if _, err := s.db.Exec(`DELETE FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider); err != nil {
 		return fmt.Errorf("keystore: delete: %w", err)
 	}
 	return nil

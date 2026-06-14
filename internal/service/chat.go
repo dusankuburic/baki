@@ -13,6 +13,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/ai/scrubber"
 	"pad-analyzer/internal/logger"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/models"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/storage"
@@ -236,7 +237,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	s.activeStreams.Store(streamID, ctl)
 
 	emit := func(eventType string, data map[string]interface{}) {
-		s.notifier.Emit("chat:event",
+		s.notifier.EmitTo(scope, "chat:event",
 			map[string]interface{}{"streamId": streamID, "type": eventType, "data": data})
 	}
 
@@ -255,6 +256,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 
 	go func() {
+		metrics.ChatStreamStart()
+		defer metrics.ChatStreamEnd()
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("chat stream goroutine panicked", "streamID", streamID, "panic", r)
+			}
+		}()
 		// On exit, remove the stream from the active set (so cancel/begin and
 		// leak-detection see it as gone) and move it to the finished set for a
 		// short grace period, so a client that reconnects after completion can

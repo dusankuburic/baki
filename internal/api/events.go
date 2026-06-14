@@ -12,24 +12,25 @@ import (
 )
 
 type Event struct {
-	Name string `json:"name"`
-	Data any    `json:"data"`
+	Name       string `json:"name"`
+	Data       any    `json:"data"`
+	TargetUser string `json:"-"` // empty = broadcast to all; non-empty = only this user
 }
 
 // EventManager manages Server-Sent Events (SSE) clients and implements
 // service.Notifier to allow internal services to emit events to the frontend.
 type EventManager struct {
-	clients     map[chan Event]bool
-	clientsMu   sync.Mutex
+	clients      map[chan Event]string // channel → userID ("" in local mode)
+	clientsMu    sync.Mutex
 	sseConnCount map[string]int // per-client SSE connection counter (keyed by clientKey)
-	shutdownCh  <-chan struct{}
-	allowOrigin func(string) bool          // injected by Router; nil = deny all cross-origin
-	clientKey   func(*http.Request) string // injected by Router; nil = fall back to remote IP
+	shutdownCh   <-chan struct{}
+	allowOrigin  func(string) bool          // injected by Router; nil = deny all cross-origin
+	clientKey    func(*http.Request) string // injected by Router; nil = fall back to remote IP
 }
 
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
 	return &EventManager{
-		clients:      make(map[chan Event]bool),
+		clients:      make(map[chan Event]string),
 		sseConnCount: make(map[string]int),
 		shutdownCh:   shutdownCh,
 	}
@@ -50,16 +51,33 @@ func (m *EventManager) SetClientKeyFunc(fn func(*http.Request) string) {
 	m.clientKey = fn
 }
 
-// Emit satisfies the service.Notifier interface.
+// Emit satisfies the service.Notifier interface. It broadcasts to ALL
+// connected SSE clients — use only for events that are truly global or in
+// local mode where only one client exists.
 func (m *EventManager) Emit(name string, data any) {
+	m.deliver(Event{Name: name, Data: data})
+}
+
+// EmitTo satisfies the service.Notifier interface. It delivers the event
+// only to SSE clients associated with userID. In local mode (userID="")
+// this behaves identically to Emit. Use EmitTo for any user-scoped event
+// (chat, analysis, settings, flow load) to prevent cross-tenant data leaks.
+func (m *EventManager) EmitTo(userID, name string, data any) {
+	m.deliver(Event{Name: name, Data: data, TargetUser: userID})
+}
+
+func (m *EventManager) deliver(ev Event) {
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
-	ev := Event{Name: name, Data: data}
-	for client := range m.clients {
+	for ch, clientUser := range m.clients {
+		// Filter by target user when one is specified.
+		if ev.TargetUser != "" && clientUser != ev.TargetUser {
+			continue
+		}
 		select {
-		case client <- ev:
+		case ch <- ev:
 		default:
-			logger.Warn("SSE client dropped event: send buffer full", "event", name)
+			logger.Warn("SSE client dropped event: send buffer full", "event", ev.Name)
 		}
 	}
 }
@@ -81,6 +99,13 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		key = m.clientKey(r)
 	}
 
+	// Extract the authenticated user ID for per-user event filtering.
+	// In local mode (no JWT), userID is "" — all events are broadcast.
+	userID := ""
+	if m.clientKey != nil {
+		userID = m.clientKey(r)
+	}
+
 	m.clientsMu.Lock()
 	if m.sseConnCount[key] >= 10 {
 		m.clientsMu.Unlock()
@@ -92,7 +117,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	// letting a slow client pin megabytes of buffered events; Emit drops
 	// events for a client whose buffer is full.
 	ch := make(chan Event, 512)
-	m.clients[ch] = true
+	m.clients[ch] = userID
 	m.clientsMu.Unlock()
 
 	defer func() {
@@ -114,6 +139,11 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
 	}
+	// Write the status explicitly before flushing. Without this, the first
+	// fmt.Fprintf in the event loop triggers an implicit WriteHeader via the
+	// otelhttp RespWriterWrapper, and the subsequent Flush triggers it again
+	// ("superfluous response.WriteHeader call" warning).
+	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
 	metrics.SSEClientStart()

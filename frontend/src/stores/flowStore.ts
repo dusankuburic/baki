@@ -249,6 +249,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       expandedBlockIds: new Set(), parseError: null,
       folderFiles: null, selectedFilePath: null,
       libraryFlowId: null, libraryVersion: 0,
+      isParsing: false, parseProgress: 0,
+      visibleBlockId: null,
+      navigationHistory: [], historyIndex: -1,
     })
     useSearchStore.getState().clear()
     useAnalysisStore.getState().setVariableLineage(null)

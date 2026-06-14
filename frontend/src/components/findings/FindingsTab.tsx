@@ -22,7 +22,6 @@ export default function FindingsTab() {
   const setReport = useAnalysisStore(s => s.setReport)
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
   const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
-  const analyzingGen = useAnalysisStore(s => s.analyzingGen)
   const setProgress = useAnalysisStore(s => s.setProgress)
   const severityFilter = useAnalysisStore(s => s.severityFilter)
   const categoryFilter = useAnalysisStore(s => s.categoryFilter)
@@ -98,9 +97,13 @@ export default function FindingsTab() {
     } catch (err) {
       toast.error('Analysis failed', {description: String(err)})
     } finally {
-      if (analyzingGen === gen) setAnalyzing(false)
+      // Read the latest gen from the store rather than a captured render-time
+      // copy: beginAnalyzing() bumps the gen during this same handler, so a
+      // closure-captured value is always stale and the equality check would
+      // never pass, leaving isAnalyzing stuck true.
+      if (useAnalysisStore.getState().analyzingGen === gen) setAnalyzing(false)
     }
-  }, [doc, setReport, setAnalyzing, beginAnalyzing, analyzingGen, setProgress])
+  }, [doc, toast, setReport, setAnalyzing, beginAnalyzing, setProgress])
 
   const handleFixWithAI = useCallback((finding: Finding) => {
     if (!doc) return

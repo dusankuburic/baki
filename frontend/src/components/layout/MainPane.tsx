@@ -14,6 +14,8 @@ const GraphView = lazy(() => import('@/components/graph/GraphView'))
 const ExecutionGraphView = lazy(() => import('@/components/flow/ExecutionGraphView'))
 const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffView'))
 const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDashboard'))
+// HomeDashboard pulls in recharts (~100KB+); lazy-load keeps it out of the entry chunk.
+const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
 import PaneDivider from '@/components/layout/PaneDivider'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -91,6 +93,19 @@ export default function MainPane() {
                 <div className="flex-1 overflow-y-auto p-4">
                     <Suspense fallback={<Spinner />}>
                         <AnalyticsDashboard />
+                    </Suspense>
+                </div>
+            </div>
+        )
+    }
+
+    if (mainPaneView === 'home') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-hidden">
+                    <Suspense fallback={<Spinner />}>
+                        <HomeDashboard />
                     </Suspense>
                 </div>
             </div>

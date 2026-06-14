@@ -309,11 +309,21 @@ func (b *PostgresStorageBackend) IsRefreshTokenValid(ctx context.Context, jti st
 }
 
 // RevokeRefreshToken revokes a single refresh token by jti (used on rotation).
+// Returns ErrTokenAlreadyRevoked if the token was already revoked, so callers
+// can detect a concurrent rotation race (two requests with the same jti).
 func (b *PostgresStorageBackend) RevokeRefreshToken(ctx context.Context, jti string) error {
-	if _, err := b.db.ExecContext(ctx,
-		`UPDATE refresh_tokens SET revoked = TRUE WHERE jti = $1`, jti,
-	); err != nil {
+	res, err := b.db.ExecContext(ctx,
+		`UPDATE refresh_tokens SET revoked = TRUE WHERE jti = $1 AND NOT revoked`, jti,
+	)
+	if err != nil {
 		return fmt.Errorf("revoke refresh token: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("revoke refresh token: rows affected: %w", err)
+	}
+	if n == 0 {
+		return interfaces.ErrTokenAlreadyRevoked
 	}
 	return nil
 }

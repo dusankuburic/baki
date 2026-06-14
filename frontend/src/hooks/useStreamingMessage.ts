@@ -134,6 +134,7 @@ export function useStreamingMessage(handler: StreamHandler) {
 
   useEffect(() => {
     return () => {
+      isCanceledRef.current = true
       if (unregisterRef.current) unregisterRef.current()
       if (unregisterConnRef.current) unregisterConnRef.current()
       if (streamIdRef.current) {

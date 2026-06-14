@@ -41,6 +41,8 @@ interface AnalysisState {
   isSuppressed: (findingId: string) => boolean
 }
 
+const MAX_REPORTS = 20
+
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   reports: new Map(),
   isAnalyzing: false,
@@ -55,6 +57,12 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setReport: (flowId, report) => set(state => {
     const next = new Map(state.reports)
     next.set(flowId, report)
+    // Evict oldest entries beyond the cap to prevent unbounded memory growth.
+    while (next.size > MAX_REPORTS) {
+      const oldest = next.keys().next().value
+      if (oldest === undefined) break
+      next.delete(oldest)
+    }
     return {reports: next}
   }),
 

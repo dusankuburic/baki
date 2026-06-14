@@ -5,7 +5,7 @@ import GlobalSearchOverlay from './components/search/GlobalSearchOverlay'
 import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
 
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'))
-import {useUIStore} from './stores/uiStore'
+import {useUIStore, isSystemView} from './stores/uiStore'
 import {logger} from './lib/logger'
 import {useAuthStore} from './stores/authStore'
 import {useFlowStore} from './stores/flowStore'
@@ -57,7 +57,7 @@ function AppInner() {
     const openDocument = useCallback((doc: DomainFlowDocument | null) => {
         setDocument(doc)
         useFlowStore.setState({ libraryFlowId: null, libraryVersion: 0 })
-        if (doc && (useUIStore.getState().mainPaneView === 'profile' || useUIStore.getState().mainPaneView === 'admin')) {
+        if (doc && isSystemView(useUIStore.getState().mainPaneView)) {
             setMainPaneView('block')
         }
     }, [setDocument, setMainPaneView])

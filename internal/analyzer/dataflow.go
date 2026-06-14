@@ -22,8 +22,8 @@ func (r *DeadDataRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		return nil
 	}
 
-	parentID := ctx.ParentMap[block.ID]
-	terminatorIdx, hasTerminator := ctx.TerminatorIndex[parentID]
+	siblingKey := ctx.SiblingKey[block.ID]
+	terminatorIdx, hasTerminator := ctx.TerminatorIndex[siblingKey]
 	if !hasTerminator {
 		return nil
 	}
@@ -44,9 +44,9 @@ func (r *DeadDataRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		if !ok {
 			continue
 		}
-		readerParentID := ctx.ParentMap[readerID]
+		readerSiblingKey := ctx.SiblingKey[readerID]
 
-		readerTermIdx, hasTerm := ctx.TerminatorIndex[readerParentID]
+		readerTermIdx, hasTerm := ctx.TerminatorIndex[readerSiblingKey]
 		if hasTerm && readerIdx > readerTermIdx {
 			continue
 		}
@@ -239,8 +239,8 @@ func computeDeadDataPaths(ctx *RuleContext) []models.DeadDataPath {
 			continue
 		}
 
-		parentID := ctx.ParentMap[b.ID]
-		termIdx, hasTerm := ctx.TerminatorIndex[parentID]
+		siblingKey := ctx.SiblingKey[b.ID]
+		termIdx, hasTerm := ctx.TerminatorIndex[siblingKey]
 		if !hasTerm {
 			continue
 		}
@@ -255,8 +255,8 @@ func computeDeadDataPaths(ctx *RuleContext) []models.DeadDataPath {
 			if !ok {
 				continue
 			}
-			readerParentID := ctx.ParentMap[readerID]
-			readerTermIdx, hasTerm := ctx.TerminatorIndex[readerParentID]
+			readerSiblingKey := ctx.SiblingKey[readerID]
+			readerTermIdx, hasTerm := ctx.TerminatorIndex[readerSiblingKey]
 			if hasTerm && readerIdx > readerTermIdx {
 				dead = append(dead, models.DeadDataPath{
 					Variable:  outVar,

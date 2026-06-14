@@ -17,7 +17,7 @@ export const flowApi = {
         if (data && data.__is_web_upload__) {
           return request('/api/flow/upload', data)
         }
-      } catch (_e) {
+      } catch {
         // Not a JSON string, must be a path
       }
     }
@@ -38,7 +38,7 @@ export const flowApi = {
         if (data && data.__is_web_upload__) {
           return request('/api/flow/upload', data)
         }
-      } catch (_e) {
+      } catch {
         // Not a JSON string, must be a path
       }
     }

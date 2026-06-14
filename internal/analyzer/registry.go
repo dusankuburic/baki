@@ -26,5 +26,7 @@ func AllRules() []Rule {
 		&WideLoopRule{},
 		&SubflowMismatchRule{},
 		&DeadDataRule{},
+		&HardcodedFilePathRule{},
+		&SqlInjectionRiskRule{},
 	}
 }

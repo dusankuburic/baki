@@ -1,5 +1,6 @@
 export {flowApi} from './flow'
 export {analysisApi} from './analysis'
+export {dashboardApi} from './dashboard'
 export {chatApi} from './chat'
 export {settingsApi} from './settings'
 export {providersApi} from './providers'

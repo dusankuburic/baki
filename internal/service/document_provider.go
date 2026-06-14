@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"pad-analyzer/internal/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -19,6 +20,7 @@ type DocumentProvider interface {
 
 // LocalDocumentProvider holds a single current flow in memory.
 type LocalDocumentProvider struct {
+	mu  sync.RWMutex
 	doc *models.FlowDocument
 }
 
@@ -27,6 +29,8 @@ func NewLocalDocumentProvider() *LocalDocumentProvider {
 }
 
 func (p *LocalDocumentProvider) ResolveDoc(ctx context.Context, id string) (*models.FlowDocument, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.doc == nil {
 		return nil, ErrUninitialized
 	}
@@ -34,10 +38,14 @@ func (p *LocalDocumentProvider) ResolveDoc(ctx context.Context, id string) (*mod
 }
 
 func (p *LocalDocumentProvider) SetCurrentDoc(doc *models.FlowDocument) {
+	p.mu.Lock()
 	p.doc = doc
+	p.mu.Unlock()
 }
 
 func (p *LocalDocumentProvider) CurrentDoc() *models.FlowDocument {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.doc
 }
 

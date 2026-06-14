@@ -145,6 +145,21 @@ CREATE INDEX IF NOT EXISTS org_invites_token_hash_idx ON org_invites (token_hash
 -- Only one active (unaccepted) invite per org+email pair.
 CREATE UNIQUE INDEX IF NOT EXISTS org_invites_org_email_idx ON org_invites (org_id, email) WHERE accepted_at IS NULL;
 
+-- flow_analysis holds the latest analysis summary per flow, upserted on every
+-- analyze run. It backs the welcome dashboard's health/findings cards so they
+-- are populated on first load (across sessions and replicas) rather than relying
+-- on the per-process in-memory analyzer cache. Owner/org scoping is resolved by
+-- JOINing flows at read time, so ownership is never denormalized here.
+CREATE TABLE IF NOT EXISTS flow_analysis (
+	flow_id      TEXT        PRIMARY KEY REFERENCES flows(id) ON DELETE CASCADE,
+	health_score INTEGER     NOT NULL DEFAULT 0,
+	errors       INTEGER     NOT NULL DEFAULT 0,
+	warnings     INTEGER     NOT NULL DEFAULT 0,
+	info         INTEGER     NOT NULL DEFAULT 0,
+	by_category  JSONB       NOT NULL DEFAULT '{}',
+	analyzed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS flow_collaborators (
 	flow_id    TEXT        NOT NULL,
 	user_id    TEXT        NOT NULL,
@@ -205,6 +220,11 @@ CREATE TABLE IF NOT EXISTS usage_metrics (
 );
 CREATE INDEX IF NOT EXISTS usage_metrics_user_id_idx ON usage_metrics (user_id);
 CREATE INDEX IF NOT EXISTS usage_metrics_org_id_idx ON usage_metrics (org_id);
+-- The dashboard token-usage chart LEFT JOINs a 14-day generate_series against
+-- usage_metrics filtered by (user_id, created_at). The single-column user_id
+-- index forces Postgres to scan every row the user has ever logged and filter
+-- by date in memory; the composite range-scans just the window.
+CREATE INDEX IF NOT EXISTS usage_metrics_user_created_idx ON usage_metrics (user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS knowledge_documents (
 	id         TEXT        PRIMARY KEY,

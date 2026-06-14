@@ -100,10 +100,12 @@ class CollaborationService {
     this.setStatus('disconnected')
   }
 
-  send(env: Omit<Envelope, 'flowId' | 'userId' | 'ts'>): void {
+  send(env: Omit<Envelope, 'flowId' | 'userId' | 'ts'>): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(env))
+      return true
     }
+    return false
   }
 
   subscribe(handler: EventHandler): () => void {

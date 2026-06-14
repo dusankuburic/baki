@@ -125,6 +125,9 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/rule/config", h.Analysis.handleUpdateRuleConfig)
 	})
 
+	// --- Welcome Dashboard (BFF) ---
+	r.Get("/api/dashboard/home", h.Dashboard.handleHome)
+
 	r.Route("/api/export", func(r chi.Router) {
 		r.Post("/compare", h.Export.handleCompareCurrentWith)
 		r.Post("/markdown", h.Export.handleExportMarkdown)

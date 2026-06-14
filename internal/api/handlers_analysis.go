@@ -18,14 +18,16 @@ import (
 type AnalysisHandler struct {
 	analysisSvc *service.AnalysisService
 	flowSvc     *service.FlowService
+	dashboard   *service.DashboardService
 	security    *SecurityConfig
 	backend     storageif.StorageBackend
 }
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, backend storageif.StorageBackend, security *SecurityConfig) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
+		dashboard:   dashboard,
 		security:    security,
 		backend:     backend,
 	}
@@ -51,6 +53,11 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+	// Persist the latest analysis summary so the welcome dashboard stays
+	// populated across sessions/replicas (best-effort; no-op in local mode).
+	if h.dashboard != nil {
+		h.dashboard.RecordAnalysis(r.Context(), doc, res)
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowAnalyze, "flow", req.FlowID, nil)
 	render.JSON(w, res)

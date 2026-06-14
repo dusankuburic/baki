@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react'
+import {useState} from 'react'
 import clsx from 'clsx'
 import {AlertTriangle, ChevronDown, X} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
@@ -10,12 +10,16 @@ export default function ParseErrorsBanner() {
   const document = useFlowStore(s => s.document)
   const [expanded, setExpanded] = useState(false)
   const [dismissed, setDismissed] = useState(false)
+  const [prevDocId, setPrevDocId] = useState(document?.id)
 
-  // Re-arm the banner when a different document is loaded.
-  useEffect(() => {
+  // Reset banner state when a different document is loaded.
+  // Uses the "store info from previous render" pattern recommended by React
+  // instead of useEffect+setState (which causes cascading renders).
+  if (document?.id !== prevDocId) {
+    setPrevDocId(document?.id)
     setDismissed(false)
     setExpanded(false)
-  }, [document?.id])
+  }
 
   const errors = document?.parseErrors
   if (!errors || errors.length === 0 || dismissed) return null

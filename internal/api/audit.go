@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,6 +37,9 @@ const (
 	AuditActionOrgInviteCreate = "org.invite_create"
 	AuditActionOrgInviteRevoke = "org.invite_revoke"
 	AuditActionOrgInviteAccept = "org.invite_accept"
+	AuditActionOrgMemberAdd    = "org.member_add"
+	AuditActionOrgMemberRemove = "org.member_remove"
+	AuditActionOrgMemberRole   = "org.member_role"
 	AuditActionProfileUpdate   = "user.profile_update"
 	AuditActionSessionRevoke   = "auth.session_revoke"
 	AuditActionSSOLogin        = "auth.sso_login"
@@ -44,9 +48,10 @@ const (
 )
 
 var (
-	auditCh   chan *storageif.AuditEvent
-	auditWg   sync.WaitGroup
-	auditOnce sync.Once
+	auditCh     chan *storageif.AuditEvent
+	auditWg     sync.WaitGroup
+	auditOnce   sync.Once
+	auditClosed atomic.Bool // guards against send-on-closed-channel panic
 )
 
 func InitAuditPool(backend storageif.StorageBackend) {
@@ -66,12 +71,18 @@ func ShutdownAuditPool() {
 	if auditCh == nil {
 		return
 	}
+	auditClosed.Store(true)
 	close(auditCh)
 	auditWg.Wait()
 }
 
 func auditWorker(backend storageif.StorageBackend) {
 	defer auditWg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("audit worker panicked", "err", r)
+		}
+	}()
 	for event := range auditCh {
 		ctx, cancel := context.WithTimeout(context.Background(), auditWriteTTL)
 		if err := backend.SaveAuditEvent(ctx, event); err != nil {
@@ -103,7 +114,7 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		Meta:         meta,
 		CreatedAt:    time.Now().UTC(),
 	}
-	if auditCh != nil {
+	if auditCh != nil && !auditClosed.Load() {
 		select {
 		case auditCh <- event:
 		default:
@@ -112,7 +123,14 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		return
 	}
 	go func() {
-		if err := backend.SaveAuditEvent(context.Background(), event); err != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Warn("audit fallback goroutine panicked", "action", action, "err", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), auditWriteTTL)
+		defer cancel()
+		if err := backend.SaveAuditEvent(ctx, event); err != nil {
 			slog.Warn("audit log write failed", "action", action, "err", err)
 		}
 	}()

@@ -443,9 +443,11 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	if s.astCache != nil {
 		if cached, ok := s.astCache.Get(context.Background(), key); ok {
 			if doc, ok := cached.(*models.FlowDocument); ok {
-				// We need a deep copy if we're going to modify FilePath
-				// But for now, let's just use it and set FilePath
-				doc.FilePath = path
+				// Shallow-copy before mutating FilePath so the cached
+				// original stays pristine for concurrent callers.
+				docCopy := *doc
+				docCopy.FilePath = path
+				doc = &docCopy
 				s.notifier.Emit("flow:loaded", doc)
 				logger.Info("flow loaded from cache", "file", filepath.Base(path))
 				return doc, nil

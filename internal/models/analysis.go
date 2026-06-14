@@ -197,6 +197,7 @@ type SubflowHash struct {
 
 type DashboardStats struct {
 	TotalFlowsAnalyzed int                `json:"totalFlowsAnalyzed"`
+	TotalSubflows      int                `json:"totalSubflows"`
 	TotalFindings      int                `json:"totalFindings"`
 	FindingsBySeverity map[string]int     `json:"findingsBySeverity"`
 	FindingsByCategory map[string]int     `json:"findingsByCategory"`

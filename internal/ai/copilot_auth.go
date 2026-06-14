@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const copilotClientID = "Iv1.b507a08c87ecfe98"
@@ -27,6 +29,7 @@ type CopilotAuth struct {
 	client       *http.Client
 	mu           sync.Mutex
 	sessionToken *CopilotSessionToken
+	flight       singleflight.Group
 }
 
 func NewCopilotAuth() *CopilotAuth {
@@ -146,19 +149,28 @@ func (a *CopilotAuth) ExchangeToken(ctx context.Context, githubToken string) (*C
 }
 
 // GetSessionToken returns a valid Copilot session token, refreshing if expired or within 5 min of expiry.
+// Uses singleflight so concurrent callers with the same GitHub token share a single HTTP exchange,
+// while different tokens proceed independently. The mutex is never held during network I/O.
 func (a *CopilotAuth) GetSessionToken(ctx context.Context, githubToken string) (string, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	now := time.Now().Unix()
 	if a.sessionToken != nil && a.sessionToken.ExpiresAt > now+300 {
-		return a.sessionToken.Token, nil
+		token := a.sessionToken.Token
+		a.mu.Unlock()
+		return token, nil
 	}
+	a.mu.Unlock()
 
-	token, err := a.ExchangeToken(ctx, githubToken)
+	v, err, _ := a.flight.Do(githubToken, func() (any, error) {
+		return a.ExchangeToken(ctx, githubToken)
+	})
 	if err != nil {
 		return "", err
 	}
+	token := v.(*CopilotSessionToken)
+
+	a.mu.Lock()
 	a.sessionToken = token
+	a.mu.Unlock()
 	return token.Token, nil
 }

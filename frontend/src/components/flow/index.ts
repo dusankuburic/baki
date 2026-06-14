@@ -1,6 +1,5 @@
 export {default as BlockCard} from './BlockCard'
 export {default as BlockConnector} from './BlockConnector'
-export {default as BlockChildren} from './BlockChildren'
 export {default as BlockEnd} from './BlockEnd'
 export {default as BlockView} from './BlockView'
 export {default as MainPaneToolbar} from './MainPaneToolbar'

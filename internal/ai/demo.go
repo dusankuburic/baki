@@ -167,7 +167,10 @@ func (d *DemoProvider) Chat(ctx context.Context, req Request) (*Response, error)
 		"maxTokens":     orDefault(req.MaxTokens, 4096),
 		"temperature":   req.Temperature,
 	}
-	jsonBody, _ := json.Marshal(payload)
+	jsonBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", DemoProxyURL+"/chat", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -221,7 +224,10 @@ func (d *DemoProvider) Stream(ctx context.Context, req Request, onChunk func(Chu
 		"temperature":   req.Temperature,
 		"stream":        true,
 	}
-	jsonBody, _ := json.Marshal(payload)
+	jsonBody, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", DemoProxyURL+"/chat", bytes.NewReader(jsonBody))
 	if err != nil {

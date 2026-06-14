@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"testing"
 
 	"pad-analyzer/internal/models"
@@ -710,4 +711,45 @@ func TestAllRulesIntegration(t *testing.T) {
 	if ruleCounts["dead-code"] < 1 {
 		t.Errorf("expected dead-code finding, got counts: %+v", ruleCounts)
 	}
+}
+
+// TestDuplicateActionRule_MultiSubflow_NoPanic reproduces the panic that occurred
+// when SiblingMap[""] was overwritten by each subflow, causing BlockIndex values
+// from earlier subflows to index out of range in the last subflow's sibling slice.
+func TestDuplicateActionRule_MultiSubflow_NoPanic(t *testing.T) {
+	sf1Blocks := make([]models.Block, 10)
+	for i := range sf1Blocks {
+		sf1Blocks[i] = *makeBlock(
+			fmt.Sprintf("sf1-b%d", i),
+			fmt.Sprintf("Action %d", i),
+			models.BlockTypeAction,
+			"SetVariable.Set", 0,
+		)
+		sf1Blocks[i].SubflowID = "sf1"
+	}
+
+	sf2Blocks := make([]models.Block, 3)
+	for i := range sf2Blocks {
+		sf2Blocks[i] = *makeBlock(
+			fmt.Sprintf("sf2-b%d", i),
+			fmt.Sprintf("Action %d", i),
+			models.BlockTypeAction,
+			"SetVariable.Set", 0,
+		)
+		sf2Blocks[i].SubflowID = "sf2"
+	}
+
+	flow := &models.FlowDocument{
+		ID: "test",
+		Subflows: []models.Subflow{
+			{ID: "sf1", Name: "Big", Blocks: sf1Blocks},
+			{ID: "sf2", Name: "Small", Blocks: sf2Blocks},
+		},
+	}
+
+	// Must not panic — previously this would index out of range because
+	// sf1 blocks had BlockIndex values up to 9, but SiblingMap[""] was
+	// overwritten by sf2's 3-block slice.
+	report := RunAnalysis(flow, []Rule{&DuplicateActionRule{}}, nil, nil)
+	_ = report
 }

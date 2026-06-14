@@ -37,6 +37,7 @@ func ComputeDashboard(reports []*models.AnalysisReport) *models.DashboardStats {
 		if r.Metrics != nil {
 			healthSum += float64(r.Metrics.HealthScore)
 			healthCount++
+			stats.TotalSubflows += r.Metrics.SubflowCount
 		}
 	}
 

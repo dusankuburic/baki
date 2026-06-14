@@ -128,9 +128,17 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 
 	// Asynchronously record the usage so it doesn't block the caller
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warn("AI usage recording panicked",
+					"provider", p.providerID, "model", modelID, "panic", r)
+			}
+		}()
 		p.recordSem <- struct{}{}
 		defer func() { <-p.recordSem }()
-		if err := p.recorder(context.Background(), &metric); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := p.recorder(ctx, &metric); err != nil {
 			logger.Warn("AI usage recording failed",
 				"provider", p.providerID, "model", modelID, "error", err)
 		}

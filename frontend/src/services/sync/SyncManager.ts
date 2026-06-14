@@ -48,16 +48,20 @@ class SyncManager {
 
   enqueue(env: Omit<Envelope, 'flowId' | 'userId' | 'ts'>): string {
     const id = `op-${++this.counter}-${Date.now()}`
-    if (collaborationService.getStatus() === 'connected') {
-      collaborationService.send(env)
-      return id
-    }
+    // Always queue first so the op survives a send failure (socket
+    // closing between the status check and the actual ws.send).
     this.queue.push({ id, env, queuedAt: Date.now() })
     if (this.queue.length > MAX_QUEUE_SIZE) {
       this.queue = this.queue.slice(-MAX_QUEUE_SIZE)
     }
     this.saveToStorage()
     this.notifyChange()
+
+    // Attempt immediate delivery if connected. flush() only removes
+    // ops that were actually delivered; undelivered ops stay queued.
+    if (collaborationService.getStatus() === 'connected') {
+      this.flush()
+    }
     return id
   }
 
@@ -77,10 +81,21 @@ class SyncManager {
   private flush(): void {
     if (!this.queue.length) return
     const now = Date.now()
-    const toSend = this.queue.filter(op => now - op.queuedAt < MAX_AGE_MS)
-    toSend.forEach(op => collaborationService.send(op.env))
-    this.queue = []
-    this.clearStorage()
+    const remaining: PendingOp[] = []
+    for (const op of this.queue) {
+      if (now - op.queuedAt >= MAX_AGE_MS) continue // expired
+      if (collaborationService.send(op.env)) {
+        // delivered — drop from queue
+      } else {
+        remaining.push(op) // socket not open — keep for retry
+      }
+    }
+    this.queue = remaining
+    if (remaining.length === 0) {
+      this.clearStorage()
+    } else {
+      this.saveToStorage()
+    }
     this.notifyChange()
   }
 

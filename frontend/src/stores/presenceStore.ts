@@ -64,7 +64,15 @@ export const usePresenceStore = create<PresenceState>((set) => ({
     syncManager.start(flowId)
 
     cleanupHandlers.push(
-      collaborationService.onStatusChange(status => set({ status })),
+      collaborationService.onStatusChange(status => {
+        set({ status })
+        // Clear stale users on disconnect/error so the UI doesn't
+        // show ghosts from before the connection dropped. Fresh presence
+        // data will repopulate as other users re-announce.
+        if (status === 'disconnected' || status === 'error') {
+          set({ users: {} })
+        }
+      }),
       collaborationService.subscribe(handleEnvelope),
     )
   },

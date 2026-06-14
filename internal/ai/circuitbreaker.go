@@ -143,18 +143,24 @@ func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChu
 }
 
 // check returns ErrCircuitOpen when the circuit is open and the cooldown has
-// not elapsed yet. In half-open state it allows a single probe through.
+// not elapsed yet. In half-open state only ONE probe is allowed through;
+// subsequent callers are rejected until the probe completes via record().
 func (cb *CircuitBreakerProvider) check() error {
 	cb.st.mu.Lock()
 	defer cb.st.mu.Unlock()
-	if cb.st.state == circuitOpen {
+	switch cb.st.state {
+	case circuitOpen:
 		if time.Since(cb.st.lastFailure) >= cb.openDuration {
 			cb.transitionLocked(circuitHalfOpen)
-			return nil
+			return nil // allow the single probe
 		}
 		return ErrCircuitOpen
+	case circuitHalfOpen:
+		// A probe is already in flight — reject all others until it resolves.
+		return ErrCircuitOpen
+	default:
+		return nil
 	}
-	return nil
 }
 
 // record updates the failure count and circuit state based on a call outcome.

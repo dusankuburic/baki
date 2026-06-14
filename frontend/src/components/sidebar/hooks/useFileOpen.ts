@@ -1,7 +1,7 @@
 import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
-import {useUIStore} from '@/stores/uiStore'
+import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {flowApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {isTauri} from '@/platform/guards'
@@ -19,7 +19,7 @@ export function useFileOpen() {
 
     const checkView = useCallback(() => {
         const view = useUIStore.getState().mainPaneView
-        if (view === 'profile' || view === 'admin') {
+        if (isSystemView(view)) {
             setMainPaneView('block')
         }
     }, [setMainPaneView])

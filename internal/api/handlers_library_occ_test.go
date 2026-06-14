@@ -33,17 +33,19 @@ func TestLibraryUpdate_VersionIncrementsOnSuccessiveSaves(t *testing.T) {
 	seed("vflow2", "alice")
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
 
-	// First update
+	// First update — seed creates flow at version=0, so version=0 is allowed.
 	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/vflow2", bearer, map[string]any{
-		"name": "v1",
+		"name":    "v1",
+		"version": 0,
 	})
 	checkStatus(t, rr, http.StatusOK)
 	var resp1 libraryFlow
 	decodeJSON(t, rr, &resp1)
 
-	// Second update — version should have incremented
+	// Second update — must send the version from the first response for OCC.
 	rr2 := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/vflow2", bearer, map[string]any{
-		"name": "v2",
+		"name":    "v2",
+		"version": resp1.Version,
 	})
 	checkStatus(t, rr2, http.StatusOK)
 	var resp2 libraryFlow
@@ -52,6 +54,25 @@ func TestLibraryUpdate_VersionIncrementsOnSuccessiveSaves(t *testing.T) {
 	if resp2.Version <= resp1.Version {
 		t.Errorf("version should increment: first=%d second=%d", resp1.Version, resp2.Version)
 	}
+}
+
+func TestLibraryUpdate_VersionZeroRejectedOnExistingFlow(t *testing.T) {
+	rt, seed := newLibraryTestRouter(t)
+	seed("vflow3", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	// First update bumps the version from 0 to 1.
+	rr := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/vflow3", bearer, map[string]any{
+		"name": "v1", "version": 0,
+	})
+	checkStatus(t, rr, http.StatusOK)
+
+	// Second update with version=0 must be rejected — the client must send
+	// the version they loaded to participate in OCC.
+	rr2 := doRequestWithAuth(t, rt, http.MethodPut, "/api/library/vflow3", bearer, map[string]any{
+		"name": "v2", "version": 0,
+	})
+	checkStatus(t, rr2, http.StatusConflict)
 }
 
 func TestLibraryGetContent_ReturnsVersionHeader(t *testing.T) {

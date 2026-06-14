@@ -248,6 +248,7 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberAdd, "org", id, map[string]string{"targetUser": targetID, "role": req.Role})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -276,6 +277,7 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberRemove, "org", id, map[string]string{"targetUser": userID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -373,8 +375,12 @@ func (h *OrgHandler) handleOrgInviteRevoke(w http.ResponseWriter, r *http.Reques
 func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
 	userID := h.security.CallerID(r)
+	userEmail := ""
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		userEmail = claims.Email
+	}
 
-	org, err := h.orgSvc.AcceptInvite(r.Context(), token, userID)
+	org, err := h.orgSvc.AcceptInvite(r.Context(), token, userID, userEmail)
 	if err != nil {
 		switch {
 		case errors.Is(err, collaboration.ErrInviteNotFound):
@@ -410,5 +416,6 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberRole, "org", id, map[string]string{"targetUser": userID, "role": req.Role})
 	render.JSON(w, map[string]string{"status": "ok"})
 }

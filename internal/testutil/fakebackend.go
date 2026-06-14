@@ -179,6 +179,14 @@ func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, er
 	return 0, nil
 }
 
+// ---- Dashboard ----
+func (m *FakeBackend) SaveFlowAnalysis(_ context.Context, _ *interfaces.FlowAnalysis) error {
+	return nil
+}
+func (m *FakeBackend) FlowDashboardData(_ context.Context, _ string, _ int) (*interfaces.DashboardData, error) {
+	return &interfaces.DashboardData{ByCategory: map[string]int{}}, nil
+}
+
 // ---- Knowledge Base ----
 func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, _ *interfaces.KnowledgeDocument) error {
 	return nil

@@ -198,6 +198,9 @@ func applyEnvVars(cfg *Config) error {
 	if v := os.Getenv("PAD_DB_CONN_MAX_LIFETIME"); v != "" {
 		cfg.Storage.DBConnMaxLifetime = v
 	}
+	if v := os.Getenv("PAD_DB_CONN_MAX_IDLE_TIME"); v != "" {
+		cfg.Storage.DBConnMaxIdleTime = v
+	}
 	if v := os.Getenv("PAD_AZURE_STORAGE_ACCOUNT"); v != "" {
 		cfg.Storage.AzureStorageAccount = v
 	}

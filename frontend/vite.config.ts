@@ -16,6 +16,7 @@ export default defineConfig({
           'react-vendor': ['react', 'react-dom', 'react-dom/client'],
           'graph': ['cytoscape', 'cytoscape-dagre'],
           'markdown': ['react-markdown', 'remark-gfm'],
+          'charts': ['recharts'],
         },
       },
     },

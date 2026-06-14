@@ -255,6 +255,8 @@ func DefaultSettings() *AppSettings {
 				"wide-loop":               {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 20}},
 				"subflow-mismatch":        {Enabled: true, Severity: "warning"},
 				"dead-data":               {Enabled: true, Severity: "info"},
+				"hardcoded-filepath":      {Enabled: true, Severity: "info"},
+				"sql-injection-risk":      {Enabled: true, Severity: "warning"},
 			},
 		},
 	}

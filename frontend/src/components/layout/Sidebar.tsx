@@ -13,7 +13,7 @@ import LibraryTab from '@/components/sidebar/LibraryTab'
 import SidebarToolbar from '@/components/sidebar/SidebarToolbar'
 import {useFlowStore, ALL_TYPES} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {useUIStore} from '@/stores/uiStore'
+import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {useToast} from '@/components/shared/Toast'
 import {useFileOpen} from '@/components/sidebar/hooks/useFileOpen'
 import {useSidebarSearch} from '@/components/sidebar/hooks/useSidebarSearch'
@@ -68,7 +68,7 @@ export default function Sidebar() {
     const handleSelectBlock = useCallback((blockId: string, subflowId: string) => {
         selectBlock(blockId)
         selectSubflow(subflowId)
-        if (useUIStore.getState().mainPaneView === 'profile' || useUIStore.getState().mainPaneView === 'admin') {
+        if (isSystemView(useUIStore.getState().mainPaneView)) {
             useUIStore.getState().setMainPaneView('block')
         }
     }, [selectBlock, selectSubflow])
@@ -247,7 +247,7 @@ export default function Sidebar() {
                             onSelectBlock={handleSelectBlock}
                             onSelectSubflow={(id) => {
                                 selectSubflow(id)
-                                if (useUIStore.getState().mainPaneView === 'profile' || useUIStore.getState().mainPaneView === 'admin') {
+                                if (isSystemView(useUIStore.getState().mainPaneView)) {
                                     useUIStore.getState().setMainPaneView('block')
                                 }
                             }}

@@ -18,7 +18,7 @@ import (
 // LocalStorageBackend implements StorageBackend for local file system storage
 type LocalStorageBackend struct {
 	dataDir string
-	usersMu sync.Mutex // guards the users map against concurrent access
+	mu      sync.RWMutex // guards users, orgs, and sharing maps
 	users   map[string]*interfaces.User
 	orgs    map[string]*interfaces.Organisation
 	sharing map[string][]*interfaces.Collaborator
@@ -124,8 +124,14 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 			continue
 		}
 
-		// Extract flow ID from filename
-		flowID := file.Name()[:len(file.Name())-5] // Remove .json extension
+		// Skip non-.json files (temp files, backups, etc.) to avoid
+		// index-out-of-range panics on the extension strip below.
+		if !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+
+		// Extract flow ID from filename (strip ".json", 5 chars)
+		flowID := file.Name()[:len(file.Name())-5]
 
 		flow, err := lsb.LoadFlow(ctx, flowID)
 		if err != nil {
@@ -420,8 +426,8 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 
 func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
 	user.Email = strings.ToLower(user.Email)
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	// Reject an email collision with a different user ID to mirror the Postgres
 	// UNIQUE(email) constraint.
 	for id, existing := range lsb.users {
@@ -439,8 +445,8 @@ func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.U
 // be promoted to RoleAdmin. Returns ErrEmailExists on email collision.
 func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
 	user.Email = strings.ToLower(user.Email)
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 
 	for _, existing := range lsb.users {
 		if existing.Email == user.Email {
@@ -459,8 +465,8 @@ func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces
 
 func (lsb *LocalStorageBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) {
 	email = strings.ToLower(email)
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	for _, u := range lsb.users {
 		if u.Email == email {
 			return u, nil
@@ -470,8 +476,8 @@ func (lsb *LocalStorageBackend) LoadUserByEmail(ctx context.Context, email strin
 }
 
 func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		return u, nil
 	}
@@ -480,8 +486,8 @@ func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*i
 
 // LoadUsersByIDs resolves multiple users via the in-memory id map (O(len(ids))).
 func (lsb *LocalStorageBackend) LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*interfaces.User, error) {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	out := make(map[string]*interfaces.User, len(ids))
 	for _, id := range ids {
 		if u, ok := lsb.users[id]; ok {
@@ -492,14 +498,14 @@ func (lsb *LocalStorageBackend) LoadUsersByIDs(ctx context.Context, ids []string
 }
 
 func (lsb *LocalStorageBackend) CountUsers(ctx context.Context) (int, error) {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	return len(lsb.users), nil
 }
 
 func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int) ([]*interfaces.User, error) {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	users := make([]*interfaces.User, 0, len(lsb.users))
 	for _, u := range lsb.users {
 		users = append(users, u)
@@ -521,8 +527,8 @@ func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int
 }
 
 func (lsb *LocalStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	var admins []*interfaces.User
 	for _, u := range lsb.users {
 		if u.Role == auth.RoleAdmin {
@@ -533,8 +539,8 @@ func (lsb *LocalStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.U
 }
 
 func (lsb *LocalStorageBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		u.Role = role
 		u.UpdatedAt = time.Now().UTC()
@@ -544,8 +550,8 @@ func (lsb *LocalStorageBackend) UpdateUserRole(ctx context.Context, id string, r
 }
 
 func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		u.Password = passwordHash
 		u.FailedLoginAttempts = 0
@@ -557,8 +563,8 @@ func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id strin
 }
 
 func (lsb *LocalStorageBackend) UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error {
-	lsb.usersMu.Lock()
-	defer lsb.usersMu.Unlock()
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	if u, ok := lsb.users[id]; ok {
 		u.DisplayName = displayName
 		u.AvatarURL = avatarURL
@@ -571,11 +577,15 @@ func (lsb *LocalStorageBackend) UpdateUserProfile(ctx context.Context, id string
 // ---- Organisation operations ----
 
 func (lsb *LocalStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	lsb.orgs[org.ID] = org
 	return nil
 }
 
 func (lsb *LocalStorageBackend) LoadOrg(ctx context.Context, id string) (*interfaces.Organisation, error) {
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	if o, ok := lsb.orgs[id]; ok {
 		return o, nil
 	}
@@ -583,6 +593,8 @@ func (lsb *LocalStorageBackend) LoadOrg(ctx context.Context, id string) (*interf
 }
 
 func (lsb *LocalStorageBackend) ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error) {
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	var result []*interfaces.Organisation
 	for _, o := range lsb.orgs {
 		for _, m := range o.Members {
@@ -596,6 +608,8 @@ func (lsb *LocalStorageBackend) ListOrgsForUser(ctx context.Context, userID stri
 }
 
 func (lsb *LocalStorageBackend) DeleteOrg(ctx context.Context, id string) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	if _, ok := lsb.orgs[id]; ok {
 		delete(lsb.orgs, id)
 		return nil
@@ -603,7 +617,23 @@ func (lsb *LocalStorageBackend) DeleteOrg(ctx context.Context, id string) error 
 	return interfaces.ErrNotFound
 }
 
+// ---- Dashboard ----
+// The filesystem backend is not used as the live StorageBackend in desktop mode
+// (that path runs with a nil backend and sources the dashboard from the in-memory
+// analyzer cache). These satisfy the interface for tests/migration; persistence is
+// a no-op and the aggregate is empty.
+
+func (lsb *LocalStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *interfaces.FlowAnalysis) error {
+	return nil
+}
+
+func (lsb *LocalStorageBackend) FlowDashboardData(ctx context.Context, ownerID string, days int) (*interfaces.DashboardData, error) {
+	return &interfaces.DashboardData{ByCategory: map[string]int{}}, nil
+}
+
 func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	org, ok := lsb.orgs[id]
 	if !ok {
 		return interfaces.ErrNotFound
@@ -614,6 +644,8 @@ func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn fun
 // ---- Sharing operations ----
 
 func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID string) ([]*interfaces.Collaborator, error) {
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	collabs := lsb.sharing[flowID]
 	if collabs == nil {
 		return []*interfaces.Collaborator{}, nil
@@ -622,6 +654,8 @@ func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID st
 }
 
 func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*interfaces.Collaborator, error) {
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	result := make(map[string][]*interfaces.Collaborator, len(flowIDs))
 	for _, id := range flowIDs {
 		if collabs := lsb.sharing[id]; len(collabs) > 0 {
@@ -632,6 +666,8 @@ func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flow
 }
 
 func (lsb *LocalStorageBackend) AddCollaborator(ctx context.Context, flowID string, c *interfaces.Collaborator) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	if c.GrantedAt.IsZero() {
 		c.GrantedAt = time.Now().UTC()
 	}
@@ -647,6 +683,8 @@ func (lsb *LocalStorageBackend) AddCollaborator(ctx context.Context, flowID stri
 }
 
 func (lsb *LocalStorageBackend) UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	list := lsb.sharing[flowID]
 	for _, existing := range list {
 		if existing.UserID == userID {
@@ -658,6 +696,8 @@ func (lsb *LocalStorageBackend) UpdateCollaborator(ctx context.Context, flowID, 
 }
 
 func (lsb *LocalStorageBackend) RemoveCollaborator(ctx context.Context, flowID, userID string) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
 	list := lsb.sharing[flowID]
 	for i, existing := range list {
 		if existing.UserID == userID {
