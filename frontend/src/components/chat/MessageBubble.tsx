@@ -3,7 +3,7 @@ import {Copy, Check, RefreshCw, RotateCcw, Bot, User} from 'lucide-react'
 import {useState, useCallback, memo} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type {ChatMessage as ChatMessageType} from '@/types/domain'
+import type {ChatMessage as ChatMessageType} from '@/types'
 import {useCopy} from '@/hooks/useCopy'
 import CodeBlock from './CodeBlock'
 

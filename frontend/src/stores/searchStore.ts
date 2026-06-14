@@ -1,5 +1,5 @@
 import {create} from 'zustand'
-import type {SearchResult} from '@/types/domain'
+import type {SearchResult} from '@/types'
 
 interface SearchState {
   query: string

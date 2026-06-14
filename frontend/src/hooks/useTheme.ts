@@ -1,7 +1,7 @@
 import {useCallback, useEffect} from 'react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useUIStore} from '@/stores/uiStore'
-import type {ThemeMode} from '@/types/domain'
+import type {ThemeMode} from '@/types'
 
 export function useTheme() {
     const theme = useSettingsStore(s => s.settings.appearance.theme)

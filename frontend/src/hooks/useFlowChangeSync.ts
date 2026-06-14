@@ -3,7 +3,7 @@ import {onFlowChanged, usePresenceStore} from '@/stores/presenceStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {libraryApi} from '@/api/library'
 import {logger} from '@/lib/logger'
-import type {FlowDocument} from '@/types/domain'
+import type {FlowDocument} from '@/types'
 
 export function useFlowChangeSync(): void {
     const flowId = usePresenceStore(s => s.flowId)

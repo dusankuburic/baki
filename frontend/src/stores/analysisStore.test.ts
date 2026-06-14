@@ -1,6 +1,6 @@
 import {describe, it, expect, beforeEach} from 'vitest'
 import {useAnalysisStore} from './analysisStore'
-import type {Finding, AnalysisReport} from '@/types/domain'
+import type {Finding, AnalysisReport} from '@/types'
 
 function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
     return {

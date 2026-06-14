@@ -1,5 +1,5 @@
 import {create} from 'zustand'
-import type {ChatMessage, ProviderID} from '@/types/domain'
+import type {ChatMessage, ProviderID} from '@/types'
 
 export interface ChatThread {
   id: string

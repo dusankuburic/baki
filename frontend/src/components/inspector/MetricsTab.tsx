@@ -7,7 +7,7 @@ import {csvCell, downloadBlob} from '@/lib/csv'
 import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
 import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
 import clsx from 'clsx'
-import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics, DataFlowAnalysis, TaintPath} from '@/types/domain'
+import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics, DataFlowAnalysis, TaintPath} from '@/types'
 
 function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const rows = [

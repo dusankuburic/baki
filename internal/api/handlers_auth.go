@@ -210,10 +210,12 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.tokenStore != nil {
-		// Atomically revoke the old token. If the token was already revoked
-		// (concurrent refresh, replay attack), RowsAffected=0 and we detect it
-		// here — no separate check-then-revoke race window.
-		if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
+		// Use the atomic verify-and-revoke to eliminate the race window
+		// between separate VerifyRefresh and RevokeRefreshToken calls.
+		// Two concurrent requests with the same jti: only one succeeds
+		// because the UPDATE...RETURNING is atomic at the DB level.
+		info, err := h.tokenStore.VerifyAndRevokeRefreshToken(r.Context(), claims.ID)
+		if err != nil {
 			if errors.Is(err, storageif.ErrTokenAlreadyRevoked) {
 				logger.Warn("detected refresh token replay: revoking all sessions", "userID", claims.UserID, "tokenID", claims.ID)
 				if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), claims.UserID); err != nil {
@@ -222,16 +224,15 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 				render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
 				return
 			}
-			logger.Error("failed to revoke old refresh token during refresh", "error", err, "tokenID", claims.ID)
+			logger.Error("failed to verify-and-revoke refresh token", "error", err, "tokenID", claims.ID)
 			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
 			return
 		}
+		_ = info // info.UserID can be used for cross-checking if needed
 	}
 
 	// Reload the user from the DB so the new token reflects the CURRENT role
-	// and email, not whatever was baked into the refresh-token claims. Without
-	// this, a demoted admin keeps issuing admin-level access tokens until their
-	// refresh token expires (up to 24h).
+	// and email, not whatever was baked into the refresh-token claims.
 	issueRole := claims.Role
 	issueEmail := claims.Email
 	if h.backend != nil {

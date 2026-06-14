@@ -1,7 +1,8 @@
 import clsx from 'clsx'
 import {FileText} from 'lucide-react'
 import {CardShell, CardPlaceholder} from './CardShell'
-import type {RecentFlowStub} from '@/types/domain'
+import type {RecentFlowStub} from '@/types'
+import {useUIStore} from '@/stores/uiStore'
 
 // RecentFlowsCard lists the most recently updated flows with their latest health
 // score (or “—” when never analyzed). Rows open the flow.
@@ -14,8 +15,18 @@ export function RecentFlowsCard({
   onOpen: (id: string) => void
   className?: string
 }) {
+  const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const browseAction = (
+    <button
+      type="button"
+      onClick={() => setMainPaneView('library')}
+      className="text-2xs font-medium text-brand-400 hover:text-brand-300 transition-colors"
+    >
+      Browse all →
+    </button>
+  )
   return (
-    <CardShell title="Recent Flows" className={className}>
+    <CardShell title="Recent Flows" action={browseAction} className={className}>
       {flows.length === 0 ? (
         <CardPlaceholder message="No flows yet. Create or open one to get started." />
       ) : (

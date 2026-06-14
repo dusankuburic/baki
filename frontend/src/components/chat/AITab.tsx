@@ -14,7 +14,7 @@ import {useState, useEffect, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import StreamingProgress from './StreamingProgress'
-import type {ProviderID} from '@/types/domain'
+import type {ProviderID} from '@/types'
 import ConnectionStatus from './ConnectionStatus'
 import EmptyChatState from './EmptyChatState'
 

@@ -30,7 +30,7 @@ import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
-import type {FlowDocument as DomainFlowDocument, RecentFile} from './types/domain'
+import type {FlowDocument as DomainFlowDocument, RecentFile} from './types'
 
 function AppInner() {
     const toast = useToast()
@@ -113,7 +113,7 @@ function AppInner() {
                 {!sidebarCollapsed && (
                     <>
                         <div className="flex-shrink-0 overflow-hidden border-r border-border-subtle" style={{width: pane.sidebarWidth}}>
-                            <ErrorBoundary fallback={<div className="p-4 text-text-muted">Sidebar error — try reloading</div>}>
+                            <ErrorBoundary fallbackMessage="Sidebar error">
                                 <Sidebar />
                             </ErrorBoundary>
                         </div>
@@ -121,7 +121,7 @@ function AppInner() {
                     </>
                 )}
                 <div className="flex-1 overflow-hidden">
-                    <ErrorBoundary fallback={<div className="p-4 text-text-muted">Main pane error — try reloading</div>}>
+                    <ErrorBoundary fallbackMessage="Main pane error">
                         <MainPane />
                     </ErrorBoundary>
                 </div>
@@ -129,7 +129,7 @@ function AppInner() {
                     <>
                         <PaneDivider onDrag={pane.handleInspectorDrag} onResizeEnd={pane.handleInspectorResizeEnd} onDoubleClick={pane.handleInspectorReset} />
                         <div className="flex-shrink-0 overflow-hidden border-l border-border-subtle" style={{width: pane.inspectorWidth}}>
-                            <ErrorBoundary fallback={<div className="p-4 text-text-muted">Inspector error — try reloading</div>}>
+                            <ErrorBoundary fallbackMessage="Inspector error">
                                 <InspectorPanel />
                             </ErrorBoundary>
                         </div>

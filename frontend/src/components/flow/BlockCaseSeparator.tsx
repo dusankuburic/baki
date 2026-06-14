@@ -1,7 +1,7 @@
 ﻿import {ChevronDown, ChevronRight} from 'lucide-react'
 import {getBlockColor} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
-import type {Block} from '@/types/domain'
+import type {Block} from '@/types'
 
 type BlockCaseSeparatorProps = {
     block: Block

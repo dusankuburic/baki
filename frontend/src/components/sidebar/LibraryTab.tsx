@@ -6,7 +6,7 @@ import { useFlowStore } from '@/stores/flowStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useOrgStore } from '@/stores/orgStore'
 import { Spinner, useToast } from '@/components/shared'
-import type { FlowDocument } from '@/types/domain'
+import type { FlowDocument } from '@/types'
 import {logger} from '@/lib/logger'
 
 export default function LibraryTab() {
@@ -29,9 +29,9 @@ export default function LibraryTab() {
     abortRef.current = ac
     setIsLoading(true)
     try {
-      const list = await libraryApi.list({ query: search, orgId: activeOrgId ?? undefined })
+      const page = await libraryApi.list({ query: search, orgId: activeOrgId ?? undefined })
       if (ac.signal.aborted) return
-      setFlows(list)
+      setFlows(page.items)
     } catch (err) {
       if (ac.signal.aborted) return
       logger.warn('Failed to fetch library', err)

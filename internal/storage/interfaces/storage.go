@@ -60,6 +60,7 @@ type User struct {
 // as an "active session" in profile/session-management UIs.
 type RefreshTokenInfo struct {
 	ID        string    `json:"id"`
+	UserID    string    `json:"userId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
@@ -131,14 +132,15 @@ type StorageBackend interface {
 	GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error)
 
 	// Dashboard
-	// SaveFlowAnalysis upserts a flow's latest analysis summary (best-effort,
-	// called on every analyze) so the welcome dashboard is populated on first
-	// load across sessions/replicas.
 	SaveFlowAnalysis(ctx context.Context, fa *FlowAnalysis) error
-	// FlowDashboardData assembles the owner-scoped welcome-dashboard payload:
-	// overview counts, persisted health/findings aggregates, recent flows, and
-	// a gap-filled `days`-day token-usage series.
+	// LoadFlowHealth returns the most recent persisted analysis snapshot for a
+	// single flow, or (nil, nil) when the flow has never been analyzed. Caller
+	// authorization is the caller's responsibility — this is a pure read.
+	LoadFlowHealth(ctx context.Context, flowID string) (*HealthSnapshot, error)
 	FlowDashboardData(ctx context.Context, ownerID string, days int) (*DashboardData, error)
+	// FlowDashboardAdvanced returns trend, cost-by-provider, rule-frequency,
+	// activity-feed, complexity-scatter, and security-posture data.
+	FlowDashboardAdvanced(ctx context.Context, ownerID string, days int) (*DashboardAdvancedData, error)
 
 	// Knowledge Base
 	SaveKnowledgeDocument(ctx context.Context, doc *KnowledgeDocument) error
@@ -203,15 +205,34 @@ type Collaborator struct {
 	GrantedAt  time.Time `json:"grantedAt"`
 }
 
+// FlowSort enumerates the supported sort orders for ListFlows. The zero value
+// (FlowSortUpdatedDesc) is the historical default.
+type FlowSort int
+
+const (
+	FlowSortUpdatedDesc FlowSort = iota
+	FlowSortUpdatedAsc
+	FlowSortNameAsc
+	FlowSortNameDesc
+	FlowSortBlocksDesc
+)
+
 // FlowFilter defines filtering options for listing flows
 type FlowFilter struct {
 	UserID         string
 	OrganizationID string
-	Query          string
-	CreatedAfter   *time.Time
-	CreatedBefore  *time.Time
-	Limit          int
-	Offset         int
+	// OrganizationIDs widens the org scope to multiple orgs the caller belongs
+	// to. When non-empty, a flow matches if its org_id is in this list (in
+	// addition to UserID-owned and collaborator matches). Service-layer code
+	// must verify membership before populating this — handlers must never bind
+	// it directly from user input.
+	OrganizationIDs []string
+	Query           string
+	CreatedAfter    *time.Time
+	CreatedBefore   *time.Time
+	Limit           int
+	Offset          int
+	SortBy          FlowSort
 	// MetadataOnly skips loading each flow's (potentially large) Content when
 	// the caller only needs listing metadata. Backends leave FlowDocument.Content
 	// empty when set. List/library endpoints set this; the migrator does not.
@@ -224,6 +245,20 @@ type FlowFilter struct {
 	// is set only by server-side operational code and must never be bound from
 	// user-controlled input.
 	AllFlows bool
+	// SharedOnly limits results to flows where the caller is a collaborator
+	// (not the owner and not via org membership). Used by the "Shared with me"
+	// scope in the library UI.
+	SharedOnly bool
+}
+
+// HealthSnapshot is the persisted per-flow analysis summary surfaced on the
+// single-flow GET. A nil pointer means the flow has never been analyzed.
+type HealthSnapshot struct {
+	HealthScore int       `json:"healthScore"`
+	Errors      int       `json:"errors"`
+	Warnings    int       `json:"warnings"`
+	Info        int       `json:"info"`
+	AnalyzedAt  time.Time `json:"analyzedAt"`
 }
 
 type UsageMetric struct {
@@ -251,6 +286,7 @@ type FlowAnalysis struct {
 	Warnings    int            `json:"warnings"`
 	Info        int            `json:"info"`
 	ByCategory  map[string]int `json:"byCategory"`
+	ByRule      map[string]int `json:"byRule"`
 	AnalyzedAt  time.Time      `json:"analyzedAt"`
 }
 
@@ -286,6 +322,62 @@ type DashboardData struct {
 	ByCategory    map[string]int
 	Recent        []RecentFlowHealth
 	TokenUsage    []DailyTokens
+}
+
+// DashboardAdvancedData extends DashboardData with trend, cost, rule, activity,
+// complexity, and security sections. Returned by FlowDashboardAdvanced.
+type DashboardAdvancedData struct {
+	HealthTrend  []DailyHealthPoint
+	CostByProv   []ProviderCost
+	RuleFreq     []RuleFrequency
+	Activity     []ActivityEntry
+	Complexity   []FlowComplexityPoint
+	Security     DashboardSecurity
+}
+
+// DailyHealthPoint is one day of the health-score trend chart.
+type DailyHealthPoint struct {
+	Date        string
+	AvgHealth   int
+	FlowCount   int
+}
+
+// ProviderCost aggregates AI spend by provider for the donut chart.
+type ProviderCost struct {
+	Provider string
+	Cost     float64
+	TokensIn  int
+	TokensOut int
+}
+
+// RuleFrequency is one rule's finding count across all of the owner's flows.
+type RuleFrequency struct {
+	Rule    string
+	Count   int
+	TopSeverity string // "error", "warning", or "info"
+}
+
+// ActivityEntry is one row of the dashboard activity feed.
+type ActivityEntry struct {
+	Action   string
+	FlowName string
+	CreatedAt time.Time
+}
+
+// FlowComplexityPoint is one flow's position on the complexity scatter.
+type FlowComplexityPoint struct {
+	FlowID      string
+	FlowName    string
+	BlockCount  int
+	FindingCount int
+	HealthScore  int
+}
+
+// DashboardSecurity summarizes the security posture for the dashboard.
+type DashboardSecurity struct {
+	FailedLogins24h  int
+	LockedAccounts   int
+	CredentialFindings int
 }
 
 type KnowledgeDocument struct {

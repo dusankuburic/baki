@@ -1,4 +1,4 @@
-import type {Block, Subflow} from '@/types/domain'
+import type {Block, Subflow} from '@/types'
 import type {ElementDefinition} from 'cytoscape'
 import {resolveTypeLabel, stripBlockKeywords} from '@/lib/blocks'
 

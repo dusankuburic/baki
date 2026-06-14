@@ -2,7 +2,7 @@ import {useEffect} from 'react'
 import {useSettingsStore, onSettingsLoaded} from '@/stores/settingsStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useChatStore} from '@/stores/chatStore'
-import type {ProviderID} from '@/types/domain'
+import type {ProviderID} from '@/types'
 
 export function useSettingsPersistence(isAuthenticated: boolean) {
     const loadFromBackend = useSettingsStore(s => s.loadFromBackend)

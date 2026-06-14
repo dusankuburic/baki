@@ -3,7 +3,7 @@ import type {
   AppSettings, ProviderID, AIProviderConfig,
   AppearanceSettings, LayoutSettings, AISettings,
   GeneralSettings, ParserSettings,
-} from '@/types/domain'
+} from '@/types'
 
 import {settingsApi} from '@/api'
 import {logger} from '@/lib/logger'
@@ -146,7 +146,7 @@ const defaultSettings: AppSettings = {
   },
   analysis: {
     rules: {},
-    autoAnalyzeOnOpen: false,
+    autoAnalyzeOnOpen: true,
   },
 }
 

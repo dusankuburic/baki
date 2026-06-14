@@ -4,7 +4,7 @@ import {logger} from '@/lib/logger'
 import {isTauri} from '@/platform/guards'
 import {useUIStore} from '@/stores/uiStore'
 import {useEditorStore} from '@/stores/editorStore'
-import type {FlowDocument as DomainFlowDocument} from '@/types/domain'
+import type {FlowDocument as DomainFlowDocument} from '@/types'
 
 interface Options {
   /** Open a freshly loaded document (handles view switching). */
@@ -33,13 +33,17 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
         const id = event.payload
         switch (id) {
           case 'file.open': {
-            const doc = await flowApi.openFlowFile()
-            if (doc) openDocument(doc)
+            try {
+              const doc = await flowApi.openFlowFile()
+              if (doc) openDocument(doc)
+            } catch (e) { logger.warn('Failed to open file:', e) }
             break
           }
           case 'file.open.folder': {
-            const doc = await flowApi.openFlowFolder()
-            if (doc) openDocument(doc)
+            try {
+              const doc = await flowApi.openFlowFolder()
+              if (doc) openDocument(doc)
+            } catch (e) { logger.warn('Failed to open folder:', e) }
             break
           }
           case 'file.export.pdf':
@@ -93,8 +97,10 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
           !arg.toLowerCase().endsWith('.exe')
         )
         if (path) {
-          const doc = await flowApi.loadFlowFromPath(path)
-          if (doc) openDocument(doc)
+          try {
+            const doc = await flowApi.loadFlowFromPath(path)
+            if (doc) openDocument(doc)
+          } catch (e) { logger.warn('Failed to open file from OS event:', e) }
         }
       })
     ).then(fn => { if (!cancelled) unsub = fn; else fn() })

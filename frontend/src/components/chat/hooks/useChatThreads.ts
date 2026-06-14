@@ -1,6 +1,6 @@
 import {useCallback} from 'react'
 import {useChatStore} from '@/stores/chatStore'
-import type {FlowDocument, SourceFileInfo} from '@/types/domain'
+import type {FlowDocument, SourceFileInfo} from '@/types'
 
 interface UseChatThreadsOptions {
   doc: FlowDocument | null

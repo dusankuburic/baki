@@ -4,7 +4,7 @@ import {useUIStore} from '@/stores/uiStore'
 import {EmptyState} from '@/components/shared'
 import {History, Plus, Minus, FileText, ArrowUp, ArrowDown} from 'lucide-react'
 import clsx from 'clsx'
-import type {BlockDiff, SubflowDiff} from '@/types/domain'
+import type {BlockDiff, SubflowDiff} from '@/types'
 import {getBlockIcon} from '@/lib/blocks'
 import IconButton from '@/components/shared/IconButton'
 

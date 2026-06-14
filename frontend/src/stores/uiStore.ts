@@ -1,20 +1,23 @@
 import {create} from 'zustand'
-import type {FlowDiff} from '@/types/domain'
+import type {FlowDiff} from '@/types'
 
-export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard'
+export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'library'
+export type ResolvedTheme = 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
+export type SidebarTab = 'explorer' | 'variables' | 'library'
+export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
 
 // "System" views are standalone destinations (don't depend on a loaded flow).
 // Sidebar handlers use isSystemView to know when opening a flow should also
 // transition the main pane back to a flow view ('block') so the new flow
 // becomes visible; staying on a system view would leave the flow off-screen.
-const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set(['home', 'dashboard', 'profile', 'admin'])
+const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set(['home', 'dashboard', 'profile', 'admin', 'library'])
 export const isSystemView = (v: MainPaneView): boolean => SYSTEM_VIEWS.has(v)
 
 interface UiState {
-  resolvedTheme: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
-  sidebarTab: 'explorer' | 'variables' | 'library'
+  resolvedTheme: ResolvedTheme
+  sidebarTab: SidebarTab
   mainPaneView: MainPaneView
-  inspectorTab: 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
+  inspectorTab: InspectorTab
   sidebarCollapsed: boolean
   inspectorCollapsed: boolean
   commandPaletteOpen: boolean
@@ -26,10 +29,10 @@ interface UiState {
   graphZoom: number
   activeDiff: FlowDiff | null
 
-  setResolvedTheme: (t: 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord') => void
-  setSidebarTab: (t: 'explorer' | 'variables' | 'library') => void
+  setResolvedTheme: (t: ResolvedTheme) => void
+  setSidebarTab: (t: SidebarTab) => void
   setMainPaneView: (v: MainPaneView) => void
-  setInspectorTab: (t: 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history') => void
+  setInspectorTab: (t: InspectorTab) => void
   setSidebarCollapsed: (v: boolean) => void
   setInspectorCollapsed: (v: boolean) => void
   setCommandPaletteOpen: (o: boolean | ((prev: boolean) => boolean)) => void

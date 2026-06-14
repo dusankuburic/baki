@@ -1,7 +1,7 @@
 import {describe, it, expect, beforeEach} from 'vitest'
 import {useFlowStore} from './flowStore'
 import {useEditorStore} from './editorStore'
-import type {Block, FlowDocument, Subflow} from '@/types/domain'
+import type {Block, FlowDocument, Subflow} from '@/types'
 
 // ---- helpers ----
 

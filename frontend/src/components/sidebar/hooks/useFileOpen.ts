@@ -5,7 +5,8 @@ import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {flowApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {isTauri} from '@/platform/guards'
-import type {RecentFile} from '@/types/domain'
+import {useToast} from '@/components/shared'
+import type {RecentFile} from '@/types'
 
 export function useFileOpen() {
     const document = useFlowStore(s => s.document)
@@ -14,8 +15,10 @@ export function useFileOpen() {
     const setSelectedFilePath = useFlowStore(s => s.setSelectedFilePath)
     const openInGroup = useEditorStore(s => s.openInGroup)
     const setMainPaneView = useUIStore(s => s.setMainPaneView)
+    const toast = useToast()
 
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
+    const [isLoading, setIsLoading] = useState(false)
 
     const checkView = useCallback(() => {
         const view = useUIStore.getState().mainPaneView
@@ -32,6 +35,7 @@ export function useFileOpen() {
     }, [document])
 
     const handleOpenFile = useCallback(async () => {
+        setIsLoading(true)
         try {
             const doc = await flowApi.openFlowFile()
             if (doc) {
@@ -42,10 +46,14 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to open file:', err)
+            toast.error('Failed to open file', {description: err instanceof Error ? err.message : String(err)})
+        } finally {
+            setIsLoading(false)
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast])
 
     const handleOpenFolder = useCallback(async () => {
+        setIsLoading(true)
         try {
             const doc = await flowApi.openFlowFolder()
             if (doc) {
@@ -58,8 +66,11 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to open folder:', err)
+            toast.error('Failed to open folder', {description: err instanceof Error ? err.message : String(err)})
+        } finally {
+            setIsLoading(false)
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast])
 
     const handleSelectFolderFile = useCallback(async (path: string) => {
         setSelectedFilePath(path)
@@ -80,6 +91,7 @@ export function useFileOpen() {
             return
         }
 
+        setIsLoading(true)
         try {
             const newDoc = await flowApi.loadFlowFromPath(path)
             if (newDoc) {
@@ -88,11 +100,15 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to load file:', err)
+            toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
+        } finally {
+            setIsLoading(false)
         }
-    }, [setDocument, setSelectedFilePath, openInGroup, checkView])
+    }, [setDocument, setSelectedFilePath, openInGroup, checkView, toast])
 
     const handleLoadRecent = useCallback(async (path: string) => {
         if (!isTauri()) return
+        setIsLoading(true)
         try {
             const recent = recentFiles.find(f => f.path === path)
             const doc = recent?.isFolder 
@@ -111,8 +127,11 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to load recent item:', err)
+            toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
+        } finally {
+            setIsLoading(false)
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast])
 
     const handleRemoveRecent = useCallback(async (path: string) => {
         try {
@@ -134,6 +153,7 @@ export function useFileOpen() {
 
     return {
         recentFiles,
+        isLoading,
         handleOpenFile,
         handleOpenFolder,
         handleSelectFolderFile,

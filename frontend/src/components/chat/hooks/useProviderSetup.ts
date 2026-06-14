@@ -3,7 +3,7 @@ import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, providersApi} from '@/api'
 import {logger} from '@/lib/logger'
-import type {ProviderID, ModelDetail, ProviderInfo} from '@/types/domain'
+import type {ProviderID, ModelDetail, ProviderInfo} from '@/types'
 
 export interface ProviderOption {
   id: string

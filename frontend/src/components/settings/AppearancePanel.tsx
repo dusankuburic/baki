@@ -1,5 +1,5 @@
 import {useSettingsStore} from '@/stores/settingsStore'
-import type {ThemeMode} from '@/types/domain'
+import type {ThemeMode} from '@/types'
 import {Check} from 'lucide-react'
 import clsx from 'clsx'
 

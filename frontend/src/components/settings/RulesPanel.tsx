@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react'
 import {analysisApi} from '@/api'
-import type {Rule, RuleConfig, Severity} from '@/types/domain'
+import type {Rule, RuleConfig, Severity} from '@/types'
 import {Switch} from '@/components/shared'
 import {Shield, AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'

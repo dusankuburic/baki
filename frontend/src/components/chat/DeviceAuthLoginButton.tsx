@@ -2,7 +2,7 @@ import {Github, Check, Loader2} from 'lucide-react'
 import {useState, useEffect, useRef, useCallback} from 'react'
 import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
-import type {DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types/domain'
+import type {DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types'
 
 /**
  * Provider-specific configuration for the OAuth device-flow login button.

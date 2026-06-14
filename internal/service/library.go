@@ -112,47 +112,127 @@ func (s *LibraryService) ResolveOwnerNames(ctx context.Context, ownerIDs []strin
 	return names
 }
 
+// LibraryScope narrows which subset of flows the caller wants to see.
+type LibraryScope string
+
+const (
+	// ScopeAll = everything visible to the caller (owned + collaborator-shared +
+	// every org they're a member of). This is the default in the new library UI.
+	ScopeAll LibraryScope = "all"
+	// ScopeMine = flows the caller owns.
+	ScopeMine LibraryScope = "mine"
+	// ScopeShared = flows the caller is a collaborator on, but does not own.
+	ScopeShared LibraryScope = "shared"
+)
+
+// ParseFlowSort maps the public sort param to a storage FlowSort. Unknown
+// values fall back to updated_desc.
+func ParseFlowSort(s string) storageif.FlowSort {
+	switch s {
+	case "updated_asc":
+		return storageif.FlowSortUpdatedAsc
+	case "name_asc":
+		return storageif.FlowSortNameAsc
+	case "name_desc":
+		return storageif.FlowSortNameDesc
+	case "blocks_desc":
+		return storageif.FlowSortBlocksDesc
+	default:
+		return storageif.FlowSortUpdatedDesc
+	}
+}
+
+// buildLibraryFilter centralises scope/org resolution so List and Count cannot
+// drift. When scope=all and no specific orgID is supplied, the caller's full
+// org-membership list is folded into the filter so the result spans every org
+// the user belongs to.
+func (s *LibraryService) buildLibraryFilter(ctx context.Context, userID, orgID string, scope LibraryScope, query string, sort storageif.FlowSort, limit, offset int) (storageif.FlowFilter, error) {
+	filter := storageif.FlowFilter{
+		UserID:       userID,
+		Query:        query,
+		Limit:        limit,
+		Offset:       offset,
+		SortBy:       sort,
+		MetadataOnly: true,
+	}
+	if orgID != "" {
+		if err := s.authz.RequireOrgMember(ctx, orgID, userID); err != nil {
+			return filter, err
+		}
+		filter.OrganizationID = orgID
+		return filter, nil
+	}
+	switch scope {
+	case ScopeMine:
+		// userID only — no org widening, no collaborator inclusion via OR-org
+		// (collaborator subquery still fires from the UserID branch).
+		return filter, nil
+	case ScopeShared:
+		filter.SharedOnly = true
+		return filter, nil
+	case "", ScopeAll:
+		// Widen org scope to every org the user belongs to. ListOrgsForUser is
+		// the authoritative membership source — handlers must never bind these
+		// IDs from user input.
+		orgs, err := s.storage.ListOrgsForUser(ctx, userID)
+		if err != nil {
+			return filter, err
+		}
+		ids := make([]string, 0, len(orgs))
+		for _, o := range orgs {
+			ids = append(ids, o.ID)
+		}
+		filter.OrganizationIDs = ids
+		return filter, nil
+	default:
+		return filter, nil
+	}
+}
+
 // ListLibraryFlows returns flows visible to the requesting user. When orgID
 // is set the caller must be a member of that org — otherwise any
 // authenticated user could enumerate another org's flows by guessing its ID.
-func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID, query string, limit, offset int) (docs []*storageif.FlowDocument, err error) {
+//
+// When orgID is empty, `scope` controls breadth:
+//   - "all" (default) — owned + collaborator-shared + every org the user belongs to
+//   - "mine" — only flows the user owns
+//   - "shared" — only flows shared with the user (excluding owned)
+func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID string, scope LibraryScope, query, sort string, limit, offset int) (docs []*storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.ListLibraryFlows", &err)
 	if s.mode == config.ModeLocal {
 		return []*storageif.FlowDocument{}, nil
 	}
-	if orgID != "" {
-		if err := s.authz.RequireOrgMember(ctx, orgID, userID); err != nil {
-			return nil, err
-		}
+	filter, err := s.buildLibraryFilter(ctx, userID, orgID, scope, query, ParseFlowSort(sort), limit, offset)
+	if err != nil {
+		return nil, err
 	}
-	return s.storage.ListFlows(ctx, storageif.FlowFilter{
-		UserID:         userID,
-		OrganizationID: orgID,
-		Query:          query,
-		Limit:          limit,
-		Offset:         offset,
-		MetadataOnly:   true, // list view needs metadata only, not full content
-	})
+	return s.storage.ListFlows(ctx, filter)
 }
 
 // CountLibraryFlows returns the total number of flows visible to the user for
 // the given filter, ignoring pagination — used for list totals. Same org
 // membership rule as ListLibraryFlows.
-func (s *LibraryService) CountLibraryFlows(ctx context.Context, userID, orgID, query string) (total int, err error) {
+func (s *LibraryService) CountLibraryFlows(ctx context.Context, userID, orgID string, scope LibraryScope, query string) (total int, err error) {
 	defer logger.Guard("LibraryService.CountLibraryFlows", &err)
 	if s.mode == config.ModeLocal {
 		return 0, nil
 	}
-	if orgID != "" {
-		if err := s.authz.RequireOrgMember(ctx, orgID, userID); err != nil {
-			return 0, err
-		}
+	filter, err := s.buildLibraryFilter(ctx, userID, orgID, scope, query, storageif.FlowSortUpdatedDesc, 0, 0)
+	if err != nil {
+		return 0, err
 	}
-	return s.storage.CountFlows(ctx, storageif.FlowFilter{
-		UserID:         userID,
-		OrganizationID: orgID,
-		Query:          query,
-	})
+	return s.storage.CountFlows(ctx, filter)
+}
+
+// FlowHealth returns the latest persisted analysis snapshot for a flow, or nil
+// if the flow has never been analyzed. The caller is responsible for read
+// authorization (typically by going through GetLibraryFlowForUser first).
+func (s *LibraryService) FlowHealth(ctx context.Context, flowID string) (h *storageif.HealthSnapshot, err error) {
+	defer logger.Guard("LibraryService.FlowHealth", &err)
+	if s.mode == config.ModeLocal || s.storage == nil {
+		return nil, nil
+	}
+	return s.storage.LoadFlowHealth(ctx, flowID)
 }
 
 // GetLibraryFlow loads a single flow by ID without an access check.

@@ -7,7 +7,7 @@ import {flowApi, analysisApi, exportApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {logger} from '@/lib/logger'
-import type {FlowDocument as DomainFlowDocument, RecentFile, AnalysisReport, Block} from '@/types/domain'
+import type {FlowDocument as DomainFlowDocument, RecentFile, AnalysisReport, Block} from '@/types'
 import type {useToast} from '@/components/shared'
 
 function extractBlockCommands(doc: DomainFlowDocument) {
@@ -58,12 +58,22 @@ export function useCommandList(deps: {
     return useMemo(() => {
         const cmds: CommandItem[] = [
             {id: 'file.open', label: 'Open Flow File', section: 'File', shortcut: ['mod', 'o'], onSelect: async () => {
-                const doc = await flowApi.openFlowFile()
-                if (doc) openDocument(doc as DomainFlowDocument)
+                try {
+                    const doc = await flowApi.openFlowFile()
+                    if (doc) openDocument(doc as DomainFlowDocument)
+                } catch (e) {
+                    logger.warn('Failed to open file:', e)
+                    toast.error('Failed to open file', {description: String(e)})
+                }
             }},
             {id: 'file.open.folder', label: 'Open Folder', section: 'File', shortcut: ['mod', 'shift', 'o'], onSelect: async () => {
-                const doc = await flowApi.openFlowFolder()
-                if (doc) openDocument(doc as DomainFlowDocument)
+                try {
+                    const doc = await flowApi.openFlowFolder()
+                    if (doc) openDocument(doc as DomainFlowDocument)
+                } catch (e) {
+                    logger.warn('Failed to open folder:', e)
+                    toast.error('Failed to open folder', {description: String(e)})
+                }
             }},
             {id: 'view.toggle-sidebar', label: 'Toggle Sidebar', section: 'View', shortcut: ['mod', 'b'], onSelect: toggleSidebar},
             {id: 'view.toggle-inspector', label: 'Toggle Inspector', section: 'View', shortcut: ['mod', 'i'], onSelect: toggleInspector},
@@ -126,8 +136,13 @@ export function useCommandList(deps: {
                     label: f.name,
                     section: 'Recent Files',
                     onSelect: async () => {
-                        const doc = await flowApi.loadFlowFromPath(f.path)
-                        if (doc) openDocument(doc as DomainFlowDocument)
+                        try {
+                            const doc = await flowApi.loadFlowFromPath(f.path)
+                            if (doc) openDocument(doc as DomainFlowDocument)
+                        } catch (e) {
+                            logger.warn('Failed to load recent file:', e)
+                            toast.error('Failed to load file', {description: String(e)})
+                        }
                     },
                 })
             }

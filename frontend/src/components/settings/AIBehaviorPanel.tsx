@@ -3,7 +3,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import SegmentedControl from '@/components/shared/SegmentedControl'
-import type {ProviderID, AIProviderConfig} from '@/types/domain'
+import type {ProviderID, AIProviderConfig} from '@/types'
 
 export default function AIBehaviorPanel() {
   const {settings, updateAI, updateProvider} = useSettingsStore()

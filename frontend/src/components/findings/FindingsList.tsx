@@ -1,8 +1,8 @@
 import {useState, useMemo} from 'react'
 import {ChevronRight, EyeOff} from 'lucide-react'
 import clsx from 'clsx'
-import type {Finding, Severity} from '@/types/domain'
-import type {FlowDocument} from '@/types/domain'
+import type {Finding, Severity} from '@/types'
+import type {FlowDocument} from '@/types'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import FindingCard from './FindingCard'
 

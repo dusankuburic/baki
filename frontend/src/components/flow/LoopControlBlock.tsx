@@ -1,6 +1,6 @@
 import {RotateCcw, CornerUpRight} from 'lucide-react'
 import {getBlockColor} from '@/lib/blocks'
-import type {Block} from '@/types/domain'
+import type {Block} from '@/types'
 
 type Props = {
     block: Block

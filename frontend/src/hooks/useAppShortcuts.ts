@@ -8,7 +8,7 @@ import {flowApi, analysisApi, exportApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {logger} from '@/lib/logger'
-import type {FlowDocument as DomainFlowDocument, AnalysisReport} from '@/types/domain'
+import type {FlowDocument as DomainFlowDocument, AnalysisReport} from '@/types'
 import type {useToast} from '@/components/shared'
 
 export function useAppShortcuts(deps: {
@@ -116,12 +116,22 @@ export function useAppShortcuts(deps: {
             },
             'view.theme.toggle': () => toggleTheme(),
             'file.open': async () => {
-                const doc = await flowApi.openFlowFile()
-                if (doc) openDocument(doc as DomainFlowDocument)
+                try {
+                    const doc = await flowApi.openFlowFile()
+                    if (doc) openDocument(doc as DomainFlowDocument)
+                } catch (e) {
+                    logger.warn('Failed to open file:', e)
+                    toast.error('Failed to open file', {description: String(e)})
+                }
             },
             'file.open.folder': async () => {
-                const doc = await flowApi.openFlowFolder()
-                if (doc) openDocument(doc as DomainFlowDocument)
+                try {
+                    const doc = await flowApi.openFlowFolder()
+                    if (doc) openDocument(doc as DomainFlowDocument)
+                } catch (e) {
+                    logger.warn('Failed to open folder:', e)
+                    toast.error('Failed to open folder', {description: String(e)})
+                }
             },
             'file.export.pdf': async () => { try { await exportApi.exportPDF() } catch (e) { logger.warn('Export PDF failed:', e) } },
             'file.export.md': async () => { try { await exportApi.exportMarkdown() } catch (e) { logger.warn('Export Markdown failed:', e) } },

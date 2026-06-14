@@ -1,5 +1,5 @@
 import {getBlockIcon, getBlockColor} from '@/lib/blocks'
-import type {Block} from '@/types/domain'
+import type {Block} from '@/types'
 
 type ChildrenListProps = {
     children: Block[]

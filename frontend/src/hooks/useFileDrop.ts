@@ -4,7 +4,7 @@ import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {logger} from '@/lib/logger'
 import {useSettingsStore} from '@/stores/settingsStore'
-import type {FlowDocument as DomainFlowDocument} from '@/types/domain'
+import type {FlowDocument as DomainFlowDocument} from '@/types'
 
 export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => void) {
     const toast = useToast()

@@ -1,4 +1,4 @@
-import type {Severity} from '@/types/domain'
+import type {Severity} from '@/types'
 
 interface Props {
   severity: Severity

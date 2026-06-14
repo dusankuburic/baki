@@ -328,6 +328,30 @@ func (b *PostgresStorageBackend) RevokeRefreshToken(ctx context.Context, jti str
 	return nil
 }
 
+// VerifyAndRevokeRefreshToken atomically verifies and revokes a refresh token
+// in a single atomic operation. Returns the claims if successful, or
+// ErrTokenAlreadyRevoked if the token was already revoked/invalid.
+// This eliminates the race window between VerifyRefresh and RevokeRefreshToken.
+func (b *PostgresStorageBackend) VerifyAndRevokeRefreshToken(ctx context.Context, jti string) (*interfaces.RefreshTokenInfo, error) {
+	var info interfaces.RefreshTokenInfo
+	err := b.db.QueryRowContext(ctx, `
+		UPDATE refresh_tokens
+		SET revoked = TRUE
+		WHERE jti = $1
+		  AND NOT revoked
+		  AND expires_at > NOW()
+		RETURNING jti, user_id, created_at, expires_at`,
+		jti,
+	).Scan(&info.ID, &info.UserID, &info.CreatedAt, &info.ExpiresAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, interfaces.ErrTokenAlreadyRevoked
+		}
+		return nil, fmt.Errorf("verify and revoke refresh token: %w", err)
+	}
+	return &info, nil
+}
+
 // RevokeUserRefreshTokens revokes every refresh token for a user (used on logout).
 func (b *PostgresStorageBackend) RevokeUserRefreshTokens(ctx context.Context, userID string) error {
 	if _, err := b.db.ExecContext(ctx,

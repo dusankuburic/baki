@@ -1,7 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
 import {Download, FileText, Search, GitCompareArrows} from 'lucide-react'
 import {analysisApi} from '@/api'
-import {subscribeToEvents} from '@/api/client'
 import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
@@ -11,7 +10,7 @@ import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
 import AnalysisDiffView from './AnalysisDiffView'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
-import type {AnalysisDiff, Finding, Severity, AnalysisReport} from '@/types/domain'
+import type {AnalysisDiff, Finding, Severity, AnalysisReport} from '@/types'
 import clsx from 'clsx'
 
 export default function FindingsTab() {
@@ -64,25 +63,6 @@ export default function FindingsTab() {
     const isSuppressed = (id: string) => suppressedFindings.some(s => s.findingId === id)
     return report.findings.filter(f => isSuppressed(f.id)).length
   }, [report, suppressedFindings])
-
-  useEffect(() => {
-    if (!isAnalyzing) return
-    // Use a sync cancelled flag so cleanup is immediate — React does not await
-    // async cleanup functions, so the Promise.then pattern leaks the listener on
-    // fast unmount/remount (e.g. React StrictMode).
-    let unsub: (() => void) | null = null
-    let cancelled = false
-    subscribeToEvents((ev) => {
-      if (ev.name !== 'analysis:progress') return
-      const data = ev.data as Record<string, unknown>
-      setProgress({
-        current: (data.current as number) ?? 0,
-        total: (data.total as number) ?? 0,
-        ruleName: (data.ruleName as string) ?? '',
-      })
-    }).then(fn => { if (!cancelled) unsub = fn; else fn() })
-    return () => { cancelled = true; unsub?.() }
-  }, [isAnalyzing, setProgress])
 
   const handleAnalyze = useCallback(async () => {
     if (!doc) return

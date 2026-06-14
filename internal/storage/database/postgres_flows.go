@@ -127,33 +127,65 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 	args := []any{}
 	n := 1
 
-	// Ownership / org filtering: show flows owned by UserID, belonging to OrganizationID,
+	// Ownership / org filtering: show flows owned by UserID, belonging to OrganizationID(s),
 	// or where the user is an explicit collaborator. Membership of UserID in
-	// OrganizationID is enforced by the service layer (AuthzService) before the
-	// filter reaches storage.
+	// OrganizationID / OrganizationIDs is enforced by the service layer
+	// (AuthzService) before the filter reaches storage.
 	switch {
 	case filter.AllFlows:
 		// Explicit operational enumeration (migration): no owner/org scoping.
-	case filter.UserID == "" && filter.OrganizationID == "":
-		// Defense-in-depth: if neither UserID nor OrganizationID is set the
+	case filter.SharedOnly:
+		// "Shared with me" — only flows where the caller is a collaborator
+		// (excluding flows they own outright). UserID is required.
+		if filter.UserID == "" {
+			return "1=0", nil, 1
+		}
+		where = append(where, fmt.Sprintf(
+			"owner_id <> $%d AND EXISTS (SELECT 1 FROM flow_collaborators WHERE flow_id = id AND user_id = $%d)",
+			n, n))
+		args = append(args, filter.UserID)
+		n++
+	case filter.UserID == "" && filter.OrganizationID == "" && len(filter.OrganizationIDs) == 0:
+		// Defense-in-depth: if neither UserID nor any org scoping is set the
 		// filter would match every row. Return an always-false clause instead
 		// so a caller who forgets to set filter fields cannot dump all data.
 		return "1=0", nil, 1
 	case filter.UserID != "":
-		collabSubquery := fmt.Sprintf("(SELECT 1 FROM flow_collaborators WHERE flow_id = id AND user_id = $%d)", n)
+		clauses := []string{fmt.Sprintf("owner_id = $%d", n)}
+		args = append(args, filter.UserID)
+		userArg := n
+		n++
 		if filter.OrganizationID != "" {
-			where = append(where, fmt.Sprintf("(owner_id = $%d OR org_id = $%d OR EXISTS %s)", n, n+1, collabSubquery))
-			args = append(args, filter.UserID, filter.OrganizationID)
-			n += 2
-		} else {
-			where = append(where, fmt.Sprintf("(owner_id = $%d OR EXISTS %s)", n, collabSubquery))
-			args = append(args, filter.UserID)
+			clauses = append(clauses, fmt.Sprintf("org_id = $%d", n))
+			args = append(args, filter.OrganizationID)
 			n++
 		}
+		if len(filter.OrganizationIDs) > 0 {
+			// pq array binding — postgres ANY()
+			placeholders := make([]string, len(filter.OrganizationIDs))
+			for i, id := range filter.OrganizationIDs {
+				placeholders[i] = fmt.Sprintf("$%d", n)
+				args = append(args, id)
+				n++
+			}
+			clauses = append(clauses, fmt.Sprintf("org_id IN (%s)", strings.Join(placeholders, ",")))
+		}
+		clauses = append(clauses, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM flow_collaborators WHERE flow_id = id AND user_id = $%d)",
+			userArg))
+		where = append(where, "("+strings.Join(clauses, " OR ")+")")
 	case filter.OrganizationID != "":
 		where = append(where, fmt.Sprintf("org_id = $%d", n))
 		args = append(args, filter.OrganizationID)
 		n++
+	case len(filter.OrganizationIDs) > 0:
+		placeholders := make([]string, len(filter.OrganizationIDs))
+		for i, id := range filter.OrganizationIDs {
+			placeholders[i] = fmt.Sprintf("$%d", n)
+			args = append(args, id)
+			n++
+		}
+		where = append(where, fmt.Sprintf("org_id IN (%s)", strings.Join(placeholders, ",")))
 	}
 
 	if filter.Query != "" {
@@ -173,6 +205,23 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 	}
 
 	return strings.Join(where, " AND "), args, n
+}
+
+// flowOrderBy returns the ORDER BY clause for a FlowSort. Whitelisted columns
+// only — never interpolate user input here.
+func flowOrderBy(s interfaces.FlowSort) string {
+	switch s {
+	case interfaces.FlowSortUpdatedAsc:
+		return "ORDER BY updated_at ASC"
+	case interfaces.FlowSortNameAsc:
+		return "ORDER BY lower(name) ASC, updated_at DESC"
+	case interfaces.FlowSortNameDesc:
+		return "ORDER BY lower(name) DESC, updated_at DESC"
+	case interfaces.FlowSortBlocksDesc:
+		return "ORDER BY COALESCE((metadata->>'BlockCount')::int, 0) DESC, updated_at DESC"
+	default:
+		return "ORDER BY updated_at DESC"
+	}
 }
 
 // CountFlows returns the total number of flows matching the filter, ignoring
@@ -206,13 +255,14 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 		contentExpr = "'{}'::jsonb AS content"
 	}
 
+	orderClause := flowOrderBy(filter.SortBy)
 	q := fmt.Sprintf(`
 		SELECT id, name, description, %s, metadata, owner_id, org_id, created_at, updated_at, version
 		FROM flows
 		WHERE %s
-		ORDER BY updated_at DESC
+		%s
 		LIMIT $%d OFFSET $%d`,
-		contentExpr, whereClause, n, n+1)
+		contentExpr, whereClause, orderClause, n, n+1)
 
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {

@@ -10,9 +10,10 @@ import LoopControlBlock from './LoopControlBlock'
 import {isLoopControl} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {EmptyState} from '@/components/shared'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
 import {useKeyboard} from '@/hooks/useKeyboard'
-import type {Severity, BlockType, Block} from '@/types/domain'
+import type {Severity, BlockType, Block} from '@/types'
 
 function BlockItemWrapperComponent({
     item,
@@ -213,7 +214,16 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         },
     })
 
-    if (!document || flattened.length === 0) return null
+    if (!document || flattened.length === 0) {
+        return (
+            <div className="w-full h-full flex items-center justify-center">
+                <EmptyState
+                    title={document ? 'Empty subflow' : 'No flow loaded'}
+                    description={document ? 'This subflow has no blocks to display' : 'Open a flow file to begin'}
+                />
+            </div>
+        )
+    }
 
     return (
         <div className="block-view w-full h-full">

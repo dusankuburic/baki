@@ -1,4 +1,4 @@
-import type {AnalysisStats} from '@/types/domain'
+import type {AnalysisStats} from '@/types'
 import SeverityBadge from './SeverityBadge'
 import {scoreColor, scoreBg} from '@/lib/scoring'
 import clsx from 'clsx'

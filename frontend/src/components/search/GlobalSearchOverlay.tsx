@@ -7,7 +7,7 @@ import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
 import {useListNavigation} from '@/hooks/useListNavigation'
 import {toggleSetMember} from '@/lib/collections'
 import {logger} from '@/lib/logger'
-import type {SearchResult, BlockType} from '@/types/domain'
+import type {SearchResult, BlockType} from '@/types'
 
 type GlobalSearchOverlayProps = {
     isOpen: boolean

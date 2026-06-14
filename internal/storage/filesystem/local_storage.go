@@ -627,8 +627,46 @@ func (lsb *LocalStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *interf
 	return nil
 }
 
+func (lsb *LocalStorageBackend) LoadFlowHealth(ctx context.Context, flowID string) (*interfaces.HealthSnapshot, error) {
+	return nil, nil
+}
+
 func (lsb *LocalStorageBackend) FlowDashboardData(ctx context.Context, ownerID string, days int) (*interfaces.DashboardData, error) {
 	return &interfaces.DashboardData{ByCategory: map[string]int{}}, nil
+}
+
+func (lsb *LocalStorageBackend) FlowDashboardAdvanced(ctx context.Context, ownerID string, days int) (*interfaces.DashboardAdvancedData, error) {
+	return &interfaces.DashboardAdvancedData{Security: interfaces.DashboardSecurity{}}, nil
+}
+
+// ---- Refresh token operations (local mode stubs) ----
+
+func (lsb *LocalStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time) error {
+	return nil
+}
+
+func (lsb *LocalStorageBackend) IsRefreshTokenValid(ctx context.Context, jti string) (bool, error) {
+	return false, nil
+}
+
+func (lsb *LocalStorageBackend) RevokeRefreshToken(ctx context.Context, jti string) error {
+	return nil
+}
+
+func (lsb *LocalStorageBackend) VerifyAndRevokeRefreshToken(ctx context.Context, jti string) (*interfaces.RefreshTokenInfo, error) {
+	return nil, interfaces.ErrTokenAlreadyRevoked
+}
+
+func (lsb *LocalStorageBackend) RevokeUserRefreshTokens(ctx context.Context, userID string) error {
+	return nil
+}
+
+func (lsb *LocalStorageBackend) ListUserRefreshTokens(ctx context.Context, userID string) ([]*interfaces.RefreshTokenInfo, error) {
+	return nil, nil
+}
+
+func (lsb *LocalStorageBackend) RevokeRefreshTokenForUser(ctx context.Context, jti, userID string) error {
+	return nil
 }
 
 func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {

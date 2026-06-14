@@ -2,7 +2,7 @@ import {useMemo} from 'react'
 import {RadialBarChart, RadialBar, PolarAngleAxis, ResponsiveContainer} from 'recharts'
 import {CardShell, CardPlaceholder} from './CardShell'
 import {useChartColors, healthColor} from './useChartColors'
-import type {DashboardOverview} from '@/types/domain'
+import type {DashboardOverview} from '@/types'
 
 // HealthGaugeCard shows the average flow-health score as a semicircular gauge.
 // When no flow has been analyzed yet, it renders a placeholder rather than a

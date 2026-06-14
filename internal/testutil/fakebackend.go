@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"sort"
+	"time"
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
@@ -183,8 +184,35 @@ func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, er
 func (m *FakeBackend) SaveFlowAnalysis(_ context.Context, _ *interfaces.FlowAnalysis) error {
 	return nil
 }
+func (m *FakeBackend) LoadFlowHealth(_ context.Context, _ string) (*interfaces.HealthSnapshot, error) {
+	return nil, nil
+}
 func (m *FakeBackend) FlowDashboardData(_ context.Context, _ string, _ int) (*interfaces.DashboardData, error) {
 	return &interfaces.DashboardData{ByCategory: map[string]int{}}, nil
+}
+func (m *FakeBackend) FlowDashboardAdvanced(_ context.Context, _ string, _ int) (*interfaces.DashboardAdvancedData, error) {
+	return &interfaces.DashboardAdvancedData{Security: interfaces.DashboardSecurity{}}, nil
+}
+func (m *FakeBackend) StoreRefreshToken(_ context.Context, _ string, _ string, _ time.Time) error {
+	return nil
+}
+func (m *FakeBackend) IsRefreshTokenValid(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+func (m *FakeBackend) RevokeRefreshToken(_ context.Context, _ string) error {
+	return nil
+}
+func (m *FakeBackend) VerifyAndRevokeRefreshToken(_ context.Context, _ string) (*interfaces.RefreshTokenInfo, error) {
+	return nil, interfaces.ErrTokenAlreadyRevoked
+}
+func (m *FakeBackend) RevokeUserRefreshTokens(_ context.Context, _ string) error {
+	return nil
+}
+func (m *FakeBackend) ListUserRefreshTokens(_ context.Context, _ string) ([]*interfaces.RefreshTokenInfo, error) {
+	return nil, nil
+}
+func (m *FakeBackend) RevokeRefreshTokenForUser(_ context.Context, _ string, _ string) error {
+	return nil
 }
 
 // ---- Knowledge Base ----

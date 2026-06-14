@@ -1,15 +1,24 @@
-import {useCallback, useEffect, useState} from 'react'
-import {RefreshCw, AlertTriangle, Layers, GitBranch} from 'lucide-react'
+import {useCallback, useEffect, useRef, useState} from 'react'
+import {RefreshCw, AlertTriangle} from 'lucide-react'
 import {dashboardApi, libraryApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {useToast} from '@/components/shared'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
-import type {DashboardHomeData, FlowDocument} from '@/types/domain'
+import {useOrgStore} from '@/stores/orgStore'
+import {useAnalysisStore} from '@/stores/analysisStore'
+import type {DashboardHomeData, FlowDocument} from '@/types'
+import {KPIStripCard} from './home/KPIStripCard'
+import {HealthTrendCard} from './home/HealthTrendCard'
+import {CostBreakdownCard} from './home/CostBreakdownCard'
 import {HealthGaugeCard} from './home/HealthGaugeCard'
 import {AITokenUsageCard} from './home/AITokenUsageCard'
 import {FindingsChartCard} from './home/FindingsChartCard'
+import {RuleFrequencyCard} from './home/RuleFrequencyCard'
 import {RecentFlowsCard} from './home/RecentFlowsCard'
+import {ActivityFeedCard} from './home/ActivityFeedCard'
+import {FlowComplexityCard} from './home/FlowComplexityCard'
+import {SecurityPostureCard} from './home/SecurityPostureCard'
 import {SkeletonDashboard} from './home/SkeletonDashboard'
 
 export default function HomeDashboard() {
@@ -19,11 +28,10 @@ export default function HomeDashboard() {
 
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const setDocument = useFlowStore(s => s.setDocument)
+  const activeOrg = useOrgStore(s => s.organisations.find(o => o.id === s.activeOrgId))
   const toast = useToast()
+  const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
 
-  // Promise-callback form (not async/await): setState runs inside .then/.catch,
-  // which keeps it out of the effect's synchronous body. The loading reset for
-  // retry lives in the button handler, not an effect.
   const load = useCallback(() => {
     dashboardApi.getHome()
       .then(d => { setData(d); setError(null) })
@@ -43,6 +51,15 @@ export default function HomeDashboard() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Re-fetch dashboard when analysis completes (isAnalyzing goes true→false).
+  const wasAnalyzing = useRef(false)
+  useEffect(() => {
+    if (wasAnalyzing.current && !isAnalyzing) {
+      load()
+    }
+    wasAnalyzing.current = isAnalyzing
+  }, [isAnalyzing, load])
 
   const openFlow = useCallback(async (id: string) => {
     try {
@@ -72,7 +89,7 @@ export default function HomeDashboard() {
           <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center">
             <AlertTriangle size={26} className="text-red-400" />
           </div>
-          <div className="text-lg font-medium text-text-primary">Couldn’t load your dashboard</div>
+          <div className="text-lg font-medium text-text-primary">Couldn't load your dashboard</div>
           {error && <div className="text-sm text-text-tertiary break-words">{error}</div>}
           <button
             onClick={retry}
@@ -85,49 +102,62 @@ export default function HomeDashboard() {
     )
   }
 
-  const {greeting, overview, tokenUsage, recentFlows, findings} = data
+  const {greeting, overview, tokenUsage, recentFlows, findings, healthTrend, costByProvider, ruleFrequency, activity, complexity, security} = data
+  const orgName = greeting.activeOrgName || activeOrg?.name
 
   return (
     <div className="w-full h-full p-6 overflow-y-auto bg-surface-1">
       <div className="grid grid-cols-12 gap-4 max-w-7xl mx-auto">
         {/* Header */}
-        <div className="col-span-12 flex items-center justify-between mb-2">
-          <div>
+        <div className="col-span-12 mb-1">
+          <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">
               {timeGreeting()}, {greeting.userDisplayName}
             </h1>
-            <p className="text-sm text-text-tertiary mt-0.5">
-              {greeting.activeOrgName ? `${greeting.activeOrgName} · ` : ''}Here’s your workspace at a glance.
-            </p>
+            {isAnalyzing && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded-full animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-400" />
+                Analyzing…
+              </span>
+            )}
           </div>
-          <div className="hidden sm:flex items-center gap-4 text-sm">
-            <Stat icon={<Layers size={15} />} label="Flows" value={overview.totalFlows} />
-            <Stat icon={<GitBranch size={15} />} label="Subflows" value={overview.totalSubflows} />
-          </div>
+          <p className="text-sm text-text-tertiary mt-0.5">
+            {orgName ? `${orgName} · ` : ''}Here's your workspace at a glance.
+          </p>
         </div>
 
-        {/* Row 2 */}
-        <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
-        <AITokenUsageCard data={tokenUsage} className="col-span-12 lg:col-span-8" />
+        {/* Row 1: KPI Strip */}
+        <KPIStripCard
+          overview={overview}
+          findings={findings}
+          costByProvider={costByProvider}
+          className="col-span-12"
+        />
 
-        {/* Row 3 */}
-        <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
+        {/* Row 2: Health Trend + Cost Breakdown */}
+        <HealthTrendCard data={healthTrend} className="col-span-12 lg:col-span-8" />
+        <CostBreakdownCard data={costByProvider} className="col-span-12 lg:col-span-4" />
+
+        {/* Row 3: AI Token Usage + Health Gauge */}
+        <AITokenUsageCard data={tokenUsage} className="col-span-12 lg:col-span-8" />
+        <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
+
+        {/* Row 4: Rule Frequency + Findings Radar */}
+        <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
         <FindingsChartCard
           findings={findings}
           onOpenAnalytics={() => setMainPaneView('dashboard')}
-          className="col-span-12 lg:col-span-5"
+          className="col-span-12 lg:col-span-4"
         />
-      </div>
-    </div>
-  )
-}
 
-function Stat({icon, label, value}: {icon: React.ReactNode; label: string; value: number}) {
-  return (
-    <div className="flex items-center gap-1.5 text-text-tertiary">
-      {icon}
-      <span className="font-mono font-semibold tabular-nums text-text-primary">{value}</span>
-      <span className="text-text-tertiary">{label}</span>
+        {/* Row 5: Recent Flows + Activity Feed */}
+        <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
+        <ActivityFeedCard data={activity} className="col-span-12 lg:col-span-5" />
+
+        {/* Row 6: Flow Complexity + Security Posture */}
+        <FlowComplexityCard data={complexity} className="col-span-12 lg:col-span-7" />
+        <SecurityPostureCard data={security} className="col-span-12 lg:col-span-5" />
+      </div>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import {AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid} from 'recharts'
 import {CardShell, CardPlaceholder} from './CardShell'
 import {useChartColors} from './useChartColors'
-import type {DailyTokenUsage} from '@/types/domain'
+import type {DailyTokenUsage} from '@/types'
 
 // AITokenUsageCard plots prompt vs completion tokens over the gap-filled 14-day
 // window. Empty in local/desktop mode (no usage tracking) → placeholder.

@@ -10,9 +10,16 @@ import "time"
 type DashboardHomeData struct {
 	Greeting    DashboardGreeting    `json:"greeting"`
 	Overview    DashboardOverview    `json:"overview"`
-	TokenUsage  []DailyTokenUsage    `json:"tokenUsage"`  // gap-filled 14-day series in cloud; empty in local mode
+	TokenUsage  []DailyTokenUsage    `json:"tokenUsage"`
 	RecentFlows []RecentFlowStub     `json:"recentFlows"`
 	Findings    DashboardFindingsAgg `json:"findings"`
+	// Advanced sections (v2). Populated in cloud mode; empty in local mode.
+	HealthTrend  []DailyHealthPoint    `json:"healthTrend"`
+	CostByProv   []ProviderCostStub    `json:"costByProvider"`
+	RuleFreq     []RuleFrequencyStub   `json:"ruleFrequency"`
+	Activity     []ActivityStub        `json:"activity"`
+	Complexity   []FlowComplexityStub  `json:"complexity"`
+	Security     DashboardSecurityStub `json:"security"`
 }
 
 type DashboardGreeting struct {
@@ -49,4 +56,43 @@ type DashboardFindingsAgg struct {
 type FindingCategory struct {
 	Category string `json:"category"`
 	Count    int    `json:"count"`
+}
+
+// ---- Advanced dashboard types (v2) ----
+
+type DailyHealthPoint struct {
+	Date      string `json:"date"`
+	AvgHealth int    `json:"avgHealth"`
+	FlowCount int    `json:"flowCount"`
+}
+
+type ProviderCostStub struct {
+	Provider  string  `json:"provider"`
+	Cost      float64 `json:"cost"`
+	TokensIn  int     `json:"tokensIn"`
+	TokensOut int     `json:"tokensOut"`
+}
+
+type RuleFrequencyStub struct {
+	Rule  string `json:"rule"`
+	Count int    `json:"count"`
+}
+
+type ActivityStub struct {
+	Action    string    `json:"action"`
+	FlowName  string    `json:"flowName,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type FlowComplexityStub struct {
+	FlowID       string `json:"flowId"`
+	FlowName     string `json:"flowName"`
+	BlockCount   int    `json:"blockCount"`
+	FindingCount int    `json:"findingCount"`
+	HealthScore  int    `json:"healthScore"`
+}
+
+type DashboardSecurityStub struct {
+	FailedLogins24h    int `json:"failedLogins24h"`
+	CredentialFindings int `json:"credentialFindings"`
 }

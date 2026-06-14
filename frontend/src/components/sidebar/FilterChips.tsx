@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import type {BlockType} from '@/types/domain'
+import type {BlockType} from '@/types'
 import {ALL_TYPES} from '@/stores/flowStore'
 
 type FilterChip = {

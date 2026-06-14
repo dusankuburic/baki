@@ -485,4 +485,45 @@ CREATE POLICY rls_knowledge_chunks_visible ON knowledge_chunks FOR ALL USING (
           AND EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = kd.org_id AND om.user_id = app_current_user_id())
     )
 );
+
+-- ── flow_analysis: add per-rule finding distribution ──
+ALTER TABLE flow_analysis ADD COLUMN IF NOT EXISTS by_rule JSONB NOT NULL DEFAULT '{}';
+
+-- ── flow_analysis_history: append-only time series for trend charts ──
+CREATE TABLE IF NOT EXISTS flow_analysis_history (
+    id           TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    flow_id      TEXT        NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    health_score INTEGER     NOT NULL DEFAULT 0,
+    errors       INTEGER     NOT NULL DEFAULT 0,
+    warnings     INTEGER     NOT NULL DEFAULT 0,
+    info         INTEGER     NOT NULL DEFAULT 0,
+    by_rule      JSONB       NOT NULL DEFAULT '{}',
+    analyzed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS flow_analysis_history_flow_idx ON flow_analysis_history (flow_id, analyzed_at DESC);
+CREATE INDEX IF NOT EXISTS flow_analysis_history_when_idx ON flow_analysis_history (analyzed_at DESC);
+
+-- RLS: a user can see history rows for flows they own or collaborate on.
+ALTER TABLE flow_analysis_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_analysis_history FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS rls_flow_analysis_history_visible ON flow_analysis_history;
+CREATE POLICY rls_flow_analysis_history_visible ON flow_analysis_history FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_analysis_history.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_analysis_history.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
 `

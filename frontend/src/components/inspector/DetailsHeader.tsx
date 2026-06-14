@@ -1,5 +1,5 @@
 import {getBlockIcon, getBlockColor, getBlockBg} from '@/lib/blocks'
-import type {Block} from '@/types/domain'
+import type {Block} from '@/types'
 import type {LucideIcon} from 'lucide-react'
 
 type DetailsHeaderProps = {

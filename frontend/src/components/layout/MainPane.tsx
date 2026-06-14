@@ -16,11 +16,14 @@ const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffVi
 const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDashboard'))
 // HomeDashboard pulls in recharts (~100KB+); lazy-load keeps it out of the entry chunk.
 const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
+// LibraryWorkspace pulls in the multi-pane browse experience and its helpers;
+// lazy keeps it out of the entry chunk and only loads when the user opens it.
+const LibraryWorkspace = lazy(() => import('@/components/library/LibraryWorkspace'))
 import PaneDivider from '@/components/layout/PaneDivider'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore, type EditorGroup} from '@/stores/editorStore'
-import type {FlowDocument} from '@/types/domain'
+import type {FlowDocument} from '@/types'
 
 export default function MainPane() {
     // All hooks must run unconditionally on every render (Rules of Hooks).
@@ -108,6 +111,16 @@ export default function MainPane() {
                         <HomeDashboard />
                     </Suspense>
                 </div>
+            </div>
+        )
+    }
+
+    if (mainPaneView === 'library') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <Suspense fallback={<Spinner />}>
+                    <LibraryWorkspace />
+                </Suspense>
             </div>
         )
     }

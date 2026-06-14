@@ -295,3 +295,27 @@ func TestStaticTokenMiddleware_WrongToken_Returns401(t *testing.T) {
 		t.Errorf("expected 401, got %d", rr.Code)
 	}
 }
+
+// TestManager_RefreshToken_BothTokensValid tests that VerifyRefresh succeeds
+// for both the access and refresh tokens of a pair. The concurrent-race test
+// lives in the API/storage layer (security_integration_test.go) because the
+// race is at the DB level (VerifyAndRevokeRefreshToken), not in JWT verification.
+func TestManager_RefreshToken_BothTokensValid(t *testing.T) {
+	mgr := newTestManager()
+	pair, _ := mgr.Issue("u1", "a@b.com", RoleMember)
+
+	// Access token should verify
+	_, err := mgr.Verify(pair.AccessToken)
+	if err != nil {
+		t.Errorf("access token verification failed: %v", err)
+	}
+
+	// Refresh token should verify
+	rc, err := mgr.VerifyRefresh(pair.RefreshToken)
+	if err != nil {
+		t.Errorf("refresh token verification failed: %v", err)
+	}
+	if rc.UserID != "u1" {
+		t.Errorf("expected userID u1, got %s", rc.UserID)
+	}
+}

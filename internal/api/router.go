@@ -182,11 +182,18 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 
 func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	ticket := r.URL.Query().Get("ticket")
-	claims, err := rt.security.AuthMgr.VerifyWSTicket(ticket)
+	// ConsumeWSTicket atomically verifies + marks the ticket as consumed via
+	// the shared blacklist (AddIfAbsent), making it truly single-use across
+	// all replicas. When no blacklist is configured (local mode), it only
+	// verifies the JWT — the local consumeTicket map handles single-use.
+	claims, err := rt.security.AuthMgr.ConsumeWSTicket(ticket)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Also check the local map as a fallback for local mode (where
+	// ConsumeWSTicket doesn't enforce single-use) and as defense-in-depth
+	// in cloud mode (belt-and-suspenders alongside the shared blacklist).
 	if !rt.consumeTicket(claims.ID, claims.ExpiresAt.Time) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return

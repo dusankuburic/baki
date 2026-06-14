@@ -1,7 +1,7 @@
 import {useState, useRef, useEffect, useCallback} from 'react'
 import {FileText, ChevronDown, Check, Files} from 'lucide-react'
 import clsx from 'clsx'
-import type {SourceFileInfo} from '@/types/domain'
+import type {SourceFileInfo} from '@/types'
 import {Portal} from '../shared'
 
 interface Props {

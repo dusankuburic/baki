@@ -2,7 +2,7 @@ import {useState, useEffect} from 'react'
 import {useChatStore, type ChatThread} from '@/stores/chatStore'
 import {chatApi, flowApi} from '@/api'
 import {logger} from '@/lib/logger'
-import type {ChatMessage, SourceFileInfo, ConversationFile, FlowDocument} from '@/types/domain'
+import type {ChatMessage, SourceFileInfo, ConversationFile, FlowDocument} from '@/types'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 

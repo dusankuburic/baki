@@ -2,7 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent} from '@testing-library/react'
 import Breadcrumbs from './Breadcrumbs'
 import {useFlowStore} from '@/stores/flowStore'
-import type {FlowDocument, Block} from '@/types/domain'
+import type {FlowDocument, Block} from '@/types'
 
 function makeBlock(id: string, name: string, children: Block[] = []): Block {
   return {id, name, type: 'ACTION', rawType: 'Test.Action', properties: {}, variables: [], children, subflowId: 'sf1', indent: 0, lineNumber: 0}

@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react'
 import {systemApi} from '@/api'
-import type {AppInfo} from '@/types/domain'
+import type {AppInfo} from '@/types'
 
 export default function AboutPanel() {
   const [info, setInfo] = useState<AppInfo | null>(null)

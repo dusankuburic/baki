@@ -1,5 +1,5 @@
 import {CollapsibleSection} from './CollapsibleSection'
-import type {Block} from '@/types/domain'
+import type {Block} from '@/types'
 
 type BlockMetadataProps = {
     block: Block

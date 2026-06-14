@@ -4,6 +4,7 @@ import {systemApi} from '@/api'
 type ErrorBoundaryProps = {
     children: ReactNode
     fallback?: ReactNode
+    fallbackMessage?: string
 }
 
 type ErrorBoundaryState = {
@@ -32,17 +33,21 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
         }
     }
 
+    private retry = () => this.setState({hasError: false, error: null})
+
     render() {
         if (this.state.hasError) {
             if (this.props.fallback) return this.props.fallback
             return (
                 <div className="flex flex-col items-center justify-center p-8">
-                    <div className="text-semantic-error text-sm font-medium mb-2">Something went wrong</div>
+                    <div className="text-semantic-error text-sm font-medium mb-2">
+                        {this.props.fallbackMessage ?? 'Something went wrong'}
+                    </div>
                     <div className="text-xs text-text-tertiary max-w-md text-center">
                         {this.state.error?.message}
                     </div>
                     <button
-                        onClick={() => this.setState({hasError: false, error: null})}
+                        onClick={this.retry}
                         className="mt-4 text-xs text-brand-400 hover:text-brand-300"
                     >
                         Try again

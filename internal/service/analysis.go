@@ -228,6 +228,13 @@ func (s *AnalysisService) ComputeDashboard() *models.DashboardStats {
 	return analyzer.ComputeDashboard(reports)
 }
 
+// CachedReports returns all analysis reports currently in the session cache.
+// Used by the local-mode dashboard to populate complexity and rule frequency
+// cards without a Postgres backend.
+func (s *AnalysisService) CachedReports() []*models.AnalysisReport {
+	return analyzer.DefaultCache.AllReports()
+}
+
 func (s *AnalysisService) ComputeSubflowHashes(doc *models.FlowDocument) []models.SubflowHash {
 	return analyzer.ComputeSubflowHashes(doc)
 }

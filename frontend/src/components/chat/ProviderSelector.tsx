@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import {Check, ChevronDown} from 'lucide-react'
 import {useState, useRef, useEffect} from 'react'
-import type {ProviderID} from '@/types/domain'
+import type {ProviderID} from '@/types'
 
 interface ProviderOption {
   id: ProviderID

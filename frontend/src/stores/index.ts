@@ -1,6 +1,14 @@
-export {useFlowStore} from './flowStore'
-export {useUIStore} from './uiStore'
-export {useChatStore} from './chatStore'
-export {useSearchStore} from './searchStore'
+// Canonical stores barrel — keep this complete so consumers can do
+// `import {useFooStore} from '@/stores'` consistently for any store.
 export {useAnalysisStore} from './analysisStore'
+export {useAuthStore} from './authStore'
+export {useChatStore} from './chatStore'
+export {useEditorStore} from './editorStore'
+export {useFlowStore} from './flowStore'
+export {useLibraryBrowseStore} from './libraryBrowseStore'
+export {useOrgStore} from './orgStore'
+export {usePresenceStore} from './presenceStore'
+export {useSearchStore} from './searchStore'
 export {useSettingsStore} from './settingsStore'
+export {useSyncStore} from './syncStore'
+export {useUIStore} from './uiStore'

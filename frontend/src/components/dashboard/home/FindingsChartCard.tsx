@@ -2,7 +2,7 @@ import {RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Toolt
 import {ArrowUpRight} from 'lucide-react'
 import {CardShell, CardPlaceholder} from './CardShell'
 import {useChartColors} from './useChartColors'
-import type {DashboardFindingsAgg} from '@/types/domain'
+import type {DashboardFindingsAgg} from '@/types'
 
 // FindingsChartCard shows findings-by-category as a radar. The title links into
 // the existing analytics dashboard for the full breakdown rather than

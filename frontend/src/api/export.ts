@@ -1,5 +1,5 @@
 import {request} from './client'
-import type {FlowDiff} from '@/types/domain'
+import type {FlowDiff} from '@/types'
 import {createAdapter} from '@/platform/adapters'
 import {isTauri} from '@/platform/guards'
 

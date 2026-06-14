@@ -1,5 +1,5 @@
 import {request} from './client'
-import type {AppInfo as AppInfoType} from '@/types/domain'
+import type {AppInfo as AppInfoType} from '@/types'
 
 export interface FrontendError {
   message: string

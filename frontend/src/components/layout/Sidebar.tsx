@@ -18,7 +18,7 @@ import {useToast} from '@/components/shared/Toast'
 import {useFileOpen} from '@/components/sidebar/hooks/useFileOpen'
 import {useSidebarSearch} from '@/components/sidebar/hooks/useSidebarSearch'
 import {analysisApi} from '@/api'
-import type {BlockType, AnalysisReport, Block} from '@/types/domain'
+import type {BlockType, AnalysisReport, Block} from '@/types'
 
 const BLOCK_TYPE_LABELS: Record<string, string> = {
     ACTION: 'Actions',
@@ -54,7 +54,7 @@ export default function Sidebar() {
     const setInspectorTab = useUIStore(s => s.setInspectorTab)
 
     const {
-        recentFiles,
+        recentFiles, isLoading,
         handleOpenFile, handleOpenFolder, handleSelectFolderFile,
         handleLoadRecent, handleRemoveRecent, handleClearRecent,
     } = useFileOpen()
@@ -117,6 +117,8 @@ export default function Sidebar() {
     const toast = useToast()
     const setReport = useAnalysisStore(s => s.setReport)
     const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
+    const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
+    const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
     const setAnalysisProgress = useAnalysisStore(s => s.setProgress)
 
     const analysisReports = useAnalysisStore(s => s.reports)
@@ -133,8 +135,9 @@ export default function Sidebar() {
 
     const handleAnalyze = useCallback(async () => {
         if (!document) return
+        if (useAnalysisStore.getState().isAnalyzing) return
         setInspectorTab('findings')
-        setAnalyzing(true)
+        const gen = beginAnalyzing()
         setAnalysisProgress({current: 0, total: 0, ruleName: ''})
         try {
             const r = await analysisApi.analyzeFlow()
@@ -142,9 +145,11 @@ export default function Sidebar() {
         } catch (err) {
             toast.error('Analysis failed: ' + (err as Error).message)
         } finally {
-            setAnalyzing(false)
+            if (useAnalysisStore.getState().analyzingGen === gen) {
+                setAnalyzing(false)
+            }
         }
-    }, [document, setReport, setAnalyzing, setAnalysisProgress, setInspectorTab, toast])
+    }, [document, setReport, setAnalyzing, beginAnalyzing, setAnalysisProgress, setInspectorTab, toast])
 
     const filterChips = useMemo(() => {
         if (!document) return []
@@ -170,6 +175,7 @@ export default function Sidebar() {
             <FileHeader
                 document={document}
                 recentFiles={recentFiles}
+                isLoading={isLoading}
                 onOpenFile={handleOpenFile}
                 onOpenFolder={handleOpenFolder}
                 onLoadRecent={handleLoadRecent}
@@ -276,7 +282,7 @@ export default function Sidebar() {
                 <LibraryTab />
             )}
 
-            <SidebarToolbar hasFlow={!!document} onAnalyze={handleAnalyze} />
+            <SidebarToolbar hasFlow={!!document} isAnalyzing={isAnalyzing} onAnalyze={handleAnalyze} />
         </div>
     )
 }

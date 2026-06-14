@@ -22,10 +22,11 @@ import (
 type DashboardService struct {
 	backend  storageif.StorageBackend
 	analysis *AnalysisService
+	flowSvc  *FlowService
 }
 
-func NewDashboardService(backend storageif.StorageBackend, analysis *AnalysisService) *DashboardService {
-	return &DashboardService{backend: backend, analysis: analysis}
+func NewDashboardService(backend storageif.StorageBackend, analysis *AnalysisService, flowSvc *FlowService) *DashboardService {
+	return &DashboardService{backend: backend, analysis: analysis, flowSvc: flowSvc}
 }
 
 const dashboardTokenDays = 14
@@ -42,12 +43,16 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 		health = report.Metrics.HealthScore
 	}
 	byCat := make(map[string]int)
+	byRule := make(map[string]int)
 	for _, f := range report.Findings {
 		cat := f.Category
 		if cat == "" {
 			cat = "other"
 		}
 		byCat[cat]++
+		if f.RuleID != "" {
+			byRule[f.RuleID]++
+		}
 	}
 	fa := &storageif.FlowAnalysis{
 		FlowID:      doc.ID,
@@ -56,6 +61,7 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 		Warnings:    report.Stats.Warnings,
 		Info:        report.Stats.Info,
 		ByCategory:  byCat,
+		ByRule:      byRule,
 		AnalyzedAt:  report.GeneratedAt,
 	}
 	if err := s.backend.SaveFlowAnalysis(ctx, fa); err != nil {
@@ -106,6 +112,42 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 			TokensOut: t.TokensOut,
 		})
 	}
+
+	// Advanced sections (best-effort; a failure logs and leaves empty slices).
+	adv, err := s.backend.FlowDashboardAdvanced(ctx, userID, 30)
+	if err != nil {
+		logger.Warn("dashboard: advanced data failed", "userId", userID, "err", err)
+		return out
+	}
+	for _, h := range adv.HealthTrend {
+		out.HealthTrend = append(out.HealthTrend, models.DailyHealthPoint{
+			Date: h.Date, AvgHealth: h.AvgHealth, FlowCount: h.FlowCount,
+		})
+	}
+	for _, c := range adv.CostByProv {
+		out.CostByProv = append(out.CostByProv, models.ProviderCostStub{
+			Provider: c.Provider, Cost: c.Cost, TokensIn: c.TokensIn, TokensOut: c.TokensOut,
+		})
+	}
+	for _, r := range adv.RuleFreq {
+		out.RuleFreq = append(out.RuleFreq, models.RuleFrequencyStub{Rule: r.Rule, Count: r.Count})
+	}
+	for _, a := range adv.Activity {
+		out.Activity = append(out.Activity, models.ActivityStub{
+			Action: a.Action, FlowName: a.FlowName, CreatedAt: a.CreatedAt,
+		})
+	}
+	for _, c := range adv.Complexity {
+		out.Complexity = append(out.Complexity, models.FlowComplexityStub{
+			FlowID: c.FlowID, FlowName: c.FlowName, BlockCount: c.BlockCount,
+			FindingCount: c.FindingCount, HealthScore: c.HealthScore,
+		})
+	}
+	out.Security = models.DashboardSecurityStub{
+		FailedLogins24h:    adv.Security.FailedLogins24h,
+		CredentialFindings: adv.Security.CredentialFindings,
+	}
+
 	return out
 }
 
@@ -126,6 +168,48 @@ func (s *DashboardService) buildLocal() *models.DashboardHomeData {
 		BySeverity: copyIntMap(stats.FindingsBySeverity),
 		ByCategory: sortedCategories(stats.FindingsByCategory),
 	}
+
+	// Rule frequency — derived from the same in-memory stats that feed the
+	// Analytics Dashboard. Sorted by count descending so the top offenders
+	// appear first.
+	out.RuleFreq = sortedRuleFreq(stats.FindingsByRule)
+
+	// Per-flow complexity scatter — derived from cached analysis reports so
+	// the card shows real data in desktop mode (not just cloud).
+	for _, r := range s.analysis.CachedReports() {
+		blockCount := 0
+		healthScore := 0
+		if r.Metrics != nil {
+			blockCount = r.Metrics.TotalBlocks
+			healthScore = r.Metrics.HealthScore
+		}
+		out.Complexity = append(out.Complexity, models.FlowComplexityStub{
+			FlowID:       r.FlowID,
+			FlowName:     r.FlowName,
+			BlockCount:   blockCount,
+			FindingCount: len(r.Findings),
+			HealthScore:  healthScore,
+		})
+	}
+
+	// Recent flows — from the settings store (same source as the sidebar
+	// "Recent" list). Only populated when the flow service is available
+	// (always true in local mode via DI).
+	if s.flowSvc != nil {
+		files, err := s.flowSvc.RecentFiles()
+		if err == nil {
+			for _, f := range files {
+				// No health score in local mode (the flow may not have been
+				// analyzed yet); leave nil so the UI shows a dash.
+				out.RecentFlows = append(out.RecentFlows, models.RecentFlowStub{
+					ID:        f.Path,
+					Name:      f.Name,
+					UpdatedAt: f.LastOpen,
+				})
+			}
+		}
+	}
+
 	return out
 }
 
@@ -139,6 +223,11 @@ func emptyHome() *models.DashboardHomeData {
 			BySeverity: map[string]int{},
 			ByCategory: []models.FindingCategory{},
 		},
+		HealthTrend: []models.DailyHealthPoint{},
+		CostByProv:  []models.ProviderCostStub{},
+		RuleFreq:    []models.RuleFrequencyStub{},
+		Activity:    []models.ActivityStub{},
+		Complexity:  []models.FlowComplexityStub{},
 	}
 }
 
@@ -163,6 +252,25 @@ func copyIntMap(m map[string]int) map[string]int {
 	out := make(map[string]int, len(m))
 	for k, v := range m {
 		out[k] = v
+	}
+	return out
+}
+
+// sortedRuleFreq renders a rule→count map as a stable slice ordered by count
+// descending then rule name, capping at 15 entries so the card doesn't overflow.
+func sortedRuleFreq(m map[string]int) []models.RuleFrequencyStub {
+	out := make([]models.RuleFrequencyStub, 0, len(m))
+	for rule, count := range m {
+		out = append(out, models.RuleFrequencyStub{Rule: rule, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Rule < out[j].Rule
+	})
+	if len(out) > 15 {
+		out = out[:15]
 	}
 	return out
 }

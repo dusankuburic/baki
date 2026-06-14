@@ -1,6 +1,6 @@
 import React from 'react'
 import {useFlowStore} from '@/stores/flowStore'
-import type {BlockToken, VariableHistory, Block} from '@/types/domain'
+import type {BlockToken, VariableHistory, Block} from '@/types'
 import clsx from 'clsx'
 
 import {analysisApi} from '@/api'

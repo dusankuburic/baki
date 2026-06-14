@@ -5,7 +5,7 @@ import {
     ShieldAlert, MessageSquare, Variable, Clock, BoxSelect, ArrowLeftRight, HelpCircle, Package,
     type LucideIcon,
 } from 'lucide-react'
-import type {Highlight} from '@/types/domain'
+import type {Highlight} from '@/types'
 export type {TreeRow} from '@/lib/tree'
 import type {TreeRow} from '@/lib/tree'
 

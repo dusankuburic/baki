@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { FlowDocument } from '@/types/domain'
+import type { FlowDocument, PagedResponse } from '@/types'
 
 export interface LibraryFlow {
   id: string
@@ -7,6 +7,7 @@ export interface LibraryFlow {
   description?: string
   ownerId: string
   ownerDisplayName?: string
+  organizationId?: string
   blockCount: number
   subflowCount: number
   updatedAt: string
@@ -15,13 +16,31 @@ export interface LibraryFlow {
   canEdit: boolean
   canDelete: boolean
   canShare: boolean
+  // Present only on single-flow GET (not the list endpoint).
+  healthScore?: number
+  errorCount?: number
+  warningCount?: number
 }
+
+export type LibraryScope = 'all' | 'mine' | 'shared'
+export type LibrarySort = 'updated_desc' | 'updated_asc' | 'name_asc' | 'name_desc' | 'blocks_desc'
 
 export interface LibraryFilter {
   orgId?: string
+  scope?: LibraryScope
+  sort?: LibrarySort
   query?: string
   limit?: number
   offset?: number
+}
+
+export interface LibraryFlowVersion {
+  id: string
+  flowId: string
+  version: number
+  comment: string
+  createdBy: string
+  createdAt: string
 }
 
 export interface CreateLibraryFlowRequest {
@@ -39,9 +58,11 @@ export interface UpdateLibraryFlowRequest {
 }
 
 export const libraryApi = {
-  list: (filter: LibraryFilter = {}): Promise<LibraryFlow[]> => {
+  list: (filter: LibraryFilter = {}): Promise<PagedResponse<LibraryFlow>> => {
     const params = new URLSearchParams()
     if (filter.orgId) params.set('orgId', filter.orgId)
+    if (filter.scope) params.set('scope', filter.scope)
+    if (filter.sort) params.set('sort', filter.sort)
     if (filter.query) params.set('q', filter.query)
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset) params.set('offset', String(filter.offset))
@@ -54,6 +75,11 @@ export const libraryApi = {
 
   getContent: (id: string): Promise<FlowDocument> =>
     request(`/api/library/${id}/content`, undefined, 'GET'),
+
+  versions: (id: string, limit?: number): Promise<LibraryFlowVersion[]> => {
+    const qs = limit ? `?limit=${limit}` : ''
+    return request(`/api/library/${id}/versions${qs}`, undefined, 'GET')
+  },
 
   create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> =>
     request('/api/library', req),

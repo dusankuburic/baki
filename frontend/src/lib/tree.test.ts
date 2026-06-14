@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import {flattenBlocks, flattenTreeRows} from './tree'
-import type {Block, FlowDocument, Subflow} from '@/types/domain'
+import type {Block, FlowDocument, Subflow} from '@/types'
 
 // ---- helpers ----
 

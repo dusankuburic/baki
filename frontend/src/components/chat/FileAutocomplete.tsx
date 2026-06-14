@@ -1,7 +1,7 @@
 import {useState, useEffect, useMemo} from 'react'
 import {flowApi} from '@/api'
 import {logger} from '@/lib/logger'
-import type {SourceFileInfo} from '@/types/domain'
+import type {SourceFileInfo} from '@/types'
 import {FileText} from 'lucide-react'
 
 interface Props {

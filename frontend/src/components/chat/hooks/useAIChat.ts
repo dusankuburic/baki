@@ -7,7 +7,7 @@ import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {logger} from '@/lib/logger'
 import {useChatConversations} from './useChatConversations'
 import {useChatThreads} from './useChatThreads'
-import type {ChatMessage, ContextPreview, ChatRequest} from '@/types/domain'
+import type {ChatMessage, ContextPreview, ChatRequest} from '@/types'
 
 interface UseAIChatOptions {
   selectedModel: string

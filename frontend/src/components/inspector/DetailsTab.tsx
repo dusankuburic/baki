@@ -11,7 +11,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
 import {findBlockInDoc} from '@/lib/tree'
 import {logger} from '@/lib/logger'
-import type {VariableHistory} from '@/types/domain'
+import type {VariableHistory} from '@/types'
 
 export default function DetailsTab() {
     const document = useFlowStore(s => s.document)

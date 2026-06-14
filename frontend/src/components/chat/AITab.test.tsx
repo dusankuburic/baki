@@ -4,8 +4,8 @@ import AITab from './AITab'
 import { chatApi, providersApi, flowApi } from '@/api'
 import { useFlowStore } from '@/stores/flowStore'
 import { useChatStore } from '@/stores/chatStore'
-import type { ConversationFile } from '@/types/domain'
-import type { ProviderInfo } from '@/types/domain'
+import type { ConversationFile } from '@/types'
+import type { ProviderInfo } from '@/types'
 
 // Prevent real network calls from all API modules.
 vi.mock('@/api', () => ({

@@ -1,22 +1,23 @@
 import clsx from 'clsx'
-import {Sparkles, User, Shield, Settings, LayoutDashboard, BarChart3} from 'lucide-react'
+import {Sparkles, User, Shield, Settings, LayoutDashboard, BarChart3, Cloud, Loader2} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import {useAuthStore} from '@/stores/authStore'
 import {useUIStore} from '@/stores/uiStore'
 
 type SidebarToolbarProps = {
     hasFlow: boolean
+    isAnalyzing?: boolean
     findingCount?: number
     onAnalyze: () => void
 }
 
-export default function SidebarToolbar({hasFlow, findingCount, onAnalyze}: SidebarToolbarProps) {
+export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCount, onAnalyze}: SidebarToolbarProps) {
     const user = useAuthStore(s => s.user)
     const mainPaneView = useUIStore(s => s.mainPaneView)
     const setMainPaneView = useUIStore(s => s.setMainPaneView)
     const toggleSettings = useUIStore(s => s.toggleSettings)
 
-    const navClass = (view: 'home' | 'dashboard' | 'profile' | 'admin') => clsx(
+    const navClass = (view: 'home' | 'dashboard' | 'library' | 'profile' | 'admin') => clsx(
         'p-1.5 rounded transition-colors',
         mainPaneView === view
             ? 'text-brand-400 bg-brand-500/10'
@@ -31,11 +32,13 @@ export default function SidebarToolbar({hasFlow, findingCount, onAnalyze}: Sideb
                         variant="primary"
                         size="sm"
                         fullWidth
-                        icon={Sparkles}
+                        icon={isAnalyzing ? Loader2 : Sparkles}
                         onClick={onAnalyze}
+                        disabled={isAnalyzing}
+                        className={isAnalyzing ? '[&_svg]:animate-spin' : ''}
                     >
-                        Analyze flow
-                        {findingCount !== undefined && findingCount > 0 && (
+                        {isAnalyzing ? 'Analyzing…' : 'Analyze flow'}
+                        {!isAnalyzing && findingCount !== undefined && findingCount > 0 && (
                             <span className="ml-1 text-xs opacity-80">{findingCount} findings</span>
                         )}
                     </Button>
@@ -57,6 +60,14 @@ export default function SidebarToolbar({hasFlow, findingCount, onAnalyze}: Sideb
                     title="Analytics Dashboard"
                 >
                     <BarChart3 size={16} />
+                </button>
+
+                <button
+                    onClick={() => setMainPaneView('library')}
+                    className={navClass('library')}
+                    title="Cloud Library"
+                >
+                    <Cloud size={16} />
                 </button>
 
                 <button

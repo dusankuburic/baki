@@ -1,5 +1,5 @@
 import {request} from './client'
-import type {DashboardHomeData} from '@/types/domain'
+import type {DashboardHomeData} from '@/types'
 
 export const dashboardApi = {
   // The backend assembles this per-section and never hard-fails: sections with

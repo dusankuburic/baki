@@ -183,6 +183,29 @@ func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+// ConsumeWSTicket verifies a WS ticket and immediately marks its jti as
+// consumed via the shared blacklist (AddIfAbsent), making the ticket truly
+// single-use across all replicas. In local mode (in-memory blacklist) this
+// is equivalent to the previous process-local map.
+func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
+		jwt.WithAudience(wsTicketAudience))
+	if err != nil {
+		return nil, fmt.Errorf("auth: verify ws ticket: %w", err)
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, errors.New("auth: invalid ws ticket claims")
+	}
+	if m.blacklist != nil && claims.ID != "" {
+		ttl := time.Until(claims.ExpiresAt.Time)
+		if ttl <= 0 || !m.blacklist.AddIfAbsent(claims.ID, ttl) {
+			return nil, errors.New("auth: ws ticket already used")
+		}
+	}
+	return claims, nil
+}
+
 // IssueSSOTicket creates a short-lived, single-use ticket that carries an
 // authenticated SSO identity from the OIDC callback redirect to the SPA,
 // which exchanges it for a real token pair. This keeps access/refresh tokens

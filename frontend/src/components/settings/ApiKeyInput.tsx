@@ -2,7 +2,7 @@ import {useState, useCallback, useEffect} from 'react'
 import Input from '@/components/shared/Input'
 import Button from '@/components/shared/Button'
 import {providersApi} from '@/api'
-import type {ProviderTestResult} from '@/types/domain'
+import type {ProviderTestResult} from '@/types'
 import {logger} from '@/lib/logger'
 
 interface Props {

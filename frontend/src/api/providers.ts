@@ -1,5 +1,5 @@
 import {request} from './client'
-import type {ProviderInfo, ProviderTestResult, DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types/domain'
+import type {ProviderInfo, ProviderTestResult, DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types'
 
 export const providersApi = {
   listProviders: (): Promise<ProviderInfo[]> =>

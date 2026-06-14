@@ -3,7 +3,7 @@ import {Copy, ArrowDownToLine, Eye, EyeOff} from 'lucide-react'
 import TreeNode from './TreeNode'
 import {flattenTreeRows, type TreeRow} from '@/lib/tree'
 import {writeClipboard} from '@/lib/clipboard'
-import type {FlowDocument, BlockType, Highlight} from '@/types/domain'
+import type {FlowDocument, BlockType, Highlight} from '@/types'
 
 const ROW_HEIGHT = 28
 const BUFFER = 200

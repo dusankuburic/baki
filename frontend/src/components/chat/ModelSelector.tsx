@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import {ChevronDown} from 'lucide-react'
 import {useState, useRef, useEffect} from 'react'
-import type {ModelDetail} from '@/types/domain'
+import type {ModelDetail} from '@/types'
 
 interface Props {
   models: ModelDetail[]

@@ -1,5 +1,5 @@
 import {create} from 'zustand'
-import type {AnalysisReport, Severity, Finding, VariableHistory} from '@/types/domain'
+import type {AnalysisReport, Severity, Finding, VariableHistory} from '@/types'
 import {toggleSetMember} from '@/lib/collections'
 
 export type FindingCategory = 'Security' | 'Reliability' | 'Performance' | 'Style' | 'Logic'

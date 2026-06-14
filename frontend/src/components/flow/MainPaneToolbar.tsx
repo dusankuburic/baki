@@ -1,4 +1,4 @@
-import {List, Network, Map, History, Minus, Plus, Maximize2, Download, Expand, ChevronLeft, ChevronRight, MapPin, Flame, LayoutDashboard, BarChart3, User, Shield} from 'lucide-react'
+import {List, Network, Map, History, Minus, Plus, Maximize2, Download, Expand, ChevronLeft, ChevronRight, MapPin, Flame, LayoutDashboard, BarChart3, User, Shield, Cloud} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import IconButton from '@/components/shared/IconButton'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
@@ -7,12 +7,13 @@ import {useEditorStore} from '@/stores/editorStore'
 import {useAuthStore} from '@/stores/authStore'
 import {exportApi} from '@/api'
 import {useToast} from '@/components/shared/Toast'
-import type {FlowDiff} from '@/types/domain'
+import type {FlowDiff} from '@/types'
 
-type SystemView = 'home' | 'dashboard' | 'profile' | 'admin'
+type SystemView = 'home' | 'dashboard' | 'library' | 'profile' | 'admin'
 const SYSTEM_VIEW_TITLES: Record<SystemView, string> = {
     home: 'Welcome',
     dashboard: 'Analysis Dashboard',
+    library: 'Cloud Library',
     profile: 'User Profile',
     admin: 'Admin',
 }
@@ -48,6 +49,7 @@ export default function MainPaneToolbar() {
         const systemOptions: {value: SystemView; label: string; icon: typeof LayoutDashboard}[] = [
             {value: 'home', label: 'Home', icon: LayoutDashboard},
             {value: 'dashboard', label: 'Analytics', icon: BarChart3},
+            {value: 'library', label: 'Library', icon: Cloud},
             {value: 'profile', label: 'Profile', icon: User},
         ]
         if (userRole === 'admin') systemOptions.push({value: 'admin', label: 'Admin', icon: Shield})

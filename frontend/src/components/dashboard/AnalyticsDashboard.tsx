@@ -11,7 +11,7 @@ import {useToast} from '@/components/shared'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {scoreColor} from '@/lib/scoring'
 import {useUIStore} from '@/stores/uiStore'
-import type {BatchAnalysis, DashboardStats} from '@/types/domain'
+import type {BatchAnalysis, DashboardStats} from '@/types'
 
 function StatCard({label, value, accent}: {label: string; value: string | number; accent?: string}) {
   return (
@@ -59,11 +59,15 @@ export default function AnalyticsDashboard() {
   const toast = useToast()
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [loading, setLoading] = useState(true)
   const [batch, setBatch] = useState<BatchAnalysis | null>(null)
   const [batchRunning, setBatchRunning] = useState(false)
 
   const refresh = useCallback(() => {
-    analysisApi.getDashboard().then(s => setStats(s)).catch((err) => { logger.warn('Failed to load dashboard stats', err) })
+    analysisApi.getDashboard()
+      .then(s => setStats(s))
+      .catch((err) => { logger.warn('Failed to load dashboard stats', err) })
+      .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -133,7 +137,20 @@ export default function AnalyticsDashboard() {
         </button>
       </div>
 
-      {isEmpty && !batch ? (
+      {loading ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-2">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="p-3 rounded-xl border border-border-subtle bg-surface-0">
+                <div className="animate-pulse bg-surface-3 rounded h-3 w-16 mb-2" />
+                <div className="animate-pulse bg-surface-3 rounded h-8 w-20" />
+              </div>
+            ))}
+          </div>
+          <div className="animate-pulse bg-surface-2 border border-border-subtle rounded-xl h-48" />
+          <div className="animate-pulse bg-surface-2 border border-border-subtle rounded-xl h-48" />
+        </div>
+      ) : isEmpty && !batch ? (
         <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-border-subtle bg-surface-0">
           <Activity size={22} className="text-text-tertiary" />
           <span className="text-sm text-text-secondary">No analyses yet this session</span>

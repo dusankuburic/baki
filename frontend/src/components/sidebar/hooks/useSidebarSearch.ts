@@ -3,7 +3,7 @@ import {useSearchStore} from '@/stores/searchStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
 import {flowApi} from '@/api'
-import type {SearchResult} from '@/types/domain'
+import type {SearchResult} from '@/types'
 
 export function useSidebarSearch() {
     const searchQuery = useSearchStore(s => s.query)

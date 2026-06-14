@@ -1,7 +1,7 @@
 import {useState, useRef, useEffect, useLayoutEffect, useCallback} from 'react'
 import clsx from 'clsx'
 import {Check, ChevronDown, Settings, Zap} from 'lucide-react'
-import type {ModelDetail, ProviderID} from '@/types/domain'
+import type {ModelDetail, ProviderID} from '@/types'
 import {useUIStore} from '@/stores/uiStore'
 import {Portal} from '../shared'
 

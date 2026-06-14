@@ -1,6 +1,6 @@
 import {request} from './client'
 import {createAdapter} from '@/platform/adapters'
-import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview} from '@/types/domain'
+import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview} from '@/types'
 
 export const chatApi = {
   streamChatMessage: (req: ChatRequest): Promise<string> =>

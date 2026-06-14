@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import {getBlockColor} from '@/lib/blocks'
-import type {BlockType} from '@/types/domain'
+import type {BlockType} from '@/types'
 
 const containerTypes: Set<BlockType> = new Set([
     'LOOP', 'CONDITION', 'BLOCK', 'ERROR_HANDLER', 'SWITCH',

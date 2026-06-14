@@ -1,4 +1,4 @@
-import type {Block, BlockType, FlowDocument, Subflow, Highlight} from '@/types/domain'
+import type {Block, BlockType, FlowDocument, Subflow, Highlight} from '@/types'
 
 // ---- FlatBlock: used by useFlattenedBlocks / block detail view ----
 

@@ -1,6 +1,6 @@
 import {FileText, FolderOpen} from 'lucide-react'
 import clsx from 'clsx'
-import type {FlowFileInfo} from '@/types/domain'
+import type {FlowFileInfo} from '@/types'
 
 function formatSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`

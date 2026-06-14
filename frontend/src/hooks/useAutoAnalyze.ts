@@ -4,7 +4,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
-import type {AnalysisReport} from '@/types/domain'
+import type {AnalysisReport} from '@/types'
 
 /**
  * When a flow finishes loading AND the user has Settings → Rules →

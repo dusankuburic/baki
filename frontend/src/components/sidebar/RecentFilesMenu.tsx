@@ -1,6 +1,6 @@
 import {useRef, useEffect} from 'react'
 import {FileText, Folder, X, Trash2} from 'lucide-react'
-import type {RecentFile} from '@/types/domain'
+import type {RecentFile} from '@/types'
 
 type RecentFilesMenuProps = {
     files: RecentFile[]

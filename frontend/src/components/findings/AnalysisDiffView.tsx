@@ -1,7 +1,7 @@
 import {useState} from 'react'
 import clsx from 'clsx'
 import {ChevronRight, GitCompareArrows, PlusCircle, CheckCircle2, MinusCircle, ArrowLeft} from 'lucide-react'
-import type {AnalysisDiff, Finding, FlowDocument} from '@/types/domain'
+import type {AnalysisDiff, Finding, FlowDocument} from '@/types'
 import FindingCard from './FindingCard'
 
 interface Props {

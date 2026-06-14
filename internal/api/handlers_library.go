@@ -46,6 +46,7 @@ type libraryFlow struct {
 	Description      string    `json:"description,omitempty"`
 	OwnerID          string    `json:"ownerId"`
 	OwnerDisplayName string    `json:"ownerDisplayName,omitempty"`
+	OrganizationID   string    `json:"organizationId,omitempty"`
 	IsSharedWithMe   bool      `json:"isSharedWithMe"`
 	CanEdit          bool      `json:"canEdit"`
 	CanDelete        bool      `json:"canDelete"`
@@ -54,6 +55,10 @@ type libraryFlow struct {
 	SubflowCount     int       `json:"subflowCount"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 	Version          int       `json:"version"`
+	// Health fields are populated only by the single-flow GET, not the list.
+	HealthScore  *int `json:"healthScore,omitempty"`
+	ErrorCount   *int `json:"errorCount,omitempty"`
+	WarningCount *int `json:"warningCount,omitempty"`
 }
 
 func (h *LibraryHandler) toLibraryFlow(ctx context.Context, doc *storageif.FlowDocument, requestingUserID, ownerName string) libraryFlow {
@@ -69,6 +74,7 @@ func (h *LibraryHandler) toLibraryFlow(ctx context.Context, doc *storageif.FlowD
 		Description:      doc.Description,
 		OwnerID:          doc.OwnerID,
 		OwnerDisplayName: ownerName,
+		OrganizationID:   doc.OrganizationID,
 		IsSharedWithMe:   doc.OwnerID != requestingUserID,
 		CanEdit:          canEdit,
 		CanDelete:        canDelete,
@@ -87,6 +93,7 @@ func (h *LibraryHandler) toLibraryFlowWithPerms(doc *storageif.FlowDocument, req
 		Description:      doc.Description,
 		OwnerID:          doc.OwnerID,
 		OwnerDisplayName: ownerName,
+		OrganizationID:   doc.OrganizationID,
 		IsSharedWithMe:   doc.OwnerID != requestingUserID,
 		CanEdit:          perms.CanEdit,
 		CanDelete:        perms.CanDelete,
@@ -104,10 +111,12 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	q := r.URL.Query()
 	orgID := q.Get("orgId")
 	query := q.Get("q")
+	sort := q.Get("sort")
+	scope := service.LibraryScope(q.Get("scope"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
 
-	docs, err := h.libSvc.ListLibraryFlows(r.Context(), userID, orgID, query, limit, offset)
+	docs, err := h.libSvc.ListLibraryFlows(r.Context(), userID, orgID, scope, query, sort, limit, offset)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -132,7 +141,7 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		items[i] = h.toLibraryFlowWithPerms(d, userID, ownerNames[d.OwnerID], p)
 	}
 
-	total, err := h.libSvc.CountLibraryFlows(r.Context(), userID, orgID, query)
+	total, err := h.libSvc.CountLibraryFlows(r.Context(), userID, orgID, scope, query)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -193,7 +202,16 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 		render.Error(w, err, 0)
 		return
 	}
-	render.JSON(w, h.toLibraryFlow(r.Context(), doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID)))
+	out := h.toLibraryFlow(r.Context(), doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID))
+	// Best-effort: a missing or failed health lookup just omits the fields —
+	// the detail view degrades to "not analyzed yet" rather than failing.
+	if health, herr := h.libSvc.FlowHealth(r.Context(), doc.ID); herr == nil && health != nil {
+		hs, e, wn := health.HealthScore, health.Errors, health.Warnings
+		out.HealthScore = &hs
+		out.ErrorCount = &e
+		out.WarningCount = &wn
+	}
+	render.JSON(w, out)
 }
 
 func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {

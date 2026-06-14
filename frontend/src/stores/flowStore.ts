@@ -1,5 +1,5 @@
 import {create} from 'zustand'
-import type {FlowDocument, Block, Subflow, BlockType, FlowFileInfo} from '@/types/domain'
+import type {FlowDocument, Block, Subflow, BlockType, FlowFileInfo} from '@/types'
 import {useEditorStore} from './editorStore'
 import {useSearchStore} from './searchStore'
 import {useAnalysisStore} from './analysisStore'

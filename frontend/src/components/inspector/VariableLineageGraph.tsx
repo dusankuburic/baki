@@ -1,5 +1,5 @@
 import {useMemo} from 'react'
-import type {VariableEvent} from '@/types/domain'
+import type {VariableEvent} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
 import {Info} from 'lucide-react'
 

@@ -1,5 +1,5 @@
 import {analysisApi} from '@/api'
-import type {AnalysisReport} from '@/types/domain'
+import type {AnalysisReport} from '@/types'
 import {csvCell, downloadBlob} from '@/lib/csv'
 
 // exportFindingsCSV serializes the report's findings; shared by the

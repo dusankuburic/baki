@@ -1,6 +1,6 @@
 import React, {useState} from 'react'
 import clsx from 'clsx'
-import type {Finding, FlowDocument} from '@/types/domain'
+import type {Finding, FlowDocument} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {findBlockInDoc} from '@/lib/tree'

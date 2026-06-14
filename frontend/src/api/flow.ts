@@ -1,6 +1,6 @@
 import {request} from './client'
 import { createAdapter } from '@/platform/adapters'
-import type {FlowDocument, RecentFile, SearchQuery, SearchResults, SourceFileInfo} from '@/types/domain'
+import type {FlowDocument, RecentFile, SearchQuery, SearchResults, SourceFileInfo} from '@/types'
 
 export const flowApi = {
   openFlowFile: async (): Promise<FlowDocument | null> => {

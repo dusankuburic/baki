@@ -1,6 +1,6 @@
 import {describe, it, expect, beforeEach} from 'vitest'
 import {useChatStore} from './chatStore'
-import type {ChatMessage} from '@/types/domain'
+import type {ChatMessage} from '@/types'
 
 function makeMessage(id: string, role: 'user' | 'assistant', content = 'hello'): ChatMessage {
     return {id, role, content, timestamp: new Date().toISOString()} as ChatMessage
