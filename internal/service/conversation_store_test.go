@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"os"
 	"runtime"
 	"strings"
@@ -31,7 +32,7 @@ func TestConvFilePath_RejectsTraversal(t *testing.T) {
 func TestSaveConversation_RejectsBadScope(t *testing.T) {
 	svc := &ChatService{configDir: t.TempDir()}
 	doc := &models.FlowDocument{ID: "f1"}
-	if err := svc.SaveConversation(doc, "../escape", nil); err == nil {
+	if err := svc.SaveConversation(context.Background(), doc, "../escape", nil); err == nil {
 		t.Error("SaveConversation with traversal scope should error")
 	}
 }
@@ -45,11 +46,11 @@ func TestSaveGetConversation_RoundTripAndPerms(t *testing.T) {
 		{ID: "2", Role: "assistant", Content: "hi"},
 	}
 
-	if err := svc.SaveConversation(doc, "flow", msgs); err != nil {
+	if err := svc.SaveConversation(context.Background(), doc, "flow", msgs); err != nil {
 		t.Fatalf("SaveConversation: %v", err)
 	}
 
-	got, err := svc.GetConversation(doc, "flow")
+	got, err := svc.GetConversation(context.Background(), doc, "flow")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
@@ -71,10 +72,10 @@ func TestSaveGetConversation_RoundTripAndPerms(t *testing.T) {
 	}
 
 	// Clearing removes it; a subsequent read returns an empty slice, not an error.
-	if err := svc.ClearConversation(doc, "flow"); err != nil {
+	if err := svc.ClearConversation(context.Background(), doc, "flow"); err != nil {
 		t.Fatalf("ClearConversation: %v", err)
 	}
-	if got, err := svc.GetConversation(doc, "flow"); err != nil || len(got) != 0 {
+	if got, err := svc.GetConversation(context.Background(), doc, "flow"); err != nil || len(got) != 0 {
 		t.Errorf("after clear: got %d msgs, err %v", len(got), err)
 	}
 }

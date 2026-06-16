@@ -133,6 +133,34 @@ func TestServeStatic_ImmutableCacheOnHashedAssets(t *testing.T) {
 	}
 }
 
+// TestServeStatic_MissingAssetReturns404 verifies that a missing build artifact
+// under /assets/ returns 404 rather than the SPA index.html. Serving index.html
+// for a .js/.css request returns a text/html body the browser rejects with a
+// strict-MIME error — the symptom when a redeploy changes content hashes while a
+// stale tab requests an old chunk.
+func TestServeStatic_MissingAssetReturns404(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"),
+		[]byte("<html>app</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rt := makeStaticRouter(t, dir)
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/assets/old-hash-DEADBEEF.js", "", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing /assets/* file: expected 404, got %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); strings.Contains(ct, "text/html") {
+		t.Errorf("missing asset must not return HTML, got Content-Type %q", ct)
+	}
+
+	// A non-asset client route still falls back to the SPA index.html.
+	rr2 := doRequestWithAuth(t, rt, http.MethodGet, "/dashboard", "", nil)
+	if rr2.Code != http.StatusOK {
+		t.Errorf("client route fallback: expected 200, got %d", rr2.Code)
+	}
+}
+
 // TestServeStatic_DirectoryListingRefused verifies that requests for a
 // directory without an explicit index file get the SPA fallback rather
 // than a directory listing, which would leak server-side layout.

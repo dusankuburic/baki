@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {flattenBlocks, flattenTreeRows} from './tree'
+import {flattenBlocks, flattenTreeRows, buildBlockLookup} from './tree'
 import type {Block, FlowDocument, Subflow} from '@/types'
 
 // ---- helpers ----
@@ -272,5 +272,34 @@ describe('flattenTreeRows', () => {
         expect(result).toHaveLength(3) // header + loop + child
         expect(result[2].id).toBe('child')
         expect(result[2].depth).toBe(2)
+    })
+})
+
+// ---- buildBlockLookup ----
+
+describe('buildBlockLookup', () => {
+    it('indexes every block (including nested) with its name and subflow name', () => {
+        const child = makeBlock('child')
+        const loop = makeBlock('loop1', 'LOOP', [child])
+        const doc = makeDoc(makeSubflow('sf1', [makeBlock('a'), loop]))
+        const lookup = buildBlockLookup(doc)
+        expect(lookup.size).toBe(3)
+        expect(lookup.get('a')).toEqual({name: 'Block a', subflowName: 'Subflow sf1'})
+        expect(lookup.get('loop1')).toEqual({name: 'Block loop1', subflowName: 'Subflow sf1'})
+        expect(lookup.get('child')).toEqual({name: 'Block child', subflowName: 'Subflow sf1'})
+    })
+
+    it('attributes blocks to their containing subflow', () => {
+        const doc = makeDoc(
+            makeSubflow('sf1', [makeBlock('a')]),
+            makeSubflow('sf2', [makeBlock('b')]),
+        )
+        const lookup = buildBlockLookup(doc)
+        expect(lookup.get('a')?.subflowName).toBe('Subflow sf1')
+        expect(lookup.get('b')?.subflowName).toBe('Subflow sf2')
+    })
+
+    it('returns an empty map for a doc with no blocks', () => {
+        expect(buildBlockLookup(makeDoc()).size).toBe(0)
     })
 })

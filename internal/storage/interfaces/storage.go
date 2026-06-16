@@ -92,6 +92,7 @@ type StorageBackend interface {
 	// Conversation operations
 	SaveConversation(ctx context.Context, flowID, scope string, messages []ChatMessage) error
 	LoadConversation(ctx context.Context, flowID, scope string) ([]ChatMessage, error)
+	DeleteConversation(ctx context.Context, flowID, scope string) error
 
 	// User operations
 	SaveUser(ctx context.Context, user *User) error
@@ -436,14 +437,22 @@ type AppSettings struct {
 	RecentFiles []RecentFile       `json:"recentFiles"`
 }
 
-// ChatMessage represents a chat message
+// ChatMessage represents a chat message. It is kept in field/JSON-tag parity
+// with pad-core/models.ChatMessage (the domain type) so the service-layer bridge
+// (toStorageMessages/toModelMessages) is lossless. Timestamp is an RFC3339 string
+// here; the bridge formats/parses it from the model's time.Time.
 type ChatMessage struct {
-	ID        string
-	Role      string
-	Content   string
-	Timestamp string
-	TokensIn  int
-	TokensOut int
+	ID               string `json:"id"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	Timestamp        string `json:"timestamp"`
+	ContextBlockID   string `json:"contextBlockId,omitempty"`
+	ContextSubflowID string `json:"contextSubflowId,omitempty"`
+	TokensIn         int    `json:"tokensIn,omitempty"`
+	TokensOut        int    `json:"tokensOut,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Model            string `json:"model,omitempty"`
+	FinishReason     string `json:"finishReason,omitempty"`
 }
 
 // Settings types — kept in parity with the matching types in internal/models

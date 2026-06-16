@@ -86,7 +86,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	
 	demo := ai.NewDemoLimiter("")
 	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil, nil)
-	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo, backend)
+	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo, backend, config.ModeLocal)
 	
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()

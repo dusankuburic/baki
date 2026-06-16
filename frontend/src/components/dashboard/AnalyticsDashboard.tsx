@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import clsx from 'clsx'
 import {
   BarChart3, RefreshCw, FolderSearch, Download, AlertTriangle,
@@ -7,10 +7,12 @@ import {
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {createAdapter} from '@/platform/adapters'
+import {isTauri} from '@/platform/guards'
 import {useToast} from '@/components/shared'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {scoreColor} from '@/lib/scoring'
 import {useUIStore} from '@/stores/uiStore'
+import {useFlowStore} from '@/stores/flowStore'
 import type {BatchAnalysis, DashboardStats} from '@/types'
 
 function StatCard({label, value, accent}: {label: string; value: string | number; accent?: string}) {
@@ -58,22 +60,58 @@ function exportBatchCSV(batch: BatchAnalysis) {
 export default function AnalyticsDashboard() {
   const toast = useToast()
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  // Loading a new flow/folder clears the server-side session cache, so re-fetch
+  // when the open document changes to reflect only the current working context.
+  const docId = useFlowStore(s => s.document?.id ?? null)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [batch, setBatch] = useState<BatchAnalysis | null>(null)
   const [batchRunning, setBatchRunning] = useState(false)
+  const reqIdRef = useRef(0)
+  const hasStatsRef = useRef(false)
+  const toastRef = useRef(toast)
+  toastRef.current = toast
 
-  const refresh = useCallback(() => {
-    setLoading(true)
-    setError(null)
+  const refresh = useCallback((background = false) => {
+    // Session analytics aggregate the desktop app's in-process analyzer cache and
+    // read server-local folders — both desktop-only. In web/cloud mode the backend
+    // returns 403 (the data would otherwise span tenants), so skip the fetch; the
+    // component early-returns a notice below. The Home dashboard is the cloud view.
+    if (!isTauri()) return
+    reqIdRef.current++
+    const myReq = reqIdRef.current
+    if (!background) {
+      setLoading(true)
+      setError(null)
+    }
     analysisApi.getDashboard()
-      .then(s => setStats(s))
-      .catch((err) => { logger.warn('Failed to load dashboard stats', err); setError(err instanceof Error ? err.message : 'Failed to load') })
-      .finally(() => setLoading(false))
+      .then(s => {
+        if (myReq !== reqIdRef.current) return
+        setStats(s)
+        hasStatsRef.current = true
+        setError(null)
+      })
+      .catch((err) => {
+        if (myReq !== reqIdRef.current) return
+        logger.warn('Failed to load dashboard stats', err)
+        if (hasStatsRef.current) {
+          toastRef.current.error('Dashboard refresh failed', {
+            description: err instanceof Error ? err.message : 'Unknown error',
+          })
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to load')
+        }
+      })
+      .finally(() => {
+        if (myReq === reqIdRef.current) setLoading(false)
+      })
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+    return () => { reqIdRef.current++ }
+  }, [refresh, docId])
 
   const handleBatch = useCallback(async () => {
     const adapter = createAdapter()
@@ -87,7 +125,8 @@ export default function AnalyticsDashboard() {
     try {
       const b = await analysisApi.batchAnalyze(result)
       setBatch(b)
-      refresh()
+      setError(null)
+      refresh(true)
     } catch (err) {
       toast.error('Batch analysis failed: ' + (err as Error).message)
     } finally {
@@ -108,6 +147,26 @@ export default function AnalyticsDashboard() {
     [batch],
   )
 
+  // Desktop-only view: the session analytics + folder batch features have no
+  // cloud equivalent (the backend gates them). Show a notice and point to Home.
+  if (!isTauri()) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-5">
+        <button
+          onClick={() => setMainPaneView('home')}
+          className="inline-flex items-center gap-1 text-sm text-text-tertiary hover:text-text-secondary transition-colors"
+        >
+          <ArrowLeft size={14} /> Home
+        </button>
+        <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-border-subtle bg-surface-0">
+          <BarChart3 size={22} className="text-text-tertiary" />
+          <span className="text-sm text-text-secondary">Session analytics are a desktop-only view</span>
+          <span className="text-sm text-text-tertiary">Open the Home dashboard for your cloud analytics.</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-5">
       <button
@@ -123,10 +182,11 @@ export default function AnalyticsDashboard() {
           <p className="text-sm text-text-tertiary">Aggregated findings across every flow analyzed this session</p>
         </div>
         <button
-          onClick={refresh}
+          onClick={() => refresh()}
+          disabled={loading}
           title="Refresh"
           aria-label="Refresh dashboard"
-          className="text-text-tertiary hover:text-text-secondary p-1.5 rounded hover:bg-surface-3 transition-colors"
+          className="text-text-tertiary hover:text-text-secondary p-1.5 rounded hover:bg-surface-3 transition-colors disabled:opacity-50"
         >
           <RefreshCw size={14} />
         </button>
@@ -146,7 +206,7 @@ export default function AnalyticsDashboard() {
           <span className="text-sm text-text-secondary">Failed to load dashboard</span>
           <span className="text-sm text-text-tertiary">{error}</span>
           <button
-            onClick={refresh}
+            onClick={() => refresh()}
             className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-surface-2 border border-border-subtle text-text-primary hover:bg-surface-3 transition-colors"
           >
             <RefreshCw size={14} /> Retry

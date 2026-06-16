@@ -98,6 +98,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     useSearchStore.getState().clear()
     useAnalysisStore.getState().setVariableLineage(null)
     useAnalysisStore.getState().setFindingSearch('')
+    // Protect the open flow's report from LRU eviction in the analysis store.
+    useAnalysisStore.getState().setProtectedFlowId(doc?.id ?? null)
 
     if (firstId) {
       useEditorStore.getState().openInGroup(firstId, 0)
@@ -256,6 +258,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     useSearchStore.getState().clear()
     useAnalysisStore.getState().setVariableLineage(null)
     useAnalysisStore.getState().setFindingSearch('')
+    useAnalysisStore.getState().setProtectedFlowId(null)
     useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [100]})
   },
 

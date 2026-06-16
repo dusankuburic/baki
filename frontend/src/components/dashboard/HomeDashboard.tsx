@@ -29,20 +29,34 @@ export default function HomeDashboard() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const setDocument = useFlowStore(s => s.setDocument)
   const activeOrg = useOrgStore(s => s.organisations.find(o => o.id === s.activeOrgId))
+  const activeOrgId = useOrgStore(s => s.activeOrgId)
+  // Loading a new flow/folder resets the desktop session analytics server-side,
+  // so re-fetch when the open document changes to show the fresh (scoped) data.
+  const docId = useFlowStore(s => s.document?.id ?? null)
   const toast = useToast()
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
 
   const loadIdRef = useRef(0)
+  const hasDataRef = useRef(false)
+  const openFlowIdRef = useRef(0)
+  const toastRef = useRef(toast)
+  toastRef.current = toast
 
   const load = useCallback(() => {
     loadIdRef.current++
     const myId = loadIdRef.current
     dashboardApi.getHome()
-      .then(d => { if (myId === loadIdRef.current) { setData(d); setError(null) } })
+      .then(d => { if (myId === loadIdRef.current) { setData(d); hasDataRef.current = true; setError(null) } })
       .catch(e => {
         if (myId !== loadIdRef.current) return
         logger.error('dashboard: load failed', e)
-        setError(e instanceof Error ? e.message : 'Failed to load dashboard')
+        if (hasDataRef.current) {
+          toastRef.current.error('Dashboard refresh failed', {
+            description: e instanceof Error ? e.message : 'Unknown error',
+          })
+        } else {
+          setError(e instanceof Error ? e.message : 'Failed to load dashboard')
+        }
       })
       .finally(() => { if (myId === loadIdRef.current) setLoading(false) })
   }, [])
@@ -54,8 +68,12 @@ export default function HomeDashboard() {
   }, [load])
 
   useEffect(() => {
+    hasDataRef.current = false
+    setLoading(true)
+    setError(null)
     load()
-  }, [load])
+    return () => { loadIdRef.current++ }
+  }, [load, activeOrgId, docId])
 
   // Re-fetch dashboard when analysis completes (isAnalyzing goes true→false).
   const wasAnalyzing = useRef(false)
@@ -67,17 +85,21 @@ export default function HomeDashboard() {
   }, [isAnalyzing, load])
 
   const openFlow = useCallback(async (id: string) => {
+    openFlowIdRef.current++
+    const myGen = openFlowIdRef.current
     try {
       const full = await libraryApi.getContent(id)
+      if (myGen !== openFlowIdRef.current) return
       setDocument(full as FlowDocument)
       useFlowStore.setState({libraryFlowId: id, libraryVersion: 0})
       setMainPaneView('block')
     } catch (e) {
-      toast.error('Failed to open flow', {
+      if (myGen !== openFlowIdRef.current) return
+      toastRef.current.error('Failed to open flow', {
         description: e instanceof Error ? e.message : 'Unknown error',
       })
     }
-  }, [setDocument, setMainPaneView, toast])
+  }, [setDocument, setMainPaneView])
 
   if (loading) {
     return (

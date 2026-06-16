@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { authApi, type AuthUser, type LoginRequest } from '@/api/auth'
 import { registerRefreshCallback, invalidateConfigCache, setSessionToken } from '@/api/client'
+import { decodeJwtPayload } from '@/lib/jwt'
 
 const REFRESH_TOKEN_KEY = 'auth_refresh_token'
 
@@ -26,17 +27,18 @@ interface AuthState {
   clearError: () => void
 }
 
-// isJwtExpired decodes a JWT's `exp` claim and reports whether it is missing or
-// already in the past. Malformed tokens are treated as expired. This lets us
-// skip a doomed /api/auth/refresh call (and its console 401) at startup.
+// isJwtExpired decodes a JWT's `exp` claim and reports whether it is already in
+// the past. This lets us skip a doomed /api/auth/refresh call (and its console
+// 401) at startup. A token we cannot decode is treated as NOT expired: rather
+// than silently discard a possibly-valid session, we let the server's 401 be
+// the arbiter. A decodable JWT that carries no `exp` is unusable, so it counts
+// as expired.
 function isJwtExpired(token: string): boolean {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    if (typeof payload.exp !== 'number') return true
-    return payload.exp * 1000 <= Date.now()
-  } catch {
-    return true
-  }
+  const payload = decodeJwtPayload(token)
+  if (!payload) return false
+  const exp = payload.exp
+  if (typeof exp !== 'number') return true
+  return exp * 1000 <= Date.now()
 }
 
 // The refresh token lives in sessionStorage by default (cleared on tab close).
@@ -175,8 +177,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       clearTokens()
       set({ user: null, accessToken: null, isAuthenticated: false, isLoading: false, error: null })
-      // Reset all domain stores to prevent cross-session data leakage.
-      resetAllStores()
+      // Reset all domain stores + tear down live connections to prevent
+      // cross-session data leakage. Awaited so a caller knows teardown completed.
+      await resetAllStores()
     }
   },
 
@@ -251,25 +254,64 @@ registerRefreshCallback(async () => {
   invalidateConfigCache()
 })
 
-// resetAllStores clears all domain stores to prevent cross-session data
-// leakage when a user logs out. Lazy imports avoid circular dependencies.
-function resetAllStores() {
-  import('@/stores/flowStore').then(m => m.useFlowStore.getState().reset())
-  import('@/stores/chatStore').then(m => {
-    m.useChatStore.setState({
-      threads: [],
-      activeThreadId: null,
-      conversations: new Map(),
-      activeStreamId: null,
-      streamingMessageId: null,
-      streamingText: '',
-      pendingMessage: null,
-    })
-  })
-  import('@/stores/analysisStore').then(m => {
-    m.useAnalysisStore.setState({ reports: new Map(), suppressedFindings: [] })
-  })
-  import('@/stores/orgStore').then(m => {
-    m.useOrgStore.setState({ organisations: [], activeOrgId: null })
-  })
+// resetAllStores clears every domain store and tears down live session side
+// effects (the collaboration WebSocket and the offline sync queue) to prevent
+// cross-session data leakage when a user logs out — important on a shared
+// browser/device where the next user logs in without a full page reload.
+//
+// Invariant (see AGENTS.md "Add a new frontend store"): every store under
+// stores/ must be reset here. (syncStore has no explicit entry — it mirrors the
+// SyncManager queue and is reset transitively by the presenceStore/syncManager
+// teardown below; don't remove that teardown assuming syncStore is covered
+// directly.) Lazy imports avoid circular dependencies; each is guarded so one
+// failure can't abort the rest (or the logout it runs from).
+export async function resetAllStores(): Promise<void> {
+  const guard = (p: Promise<unknown>) => p.catch(() => {})
+  await Promise.all([
+    guard(import('@/stores/flowStore').then(m => m.useFlowStore.getState().reset())),
+    guard(import('@/stores/chatStore').then(m => {
+      m.useChatStore.setState({
+        threads: [],
+        activeThreadId: null,
+        conversations: new Map(),
+        activeStreamId: null,
+        streamingMessageId: null,
+        streamingText: '',
+        pendingMessage: null,
+        selectedProvider: 'claude',
+      })
+    })),
+    guard(import('@/stores/analysisStore').then(m => m.useAnalysisStore.getState().reset())),
+    guard(import('@/stores/orgStore').then(m => {
+      m.useOrgStore.setState({ organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null })
+    })),
+    // Closes the collaboration WebSocket and discards the offline sync queue
+    // (including its localStorage copy) so the next user on a shared device can't
+    // inherit the previous user's pending mutations. reset() must run AFTER
+    // disconnect()→stop() (which re-persists the queue), so chain them rather
+    // than rely on Promise.all ordering.
+    guard(import('@/stores/presenceStore').then(async m => {
+      m.usePresenceStore.getState().disconnect()
+      const { syncManager } = await import('@/services/sync/SyncManager')
+      syncManager.reset()
+    })),
+    // searchStore.results carries flow-content matches — clear them.
+    guard(import('@/stores/searchStore').then(m => m.useSearchStore.getState().clear())),
+    guard(import('@/stores/libraryBrowseStore').then(m => m.useLibraryBrowseStore.getState().reset())),
+    guard(import('@/stores/editorStore').then(m => m.useEditorStore.setState({
+      groups: [{ tabs: [], activeTabId: null }], focusedGroupIndex: 0, groupWidths: [100],
+    }))),
+    // Settings repopulate from the backend on the next login (loadFromBackend).
+    guard(import('@/stores/settingsStore').then(m => m.useSettingsStore.setState({
+      settings: m.defaultSettings, isLoaded: false,
+    }))),
+    // Reset UI chrome and the diff view (activeDiff holds flow content), but keep
+    // resolvedTheme so the login screen doesn't flash before settings reload.
+    guard(import('@/stores/uiStore').then(m => m.useUIStore.setState({
+      sidebarTab: 'explorer', mainPaneView: 'home', inspectorTab: 'details',
+      sidebarCollapsed: false, inspectorCollapsed: false, commandPaletteOpen: false,
+      globalSearchOpen: false, complexityMode: false, settingsOpen: false,
+      variablePanelOpen: false, selectedVariable: null, graphZoom: 1, activeDiff: null,
+    }))),
+  ])
 }

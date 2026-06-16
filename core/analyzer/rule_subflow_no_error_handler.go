@@ -28,14 +28,8 @@ func (r *SubflowNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext)
 		return nil
 	}
 
-	// Locate the subflow this block belongs to.
-	var sf *models.Subflow
-	for i := range ctx.Flow.Subflows {
-		if ctx.Flow.Subflows[i].ID == block.SubflowID {
-			sf = &ctx.Flow.Subflows[i]
-			break
-		}
-	}
+	// Locate the subflow this block belongs to (O(1) via the precomputed index).
+	sf := ctx.SubflowByID[block.SubflowID]
 	if sf == nil {
 		return nil
 	}

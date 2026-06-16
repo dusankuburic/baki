@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, waitFor} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useOrgStore} from '@/stores/orgStore'
 import HomeDashboard from './HomeDashboard'
 
 const getHome = vi.fn()
@@ -56,7 +57,8 @@ function renderHome() {
 beforeEach(() => {
   vi.clearAllMocks()
   getHome.mockResolvedValue(emptyData)
-  useAnalysisStore.setState({isAnalyzing: false})
+  useAnalysisStore.getState().reset()
+  useOrgStore.setState({organisations: [], activeOrgId: null})
 })
 
 describe('HomeDashboard', () => {
@@ -110,5 +112,42 @@ describe('HomeDashboard', () => {
 
     useAnalysisStore.setState({isAnalyzing: false})
     await waitFor(() => expect(screen.queryByText('Analyzing…')).not.toBeInTheDocument())
+  })
+
+  it('re-fetches when activeOrgId changes', async () => {
+    renderHome()
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(1))
+
+    useOrgStore.setState({activeOrgId: 'org-2'})
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows error UI when org-switch fetch fails after prior success', async () => {
+    getHome.mockResolvedValueOnce(emptyData)
+    renderHome()
+    await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
+
+    getHome.mockRejectedValueOnce(new Error('org B down'))
+    useOrgStore.setState({activeOrgId: 'org-2'})
+
+    expect(await screen.findByText(/Couldn't load your dashboard/)).toBeInTheDocument()
+    expect(screen.getByText(/org B down/)).toBeInTheDocument()
+    expect(screen.getByText('Retry')).toBeInTheDocument()
+  })
+
+  it('shows toast (not error UI) when background refresh fails after data loaded', async () => {
+    renderHome()
+    await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
+
+    getHome.mockRejectedValueOnce(new Error('blip'))
+    useAnalysisStore.setState({isAnalyzing: true})
+    await new Promise(r => setTimeout(r, 10))
+    useAnalysisStore.setState({isAnalyzing: false})
+
+    await waitFor(() => expect(getHome).toHaveBeenCalledTimes(2))
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(screen.getByText(/Tester/)).toBeInTheDocument()
+    expect(screen.queryByText(/Couldn't load your dashboard/)).not.toBeInTheDocument()
   })
 })

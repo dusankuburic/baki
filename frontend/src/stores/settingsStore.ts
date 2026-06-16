@@ -19,7 +19,7 @@ export function onSettingsLoaded(fn: SettingsListener): () => void {
   }
 }
 
-const defaultSettings: AppSettings = {
+export const defaultSettings: AppSettings = {
   version: 1,
   general: {
     firstRunCompleted: false,

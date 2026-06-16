@@ -17,11 +17,20 @@ type FakeBackend struct {
 	Flows    map[string]*interfaces.FlowDocument
 	Settings *interfaces.AppSettings
 	PingErr  error
+	// Conversations stores chat history keyed by scope+"\x00"+flowID so cloud-mode
+	// conversation persistence can be round-tripped in tests. nil-safe: the methods
+	// below tolerate a zero-valued FakeBackend built with a struct literal.
+	Conversations map[string][]interfaces.ChatMessage
 }
 
 func NewFakeBackend() *FakeBackend {
-	return &FakeBackend{Flows: make(map[string]*interfaces.FlowDocument)}
+	return &FakeBackend{
+		Flows:         make(map[string]*interfaces.FlowDocument),
+		Conversations: make(map[string][]interfaces.ChatMessage),
+	}
 }
+
+func convKey(flowID, scope string) string { return scope + "\x00" + flowID }
 
 func (m *FakeBackend) Ping(_ context.Context) error { return m.PingErr }
 func (m *FakeBackend) Close() error                 { return nil }
@@ -112,12 +121,21 @@ func (m *FakeBackend) LoadOrgSettings(_ context.Context, _ string) (*interfaces.
 	return m.LoadSettings(context.TODO())
 }
 
-func (m *FakeBackend) SaveConversation(_ context.Context, _, _ string, _ []interfaces.ChatMessage) error {
+func (m *FakeBackend) SaveConversation(_ context.Context, flowID, scope string, messages []interfaces.ChatMessage) error {
+	if m.Conversations == nil {
+		m.Conversations = make(map[string][]interfaces.ChatMessage)
+	}
+	m.Conversations[convKey(flowID, scope)] = messages
 	return nil
 }
 
-func (m *FakeBackend) LoadConversation(_ context.Context, _, _ string) ([]interfaces.ChatMessage, error) {
-	return nil, nil
+func (m *FakeBackend) LoadConversation(_ context.Context, flowID, scope string) ([]interfaces.ChatMessage, error) {
+	return m.Conversations[convKey(flowID, scope)], nil
+}
+
+func (m *FakeBackend) DeleteConversation(_ context.Context, flowID, scope string) error {
+	delete(m.Conversations, convKey(flowID, scope))
+	return nil
 }
 
 // ---- User operations ----

@@ -85,23 +85,11 @@ func isSystemVariable(vname string) bool {
 }
 
 func isFirstUsage(vname string, block *models.Block, ctx *RuleContext) bool {
-	// Find the reader block with the lowest LineNumber. LineNumber is globally
-	// unique within a document so this gives correct document-order ordering
-	// even across nested sibling lists. ReadersByVar is pre-indexed from
-	// block.Variables, so this is O(readers) instead of an O(blocks) scan.
-	lowestLine := -1
-	lowestID := ""
-	for _, id := range ctx.ReadersByVar[vname] {
-		b := ctx.AllBlocks[id]
-		if b == nil {
-			continue
-		}
-		if lowestLine < 0 || b.LineNumber < lowestLine {
-			lowestLine = b.LineNumber
-			lowestID = id
-		}
-	}
-	return lowestID == block.ID
+	// The earliest-reading block (lowest LineNumber) is precomputed once in
+	// buildContext, so this is O(1). Previously this rescanned every reader of
+	// the variable on each block, making the rule O(readers²) per variable —
+	// the dominant cost of analysis on large flows.
+	return ctx.FirstReaderByVar[vname] == block.ID
 }
 
 func isAssignedAnywhere(vname string, ctx *RuleContext) bool {

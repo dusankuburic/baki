@@ -244,3 +244,26 @@ func TestRuleProfiling(t *testing.T) {
 		}
 	})
 }
+
+func TestAnalysisCache_Clear(t *testing.T) {
+	cache := NewAnalysisCache(10)
+	cache.Put("f1", "h1", &models.AnalysisReport{FlowID: "f1"})
+	cache.Put("f2", "h1", &models.AnalysisReport{FlowID: "f2"})
+	if len(cache.AllReports()) != 2 {
+		t.Fatalf("setup: expected 2 reports, got %d", len(cache.AllReports()))
+	}
+
+	cache.Clear()
+
+	if got := len(cache.AllReports()); got != 0 {
+		t.Errorf("after Clear: expected 0 reports, got %d", got)
+	}
+	if cache.Get("f1", "h1") != nil {
+		t.Error("after Clear: expected cache miss for f1")
+	}
+	// Cache stays usable after clearing.
+	cache.Put("f3", "h1", &models.AnalysisReport{FlowID: "f3"})
+	if cache.Get("f3", "h1") == nil {
+		t.Error("expected f3 present after re-Put following Clear")
+	}
+}

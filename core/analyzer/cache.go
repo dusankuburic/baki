@@ -118,6 +118,16 @@ func (c *AnalysisCache) Invalidate(flowID string) {
 	}
 }
 
+// Clear removes every cached report. Used to reset the desktop session analytics
+// when the user loads a new file or folder, so the dashboards (which aggregate
+// AllReports) reflect only the flows analyzed in the current working context.
+func (c *AnalysisCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[string]*CachedReport)
+	c.seq = 0
+}
+
 func (c *AnalysisCache) AllReports() []*models.AnalysisReport {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

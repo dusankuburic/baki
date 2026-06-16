@@ -11,6 +11,7 @@ import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
 import AnalysisDiffView from './AnalysisDiffView'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
+import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
 import type {AnalysisDiff, Finding, Severity, AnalysisReport} from '@/types'
 import clsx from 'clsx'
 
@@ -36,7 +37,7 @@ export default function FindingsTab() {
   const findingSearch = useAnalysisStore(s => s.findingSearch)
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
-  const suppressedFindings = useAnalysisStore(s => s.suppressedFindings)
+  const suppressedIds = useAnalysisStore(s => s.suppressedIds)
   const toast = useToast()
   const [diff, setDiff] = useState<AnalysisDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
@@ -49,25 +50,32 @@ export default function FindingsTab() {
     setDedupGroups(null)
   }, [doc?.id, report?.generatedAt])
 
+  // Build a blockId → label index once per document so the findings list can
+  // resolve each row's block name in O(1), instead of walking the whole block
+  // tree per finding (which made a large report's render O(findings × blocks)).
+  const blockLookup = useMemo<BlockLookup>(() => doc ? buildBlockLookup(doc) : new Map(), [doc])
+
   const findings = useMemo(() => {
     if (!report) return []
-    const isSuppressed = (id: string) => suppressedFindings.some(s => s.findingId === id)
     const q = findingSearch.toLowerCase()
     return report.findings.filter(f => {
       if (dedupGroups && !dedupGroups.has(f.id)) return false
       if (!severityFilter.has(f.severity)) return false
       if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
-      if (isSuppressed(f.id)) return false
+      if (suppressedIds.has(f.id)) return false
       if (q && !f.title.toLowerCase().includes(q) && !f.description.toLowerCase().includes(q) && !f.ruleId.toLowerCase().includes(q)) return false
       return true
     })
-  }, [report, severityFilter, categoryFilter, findingSearch, suppressedFindings, dedupGroups])
+  }, [report, severityFilter, categoryFilter, findingSearch, suppressedIds, dedupGroups])
 
   const suppressedCount = useMemo(() => {
     if (!report) return 0
-    const isSuppressed = (id: string) => suppressedFindings.some(s => s.findingId === id)
-    return report.findings.filter(f => isSuppressed(f.id)).length
-  }, [report, suppressedFindings])
+    let count = 0
+    for (const f of report.findings) {
+      if (suppressedIds.has(f.id)) count++
+    }
+    return count
+  }, [report, suppressedIds])
 
   const handleAnalyze = useCallback(async () => {
     if (!doc) return
@@ -323,7 +331,7 @@ export default function FindingsTab() {
         </div>
       )}
       {diff ? (
-        <AnalysisDiffView diff={diff} doc={doc} onBack={() => setDiff(null)} onFixWithAI={handleFixWithAI} />
+        <AnalysisDiffView diff={diff} blockLookup={blockLookup} onBack={() => setDiff(null)} onFixWithAI={handleFixWithAI} />
       ) : (
         <>
           {report!.findings.length > 0 && (
@@ -352,7 +360,7 @@ export default function FindingsTab() {
               </div>
             )
           ) : (
-            <FindingsList findings={findings} doc={doc} onFixWithAI={handleFixWithAI} />
+            <FindingsList findings={findings} blockLookup={blockLookup} onFixWithAI={handleFixWithAI} />
           )}
         </>
       )}

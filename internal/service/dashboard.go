@@ -156,7 +156,9 @@ func (s *DashboardService) buildLocal() *models.DashboardHomeData {
 	if s.analysis == nil {
 		return out
 	}
-	stats := s.analysis.ComputeDashboard()
+	// Single cache snapshot — ensures all dashboard sections see the same data
+	// and deduplicates flows re-analyzed after edits or settings changes.
+	stats, reports := s.analysis.DashboardData()
 	out.Overview = models.DashboardOverview{
 		AvgHealthScore:  int(math.Round(stats.AvgHealthScore)),
 		HealthAvailable: stats.TotalFlowsAnalyzed > 0,
@@ -174,9 +176,9 @@ func (s *DashboardService) buildLocal() *models.DashboardHomeData {
 	// appear first.
 	out.RuleFreq = sortedRuleFreq(stats.FindingsByRule)
 
-	// Per-flow complexity scatter — derived from cached analysis reports so
-	// the card shows real data in desktop mode (not just cloud).
-	for _, r := range s.analysis.CachedReports() {
+	// Per-flow complexity scatter — derived from the SAME deduped snapshot
+	// that fed the stats above, so the two sections never disagree.
+	for _, r := range reports {
 		blockCount := 0
 		healthScore := 0
 		if r.Metrics != nil {

@@ -52,16 +52,12 @@ func (r *ResourceLeakRule) Check(block *models.Block, ctx *RuleContext) []models
 		return nil
 	}
 
-	// Consider the resource "closed" if any block in the flow:
-	//   (a) has a rawType matching the close prefix, AND
-	//   (b) references the output variable (either in Variables or in a property value).
-	for _, b := range ctx.AllBlocks {
-		if !strings.HasPrefix(b.RawType, matched.closePrefix) {
-			continue
-		}
-		if blockReferencesVar(b, outputVar) {
-			return nil
-		}
+	// The resource is "closed" if some close-action block references the output
+	// variable. ClosedResourceVars precomputes, per close prefix, the set of all
+	// variables referenced by matching blocks (see buildClosedResourceVars), so
+	// this is O(1) instead of an O(blocks) scan per open action.
+	if closed := ctx.ClosedResourceVars[matched.closePrefix]; closed[outputVar] {
+		return nil
 	}
 
 	return []models.Finding{{
@@ -79,7 +75,8 @@ func (r *ResourceLeakRule) Check(block *models.Block, ctx *RuleContext) []models
 }
 
 // blockReferencesVar returns true if the block uses varName in its Variables list
-// or as a bare value / %varName% in any property.
+// or as a bare value / %varName% in any property. addReferencedVars below is the
+// set-building inverse of this predicate, used to precompute closed-resource vars.
 func blockReferencesVar(b *models.Block, varName string) bool {
 	for _, v := range b.Variables {
 		if v == varName {
@@ -93,4 +90,44 @@ func blockReferencesVar(b *models.Block, varName string) bool {
 		}
 	}
 	return false
+}
+
+// addReferencedVars records every variable that block b references into set,
+// mirroring blockReferencesVar exactly: a var counts as referenced if it appears
+// in b.Variables, or a property value equals the bare name, or a property value
+// equals "%name%". Adding the raw value covers the bare-name case; stripping the
+// %…% wrapper covers the wrapped case.
+func addReferencedVars(set map[string]bool, b *models.Block) {
+	for _, v := range b.Variables {
+		set[v] = true
+	}
+	for _, val := range b.Properties {
+		set[val] = true
+		if len(val) >= 2 && val[0] == '%' && val[len(val)-1] == '%' {
+			set[val[1:len(val)-1]] = true
+		}
+	}
+}
+
+// buildClosedResourceVars indexes, per resource close-action prefix, the set of
+// variables referenced by any block performing that close. The resource-leak
+// rule then resolves "is this handle closed anywhere?" with an O(1) set lookup
+// instead of scanning every block for each open action (was O(opens·blocks)).
+func buildClosedResourceVars(ctx *RuleContext) map[string]map[string]bool {
+	out := make(map[string]map[string]bool)
+	for _, b := range ctx.AllBlocks {
+		for i := range resourcePairs {
+			cp := resourcePairs[i].closePrefix
+			if !strings.HasPrefix(b.RawType, cp) {
+				continue
+			}
+			set := out[cp]
+			if set == nil {
+				set = make(map[string]bool)
+				out[cp] = set
+			}
+			addReferencedVars(set, b)
+		}
+	}
+	return out
 }

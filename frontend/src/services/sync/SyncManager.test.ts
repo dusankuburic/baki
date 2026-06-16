@@ -154,3 +154,34 @@ describe('stop()', () => {
     expect(data.queue).toHaveLength(1)
   })
 })
+
+describe('reset()', () => {
+  it('clears the in-memory queue AND every persisted per-flow queue', () => {
+    // The active flow persists its own queue...
+    syncManager.start('flow-a')
+    syncManager.enqueue({ type: 'block.update' })
+    expect(syncManager.getQueue()).toHaveLength(1)
+    expect(localStorage.getItem('baki-sync-queue-flow-a')).not.toBeNull()
+    // ...and an earlier flow left an orphaned persisted queue behind.
+    localStorage.setItem('baki-sync-queue-flow-b', JSON.stringify({ queue: [], counter: 0 }))
+
+    syncManager.reset()
+
+    expect(syncManager.getQueue()).toHaveLength(0)
+    // Both keys are gone — reset must not leave the previous user's ops behind
+    // on a shared device, including flows other than the active one.
+    expect(localStorage.getItem('baki-sync-queue-flow-a')).toBeNull()
+    expect(localStorage.getItem('baki-sync-queue-flow-b')).toBeNull()
+  })
+
+  it('only removes baki-sync-queue-* keys, leaving unrelated storage intact', () => {
+    syncManager.start('flow-a')
+    syncManager.enqueue({ type: 'block.update' })
+    localStorage.setItem('unrelated-key', 'keep-me')
+
+    syncManager.reset()
+
+    expect(localStorage.getItem('baki-sync-queue-flow-a')).toBeNull()
+    expect(localStorage.getItem('unrelated-key')).toBe('keep-me')
+  })
+})

@@ -32,6 +32,29 @@ type RuleContext struct {
 	// instead of a full AllBlocks scan per variable (was O(blocks²·vars)).
 	WritersByVar map[string][]string
 	ReadersByVar map[string][]string
+	// FirstReaderByVar maps a variable name to the ID of its earliest-reading
+	// block (lowest LineNumber). Precomputed once from ReadersByVar so the
+	// uninitialized-variable rule's "is this the first usage?" check is O(1)
+	// per block instead of rescanning every reader — that rescan made the rule
+	// O(readers²) per variable and dominated analysis time on large flows.
+	FirstReaderByVar map[string]string
+	// LabelByName maps a lowercased label name to its (document-order first)
+	// LABEL block. Precomputed so the goto-antipattern rule resolves a jump
+	// target in O(1) instead of scanning every block per GOTO (was O(gotos·blocks)).
+	LabelByName map[string]*models.Block
+	// ClosedResourceVars maps a resource "close" action prefix to the set of
+	// variables referenced by any block performing that close. Precomputed so the
+	// resource-leak rule checks "is this handle closed anywhere?" in O(1) instead
+	// of scanning every block per open action (was O(opens·blocks)).
+	ClosedResourceVars map[string]map[string]bool
+	// SubflowByID / SubflowByName resolve a subflow in O(1). Precomputed so the
+	// subflow rules (large-subflow, subflow-no-error-handler resolve by ID;
+	// subflow-mismatch resolves a CALL target by name) don't rescan every subflow
+	// per invocation — that scan made those rules O(subflows²) / O(calls·subflows).
+	// On duplicate names the first subflow in document order wins, matching the
+	// previous inline scans which kept the first match and broke.
+	SubflowByID   map[string]*models.Subflow
+	SubflowByName map[string]*models.Subflow
 	// sigCache memoizes block content signatures (see blockSig) so the
 	// duplicate-action rule hashes each block at most once instead of O(run²)
 	// times. Safe as a plain map: the analysis walk is single-threaded.
@@ -80,6 +103,45 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 	for i := range flow.Subflows {
 		sf := &flow.Subflows[i]
 		collectBlocks(ctx, sf.Blocks, "", sf.ID, 0)
+	}
+
+	// Precompute the earliest-reading block per variable in a single pass over
+	// ReadersByVar (O(total reads)). This replaces the per-block reader rescan
+	// in the uninitialized-variable rule, which was O(readers²) per variable.
+	// The tie-break is identical to the previous inline scan: lowest LineNumber
+	// wins; on equal lines the first ID in ReadersByVar order is kept.
+	ctx.FirstReaderByVar = make(map[string]string, len(ctx.ReadersByVar))
+	for vname, ids := range ctx.ReadersByVar {
+		lowestLine := -1
+		lowestID := ""
+		for _, id := range ids {
+			b := ctx.AllBlocks[id]
+			if b == nil {
+				continue
+			}
+			if lowestLine < 0 || b.LineNumber < lowestLine {
+				lowestLine = b.LineNumber
+				lowestID = id
+			}
+		}
+		ctx.FirstReaderByVar[vname] = lowestID
+	}
+
+	// Rule-specific lookups, each built in one O(blocks) pass to replace a
+	// per-block full scan inside the corresponding rule (see field docs).
+	ctx.LabelByName = buildLabelIndex(ctx)
+	ctx.ClosedResourceVars = buildClosedResourceVars(ctx)
+
+	// Index subflows by ID and name in a single pass (see field docs). First
+	// match wins on duplicate names, preserving the prior inline scans' semantics.
+	ctx.SubflowByID = make(map[string]*models.Subflow, len(flow.Subflows))
+	ctx.SubflowByName = make(map[string]*models.Subflow, len(flow.Subflows))
+	for i := range flow.Subflows {
+		sf := &flow.Subflows[i]
+		ctx.SubflowByID[sf.ID] = sf
+		if _, ok := ctx.SubflowByName[sf.Name]; !ok {
+			ctx.SubflowByName[sf.Name] = sf
+		}
 	}
 
 	return ctx

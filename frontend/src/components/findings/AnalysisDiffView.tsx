@@ -1,12 +1,13 @@
 import {useState} from 'react'
 import clsx from 'clsx'
 import {ChevronRight, GitCompareArrows, PlusCircle, CheckCircle2, MinusCircle, ArrowLeft} from 'lucide-react'
-import type {AnalysisDiff, Finding, FlowDocument} from '@/types'
+import type {AnalysisDiff, Finding} from '@/types'
+import type {BlockLookup} from '@/lib/tree'
 import FindingCard from './FindingCard'
 
 interface Props {
   diff: AnalysisDiff
-  doc: FlowDocument
+  blockLookup: BlockLookup
   onBack: () => void
   onFixWithAI?: (finding: Finding) => void
 }
@@ -21,7 +22,7 @@ interface SectionDef {
   defaultOpen: boolean
 }
 
-function DiffSection({def, doc, onFixWithAI}: {def: SectionDef; doc: FlowDocument; onFixWithAI?: (f: Finding) => void}) {
+function DiffSection({def, blockLookup, onFixWithAI}: {def: SectionDef; blockLookup: BlockLookup; onFixWithAI?: (f: Finding) => void}) {
   const [open, setOpen] = useState(def.defaultOpen)
   const Icon = def.icon
 
@@ -45,7 +46,7 @@ function DiffSection({def, doc, onFixWithAI}: {def: SectionDef; doc: FlowDocumen
         <div className="px-9 pb-2.5 text-2xs text-text-tertiary">None</div>
       )}
       {open && def.findings.map(f => (
-        <FindingCard key={`${def.key}-${f.id}`} finding={f} doc={doc} onFixWithAI={def.key !== 'removed' ? onFixWithAI : undefined} />
+        <FindingCard key={`${def.key}-${f.id}`} finding={f} blockLookup={blockLookup} onFixWithAI={def.key !== 'removed' ? onFixWithAI : undefined} />
       ))}
     </div>
   )
@@ -53,7 +54,7 @@ function DiffSection({def, doc, onFixWithAI}: {def: SectionDef; doc: FlowDocumen
 
 // AnalysisDiffView shows the findings-level delta between the previous and
 // current analysis run: what's new, what got fixed, what persists.
-export default function AnalysisDiffView({diff, doc, onBack, onFixWithAI}: Props) {
+export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI}: Props) {
   const sections: SectionDef[] = [
     {
       key: 'added',
@@ -112,7 +113,7 @@ export default function AnalysisDiffView({diff, doc, onBack, onFixWithAI}: Props
       ) : (
         <div>
           {sections.map(s => (
-            <DiffSection key={s.key} def={s} doc={doc} onFixWithAI={onFixWithAI} />
+            <DiffSection key={s.key} def={s} blockLookup={blockLookup} onFixWithAI={onFixWithAI} />
           ))}
         </div>
       )}

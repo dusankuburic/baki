@@ -18,13 +18,7 @@ function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
 }
 
 beforeEach(() => {
-    useAnalysisStore.setState({
-        reports: new Map(),
-        suppressedFindings: [],
-        severityFilter: new Set(['error', 'warning', 'info']),
-        categoryFilter: new Set(['Security', 'Reliability', 'Performance', 'Style', 'Logic']),
-        findingSearch: '',
-    })
+    useAnalysisStore.getState().reset()
 })
 
 describe('suppression', () => {
@@ -95,5 +89,66 @@ describe('findingsForBlock', () => {
         const got = useAnalysisStore.getState().findingsForBlock('doc1', 'b1')
         expect(got.map(f => f.id)).toEqual(['f1', 'f3'])
         expect(useAnalysisStore.getState().findingsForBlock('missing', 'b1')).toEqual([])
+    })
+})
+
+describe('setReport eviction', () => {
+    function makeReport(flowId: string): AnalysisReport {
+        return {flowId, findings: []} as unknown as AnalysisReport
+    }
+
+    it('evicts the oldest entry beyond MAX_REPORTS', () => {
+        const store = useAnalysisStore.getState()
+        for (let i = 0; i < 20; i++) {
+            store.setReport(`flow-${i}`, makeReport(`flow-${i}`))
+        }
+        expect(useAnalysisStore.getState().reports.size).toBe(20)
+        store.setReport('flow-20', makeReport('flow-20'))
+        expect(useAnalysisStore.getState().reports.size).toBe(20)
+        expect(useAnalysisStore.getState().reports.has('flow-0')).toBe(false)
+        expect(useAnalysisStore.getState().reports.has('flow-20')).toBe(true)
+    })
+
+    it('never evicts the protectedFlowId', () => {
+        const store = useAnalysisStore.getState()
+        store.setProtectedFlowId('flow-0')
+        for (let i = 0; i < 21; i++) {
+            store.setReport(`flow-${i}`, makeReport(`flow-${i}`))
+        }
+        expect(useAnalysisStore.getState().reports.size).toBe(20)
+        expect(useAnalysisStore.getState().reports.has('flow-0')).toBe(true)
+        expect(useAnalysisStore.getState().reports.has('flow-1')).toBe(false)
+    })
+})
+
+describe('reset', () => {
+    it('clears every field back to defaults', () => {
+        const store = useAnalysisStore.getState()
+        store.setReport('doc1', {flowId: 'doc1', findings: []} as unknown as AnalysisReport)
+        store.suppressFinding(makeFinding('f1'), 'noise')
+        store.setAnalyzing(true)
+        store.beginAnalyzing()
+        store.setProgress({current: 5, total: 10, ruleName: 'test'})
+        store.setVariableLineage({} as never)
+        store.setFindingSearch('query')
+        store.toggleSeverityFilter('error')
+        store.setProtectedFlowId('doc1')
+
+        useAnalysisStore.getState().reset()
+
+        const s = useAnalysisStore.getState()
+        expect(s.reports.size).toBe(0)
+        expect(s.findingsByBlock.size).toBe(0)
+        expect(s.suppressedFindings).toHaveLength(0)
+        expect(s.suppressedIds.size).toBe(0)
+        expect(s.isAnalyzing).toBe(false)
+        expect(s.analyzingGen).toBe(0)
+        expect(s.progress).toEqual({current: 0, total: 0, ruleName: ''})
+        expect(s.variableLineage).toBeNull()
+        expect(s.findingSearch).toBe('')
+        expect(s.protectedFlowId).toBeNull()
+        expect(s.severityFilter.has('error')).toBe(true)
+        expect(s.severityFilter.has('warning')).toBe(true)
+        expect(s.severityFilter.has('info')).toBe(true)
     })
 })

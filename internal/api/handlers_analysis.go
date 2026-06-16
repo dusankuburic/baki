@@ -231,6 +231,13 @@ func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Request) {
+	// Desktop-only: this reads .txt files from a server-side folder path. In cloud
+	// mode it would be an authenticated arbitrary-directory read (LFI), so gate it
+	// like the other filesystem endpoints in handlers_flow.go.
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("batch folder analysis is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
 	var req struct {
 		FolderPath string `json:"folderPath"`
 	}
@@ -358,6 +365,13 @@ func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.R
 }
 
 func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
+	// Desktop-only: ComputeDashboard aggregates the process-global analyzer cache,
+	// which in cloud mode holds every tenant's analyzed flows — i.e. a cross-tenant
+	// aggregate leak. Cloud clients use the owner-scoped /api/dashboard/home instead.
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("session analytics are not available in cloud mode; use the home dashboard"), http.StatusForbidden)
+		return
+	}
 	result := h.analysisSvc.ComputeDashboard()
 	render.JSON(w, result)
 }

@@ -1,9 +1,9 @@
 import React, {useState, useCallback} from 'react'
 import clsx from 'clsx'
-import type {Finding, FlowDocument} from '@/types'
+import type {Finding} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {findBlockInDoc} from '@/lib/tree'
+import type {BlockLookup} from '@/lib/tree'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {categoryBadgeClass} from '@/lib/findingsColors'
@@ -11,11 +11,11 @@ import {ArrowRight, Sparkles, EyeOff, Wrench, ChevronDown, GitBranch} from 'luci
 
 interface Props {
   finding: Finding
-  doc: FlowDocument
+  blockLookup: BlockLookup
   onFixWithAI?: (finding: Finding) => void
 }
 
-function FindingCard({finding, doc, onFixWithAI}: Props) {
+function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const suppressFinding = useAnalysisStore(s => s.suppressFinding)
@@ -52,8 +52,8 @@ function FindingCard({finding, doc, onFixWithAI}: Props) {
     }
   }, [showRelated, related, finding.id, finding.blockId])
 
-  const loc = findBlockInDoc(doc, finding.blockId)
-  const blockLabel = loc?.block.name ?? finding.blockId.slice(0, 8)
+  const loc = blockLookup.get(finding.blockId)
+  const blockLabel = loc?.name ?? finding.blockId.slice(0, 8)
   const subflowLabel = loc?.subflowName
 
   return (

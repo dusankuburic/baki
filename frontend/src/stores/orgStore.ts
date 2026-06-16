@@ -71,12 +71,9 @@ export const useOrgStore = create<OrgState>()(persist((set, get) => ({
   setActiveOrg: (id) => {
     if (get().activeOrgId === id) return
     set({ activeOrgId: id })
-    // Clear all flow-scoped data from the previous org context so the user
-    // doesn't see stale documents, chats, analysis, or search results.
     useFlowStore.getState().reset()
     useSearchStore.getState().clear()
-    useAnalysisStore.getState().setVariableLineage(null)
-    useAnalysisStore.getState().setFindingSearch('')
+    useAnalysisStore.getState().reset()
     useChatStore.setState({ threads: [], activeThreadId: null, conversations: new Map() })
   },
 

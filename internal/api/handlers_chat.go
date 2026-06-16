@@ -122,7 +122,7 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	conv, err := h.chatSvc.GetConversation(doc, req.Provider)
+	conv, err := h.chatSvc.GetConversation(r.Context(), doc, req.Provider)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -149,7 +149,7 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := h.chatSvc.SaveConversation(doc, req.Provider, req.Messages); err != nil {
+	if err := h.chatSvc.SaveConversation(r.Context(), doc, req.Provider, req.Messages); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -171,7 +171,7 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.chatSvc.ClearConversation(doc, req.Provider); err != nil {
+	if err := h.chatSvc.ClearConversation(r.Context(), doc, req.Provider); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -198,7 +198,7 @@ func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := h.chatSvc.ExportConversation(doc, req.Provider, req.Path); err != nil {
+	if err := h.chatSvc.ExportConversation(r.Context(), doc, req.Provider, req.Path); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

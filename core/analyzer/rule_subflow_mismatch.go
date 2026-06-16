@@ -24,13 +24,7 @@ func (r *SubflowMismatchRule) Check(block *models.Block, ctx *RuleContext) []mod
 		return nil
 	}
 
-	var target *models.Subflow
-	for i := range ctx.Flow.Subflows {
-		if ctx.Flow.Subflows[i].Name == targetName {
-			target = &ctx.Flow.Subflows[i]
-			break
-		}
-	}
+	target := ctx.SubflowByName[targetName]
 	if target == nil {
 		return nil
 	}

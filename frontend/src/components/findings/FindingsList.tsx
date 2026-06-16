@@ -1,14 +1,15 @@
 import {useState, useMemo} from 'react'
+import {Virtuoso} from 'react-virtuoso'
 import {ChevronRight, EyeOff} from 'lucide-react'
 import clsx from 'clsx'
 import type {Finding, Severity} from '@/types'
-import type {FlowDocument} from '@/types'
+import type {BlockLookup} from '@/lib/tree'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import FindingCard from './FindingCard'
 
 interface Props {
   findings: Finding[]
-  doc: FlowDocument
+  blockLookup: BlockLookup
   onFixWithAI?: (finding: Finding) => void
 }
 
@@ -20,6 +21,15 @@ interface RuleGroup {
   suggestion: string
   findings: Finding[]
 }
+
+// A flattened render row: each rule group contributes one header row, followed
+// by one row per finding when expanded. Flattening lets the whole list render
+// through a single virtualizer (react-virtuoso) so only the visible rows mount —
+// large flows can produce tens of thousands of findings, and mounting them all
+// froze the Findings tab on every open.
+type Row =
+  | {kind: 'header'; group: RuleGroup; collapsed: boolean; groupEnd: boolean}
+  | {kind: 'card'; group: RuleGroup; finding: Finding; groupEnd: boolean}
 
 function groupByRule(findings: Finding[]): RuleGroup[] {
   const map = new Map<string, RuleGroup>()
@@ -42,11 +52,34 @@ function groupByRule(findings: Finding[]): RuleGroup[] {
   return Array.from(map.values()).sort((a, b) => order[a.severity] - order[b.severity])
 }
 
-export default function FindingsList({findings, doc, onFixWithAI}: Props) {
+const sevColor: Record<Severity, string> = {
+  error: 'border-l-red-500',
+  warning: 'border-l-amber-500',
+  info: 'border-l-blue-500',
+}
+
+export default function FindingsList({findings, blockLookup, onFixWithAI}: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const suppressMany = useAnalysisStore(s => s.suppressMany)
 
   const groups = useMemo(() => groupByRule(findings), [findings])
+
+  // Flatten groups → header/card rows for the virtualizer. A collapsed group
+  // contributes only its header; groupEnd marks the last visible row of a group
+  // so it carries the bottom divider (the old per-group wrapper did this).
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = []
+    for (const group of groups) {
+      const isCollapsed = collapsed.has(group.ruleId)
+      out.push({kind: 'header', group, collapsed: isCollapsed, groupEnd: isCollapsed})
+      if (!isCollapsed) {
+        group.findings.forEach((finding, i) => {
+          out.push({kind: 'card', group, finding, groupEnd: i === group.findings.length - 1})
+        })
+      }
+    }
+    return out
+  }, [groups, collapsed])
 
   const toggle = (ruleId: string) => {
     setCollapsed(prev => {
@@ -57,63 +90,61 @@ export default function FindingsList({findings, doc, onFixWithAI}: Props) {
     })
   }
 
-  const sevColor: Record<Severity, string> = {
-    error: 'border-l-red-500',
-    warning: 'border-l-amber-500',
-    info: 'border-l-blue-500',
-  }
-
   return (
-    <div className="flex-1 overflow-y-auto">
-      {groups.map(group => {
-        const isCollapsed = collapsed.has(group.ruleId)
-        return (
-          <div key={group.ruleId} className={clsx('border-b border-border-subtle', sevColor[group.severity], 'border-l-2')}>
-            <div className="w-full px-3 py-2.5 flex items-start gap-2 hover:bg-surface-2 transition-colors group/header">
-              <button
-                onClick={() => toggle(group.ruleId)}
-                aria-expanded={!isCollapsed}
-                className="flex-1 flex items-start gap-2 text-left min-w-0"
-              >
-                <ChevronRight
-                  size={14}
-                  className={clsx(
-                    'mt-0.5 shrink-0 text-text-tertiary transition-transform duration-fast',
-                    !isCollapsed && 'rotate-90'
-                  )}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-text-primary truncate">{group.title}</span>
-                    <span className="text-2xs text-text-tertiary shrink-0">{group.findings.length}×</span>
-                  </div>
-                  {!isCollapsed && (
-                    <p className="text-2xs text-text-secondary mt-1 leading-relaxed">{group.description}</p>
-                  )}
+    <div className="flex-1 min-h-0">
+      <Virtuoso
+        style={{height: '100%'}}
+        data={rows}
+        computeItemKey={(_index, row) => row.kind === 'header' ? `h:${row.group.ruleId}` : row.finding.id}
+        itemContent={(_index, row) => {
+          const frame = clsx('border-l-2', sevColor[row.group.severity], row.groupEnd && 'border-b border-border-subtle')
+          if (row.kind === 'header') {
+            const {group, collapsed: isCollapsed} = row
+            return (
+              <div className={frame}>
+                <div className="w-full px-3 py-2.5 flex items-start gap-2 hover:bg-surface-2 transition-colors group/header">
+                  <button
+                    onClick={() => toggle(group.ruleId)}
+                    aria-expanded={!isCollapsed}
+                    className="flex-1 flex items-start gap-2 text-left min-w-0"
+                  >
+                    <ChevronRight
+                      size={14}
+                      className={clsx(
+                        'mt-0.5 shrink-0 text-text-tertiary transition-transform duration-fast',
+                        !isCollapsed && 'rotate-90'
+                      )}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-text-primary truncate">{group.title}</span>
+                        <span className="text-2xs text-text-tertiary shrink-0">{group.findings.length}×</span>
+                      </div>
+                      {!isCollapsed && (
+                        <p className="text-2xs text-text-secondary mt-1 leading-relaxed">{group.description}</p>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => suppressMany(group.findings, `Suppressed all "${group.title}" findings`)}
+                    aria-label={`Suppress all ${group.findings.length} findings of this rule`}
+                    title="Suppress all findings in this group"
+                    className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
+                  >
+                    <EyeOff size={12} />
+                    <span className="hidden sm:inline">All</span>
+                  </button>
                 </div>
-              </button>
-              <button
-                onClick={() => suppressMany(group.findings, `Suppressed all "${group.title}" findings`)}
-                aria-label={`Suppress all ${group.findings.length} findings of this rule`}
-                title="Suppress all findings in this group"
-                className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
-              >
-                <EyeOff size={12} />
-                <span className="hidden sm:inline">All</span>
-              </button>
+              </div>
+            )
+          }
+          return (
+            <div className={frame}>
+              <FindingCard finding={row.finding} blockLookup={blockLookup} onFixWithAI={onFixWithAI} />
             </div>
-
-            {!isCollapsed && group.findings.map(f => (
-              <FindingCard
-                key={f.id}
-                finding={f}
-                doc={doc}
-                onFixWithAI={onFixWithAI}
-              />
-            ))}
-          </div>
-        )
-      })}
+          )
+        }}
+      />
     </div>
   )
 }

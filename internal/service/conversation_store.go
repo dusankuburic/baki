@@ -6,9 +6,70 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pad-core/models"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
+
+// toStorageMessages converts domain chat messages to the storage-layer type for
+// backend (cloud) persistence. It is the lossless inverse of toModelMessages;
+// the storage type carries Timestamp as an RFC3339Nano string (matching how
+// models.ChatMessage's time.Time marshals), so each message encodes identically
+// on both paths. (The filesystem path additionally wraps the message array in a
+// Conversation{FlowKey,Scope,UpdatedAt} envelope; the backend stores the bare
+// array. The per-message parity is what keeps the bridge lossless.)
+func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
+	out := make([]storageif.ChatMessage, len(msgs))
+	for i, m := range msgs {
+		ts := ""
+		if !m.Timestamp.IsZero() {
+			ts = m.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		out[i] = storageif.ChatMessage{
+			ID:               m.ID,
+			Role:             m.Role,
+			Content:          m.Content,
+			Timestamp:        ts,
+			ContextBlockID:   m.ContextBlockID,
+			ContextSubflowID: m.ContextSubflowID,
+			TokensIn:         m.TokensIn,
+			TokensOut:        m.TokensOut,
+			Provider:         m.Provider,
+			Model:            m.Model,
+			FinishReason:     m.FinishReason,
+		}
+	}
+	return out
+}
+
+// toModelMessages is the inverse of toStorageMessages. A blank or unparseable
+// timestamp decodes to the zero time rather than failing the whole load.
+func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
+	out := make([]models.ChatMessage, len(msgs))
+	for i, m := range msgs {
+		var ts time.Time
+		if m.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
+		out[i] = models.ChatMessage{
+			ID:               m.ID,
+			Role:             m.Role,
+			Content:          m.Content,
+			Timestamp:        ts,
+			ContextBlockID:   m.ContextBlockID,
+			ContextSubflowID: m.ContextSubflowID,
+			TokensIn:         m.TokensIn,
+			TokensOut:        m.TokensOut,
+			Provider:         m.Provider,
+			Model:            m.Model,
+			FinishReason:     m.FinishReason,
+		}
+	}
+	return out
+}
 
 // Per-conversation persistence limits. These (and the helpers below) consolidate
 // the write/eviction logic that previously lived in a separate, unused

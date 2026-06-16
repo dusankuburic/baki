@@ -32,6 +32,18 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 		servedFile = indexPath
 	}
 
+	// Never serve the SPA index.html in place of a missing build artifact under
+	// /assets/. Those files are content-hashed and immutable, so a miss means the
+	// file genuinely isn't there — e.g. a browser running a stale index.html from
+	// a previous deploy requests an old hash. Falling back to index.html returns a
+	// text/html body for a .js/.css request, which the browser rejects with a
+	// strict-MIME error ("Failed to load module script"). A 404 is the correct
+	// answer and lets the client recover (reload to pick up the new index.html).
+	if isFallback && strings.HasPrefix(path, "/assets/") {
+		http.NotFound(w, r)
+		return
+	}
+
 	if isFallback || strings.HasSuffix(path, "/index.html") {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Content-Security-Policy",

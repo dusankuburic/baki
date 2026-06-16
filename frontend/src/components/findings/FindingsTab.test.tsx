@@ -1,3 +1,4 @@
+import type {ReactNode} from 'react'
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
@@ -16,6 +17,23 @@ vi.mock('@/api', () => ({
     getDiff: (...a: unknown[]) => getDiff(...a),
     exportHTML: vi.fn().mockResolvedValue(''),
   },
+}))
+
+// react-virtuoso renders nothing in jsdom (zero-height scroller), so stub it with
+// a passthrough that renders every row. The tests assert on findings content, not
+// on windowing behaviour.
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: ({data = [], itemContent, computeItemKey}: {
+    data?: unknown[]
+    itemContent: (i: number, item: unknown) => ReactNode
+    computeItemKey?: (i: number, item: unknown) => string | number
+  }) => (
+    <div>
+      {data.map((item, i) => (
+        <div key={computeItemKey ? computeItemKey(i, item) : i}>{itemContent(i, item)}</div>
+      ))}
+    </div>
+  ),
 }))
 
 const mockDoc = {

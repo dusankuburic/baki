@@ -342,6 +342,16 @@ func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, sc
 	return messages, nil
 }
 
+// DeleteConversation removes the on-disk conversation for a flow+scope. A
+// missing file is treated as success so the operation is idempotent.
+func (lsb *LocalStorageBackend) DeleteConversation(ctx context.Context, flowID, scope string) error {
+	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
+	if err := os.Remove(conversationPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete conversation file: %w", err)
+	}
+	return nil
+}
+
 // Ping checks if the storage backend is accessible
 func (b *LocalStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
 	// Local storage does not track usage metrics

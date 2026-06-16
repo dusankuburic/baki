@@ -46,6 +46,23 @@ class SyncManager {
     this.notifyChange()
   }
 
+  // reset discards the queue AND every persisted per-flow copy — for session
+  // teardown (logout). Unlike stop(), which persists the queue so an in-progress
+  // flow can resume after a reconnect, no queue must survive into the next user's
+  // session on a shared device. It clears ALL baki-sync-queue-* keys (not just
+  // the active flow's): switching flows orphans the previous flow's persisted
+  // queue (start() clears memory but not storage), so clearing only the current
+  // flowId would leave earlier flows' ops behind to leak.
+  reset(): void {
+    this.clearAllStorage()
+    this.unsubscribeStatus?.()
+    this.unsubscribeStatus = null
+    this.queue = []
+    this.counter = 0
+    this.flowId = null
+    this.notifyChange()
+  }
+
   enqueue(env: Omit<Envelope, 'flowId' | 'userId' | 'ts'>): string {
     const id = `op-${++this.counter}-${Date.now()}`
     // Always queue first so the op survives a send failure (socket
@@ -138,6 +155,22 @@ class SyncManager {
       localStorage.removeItem(this.storageKey())
     } catch {
       // ignore
+    }
+  }
+
+  // clearAllStorage removes every persisted per-flow queue (all baki-sync-queue-*
+  // keys), used by reset() on logout. Keys are collected before removal because
+  // removeItem during a length/key(i) walk shifts indices.
+  private clearAllStorage(): void {
+    try {
+      const keys: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k)
+      }
+      keys.forEach(k => localStorage.removeItem(k))
+    } catch {
+      // storage unavailable — nothing to clear
     }
   }
 }

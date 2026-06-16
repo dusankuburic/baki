@@ -27,14 +27,22 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 		content = []byte("{}")
 	}
 
-	// Upload to Blob Storage if configured
+	// When blob storage is configured the content lives in the blob and the DB
+	// row only holds a "{}" placeholder. The blob MUST be written *after* the
+	// optimistic-concurrency check below succeeds, never before: the blob key is
+	// keyed by flow ID only (not version), so uploading first lets an OCC-losing
+	// writer overwrite the winner's content in the blob even though its DB update
+	// is rejected — silently corrupting the flow. Deferring the upload until the
+	// conditional UPDATE returns a row means a version conflict leaves the blob
+	// untouched. SaveFlow and the upload run inside the request's RLS
+	// transaction, so if the upload fails the transaction rolls back and undoes
+	// the version bump. (Residual: the blob write is not transactional, so a
+	// COMMIT failure *after* a successful upload leaves new blob content under an
+	// un-bumped row — a narrow dual-write window, far rarer than the corruption
+	// the ordering above prevents.)
+	dbContent := content
 	if b.blobClient != nil {
-		blobKey := fmt.Sprintf("flows/%s/content.json", flow.ID)
-		if err := b.uploadBlob(ctx, blobKey, content); err != nil {
-			return err
-		}
-		// Clear content for DB storage to save space
-		content = []byte("{}")
+		dbContent = []byte("{}")
 	}
 
 	meta, err := json.Marshal(flow.Metadata)
@@ -56,7 +64,7 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 			version     = flows.version + 1
 		WHERE flows.version = $10 OR $10 = 0
 		RETURNING version`,
-		flow.ID, flow.Name, flow.Description, string(content), string(meta),
+		flow.ID, flow.Name, flow.Description, string(dbContent), string(meta),
 		flow.OwnerID, flow.OrganizationID, now, now, expectedVer,
 	).Scan(&newVersion)
 	if err != nil {
@@ -65,6 +73,16 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 		}
 		return fmt.Errorf("upsert flow: %w", err)
 	}
+
+	// OCC check passed — only now is it safe to persist the real content to the
+	// blob, so a rejected concurrent write can never clobber the stored content.
+	if b.blobClient != nil {
+		blobKey := fmt.Sprintf("flows/%s/content.json", flow.ID)
+		if err := b.uploadBlob(ctx, blobKey, content); err != nil {
+			return err
+		}
+	}
+
 	flow.UpdatedAt = now
 	flow.Version = newVersion
 	return nil
@@ -298,10 +316,26 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 	// Concurrent blob fetching if MetadataOnly is false and blobClient is configured
 	if !filter.MetadataOnly && b.blobClient != nil {
 		g, gctx := errgroup.WithContext(ctx)
+		// Bound concurrent Azure blob downloads: a page can hold up to 500 flows
+		// (see limit above), and firing that many downloads at once risks Azure
+		// throttling (429s) and a memory spike holding every body in flight.
+		// g.Go then blocks until a slot frees, so fetches still parallelize.
+		// 16 matches the house cap in internal/ai (maxConcurrentRecords).
+		g.SetLimit(16)
 		for _, flow := range result {
 			if len(flow.Content) == 0 || string(flow.Content) == "{}" || string(flow.Content) == "null" {
 				f := flow // capture range variable
-				g.Go(func() error {
+				g.Go(func() (err error) {
+					// errgroup does not recover panics raised in its goroutines, so
+					// a panic in the azblob SDK would crash the process. Recover and
+					// degrade to "no content" for this one flow, matching the
+					// log-and-continue behaviour used for download errors below.
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Warn("ListFlows blob fetch goroutine panicked", "flow_id", f.ID, "err", r)
+							err = nil
+						}
+					}()
 					blobKey := fmt.Sprintf("flows/%s/content.json", f.ID)
 					content, err := b.downloadBlob(gctx, blobKey)
 					if err != nil {
@@ -338,6 +372,14 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 	if b.blobClient != nil {
 		prefix := fmt.Sprintf("flows/%s/", id)
 		go func() {
+			// Detached goroutine: a panic (e.g. inside the azblob SDK) would
+			// otherwise take down the whole process, so recover per the project
+			// convention for background goroutines.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Warn("DeleteFlow blob cleanup goroutine panicked", "flow_id", id, "err", r)
+				}
+			}()
 			// Use a background context as the request context might be cancelled
 			if err := b.deleteBlobs(context.Background(), prefix); err != nil {
 				logger.Warn("failed to delete flow blobs", "flow_id", id, "error", err)
@@ -389,6 +431,18 @@ func (b *PostgresStorageBackend) LoadConversation(ctx context.Context, flowID, s
 		msgs = []interfaces.ChatMessage{}
 	}
 	return msgs, nil
+}
+
+// DeleteConversation removes the conversation for a flow+scope. Deleting a
+// missing conversation is a no-op (matches the filesystem backend's idempotent
+// clear), so callers can use it as a "clear history" operation.
+func (b *PostgresStorageBackend) DeleteConversation(ctx context.Context, flowID, scope string) error {
+	_, err := b.query(ctx).ExecContext(ctx,
+		`DELETE FROM conversations WHERE flow_id = $1 AND scope = $2`, flowID, scope)
+	if err != nil {
+		return fmt.Errorf("delete conversation: %w", err)
+	}
+	return nil
 }
 
 // ListCollaborators returns the collaborators for a flow.

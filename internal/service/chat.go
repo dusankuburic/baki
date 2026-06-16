@@ -13,6 +13,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
+	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/metrics"
 	"pad-core/models"
 	"pad-analyzer/internal/rag"
@@ -113,6 +114,9 @@ type ChatService struct {
 	factory       *ai.ProviderFactory
 	demoLimiter   *ai.DemoLimiter
 	backend       storageif.StorageBackend
+	// mode selects where conversations persist: ModeLocal uses the on-disk file
+	// store (desktop), cloud routes through the backend (Postgres + RLS).
+	mode          config.DeploymentMode
 	knowledge     *rag.KnowledgeService
 	activeStreams sync.Map // map[streamID]*streamCtl — in-flight streams
 	// finishedStreams holds recently-completed streams for a short grace period
@@ -130,6 +134,7 @@ func NewChatService(
 	factory *ai.ProviderFactory,
 	demoLimiter *ai.DemoLimiter,
 	backend storageif.StorageBackend,
+	mode config.DeploymentMode,
 ) *ChatService {
 	return &ChatService{
 		notifier:      notifier,
@@ -140,6 +145,7 @@ func NewChatService(
 		factory:       factory,
 		demoLimiter:   demoLimiter,
 		backend:       backend,
+		mode:          mode,
 	}
 }
 
@@ -558,9 +564,25 @@ func (s *ChatService) ResumeStream(streamID string) (*ResumeResult, error) {
 	}, nil
 }
 
-func (lsb *ChatService) GetConversation(doc *models.FlowDocument, provider string) ([]models.ChatMessage, error) {
+// useBackendConversations reports whether conversations should persist through
+// the storage backend (cloud mode: Postgres, durable + cross-replica + RLS)
+// rather than the local on-disk file store (desktop, single persistent instance).
+// Explicit allow-list on ModeCloud: an unset/zero mode (or any future mode) must
+// fall back to the local file store, never silently route chat history to Postgres.
+func (lsb *ChatService) useBackendConversations() bool {
+	return lsb.mode == config.ModeCloud && lsb.backend != nil
+}
+
+func (lsb *ChatService) GetConversation(ctx context.Context, doc *models.FlowDocument, provider string) ([]models.ChatMessage, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
+	}
+	if lsb.useBackendConversations() {
+		stored, err := lsb.backend.LoadConversation(ctx, doc.ID, provider)
+		if err != nil {
+			return nil, err
+		}
+		return toModelMessages(stored), nil
 	}
 	path, err := convFilePath(lsb.configDir, provider, doc.ID)
 	if err != nil {
@@ -581,10 +603,16 @@ func (lsb *ChatService) GetConversation(doc *models.FlowDocument, provider strin
 	return conv.Messages, nil
 }
 
-func (lsb *ChatService) SaveConversation(doc *models.FlowDocument, provider string, messages []models.ChatMessage) error {
+func (lsb *ChatService) SaveConversation(ctx context.Context, doc *models.FlowDocument, provider string, messages []models.ChatMessage) error {
 	if doc == nil {
 		return fmt.Errorf("no flow loaded")
 	}
+	trimmed := evictConvMessages(messages)
+
+	if lsb.useBackendConversations() {
+		return lsb.backend.SaveConversation(ctx, doc.ID, provider, toStorageMessages(trimmed))
+	}
+
 	path, err := convFilePath(lsb.configDir, provider, doc.ID)
 	if err != nil {
 		return err
@@ -599,7 +627,7 @@ func (lsb *ChatService) SaveConversation(doc *models.FlowDocument, provider stri
 		FlowKey:   doc.ID,
 		Scope:     provider,
 		UpdatedAt: time.Now(),
-		Messages:  evictConvMessages(messages),
+		Messages:  trimmed,
 	}
 
 	data, err := json.MarshalIndent(conv, "", "  ")
@@ -612,9 +640,12 @@ func (lsb *ChatService) SaveConversation(doc *models.FlowDocument, provider stri
 	return atomicWriteConv(dir, path, data)
 }
 
-func (lsb *ChatService) ClearConversation(doc *models.FlowDocument, provider string) error {
+func (lsb *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDocument, provider string) error {
 	if doc == nil {
 		return fmt.Errorf("no flow loaded")
+	}
+	if lsb.useBackendConversations() {
+		return lsb.backend.DeleteConversation(ctx, doc.ID, provider)
 	}
 	path, err := convFilePath(lsb.configDir, provider, doc.ID)
 	if err != nil {
@@ -626,11 +657,11 @@ func (lsb *ChatService) ClearConversation(doc *models.FlowDocument, provider str
 	return nil
 }
 
-func (lsb *ChatService) ExportConversation(doc *models.FlowDocument, provider string, path string) error {
+func (lsb *ChatService) ExportConversation(ctx context.Context, doc *models.FlowDocument, provider string, path string) error {
 	if err := validateUserPath(path); err != nil {
 		return err
 	}
-	msgs, err := lsb.GetConversation(doc, provider)
+	msgs, err := lsb.GetConversation(ctx, doc, provider)
 	if err != nil {
 		return err
 	}

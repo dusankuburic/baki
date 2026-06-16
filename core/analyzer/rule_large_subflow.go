@@ -35,24 +35,21 @@ func (r *LargeSubflowRule) Check(block *models.Block, ctx *RuleContext) []models
 		}
 	}
 
-	for i := range ctx.Flow.Subflows {
-		sf := &ctx.Flow.Subflows[i]
-		if sf.ID != block.SubflowID {
-			continue
-		}
-		count := countAllBlocks(sf.Blocks)
-		if count > threshold {
-			return []models.Finding{{
-				RuleID:      r.ID(),
-				Severity:    r.DefaultSeverity(),
-				Title:       "Large subflow",
-				Description: "Subflow '" + sf.Name + "' has " + strconv.Itoa(count) + " blocks (threshold: " + strconv.Itoa(threshold) + ").",
-				BlockID:     block.ID,
-				SubflowID:   block.SubflowID,
-				Suggestion:  "Break the subflow into smaller, focused subflows that each handle a single responsibility.",
-			}}
-		}
-		break
+	sf := ctx.SubflowByID[block.SubflowID]
+	if sf == nil {
+		return nil
+	}
+	count := countAllBlocks(sf.Blocks)
+	if count > threshold {
+		return []models.Finding{{
+			RuleID:      r.ID(),
+			Severity:    r.DefaultSeverity(),
+			Title:       "Large subflow",
+			Description: "Subflow '" + sf.Name + "' has " + strconv.Itoa(count) + " blocks (threshold: " + strconv.Itoa(threshold) + ").",
+			BlockID:     block.ID,
+			SubflowID:   block.SubflowID,
+			Suggestion:  "Break the subflow into smaller, focused subflows that each handle a single responsibility.",
+		}}
 	}
 
 	return nil

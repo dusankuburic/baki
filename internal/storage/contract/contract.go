@@ -178,6 +178,30 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
+	t.Run("DeleteConversation_removes_and_is_idempotent", func(t *testing.T) {
+		flowID := "contract-delconv-" + runID
+		msgs := []interfaces.ChatMessage{
+			{ID: "m1", Role: "user", Content: "hi", Timestamp: time.Now().UTC().Format(time.RFC3339)},
+		}
+		if err := b.SaveConversation(ctx, flowID, "scope", msgs); err != nil {
+			t.Fatalf("SaveConversation: %v", err)
+		}
+		if err := b.DeleteConversation(ctx, flowID, "scope"); err != nil {
+			t.Fatalf("DeleteConversation: %v", err)
+		}
+		got, err := b.LoadConversation(ctx, flowID, "scope")
+		if err != nil {
+			t.Fatalf("LoadConversation after delete: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("after delete: want 0 messages, got %d", len(got))
+		}
+		// Deleting a missing conversation is a no-op, not an error.
+		if err := b.DeleteConversation(ctx, flowID, "scope"); err != nil {
+			t.Errorf("DeleteConversation (missing) should be a no-op, got %v", err)
+		}
+	})
+
 	t.Run("SaveUserSettings_then_LoadUserSettings_round_trips", func(t *testing.T) {
 		userID := "contract-usettings-" + runID
 		// Seed the user first: Postgres enforces user_settings.user_id → users(id)

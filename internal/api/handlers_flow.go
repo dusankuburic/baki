@@ -8,6 +8,7 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
+	"pad-core/analyzer"
 	"pad-core/models"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -102,6 +103,10 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Loading new data starts a fresh working context, so reset the desktop
+	// session analytics — the dashboards aggregate this cache and should reflect
+	// only the flow/folder the user is now working with, not prior sessions.
+	analyzer.DefaultCache.Clear()
 	render.JSON(w, doc)
 }
 
@@ -123,6 +128,9 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	// New folder = fresh working context: reset the desktop session analytics so
+	// the dashboards reflect only this folder, not previously-loaded data.
+	analyzer.DefaultCache.Clear()
 	render.JSON(w, doc)
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"pad-analyzer/internal/config"
+	"pad-core/analyzer"
 	"pad-core/logger"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -328,6 +329,7 @@ func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID, callerID
 	if err := s.storage.DeleteFlow(ctx, flowID); err != nil {
 		return err
 	}
+	analyzer.DefaultCache.Invalidate(flowID)
 	if s.flowCache != nil {
 		s.flowCache.InvalidateSearchIndex(flowID)
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -122,7 +123,12 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 		s.history.Record(key, result, doc)
 	}
 
-	s.notifier.EmitTo(userID, "analysis:complete", result)
+	// NOTE: we intentionally do NOT broadcast the full report over SSE here.
+	// AnalyzeFlow already returns the report to the caller via the HTTP response,
+	// and no client consumes an "analysis:complete" event. Emitting it shipped the
+	// entire report (megabytes on large flows) over the SSE bus only to be parsed
+	// on the webview main thread and discarded — a needless UI-thread stall right
+	// as analysis finished. Progress is still streamed via "analysis:progress".
 
 	logger.Info("analysis complete",
 		"flowId", result.FlowID,
@@ -235,15 +241,42 @@ func (s *AnalysisService) GetDependencyAnalysis() *models.DependencyAnalysis {
 }
 
 func (s *AnalysisService) ComputeDashboard() *models.DashboardStats {
-	reports := analyzer.DefaultCache.AllReports()
+	reports := dedupByFlowID(analyzer.DefaultCache.AllReports())
 	return analyzer.ComputeDashboard(reports)
 }
 
-// CachedReports returns all analysis reports currently in the session cache.
-// Used by the local-mode dashboard to populate complexity and rule frequency
-// cards without a Postgres backend.
-func (s *AnalysisService) CachedReports() []*models.AnalysisReport {
-	return analyzer.DefaultCache.AllReports()
+// DashboardData returns aggregated stats and per-flow reports from a single
+// cache snapshot, deduplicated by flow ID. The single-snapshot guarantee is
+// important for the local-mode dashboard so all sections (overview, findings,
+// complexity scatter) see a consistent view — two separate reads of the cache
+// can diverge if an analysis completes between them.
+func (s *AnalysisService) DashboardData() (*models.DashboardStats, []*models.AnalysisReport) {
+	reports := dedupByFlowID(analyzer.DefaultCache.AllReports())
+	return analyzer.ComputeDashboard(reports), reports
+}
+
+// dedupByFlowID keeps only the newest report per FlowID (most recent
+// GeneratedAt). The cache is keyed by flowID:contentHash, so editing and
+// re-analyzing a flow inserts a new entry without removing the old one.
+// Without dedup the dashboard would double-count flows.
+func dedupByFlowID(reports []*models.AnalysisReport) []*models.AnalysisReport {
+	if len(reports) == 0 {
+		return reports
+	}
+	newest := make(map[string]*models.AnalysisReport, len(reports))
+	for _, r := range reports {
+		existing, ok := newest[r.FlowID]
+		if !ok || r.GeneratedAt.After(existing.GeneratedAt) ||
+			(r.GeneratedAt.Equal(existing.GeneratedAt) && r.FlowName > existing.FlowName) {
+			newest[r.FlowID] = r
+		}
+	}
+	out := make([]*models.AnalysisReport, 0, len(newest))
+	for _, r := range newest {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FlowID < out[j].FlowID })
+	return out
 }
 
 func (s *AnalysisService) ComputeSubflowHashes(doc *models.FlowDocument) []models.SubflowHash {

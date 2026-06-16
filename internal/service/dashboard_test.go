@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-core/analyzer"
 	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
@@ -235,5 +236,49 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 	}
 	if home.Security.FailedLogins24h != 3 || home.Security.CredentialFindings != 2 {
 		t.Errorf("Security mapping: got %+v", home.Security)
+	}
+}
+
+// buildLocal must deduplicate flows that were analyzed under multiple content
+// hashes (e.g. after editing). Without dedup the same flow would be counted
+// multiple times in overview, findings, and complexity.
+func TestDashboardService_BuildLocal_DeduplicatesFlows(t *testing.T) {
+	// Clear any pre-existing entries from the global cache (shared across tests).
+	for _, r := range analyzer.DefaultCache.AllReports() {
+		analyzer.DefaultCache.Invalidate(r.FlowID)
+	}
+
+	t1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	// Insert two reports for the same flow (different GeneratedAt)
+	analyzer.DefaultCache.Put("dup-flow", "hash-old", &models.AnalysisReport{
+		FlowID:      "dup-flow",
+		FlowName:    "Old",
+		GeneratedAt: t1,
+		Findings:    []models.Finding{},
+		Stats:       models.AnalysisStats{Errors: 1, Warnings: 0, Info: 0},
+	})
+	analyzer.DefaultCache.Put("dup-flow", "hash-new", &models.AnalysisReport{
+		FlowID:      "dup-flow",
+		FlowName:    "New",
+		GeneratedAt: t2,
+		Findings:    []models.Finding{},
+		Stats:       models.AnalysisStats{Errors: 2, Warnings: 0, Info: 0},
+	})
+	t.Cleanup(func() { analyzer.DefaultCache.Invalidate("dup-flow") })
+
+	analysisSvc := &AnalysisService{}
+	svc := NewDashboardService(nil, analysisSvc, nil)
+
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	if home.Overview.TotalFlows != 1 {
+		t.Errorf("expected 1 flow after dedup, got %d", home.Overview.TotalFlows)
+	}
+	if len(home.Complexity) != 1 {
+		t.Errorf("expected 1 complexity point after dedup, got %d", len(home.Complexity))
+	}
+	if home.Complexity[0].FlowName != "New" {
+		t.Errorf("expected newest report to win, got %q", home.Complexity[0].FlowName)
 	}
 }

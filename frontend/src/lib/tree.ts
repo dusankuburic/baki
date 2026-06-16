@@ -195,6 +195,28 @@ export function findBlockInDoc(doc: FlowDocument, blockId: string): {block: Bloc
     return null
 }
 
+/** A blockId → {name, subflowName} index for cheap label lookups. */
+export type BlockLookup = Map<string, {name: string; subflowName: string}>
+
+/**
+ * Build a blockId → {name, subflowName} index for the whole document in a single
+ * traversal. Callers that need labels for many block ids (e.g. the findings list,
+ * which renders one row per finding) should build this once and reuse it instead
+ * of calling findBlockInDoc per id — that re-walks the entire tree each time,
+ * making the list O(findings × blocks).
+ */
+export function buildBlockLookup(doc: FlowDocument): BlockLookup {
+    const map: BlockLookup = new Map()
+    const walk = (blocks: Block[], subflowName: string) => {
+        for (const b of blocks) {
+            map.set(b.id, {name: b.name, subflowName})
+            if (b.children.length > 0) walk(b.children, subflowName)
+        }
+    }
+    for (const sf of doc.subflows) walk(sf.blocks, sf.name)
+    return map
+}
+
 /** Return the id of the subflow that contains blockId, or null. */
 export function findSubflowIdByBlock(doc: FlowDocument, blockId: string): string | null {
     for (const sf of doc.subflows) {

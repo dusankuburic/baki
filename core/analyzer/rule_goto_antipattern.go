@@ -64,17 +64,27 @@ func extractGotoTarget(block *models.Block) string {
 	return ""
 }
 
+// buildLabelIndex maps each label name (lowercased, so lookups are
+// case-insensitive like the previous EqualFold scan) to its first LABEL block in
+// document order. Walking in document order keeps the result deterministic when
+// duplicate label names exist; the old per-GOTO map scan picked an arbitrary one.
+func buildLabelIndex(ctx *RuleContext) map[string]*models.Block {
+	idx := make(map[string]*models.Block)
+	walkBlocks(ctx.Flow, func(b *models.Block) {
+		if b.RawType == "LABEL" {
+			key := strings.ToLower(b.Name)
+			if _, ok := idx[key]; !ok {
+				idx[key] = b
+			}
+		}
+	})
+	return idx
+}
+
 func isScopeBreakingGoto(gotoBlock *models.Block, targetLabel string, ctx *RuleContext) bool {
 	gotoDepth := ctx.BlockDepth[gotoBlock.ID]
 
-	var labelBlock *models.Block
-	for _, b := range ctx.AllBlocks {
-		if b.RawType == "LABEL" && (b.Name == targetLabel || strings.EqualFold(b.Name, targetLabel)) {
-			labelBlock = b
-			break
-		}
-	}
-
+	labelBlock := ctx.LabelByName[strings.ToLower(targetLabel)]
 	if labelBlock == nil {
 		return false
 	}

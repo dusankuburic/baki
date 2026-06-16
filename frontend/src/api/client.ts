@@ -1,5 +1,6 @@
 import { createAdapter } from '@/platform/adapters'
 import {logger} from '@/lib/logger'
+import { decodeJwtPayload } from '@/lib/jwt'
 
 export class PermissionDeniedError extends Error {
     constructor(message: string) {
@@ -72,15 +73,11 @@ export function setSessionToken(token: string | null): void {
 // and malformed tokens decode to "not expired" so local mode is unaffected.
 function tokenExpired(token: string | null): boolean {
     if (!token) return false
-    const parts = token.split('.')
-    if (parts.length !== 3) return false // not a JWT (e.g. local-mode token)
-    try {
-        const payload = JSON.parse(atob(parts[1]))
-        if (typeof payload.exp !== 'number') return false
-        return payload.exp * 1000 <= Date.now() + 5_000 // refresh 5s early
-    } catch {
-        return false
-    }
+    const payload = decodeJwtPayload(token)
+    if (!payload) return false // not a JWT (e.g. local-mode token) → not expired
+    const exp = payload.exp
+    if (typeof exp !== 'number') return false
+    return exp * 1000 <= Date.now() + 5_000 // refresh 5s early
 }
 
 // ensureFreshToken proactively refreshes an expired access token BEFORE sending

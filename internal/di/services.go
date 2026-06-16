@@ -101,8 +101,9 @@ var ServiceModule = fx.Options(
 			demo *ai.DemoLimiter,
 			backend storageif.StorageBackend,
 			knowledge *rag.KnowledgeService,
+			mode config.DeploymentMode,
 		) *service.ChatService {
-			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, demo, backend)
+			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, demo, backend, mode)
 			svc.SetKnowledgeService(knowledge)
 			return svc
 		},
