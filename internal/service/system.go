@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 
+	"pad-analyzer/internal/config"
 	"pad-core/logger"
 	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -23,19 +24,21 @@ type SystemService struct {
 	secrets  SecretStore
 	notifier Notifier
 	backend  storageif.StorageBackend
+	mode     config.DeploymentMode
 }
 
-func NewSystemService(settings SettingsProvider, secrets SecretStore, notifier Notifier, backend storageif.StorageBackend) *SystemService {
-	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend}
+func NewSystemService(settings SettingsProvider, secrets SecretStore, notifier Notifier, backend storageif.StorageBackend, mode config.DeploymentMode) *SystemService {
+	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode}
 }
 
 func (s *SystemService) GetSettings() (settings *models.AppSettings, err error) {
 	defer logger.Guard("SystemService.GetSettings", &err)
 	if s.backend != nil {
 		ifaceSettings, err := s.backend.LoadSettings(context.Background())
-		if err == nil {
-			return s.toModel(ifaceSettings), nil
+		if err != nil {
+			return nil, fmt.Errorf("load settings: %w", err)
 		}
+		return s.toModel(ifaceSettings), nil
 	}
 	if s.settings == nil {
 		return models.DefaultSettings(), nil
@@ -46,11 +49,13 @@ func (s *SystemService) GetSettings() (settings *models.AppSettings, err error) 
 func (s *SystemService) UpdateSettings(settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateSettings", &err)
 	if s.backend != nil {
-		if err := s.backend.SaveSettings(context.Background(), s.fromModel(&settings)); err == nil {
-			s.notifier.Emit("settings:changed", settings)
-			return nil
+		if err := s.backend.SaveSettings(context.Background(), s.fromModel(&settings)); err != nil {
+			return fmt.Errorf("persist settings: %w", err)
 		}
+		s.notifier.Emit("settings:changed", settings)
+		return nil
 	}
+	// Desktop/local mode — no backend, use in-memory store
 	if s.settings == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
@@ -156,6 +161,9 @@ func (s *SystemService) AppInfo() (info *models.AppInfo, err error) {
 		Arch:      runtime.GOARCH,
 		BuildDate: BuildDate,
 		GitCommit: GitCommit,
+		Capabilities: models.AppCapabilities{
+			SessionAnalytics: s.mode == config.ModeLocal,
+		},
 	}, nil
 }
 

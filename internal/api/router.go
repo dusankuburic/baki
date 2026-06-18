@@ -93,6 +93,16 @@ func NewRouter(
 	// users behind a reverse proxy onto one IP bucket.
 	rt.eventManager.SetClientKeyFunc(rt.sseClientKey)
 
+	// Wire the auth blacklist so SSE connections are periodically re-validated
+	// after the initial upgrade. This disconnects a session once its access
+	// token is blacklisted (logout / explicit revoke). Password change and
+	// refresh-replay revoke only refresh tokens, so those sessions end when the
+	// short-lived access token expires — which the SSE loop enforces directly
+	// (it also drops the connection at the access-token expiry).
+	if rt.security.AuthMgr != nil {
+		rt.eventManager.SetRevocationChecker(rt.security.AuthMgr.IsRevoked)
+	}
+
 	// Reclaim expired single-use WS tickets in the background so consumeTicket
 	// stays O(1) per connection instead of scanning the whole map each time.
 	go rt.cleanupUsedTickets()
@@ -198,7 +208,11 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins, rt.flowChecker)(w, r)
+	var isRevoked func(string) bool
+	if rt.security.AuthMgr != nil {
+		isRevoked = rt.security.AuthMgr.IsRevoked
+	}
+	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins, rt.flowChecker, claims.ID, isRevoked)(w, r)
 }
 
 // --- Ticket store ---
@@ -329,11 +343,11 @@ var publicRoutes = map[string]bool{
 	"/api/auth/sso/start":    true,
 	"/api/auth/sso/callback": true,
 	"/api/auth/sso/exchange": true,
-	"/api/local-config":  true,
-	"/healthz":           true,
-	"/readyz":            true,
-	"/api/health":        true,
-	"/metrics":           true,
+	"/api/local-config":      true,
+	"/healthz":               true,
+	"/readyz":                true,
+	"/api/health":            true,
+	"/metrics":               true,
 }
 
 // swagger handler (chi-compatible, not a method on Router)

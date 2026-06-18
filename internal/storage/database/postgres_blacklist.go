@@ -37,13 +37,23 @@ func (bl *PostgresBlacklist) Add(jti string, ttl time.Duration) {
 }
 
 func (bl *PostgresBlacklist) IsRevoked(jti string) bool {
+	// Bound the check so a slow/hung DB can't stall the auth hot path
+	// (this runs on every request and on SSE/WS re-validation ticks).
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	var tmp int
-	err := bl.db.QueryRowContext(context.Background(),
+	err := bl.db.QueryRowContext(ctx,
 		`SELECT 1 FROM token_blacklist WHERE jti = $1 AND expires_at > NOW()`, jti).Scan(&tmp)
-	if err != nil && err != sql.ErrNoRows {
-		slog.Warn("blacklist check failed — treating as not revoked", "jti", jti, "err", err)
+	if err == nil {
+		return true // found in blacklist
 	}
-	return err == nil
+	if err == sql.ErrNoRows {
+		return false // not blacklisted
+	}
+	// DB error — fail closed: treat as revoked to prevent a revoked token
+	// from being accepted during a database outage.
+	slog.Warn("blacklist check failed — treating as revoked (fail-closed)", "jti", jti, "err", err)
+	return true
 }
 
 func (bl *PostgresBlacklist) AddIfAbsent(jti string, ttl time.Duration) bool {

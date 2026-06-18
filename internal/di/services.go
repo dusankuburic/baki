@@ -82,8 +82,8 @@ var ServiceModule = fx.Options(
 			// per-user) and never picks up keys added later.
 			return rag.NewKnowledgeService(backend, factory, settings)
 		},
-		func(settings service.SettingsProvider, secrets service.SecretStore, notifier service.Notifier, backend storageif.StorageBackend) *service.SystemService {
-			return service.NewSystemService(settings, secrets, notifier, backend)
+		func(settings service.SettingsProvider, secrets service.SecretStore, notifier service.Notifier, backend storageif.StorageBackend, mode config.DeploymentMode) *service.SystemService {
+			return service.NewSystemService(settings, secrets, notifier, backend, mode)
 		},
 		service.NewAuthzService,
 		service.NewFlowService,

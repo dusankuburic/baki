@@ -7,6 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // login posts to /api/auth/login and returns the decoded response body.
@@ -235,5 +239,98 @@ func TestHandleAuthRegister_ConcurrentFirstUser_ExactlyOneAdmin(t *testing.T) {
 	}
 	if storedAdmins != 1 {
 		t.Errorf("storage shows %d admins, expected 1", storedAdmins)
+	}
+}
+
+// A1.1: A locked user must not be able to refresh tokens.
+func TestHandleAuthRefresh_LockedUser_Returns401(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	resp := login(t, rt, "locked@example.com", "Password123!")
+	accessToken, _ := resp["accessToken"].(string)
+	refreshToken, _ := resp["refreshToken"].(string)
+
+	// Get the user ID
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/auth/me", "Bearer "+accessToken, nil)
+	var me map[string]any
+	decodeJSON(t, rr, &me)
+	userID, _ := me["id"].(string)
+
+	// Lock the user
+	user, err := rt.security.Backend.LoadUserByID(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("LoadUserByID: %v", err)
+	}
+	lockUntil := time.Now().UTC().Add(1 * time.Hour)
+	user.LockedUntil = &lockUntil
+	if err := rt.security.Backend.SaveUser(context.Background(), user); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	// Attempt refresh — must be rejected
+	rr2 := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/refresh", "", map[string]any{
+		"refreshToken": refreshToken,
+	})
+	checkStatus(t, rr2, http.StatusUnauthorized)
+}
+
+// A1.2: A deleted/non-existent user must not be able to refresh tokens.
+func TestHandleAuthRefresh_DeletedUser_Returns401(t *testing.T) {
+	rt := newJWTTestRouter(t)
+
+	// Issue a token pair for a user that was never registered
+	pair, err := rt.security.AuthMgr.Issue("ghost-user-id", "ghost@example.com", auth.RoleMember)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	// Attempt refresh — LoadUserByID will fail → 401
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/refresh", "", map[string]any{
+		"refreshToken": pair.RefreshToken,
+	})
+	checkStatus(t, rr, http.StatusUnauthorized)
+}
+
+// O1: Filesystem SaveFlow must enforce OCC and return ErrVersionConflict on stale versions.
+func TestLocalStorage_SaveFlow_VersionConflict(t *testing.T) {
+	rt := newJWTTestRouter(t)
+
+	// Create and save a new flow — version stays 0 for new flows
+	flow := &interfaces.FlowDocument{
+		ID:      "test-flow-occ",
+		Name:    "Test",
+		Content: []byte("{}"),
+		OwnerID: "test-user",
+		Version: 0,
+	}
+	if err := rt.security.Backend.SaveFlow(context.Background(), flow); err != nil {
+		t.Fatalf("initial SaveFlow: %v", err)
+	}
+
+	// Second save with matching version=0 → succeeds, bumps to 1
+	flow2 := &interfaces.FlowDocument{
+		ID:      "test-flow-occ",
+		Name:    "Test v2",
+		Content: []byte(`{"v":2}`),
+		OwnerID: "test-user",
+		Version: 0,
+	}
+	if err := rt.security.Backend.SaveFlow(context.Background(), flow2); err != nil {
+		t.Fatalf("second SaveFlow: %v", err)
+	}
+	if flow2.Version != 1 {
+		t.Fatalf("expected version 1 after second save, got %d", flow2.Version)
+	}
+
+	// Now attempt to save with stale version 0 → must conflict (current is 1)
+	stale := &interfaces.FlowDocument{
+		ID:      "test-flow-occ",
+		Name:    "Stale",
+		Content: []byte(`{"v":"stale"}`),
+		OwnerID: "test-user",
+		Version: 0,
+	}
+	err := rt.security.Backend.SaveFlow(context.Background(), stale)
+	if err != interfaces.ErrVersionConflict {
+		t.Errorf("expected ErrVersionConflict for stale version, got %v", err)
 	}
 }

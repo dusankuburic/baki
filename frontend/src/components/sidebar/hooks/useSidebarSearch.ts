@@ -20,22 +20,26 @@ export function useSidebarSearch() {
     const handleSearch = useCallback(async (q: string) => {
         const doc = useFlowStore.getState().document
         if (!doc || !q) {
+            searchVersionRef.current++
             setResults([], 0)
             return
         }
+        const docId = doc.id
         const version = ++searchVersionRef.current
         try {
-            const results = await flowApi.searchFlow(doc.id, {
+            const results = await flowApi.searchFlow(docId, {
                 text: q,
                 fuzzy: true,
                 maxResults: 100,
             })
             if (version !== searchVersionRef.current) return
+            if (useFlowStore.getState().document?.id !== docId) return
             if (results?.results) {
                 setResults(results.results as SearchResult[], results.totalCount ?? 0)
             }
         } catch {
             if (version !== searchVersionRef.current) return
+            if (useFlowStore.getState().document?.id !== docId) return
             setResults([], 0)
         }
     }, [setResults])

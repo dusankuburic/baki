@@ -75,10 +75,9 @@ describe('KPIStripCard', () => {
     expect(screen.getByText('2 providers')).toBeTruthy()
   })
 
-  it('shows dash for AI spend when no usage', () => {
+  it('hides AI spend KPI when costByProvider is empty', () => {
     render(<KPIStripCard overview={mockOverview()} findings={mockFindings()} costByProvider={[]} />)
-    const spendLabels = screen.getAllByText('—')
-    expect(spendLabels.length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText(/AI Spend/)).toBeNull()
   })
 
   it('shows flow count and subflow count', () => {

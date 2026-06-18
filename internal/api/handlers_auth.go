@@ -228,7 +228,14 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 			render.Error(w, fmt.Errorf("failed to process token refresh"), http.StatusInternalServerError)
 			return
 		}
-		_ = info // info.UserID can be used for cross-checking if needed
+		// A1.3: Cross-check the DB-verified owner against the JWT claims to
+		// prevent a forged token (different UserID in claims) from rotating
+		// another user's refresh token into a new session.
+		if info.UserID != claims.UserID {
+			logger.Warn("refresh token user mismatch", "claimsUserID", claims.UserID, "dbUserID", info.UserID, "tokenID", claims.ID)
+			render.Error(w, fmt.Errorf("session compromised — please log in again"), http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Reload the user from the DB so the new token reflects the CURRENT role
@@ -236,10 +243,22 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	issueRole := claims.Role
 	issueEmail := claims.Email
 	if h.backend != nil {
-		if user, err := h.backend.LoadUserByID(r.Context(), claims.UserID); err == nil {
-			issueRole = user.Role
-			issueEmail = user.Email
+		user, err := h.backend.LoadUserByID(r.Context(), claims.UserID)
+		if err != nil {
+			// A1.2: Fail closed — a deleted or non-existent user must NOT be
+			// able to refresh tokens indefinitely from stale JWT claims.
+			logger.Warn("refresh for deleted/missing user", "userID", claims.UserID, "error", err)
+			render.Error(w, fmt.Errorf("account not found — please log in again"), http.StatusUnauthorized)
+			return
 		}
+		// A1.1: Locked accounts must not be able to refresh their way back in.
+		if user.LockedUntil != nil && time.Now().UTC().Before(*user.LockedUntil) {
+			logger.Warn("refresh blocked for locked user", "userID", claims.UserID)
+			render.Error(w, fmt.Errorf("account is temporarily locked"), http.StatusUnauthorized)
+			return
+		}
+		issueRole = user.Role
+		issueEmail = user.Email
 	}
 
 	pair, err := h.security.AuthMgr.Issue(claims.UserID, issueEmail, issueRole)

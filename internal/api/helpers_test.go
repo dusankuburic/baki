@@ -62,7 +62,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, storage.CurrentSecretStore(), notifier, backend)
+	sysSvc := service.NewSystemService(settings, storage.CurrentSecretStore(), notifier, backend, cfg.Mode)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)

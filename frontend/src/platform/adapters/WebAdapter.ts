@@ -56,52 +56,63 @@ export class WebAdapter implements PlatformAdapter {
    */
   async fileOpen(options: FileOpenOptions): Promise<string | string[] | null> {
     return new Promise((resolve) => {
-      // Create hidden file input
       const input = document.createElement('input');
       input.type = 'file';
       input.multiple = options.multiple || false;
       input.style.display = 'none';
 
-      // Apply file filters if specified
       if (options.filters && options.filters.length > 0) {
         const extensions = options.filters.flatMap(f => f.extensions);
         input.accept = extensions.map(ext => `.${ext}`).join(',');
       }
 
+      let settled = false;
+      const cleanup = () => {
+        if (input.parentNode) document.body.removeChild(input);
+      };
+      const done = (val: string | string[] | null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        clearTimeout(fallbackTimer);
+        resolve(val);
+      };
+      // Fallback: if neither onchange nor oncancel fires (some browsers don't
+      // fire oncancel when the user dismisses via Esc), resolve after 5 minutes.
+      const fallbackTimer = setTimeout(() => done(null), 300_000);
+
       input.onchange = (e) => {
         const files = (e.target as HTMLInputElement).files;
         if (!files || files.length === 0) {
-          resolve(null);
+          done(null);
           return;
         }
 
         const file = files[0];
         const maxBytes = 100 * 1024 * 1024;
         if (file.size > maxBytes) {
-          resolve(null);
+          logger.warn('File exceeds 100MB limit', {size: file.size});
+          done(null);
           return;
         }
         const reader = new FileReader();
         reader.onload = (e) => {
           const content = e.target?.result as string;
-          resolve(JSON.stringify({
+          done(JSON.stringify({
             __is_web_upload__: true,
             name: file.name,
             files: { [file.name]: content }
           }));
         };
+        reader.onerror = () => {
+          logger.warn('FileReader error', {name: file.name});
+          done(null);
+        };
         reader.readAsText(file);
-
-        // Clean up
-        document.body.removeChild(input);
       };
 
-      input.oncancel = () => {
-        document.body.removeChild(input);
-        resolve(null);
-      };
+      input.oncancel = () => done(null);
 
-      // Add to DOM and trigger click
       document.body.appendChild(input);
       input.click();
     });
@@ -117,10 +128,23 @@ export class WebAdapter implements PlatformAdapter {
       input.webkitdirectory = true;
       input.style.display = 'none';
 
+      let settled = false;
+      const cleanup = () => {
+        if (input.parentNode) document.body.removeChild(input);
+      };
+      const done = (val: string | null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        clearTimeout(fallbackTimer);
+        resolve(val);
+      };
+      const fallbackTimer = setTimeout(() => done(null), 300_000);
+
       input.onchange = async (e) => {
         const files = (e.target as HTMLInputElement).files;
         if (!files || files.length === 0) {
-          resolve(null);
+          done(null);
           return;
         }
 
@@ -141,31 +165,26 @@ export class WebAdapter implements PlatformAdapter {
                 fileMap[file.name] = e.target?.result as string;
                 res();
               };
+              reader.onerror = () => res();
               reader.readAsText(file);
             });
           });
 
         await Promise.all(promises);
-        
+
         if (Object.keys(fileMap).length === 0) {
-          resolve(null);
+          done(null);
           return;
         }
 
-        // Return a special JSON string that flowApi will recognize
-        resolve(JSON.stringify({
+        done(JSON.stringify({
           __is_web_upload__: true,
           name: directoryName || 'Uploaded Folder',
           files: fileMap
         }));
-
-        document.body.removeChild(input);
       };
 
-      input.oncancel = () => {
-        document.body.removeChild(input);
-        resolve(null);
-      };
+      input.oncancel = () => done(null);
 
       document.body.appendChild(input);
       input.click();

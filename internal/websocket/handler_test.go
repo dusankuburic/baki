@@ -21,7 +21,7 @@ func (f *fakeChecker) CheckAccess(_ context.Context, flowID, _ string) error {
 }
 
 func newCheckedServer(hub *Hub, userID string, checker FlowAccessChecker) *httptest.Server {
-	return httptest.NewServer(Handler(hub, userID, "Test User", nil, checker))
+	return httptest.NewServer(Handler(hub, userID, "Test User", nil, checker, "", nil))
 }
 
 // dialRaw attempts a WebSocket upgrade and returns the HTTP response status

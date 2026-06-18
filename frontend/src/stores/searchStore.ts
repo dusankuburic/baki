@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {SearchResult} from '@/types'
 
 interface SearchState {
@@ -48,3 +49,6 @@ export const useSearchStore = create<SearchState>((set, _get) => ({
 
   requestFocus: () => set(state => ({focusRequest: state.focusRequest + 1, query: ''})),
 }))
+
+// Reset on logout (see storeRegistry).
+registerStoreReset(() => useSearchStore.getState().clear())

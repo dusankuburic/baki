@@ -1,6 +1,6 @@
-import React from 'react'
+import React, {useMemo} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
-import type {BlockToken, VariableHistory, Block} from '@/types'
+import type {BlockToken, VariableHistory, Block, FlowDocument, VariableDecl} from '@/types'
 import clsx from 'clsx'
 
 import {analysisApi} from '@/api'
@@ -15,45 +15,81 @@ interface TokenRendererProps {
   tokens: BlockToken[]
 }
 
+type VarInfo = {decl: VariableDecl | null; usageCount: number}
+
+// Shared index: built once per document change via useMemo in TokenRenderer,
+// consumed by all VariableToken instances via context — avoids O(tokens ×
+// blocks) repeated full-tree walks.
+const VariableIndexContext = React.createContext<Map<string, VarInfo>>(new Map())
+
+function buildVariableIndex(doc: FlowDocument | null): Map<string, VarInfo> {
+    const index = new Map<string, VarInfo>()
+    if (!doc) return index
+    // Collect declarations
+    for (const sf of doc.subflows) {
+        if (sf.variables) {
+            for (const v of sf.variables) {
+                if (!index.has(v.name)) index.set(v.name, {decl: v, usageCount: 0})
+            }
+        }
+    }
+    // Count usages in a single tree walk (O(blocks), not O(vars × blocks))
+    const countInBlocks = (blocks: Block[]) => {
+        for (const b of blocks) {
+            if (b.variables) {
+                for (const v of b.variables) {
+                    const entry = index.get(v)
+                    if (entry) entry.usageCount++
+                }
+            }
+            if (b.children?.length) countInBlocks(b.children)
+        }
+    }
+    for (const sf of doc.subflows) countInBlocks(sf.blocks)
+    return index
+}
+
 export default function TokenRenderer({tokens}: TokenRendererProps) {
+  const document = useFlowStore(s => s.document)
+  const index = useMemo(() => buildVariableIndex(document), [document])
+
   return (
-    <div className="flex flex-wrap items-center">
-      {tokens.map((token, i) => {
-        if (token.type === 'variable') {
+    <VariableIndexContext.Provider value={index}>
+      <div className="flex flex-wrap items-center">
+        {tokens.map((token, i) => {
+          if (token.type === 'variable') {
             return <VariableToken key={i} token={token} />
-        }
+          }
 
-        if (token.type === 'label') {
+          if (token.type === 'label') {
             return <LabelToken key={i} token={token} />
-        }
+          }
 
-        const isInteractive = token.type === 'subflow'
-        const navigateToSubflowByName = useFlowStore.getState().navigateToSubflowByName
-        
-        return (
-          <span
-            key={i}
-            onClick={isInteractive ? (e) => {
-                e.stopPropagation()
-                navigateToSubflowByName(token.target!)
-            } : undefined}
-            title={token.type === 'subflow' ? `Jump to subflow: ${token.target}` : undefined}
-            className={clsx(
-              isInteractive && 'cursor-pointer',
-              token.type === 'subflow' && 'inline-flex items-center gap-1 text-block-subflow font-semibold hover:underline decoration-block-subflow/30 underline-offset-2 transition-all duration-fast',
-              token.type === 'string' && 'text-block-string font-mono italic',
-              // whitespace-pre-wrap: preserve leading/trailing spaces that flex
-              // layout strips at the start/end of each item's line box.
-              // Keeps " FROM ", " TO ", " = ", " += " etc. visually spaced.
-              token.type === 'text' && 'text-text-primary whitespace-pre-wrap'
-            )}
-          >
-            {token.value}
-            {token.type === 'subflow' && <ExternalLink size={10} className="opacity-60" />}
-          </span>
-        )
-      })}
-    </div>
+          const isInteractive = token.type === 'subflow'
+          const navigateToSubflowByName = useFlowStore.getState().navigateToSubflowByName
+
+          return (
+            <span
+              key={i}
+              onClick={isInteractive ? (e) => {
+                  e.stopPropagation()
+                  navigateToSubflowByName(token.target!)
+              } : undefined}
+              title={token.type === 'subflow' ? `Jump to subflow: ${token.target}` : undefined}
+              className={clsx(
+                isInteractive && 'cursor-pointer',
+                token.type === 'subflow' && 'inline-flex items-center gap-1 text-block-subflow font-semibold hover:underline decoration-block-subflow/30 underline-offset-2 transition-all duration-fast',
+                token.type === 'string' && 'text-block-string font-mono italic',
+                token.type === 'text' && 'text-text-primary whitespace-pre-wrap'
+              )}
+            >
+              {token.value}
+              {token.type === 'subflow' && <ExternalLink size={10} className="opacity-60" />}
+            </span>
+          )
+        })}
+      </div>
+    </VariableIndexContext.Provider>
   )
 }
 
@@ -82,32 +118,13 @@ function LabelToken({token}: {token: BlockToken}) {
 }
 
 function VariableToken({token}: {token: BlockToken}) {
-    const document = useFlowStore(s => s.document)
+    const index = React.useContext(VariableIndexContext)
     const selectedVariable = useUIStore(s => s.selectedVariable)
     const setSelectedVariable = useUIStore(s => s.setSelectedVariable)
     const setVariableLineage = useAnalysisStore(s => s.setVariableLineage)
     const setVariablePanelOpen = useUIStore(s => s.setVariablePanelOpen)
 
-    const info = React.useMemo(() => {
-        if (!document || !token.target) return null
-        
-        let decl = null
-        for (const sf of document.subflows) {
-            const d = sf.variables?.find?.(v => v.name === token.target)
-            if (d) { decl = d; break }
-        }
-
-        let usageCount = 0
-        const countUsage = (blocks: Block[]) => {
-            for (const b of blocks) {
-                if (b.variables?.includes(token.target!)) usageCount++
-                if (b.children?.length) countUsage(b.children)
-            }
-        }
-        for (const sf of document.subflows) countUsage(sf.blocks)
-
-        return {decl, usageCount}
-    }, [document, token.target])
+    const info = token.target ? (index.get(token.target) ?? null) : null
 
     const isSelected = token.target === selectedVariable
 

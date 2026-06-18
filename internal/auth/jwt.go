@@ -56,6 +56,13 @@ const (
 	// ssoTicketAudience tags SSO exchange tickets so they are not usable as
 	// access tokens, refresh tokens, or WS tickets (and vice versa).
 	ssoTicketAudience = "pad-sso-ticket"
+	// refreshAudience tags refresh tokens with a distinct audience from access
+	// tokens. Without this, a refresh token (same secret, structurally
+	// identical claims) would pass Verify() and be usable as a bearer access
+	// token — bypassing the short access TTL and the rotation/replay checks
+	// that only run at /auth/refresh. Verify() enforces m.audience and
+	// VerifyRefresh() enforces this, so neither token works in the other's role.
+	refreshAudience = "pad-refresh"
 )
 
 // Manager handles JWT issuance and verification.
@@ -122,7 +129,7 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 			ExpiresAt: jwt.NewNumericDate(refreshExpiresAt),
 			Subject:   userID,
 			Issuer:    m.issuer,
-			Audience:  jwt.ClaimStrings{m.audience},
+			Audience:  jwt.ClaimStrings{refreshAudience},
 		},
 	}
 
@@ -312,10 +319,24 @@ func (m *Manager) Revoke(claims *Claims) {
 	m.blacklist.Add(claims.ID, ttl)
 }
 
-// VerifyRefresh parses and validates a refresh token.
+// IsRevoked returns true if the given JTI has been blacklisted. Today only
+// logout (and any explicit access-token Revoke) blacklists an access JTI;
+// password change and refresh-replay revoke refresh tokens, not access tokens.
+// Used by long-lived connections (SSE, WebSocket) to periodically re-validate
+// after the initial middleware check.
+func (m *Manager) IsRevoked(jti string) bool {
+	if m.blacklist == nil || jti == "" {
+		return false
+	}
+	return m.blacklist.IsRevoked(jti)
+}
+
+// VerifyRefresh parses and validates a refresh token. It enforces the refresh
+// audience so an access token cannot be presented at /auth/refresh (and a
+// refresh token cannot be presented as an access token to Verify).
 func (m *Manager) VerifyRefresh(tokenStr string) (*RefreshClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &RefreshClaims{}, m.keyFunc,
-		jwt.WithAudience(m.audience))
+		jwt.WithAudience(refreshAudience))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify refresh token: %w", err)
 	}

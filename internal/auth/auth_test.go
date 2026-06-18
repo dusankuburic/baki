@@ -181,16 +181,31 @@ func TestManager_AccessTokenIsNotValidAsRefresh(t *testing.T) {
 	mgr := newTestManager()
 	pair, _ := mgr.Issue("u1", "a@b.com", RoleMember)
 
-	// Refresh token verifier should reject an access token because the Claims
-	// type is different (extra fields cause parse mismatch in strict mode).
-	// At minimum, the claims.UserID will come from the access-token-specific
-	// Claims struct which embeds RegisteredClaims differently.
-	//
-	// We just verify there is no panic and check the happy-path round-trip
-	// is consistent.
-	rc, _ := mgr.VerifyRefresh(pair.RefreshToken)
-	if rc == nil {
-		t.Error("valid refresh token should verify successfully")
+	// The happy-path refresh token verifies.
+	rc, err := mgr.VerifyRefresh(pair.RefreshToken)
+	if err != nil || rc == nil {
+		t.Fatalf("valid refresh token should verify successfully: %v", err)
+	}
+
+	// An access token must NOT verify as a refresh token: access and refresh
+	// carry distinct audiences, so VerifyRefresh (which enforces the refresh
+	// audience) rejects it. This stops an access token being replayed at
+	// /auth/refresh.
+	if _, err := mgr.VerifyRefresh(pair.AccessToken); err == nil {
+		t.Error("access token must be rejected by VerifyRefresh (audience separation)")
+	}
+}
+
+func TestManager_RefreshTokenIsNotValidAsAccess(t *testing.T) {
+	mgr := newTestManager()
+	pair, _ := mgr.Issue("u1", "a@b.com", RoleMember)
+
+	// A refresh token must NOT verify as an access token. Without distinct
+	// audiences, a leaked refresh token (long TTL) would work as a bearer
+	// access token and bypass the rotation/replay checks that only run at
+	// /auth/refresh.
+	if _, err := mgr.Verify(pair.RefreshToken); err == nil {
+		t.Error("refresh token must be rejected by Verify (audience separation)")
 	}
 }
 

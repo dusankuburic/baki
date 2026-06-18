@@ -1,4 +1,4 @@
-import {useMemo} from 'react'
+import {memo, useMemo} from 'react'
 import {AlertTriangle, AlertCircle, Info, Sparkles} from 'lucide-react'
 import clsx from 'clsx'
 import {useFlowStore} from '@/stores/flowStore'
@@ -22,10 +22,15 @@ const severityColor: Record<Severity, string> = {
 
 const severityRank: Record<Severity, number> = {error: 0, warning: 1, info: 2}
 
-export default function BlockFindings() {
+const MAX_VISIBLE = 50
+const EMPTY: Finding[] = []
+
+function BlockFindings() {
     const docId = useFlowStore(s => s.document?.id ?? null)
     const blockId = useFlowStore(s => s.selectedBlockId)
-    const report = useAnalysisStore(s => docId ? s.reports.get(docId) : undefined)
+    const indexedFindings = useAnalysisStore(s =>
+        docId && blockId ? (s.findingsByBlock.get(docId)?.get(blockId) ?? EMPTY) : EMPTY
+    )
     const setInspectorTab = useUIStore(s => s.setInspectorTab)
     const setInspectorCollapsed = useUIStore(s => s.setInspectorCollapsed)
     const appendMessage = useChatStore(s => s.appendMessage)
@@ -34,13 +39,14 @@ export default function BlockFindings() {
     const switchThread = useChatStore(s => s.switchThread)
 
     const blockFindings = useMemo(() => {
-        if (!report || !blockId) return []
-        return report.findings
-            .filter(f => f.blockId === blockId)
-            .sort((a, b) => severityRank[a.severity] - severityRank[b.severity])
-    }, [report, blockId])
+        if (indexedFindings.length === 0) return EMPTY
+        return [...indexedFindings].sort((a, b) => severityRank[a.severity] - severityRank[b.severity])
+    }, [indexedFindings])
 
     if (blockFindings.length === 0) return null
+
+    const visible = blockFindings.slice(0, MAX_VISIBLE)
+    const hiddenCount = blockFindings.length - visible.length
 
     const handleFixWithAI = (finding: Finding) => {
         if (!docId) return
@@ -55,7 +61,7 @@ export default function BlockFindings() {
             finding.description,
             finding.suggestion ? `Suggestion: ${finding.suggestion}` : '',
             finding.autoFixHint ? `Analyzer fix hint:\n\`\`\`\n${finding.autoFixHint}\n\`\`\`` : '',
-            `Rule: \`${finding.ruleId}\` · Severity: ${finding.severity}`,
+            `Rule: \`${finding.ruleId}\` · Severity: ${finding.severity} · Block: \`${finding.blockId}\``,
         ].filter(Boolean)
         appendMessage(threadId, {
             id: crypto.randomUUID(),
@@ -78,7 +84,7 @@ export default function BlockFindings() {
                 </span>
             </div>
             <div className="divide-y divide-border-subtle">
-                {blockFindings.map(f => {
+                {visible.map(f => {
                     const Icon = severityIcon[f.severity] ?? Info
                     return (
                         <div key={f.id} className="px-3 py-2 hover:bg-surface-2/50 transition-colors">
@@ -114,6 +120,11 @@ export default function BlockFindings() {
                         </div>
                     )
                 })}
+                {hiddenCount > 0 && (
+                    <div className="px-3 py-1.5 text-2xs text-text-tertiary text-center">
+                        +{hiddenCount} more — see all findings →
+                    </div>
+                )}
             </div>
             <button
                 onClick={() => { setInspectorTab('findings'); setInspectorCollapsed(false) }}
@@ -124,3 +135,5 @@ export default function BlockFindings() {
         </div>
     )
 }
+
+export default memo(BlockFindings)

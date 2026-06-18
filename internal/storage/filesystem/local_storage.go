@@ -19,6 +19,7 @@ import (
 type LocalStorageBackend struct {
 	dataDir string
 	mu      sync.RWMutex // guards users, orgs, and sharing maps
+	flowMu  sync.Mutex   // guards SaveFlow version-bump + write (OCC)
 	users   map[string]*interfaces.User
 	orgs    map[string]*interfaces.Organisation
 	sharing map[string][]*interfaces.Collaborator
@@ -54,10 +55,17 @@ func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	}, nil
 }
 
-// SaveFlow saves a flow document to the local file system
+// SaveFlow saves a flow document to the local file system.
+// In local mode OCC is enforced via flowMu + a version comparison.
 func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
-	// Increment version if the flow already exists (no OCC check in local mode)
+	lsb.flowMu.Lock()
+	defer lsb.flowMu.Unlock()
+
+	// Check for existing version to enforce OCC
 	if existing, err := lsb.LoadFlow(ctx, flow.ID); err == nil && existing != nil {
+		if flow.Version != existing.Version {
+			return interfaces.ErrVersionConflict
+		}
 		flow.Version = existing.Version + 1
 	}
 

@@ -35,10 +35,34 @@ export class TauriAdapter implements PlatformAdapter {
       const raw = await invoke<{ port: number; token: string }>('get_backend_config');
       return toConfig(raw);
     } catch {
+      // Sidecar not ready yet. Use BOTH a listener for the 'backend-ready'
+      // event AND periodic invoke retries, because listen() is async and the
+      // event may fire before the listener is attached.
       return new Promise((resolve) => {
+        let resolved = false;
+        let unlisten: (() => void) | null = null;
+        let retryTimer: ReturnType<typeof setInterval> | null = null;
+
+        const finish = (cfg: BackendConfig) => {
+          if (resolved) return;
+          resolved = true;
+          if (unlisten) unlisten();
+          if (retryTimer) clearInterval(retryTimer);
+          resolve(cfg);
+        };
+
+        // Listen for the event
         listen<{ port: number; token: string }>('backend-ready', (event) => {
-          resolve(toConfig(event.payload));
-        });
+          finish(toConfig(event.payload));
+        }).then(fn => { unlisten = fn; })
+          .catch(() => {});
+
+        // Also retry invoke every 500ms in case the event was missed
+        retryTimer = setInterval(() => {
+          invoke<{ port: number; token: string }>('get_backend_config')
+            .then(raw => finish(toConfig(raw)))
+            .catch(() => {});
+        }, 500);
       });
     }
   }

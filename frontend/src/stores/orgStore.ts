@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { registerStoreReset } from './storeRegistry'
 import { persist } from 'zustand/middleware'
 import { request } from '@/api/client'
 import type { AuthUser } from '@/api/auth'
@@ -150,3 +151,6 @@ export const useOrgStore = create<OrgState>()(persist((set, get) => ({
   name: 'baki-active-org',
   partialize: s => ({ activeOrgId: s.activeOrgId }),
 }))
+
+// Reset on logout (see storeRegistry).
+registerStoreReset(() => useOrgStore.setState({ organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null }))

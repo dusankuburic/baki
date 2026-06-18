@@ -74,9 +74,13 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 // flags false) so the UI can render honest empty states rather than an error.
 func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models.DashboardHomeData {
 	if s.backend == nil {
-		return s.buildLocal()
+		out := s.buildLocal()
+		out.IsCloud = false
+		return out
 	}
-	return s.buildCloud(ctx, userID)
+	out := s.buildCloud(ctx, userID)
+	out.IsCloud = true
+	return out
 }
 
 func (s *DashboardService) buildCloud(ctx context.Context, userID string) *models.DashboardHomeData {

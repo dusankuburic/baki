@@ -41,7 +41,7 @@ export function FlowComplexityCard({data, className}: {data: FlowComplexityPoint
                 tick={{fill: colors.textTertiary, fontSize: 11}}
                 width={36}
               />
-              <ZAxis type="number" dataKey="health" name="Health" domain={[0, 100]} />
+              <ZAxis type="number" dataKey="health" name="Health" domain={[0, 100]} range={[60, 400]} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: 'var(--glass-bg)',
@@ -52,14 +52,17 @@ export function FlowComplexityCard({data, className}: {data: FlowComplexityPoint
                 }}
                 cursor={{strokeDasharray: '3 3', stroke: colors.textTertiary, strokeOpacity: 0.3}}
                 formatter={(v, name) => {
-                  if (name === 'Health') return [v ?? 0, name]
-                  return [v ?? 0, name]
+                  if (name === 'Health') return [`${v}/100`, name]
+                  return [v, name]
                 }}
-                labelFormatter={() => ''}
+                labelFormatter={(_value, payload) => {
+                  const item = payload[0]?.payload
+                  return item ? item.name : ''
+                }}
               />
               <Scatter data={chartData} isAnimationActive={false}>
                 {chartData.map((entry, i) => (
-                  <Cell key={i} fill={dotColor(entry.health)} fillOpacity={0.7} />
+                  <Cell key={`cell-${i}`} fill={dotColor(entry.health)} fillOpacity={0.6} strokeWidth={1} stroke={dotColor(entry.health)} />
                 ))}
               </Scatter>
             </ScatterChart>

@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {LibraryScope, LibrarySort} from '@/api/library'
 
 // UI state for the Cloud Library workspace (browse view). Pure presentation —
@@ -68,3 +69,6 @@ export const useLibraryBrowseStore = create<LibraryBrowseState>((set, get) => ({
   setSelectedFlow: (id) => set({selectedFlowId: id}),
   reset: () => set(DEFAULTS),
 }))
+
+// Reset on logout (see storeRegistry).
+registerStoreReset(() => useLibraryBrowseStore.getState().reset())

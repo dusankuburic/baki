@@ -62,6 +62,37 @@ describe('loadFromBackend', () => {
     await useSettingsStore.getState().loadFromBackend()
     expect(useSettingsStore.getState().isLoaded).toBe(true)
   })
+
+  it('preserves defaults when backend returns Go zero-values (0/empty)', async () => {
+    // Simulate a first-time cloud user where Postgres returns zero-values
+    mockGet.mockResolvedValue({
+      version: 1,
+      general: { checkForUpdates: '' },
+      appearance: { theme: '', density: '', codeFont: '', uiFont: '' },
+      parser: { maxFileSizeMB: 0, spacesPerIndent: 0 },
+      layout: { sidebarWidth: 0, inspectorWidth: 0, lastActiveInspectorTab: '', lastViewMode: '' },
+      ai: { activeProvider: '', embeddingProvider: '', dailyBudget: 0, demoMode: { dailyLimit: 0 } },
+      analysis: { autoAnalyzeOnOpen: false },
+    })
+
+    await useSettingsStore.getState().loadFromBackend()
+    const s = useSettingsStore.getState().settings
+    // Every field must fall back to its non-zero default
+    expect(s.parser.maxFileSizeMB).toBe(50)
+    expect(s.parser.spacesPerIndent).toBe(4)
+    expect(s.appearance.theme).toBe('dark')
+    expect(s.appearance.density).toBe('comfortable')
+    expect(s.appearance.codeFont).toBeTruthy()
+    expect(s.appearance.uiFont).toBeTruthy()
+    expect(s.ai.activeProvider).toBeTruthy()
+    expect(s.ai.dailyBudget).toBeGreaterThan(0)
+    expect(s.ai.demoMode.dailyLimit).toBeGreaterThan(0)
+    expect(s.layout.sidebarWidth).toBeGreaterThan(0)
+    expect(s.layout.inspectorWidth).toBeGreaterThan(0)
+    expect(s.layout.lastActiveInspectorTab).toBeTruthy()
+    expect(s.layout.lastViewMode).toBeTruthy()
+    expect(s.general.checkForUpdates).toBeTruthy()
+  })
 })
 
 // ---- updateAppearance ----

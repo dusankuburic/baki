@@ -7,6 +7,7 @@ export interface DashboardHomeData {
   tokenUsage: DailyTokenUsage[];
   recentFlows: RecentFlowStub[];
   findings: DashboardFindingsAgg;
+  isCloud: boolean;
   // Advanced sections (v2)
   healthTrend: DailyHealthPoint[];
   costByProvider: ProviderCost[];

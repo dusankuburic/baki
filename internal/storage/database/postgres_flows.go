@@ -62,7 +62,7 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 			metadata    = EXCLUDED.metadata,
 			updated_at  = EXCLUDED.updated_at,
 			version     = flows.version + 1
-		WHERE flows.version = $10 OR $10 = 0
+		WHERE flows.version = $10
 		RETURNING version`,
 		flow.ID, flow.Name, flow.Description, string(dbContent), string(meta),
 		flow.OwnerID, flow.OrganizationID, now, now, expectedVer,

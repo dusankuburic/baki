@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {ChatMessage, ProviderID} from '@/types'
 
 export interface ChatThread {
@@ -175,4 +176,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setProvider: (p) => set({selectedProvider: p}),
   setPendingMessage: (p) => set({pendingMessage: p}),
+}))
+
+// Reset on logout (see storeRegistry).
+registerStoreReset(() => useChatStore.setState({
+  threads: [], activeThreadId: null, conversations: new Map(), activeStreamId: null,
+  streamingMessageId: null, streamingText: '', pendingMessage: null, selectedProvider: 'claude',
 }))

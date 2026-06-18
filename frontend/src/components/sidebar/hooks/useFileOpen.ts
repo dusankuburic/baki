@@ -1,5 +1,5 @@
-import {useState, useCallback, useEffect, useRef} from 'react'
-import {useFlowStore} from '@/stores/flowStore'
+import {useState, useCallback, useEffect} from 'react'
+import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {flowApi} from '@/api'
@@ -19,7 +19,6 @@ export function useFileOpen() {
 
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
     const [isLoading, setIsLoading] = useState(false)
-    const loadIdRef = useRef(0)
 
     const checkView = useCallback(() => {
         const view = useUIStore.getState().mainPaneView
@@ -28,13 +27,7 @@ export function useFileOpen() {
         }
     }, [setMainPaneView])
 
-    const beginLoad = useCallback(() => {
-        loadIdRef.current++
-        const myId = loadIdRef.current
-        setIsLoading(true)
-        return () => myId === loadIdRef.current
-    }, [])
-
+    const setIsLoadingState = useCallback(() => setIsLoading(true), [])
     const endLoad = useCallback(() => setIsLoading(false), [])
 
     useEffect(() => {
@@ -42,13 +35,14 @@ export function useFileOpen() {
         flowApi.recentFiles()
             .then((files: RecentFile[]) => { if (files) setRecentFiles(files) })
             .catch((err) => { logger.warn('Failed to load recent files', err) })
-    }, [document])
+    }, [document?.id])
 
     const handleOpenFile = useCallback(async () => {
-        const isLatest = beginLoad()
+        const gen = beginDocLoad()
+        setIsLoadingState()
         try {
             const doc = await flowApi.openFlowFile()
-            if (doc && isLatest()) {
+            if (doc && isDocLoadCurrent(gen)) {
                 setDocument(doc)
                 setFolderFiles([])
                 setSelectedFilePath(doc.filePath)
@@ -56,17 +50,18 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to open file:', err)
-            toast.error('Failed to open file', {description: err instanceof Error ? err.message : String(err)})
+            if (isDocLoadCurrent(gen)) toast.error('Failed to open file', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            if (isLatest()) endLoad()
+            if (isDocLoadCurrent(gen)) endLoad()
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, beginLoad, endLoad])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, setIsLoadingState, endLoad])
 
     const handleOpenFolder = useCallback(async () => {
-        const isLatest = beginLoad()
+        const gen = beginDocLoad()
+        setIsLoadingState()
         try {
             const doc = await flowApi.openFlowFolder()
-            if (doc && isLatest()) {
+            if (doc && isDocLoadCurrent(gen)) {
                 setDocument(doc)
                 if (doc.files && doc.files.length > 0) {
                     setFolderFiles(doc.files)
@@ -76,18 +71,17 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to open folder:', err)
-            toast.error('Failed to open folder', {description: err instanceof Error ? err.message : String(err)})
+            if (isDocLoadCurrent(gen)) toast.error('Failed to open folder', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            if (isLatest()) endLoad()
+            if (isDocLoadCurrent(gen)) endLoad()
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, beginLoad, endLoad])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, setIsLoadingState, endLoad])
 
     const handleSelectFolderFile = useCallback(async (path: string) => {
         setSelectedFilePath(path)
         const doc = useFlowStore.getState().document
         if (doc) {
             const fileName = path.split(/[/\\]/).pop() ?? ''
-            // Find the subflow whose sourceFile matches to avoid a full reload for folder views
             const sf = doc.subflows.find(s => s.sourceFile === fileName)
             if (sf) {
                 openInGroup(sf.id)
@@ -101,30 +95,32 @@ export function useFileOpen() {
             return
         }
 
-        const isLatest = beginLoad()
+        const gen = beginDocLoad()
+        setIsLoadingState()
         try {
             const newDoc = await flowApi.loadFlowFromPath(path)
-            if (newDoc && isLatest()) {
+            if (newDoc && isDocLoadCurrent(gen)) {
                 setDocument(newDoc)
                 checkView()
             }
         } catch (err) {
             logger.warn('Failed to load file:', err)
-            toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
+            if (isDocLoadCurrent(gen)) toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            if (isLatest()) endLoad()
+            if (isDocLoadCurrent(gen)) endLoad()
         }
-    }, [setDocument, setSelectedFilePath, openInGroup, checkView, toast, beginLoad, endLoad])
+    }, [setDocument, setSelectedFilePath, openInGroup, checkView, toast, setIsLoadingState, endLoad])
 
     const handleLoadRecent = useCallback(async (path: string) => {
         if (!isTauri()) return
-        const isLatest = beginLoad()
+        const gen = beginDocLoad()
+        setIsLoadingState()
         try {
             const recent = recentFiles.find(f => f.path === path)
             const doc = recent?.isFolder
                 ? await flowApi.loadFlowFolder(path)
                 : await flowApi.loadFlowFromPath(path)
-            if (doc && isLatest()) {
+            if (doc && isDocLoadCurrent(gen)) {
                 setDocument(doc)
                 if (doc.isFolder && doc.files) {
                     setFolderFiles(doc.files)
@@ -137,11 +133,11 @@ export function useFileOpen() {
             }
         } catch (err) {
             logger.warn('Failed to load recent item:', err)
-            toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
+            if (isDocLoadCurrent(gen)) toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
         } finally {
-            if (isLatest()) endLoad()
+            if (isDocLoadCurrent(gen)) endLoad()
         }
-    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast, beginLoad, endLoad])
+    }, [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast, setIsLoadingState, endLoad])
 
     const handleRemoveRecent = useCallback(async (path: string) => {
         try {

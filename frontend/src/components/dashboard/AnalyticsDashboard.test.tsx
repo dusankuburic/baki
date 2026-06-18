@@ -3,6 +3,8 @@ import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import AnalyticsDashboard from './AnalyticsDashboard'
 import {ToastProvider} from '@/components/shared/Toast'
 
+import {useSystemStore} from '@/stores/systemStore'
+
 const getDashboard = vi.fn()
 const batchAnalyze = vi.fn()
 const fileOpenDirectory = vi.fn()
@@ -18,14 +20,6 @@ vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({fileOpenDirectory: (...a: unknown[]) => fileOpenDirectory(...a)}),
 }))
 
-// AnalyticsDashboard is a desktop-only view; default the tests to desktop so the
-// existing assertions exercise the live data path, and flip to web where needed.
-const isTauriMock = vi.fn(() => true)
-vi.mock('@/platform/guards', () => ({
-  isTauri: () => isTauriMock(),
-  isWeb: () => !isTauriMock(),
-}))
-
 function renderDash() {
   return render(
     <ToastProvider>
@@ -39,7 +33,13 @@ beforeEach(() => {
   getDashboard.mockReset()
   batchAnalyze.mockReset()
   fileOpenDirectory.mockReset()
-  isTauriMock.mockReturnValue(true)
+  useSystemStore.setState({
+    isLoaded: true,
+    info: {
+      version: '1.0.0', platform: 'win32', arch: 'x64', buildDate: '', gitCommit: '',
+      capabilities: { sessionAnalytics: true }
+    }
+  })
 })
 
 describe('AnalyticsDashboard', () => {
@@ -77,10 +77,15 @@ describe('AnalyticsDashboard', () => {
     expect(screen.getByText('7 warning')).toBeInTheDocument()
   })
 
-  it('shows a desktop-only notice in web mode and does not fetch', () => {
-    isTauriMock.mockReturnValue(false)
+  it('shows a notice when session analytics are disabled and does not fetch', () => {
+    useSystemStore.setState({
+      info: {
+        version: '1.0.0', platform: 'win32', arch: 'x64', buildDate: '', gitCommit: '',
+        capabilities: { sessionAnalytics: false }
+      }
+    })
     renderDash()
-    expect(screen.getByText(/desktop-only view/)).toBeInTheDocument()
+    expect(screen.getByText(/not available in this mode/)).toBeInTheDocument()
     expect(getDashboard).not.toHaveBeenCalled()
   })
 

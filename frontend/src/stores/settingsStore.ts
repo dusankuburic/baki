@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {
   AppSettings, ProviderID, AIProviderConfig,
   AppearanceSettings, LayoutSettings, AISettings,
@@ -170,9 +171,19 @@ interface SettingsState {
 // callers can roll back their optimistic update. A superseded persist resolves
 // immediately: the newer call reads the latest state, so it carries this
 // call's changes too (previously the superseded promise never settled).
+//
+// An in-flight guard prevents two concurrent API calls: if a new persist
+// arrives while the previous one is still hitting the network, the new call
+// waits for the previous to settle, then retries with the latest settings.
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 let resolveSuperseded: (() => void) | null = null
+let inflightPromise: Promise<void> | null = null
 async function persist(settings: AppSettings): Promise<void> {
+  if (inflightPromise) {
+    await inflightPromise.catch(() => {})
+    return persist(settings)
+  }
+
   if (persistTimer) {
     clearTimeout(persistTimer)
     resolveSuperseded?.()
@@ -180,17 +191,17 @@ async function persist(settings: AppSettings): Promise<void> {
 
   return new Promise((resolve, reject) => {
     resolveSuperseded = resolve
-    persistTimer = setTimeout(async () => {
+    persistTimer = setTimeout(() => {
       persistTimer = null
       resolveSuperseded = null
-      try {
-        await settingsApi.updateSettings(settings)
-        resolve()
-      } catch (err) {
-        logger.warn('Failed to persist settings', err)
-        reject(err)
-      }
-    }, 1000) // 1 second debounce
+      inflightPromise = settingsApi.updateSettings(settings)
+        .then(() => resolve())
+        .catch((err) => {
+          logger.warn('Failed to persist settings', err)
+          reject(err)
+        })
+        .finally(() => { inflightPromise = null })
+    }, 1000)
   })
 }
 
@@ -215,41 +226,54 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const loaded = await settingsApi.getSettings()
       if (loaded) {
         // Deep-merge server response with defaults so Go zero-values (0 for
-        // int fields like sidebarWidth/inspectorWidth) don't clobber the
-        // frontend defaults that guarantee a usable layout on first run.
+        // int fields, "" for strings) don't clobber the frontend defaults that
+        // guarantee a usable experience on first run. Each scalar with a
+        // non-zero default gets an explicit || fallback.
         const merged: AppSettings = {
           ...defaultSettings,
           ...loaded,
           general: {
             ...defaultSettings.general,
             ...loaded.general,
+            checkForUpdates: loaded.general?.checkForUpdates || defaultSettings.general.checkForUpdates,
           },
           appearance: {
             ...defaultSettings.appearance,
             ...loaded.appearance,
+            theme:    loaded.appearance?.theme    || defaultSettings.appearance.theme,
+            density:  loaded.appearance?.density  || defaultSettings.appearance.density,
+            codeFont: loaded.appearance?.codeFont || defaultSettings.appearance.codeFont,
+            uiFont:   loaded.appearance?.uiFont   || defaultSettings.appearance.uiFont,
           },
           parser: {
             ...defaultSettings.parser,
             ...loaded.parser,
+            maxFileSizeMB:   loaded.parser?.maxFileSizeMB   || defaultSettings.parser.maxFileSizeMB,
+            spacesPerIndent: loaded.parser?.spacesPerIndent || defaultSettings.parser.spacesPerIndent,
           },
           layout: {
             ...defaultSettings.layout,
             ...loaded.layout,
-            sidebarWidth:   loaded.layout?.sidebarWidth   || defaultSettings.layout.sidebarWidth,
-            inspectorWidth: loaded.layout?.inspectorWidth || defaultSettings.layout.inspectorWidth,
+            sidebarWidth:           loaded.layout?.sidebarWidth           || defaultSettings.layout.sidebarWidth,
+            inspectorWidth:         loaded.layout?.inspectorWidth         || defaultSettings.layout.inspectorWidth,
+            lastActiveInspectorTab: loaded.layout?.lastActiveInspectorTab || defaultSettings.layout.lastActiveInspectorTab,
+            lastViewMode:           loaded.layout?.lastViewMode           || defaultSettings.layout.lastViewMode,
           },
           ai: {
             ...defaultSettings.ai,
             ...loaded.ai,
+            activeProvider:    loaded.ai?.activeProvider    || defaultSettings.ai.activeProvider,
+            embeddingProvider: loaded.ai?.embeddingProvider || defaultSettings.ai.embeddingProvider,
+            dailyBudget:       loaded.ai?.dailyBudget       || defaultSettings.ai.dailyBudget,
             providers: {
               ...defaultSettings.ai.providers,
               ...(loaded.ai?.providers ?? {}),
             },
-            // Each prompt list falls back to defaults when the server sends
-            // null/undefined — settings persisted before the prompts field
-            // existed come back as Go nil slices (JSON null), and a shallow
-            // spread would let those nulls clobber the defaults, making the
-            // AI Prompts panel map over a null array and crash.
+            demoMode: {
+              ...defaultSettings.ai.demoMode,
+              ...(loaded.ai?.demoMode ?? {}),
+              dailyLimit: loaded.ai?.demoMode?.dailyLimit || defaultSettings.ai.demoMode.dailyLimit,
+            },
             prompts: {
               block:             loaded.ai?.prompts?.block             ?? defaultSettings.ai.prompts.block,
               flow:              loaded.ai?.prompts?.flow              ?? defaultSettings.ai.prompts.flow,
@@ -316,3 +340,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   },
   }
 })
+
+// Reset on logout (see storeRegistry). Settings repopulate from the backend on
+// the next login (loadFromBackend).
+registerStoreReset(() => useSettingsStore.setState({settings: defaultSettings, isLoaded: false}))

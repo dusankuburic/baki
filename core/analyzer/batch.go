@@ -15,7 +15,7 @@ func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *model
 	healthCount := 0
 
 	for _, doc := range docs {
-		report := RunAnalysis(doc, rules, settings, nil)
+		report := CachedAnalysis(doc, rules, settings, nil)
 		result := models.BatchResult{
 			FlowID:   doc.ID,
 			FlowName: doc.Name,

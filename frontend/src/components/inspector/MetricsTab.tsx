@@ -47,35 +47,35 @@ const SubflowMetricsRow = React.memo(function SubflowMetricsRow({m, onSelect}: {
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-text-primary truncate">{m.subflowName}</span>
-        <span className="text-2xs text-text-tertiary tabular-nums">{m.blockCount} blocks</span>
+        <span className="text-xs text-text-tertiary tabular-nums">{m.blockCount} blocks</span>
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
         <div>
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-2xs text-text-tertiary uppercase tracking-wider">Cyclomatic</span>
-            <span className="text-2xs font-mono text-text-secondary tabular-nums">{m.cyclomaticComplexity}</span>
+            <span className="text-xs text-text-tertiary uppercase tracking-wider">Cyclomatic</span>
+            <span className="text-xs font-mono text-text-secondary tabular-nums">{m.cyclomaticComplexity}</span>
           </div>
           <MiniBar value={m.cyclomaticComplexity} max={30} color={cycloColor} />
         </div>
         <div>
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-2xs text-text-tertiary uppercase tracking-wider">Cognitive</span>
-            <span className="text-2xs font-mono text-text-secondary tabular-nums">{m.cognitiveComplexity}</span>
+            <span className="text-xs text-text-tertiary uppercase tracking-wider">Cognitive</span>
+            <span className="text-xs font-mono text-text-secondary tabular-nums">{m.cognitiveComplexity}</span>
           </div>
           <MiniBar value={m.cognitiveComplexity} max={40} color={cogColor} />
         </div>
       </div>
       <div className="flex items-center gap-3 mt-2 pt-2 border-t border-border-subtle">
-        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
-          <ArrowDownToLine size={9} /> Fan-in: {m.fanIn}
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">
+          <ArrowDownToLine size={12} /> Fan-in: {m.fanIn}
         </span>
-        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
-          <ArrowUpFromLine size={9} /> Fan-out: {m.fanOut}
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">
+          <ArrowUpFromLine size={12} /> Fan-out: {m.fanOut}
         </span>
-        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">
           Depth: {m.maxNestingDepth}
         </span>
-        <span className="flex items-center gap-1 text-2xs text-text-tertiary">
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">
           Vars: {m.variableCount}
         </span>
       </div>
@@ -104,7 +104,7 @@ export default function MetricsTab() {
       <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
         <BarChart3 size={24} className="text-text-tertiary" />
         <span className="text-sm text-text-tertiary">Run analysis to see metrics</span>
-        <span className="text-2xs text-text-disabled">Click "Run Analysis" in the Findings tab</span>
+        <span className="text-xs text-text-disabled">Click "Run Analysis" in the Findings tab</span>
       </div>
     )
   }
@@ -116,7 +116,7 @@ export default function MetricsTab() {
       <div className="p-4 space-y-4">
         <div className={clsx('p-4 rounded-xl border', scoreBg(metrics.healthScore))}>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-2xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-2">
+            <span className="text-xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-2">
               Health Score
               <button
                 onClick={() => exportMetricsCSV(metrics, doc.id)}
@@ -124,7 +124,7 @@ export default function MetricsTab() {
                 aria-label="Export metrics as CSV"
                 className="text-text-tertiary hover:text-text-secondary p-0.5 rounded hover:bg-surface-3 transition-colors"
               >
-                <Download size={11} />
+                <Download size={12} />
               </button>
             </span>
             <span className={clsx('text-2xl font-black font-mono tabular-nums', scoreColor(metrics.healthScore))}>
@@ -159,7 +159,7 @@ export default function MetricsTab() {
               <RefreshCw size={12} className="text-red-400" />
               <span className="text-xs font-bold text-red-400">Circular Dependencies</span>
             </div>
-            <p className="text-2xs text-text-secondary">
+            <p className="text-xs text-text-secondary">
               Subflow call cycle detected: {metrics.circularDependencies!.join(' → ')}
             </p>
           </div>
@@ -169,7 +169,7 @@ export default function MetricsTab() {
 
         {ruleProfiles && ruleProfiles.length > 0 && (
           <div>
-            <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Rule Performance</h3>
+            <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Rule Performance</h3>
             <div className="space-y-1">
               {ruleProfiles
                 .filter(rp => rp.durationMs > 0)
@@ -177,9 +177,9 @@ export default function MetricsTab() {
                 .slice(0, 8)
                 .map(rp => (
                   <div key={rp.ruleId} className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-0">
-                    <span className="text-2xs text-text-primary flex-1 truncate">{rp.ruleName}</span>
-                    <span className="text-2xs text-text-tertiary tabular-nums">{rp.findingCount} findings</span>
-                    <span className={clsx('text-2xs font-mono tabular-nums', rp.durationMs > 50 ? 'text-amber-400' : 'text-text-tertiary')}>
+                    <span className="text-xs text-text-primary flex-1 truncate">{rp.ruleName}</span>
+                    <span className="text-xs text-text-tertiary tabular-nums">{rp.findingCount} findings</span>
+                    <span className={clsx('text-xs font-mono tabular-nums', rp.durationMs > 50 ? 'text-amber-400' : 'text-text-tertiary')}>
                       {rp.durationMs}ms
                     </span>
                   </div>
@@ -189,7 +189,7 @@ export default function MetricsTab() {
         )}
 
         <div>
-          <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Per-Subflow Complexity</h3>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Per-Subflow Complexity</h3>
           <div className="space-y-2">
             {metrics.subflows.map(sf => (
               <SubflowMetricsRow
@@ -208,7 +208,7 @@ export default function MetricsTab() {
 function StatCard({label, value, warn}: {label: string; value: string | number; warn?: boolean}) {
   return (
     <div className="p-2.5 rounded-lg border border-border-subtle bg-surface-0">
-      <div className="text-2xs text-text-tertiary uppercase tracking-wider mb-0.5">{label}</div>
+      <div className="text-xs text-text-tertiary uppercase tracking-wider mb-0.5">{label}</div>
       <div className={clsx('text-sm font-bold font-mono tabular-nums', warn ? 'text-amber-400' : 'text-text-primary')}>
         {value}
       </div>
@@ -247,11 +247,11 @@ function HealthTrend() {
   return (
     <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-2xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
-          <TrendingUp size={10} />
+        <span className="text-xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
+          <TrendingUp size={12} />
           Health Trend
         </span>
-        <span className="text-2xs text-text-tertiary tabular-nums">
+        <span className="text-xs text-text-tertiary tabular-nums">
           {new Date(active.timestamp).toLocaleString()} · score {active.healthScore} ·{' '}
           <span className="text-red-400">{active.errors}E</span>{' '}
           <span className="text-amber-400">{active.warnings}W</span>{' '}
@@ -314,15 +314,15 @@ function DataFlowInsights() {
 
   return (
     <div>
-      <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
-        <ShieldAlert size={10} />
+      <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
+        <ShieldAlert size={12} />
         Data Flow Insights
       </h3>
       <div className="space-y-2">
         {dataFlow.taintPaths && dataFlow.taintPaths.length > 0 && (
           <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
-            <div className="text-2xs font-bold text-amber-400 mb-1">Taint Paths ({dataFlow.taintPaths.length})</div>
-            <p className="text-2xs text-text-secondary mb-2">
+            <div className="text-xs font-bold text-amber-400 mb-1">Taint Paths ({dataFlow.taintPaths.length})</div>
+            <p className="text-xs text-text-secondary mb-2">
               User input flows to sensitive sinks without validation.
             </p>
             {dataFlow.taintPaths.slice(0, 5).map((tp: TaintPath, i: number) => (
@@ -331,17 +331,17 @@ function DataFlowInsights() {
                 onClick={() => navigateToBlock(tp.sinkBlock)}
                 className="block w-full text-left p-1.5 rounded border border-border-subtle bg-surface-0 hover:border-brand-500/30 mb-1 last:mb-0 transition-colors"
               >
-                <span className="text-2xs text-text-primary font-mono">%{tp.sourceVar}%</span>
-                <span className="text-2xs text-text-tertiary mx-1">→</span>
-                <span className="text-2xs text-amber-400">{tp.sinkType}</span>
+                <span className="text-xs text-text-primary font-mono">%{tp.sourceVar}%</span>
+                <span className="text-xs text-text-tertiary mx-1">→</span>
+                <span className="text-xs text-amber-400">{tp.sinkType}</span>
               </button>
             ))}
           </div>
         )}
         {dataFlow.deadData && dataFlow.deadData.length > 0 && (
           <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
-            <div className="text-2xs font-bold text-text-tertiary mb-1">Dead Data Paths ({dataFlow.deadData.length})</div>
-            <p className="text-2xs text-text-secondary">
+            <div className="text-xs font-bold text-text-tertiary mb-1">Dead Data Paths ({dataFlow.deadData.length})</div>
+            <p className="text-xs text-text-secondary">
               Variables set but only consumed by unreachable blocks.
             </p>
           </div>

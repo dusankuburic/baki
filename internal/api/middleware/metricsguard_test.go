@@ -96,17 +96,21 @@ func TestMetricsGuard_TrustedProxyXFF(t *testing.T) {
 }
 
 func TestMetricsGuard_PublicViaTrustedProxyXFF(t *testing.T) {
+	// After the XFF bypass fix, the guard uses RemoteAddr only — a spoofed
+	// X-Forwarded-For header must NOT bypass the private-IP check.
+	// Protection against public /metrics access relies on network ACLs
+	// (NSG/ingress), not on the client-controlled XFF header.
 	handler := MetricsGuard([]string{"10.0.0.0/8"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not be called for public IP via XFF")
+		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "8.8.8.8")
+	req.RemoteAddr = "10.0.0.1:12345" // private (trusted proxy)
+	req.Header.Set("X-Forwarded-For", "8.8.8.8") // spoofed public XFF
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected 403 (public IP via trusted proxy XFF), got %d", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 (RemoteAddr is private; XFF is ignored), got %d", rr.Code)
 	}
 }

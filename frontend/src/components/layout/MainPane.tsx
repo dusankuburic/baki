@@ -1,4 +1,4 @@
-import {useCallback, useMemo, useRef, Fragment, lazy, Suspense, useState} from 'react'
+import {useCallback, useMemo, useRef, Fragment, lazy, Suspense, useState, memo} from 'react'
 import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
@@ -236,7 +236,7 @@ export default function MainPane() {
     )
 }
 
-function GroupTabStrip({
+const GroupTabStrip = memo(function GroupTabStrip({
     document,
     group,
     groupIndex,
@@ -260,6 +260,11 @@ function GroupTabStrip({
     onCloseGroup: () => void
 }) {
     const [menuPos, setMenuPos] = useState<{x: number, y: number, tabId: string} | null>(null)
+    const subflowMap = useMemo(() => {
+        const m = new Map<string, typeof document.subflows[0]>()
+        for (const sf of document.subflows) m.set(sf.id, sf)
+        return m
+    }, [document])
     if (group.tabs.length === 0) return null
 
     return (
@@ -268,7 +273,7 @@ function GroupTabStrip({
         }`}>
             <div className="flex-1 flex items-center overflow-x-auto">
                 {group.tabs.map(tabId => {
-                    const sf = document.subflows.find(s => s.id === tabId)
+                    const sf = subflowMap.get(tabId)
                     if (!sf) return null
                     const isActive = tabId === group.activeTabId
                     
@@ -350,4 +355,4 @@ function GroupTabStrip({
             )}
         </div>
     )
-}
+})

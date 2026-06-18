@@ -13,13 +13,15 @@ type DashboardHomeData struct {
 	TokenUsage  []DailyTokenUsage    `json:"tokenUsage"`
 	RecentFlows []RecentFlowStub     `json:"recentFlows"`
 	Findings    DashboardFindingsAgg `json:"findings"`
+	// Mode hints for the UI (e.g. to hide cards that have no local source)
+	IsCloud bool `json:"isCloud"`
 	// Advanced sections (v2). Populated in cloud mode; empty in local mode.
-	HealthTrend  []DailyHealthPoint    `json:"healthTrend"`
-	CostByProv   []ProviderCostStub    `json:"costByProvider"`
-	RuleFreq     []RuleFrequencyStub   `json:"ruleFrequency"`
-	Activity     []ActivityStub        `json:"activity"`
-	Complexity   []FlowComplexityStub  `json:"complexity"`
-	Security     DashboardSecurityStub `json:"security"`
+	HealthTrend []DailyHealthPoint   `json:"healthTrend"`
+	CostByProv  []ProviderCostStub   `json:"costByProvider"`
+	RuleFreq    []RuleFrequencyStub  `json:"ruleFrequency"`
+	Activity    []ActivityStub       `json:"activity"`
+	Complexity  []FlowComplexityStub `json:"complexity"`
+	Security    DashboardSecurityStub `json:"security"`
 }
 
 type DashboardGreeting struct {

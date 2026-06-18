@@ -136,6 +136,16 @@ func Tokenize(text string) []Token {
 		tokens = append(tokens, tok)
 	}
 
+	if err := scanner.Err(); err != nil {
+		tokens = append(tokens, Token{
+			Kind:    TokError,
+			Line:    lineNum + 1,
+			Raw:     err.Error(),
+			Content: err.Error(),
+			Name:    err.Error(),
+		})
+	}
+
 	return tokens
 }
 

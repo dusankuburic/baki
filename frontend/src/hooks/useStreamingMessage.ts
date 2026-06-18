@@ -22,7 +22,6 @@ export function useStreamingMessage(handler: StreamHandler) {
     handlerRef.current = handler
   }, [handler])
 
-  const activeStreamId = useChatStore(s => s.activeStreamId)
   const streamIdRef = useRef<string | null>(null)
   const isCanceledRef = useRef(false)
 
@@ -36,7 +35,6 @@ export function useStreamingMessage(handler: StreamHandler) {
       unregisterConnRef.current = null
     }
     streamIdRef.current = streamId
-    isCanceledRef.current = false
 
     let wasReconnecting = false
 
@@ -49,8 +47,12 @@ export function useStreamingMessage(handler: StreamHandler) {
         // a finished stream briefly, so even if it completed while we were
         // disconnected we recover the final text and a done/error signal
         // (otherwise the UI would hang in the streaming state).
-        if (streamIdRef.current) {
-          chatApi.resumeStream(streamIdRef.current).then(res => {
+        const activeStreamId = streamIdRef.current
+        if (activeStreamId) {
+          chatApi.resumeStream(activeStreamId).then(res => {
+            // Guard against the stream having been cancelled or replaced
+            // between the resume call and its resolution.
+            if (streamIdRef.current !== activeStreamId) return
             if (res.text) {
               handlerRef.current.onReplace(res.text)
             }
@@ -66,6 +68,8 @@ export function useStreamingMessage(handler: StreamHandler) {
       }
     })
 
+    // If the component unmounted while the async subscription was in flight,
+    // isCanceledRef is now true — immediately unsubscribe to prevent a leak.
     const unsub = await subscribeToEvents((event: { name: string; data: unknown }) => {
       if (event.name !== 'chat:event') return
       const payload = event.data as Record<string, unknown> | null
@@ -90,6 +94,10 @@ export function useStreamingMessage(handler: StreamHandler) {
       }
     })
 
+    if (isCanceledRef.current) {
+      unsub()
+      return
+    }
     unregisterRef.current = unsub
 
     // Wait for the SSE connection to be fully 'open' before signaling the backend
@@ -118,8 +126,9 @@ export function useStreamingMessage(handler: StreamHandler) {
 
   const cancel = useCallback(() => {
     isCanceledRef.current = true
-    if (activeStreamId) {
-      chatApi.cancelStream(activeStreamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
+    const sid = streamIdRef.current
+    if (sid) {
+      chatApi.cancelStream(sid).catch((err) => { logger.warn('Failed to cancel stream', err) })
     }
     if (unregisterRef.current) {
       unregisterRef.current()
@@ -130,9 +139,25 @@ export function useStreamingMessage(handler: StreamHandler) {
       unregisterConnRef.current = null
     }
     streamIdRef.current = null
-  }, [activeStreamId])
+  }, [])
+
+  // teardownStream clears refs and listeners after a stream completes
+  // naturally (onDone/onError). Unlike cancel, it does NOT call cancelStream
+  // on the backend (the stream already finished).
+  const teardownStream = useCallback(() => {
+    if (unregisterRef.current) {
+      unregisterRef.current()
+      unregisterRef.current = null
+    }
+    if (unregisterConnRef.current) {
+      unregisterConnRef.current()
+      unregisterConnRef.current = null
+    }
+    streamIdRef.current = null
+  }, [])
 
   useEffect(() => {
+    isCanceledRef.current = false
     return () => {
       isCanceledRef.current = true
       if (unregisterRef.current) unregisterRef.current()
@@ -144,5 +169,5 @@ export function useStreamingMessage(handler: StreamHandler) {
     }
   }, [])
 
-  return {registerStream, cancel}
+  return {registerStream, cancel, teardownStream}
 }

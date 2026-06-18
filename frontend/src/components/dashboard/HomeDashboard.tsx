@@ -4,7 +4,7 @@ import {dashboardApi, libraryApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {useToast} from '@/components/shared'
 import {useUIStore} from '@/stores/uiStore'
-import {useFlowStore} from '@/stores/flowStore'
+import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import type {DashboardHomeData, FlowDocument} from '@/types'
@@ -38,7 +38,6 @@ export default function HomeDashboard() {
 
   const loadIdRef = useRef(0)
   const hasDataRef = useRef(false)
-  const openFlowIdRef = useRef(0)
   const toastRef = useRef(toast)
   toastRef.current = toast
 
@@ -85,16 +84,15 @@ export default function HomeDashboard() {
   }, [isAnalyzing, load])
 
   const openFlow = useCallback(async (id: string) => {
-    openFlowIdRef.current++
-    const myGen = openFlowIdRef.current
+    const gen = beginDocLoad()
     try {
       const full = await libraryApi.getContent(id)
-      if (myGen !== openFlowIdRef.current) return
+      if (!isDocLoadCurrent(gen)) return
       setDocument(full as FlowDocument)
       useFlowStore.setState({libraryFlowId: id, libraryVersion: 0})
       setMainPaneView('block')
     } catch (e) {
-      if (myGen !== openFlowIdRef.current) return
+      if (!isDocLoadCurrent(gen)) return
       toastRef.current.error('Failed to open flow', {
         description: e instanceof Error ? e.message : 'Unknown error',
       })
@@ -129,7 +127,7 @@ export default function HomeDashboard() {
     )
   }
 
-  const {greeting, overview, tokenUsage, recentFlows, findings, healthTrend, costByProvider, ruleFrequency, activity, complexity, security} = data
+  const {greeting, overview, tokenUsage, recentFlows, findings, isCloud, healthTrend, costByProvider, ruleFrequency, activity, complexity, security} = data
   const orgName = greeting.activeOrgName || activeOrg?.name
 
   return (
@@ -157,33 +155,54 @@ export default function HomeDashboard() {
         <KPIStripCard
           overview={overview}
           findings={findings}
-          costByProvider={costByProvider}
+          costByProvider={isCloud ? costByProvider : []}
           className="col-span-12"
         />
 
-        {/* Row 2: Health Trend + Cost Breakdown */}
-        <HealthTrendCard data={healthTrend} className="col-span-12 lg:col-span-8" />
-        <CostBreakdownCard data={costByProvider} className="col-span-12 lg:col-span-4" />
+        {isCloud ? (
+          <>
+            {/* Row 2: Health Trend + Cost Breakdown */}
+            <HealthTrendCard data={healthTrend} className="col-span-12 lg:col-span-8" />
+            <CostBreakdownCard data={costByProvider} className="col-span-12 lg:col-span-4" />
 
-        {/* Row 3: AI Token Usage + Health Gauge */}
-        <AITokenUsageCard data={tokenUsage} className="col-span-12 lg:col-span-8" />
-        <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
+            {/* Row 3: AI Token Usage + Health Gauge */}
+            <AITokenUsageCard data={tokenUsage} className="col-span-12 lg:col-span-8" />
+            <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
 
-        {/* Row 4: Rule Frequency + Findings Radar */}
-        <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
-        <FindingsChartCard
-          findings={findings}
-          onOpenAnalytics={() => setMainPaneView('dashboard')}
-          className="col-span-12 lg:col-span-4"
-        />
+            {/* Row 4: Rule Frequency + Findings Radar */}
+            <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
+            <FindingsChartCard
+              findings={findings}
+              onOpenAnalytics={() => setMainPaneView('dashboard')}
+              className="col-span-12 lg:col-span-4"
+            />
 
-        {/* Row 5: Recent Flows + Activity Feed */}
-        <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
-        <ActivityFeedCard data={activity} className="col-span-12 lg:col-span-5" />
+            {/* Row 5: Recent Flows + Activity Feed */}
+            <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
+            <ActivityFeedCard data={activity} className="col-span-12 lg:col-span-5" />
 
-        {/* Row 6: Flow Complexity + Security Posture */}
-        <FlowComplexityCard data={complexity} className="col-span-12 lg:col-span-7" />
-        <SecurityPostureCard data={security} className="col-span-12 lg:col-span-5" />
+            {/* Row 6: Flow Complexity + Security Posture */}
+            <FlowComplexityCard data={complexity} className="col-span-12 lg:col-span-7" />
+            <SecurityPostureCard data={security} className="col-span-12 lg:col-span-5" />
+          </>
+        ) : (
+          <>
+            {/* Row 2: Rule Frequency + Health Gauge */}
+            <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
+            <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
+
+            {/* Row 3: Recent Flows + Findings Radar */}
+            <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
+            <FindingsChartCard
+              findings={findings}
+              onOpenAnalytics={() => setMainPaneView('dashboard')}
+              className="col-span-12 lg:col-span-5"
+            />
+
+            {/* Row 4: Flow Complexity */}
+            <FlowComplexityCard data={complexity} className="col-span-12" />
+          </>
+        )}
       </div>
     </div>
   )

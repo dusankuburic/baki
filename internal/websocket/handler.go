@@ -40,7 +40,7 @@ type FlowAccessChecker interface {
 // The caller is responsible for extracting userID and displayName from the
 // authenticated request context (e.g. from auth.ClaimsFromContext) before
 // calling this handler.
-func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, checker FlowAccessChecker) http.HandlerFunc {
+func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, checker FlowAccessChecker, jti string, isRevoked func(string) bool) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -113,6 +113,17 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 					case <-authzCtx.Done():
 						return
 					case <-ticker.C:
+						// Check token blacklist first — a logged-out / explicitly
+						// revoked session disconnects on the next tick even if
+						// flow access is still technically valid. (Password
+						// change and refresh-replay revoke only refresh tokens,
+						// so those sessions end when the access token expires.)
+						if isRevoked != nil && jti != "" && isRevoked(jti) {
+							slog.Info("websocket: disconnecting client after token revoked",
+								"flowId", flowID, "userID", userID)
+							conn.Close()
+							return
+						}
 						if err := checker.CheckAccess(authzCtx, flowID, userID); err != nil {
 							slog.Info("websocket: disconnecting client after access revoked",
 								"flowId", flowID, "userID", userID)

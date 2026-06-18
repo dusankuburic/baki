@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { authApi, type AuthUser, type LoginRequest } from '@/api/auth'
 import { registerRefreshCallback, invalidateConfigCache, setSessionToken } from '@/api/client'
 import { decodeJwtPayload } from '@/lib/jwt'
+import { resetAllStores } from './storeRegistry'
 
 const REFRESH_TOKEN_KEY = 'auth_refresh_token'
 
@@ -254,64 +255,12 @@ registerRefreshCallback(async () => {
   invalidateConfigCache()
 })
 
-// resetAllStores clears every domain store and tears down live session side
-// effects (the collaboration WebSocket and the offline sync queue) to prevent
+// resetAllStores tears down every domain store on logout to prevent
 // cross-session data leakage when a user logs out — important on a shared
-// browser/device where the next user logs in without a full page reload.
-//
-// Invariant (see AGENTS.md "Add a new frontend store"): every store under
-// stores/ must be reset here. (syncStore has no explicit entry — it mirrors the
-// SyncManager queue and is reset transitively by the presenceStore/syncManager
-// teardown below; don't remove that teardown assuming syncStore is covered
-// directly.) Lazy imports avoid circular dependencies; each is guarded so one
-// failure can't abort the rest (or the logout it runs from).
-export async function resetAllStores(): Promise<void> {
-  const guard = (p: Promise<unknown>) => p.catch(() => {})
-  await Promise.all([
-    guard(import('@/stores/flowStore').then(m => m.useFlowStore.getState().reset())),
-    guard(import('@/stores/chatStore').then(m => {
-      m.useChatStore.setState({
-        threads: [],
-        activeThreadId: null,
-        conversations: new Map(),
-        activeStreamId: null,
-        streamingMessageId: null,
-        streamingText: '',
-        pendingMessage: null,
-        selectedProvider: 'claude',
-      })
-    })),
-    guard(import('@/stores/analysisStore').then(m => m.useAnalysisStore.getState().reset())),
-    guard(import('@/stores/orgStore').then(m => {
-      m.useOrgStore.setState({ organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null })
-    })),
-    // Closes the collaboration WebSocket and discards the offline sync queue
-    // (including its localStorage copy) so the next user on a shared device can't
-    // inherit the previous user's pending mutations. reset() must run AFTER
-    // disconnect()→stop() (which re-persists the queue), so chain them rather
-    // than rely on Promise.all ordering.
-    guard(import('@/stores/presenceStore').then(async m => {
-      m.usePresenceStore.getState().disconnect()
-      const { syncManager } = await import('@/services/sync/SyncManager')
-      syncManager.reset()
-    })),
-    // searchStore.results carries flow-content matches — clear them.
-    guard(import('@/stores/searchStore').then(m => m.useSearchStore.getState().clear())),
-    guard(import('@/stores/libraryBrowseStore').then(m => m.useLibraryBrowseStore.getState().reset())),
-    guard(import('@/stores/editorStore').then(m => m.useEditorStore.setState({
-      groups: [{ tabs: [], activeTabId: null }], focusedGroupIndex: 0, groupWidths: [100],
-    }))),
-    // Settings repopulate from the backend on the next login (loadFromBackend).
-    guard(import('@/stores/settingsStore').then(m => m.useSettingsStore.setState({
-      settings: m.defaultSettings, isLoaded: false,
-    }))),
-    // Reset UI chrome and the diff view (activeDiff holds flow content), but keep
-    // resolvedTheme so the login screen doesn't flash before settings reload.
-    guard(import('@/stores/uiStore').then(m => m.useUIStore.setState({
-      sidebarTab: 'explorer', mainPaneView: 'home', inspectorTab: 'details',
-      sidebarCollapsed: false, inspectorCollapsed: false, commandPaletteOpen: false,
-      globalSearchOpen: false, complexityMode: false, settingsOpen: false,
-      variablePanelOpen: false, selectedVariable: null, graphZoom: 1, activeDiff: null,
-    }))),
-  ])
-}
+// browser/device where the next user logs in without a full page reload. Stores
+// self-register their reset handler via registerStoreReset() in storeRegistry.ts
+// (so a new store can't be forgotten here, and authStore needn't import them
+// all). syncStore has no handler of its own — it mirrors the SyncManager queue
+// and is torn down inside presenceStore's handler (disconnect → syncManager.reset).
+// Re-exported so callers/tests can import it from this module as before.
+export { resetAllStores }

@@ -6,6 +6,11 @@ export interface AppInfo {
   arch: string;
   buildDate: string;
   gitCommit: string;
+  capabilities: AppCapabilities;
+}
+
+export interface AppCapabilities {
+  sessionAnalytics: boolean;
 }
 
 // Generic envelope returned by paginated list endpoints (render.PagedResponse

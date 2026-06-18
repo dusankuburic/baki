@@ -267,11 +267,16 @@ func DefaultSettings() *AppSettings {
 }
 
 type AppInfo struct {
-	Version   string `json:"version"`
-	Platform  string `json:"platform"`
-	Arch      string `json:"arch"`
-	BuildDate string `json:"buildDate"`
-	GitCommit string `json:"gitCommit"`
+	Version      string          `json:"version"`
+	Platform     string          `json:"platform"`
+	Arch         string          `json:"arch"`
+	BuildDate    string          `json:"buildDate"`
+	GitCommit    string          `json:"gitCommit"`
+	Capabilities AppCapabilities `json:"capabilities"`
+}
+
+type AppCapabilities struct {
+	SessionAnalytics bool `json:"sessionAnalytics"`
 }
 
 type FrontendError struct {

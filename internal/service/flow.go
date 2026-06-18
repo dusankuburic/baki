@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
 	"pad-core/parser"
 	"pad-core/search"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // FlowService owns document state, search index, and all file-related operations.
@@ -226,6 +226,11 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 		if cached, ok := s.astCache.Get(ctx, key); ok {
 			if doc, ok := cached.(*models.FlowDocument); ok {
 				s.docProvider.SetCurrentDoc(doc)
+				// NOTE: Emit (broadcast) is safe here — LoadFlowFiles is a desktop-only
+				// code path that reads from the local filesystem. Cloud mode loads flows
+				// from Postgres via separate handlers. If this ever becomes reachable from
+				// a JWT/cloud handler, switch to EmitTo with the user's ID to prevent
+				// cross-tenant data leaks.
 				s.notifier.Emit("flow:loaded", doc)
 				logger.Info("flow files loaded from cache", "root", rootName)
 				return doc, nil

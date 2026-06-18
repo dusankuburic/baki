@@ -1,4 +1,4 @@
-import React, {useState, useCallback, useRef, useEffect} from 'react'
+import React, {useState, useCallback, useRef, useEffect, useMemo} from 'react'
 import clsx from 'clsx'
 
 type ToastData = {
@@ -78,13 +78,28 @@ function Toast({id, variant = 'info', title, description, action, duration = 400
     )
 }
 
-type ToastContextValue = {
-    toasts: ToastData[]
+type ToastActions = {
     addToast: (toast: Omit<ToastData, 'id'>) => void
     removeToast: (id: string) => void
 }
 
-const ToastContext = React.createContext<ToastContextValue | null>(null)
+// Split into two contexts so useToast() consumers don't re-render when
+// toasts are added/removed — only the actions are stable; the toast list
+// is consumed by ToastList below.
+const ToastActionsContext = React.createContext<ToastActions | null>(null)
+const ToastListContext = React.createContext<ToastData[]>([])
+
+function ToastList() {
+    const toasts = React.useContext(ToastListContext)
+    const removeToast = React.useContext(ToastActionsContext)!.removeToast
+    return (
+        <div className="fixed bottom-4 right-4 z-toast flex flex-col-reverse gap-2">
+            {toasts.map(toast => (
+                <Toast key={toast.id} {...toast} onClose={removeToast} />
+            ))}
+        </div>
+    )
+}
 
 export function ToastProvider({children}: {children: React.ReactNode}) {
     const [toasts, setToasts] = useState<ToastData[]>([])
@@ -99,26 +114,26 @@ export function ToastProvider({children}: {children: React.ReactNode}) {
         setToasts(prev => prev.filter(t => t.id !== id))
     }, [])
 
+    const actions = useMemo(() => ({addToast, removeToast}), [addToast, removeToast])
+
     return (
-        <ToastContext.Provider value={{toasts, addToast, removeToast}}>
-            {children}
-            <div className="fixed bottom-4 right-4 z-toast flex flex-col-reverse gap-2">
-                {toasts.map(toast => (
-                    <Toast key={toast.id} {...toast} onClose={removeToast} />
-                ))}
-            </div>
-        </ToastContext.Provider>
+        <ToastActionsContext.Provider value={actions}>
+            <ToastListContext.Provider value={toasts}>
+                {children}
+                <ToastList />
+            </ToastListContext.Provider>
+        </ToastActionsContext.Provider>
     )
 }
 
 export function useToast() {
-    const ctx = React.useContext(ToastContext)
+    const ctx = React.useContext(ToastActionsContext)
     if (!ctx) throw new Error('useToast must be used within ToastProvider')
-    return {
+    return useMemo(() => ({
         toast: ctx.addToast,
         success: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'success', title, ...opts}),
         error: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'error', title, ...opts}),
         warning: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'warning', title, ...opts}),
         info: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'info', title, ...opts}),
-    }
+    }), [ctx.addToast])
 }

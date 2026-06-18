@@ -31,10 +31,12 @@ func LoadRaw(path string) (*Config, error) {
 // validating. The caller is responsible for calling Validate on the result.
 // Use this when you need to resolve additional secrets (e.g. Azure Key Vault)
 // before the config is validated.
-func LoadFromEnvRaw() *Config {
+func LoadFromEnvRaw() (*Config, error) {
 	cfg := Default()
-	applyEnvVars(cfg)
-	return cfg
+	if err := applyEnvVars(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // Load reads configuration from the given JSON file.
@@ -147,7 +149,11 @@ func applyEnvVars(cfg *Config) error {
 		cfg.Storage.DatabaseURL = v
 	}
 	if v := os.Getenv("PAD_AUTH_ENABLED"); v != "" {
-		cfg.Auth.Enabled = v == "true" || v == "1"
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("PAD_AUTH_ENABLED=%q: %w (use true/false, 1/0, or TRUE/FALSE)", v, err)
+		}
+		cfg.Auth.Enabled = b
 	}
 	if v := os.Getenv("PAD_AUTH_SECRET"); v != "" {
 		cfg.Auth.Secret = v
@@ -174,7 +180,11 @@ func applyEnvVars(cfg *Config) error {
 		cfg.Server.TLSKey = v
 	}
 	if v := os.Getenv("PAD_BEHIND_PROXY"); v != "" {
-		cfg.Server.BehindProxy = v == "true" || v == "1"
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("PAD_BEHIND_PROXY=%q: %w (use true/false, 1/0, or TRUE/FALSE)", v, err)
+		}
+		cfg.Server.BehindProxy = b
 	}
 	if v := os.Getenv("PAD_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
@@ -301,10 +311,11 @@ var knownWeakSecrets = map[string]bool{
 
 // isWeakSecret reports whether a secret is too short or a known placeholder.
 func isWeakSecret(s string) bool {
+	s = strings.TrimSpace(s)
 	if len(s) < minSecretLength {
 		return true
 	}
-	return knownWeakSecrets[strings.ToLower(strings.TrimSpace(s))]
+	return knownWeakSecrets[strings.ToLower(s)]
 }
 
 // Validate checks that the configuration is internally consistent.
@@ -326,6 +337,9 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(o) == "*" {
 			return errors.New("config: wildcard '*' is not permitted in server.allowed_origins; list explicit origins")
 		}
+	}
+	if cfg.Mode == ModeCloud && cfg.Storage.Backend != StorageDatabase {
+		return errors.New("config: cloud mode requires storage.backend=database (set PAD_STORAGE=database)")
 	}
 	if cfg.Storage.Backend == StorageDatabase && cfg.Storage.DatabaseURL == "" {
 		return errors.New("config: storage.database_url is required when storage.backend is database")

@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {AnalysisReport, Severity, Finding, VariableHistory} from '@/types'
 import {toggleSetMember} from '@/lib/collections'
 
@@ -183,3 +184,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     protectedFlowId: null,
   }),
 }))
+
+// Reset on logout (see storeRegistry).
+registerStoreReset(() => useAnalysisStore.getState().reset())

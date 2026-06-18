@@ -68,11 +68,6 @@ docs/docs.go
 docs/swagger.json
 docs/swagger.yaml
 
-# Markdown — ignore all .md files except explicitly allowed ones
+# Markdown — ignore all .md files except README (matches README.md at any depth)
 *.md
 !README.md
-!LICENSE
-!ARCHITECTURE_MIGRATION_PLAN.md
-!core/parser/GRAMMAR.md
-!core/README.md
-!docs/AZURE_PLAN.md

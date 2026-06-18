@@ -7,7 +7,7 @@ import {
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {createAdapter} from '@/platform/adapters'
-import {isTauri} from '@/platform/guards'
+import {useSystemStore} from '@/stores/systemStore'
 import {useToast} from '@/components/shared'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {scoreColor} from '@/lib/scoring'
@@ -54,12 +54,14 @@ function exportBatchCSV(batch: BatchAnalysis) {
   downloadBlob(csv, 'text/csv;charset=utf-8;', `batch-analysis-${new Date().toISOString().slice(0, 10)}.csv`)
 }
 
-// AnalyticsDashboard surfaces the session-wide analysis aggregates (the
-// /dashboard endpoint existed unused since it was written) plus folder-level
-// batch analysis with per-file error rows.
+// AnalyticsDashboard surfaces the session-wide analysis aggregates plus
+// folder-level batch analysis with per-file error rows.
 export default function AnalyticsDashboard() {
   const toast = useToast()
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const sessionAnalyticsEnabled = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
+  const isLoaded = useSystemStore(s => s.isLoaded)
+
   // Loading a new flow/folder clears the server-side session cache, so re-fetch
   // when the open document changes to reflect only the current working context.
   const docId = useFlowStore(s => s.document?.id ?? null)
@@ -74,11 +76,14 @@ export default function AnalyticsDashboard() {
   toastRef.current = toast
 
   const refresh = useCallback((background = false) => {
-    // Session analytics aggregate the desktop app's in-process analyzer cache and
-    // read server-local folders — both desktop-only. In web/cloud mode the backend
-    // returns 403 (the data would otherwise span tenants), so skip the fetch; the
-    // component early-returns a notice below. The Home dashboard is the cloud view.
-    if (!isTauri()) return
+    // Session analytics aggregate the app's in-process analyzer cache and read
+    // server-local folders. In cloud/JWT mode the backend returns 403 (data
+    // would otherwise span tenants), so we check the capability flag provided
+    // by the backend. The Home dashboard is the cloud view. Wait for the
+    // capability to load before fetching so we don't fire a doomed 403 in
+    // cloud mode; the effect re-runs once isLoaded flips true.
+    if (!isLoaded || !sessionAnalyticsEnabled) return
+
     reqIdRef.current++
     const myReq = reqIdRef.current
     if (!background) {
@@ -106,7 +111,7 @@ export default function AnalyticsDashboard() {
       .finally(() => {
         if (myReq === reqIdRef.current) setLoading(false)
       })
-  }, [])
+  }, [sessionAnalyticsEnabled, isLoaded])
 
   useEffect(() => {
     refresh()
@@ -118,7 +123,7 @@ export default function AnalyticsDashboard() {
     const result = await adapter.fileOpenDirectory()
     if (!result) return
     if (typeof result !== 'string' || result.trim().startsWith('{')) {
-      toast.error('Batch analysis requires the desktop app')
+      toast.error('Batch analysis requires a local file system')
       return
     }
     setBatchRunning(true)
@@ -147,9 +152,9 @@ export default function AnalyticsDashboard() {
     [batch],
   )
 
-  // Desktop-only view: the session analytics + folder batch features have no
-  // cloud equivalent (the backend gates them). Show a notice and point to Home.
-  if (!isTauri()) {
+  // Gated view: session analytics + folder batch are only available when the
+  // backend supports them (e.g. local mode). Show a notice and point to Home.
+  if (isLoaded && !sessionAnalyticsEnabled) {
     return (
       <div className="max-w-4xl mx-auto space-y-5">
         <button
@@ -160,7 +165,7 @@ export default function AnalyticsDashboard() {
         </button>
         <div className="flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-border-subtle bg-surface-0">
           <BarChart3 size={22} className="text-text-tertiary" />
-          <span className="text-sm text-text-secondary">Session analytics are a desktop-only view</span>
+          <span className="text-sm text-text-secondary">Session analytics are not available in this mode</span>
           <span className="text-sm text-text-tertiary">Open the Home dashboard for your cloud analytics.</span>
         </div>
       </div>

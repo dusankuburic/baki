@@ -33,7 +33,7 @@ func TestLoad_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	data := `{"Mode":"cloud","Server":{"Host":"0.0.0.0","Port":8080},"Storage":{"Backend":"local"},"Auth":{"Enabled":false}}`
+	data := `{"Mode":"cloud","Server":{"Host":"0.0.0.0","Port":8080},"Storage":{"Backend":"database","DatabaseURL":"postgres://localhost/test"},"Auth":{"Enabled":false}}`
 	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +88,8 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	original := Default()
 	original.Server.Port = 9000
 	original.Mode = ModeCloud
+	original.Storage.Backend = StorageDatabase
+	original.Storage.DatabaseURL = "postgres://localhost/test"
 
 	if err := Save(original, path); err != nil {
 		t.Fatalf("save failed: %v", err)

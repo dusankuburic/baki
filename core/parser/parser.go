@@ -49,6 +49,19 @@ func (s *parseState) processToken(tok Token) {
 		return
 
 	case TokSubflowStart:
+		// Check for unclosed blocks before starting a new subflow (mirrors
+		// TokSubflowEnd). Without this, a missing EndRegion before the next
+		// Region silently drops all open IF/LOOP/BLOCK entries.
+		if len(s.stack) > 0 {
+			for _, entry := range s.stack {
+				s.parseErrors = append(s.parseErrors, models.ParseError{
+					Line:     entry.block.LineNumber,
+					Message:  fmt.Sprintf("unclosed block: %s", entry.block.Name),
+					Severity: "error",
+					Snippet:  entry.block.RawType,
+				})
+			}
+		}
 		s.current = &builtSubflow{id: uuid.NewString(), name: tok.Name}
 		s.built = append(s.built, s.current)
 		s.stack = nil

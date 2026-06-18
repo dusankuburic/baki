@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { registerStoreReset } from './storeRegistry'
 import {
   collaborationService,
   type ConnectionStatus,
@@ -133,3 +134,11 @@ function handleEnvelope(env: Envelope): void {
   }
 
 }
+
+// Reset on logout (see storeRegistry). disconnect() re-persists the sync queue
+// via syncManager.stop(); syncManager.reset() then discards it — order matters,
+// so keep these two sequential here rather than as separate handlers.
+registerStoreReset(() => {
+  usePresenceStore.getState().disconnect()
+  syncManager.reset()
+})

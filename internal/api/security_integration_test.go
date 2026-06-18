@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -66,6 +68,43 @@ func TestEventManager_Emit_BroadcastsToAll(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 			t.Fatalf("client %d did not receive broadcast", i)
 		}
+	}
+}
+
+// TestHandleEvents_DisconnectsAtTokenExpiry verifies a live SSE stream is
+// dropped once the access token reaches its expiry, capping the connection at
+// the access-token TTL instead of letting it run indefinitely.
+func TestHandleEvents_DisconnectsAtTokenExpiry(t *testing.T) {
+	em := NewEventManager(make(chan struct{}))
+
+	claims := &auth.Claims{}
+	claims.ID = "jti-expiry-test"
+	// Construct NumericDate directly: jwt.NewNumericDate truncates to whole
+	// seconds (TimePrecision), which would round a sub-second offset into the
+	// past. Real tokens already carry whole-second exp, so this only matters
+	// for the test's short offset.
+	claims.ExpiresAt = &jwt.NumericDate{Time: time.Now().Add(150 * time.Millisecond)}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	req = req.WithContext(auth.WithClaims(req.Context(), claims))
+
+	rr := httptest.NewRecorder() // implements http.Flusher
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		em.HandleEvents(rr, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
+			t.Fatalf("disconnected too early (%v) — should wait until token expiry", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleEvents did not disconnect after token expiry")
 	}
 }
 

@@ -1,14 +1,23 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {FlowDocument, Block, Subflow, BlockType, FlowFileInfo} from '@/types'
 import {useEditorStore} from './editorStore'
 import {useSearchStore} from './searchStore'
 import {useAnalysisStore} from './analysisStore'
+import {useChatStore} from './chatStore'
 import {
   findBlockInDoc, findSubflowIdByBlock, findAncestorIds, findLabelBlock,
 } from '@/lib/tree'
 import {toggleSetMember} from '@/lib/collections'
 
 export const ALL_TYPES: BlockType[] = ['ACTION', 'LOOP', 'CONDITION', 'SUBFLOW', 'ERROR_HANDLER', 'COMMENT', 'VARIABLE', 'WAIT', 'BLOCK', 'SWITCH', 'ELSE', 'CASE', 'DEFAULT', 'END', 'UNKNOWN']
+
+// Global document-load generation counter. All code paths that load a document
+// call beginDocLoad() before their async fetch and isDocLoadCurrent(gen) after,
+// so a stale load from one path can't overwrite a newer load from another.
+let docLoadGen = 0
+export function beginDocLoad(): number { return ++docLoadGen }
+export function isDocLoadCurrent(gen: number): boolean { return gen === docLoadGen }
 
 interface FlowState {
   document: FlowDocument | null
@@ -98,8 +107,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     useSearchStore.getState().clear()
     useAnalysisStore.getState().setVariableLineage(null)
     useAnalysisStore.getState().setFindingSearch('')
-    // Protect the open flow's report from LRU eviction in the analysis store.
     useAnalysisStore.getState().setProtectedFlowId(doc?.id ?? null)
+    // Clear the active chat thread so the new flow doesn't show the previous
+    // flow's conversation. useChatConversations will auto-create a thread for
+    // the new flow when the AITab mounts.
+    useChatStore.setState({activeThreadId: null})
 
     if (firstId) {
       useEditorStore.getState().openInGroup(firstId, 0)
@@ -273,3 +285,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     return document?.subflows.find(s => s.id === selectedSubflowId) ?? null
   },
 }))
+
+// Reset on logout (see storeRegistry). reset() also clears search/analysis/editor.
+registerStoreReset(() => useFlowStore.getState().reset())

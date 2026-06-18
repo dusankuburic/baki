@@ -42,6 +42,7 @@ const emptyData = {
   overview: {avgHealthScore: 0, healthAvailable: false, totalFlows: 0, totalSubflows: 0},
   tokenUsage: [], recentFlows: [],
   findings: {available: false, bySeverity: {}, byCategory: []},
+  isCloud: false,
   healthTrend: [], costByProvider: [], ruleFrequency: [], activity: [],
   complexity: [], security: {failedLogins24h: 0, credentialFindings: 0},
 }
@@ -66,6 +67,40 @@ describe('HomeDashboard', () => {
     renderHome()
     expect(getHome).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
+  })
+
+  it('hides advanced cards in local mode (isCloud: false)', async () => {
+    renderHome()
+    await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
+    
+    // Cards that should be hidden
+    expect(screen.queryByText(/Health Score Trend/)).toBeNull()
+    expect(screen.queryByText(/AI Cost by Provider/)).toBeNull()
+    expect(screen.queryByText(/AI Token Usage/)).toBeNull()
+    expect(screen.queryByText(/Recent Activity/)).toBeNull()
+    expect(screen.queryByText(/Security Posture/)).toBeNull()
+
+    // Cards that should still be visible
+    expect(screen.getByText(/Findings by Rule/)).toBeInTheDocument()
+    expect(screen.getByText(/Recent Flows/)).toBeInTheDocument()
+  })
+
+  it('shows advanced cards in cloud mode (isCloud: true)', async () => {
+    getHome.mockResolvedValue({
+      ...emptyData,
+      isCloud: true,
+      healthTrend: [{date: '2023-01-01', avgHealth: 80, flowCount: 1}],
+      costByProvider: [{provider: 'openai', cost: 1.0, tokensIn: 100, tokensOut: 100}],
+      activity: [{action: 'auth.login', createdAt: new Date().toISOString()}],
+      security: {failedLogins24h: 0, credentialFindings: 0},
+    })
+    renderHome()
+    await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
+    
+    expect(screen.getByText(/Health Score Trend/)).toBeInTheDocument()
+    expect(screen.getByText(/AI Cost by Provider/)).toBeInTheDocument()
+    expect(screen.getByText(/Recent Activity/)).toBeInTheDocument()
+    expect(screen.getByText(/Security Posture/)).toBeInTheDocument()
   })
 
   it('shows skeleton while loading', () => {

@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 import type {FlowDiff} from '@/types'
 
 export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'library'
@@ -85,4 +86,13 @@ export const useUIStore = create<UiState>((set) => ({
   toggleComplexityMode: () => set(s => ({complexityMode: !s.complexityMode})),
   toggleInspector: () => set(s => ({inspectorCollapsed: !s.inspectorCollapsed})),
   toggleSettings: () => set(s => ({settingsOpen: !s.settingsOpen})),
+}))
+
+// Reset on logout (see storeRegistry). resolvedTheme is intentionally preserved
+// so the login screen doesn't flash before settings reload.
+registerStoreReset(() => useUIStore.setState({
+  sidebarTab: 'explorer', mainPaneView: 'home', inspectorTab: 'details',
+  sidebarCollapsed: false, inspectorCollapsed: false, commandPaletteOpen: false,
+  globalSearchOpen: false, complexityMode: false, settingsOpen: false,
+  variablePanelOpen: false, selectedVariable: null, graphZoom: 1, activeDiff: null,
 }))

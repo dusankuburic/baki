@@ -39,19 +39,22 @@ export function KPIStripCard({
       sub: `${findings.bySeverity.error ?? 0}E · ${findings.bySeverity.warning ?? 0}W · ${findings.bySeverity.info ?? 0}I`,
     },
     {
-      label: 'AI Spend (30d)',
-      value: totalCost > 0 ? `$${totalCost.toFixed(2)}` : '—',
-      sub: totalCost > 0 ? `${costByProvider.length} providers` : 'no usage',
-    },
-    {
       label: 'Flows',
       value: overview.totalFlows,
       sub: `${overview.totalSubflows} subflows`,
     },
   ]
 
+  if (costByProvider.length > 0) {
+    kpis.splice(2, 0, {
+      label: 'AI Spend (30d)',
+      value: totalCost > 0 ? `$${totalCost.toFixed(2)}` : '—',
+      sub: totalCost > 0 ? `${costByProvider.length} providers` : 'no usage',
+    })
+  }
+
   return (
-    <div className={clsx('grid grid-cols-2 lg:grid-cols-4 gap-3', className)}>
+    <div className={clsx('grid gap-3', className, costByProvider.length > 0 ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3')}>
       {kpis.map((kpi) => (
         <div key={kpi.label} className="bg-surface-2 border border-border-subtle rounded-xl p-3 flex flex-col gap-0.5">
           <span className="text-2xs uppercase tracking-wider text-text-tertiary">{kpi.label}</span>

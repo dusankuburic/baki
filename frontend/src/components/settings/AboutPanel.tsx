@@ -12,7 +12,8 @@ export default function AboutPanel() {
       arch: i?.arch || '',
       buildDate: i?.buildDate || '',
       gitCommit: i?.gitCommit || '',
-    })).catch(() => setInfo({version: 'dev', platform: '', arch: '', buildDate: '', gitCommit: ''}))
+      capabilities: i?.capabilities ?? {sessionAnalytics: false},
+    })).catch(() => setInfo({version: 'dev', platform: '', arch: '', buildDate: '', gitCommit: '', capabilities: {sessionAnalytics: false}}))
   }, [])
 
   return (

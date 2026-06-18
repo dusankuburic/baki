@@ -48,13 +48,19 @@ func isPrivateIP(ipStr string) bool {
 
 // MetricsGuard returns middleware that restricts access to private/loopback IPs.
 // Requests from public IPs are rejected with 403 Forbidden.
-// Pass cfg.Server.TrustedProxies so X-Forwarded-For is honoured when the
-// service is behind an ingress controller that injects the real client IP.
-func MetricsGuard(trustedProxies []string) func(http.Handler) http.Handler {
+//
+// IMPORTANT: We deliberately use r.RemoteAddr (the actual TCP peer) rather than
+// ClientIP, because ClientIP honours X-Forwarded-For whose leftmost entry is
+// client-controlled and trivially spoofable. The metrics endpoint must only be
+// reachable from inside the cluster network.
+func MetricsGuard(_ []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := ClientIP(r, trustedProxies)
-			if !isPrivateIP(ip) {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			if !isPrivateIP(host) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

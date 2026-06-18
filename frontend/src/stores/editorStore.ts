@@ -1,4 +1,5 @@
 import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
 
 export interface EditorGroup {
   tabs: string[]
@@ -32,12 +33,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   openInGroup: (subflowId, groupIndex) => {
     const {groups, focusedGroupIndex} = get()
     const targetIndex = groupIndex !== undefined ? groupIndex : focusedGroupIndex
+    if (targetIndex < 0 || targetIndex >= groups.length) return
     const nextGroups = [...groups]
     const group = {...nextGroups[targetIndex]}
-    
+
     if (!group.tabs.includes(subflowId)) {
-      if (group.tabs.length >= MAX_TABS_PER_GROUP) return
-      group.tabs = [...group.tabs, subflowId]
+      if (group.tabs.length >= MAX_TABS_PER_GROUP) {
+        // At the tab cap — evict the oldest tab so the newly opened subflow
+        // still gets a tab. This keeps activeTabId always present in tabs.
+        group.tabs = [...group.tabs.slice(1), subflowId]
+      } else {
+        group.tabs = [...group.tabs, subflowId]
+      }
     }
     group.activeTabId = subflowId
     nextGroups[targetIndex] = group
@@ -90,9 +97,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   focusGroup: (index) => set({focusedGroupIndex: index}),
 
   splitRight: () => {
-    const {groups} = get()
+    const {groups, focusedGroupIndex} = get()
     if (groups.length >= MAX_GROUPS) return
-    const nextGroups = [...groups, {tabs: [], activeTabId: null}]
+
+    const activeTabId = groups[focusedGroupIndex]?.activeTabId
+    const newGroup = {
+      tabs: activeTabId ? [activeTabId] : [],
+      activeTabId: activeTabId || null
+    }
+
+    const nextGroups = [...groups, newGroup]
     const nextWidths = nextGroups.map(() => 100 / nextGroups.length)
     set({groups: nextGroups, focusedGroupIndex: nextGroups.length - 1, groupWidths: nextWidths})
   },
@@ -135,3 +149,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setGroupWidths: (widths) => set({groupWidths: widths}),
 }))
+
+// Reset on logout (see storeRegistry).
+registerStoreReset(() => useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [100]}))

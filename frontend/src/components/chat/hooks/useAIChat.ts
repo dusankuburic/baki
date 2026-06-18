@@ -80,6 +80,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   const accumulatedTextRef = useRef('')
   const lastUpdateRef = useRef<number | null>(null)
+  const sendGenRef = useRef(0)
+  const teardownRef = useRef<() => void>(() => {})
 
   const isCurrentThreadStreaming = isStreaming && streamingThreadId === activeThreadId
   const showThinking = isCurrentThreadStreaming && isThinking && !streamingText
@@ -140,6 +142,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     }
     setStreamingThreadId(null)
     accumulatedTextRef.current = ''
+    teardownRef.current()
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
@@ -166,6 +169,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     setStreamingThreadId(null)
     accumulatedTextRef.current = ''
     lastUpdateRef.current = null
+    teardownRef.current()
     endStream()
     setIsThinking(false)
     setStreamingTokens(0)
@@ -176,7 +180,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     onChunk, onReplace, onDone, onError, onToolStatus,
   }), [onChunk, onReplace, onDone, onError, onToolStatus])
 
-  const {registerStream} = useStreamingMessage(handler)
+  const {registerStream, teardownStream} = useStreamingMessage(handler)
+  useEffect(() => { teardownRef.current = teardownStream }, [teardownStream])
 
   const buildRequest = useCallback((text: string, overrideFiles?: string[], excludeContext?: boolean) => {
     if (!doc || !activeThread) return null
@@ -220,7 +225,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
     const msgId = crypto.randomUUID()
     setStreamingThreadId(activeThread.id)
+    accumulatedTextRef.current = ''
     lastUpdateRef.current = null
+    sendGenRef.current++
+    const myGen = sendGenRef.current
     startStream('pending', msgId)
     setIsThinking(true)
     setStreamingTokens(0)
@@ -243,7 +251,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         } as ChatMessage)
         return
       }
-      if (useChatStore.getState().activeStreamId === null) {
+      if (sendGenRef.current !== myGen) {
         chatApi.cancelStream(sid).catch((err) => { logger.warn('Failed to cancel stream', err) })
         setStreamingThreadId(null)
         setIsThinking(false)
@@ -252,6 +260,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       startStream(sid, msgId)
       await registerStream(sid)
     } catch (e: unknown) {
+      if (sendGenRef.current !== myGen) return
       const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
       appendMessage(activeThread.id, {
         id: crypto.randomUUID(),
@@ -334,11 +343,15 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   }, [doc, activeThread])
 
   const handleCancelStream = useCallback(() => {
-    if (activeStreamId) {
+    sendGenRef.current++
+    if (activeStreamId && activeStreamId !== 'pending') {
       chatApi.cancelStream(activeStreamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
-      endStream()
     }
+    endStream()
+    teardownRef.current()
     setStreamingThreadId(null)
+    accumulatedTextRef.current = ''
+    lastUpdateRef.current = null
     setIsThinking(false)
     setStreamingTokens(0)
   }, [activeStreamId, endStream, setStreamingThreadId])

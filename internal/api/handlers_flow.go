@@ -2,16 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
-	"pad-core/analyzer"
-	"pad-core/models"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/analyzer"
+	"pad-core/models"
 )
 
 type FlowHandler struct {
@@ -75,7 +76,22 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if h.backend != nil {
+			// Load the existing version so OCC applies. If the flow is new,
+			// version stays 0 (insert path). If it exists, passing the current
+			// version prevents silent clobbering of prior edits.
+			existing, err := h.backend.LoadFlow(r.Context(), doc.ID)
+			if err == nil && existing != nil {
+				libDoc.Version = existing.Version
+			} else if err != nil && !errors.Is(err, storageif.ErrNotFound) {
+				// Transient DB error — must not silently bypass OCC
+				render.Error(w, fmt.Errorf("failed to check existing flow: %w", err), http.StatusInternalServerError)
+				return
+			}
 			if err := h.backend.SaveFlow(r.Context(), &libDoc); err != nil {
+				if errors.Is(err, storageif.ErrVersionConflict) {
+					render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+					return
+				}
 				render.Error(w, fmt.Errorf("failed to save uploaded flow: %w", err), http.StatusInternalServerError)
 				return
 			}
@@ -206,12 +222,12 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.ID, "viewer")
 	if !ok {
 		return
 	}
-	
+
 	res, err := h.flowSvc.SearchFlow(doc, req.Query)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)

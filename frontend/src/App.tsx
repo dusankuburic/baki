@@ -6,6 +6,7 @@ import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
 
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'))
 import {useUIStore, isSystemView} from './stores/uiStore'
+import {useSystemStore} from './stores/systemStore'
 import {logger} from './lib/logger'
 import {useAuthStore} from './stores/authStore'
 import {useFlowStore} from './stores/flowStore'
@@ -61,6 +62,10 @@ function AppInner() {
             setMainPaneView('block')
         }
     }, [setDocument, setMainPaneView])
+
+    useEffect(() => {
+        useSystemStore.getState().loadInfo()
+    }, [])
 
     useEffect(() => {
         let cancelled = false

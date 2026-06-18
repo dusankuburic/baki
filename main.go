@@ -76,7 +76,12 @@ func loadConfig() *config.Config {
 		}
 		cfg = c
 	} else if os.Getenv("PAD_MODE") != "" || os.Getenv("PAD_PORT") != "" {
-		cfg = config.LoadFromEnvRaw()
+		c, err := config.LoadFromEnvRaw()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid env config: %v\n", err)
+			os.Exit(1)
+		}
+		cfg = c
 	} else {
 		cfg = config.Default()
 	}
@@ -99,15 +104,8 @@ func loadConfig() *config.Config {
 	return cfg
 }
 
-func provideShutdownCh(lc fx.Lifecycle) chan struct{} {
-	ch := make(chan struct{})
-	lc.Append(fx.Hook{
-		OnStop: func(ctx context.Context) error {
-			close(ch)
-			return nil
-		},
-	})
-	return ch
+func provideShutdownCh() chan struct{} {
+	return make(chan struct{})
 }
 
 func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) *auth.Manager {

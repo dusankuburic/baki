@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/api/middleware"
-	"pad-core/logger"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
+	"pad-core/logger"
 )
 
 type Event struct {
@@ -26,6 +29,7 @@ type EventManager struct {
 	shutdownCh   <-chan struct{}
 	allowOrigin  func(string) bool          // injected by Router; nil = deny all cross-origin
 	clientKey    func(*http.Request) string // injected by Router; nil = fall back to remote IP
+	isRevoked    func(string) bool          // injected by Router; nil = skip blacklist re-check
 }
 
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
@@ -49,6 +53,16 @@ func (m *EventManager) SetOriginChecker(fn func(string) bool) {
 // shared connection cap for everyone).
 func (m *EventManager) SetClientKeyFunc(fn func(*http.Request) string) {
 	m.clientKey = fn
+}
+
+// SetRevocationChecker injects the auth manager's blacklist check so the SSE
+// event loop can periodically verify the access token hasn't been blacklisted
+// (logout / explicit revoke) after the initial middleware upgrade. Note:
+// password change and refresh-replay revoke only refresh tokens, not access
+// tokens; those sessions end when the access token expires, which the SSE loop
+// enforces directly via the token's expiry (independent of this check).
+func (m *EventManager) SetRevocationChecker(fn func(string) bool) {
+	m.isRevoked = fn
 }
 
 // Emit satisfies the service.Notifier interface. It broadcasts to ALL
@@ -100,10 +114,16 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract the authenticated user ID for per-user event filtering.
-	// In local mode (no JWT), userID is "" — all events are broadcast.
+	// sseClientKey returns "user:<id>" (prefixed for connection-limit bucketing);
+	// strip the prefix so the stored value matches the bare userID that services
+	// pass to EmitTo via auth.ClaimsFromContext. In local mode (no JWT), the key
+	// is the bare IP and userID stays "" — all events broadcast to everyone.
 	userID := ""
 	if m.clientKey != nil {
-		userID = m.clientKey(r)
+		rawKey := m.clientKey(r)
+		if strings.HasPrefix(rawKey, "user:") {
+			userID = rawKey[5:]
+		}
 	}
 
 	m.clientsMu.Lock()
@@ -148,13 +168,53 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 	metrics.SSEClientStart()
 
+	// Extract the token JTI and expiry for periodic re-validation. In local
+	// mode (no JWT) there is no token, so both checks are skipped.
+	jti := ""
+	var tokenExp time.Time
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		jti = claims.ID
+		if claims.ExpiresAt != nil {
+			tokenExp = claims.ExpiresAt.Time
+		}
+	}
+
 	ctx := r.Context()
+
+	// Drop the stream once the access token is blacklisted (logout / explicit
+	// revoke). Checked on a slow ticker because it hits the shared blacklist store.
+	var revokeC <-chan time.Time
+	if m.isRevoked != nil && jti != "" {
+		revokeTicker := time.NewTicker(2 * time.Minute)
+		defer revokeTicker.Stop()
+		revokeC = revokeTicker.C
+	}
+
+	// Drop the stream when the access token reaches its expiry, capping a live
+	// connection at the access-token TTL rather than letting it outlive the
+	// token indefinitely. The frontend reconnects with a freshly-refreshed
+	// token (ensureFreshToken), so this won't loop. No DB cost, so fire
+	// precisely at expiry instead of polling.
+	var expiryC <-chan time.Time
+	if !tokenExp.IsZero() {
+		expiryTimer := time.NewTimer(time.Until(tokenExp))
+		defer expiryTimer.Stop()
+		expiryC = expiryTimer.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-m.shutdownCh:
-			// Server is shutting down — return so http.Server.Shutdown can drain.
+			return
+		case <-revokeC:
+			if m.isRevoked(jti) {
+				logger.Info("SSE: disconnecting client after token revoked", "jti", jti)
+				return
+			}
+		case <-expiryC:
+			logger.Info("SSE: disconnecting client after token expired", "jti", jti)
 			return
 		case ev := <-ch:
 			data, _ := json.Marshal(ev)
