@@ -22,6 +22,30 @@ export interface LibraryFlow {
   warningCount?: number
 }
 
+// Portfolio: the org-wide governance fleet view (GET /api/library/portfolio).
+export interface PortfolioEntry {
+  flowId: string
+  flowName: string
+  ownerId?: string
+  ownerName?: string
+  analyzed: boolean
+  healthScore: number
+  errors: number
+  warnings: number
+  info: number
+  analyzedAt?: string
+}
+
+export interface Portfolio {
+  entries: PortfolioEntry[]
+  totalFlows: number
+  analyzedFlows: number
+  avgHealth: number
+  errors: number
+  warnings: number
+  info: number
+}
+
 export type LibraryScope = 'all' | 'mine' | 'shared'
 export type LibrarySort = 'updated_desc' | 'updated_asc' | 'name_asc' | 'name_desc' | 'blocks_desc'
 
@@ -68,6 +92,12 @@ export const libraryApi = {
     if (filter.offset) params.set('offset', String(filter.offset))
     const qs = params.toString()
     return request(`/api/library${qs ? '?' + qs : ''}`, undefined, 'GET')
+  },
+
+  // Org-wide governance portfolio, ranked worst-health-first.
+  portfolio: (orgId?: string): Promise<Portfolio> => {
+    const qs = orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''
+    return request(`/api/library/portfolio${qs}`, undefined, 'GET')
   },
 
   get: (id: string): Promise<LibraryFlow> =>

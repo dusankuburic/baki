@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
 import {Download, FileText, Search, GitCompareArrows, Layers, ArrowUpDown} from 'lucide-react'
 import {analysisApi} from '@/api'
-import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
+import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
@@ -37,7 +37,8 @@ export default function FindingsTab() {
   const findingSearch = useAnalysisStore(s => s.findingSearch)
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
-  const suppressedIds = useAnalysisStore(s => s.suppressedIds)
+  const suppressedKeys = useAnalysisStore(s => s.suppressedKeys)
+  const loadSuppressions = useAnalysisStore(s => s.loadSuppressions)
   const toast = useToast()
   const [diff, setDiff] = useState<AnalysisDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
@@ -54,6 +55,12 @@ export default function FindingsTab() {
     setDedupGroups(null)
   }, [doc?.id, report?.generatedAt])
 
+  // Pull persisted, team-shared suppressions for the active flow (cloud mode;
+  // a no-op on desktop). Keeps suppressions in sync across users/sessions.
+  useEffect(() => {
+    if (doc?.id) void loadSuppressions(doc.id)
+  }, [doc?.id, loadSuppressions])
+
   // Build a blockId → label index once per document so the findings list can
   // resolve each row's block name in O(1), instead of walking the whole block
   // tree per finding (which made a large report's render O(findings × blocks)).
@@ -66,20 +73,20 @@ export default function FindingsTab() {
       if (dedupGroups && !dedupGroups.has(f.id)) return false
       if (!severityFilter.has(f.severity)) return false
       if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
-      if (suppressedIds.has(f.id)) return false
+      if (suppressedKeys.has(findingKey(f))) return false
       if (q && !f.title.toLowerCase().includes(q) && !f.description.toLowerCase().includes(q) && !f.ruleId.toLowerCase().includes(q)) return false
       return true
     })
-  }, [report, severityFilter, categoryFilter, findingSearch, suppressedIds, dedupGroups])
+  }, [report, severityFilter, categoryFilter, findingSearch, suppressedKeys, dedupGroups])
 
   const suppressedCount = useMemo(() => {
     if (!report) return 0
     let count = 0
     for (const f of report.findings) {
-      if (suppressedIds.has(f.id)) count++
+      if (suppressedKeys.has(findingKey(f))) count++
     }
     return count
-  }, [report, suppressedIds])
+  }, [report, suppressedKeys])
 
   const handleAnalyze = useCallback(async () => {
     if (!doc) return

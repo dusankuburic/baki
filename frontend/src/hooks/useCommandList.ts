@@ -41,7 +41,7 @@ export function useCommandList(deps: {
     toggleSidebar: () => void
     toggleInspector: () => void
     toggleSettings: () => void
-    setMainPaneView: (v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard') => void
+    setMainPaneView: (v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'portfolio') => void
     requestSearchFocus: () => void
     recentFiles: RecentFile[]
     sidebarCollapsed: boolean
@@ -127,6 +127,11 @@ export function useCommandList(deps: {
 
         if (user?.role === 'admin') {
             cmds.push({id: 'nav.admin', label: 'Admin Dashboard', section: 'Navigation', onSelect: () => setMainPaneView('admin')})
+        }
+
+        // The portfolio is an org-wide governance view — cloud mode only.
+        if (!isTauri()) {
+            cmds.push({id: 'view.portfolio', label: 'Flow Portfolio', section: 'Analysis', onSelect: () => setMainPaneView('portfolio')})
         }
 
         if (isTauri()) {

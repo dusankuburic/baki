@@ -12,12 +12,13 @@ import {
   RulesPanel,
   OrganizationsPanel,
   KnowledgeBasePanel,
+  ApiTokensPanel,
   ShortcutsPanel,
   PrivacyPanel,
   AboutPanel
 } from './index'
 
-type SettingsSection = 'general' | 'parser' | 'accounts' | 'behavior' | 'prompts' | 'appearance' | 'analysis' | 'orgs' | 'knowledge' | 'shortcuts' | 'privacy' | 'about'
+type SettingsSection = 'general' | 'parser' | 'accounts' | 'behavior' | 'prompts' | 'appearance' | 'analysis' | 'orgs' | 'knowledge' | 'tokens' | 'shortcuts' | 'privacy' | 'about'
 
 // Organisations are a cloud-mode (multi-user) concept; the desktop app is
 // single-user and has no notion of orgs, so hide that entry there.
@@ -34,6 +35,7 @@ const sections: {id: SettingsSection; label: string}[] = [
   ...(isCloud ? [
     {id: 'orgs' as const, label: 'Organizations'},
     {id: 'knowledge' as const, label: 'Knowledge Base'},
+    {id: 'tokens' as const, label: 'API Tokens'},
   ] : []),
   {id: 'shortcuts', label: 'Shortcuts'},
   {id: 'privacy', label: 'Privacy'},
@@ -77,6 +79,7 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
           {activeSection === 'analysis' && <RulesPanel />}
           {activeSection === 'orgs' && isCloud && <OrganizationsPanel />}
           {activeSection === 'knowledge' && isCloud && <KnowledgeBasePanel />}
+          {activeSection === 'tokens' && isCloud && <ApiTokensPanel />}
           {activeSection === 'shortcuts' && <ShortcutsPanel />}
           {activeSection === 'privacy' && <PrivacyPanel />}
           {activeSection === 'about' && <AboutPanel />}

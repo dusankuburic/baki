@@ -1,8 +1,6 @@
 import {useState, useCallback, useEffect} from 'react'
-import {Check, X} from 'lucide-react'
 import Input from '@/components/shared/Input'
 import Button from '@/components/shared/Button'
-import {useToast} from '@/components/shared'
 import {providersApi} from '@/api'
 import type {ProviderTestResult} from '@/types'
 import {logger} from '@/lib/logger'

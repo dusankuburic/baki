@@ -2,7 +2,7 @@ import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {FlowDiff} from '@/types'
 
-export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'library'
+export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'library' | 'portfolio'
 export type ResolvedTheme = 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
 export type SidebarTab = 'explorer' | 'variables' | 'library'
 export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
@@ -11,7 +11,7 @@ export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing'
 // Sidebar handlers use isSystemView to know when opening a flow should also
 // transition the main pane back to a flow view ('block') so the new flow
 // becomes visible; staying on a system view would leave the flow off-screen.
-const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set(['home', 'dashboard', 'profile', 'admin', 'library'])
+const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set(['home', 'dashboard', 'profile', 'admin', 'library', 'portfolio'])
 export const isSystemView = (v: MainPaneView): boolean => SYSTEM_VIEWS.has(v)
 
 interface UiState {

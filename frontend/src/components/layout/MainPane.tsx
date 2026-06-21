@@ -19,6 +19,7 @@ const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
 // LibraryWorkspace pulls in the multi-pane browse experience and its helpers;
 // lazy keeps it out of the entry chunk and only loads when the user opens it.
 const LibraryWorkspace = lazy(() => import('@/components/library/LibraryWorkspace'))
+const PortfolioView = lazy(() => import('@/components/dashboard/PortfolioView'))
 import PaneDivider from '@/components/layout/PaneDivider'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -121,6 +122,19 @@ export default function MainPane() {
                 <Suspense fallback={<Spinner />}>
                     <LibraryWorkspace />
                 </Suspense>
+            </div>
+        )
+    }
+
+    if (mainPaneView === 'portfolio') {
+        return (
+            <div className="flex flex-col h-full bg-surface-1">
+                <MainPaneToolbar />
+                <div className="flex-1 overflow-hidden">
+                    <Suspense fallback={<Spinner />}>
+                        <PortfolioView />
+                    </Suspense>
+                </div>
             </div>
         )
     }

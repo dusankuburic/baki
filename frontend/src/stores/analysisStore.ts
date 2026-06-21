@@ -2,13 +2,23 @@ import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {AnalysisReport, Severity, Finding, VariableHistory} from '@/types'
 import {toggleSetMember} from '@/lib/collections'
+import {analysisApi} from '@/api'
+import {isTauri} from '@/platform/guards'
+import {logger} from '@/lib/logger'
 
 export type FindingCategory = 'Security' | 'Reliability' | 'Performance' | 'Style' | 'Logic'
 
+// findingKey is the stable identity for a finding: the backend's content-derived
+// fingerprint (ruleId:blockId), falling back to computing it locally for older
+// payloads. Suppression and triage are keyed by this — NOT by finding.id, which
+// is a per-run index that shifts as findings come and go.
+export function findingKey(f: Finding): string {
+  return f.fingerprint || `${f.ruleId}:${f.blockId}`
+}
+
 export interface SuppressedFinding {
-  findingId: string
+  key: string
   ruleId: string
-  blockId: string
   reason: string
   suppressedAt: string
 }
@@ -23,7 +33,7 @@ interface AnalysisState {
   categoryFilter: Set<FindingCategory>
   variableLineage: VariableHistory | null
   suppressedFindings: SuppressedFinding[]
-  suppressedIds: Set<string>
+  suppressedKeys: Set<string>
   findingSearch: string
   protectedFlowId: string | null
 
@@ -40,9 +50,12 @@ interface AnalysisState {
   setFindingSearch: (q: string) => void
   suppressFinding: (finding: Finding, reason: string) => void
   suppressMany: (findings: Finding[], reason: string) => void
-  unsuppressFinding: (findingId: string) => void
+  unsuppressFinding: (finding: Finding) => void
   clearSuppressed: () => void
-  isSuppressed: (findingId: string) => boolean
+  isSuppressed: (finding: Finding) => boolean
+  // loadSuppressions pulls persisted, team-shared triage state for a flow (cloud
+  // mode) and replaces the local suppressed set with it.
+  loadSuppressions: (flowId: string) => Promise<void>
   setProtectedFlowId: (id: string | null) => void
   reset: () => void
 }
@@ -63,7 +76,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   categoryFilter: defaultCategoryFilter(),
   variableLineage: null,
   suppressedFindings: [],
-  suppressedIds: new Set(),
+  suppressedKeys: new Set(),
   findingSearch: '',
   protectedFlowId: null,
 
@@ -129,43 +142,89 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setFindingSearch: (q) => set({findingSearch: q}),
 
-  suppressFinding: (finding, reason) => set(state => {
-    const ids = new Set(state.suppressedIds)
-    ids.add(finding.id)
-    return {
-      suppressedFindings: [...state.suppressedFindings, {
-        findingId: finding.id,
-        ruleId: finding.ruleId,
-        blockId: finding.blockId,
-        reason,
-        suppressedAt: new Date().toISOString(),
-      }],
-      suppressedIds: ids,
+  // Suppression is keyed by the stable findingKey and, in cloud mode, persisted
+  // as team-shared triage state (status="suppressed"). Updates are optimistic;
+  // a failed persist reverts the local change. Desktop (Tauri) has no backend,
+  // so it stays in-memory only.
+  suppressFinding: (finding, reason) => {
+    const key = findingKey(finding)
+    set(state => {
+      if (state.suppressedKeys.has(key)) return state
+      const keys = new Set(state.suppressedKeys)
+      keys.add(key)
+      return {
+        suppressedKeys: keys,
+        suppressedFindings: [...state.suppressedFindings, {key, ruleId: finding.ruleId, reason, suppressedAt: new Date().toISOString()}],
+      }
+    })
+    if (!isTauri()) {
+      analysisApi.setFindingStatus({findingKey: key, ruleId: finding.ruleId, status: 'suppressed', justification: reason})
+        .catch(err => {
+          logger.warn('Failed to persist suppression', err)
+          set(state => {
+            const keys = new Set(state.suppressedKeys)
+            keys.delete(key)
+            return {suppressedKeys: keys, suppressedFindings: state.suppressedFindings.filter(s => s.key !== key)}
+          })
+        })
     }
-  }),
+  },
 
-  suppressMany: (findings, reason) => set(state => {
-    const added = findings
-      .filter(f => !state.suppressedIds.has(f.id))
-      .map(f => ({findingId: f.id, ruleId: f.ruleId, blockId: f.blockId, reason, suppressedAt: new Date().toISOString()}))
-    if (added.length === 0) return state
-    const ids = new Set(state.suppressedIds)
-    for (const a of added) ids.add(a.findingId)
-    return {suppressedFindings: [...state.suppressedFindings, ...added], suppressedIds: ids}
-  }),
-
-  unsuppressFinding: (findingId) => set(state => {
-    const ids = new Set(state.suppressedIds)
-    ids.delete(findingId)
-    return {
-      suppressedFindings: state.suppressedFindings.filter(s => s.findingId !== findingId),
-      suppressedIds: ids,
+  suppressMany: (findings, reason) => {
+    const toAdd = findings.filter(f => !get().suppressedKeys.has(findingKey(f)))
+    if (toAdd.length === 0) return
+    set(state => {
+      const keys = new Set(state.suppressedKeys)
+      const added: SuppressedFinding[] = []
+      for (const f of toAdd) {
+        const key = findingKey(f)
+        keys.add(key)
+        added.push({key, ruleId: f.ruleId, reason, suppressedAt: new Date().toISOString()})
+      }
+      return {suppressedKeys: keys, suppressedFindings: [...state.suppressedFindings, ...added]}
+    })
+    if (!isTauri()) {
+      for (const f of toAdd) {
+        analysisApi.setFindingStatus({findingKey: findingKey(f), ruleId: f.ruleId, status: 'suppressed', justification: reason})
+          .catch(err => logger.warn('Failed to persist suppression', err))
+      }
     }
-  }),
+  },
 
-  clearSuppressed: () => set({suppressedFindings: [], suppressedIds: new Set()}),
+  unsuppressFinding: (finding) => {
+    const key = findingKey(finding)
+    set(state => {
+      const keys = new Set(state.suppressedKeys)
+      keys.delete(key)
+      return {suppressedKeys: keys, suppressedFindings: state.suppressedFindings.filter(s => s.key !== key)}
+    })
+    if (!isTauri()) {
+      analysisApi.clearFindingStatus(key).catch(err => logger.warn('Failed to clear suppression', err))
+    }
+  },
 
-  isSuppressed: (findingId) => get().suppressedIds.has(findingId),
+  clearSuppressed: () => set({suppressedFindings: [], suppressedKeys: new Set()}),
+
+  isSuppressed: (finding) => get().suppressedKeys.has(findingKey(finding)),
+
+  loadSuppressions: async (flowId) => {
+    if (isTauri() || !flowId) return
+    try {
+      const statuses = await analysisApi.listFindingStatuses(flowId)
+      const suppressed = (statuses || []).filter(s => s.status === 'suppressed')
+      set({
+        suppressedKeys: new Set(suppressed.map(s => s.findingKey)),
+        suppressedFindings: suppressed.map(s => ({
+          key: s.findingKey,
+          ruleId: s.ruleId || '',
+          reason: s.justification || '',
+          suppressedAt: s.updatedAt,
+        })),
+      })
+    } catch (err) {
+      logger.warn('Failed to load suppressions', err)
+    }
+  },
 
   setProtectedFlowId: (id) => set({protectedFlowId: id}),
 
@@ -179,7 +238,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     categoryFilter: defaultCategoryFilter(),
     variableLineage: null,
     suppressedFindings: [],
-    suppressedIds: new Set(),
+    suppressedKeys: new Set(),
     findingSearch: '',
     protectedFlowId: null,
   }),

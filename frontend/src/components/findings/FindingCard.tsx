@@ -36,7 +36,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const handleSuppress = () => {
     suppressFinding(finding, 'Dismissed by user')
     toast.warning('Finding suppressed', {
-      action: {label: 'Undo', onClick: () => unsuppressFinding(finding.id)},
+      action: {label: 'Undo', onClick: () => unsuppressFinding(finding)},
     })
   }
 

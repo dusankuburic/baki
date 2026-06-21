@@ -1,6 +1,16 @@
-import {describe, it, expect, beforeEach} from 'vitest'
-import {useAnalysisStore} from './analysisStore'
+import {describe, it, expect, beforeEach, vi} from 'vitest'
+import {useAnalysisStore, findingKey} from './analysisStore'
 import type {Finding, AnalysisReport} from '@/types'
+
+// Suppression persists via the triage API in cloud mode (jsdom reports !isTauri).
+// Mock it so the store's optimistic local behavior is what's under test.
+vi.mock('@/api', () => ({
+  analysisApi: {
+    setFindingStatus: vi.fn().mockResolvedValue({}),
+    clearFindingStatus: vi.fn().mockResolvedValue(undefined),
+    listFindingStatuses: vi.fn().mockResolvedValue([]),
+  },
+}))
 
 function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
     return {
@@ -22,37 +32,45 @@ beforeEach(() => {
 })
 
 describe('suppression', () => {
+    // Findings are keyed by ruleId:blockId, so distinct findings need distinct blocks.
+    const f1 = () => makeFinding('f1', {blockId: 'b1'})
+    const f2 = () => makeFinding('f2', {blockId: 'b2'})
+    const f3 = () => makeFinding('f3', {blockId: 'b3'})
+
     it('suppressFinding marks a finding suppressed', () => {
-        const s = useAnalysisStore.getState()
-        s.suppressFinding(makeFinding('f1'), 'noise')
-        expect(useAnalysisStore.getState().isSuppressed('f1')).toBe(true)
-        expect(useAnalysisStore.getState().isSuppressed('f2')).toBe(false)
+        useAnalysisStore.getState().suppressFinding(f1(), 'noise')
+        expect(useAnalysisStore.getState().isSuppressed(f1())).toBe(true)
+        expect(useAnalysisStore.getState().isSuppressed(f2())).toBe(false)
     })
 
-    it('suppressMany suppresses a whole group and skips already-suppressed ids', () => {
+    it('suppression is keyed by fingerprint, so it survives a finding.id change', () => {
+        useAnalysisStore.getState().suppressFinding(makeFinding('F-001', {blockId: 'b1'}), 'noise')
+        // A later analysis renumbers ids but the same rule fires on the same block.
+        expect(useAnalysisStore.getState().isSuppressed(makeFinding('F-042', {blockId: 'b1'}))).toBe(true)
+    })
+
+    it('suppressMany suppresses a whole group and skips already-suppressed', () => {
         const s = useAnalysisStore.getState()
-        s.suppressFinding(makeFinding('f1'), 'noise')
-        s.suppressMany([makeFinding('f1'), makeFinding('f2'), makeFinding('f3')], 'bulk')
+        s.suppressFinding(f1(), 'noise')
+        s.suppressMany([f1(), f2(), f3()], 'bulk')
 
         const state = useAnalysisStore.getState()
-        expect(state.isSuppressed('f1')).toBe(true)
-        expect(state.isSuppressed('f2')).toBe(true)
-        expect(state.isSuppressed('f3')).toBe(true)
+        expect(state.isSuppressed(f1())).toBe(true)
+        expect(state.isSuppressed(f2())).toBe(true)
+        expect(state.isSuppressed(f3())).toBe(true)
         // f1 must not be duplicated in the list
-        expect(state.suppressedFindings.filter(x => x.findingId === 'f1')).toHaveLength(1)
+        expect(state.suppressedFindings.filter(x => x.key === findingKey(f1()))).toHaveLength(1)
     })
 
     it('unsuppressFinding restores a single finding', () => {
-        const s = useAnalysisStore.getState()
-        s.suppressMany([makeFinding('f1'), makeFinding('f2')], 'bulk')
-        useAnalysisStore.getState().unsuppressFinding('f1')
-        expect(useAnalysisStore.getState().isSuppressed('f1')).toBe(false)
-        expect(useAnalysisStore.getState().isSuppressed('f2')).toBe(true)
+        useAnalysisStore.getState().suppressMany([f1(), f2()], 'bulk')
+        useAnalysisStore.getState().unsuppressFinding(f1())
+        expect(useAnalysisStore.getState().isSuppressed(f1())).toBe(false)
+        expect(useAnalysisStore.getState().isSuppressed(f2())).toBe(true)
     })
 
     it('clearSuppressed restores everything', () => {
-        const s = useAnalysisStore.getState()
-        s.suppressMany([makeFinding('f1'), makeFinding('f2')], 'bulk')
+        useAnalysisStore.getState().suppressMany([f1(), f2()], 'bulk')
         useAnalysisStore.getState().clearSuppressed()
         expect(useAnalysisStore.getState().suppressedFindings).toHaveLength(0)
     })
@@ -140,7 +158,7 @@ describe('reset', () => {
         expect(s.reports.size).toBe(0)
         expect(s.findingsByBlock.size).toBe(0)
         expect(s.suppressedFindings).toHaveLength(0)
-        expect(s.suppressedIds.size).toBe(0)
+        expect(s.suppressedKeys.size).toBe(0)
         expect(s.isAnalyzing).toBe(false)
         expect(s.analyzingGen).toBe(0)
         expect(s.progress).toEqual({current: 0, total: 0, ruleName: ''})

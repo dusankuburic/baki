@@ -43,6 +43,19 @@ export interface SSOInfo {
   provider?: string
 }
 
+// ApiToken is the metadata for a machine token (the secret is never returned).
+export interface ApiToken {
+  id: string
+  name: string
+  createdAt: string
+  expiresAt?: string
+}
+
+// CreatedApiToken additionally carries the raw token, shown exactly once.
+export interface CreatedApiToken extends ApiToken {
+  token: string
+}
+
 export const authApi = {
   login: (credentials: LoginRequest): Promise<LoginResponse> =>
     request('/api/auth/login', credentials),
@@ -78,4 +91,16 @@ export const authApi = {
   // regular token pair (same shape as login).
   ssoExchange: (ticket: string): Promise<LoginResponse> =>
     request('/api/auth/sso/exchange', { ticket }),
+
+  // Machine API tokens (PATs) for headless/CI access.
+  listApiTokens: (): Promise<ApiToken[]> =>
+    request('/api/auth/tokens', undefined, 'GET'),
+
+  // expiresInDays <= 0 (or omitted) creates a non-expiring token. The returned
+  // CreatedApiToken.token is the only time the raw secret is available.
+  createApiToken: (name: string, expiresInDays?: number): Promise<CreatedApiToken> =>
+    request('/api/auth/tokens', { name, expiresInDays: expiresInDays ?? 0 }, 'POST'),
+
+  revokeApiToken: (id: string): Promise<void> =>
+    request(`/api/auth/tokens/${id}`, undefined, 'DELETE'),
 }
