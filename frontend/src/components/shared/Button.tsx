@@ -15,7 +15,7 @@ type ButtonProps = {
 } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'>
 
 const variantClasses: Record<string, string> = {
-    primary: 'bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white shadow-sm',
+    primary: 'bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-brand-foreground shadow-sm',
     secondary: 'bg-surface-2 hover:bg-surface-3 text-text-primary border border-border-default',
     ghost: 'bg-transparent hover:bg-surface-2 text-text-secondary hover:text-text-primary',
     danger: 'bg-semantic-error/15 hover:bg-semantic-error/25 text-semantic-error border border-semantic-error/30',

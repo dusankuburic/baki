@@ -4,9 +4,9 @@ import {useFlowStore} from '@/stores/flowStore'
 import {Info} from 'lucide-react'
 
 const EVENT_COLOR: Record<VariableEvent['type'], string> = {
-    init:   '#22c55e',
-    mutate: '#f59e0b',
-    read:   '#3b82f6',
+    init:   'var(--success)',
+    mutate: 'var(--warning)',
+    read:   'var(--info)',
 }
 
 const EVENT_PATH: Record<VariableEvent['type'], string> = {
@@ -90,19 +90,20 @@ export default function VariableLineageGraph({events}: Props) {
                                 cx={node.x}
                                 cy={node.y}
                                 r="16"
-                                fill="var(--bg-surface-2)"
-                                stroke={color}
                                 strokeWidth="2"
+                                // CSS var() does not resolve in SVG presentation
+                                // attributes — apply theme colors via `style`.
+                                style={{fill: 'var(--surface-2)', stroke: color}}
                             />
                             {/* Icon via SVG path — avoids foreignObject overhead */}
                             <g
                                 transform={`translate(${node.x - 6}, ${node.y - 6})`}
                                 fill="none"
-                                stroke={color}
                                 strokeWidth="1.5"
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
                                 viewBox="0 0 24 24"
+                                style={{stroke: color}}
                             >
                                 <svg width="12" height="12" viewBox="0 0 24 24">
                                     <path d={EVENT_PATH[node.type]} />

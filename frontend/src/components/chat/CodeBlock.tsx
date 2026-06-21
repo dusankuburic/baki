@@ -2,6 +2,7 @@ import {useCallback, useMemo} from 'react'
 import {Highlight, themes} from 'prism-react-renderer'
 import {Copy, Check} from 'lucide-react'
 import {useCopy} from '@/hooks/useCopy'
+import {useUIStore} from '@/stores/uiStore'
 
 interface Props {
   language?: string
@@ -10,6 +11,15 @@ interface Props {
 
 export default function CodeBlock({language, value}: Props) {
   const {copied, copy} = useCopy()
+  const resolvedTheme = useUIStore(s => s.resolvedTheme)
+  // Pick the Prism theme by reading the active theme's `color-scheme` so we
+  // never need to maintain a light-theme allowlist — any theme that declares
+  // `color-scheme: light` automatically gets the light code theme.
+  const prismTheme = useMemo(() => {
+    if (typeof window === 'undefined') return themes.vsDark
+    const scheme = getComputedStyle(document.documentElement).getPropertyValue('color-scheme').trim()
+    return scheme === 'light' ? themes.vsLight : themes.vsDark
+  }, [resolvedTheme])
 
   const handleCopy = useCallback(() => {
     copy(value)
@@ -18,7 +28,7 @@ export default function CodeBlock({language, value}: Props) {
   const code = useMemo(() => value.replace(/\n$/, ''), [value])
 
   return (
-    <div className="relative group rounded-xl overflow-hidden border border-border-default my-3 bg-[#1e1e1e]">
+    <div className="relative group rounded-xl overflow-hidden border border-border-default my-3 bg-surface-0">
       <div className="flex items-center justify-between px-4 py-2 bg-surface-3/80 backdrop-blur-sm border-b border-border-subtle">
         <span className="text-xs font-mono text-text-tertiary select-none">
           {language || 'text'}
@@ -43,7 +53,7 @@ export default function CodeBlock({language, value}: Props) {
       </div>
 
       <Highlight
-        theme={themes.vsDark}
+        theme={prismTheme}
         code={code}
         language={language || 'text'}
       >

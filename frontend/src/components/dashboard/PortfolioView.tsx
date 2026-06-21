@@ -14,7 +14,7 @@ function healthColor(score: number): string {
 function Stat({label, value, accent}: {label: string; value: string | number; accent?: string}) {
   return (
     <div className="px-4 py-3 rounded-xl border border-border-default bg-surface-1">
-      <div className={`text-2xl font-semibold ${accent ?? 'text-text-primary'}`}>{value}</div>
+      <div className={`text-2xl font-semibold tabular-nums ${accent ?? 'text-text-primary'}`}>{value}</div>
       <div className="text-2xs uppercase tracking-wider text-text-tertiary mt-0.5">{label}</div>
     </div>
   )

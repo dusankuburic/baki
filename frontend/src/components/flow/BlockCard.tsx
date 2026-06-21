@@ -222,12 +222,17 @@ export default React.memo(function BlockCard({
 
             {findingCount > 0 && (
                 <div
-                    className={clsx(
-                        'absolute -top-1.5 -right-1.5 flex items-center gap-0.5 text-2xs font-bold px-1.5 py-0.5 rounded-full shadow-sm',
-                        findingSeverity === 'error' && 'bg-semantic-error text-white',
-                        findingSeverity === 'warning' && 'bg-semantic-warning text-white',
-                        findingSeverity === 'info' && 'bg-semantic-info text-white',
-                    )}
+                    className="absolute -top-1.5 -right-1.5 flex items-center gap-0.5 text-2xs font-bold px-1.5 py-0.5 rounded-full shadow-sm border text-text-primary"
+                    // Severity shown via a themed tint background + solid colored border;
+                    // the count uses text-primary so it stays legible in every theme.
+                    // (White on a solid semantic fill fails WCAG in most of the new
+                    // themes. Tailwind opacity modifiers like bg-semantic-error/15 don't
+                    // compile here — the colors are plain var() values without alpha
+                    // channels — so the tint/border come from the per-theme tokens.)
+                    style={{
+                        backgroundColor: `var(--${findingSeverity}-bg)`,
+                        borderColor: `var(--${findingSeverity})`,
+                    }}
                 >
                     <AlertTriangle size={10} />
                     {findingCount}

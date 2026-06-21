@@ -123,7 +123,7 @@ export default function SourceFilePicker({files, selected, onSelectionChange}: P
                     'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors',
                     checked ? 'bg-brand-500 border-brand-500' : 'border-border-default'
                   )}>
-                    {checked && <Check size={10} className="text-white" />}
+                    {checked && <Check size={10} className="text-brand-foreground" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="block truncate font-medium">{f.subflowName}</span>

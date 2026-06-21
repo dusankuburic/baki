@@ -114,10 +114,10 @@ function AppInner() {
             onDrop={handleDrop}
         >
             <TitleBar />
-            <div className="flex flex-1 overflow-hidden">
+            <div className="flex flex-1 overflow-hidden print:overflow-visible">
                 {!sidebarCollapsed && (
                     <>
-                        <div className="flex-shrink-0 overflow-hidden border-r border-border-subtle" style={{width: pane.sidebarWidth}}>
+                        <div className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden" style={{width: pane.sidebarWidth}}>
                             <ErrorBoundary fallbackMessage="Sidebar error">
                                 <Sidebar />
                             </ErrorBoundary>
@@ -125,7 +125,7 @@ function AppInner() {
                         <PaneDivider onDrag={pane.handleSidebarDrag} onResizeEnd={pane.handleSidebarResizeEnd} onDoubleClick={pane.handleSidebarReset} />
                     </>
                 )}
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 overflow-hidden print:overflow-visible">
                     <ErrorBoundary fallbackMessage="Main pane error">
                         <MainPane />
                     </ErrorBoundary>
@@ -133,7 +133,7 @@ function AppInner() {
                 {!inspectorCollapsed && (
                     <>
                         <PaneDivider onDrag={pane.handleInspectorDrag} onResizeEnd={pane.handleInspectorResizeEnd} onDoubleClick={pane.handleInspectorReset} />
-                        <div className="flex-shrink-0 overflow-hidden border-l border-border-subtle" style={{width: pane.inspectorWidth}}>
+                        <div className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden" style={{width: pane.inspectorWidth}}>
                             <ErrorBoundary fallbackMessage="Inspector error">
                                 <InspectorPanel />
                             </ErrorBoundary>

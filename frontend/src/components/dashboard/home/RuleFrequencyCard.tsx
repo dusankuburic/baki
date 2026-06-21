@@ -66,7 +66,7 @@ export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; cla
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12,
+                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
                 }}
                 cursor={{fill: colors.surface3, fillOpacity: 0.3}}
               />

@@ -1,7 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
-  darkMode: ['class', '[data-theme="dark"]'],
+  darkMode: ['class', '[data-theme="dark"], [data-theme="midnight"], [data-theme="warm"], [data-theme="tokyo-night"], [data-theme="one-dark"], [data-theme="dracula"], [data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="catppuccin-mocha"], [data-theme="rose-pine"], [data-theme="rose-pine-moon"], [data-theme="github-dark"], [data-theme="kanagawa"], [data-theme="everforest"]'],
   theme: {
     extend: {
       colors: {
@@ -32,6 +32,7 @@ export default {
           500: 'var(--brand-500)',
           600: 'var(--brand-600)',
           700: 'var(--brand-700)',
+          foreground: 'var(--brand-foreground)',
         },
         block: {
           action: 'var(--block-action)',
@@ -78,9 +79,13 @@ export default {
         '3xl': ['36px', { lineHeight: '44px', letterSpacing: '-0.02em' }],
       },
       spacing: {
+        0.5: 'var(--space-0.5)',
         1: 'var(--space-1)',
+        1.5: 'var(--space-1.5)',
         2: 'var(--space-2)',
+        2.5: 'var(--space-2.5)',
         3: 'var(--space-3)',
+        3.5: 'var(--space-3.5)',
         4: 'var(--space-4)',
         5: 'var(--space-5)',
         6: 'var(--space-6)',

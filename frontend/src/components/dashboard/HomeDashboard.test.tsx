@@ -27,7 +27,7 @@ vi.mock('recharts', async (importOriginal) => {
 vi.mock('./home/useChartColors', () => ({
   useChartColors: () => ({
     success: '#22c55e', warning: '#eab308', error: '#ef4444',
-    brand400: '#818cf8', brand500: '#6366f1', brand600: '#4f46d5',
+    brand400: '#818cf8', brand500: '#5b61ef', brand600: '#4f46d5',
     surface3: '#26262d', borderStrong: '#3f3f47', textTertiary: '#71717a',
   }),
   healthColor: (score: number, c: Record<string, string>) => {

@@ -119,7 +119,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         {
           selector: 'node[isCenter = "true"]',
           style: {
-            'border-color': '#6366f1',
+            'border-color': cssVar('--brand-500'),
             'border-width': 3,
             'background-color': cssVar('--surface-3')
           }
@@ -137,7 +137,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         {
           selector: 'node:selected',
           style: {
-            'border-color': '#6366f1',
+            'border-color': cssVar('--brand-500'),
             'border-width': 3
           }
         },
@@ -145,7 +145,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         {
           selector: 'node[errorCount > 0]',
           style: {
-            'border-color': '#ef4444',
+            'border-color': cssVar('--error'),
             'border-width': 2
           }
         },
@@ -153,7 +153,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         {
           selector: 'node[warnCount > 0][errorCount = 0]',
           style: {
-            'border-color': '#eab308',
+            'border-color': cssVar('--warning'),
             'border-width': 2
           }
         },
@@ -161,7 +161,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         {
           selector: 'node.search-match',
           style: {
-            'border-color': '#6366f1',
+            'border-color': cssVar('--brand-500'),
             'border-width': 4,
             'background-color': cssVar('--surface-3')
           }
@@ -313,7 +313,7 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
           <div className="space-y-2">
             {subflowId && (
               <div className="flex items-center gap-3">
-                <div className="w-3 h-3 rounded border-[3px] border-[#6366f1] bg-[#f5f7ff] dark:bg-[#23232b]" />
+                <div className="w-3 h-3 rounded border-[3px] border-brand-500 bg-surface-2" />
                 <span className="text-xs text-text-secondary font-medium">Current Subflow</span>
               </div>
             )}

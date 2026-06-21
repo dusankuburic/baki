@@ -29,8 +29,8 @@ export default function Switch({checked, onChange, label, disabled = false, clas
             >
                 <span
                     className={clsx(
-                        'absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-xs transition-transform duration-fast',
-                        checked ? 'left-[14px]' : 'left-[2px]'
+                        'absolute top-[2px] w-[14px] h-[14px] rounded-full shadow-xs transition-transform duration-fast',
+                        checked ? 'left-[14px] bg-brand-foreground' : 'left-[2px] bg-white'
                     )}
                 />
             </button>

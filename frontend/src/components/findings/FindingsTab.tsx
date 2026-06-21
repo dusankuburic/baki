@@ -199,7 +199,7 @@ export default function FindingsTab() {
         <span className="text-sm text-text-tertiary">No analysis run yet</span>
         <button
           onClick={handleAnalyze}
-          className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-light transition-colors"
+          className="px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors"
         >
           Run Analysis
         </button>
@@ -212,7 +212,7 @@ export default function FindingsTab() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
         <Spinner size={24} />
-        <span className="text-sm text-text-secondary">
+        <span className="text-sm text-text-secondary tabular-nums">
           Analyzing... {pct}% ({progress.ruleName})
         </span>
       </div>

@@ -138,9 +138,9 @@ export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
     {
       selector: 'node.variable-highlighted',
       style: {
-        'border-color': '#eab308',
+        'border-color': t.warning,
         'border-width': 3,
-        'background-color': 'rgba(234, 179, 8, 0.05)',
+        'background-color': t.surface2,
       },
     },
     {

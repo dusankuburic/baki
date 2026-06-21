@@ -199,7 +199,7 @@ export default function AnalyticsDashboard() {
         <button
           onClick={handleBatch}
           disabled={batchRunning}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-light transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors disabled:opacity-50"
         >
           <FolderSearch size={13} />
           {batchRunning ? 'Analyzing…' : 'Analyze Folder…'}
@@ -239,7 +239,7 @@ export default function AnalyticsDashboard() {
           <button
             onClick={handleBatch}
             disabled={batchRunning}
-            className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+            className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-brand-foreground text-sm font-medium transition-colors"
           >
             {batchRunning ? <RefreshCw size={14} className="animate-spin" /> : <FolderSearch size={14} />}
             {batchRunning ? 'Analyzing…' : 'Analyze folder…'}

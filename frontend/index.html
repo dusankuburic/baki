@@ -3,23 +3,37 @@
 <head>
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <meta name="theme-color" content="#0a0a0b"/>
     <title>PAD Analyzer</title>
     <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="/fonts/JetBrainsMono-Regular.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <script>
         (function () {
+            // Sync the browser/PWA chrome color with the active theme's surface-0.
+            // Best-effort: the stylesheet may not be parsed on the first call, so
+            // also retry after the first frame. useTheme keeps it in sync after mount.
+            function syncThemeColor() {
+                try {
+                    var surface = getComputedStyle(document.documentElement)
+                        .getPropertyValue('--surface-0').trim();
+                    var meta = document.querySelector('meta[name="theme-color"]');
+                    if (meta && surface) meta.setAttribute('content', surface);
+                } catch (e) { /* ignore */ }
+            }
             try {
                 var cached = window.__INITIAL_THEME__ || localStorage.getItem('pad-theme');
-                if (cached === 'dark' || cached === 'light') {
+                if (cached && cached !== 'system') {
                     document.documentElement.dataset.theme = cached;
-                    return;
+                } else {
+                    document.documentElement.dataset.theme =
+                        window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
                 }
-                var theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-                document.documentElement.dataset.theme = theme;
             } catch (e) {
                 document.documentElement.dataset.theme = 'dark';
             }
+            syncThemeColor();
+            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncThemeColor);
         })();
     </script>
 </head>

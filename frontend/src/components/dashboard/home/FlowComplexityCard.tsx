@@ -48,7 +48,7 @@ export function FlowComplexityCard({data, className}: {data: FlowComplexityPoint
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12,
+                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
                 }}
                 cursor={{strokeDasharray: '3 3', stroke: colors.textTertiary, strokeOpacity: 0.3}}
                 formatter={(v, name) => {

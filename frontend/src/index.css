@@ -65,10 +65,11 @@
   --brand-100: #e0e7ff;
   --brand-300: #a5b4fc;
   --brand-400: #818cf8;
-  --brand-500: #6366f1;
+  --brand-500: #5b61ef;
   --brand-600: #4f46e5;
   --brand-700: #4338ca;
-  --brand-glow: rgba(99, 102, 241, 0.4);
+  --brand-glow: rgba(91, 97, 239, 0.4);
+  --brand-foreground: #ffffff;
 
   /* === BLOCK TYPE COLORS === */
   --block-action:        #3b82f6;
@@ -116,9 +117,13 @@
 
   /* === SPACING SCALE (4px base) === */
   --space-0: 0;
+  --space-0.5: 2px;
   --space-1: 4px;
+  --space-1.5: 6px;
   --space-2: 8px;
+  --space-2.5: 10px;
   --space-3: 12px;
+  --space-3.5: 14px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
@@ -176,6 +181,7 @@
   --text-secondary: #3f3f46;
   --text-tertiary:  #71717a;
   --text-disabled:  #a1a1aa;
+  --text-inverse:   #ffffff;
 
   --border-subtle:  #f4f4f5;
   --border-default: #e4e4e7;
@@ -183,13 +189,14 @@
 
   --glass-bg: rgba(255, 255, 255, 0.75);
   --glass-border: rgba(0, 0, 0, 0.06);
+  --glass-blur: blur(16px) saturate(1.2);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
   --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.16);
-  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px rgba(99, 102, 241, 0.2);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px rgba(91, 97, 239, 0.2);
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(239, 68, 68, 0.15);
 
   --block-action:        #2563eb;
@@ -206,8 +213,8 @@
   --block-comment-bg:    rgba(107, 114, 128, 0.06);
   --block-variable:      #db2777;
   --block-variable-bg:   rgba(219, 39, 119, 0.08);
-  --block-string:        #d97706;
-  --block-string-bg:     rgba(217, 119, 6, 0.08);
+  --block-string:        #b45309;
+  --block-string-bg:     rgba(180, 83, 9, 0.08);
   --block-wait:          #0d9488;
   --block-wait-bg:       rgba(13, 148, 136, 0.08);
 
@@ -220,10 +227,19 @@
   --info:     #2563eb;
   --info-bg:  rgba(37, 99, 235, 0.08);
 
-  --brand-glow: rgba(99, 102, 241, 0.2);
+  --brand-50:  #eef2ff;
+  --brand-100: #e0e7ff;
+  --brand-300: #a5b4fc;
+  --brand-400: #818cf8;
+  --brand-500: #5b61ef;
+  --brand-600: #4f46e5;
+  --brand-700: #4338ca;
+  --brand-foreground: #ffffff;
+  --brand-glow: rgba(91, 97, 239, 0.2);
 }
 
 [data-theme="midnight"] {
+  color-scheme: dark;
   /* === SURFACES — cool navy === */
   --surface-0: #070d1a;
   --surface-1: #0d1829;
@@ -234,8 +250,8 @@
 
   /* === TEXT === */
   --text-primary:   #e8edf5;
-  --text-secondary: #8fa3c4;
-  --text-tertiary:  #5a7094;
+  --text-secondary: #a8b8d4;
+  --text-tertiary:  #7891ba;
   --text-disabled:  #3c5070;
   --text-inverse:   #070d1a;
 
@@ -253,6 +269,7 @@
   --brand-600: #0891b2;
   --brand-700: #0e7490;
   --brand-glow: rgba(6, 182, 212, 0.4);
+  --brand-foreground: #070d1a;
 
   /* === BLOCK TYPE COLORS === */
   --block-action:        #38bdf8;
@@ -300,6 +317,7 @@
 }
 
 [data-theme="warm"] {
+  color-scheme: dark;
   /* === SURFACES — sepia/brown dark === */
   --surface-0: #110e0a;
   --surface-1: #1a1612;
@@ -329,6 +347,7 @@
   --brand-600: #d97706;
   --brand-700: #b45309;
   --brand-glow: rgba(245, 158, 11, 0.4);
+  --brand-foreground: #110e0a;
 
   /* === BLOCK TYPE COLORS === */
   --block-action:        #60a5fa;
@@ -376,6 +395,7 @@
 }
 
 [data-theme="tokyo-night"] {
+  color-scheme: dark;
   --surface-0: #16161e;
   --surface-1: #1a1b26;
   --surface-2: #1f2335;
@@ -384,17 +404,24 @@
   --surface-overlay: rgba(22, 22, 30, 0.7);
   --text-primary: #c0caf5;
   --text-secondary: #a9b1d6;
-  --text-tertiary: #565f89;
+  --text-tertiary: #7a89b8;
   --text-disabled: #444b6a;
   --text-inverse: #16161e;
   --border-subtle: #1b1c27;
   --border-default: #24283b;
   --border-strong: #383e5a;
+  --brand-50:  #eff5ff;
+  --brand-100: #dce8ff;
+  --brand-300: #a8c8f9;
+  --brand-400: #8fb5f8;
   --brand-500: #7aa2f7;
+  --brand-600: #5a7fd4;
+  --brand-700: #4a66ad;
   --brand-glow: rgba(122, 162, 247, 0.4);
+  --brand-foreground: #16161e;
   --block-action: #7aa2f7;
   --block-loop: #e0af68;
-  --block-condition: #9ece6a;
+  --block-condition: #73daca;
   --block-subflow: #bb9af7;
   --block-error: #f7768e;
   --block-comment: #565f89;
@@ -403,16 +430,28 @@
   --block-wait: #7dcfff;
   --block-action-bg:     rgba(122, 162, 247, 0.08);
   --block-loop-bg:       rgba(224, 175, 104, 0.08);
-  --block-condition-bg:  rgba(158, 206, 106, 0.08);
+  --block-condition-bg:  rgba(115, 218, 202, 0.08);
   --block-subflow-bg:    rgba(187, 154, 247, 0.08);
   --block-error-bg:      rgba(247, 118, 142, 0.08);
   --block-comment-bg:    rgba(86, 95, 137, 0.08);
   --block-variable-bg:   rgba(255, 158, 100, 0.08);
   --block-string-bg:     rgba(158, 206, 106, 0.08);
   --block-wait-bg:       rgba(125, 207, 255, 0.08);
+  --success: #9ece6a;  --success-bg: rgba(158, 206, 106, 0.1);
+  --warning: #e0af68;  --warning-bg: rgba(224, 175, 104, 0.1);
+  --error:   #f7768e;  --error-bg:   rgba(247, 118, 142, 0.1);
+  --info:    #7aa2f7;  --info-bg:    rgba(122, 162, 247, 0.1);
+
+  --glass-bg: rgba(26, 27, 38, 0.78); --glass-border: rgba(192, 202, 245, 0.05); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(247, 118, 142, 0.3);
 }
 
 [data-theme="one-dark"] {
+  color-scheme: dark;
   --surface-0: #1e2227;
   --surface-1: #21252b;
   --surface-2: #282c34;
@@ -420,36 +459,55 @@
   --surface-4: #3e4451;
   --surface-overlay: rgba(30, 34, 39, 0.7);
   --text-primary: #abb2bf;
-  --text-secondary: #828997;
-  --text-tertiary: #5c6370;
+  --text-secondary: #9ba3b0;
+  --text-tertiary: #7e8893;
   --text-disabled: #4b5263;
   --text-inverse: #21252b;
   --border-subtle: #21252b;
   --border-default: #181a1f;
   --border-strong: #3e4451;
+  --brand-50:  #eff8ff;
+  --brand-100: #d6ecff;
+  --brand-300: #9bd0f5;
+  --brand-400: #82c1ee;
   --brand-500: #61afef;
+  --brand-600: #4d92cc;
+  --brand-700: #3d76a6;
   --brand-glow: rgba(97, 175, 239, 0.4);
+  --brand-foreground: #1e2227;
   --block-action: #61afef;
   --block-loop: #d19a66;
-  --block-condition: #98c379;
+  --block-condition: #56b6c2;
   --block-subflow: #c678dd;
   --block-error: #e06c75;
   --block-comment: #5c6370;
-  --block-variable: #d19a66;
+  --block-variable: #e5c07b;
   --block-string: #98c379;
-  --block-wait: #56b6c2;
+  --block-wait: #4fd8a0;
   --block-action-bg:     rgba(97, 175, 239, 0.08);
   --block-loop-bg:       rgba(209, 154, 102, 0.08);
-  --block-condition-bg:  rgba(152, 195, 121, 0.08);
+  --block-condition-bg:  rgba(86, 182, 194, 0.08);
   --block-subflow-bg:    rgba(198, 120, 221, 0.08);
   --block-error-bg:      rgba(224, 108, 117, 0.08);
   --block-comment-bg:    rgba(92, 99, 112, 0.08);
-  --block-variable-bg:   rgba(209, 154, 102, 0.08);
+  --block-variable-bg:   rgba(229, 192, 123, 0.08);
   --block-string-bg:     rgba(152, 195, 121, 0.08);
-  --block-wait-bg:       rgba(86, 182, 194, 0.08);
+  --block-wait-bg:       rgba(79, 216, 160, 0.08);
+  --success: #98c379;  --success-bg: rgba(152, 195, 121, 0.1);
+  --warning: #e5c07b;  --warning-bg: rgba(229, 192, 123, 0.1);
+  --error:   #e06c75;  --error-bg:   rgba(224, 108, 117, 0.1);
+  --info:    #61afef;  --info-bg:    rgba(97, 175, 239, 0.1);
+
+  --glass-bg: rgba(33, 37, 43, 0.78); --glass-border: rgba(171, 178, 191, 0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(224, 108, 117, 0.3);
 }
 
 [data-theme="dracula"] {
+  color-scheme: dark;
   --surface-0: #1e1f29;
   --surface-1: #282a36;
   --surface-2: #44475a;
@@ -457,70 +515,470 @@
   --surface-4: #bd93f9;
   --surface-overlay: rgba(30, 31, 41, 0.7);
   --text-primary: #f8f8f2;
-  --text-secondary: #bd93f9;
-  --text-tertiary: #6272a4;
+  --text-secondary: #c5b8f0;
+  --text-tertiary: #8b9bd5;
   --text-disabled: #44475a;
   --text-inverse: #282a36;
   --border-subtle: #21222c;
   --border-default: #44475a;
   --border-strong: #6272a4;
+  --brand-50:  #fff0fa;
+  --brand-100: #ffe0f5;
+  --brand-300: #ffaee6;
+  --brand-400: #ff95dd;
   --brand-500: #ff79c6;
+  --brand-600: #e05fa8;
+  --brand-700: #b84a87;
   --brand-glow: rgba(255, 121, 198, 0.4);
+  --brand-foreground: #1e1f29;
   --block-action: #8be9fd;
   --block-loop: #ffb86c;
   --block-condition: #50fa7b;
   --block-subflow: #bd93f9;
   --block-error: #ff5555;
   --block-comment: #6272a4;
-  --block-variable: #ffb86c;
+  --block-variable: #d8b878;
   --block-string: #f1fa8c;
-  --block-wait: #8be9fd;
+  --block-wait: #a9e3ff;
   --block-action-bg:     rgba(139, 233, 253, 0.08);
   --block-loop-bg:       rgba(255, 184, 108, 0.08);
   --block-condition-bg:  rgba(80, 250, 123, 0.08);
   --block-subflow-bg:    rgba(189, 147, 249, 0.08);
   --block-error-bg:      rgba(255, 85, 85, 0.08);
   --block-comment-bg:    rgba(98, 114, 164, 0.08);
-  --block-variable-bg:   rgba(255, 184, 108, 0.08);
+  --block-variable-bg:   rgba(216, 184, 120, 0.08);
   --block-string-bg:     rgba(241, 250, 140, 0.08);
-  --block-wait-bg:       rgba(139, 233, 253, 0.08);
+  --block-wait-bg:       rgba(169, 227, 255, 0.08);
+  --success: #50fa7b;  --success-bg: rgba(80, 250, 123, 0.1);
+  --warning: #f1fa8c;  --warning-bg: rgba(241, 250, 140, 0.1);
+  --error:   #ff5555;  --error-bg:   rgba(255, 85, 85, 0.1);
+  --info:    #8be9fd;  --info-bg:    rgba(139, 233, 253, 0.1);
+
+  --glass-bg: rgba(40, 42, 54, 0.78); --glass-border: rgba(248, 248, 242, 0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(255, 85, 85, 0.3);
 }
 
 [data-theme="nord"] {
+  color-scheme: dark;
   --surface-0: #242933;
   --surface-1: #2e3440;
   --surface-2: #3b4252;
   --surface-3: #434c5e;
   --surface-4: #4c566a;
   --surface-overlay: rgba(36, 41, 51, 0.7);
-  --text-primary: #eceff4;
+  --text-primary: #f5f8fb;
   --text-secondary: #d8dee9;
-  --text-tertiary: #4c566a;
-  --text-disabled: #3b4252;
+  --text-tertiary: #8b96a8;
+  --text-disabled: #5e6a7e;
   --text-inverse: #2e3440;
   --border-subtle: #2e3440;
   --border-default: #3b4252;
   --border-strong: #434c5e;
+  --brand-50:  #effafb;
+  --brand-100: #d8f2f5;
+  --brand-300: #aedbe3;
+  --brand-400: #97cfd9;
   --brand-500: #88c0d0;
+  --brand-600: #6a9eac;
+  --brand-700: #557e8a;
   --brand-glow: rgba(136, 192, 208, 0.4);
+  --brand-foreground: #242933;
   --block-action: #81a1c1;
   --block-loop: #ebcb8b;
-  --block-condition: #a3be8c;
+  --block-condition: #8fbcbb;
   --block-subflow: #b48ead;
-  --block-error: #bf616a;
+  --block-error: #c96b73;
   --block-comment: #4c566a;
   --block-variable: #d08770;
   --block-string: #a3be8c;
-  --block-wait: #88c0d0;
+  --block-wait: #93ccdc;
   --block-action-bg:     rgba(129, 161, 193, 0.08);
   --block-loop-bg:       rgba(235, 203, 139, 0.08);
-  --block-condition-bg:  rgba(163, 190, 140, 0.08);
+  --block-condition-bg:  rgba(143, 188, 187, 0.08);
   --block-subflow-bg:    rgba(180, 142, 173, 0.08);
-  --block-error-bg:      rgba(191, 97, 106, 0.08);
+  --block-error-bg:      rgba(201, 107, 115, 0.08);
   --block-comment-bg:    rgba(76, 86, 106, 0.08);
   --block-variable-bg:   rgba(208, 135, 112, 0.08);
   --block-string-bg:     rgba(163, 190, 140, 0.08);
-  --block-wait-bg:       rgba(136, 192, 208, 0.08);
+  --block-wait-bg:       rgba(147, 204, 220, 0.08);
+  --success: #a3be8c;  --success-bg: rgba(163, 190, 140, 0.1);
+  --warning: #ebcb8b;  --warning-bg: rgba(235, 203, 139, 0.1);
+  --error:   #bf616a;  --error-bg:   rgba(191, 97, 106, 0.1);
+  --info:    #88c0d0;  --info-bg:    rgba(136, 192, 208, 0.1);
+
+  --glass-bg: rgba(46, 52, 64, 0.78); --glass-border: rgba(236, 239, 244, 0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(191, 97, 106, 0.3);
+}
+
+/* === GRUVBOX DARK === */
+[data-theme="gruvbox-dark"] {
+  color-scheme: dark;
+  --surface-0: #1d2021; --surface-1: #282828; --surface-2: #32302f;
+  --surface-3: #3c3836; --surface-4: #504945; --surface-overlay: rgba(29,32,33,0.75);
+  --text-primary: #ebdbb2; --text-secondary: #d5c4a1; --text-tertiary: #bdae93;
+  --text-disabled: #7c6f64; --text-inverse: #1d2021;
+  --border-subtle: #282828; --border-default: #3c3836; --border-strong: #504945;
+  --brand-50:  #fbf2e0; --brand-100: #f5e2b8; --brand-300: #f0b366; --brand-400: #ee923b;
+  --brand-500: #fe8019; --brand-600: #d65d0e; --brand-700: #af3a03;
+  --brand-glow: rgba(254,128,25,0.4);
+  --brand-foreground: #1d2021;
+  --block-action: #83a598;    --block-action-bg:    rgba(131,165,152,0.08);
+  --block-loop: #fabd2f;      --block-loop-bg:      rgba(250,189,47,0.08);
+  --block-condition: #b8bb26; --block-condition-bg: rgba(184,187,38,0.08);
+  --block-subflow: #d3869b;   --block-subflow-bg:   rgba(211,134,155,0.08);
+  --block-error: #fb4934;     --block-error-bg:     rgba(251,73,52,0.08);
+  --block-comment: #928374;   --block-comment-bg:   rgba(146,131,116,0.08);
+  --block-variable: #fe8019;  --block-variable-bg:  rgba(254,128,25,0.08);
+  --block-string: #d79921;    --block-string-bg:    rgba(215,153,33,0.08);
+  --block-wait: #8ec07c;      --block-wait-bg:      rgba(142,192,124,0.08);
+  --success: #b8bb26; --success-bg: rgba(184,187,38,0.1);
+  --warning: #fabd2f; --warning-bg: rgba(250,189,47,0.1);
+  --error:   #fb4934; --error-bg:   rgba(251,73,52,0.1);
+  --info:    #83a598; --info-bg:    rgba(131,165,152,0.1);
+  --glass-bg: rgba(40,40,40,0.78); --glass-border: rgba(235,219,178,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.35); --shadow-sm: 0 2px 4px rgba(0,0,0,0.45);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.55); --shadow-lg: 0 12px 32px rgba(0,0,0,0.65);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.75);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(251,73,52,0.3);
+}
+
+/* === GRUVBOX LIGHT === */
+[data-theme="gruvbox-light"] {
+  color-scheme: light;
+  --surface-0: #fbf1c7; --surface-1: #f9f5d7; --surface-2: #ebdbb2;
+  --surface-3: #d5c4a1; --surface-4: #bdae93; --surface-overlay: rgba(251,241,199,0.75);
+  --text-primary: #3c3836; --text-secondary: #504945; --text-tertiary: #665c54;
+  --text-disabled: #928374; --text-inverse: #fbf1c7;
+  --border-subtle: #ebdbb2; --border-default: #d5c4a1; --border-strong: #bdae93;
+  --brand-50:  #fdf4e3; --brand-100: #fbe6c4; --brand-300: #f7c987; --brand-400: #f3ab56;
+  --brand-500: #af3a03; --brand-600: #8f3002; --brand-700: #6f2402;
+  --brand-glow: rgba(175,58,3,0.2);
+  --brand-foreground: #ffffff;
+  --block-action: #076678;    --block-action-bg:    rgba(7,102,120,0.08);
+  --block-loop: #b57614;      --block-loop-bg:      rgba(181,118,20,0.08);
+  --block-condition: #79740e; --block-condition-bg: rgba(121,116,14,0.08);
+  --block-subflow: #8f3f71;   --block-subflow-bg:   rgba(143,63,113,0.08);
+  --block-error: #cc2414;     --block-error-bg:     rgba(204,36,20,0.08);
+  --block-comment: #928374;   --block-comment-bg:   rgba(146,131,116,0.06);
+  --block-variable: #af3a03;  --block-variable-bg:  rgba(175,58,3,0.08);
+  --block-string: #9a7b1a;    --block-string-bg:    rgba(154,123,26,0.08);
+  --block-wait: #427b58;      --block-wait-bg:      rgba(66,123,88,0.08);
+  --success: #79740e; --success-bg: rgba(121,116,14,0.08);
+  --warning: #b57614;--warning-bg: rgba(181,118,20,0.08);
+  --error:   #cc2414; --error-bg:  rgba(204,36,20,0.08);
+  --info:    #076678; --info-bg:   rgba(7,102,120,0.08);
+  --glass-bg: rgba(251,241,199,0.78); --glass-border: rgba(60,56,54,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(60,56,54,0.06); --shadow-sm: 0 2px 4px rgba(60,56,54,0.08);
+  --shadow-md: 0 4px 12px rgba(60,56,54,0.10); --shadow-lg: 0 12px 32px rgba(60,56,54,0.14);
+  --shadow-xl: 0 24px 64px rgba(60,56,54,0.18);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px rgba(175,58,3,0.2);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(204,36,20,0.15);
+}
+
+/* === CATPPUCCIN MOCHA === */
+[data-theme="catppuccin-mocha"] {
+  color-scheme: dark;
+  --surface-0: #11111b; --surface-1: #181825; --surface-2: #1e1e2e;
+  --surface-3: #313244; --surface-4: #45475a; --surface-overlay: rgba(17,17,27,0.75);
+  --text-primary: #cdd6f4; --text-secondary: #bac2de; --text-tertiary: #a6adc8;
+  --text-disabled: #6c7086; --text-inverse: #11111b;
+  --border-subtle: #181825; --border-default: #313244; --border-strong: #45475a;
+  --brand-50:  #f5f0fb; --brand-100: #e8def7; --brand-300: #d4c2f4; --brand-400: #c3b1f0;
+  --brand-500: #cba6f7; --brand-600: #a87eea; --brand-700: #8855c9;
+  --brand-glow: rgba(203,166,247,0.4);
+  --brand-foreground: #11111b;
+  --block-action: #89b4fa;    --block-action-bg:    rgba(137,180,250,0.08);
+  --block-loop: #fab387;      --block-loop-bg:      rgba(250,179,135,0.08);
+  --block-condition: #a6e3a1; --block-condition-bg: rgba(166,227,161,0.08);
+  --block-subflow: #b4befe;   --block-subflow-bg:   rgba(180,190,254,0.08);
+  --block-error: #f38ba8;     --block-error-bg:     rgba(243,139,168,0.08);
+  --block-comment: #6c7086;   --block-comment-bg:   rgba(108,112,134,0.08);
+  --block-variable: #f5c2e7;  --block-variable-bg:  rgba(245,194,231,0.08);
+  --block-string: #f9e2af;    --block-string-bg:    rgba(249,226,175,0.08);
+  --block-wait: #94e2d5;      --block-wait-bg:      rgba(148,226,213,0.08);
+  --success: #a6e3a1; --success-bg: rgba(166,227,161,0.1);
+  --warning: #f9e2af;--warning-bg: rgba(249,226,175,0.1);
+  --error:   #f38ba8; --error-bg:   rgba(243,139,168,0.1);
+  --info:    #89b4fa; --info-bg:    rgba(137,180,250,0.1);
+  --glass-bg: rgba(30,30,46,0.78); --glass-border: rgba(205,214,244,0.06); --glass-blur: blur(16px) saturate(1.3);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(243,139,168,0.3);
+}
+
+/* === CATPPUCCIN LATTE === */
+[data-theme="catppuccin-latte"] {
+  color-scheme: light;
+  --surface-0: #eff1f5; --surface-1: #e6e9ef; --surface-2: #dce0e8;
+  --surface-3: #ccd0da; --surface-4: #bcc0cc; --surface-overlay: rgba(239,241,245,0.75);
+  --text-primary: #4c4f69; --text-secondary: #5c5f77; --text-tertiary: #6c6f85;
+  --text-disabled: #9ca0b0; --text-inverse: #eff1f5;
+  --border-subtle: #e6e9ef; --border-default: #ccd0da; --border-strong: #bcc0cc;
+  --brand-50:  #f4eefb; --brand-100: #e7ddf8; --brand-300: #cab0ef; --brand-400: #ad8ce6;
+  --brand-500: #8839ef; --brand-600: #6f2ec9; --brand-700: #5623a3;
+  --brand-glow: rgba(136,57,239,0.2);
+  --brand-foreground: #ffffff;
+  --block-action: #1e66f5;    --block-action-bg:    rgba(30,102,245,0.08);
+  --block-loop: #d65c08;      --block-loop-bg:      rgba(214,92,8,0.08);
+  --block-condition: #40a02b; --block-condition-bg: rgba(64,160,43,0.08);
+  --block-subflow: #6271f0;   --block-subflow-bg:   rgba(98,113,240,0.08);
+  --block-error: #d20f39;     --block-error-bg:     rgba(210,15,57,0.08);
+  --block-comment: #9ca0b0;   --block-comment-bg:   rgba(156,160,176,0.06);
+  --block-variable: #c261aa;  --block-variable-bg:  rgba(194,97,170,0.08);
+  --block-string: #b87415;    --block-string-bg:    rgba(184,116,21,0.08);
+  --block-wait: #179299;      --block-wait-bg:      rgba(23,146,153,0.08);
+  --success: #40a02b; --success-bg: rgba(64,160,43,0.08);
+  --warning: #df8e1d;--warning-bg: rgba(223,142,29,0.08);
+  --error:   #d20f39; --error-bg:   rgba(210,15,57,0.08);
+  --info:    #1e66f5; --info-bg:    rgba(30,102,245,0.08);
+  --glass-bg: rgba(239,241,245,0.78); --glass-border: rgba(76,79,105,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(76,79,105,0.06); --shadow-sm: 0 2px 4px rgba(76,79,105,0.08);
+  --shadow-md: 0 4px 12px rgba(76,79,105,0.10); --shadow-lg: 0 12px 32px rgba(76,79,105,0.14);
+  --shadow-xl: 0 24px 64px rgba(76,79,105,0.18);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px rgba(136,57,239,0.2);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(210,15,57,0.15);
+}
+
+/* === ROSE PINE === */
+[data-theme="rose-pine"] {
+  color-scheme: dark;
+  --surface-0: #191724; --surface-1: #1f1d2e; --surface-2: #26233a;
+  --surface-3: #2a283d; --surface-4: #34304a; --surface-overlay: rgba(25,23,36,0.75);
+  --text-primary: #e0def4; --text-secondary: #cdc9e4; --text-tertiary: #a9a4c4;
+  --text-disabled: #6e6a86; --text-inverse: #191724;
+  --border-subtle: #1f1d2e; --border-default: #2a283d; --border-strong: #403d57;
+  --brand-50:  #fbeef0; --brand-100: #f6d8dd; --brand-300: #ee9aa6; --brand-400: #e67e8c;
+  --brand-500: #ebbcba; --brand-600: #cc9290; --brand-700: #a76e6c;
+  --brand-glow: rgba(235,188,186,0.4);
+  --brand-foreground: #191724;
+  --block-action: #31748f;    --block-action-bg:    rgba(49,116,143,0.08);
+  --block-loop: #f6c177;      --block-loop-bg:      rgba(246,193,119,0.08);
+  --block-condition: #9ccfd8; --block-condition-bg: rgba(156,207,216,0.08);
+  --block-subflow: #c4a7e7;   --block-subflow-bg:   rgba(196,167,231,0.08);
+  --block-error: #eb6f92;     --block-error-bg:     rgba(235,111,146,0.08);
+  --block-comment: #6e6a86;   --block-comment-bg:   rgba(110,106,134,0.08);
+  --block-variable: #ebbcba;  --block-variable-bg:  rgba(235,188,186,0.08);
+  --block-string: #e0b865;    --block-string-bg:    rgba(224,184,101,0.08);
+  --block-wait: #5a9aa8;      --block-wait-bg:      rgba(90,154,168,0.08);
+  --success: #9ccfd8; --success-bg: rgba(156,207,216,0.1);
+  --warning: #f6c177;--warning-bg: rgba(246,193,119,0.1);
+  --error:   #eb6f92; --error-bg:   rgba(235,111,146,0.1);
+  --info:    #31748f; --info-bg:    rgba(49,116,143,0.1);
+  --glass-bg: rgba(31,29,46,0.78); --glass-border: rgba(224,222,244,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(235,111,146,0.3);
+}
+
+/* === ROSE PINE MOON === */
+[data-theme="rose-pine-moon"] {
+  color-scheme: dark;
+  --surface-0: #1f1d2e; --surface-1: #232136; --surface-2: #2a273f;
+  --surface-3: #393552; --surface-4: #44415a; --surface-overlay: rgba(31,29,46,0.75);
+  --text-primary: #e0def4; --text-secondary: #cdcbe0; --text-tertiary: #aeacc8;
+  --text-disabled: #6e6a86; --text-inverse: #232136;
+  --border-subtle: #2a273f; --border-default: #393552; --border-strong: #4f4a69;
+  --brand-50:  #fbedef; --brand-100: #f5d3d7; --brand-300: #ea9aa0; --brand-400: #e2818a;
+  --brand-500: #ea9a97; --brand-600: #c77773; --brand-700: #a45a57;
+  --brand-glow: rgba(234,154,151,0.4);
+  --brand-foreground: #1f1d2e;
+  --block-action: #3e8fb0;    --block-action-bg:    rgba(62,143,176,0.08);
+  --block-loop: #f6c177;      --block-loop-bg:      rgba(246,193,119,0.08);
+  --block-condition: #9ccfd8; --block-condition-bg: rgba(156,207,216,0.08);
+  --block-subflow: #c4a7e7;   --block-subflow-bg:   rgba(196,167,231,0.08);
+  --block-error: #eb6f92;     --block-error-bg:     rgba(235,111,146,0.08);
+  --block-comment: #6e6a86;   --block-comment-bg:   rgba(110,106,134,0.08);
+  --block-variable: #ea9a97;  --block-variable-bg:  rgba(234,154,151,0.08);
+  --block-string: #e0b865;    --block-string-bg:    rgba(224,184,101,0.08);
+  --block-wait: #5a9aa8;      --block-wait-bg:      rgba(90,154,168,0.08);
+  --success: #9ccfd8; --success-bg: rgba(156,207,216,0.1);
+  --warning: #f6c177;--warning-bg: rgba(246,193,119,0.1);
+  --error:   #eb6f92; --error-bg:   rgba(235,111,146,0.1);
+  --info:    #3e8fb0; --info-bg:    rgba(62,143,176,0.1);
+  --glass-bg: rgba(35,33,54,0.78); --glass-border: rgba(224,222,244,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(235,111,146,0.3);
+}
+
+/* === ROSE PINE DAWN === */
+[data-theme="rose-pine-dawn"] {
+  color-scheme: light;
+  --surface-0: #faf4ed; --surface-1: #fffaf3; --surface-2: #f2e9e0;
+  --surface-3: #e8dfd5; --surface-4: #dcd1c4; --surface-overlay: rgba(250,244,237,0.75);
+  --text-primary: #575279; --text-secondary: #635e7c; --text-tertiary: #87839a;
+  --text-disabled: #9893a5; --text-inverse: #faf4ed;
+  --border-subtle: #f2e9e0; --border-default: #e0d9ce; --border-strong: #cec3b4;
+  --brand-50:  #fbeee9; --brand-100: #f4d2c8; --brand-300: #e49a87; --brand-400: #db8170;
+  --brand-500: #d7827e; --brand-600: #b86661; --brand-700: #944c48;
+  --brand-glow: rgba(215,130,126,0.2);
+  --brand-foreground: #191724;
+  --block-action: #286983;    --block-action-bg:    rgba(40,105,131,0.08);
+  --block-loop: #b8761e;      --block-loop-bg:      rgba(184,118,30,0.08);
+  --block-condition: #56949f; --block-condition-bg: rgba(86,148,159,0.08);
+  --block-subflow: #907aa9;   --block-subflow-bg:   rgba(144,122,169,0.08);
+  --block-error: #b4637a;     --block-error-bg:     rgba(180,99,122,0.08);
+  --block-comment: #9893a5;   --block-comment-bg:   rgba(152,147,165,0.06);
+  --block-variable: #c06c68;  --block-variable-bg:  rgba(192,108,104,0.08);
+  --block-string: #a6812e;    --block-string-bg:    rgba(166,129,46,0.08);
+  --block-wait: #3e8a96;      --block-wait-bg:      rgba(62,138,150,0.08);
+  --success: #56949f; --success-bg: rgba(86,148,159,0.08);
+  --warning: #ea9d34;--warning-bg: rgba(234,157,52,0.08);
+  --error:   #b4637a; --error-bg:   rgba(180,99,122,0.08);
+  --info:    #286983; --info-bg:    rgba(40,105,131,0.08);
+  --glass-bg: rgba(255,250,243,0.78); --glass-border: rgba(87,82,121,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(87,82,121,0.06); --shadow-sm: 0 2px 4px rgba(87,82,121,0.08);
+  --shadow-md: 0 4px 12px rgba(87,82,121,0.10); --shadow-lg: 0 12px 32px rgba(87,82,121,0.14);
+  --shadow-xl: 0 24px 64px rgba(87,82,121,0.18);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px rgba(215,130,126,0.2);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(180,99,122,0.15);
+}
+
+/* === GITHUB DARK === */
+[data-theme="github-dark"] {
+  color-scheme: dark;
+  --surface-0: #010409; --surface-1: #0d1117; --surface-2: #161b22;
+  --surface-3: #21262d; --surface-4: #30363d; --surface-overlay: rgba(1,4,9,0.75);
+  --text-primary: #e6edf3; --text-secondary: #c9d1d9; --text-tertiary: #8b949e;
+  --text-disabled: #6e7681; --text-inverse: #010409;
+  --border-subtle: #161b22; --border-default: #30363d; --border-strong: #484f58;
+  --brand-50:  #eaf3ff; --brand-100: #cfe4ff; --brand-300: #82b6ff; --brand-400: #5a9bf8;
+  --brand-500: #2f81f7; --brand-600: #1f6feb; --brand-700: #1158c7;
+  --brand-glow: rgba(47,129,247,0.4);
+  --brand-foreground: #010409;
+  --block-action: #2f81f7;    --block-action-bg:    rgba(47,129,247,0.08);
+  --block-loop: #d29922;      --block-loop-bg:      rgba(210,153,34,0.08);
+  --block-condition: #3fb950; --block-condition-bg: rgba(63,185,80,0.08);
+  --block-subflow: #a371f7;   --block-subflow-bg:   rgba(163,113,247,0.08);
+  --block-error: #f85149;     --block-error-bg:     rgba(248,81,73,0.08);
+  --block-comment: #6e7681;   --block-comment-bg:   rgba(110,118,129,0.08);
+  --block-variable: #db6d28;  --block-variable-bg:  rgba(219,109,40,0.08);
+  --block-string: #e3b341;    --block-string-bg:    rgba(227,179,65,0.08);
+  --block-wait: #39c5cf;      --block-wait-bg:      rgba(57,197,207,0.08);
+  --success: #3fb950; --success-bg: rgba(63,185,80,0.1);
+  --warning: #d29922;--warning-bg: rgba(210,153,34,0.1);
+  --error:   #f85149; --error-bg:   rgba(248,81,73,0.1);
+  --info:    #2f81f7; --info-bg:    rgba(47,129,247,0.1);
+  --glass-bg: rgba(13,17,23,0.78); --glass-border: rgba(230,237,243,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.35); --shadow-sm: 0 2px 4px rgba(0,0,0,0.45);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.55); --shadow-lg: 0 12px 32px rgba(0,0,0,0.65);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.75);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(248,81,73,0.3);
+}
+
+/* === GITHUB LIGHT === */
+[data-theme="github-light"] {
+  color-scheme: light;
+  --surface-0: #f6f8fa; --surface-1: #ffffff; --surface-2: #eaeef2;
+  --surface-3: #d0d7de; --surface-4: #afb8c1; --surface-overlay: rgba(246,248,250,0.75);
+  --text-primary: #1f2328; --text-secondary: #24292f; --text-tertiary: #57606a;
+  --text-disabled: #8c959f; --text-inverse: #ffffff;
+  --border-subtle: #eaeef2; --border-default: #d0d7de; --border-strong: #afb8c1;
+  --brand-50:  #e8f1ff; --brand-100: #cee3ff; --brand-300: #7db4fc; --brand-400: #4f93f7;
+  --brand-500: #0969da; --brand-600: #0856b3; --brand-700: #064388;
+  --brand-glow: rgba(9,105,218,0.2);
+  --brand-foreground: #ffffff;
+  --block-action: #0969da;    --block-action-bg:    rgba(9,105,218,0.08);
+  --block-loop: #9a6700;      --block-loop-bg:      rgba(154,103,0,0.08);
+  --block-condition: #1a7f37; --block-condition-bg: rgba(26,127,55,0.08);
+  --block-subflow: #8250df;   --block-subflow-bg:   rgba(130,80,223,0.08);
+  --block-error: #cf222e;     --block-error-bg:     rgba(207,34,46,0.08);
+  --block-comment: #6e7781;   --block-comment-bg:   rgba(110,119,129,0.06);
+  --block-variable: #bc4c00;  --block-variable-bg:  rgba(188,76,0,0.08);
+  --block-string: #bf8700;    --block-string-bg:    rgba(191,135,0,0.08);
+  --block-wait: #0a7b83;      --block-wait-bg:      rgba(10,123,131,0.08);
+  --success: #1a7f37; --success-bg: rgba(26,127,55,0.08);
+  --warning: #9a6700;--warning-bg: rgba(154,103,0,0.08);
+  --error:   #cf222e; --error-bg:   rgba(207,34,46,0.08);
+  --info:    #0969da; --info-bg:    rgba(9,105,218,0.08);
+  --glass-bg: rgba(255,255,255,0.8); --glass-border: rgba(31,35,40,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(31,35,40,0.04); --shadow-sm: 0 2px 4px rgba(31,35,40,0.06);
+  --shadow-md: 0 4px 12px rgba(31,35,40,0.08); --shadow-lg: 0 12px 32px rgba(31,35,40,0.12);
+  --shadow-xl: 0 24px 64px rgba(31,35,40,0.16);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px rgba(9,105,218,0.2);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(207,34,46,0.15);
+}
+
+/* === KANAGAWA === */
+[data-theme="kanagawa"] {
+  color-scheme: dark;
+  --surface-0: #16161d; --surface-1: #1f1f28; --surface-2: #2a2a37;
+  --surface-3: #363646; --surface-4: #54546d; --surface-overlay: rgba(22,22,29,0.75);
+  --text-primary: #dcd7ba; --text-secondary: #c8c2a8; --text-tertiary: #9e9a87;
+  --text-disabled: #54546d; --text-inverse: #16161d;
+  --border-subtle: #1f1f28; --border-default: #2a2a37; --border-strong: #3b3b4f;
+  --brand-50:  #eff4fb; --brand-100: #d9e6f5; --brand-300: #9fbce4; --brand-400: #87a9dc;
+  --brand-500: #7e9cd8; --brand-600: #6480b8; --brand-700: #4f6594;
+  --brand-glow: rgba(126,156,216,0.4);
+  --brand-foreground: #16161d;
+  --block-action: #7aa2f7;    --block-action-bg:    rgba(122,162,247,0.08);
+  --block-loop: #ffa066;      --block-loop-bg:      rgba(255,160,102,0.08);
+  --block-condition: #98bb6c; --block-condition-bg: rgba(152,187,108,0.08);
+  --block-subflow: #957fb8;   --block-subflow-bg:   rgba(149,127,184,0.08);
+  --block-error: #e46876;     --block-error-bg:     rgba(228,104,118,0.08);
+  --block-comment: #54546d;   --block-comment-bg:   rgba(84,84,109,0.08);
+  --block-variable: #d27e99;  --block-variable-bg:  rgba(210,126,153,0.08);
+  --block-string: #e6c384;    --block-string-bg:    rgba(230,195,132,0.08);
+  --block-wait: #6a9589;      --block-wait-bg:      rgba(106,149,137,0.08);
+  --success: #98bb6c; --success-bg: rgba(152,187,108,0.1);
+  --warning: #e6c384;--warning-bg: rgba(230,195,132,0.1);
+  --error:   #e46876; --error-bg:   rgba(228,104,118,0.1);
+  --info:    #7aa2f7; --info-bg:    rgba(122,162,247,0.1);
+  --glass-bg: rgba(31,31,40,0.78); --glass-border: rgba(220,215,186,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(228,104,118,0.3);
+}
+
+/* === EVERFOREST === */
+[data-theme="everforest"] {
+  color-scheme: dark;
+  --surface-0: #22272a; --surface-1: #2d353b; --surface-2: #343f44;
+  --surface-3: #3d484d; --surface-4: #475558; --surface-overlay: rgba(34,39,42,0.75);
+  --text-primary: #d3c6aa; --text-secondary: #bdaa8a; --text-tertiary: #9da9a0;
+  --text-disabled: #7a8b98; --text-inverse: #22272a;
+  --border-subtle: #2d353b; --border-default: #3d484d; --border-strong: #4d595e;
+  --brand-50:  #eef5e8; --brand-100: #d8ebcc; --brand-300: #a3d088; --brand-400: #88bd6f;
+  --brand-500: #a7c080; --brand-600: #8aa365; --brand-700: #6d8049;
+  --brand-glow: rgba(167,192,128,0.4);
+  --brand-foreground: #22272a;
+  --block-action: #7fbbb3;    --block-action-bg:    rgba(127,187,179,0.08);
+  --block-loop: #e69875;      --block-loop-bg:      rgba(230,152,117,0.08);
+  --block-condition: #93c25a; --block-condition-bg: rgba(147,194,90,0.08);
+  --block-subflow: #d699b6;   --block-subflow-bg:   rgba(214,153,182,0.08);
+  --block-error: #e67e80;     --block-error-bg:     rgba(230,126,128,0.08);
+  --block-comment: #7a8b98;   --block-comment-bg:   rgba(122,139,152,0.08);
+  --block-variable: #dbbc7f;  --block-variable-bg:  rgba(219,188,127,0.08);
+  --block-string: #d9ba5f;    --block-string-bg:    rgba(217,186,95,0.08);
+  --block-wait: #83c092;      --block-wait-bg:      rgba(131,192,146,0.08);
+  --success: #a7c080; --success-bg: rgba(167,192,128,0.1);
+  --warning: #dbbc7f;--warning-bg: rgba(219,188,127,0.1);
+  --error:   #e67e80; --error-bg:   rgba(230,126,128,0.1);
+  --info:    #7fbbb3; --info-bg:    rgba(127,187,179,0.1);
+  --glass-bg: rgba(45,53,59,0.78); --glass-border: rgba(211,198,170,0.06); --glass-blur: blur(16px) saturate(1.2);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3); --shadow-sm: 0 2px 4px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5); --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  --shadow-xl: 0 24px 64px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
+  --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(230,126,128,0.3);
 }
 
 /* === GLASS UTILITY === */
@@ -667,7 +1125,7 @@
 
 /* Button pulse for sending state */
 @keyframes btn-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--brand-500/30); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand-500) 30%, transparent); }
   50% { box-shadow: 0 0 0 6px transparent; }
 }
 
@@ -700,7 +1158,7 @@
 .animate-cursor        { animation: blink-cursor 1s step-end infinite; }
 .animate-dash          { stroke-dasharray: 4; animation: dash 1s linear infinite; }
 .animate-shimmer {
-  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.15), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--brand-500) 15%, transparent), transparent);
   background-size: 200% 100%;
   animation: shimmer 2s linear infinite;
 }
@@ -726,6 +1184,91 @@
   .animate-spin   { animation-duration: 2s !important; }
 }
 
+/* === USER OPT-IN: REDUCE MOTION === */
+/* Triggered by the AppearancePanel "Reduce Motion" toggle (data-reduce-motion="true"). */
+[data-reduce-motion="true"] *,
+[data-reduce-motion="true"] *::before,
+[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+[data-reduce-motion="true"] .animate-cursor { animation-duration: 2s !important; }
+[data-reduce-motion="true"] .animate-spin   { animation-duration: 2s !important; }
+
+/* === USER OPT-IN: HIGH CONTRAST === */
+/* Triggered by the AppearancePanel "High Contrast" toggle (data-high-contrast="true").
+   Collapses the text ramp toward primary and strengthens borders for legibility. */
+[data-high-contrast="true"] {
+  --text-secondary: var(--text-primary);
+  --text-tertiary:  var(--text-primary);
+  --text-disabled:  var(--text-secondary);
+  --border-subtle:  var(--border-default);
+  --border-default: var(--border-strong);
+  --border-strong:  var(--text-primary);
+}
+
+/* === OS-LEVEL HIGH CONTRAST === */
+/* `[data-theme]` is included so this also strengthens the non-default themes,
+   not just the `:root` dark defaults. Both selectors have equal specificity to
+   the per-theme blocks, so source order (this block is later) lets them win. */
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme] {
+    --text-secondary: var(--text-primary);
+    --text-tertiary:  var(--text-primary);
+    --border-subtle:  var(--border-default);
+    --border-default: var(--border-strong);
+  }
+}
+
+/* === UI DENSITY === */
+/* Triggered by the AppearancePanel "UI Density" selector (data-density="compact").
+   Shrinks the var-based spacing scale ~20-25%. Also drops --text-sm 13px→12px,
+   which currently only affects chat prose (.prose-chat), not Tailwind's text-sm. */
+[data-density="compact"] {
+  --space-1.5: 5px;
+  --space-2: 6px;
+  --space-2.5: 8px;
+  --space-3: 10px;
+  --space-3.5: 11px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --text-sm: 12px;
+}
+
+/* === THEME COLOR TRANSITION === */
+/* Briefly applied to <html> during theme switches for a smooth color crossfade.
+   Suppressed for users who prefer reduced motion (OS-level or user opt-in). */
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+  transition: background-color 200ms var(--ease-out),
+              border-color 200ms var(--ease-out),
+              color 200ms var(--ease-out),
+              fill 200ms var(--ease-out),
+              stroke 200ms var(--ease-out),
+              box-shadow 200ms var(--ease-out),
+              outline-color 200ms var(--ease-out),
+              caret-color 200ms var(--ease-out) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-transitioning *,
+  .theme-transitioning *::before,
+  .theme-transitioning *::after {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+[data-reduce-motion="true"].theme-transitioning *,
+[data-reduce-motion="true"].theme-transitioning *::before,
+[data-reduce-motion="true"].theme-transitioning *::after {
+  transition-duration: 0.01ms !important;
+}
+
 /* === BASE RESET === */
 html, body, #root {
   margin: 0;
@@ -737,6 +1280,17 @@ html, body, #root {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Firefox scrollbar theming (Chrome/Safari use ::-webkit-scrollbar below) */
+html {
+  scrollbar-color: var(--surface-4) transparent;
+  scrollbar-width: thin;
+}
+
+/* Enable code ligatures (=>, !==, >=) and slashed zero for monospace text */
+code, pre, .font-mono {
+  font-feature-settings: 'calt' 1, 'zero' 1;
 }
 
 ::-webkit-scrollbar {
@@ -769,6 +1323,9 @@ html, body, #root {
 }
 
 /* Utility: styled scrollbar (explicit opt-in, mirrors global scrollbar styles) */
+.custom-scrollbar {
+  scrollbar-color: var(--surface-4) transparent;
+}
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -785,8 +1342,21 @@ html, body, #root {
 }
 
 ::selection {
-  background: rgba(99, 102, 241, 0.3);
+  background: color-mix(in srgb, var(--brand-500) 30%, transparent);
   color: var(--text-primary);
+}
+
+/* === KEYBOARD FOCUS RING === */
+/* Only visible for keyboard navigation (:focus-visible), not mouse clicks.
+   Uses the theme brand color so the ring adapts to every theme.
+   Modern browsers make outline follow the element's border-radius. */
+:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .prose-chat {
@@ -1012,4 +1582,144 @@ input:-webkit-autofill:active {
   -webkit-box-shadow: 0 0 0px 1000px #3b4252 inset !important;
   -webkit-text-fill-color: #eceff4 !important;
   caret-color: #eceff4;
+}
+
+[data-theme="gruvbox-dark"] input:-webkit-autofill,
+[data-theme="gruvbox-dark"] input:-webkit-autofill:hover,
+[data-theme="gruvbox-dark"] input:-webkit-autofill:focus,
+[data-theme="gruvbox-dark"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #32302f inset !important;
+  -webkit-text-fill-color: #ebdbb2 !important;
+  caret-color: #ebdbb2;
+}
+
+[data-theme="gruvbox-light"] input:-webkit-autofill,
+[data-theme="gruvbox-light"] input:-webkit-autofill:hover,
+[data-theme="gruvbox-light"] input:-webkit-autofill:focus,
+[data-theme="gruvbox-light"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #ebdbb2 inset !important;
+  -webkit-text-fill-color: #3c3836 !important;
+  caret-color: #3c3836;
+}
+
+[data-theme="catppuccin-mocha"] input:-webkit-autofill,
+[data-theme="catppuccin-mocha"] input:-webkit-autofill:hover,
+[data-theme="catppuccin-mocha"] input:-webkit-autofill:focus,
+[data-theme="catppuccin-mocha"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #1e1e2e inset !important;
+  -webkit-text-fill-color: #cdd6f4 !important;
+  caret-color: #cdd6f4;
+}
+
+[data-theme="catppuccin-latte"] input:-webkit-autofill,
+[data-theme="catppuccin-latte"] input:-webkit-autofill:hover,
+[data-theme="catppuccin-latte"] input:-webkit-autofill:focus,
+[data-theme="catppuccin-latte"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #dce0e8 inset !important;
+  -webkit-text-fill-color: #4c4f69 !important;
+  caret-color: #4c4f69;
+}
+
+[data-theme="rose-pine"] input:-webkit-autofill,
+[data-theme="rose-pine"] input:-webkit-autofill:hover,
+[data-theme="rose-pine"] input:-webkit-autofill:focus,
+[data-theme="rose-pine"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #26233a inset !important;
+  -webkit-text-fill-color: #e0def4 !important;
+  caret-color: #e0def4;
+}
+
+[data-theme="rose-pine-moon"] input:-webkit-autofill,
+[data-theme="rose-pine-moon"] input:-webkit-autofill:hover,
+[data-theme="rose-pine-moon"] input:-webkit-autofill:focus,
+[data-theme="rose-pine-moon"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #2a273f inset !important;
+  -webkit-text-fill-color: #e0def4 !important;
+  caret-color: #e0def4;
+}
+
+[data-theme="rose-pine-dawn"] input:-webkit-autofill,
+[data-theme="rose-pine-dawn"] input:-webkit-autofill:hover,
+[data-theme="rose-pine-dawn"] input:-webkit-autofill:focus,
+[data-theme="rose-pine-dawn"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #f2e9e0 inset !important;
+  -webkit-text-fill-color: #575279 !important;
+  caret-color: #575279;
+}
+
+[data-theme="github-dark"] input:-webkit-autofill,
+[data-theme="github-dark"] input:-webkit-autofill:hover,
+[data-theme="github-dark"] input:-webkit-autofill:focus,
+[data-theme="github-dark"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #161b22 inset !important;
+  -webkit-text-fill-color: #e6edf3 !important;
+  caret-color: #e6edf3;
+}
+
+[data-theme="github-light"] input:-webkit-autofill,
+[data-theme="github-light"] input:-webkit-autofill:hover,
+[data-theme="github-light"] input:-webkit-autofill:focus,
+[data-theme="github-light"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #eaeef2 inset !important;
+  -webkit-text-fill-color: #1f2328 !important;
+  caret-color: #1f2328;
+}
+
+[data-theme="kanagawa"] input:-webkit-autofill,
+[data-theme="kanagawa"] input:-webkit-autofill:hover,
+[data-theme="kanagawa"] input:-webkit-autofill:focus,
+[data-theme="kanagawa"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #2a2a37 inset !important;
+  -webkit-text-fill-color: #dcd7ba !important;
+  caret-color: #dcd7ba;
+}
+
+[data-theme="everforest"] input:-webkit-autofill,
+[data-theme="everforest"] input:-webkit-autofill:hover,
+[data-theme="everforest"] input:-webkit-autofill:focus,
+[data-theme="everforest"] input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #343f44 inset !important;
+  -webkit-text-fill-color: #d3c6aa !important;
+  caret-color: #d3c6aa;
+}
+
+/* === PRINT STYLES === */
+/* Force light output regardless of active theme. Ink-efficient: white backgrounds,
+   dark text, no shadows. UI chrome is hidden via Tailwind's print:hidden utility
+   on TitleBar, StatusBar, Sidebar, and Inspector wrappers. */
+@media print {
+  :root,
+  [data-theme] {
+    --surface-0: #ffffff;
+    --surface-1: #ffffff;
+    --surface-2: #f6f6f6;
+    --surface-3: #eaeaea;
+    --surface-4: #dcdcdc;
+    --text-primary: #1a1a1a;
+    --text-secondary: #404040;
+    --text-tertiary: #707070;
+    --text-disabled: #a0a0a0;
+    --border-subtle: #e8e8e8;
+    --border-default: #cccccc;
+    --border-strong: #999999;
+    color-scheme: light;
+  }
+
+  html, body, #root {
+    overflow: visible;
+    height: auto;
+    background: #ffffff;
+  }
+
+  /* Strip shadows and effects that waste ink or cause rendering artifacts */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Avoid breaking inside block cards, code blocks, and table rows */
+  .block-view, .prose-chat pre, tr {
+    break-inside: avoid;
+  }
 }

@@ -128,7 +128,7 @@ export default function OrganizationsPanel() {
         {!creating && (
           <button
             onClick={() => setCreating(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors shrink-0"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-brand-foreground text-sm font-medium transition-colors shrink-0"
           >
             <Plus size={14} />
             New organization
@@ -165,7 +165,7 @@ export default function OrganizationsPanel() {
             <button
               onClick={handleCreate}
               disabled={!newName.trim() || createBusy}
-              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white text-sm font-medium"
+              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-sm font-medium"
             >
               {createBusy ? 'Creating…' : 'Create'}
             </button>
@@ -295,7 +295,7 @@ export default function OrganizationsPanel() {
                         <button
                           onClick={handleInvite}
                           disabled={!inviteEmail.trim() || inviteBusy}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white text-sm font-medium"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-sm font-medium"
                         >
                           <UserPlus size={14} />
                           {inviteBusy ? 'Inviting…' : 'Invite'}

@@ -32,9 +32,9 @@ export const DataMigrationSection: React.FC<{
     <div className="p-5 space-y-4">
       {status?.result && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-surface-3 border border-border-subtle rounded-lg p-3">
-          <div className="flex flex-col gap-1"><span className="text-xs text-text-tertiary">Migrated</span><span className="text-sm font-semibold text-text-primary">{status.result.FlowsMigrated}</span></div>
-          <div className="flex flex-col gap-1"><span className="text-xs text-text-tertiary">Skipped</span><span className="text-sm font-semibold text-text-primary">{status.result.FlowsSkipped}</span></div>
-          <div className="flex flex-col gap-1"><span className="text-xs text-text-tertiary">Failed</span><span className="text-sm font-semibold text-text-primary">{status.result.FlowsFailed}</span></div>
+          <div className="flex flex-col gap-1"><span className="text-xs text-text-tertiary">Migrated</span><span className="text-sm font-semibold text-text-primary tabular-nums">{status.result.FlowsMigrated}</span></div>
+          <div className="flex flex-col gap-1"><span className="text-xs text-text-tertiary">Skipped</span><span className="text-sm font-semibold text-text-primary tabular-nums">{status.result.FlowsSkipped}</span></div>
+          <div className="flex flex-col gap-1"><span className="text-xs text-text-tertiary">Failed</span><span className="text-sm font-semibold text-text-primary tabular-nums">{status.result.FlowsFailed}</span></div>
           <div className="flex flex-col gap-1">
             <span className="text-xs text-text-tertiary">Settings</span>
             <span className="flex items-center gap-1">
@@ -44,7 +44,7 @@ export const DataMigrationSection: React.FC<{
           </div>
           <div className="col-span-full pt-2 border-t border-border-subtle flex items-center gap-2">
             <span className="text-xs text-text-tertiary">Duration</span>
-            <span className="text-sm font-semibold text-text-primary">{(status.result.Duration / 1e9).toFixed(2)}s</span>
+            <span className="text-sm font-semibold text-text-primary tabular-nums">{(status.result.Duration / 1e9).toFixed(2)}s</span>
           </div>
         </div>
       )}

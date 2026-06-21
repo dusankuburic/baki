@@ -8,7 +8,7 @@ vi.mock('./useChartColors', () => ({
     warning: '#eab308',
     error: '#ef4444',
     brand400: '#818cf8',
-    brand500: '#6366f1',
+    brand500: '#5b61ef',
     brand600: '#4f46e5',
     surface3: '#26262d',
     borderStrong: '#3f3f47',

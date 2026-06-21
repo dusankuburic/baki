@@ -251,7 +251,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
                 className={clsx(
                   'p-1.5 rounded-lg transition-all',
                   hasContent 
-                    ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/20 hover:bg-brand-600' 
+                    ? 'bg-brand-500 text-brand-foreground shadow-lg shadow-brand-500/20 hover:bg-brand-600'
                     : 'text-text-tertiary hover:bg-surface-3'
                 )}
               >

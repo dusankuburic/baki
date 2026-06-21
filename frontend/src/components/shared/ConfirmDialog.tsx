@@ -100,7 +100,7 @@ export function ConfirmProvider({children}: {children: React.ReactNode}) {
                             onClick={handleConfirm}
                             disabled={!canConfirm}
                             className={clsx(
-                                'px-3 py-1.5 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50',
+                                'px-3 py-1.5 rounded-lg text-sm font-medium text-brand-foreground transition-colors disabled:opacity-50',
                                 danger ? 'bg-red-600 hover:bg-red-700' : 'bg-brand-600 hover:bg-brand-700',
                             )}
                         >

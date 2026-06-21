@@ -3,10 +3,12 @@ import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 import {flowApi, analysisApi, exportApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {logger} from '@/lib/logger'
+import {THEME_REGISTRY} from '@/lib/themeRegistry'
 import type {FlowDocument as DomainFlowDocument, RecentFile, AnalysisReport, Block} from '@/types'
 import type {useToast} from '@/components/shared'
 
@@ -123,6 +125,19 @@ export function useCommandList(deps: {
             }},
             {id: 'view.dashboard', label: 'Analysis Dashboard', section: 'Analysis', onSelect: () => setMainPaneView('dashboard')},
             {id: 'nav.profile', label: 'User Profile', section: 'Navigation', onSelect: () => setMainPaneView('profile')},
+
+            // ---- Appearance: theme switching via command palette ----
+            {id: 'theme.toggle', label: 'Toggle Light/Dark Theme', section: 'Appearance', shortcut: ['mod', 'shift', 't'], onSelect: () => {
+                const resolved = useUIStore.getState().resolvedTheme
+                useSettingsStore.getState().updateAppearance({theme: resolved === 'light' ? 'dark' : 'light'})
+            }},
+            {id: 'theme.system', label: 'Theme: System (Follow OS)', section: 'Appearance', onSelect: () => useSettingsStore.getState().updateAppearance({theme: 'system'})},
+            ...THEME_REGISTRY.map(t => ({
+                id: `theme.${t.id}`,
+                label: `Theme: ${t.label}`,
+                section: 'Appearance',
+                onSelect: () => useSettingsStore.getState().updateAppearance({theme: t.id}),
+            })),
         ]
 
         if (user?.role === 'admin') {

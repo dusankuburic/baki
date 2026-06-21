@@ -30,8 +30,8 @@ export default function Checkbox({checked, onChange, label, disabled = false, cl
                 )}
             >
                 {checked && (
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                        <path d="M2 5L4 7L8 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="text-brand-foreground">
+                        <path d="M2 5L4 7L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                     </svg>
                 )}
             </button>

@@ -26,7 +26,7 @@ export default function StreamingProgress({tokens, isStreaming, estimatedTokens}
           />
         )}
       </div>
-      <span className="text-2xs text-text-tertiary">{formatCompact(tokens)} tokens</span>
+      <span className="text-2xs text-text-tertiary tabular-nums">{formatCompact(tokens)} tokens</span>
     </div>
   )
 }

@@ -1,19 +1,9 @@
+import type {ReactNode} from 'react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import type {ThemeMode} from '@/types'
+import {DARK_THEMES, LIGHT_THEMES, SYSTEM_THEME} from '@/lib/themeRegistry'
 import {Check} from 'lucide-react'
 import clsx from 'clsx'
-
-const themes: {id: ThemeMode; label: string; description: string}[] = [
-  {id: 'dark',        label: 'Deep Dark',   description: 'The standard high-contrast dark mode.'},
-  {id: 'light',       label: 'Clean Light',  description: 'Bright and airy for high-light environments.'},
-  {id: 'midnight',    label: 'Midnight',    description: 'A cool, deep navy palette for night owls.'},
-  {id: 'tokyo-night', label: 'Tokyo Night', description: 'Deep purples and neon cyan accents.'},
-  {id: 'one-dark',    label: 'One Dark',    description: 'Classic soft gray with balanced contrast.'},
-  {id: 'dracula',     label: 'Dracula',     description: 'Vibrant colors on a vampiric purple base.'},
-  {id: 'nord',        label: 'Nord',        description: 'An elegant arctic-bluish clean aesthetic.'},
-  {id: 'warm',        label: 'Warm Sand',    description: 'A soft, sepia-toned dark theme.'},
-  {id: 'system',      label: 'System',      description: 'Automatically follow your OS preferences.'},
-]
 
 export default function AppearancePanel() {
   const {theme, density, reduceMotion, highContrast} = useSettingsStore(s => s.settings.appearance)
@@ -29,16 +19,39 @@ export default function AppearancePanel() {
       <div className="space-y-10">
         <div>
           <label className="text-sm font-medium text-text-primary block mb-4">Color Theme</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {themes.map(t => (
-              <ThemeCard 
+
+          {/* System (follows OS) — full width */}
+          <div className="mb-6">
+            <ThemeCard
+              theme={SYSTEM_THEME}
+              isSelected={theme === SYSTEM_THEME.id}
+              onClick={() => updateAppearance({theme: SYSTEM_THEME.id})}
+            />
+          </div>
+
+          {/* Dark themes */}
+          <ThemeSection label="Dark Themes" count={DARK_THEMES.length}>
+            {DARK_THEMES.map(t => (
+              <ThemeCard
                 key={t.id}
                 theme={t}
                 isSelected={theme === t.id}
                 onClick={() => updateAppearance({theme: t.id})}
               />
             ))}
-          </div>
+          </ThemeSection>
+
+          {/* Light themes */}
+          <ThemeSection label="Light Themes" count={LIGHT_THEMES.length}>
+            {LIGHT_THEMES.map(t => (
+              <ThemeCard
+                key={t.id}
+                theme={t}
+                isSelected={theme === t.id}
+                onClick={() => updateAppearance({theme: t.id})}
+              />
+            ))}
+          </ThemeSection>
         </div>
 
         {/* ... Rest of settings (density, accessibility) ... */}
@@ -83,7 +96,21 @@ export default function AppearancePanel() {
   )
 }
 
-function ThemeCard({theme, isSelected, onClick}: {theme: typeof themes[0], isSelected: boolean, onClick: () => void}) {
+function ThemeSection({label, count, children}: {label: string, count: number, children: ReactNode}) {
+  return (
+    <div className="mb-6 last:mb-0">
+      <div className="flex items-baseline gap-2 mb-3">
+        <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary">{label}</h3>
+        <span className="text-2xs text-text-disabled">{count}</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function ThemeCard({theme, isSelected, onClick}: {theme: {id: ThemeMode, label: string, description: string}, isSelected: boolean, onClick: () => void}) {
   return (
     <button
       onClick={onClick}
@@ -117,12 +144,12 @@ function ThemeCard({theme, isSelected, onClick}: {theme: typeof themes[0], isSel
               <div className="w-3/4 h-1.5 rounded-sm bg-block-action opacity-30" />
               <div className="w-full h-1.5 rounded-sm bg-block-condition opacity-30" />
             </div>
-            <div className="w-1/2 h-1.5 rounded-sm bg-brand-500 opacity-40 shadow-[0_0_8px_var(--brand-500)]" style={{opacity: 0.2}} />
+            <div className="w-1/2 h-1.5 rounded-sm bg-brand-500 opacity-20 shadow-[0_0_8px_var(--brand-500)]" />
           </div>
         </div>
 
         {isSelected && (
-          <div className="absolute top-2 right-2 bg-brand-500 text-white rounded-full p-0.5 shadow-lg">
+          <div className="absolute top-2 right-2 bg-brand-500 text-brand-foreground rounded-full p-0.5 shadow-lg">
             <Check className="w-3 h-3" strokeWidth={3} />
           </div>
         )}
@@ -143,7 +170,7 @@ function DensityButton({label, isActive, onClick}: {label: string, isActive: boo
       className={clsx(
         'px-3 py-1.5 text-xs font-medium rounded-md border transition-colors flex-1',
         isActive 
-          ? 'bg-brand-500 border-brand-500 text-white shadow-sm' 
+          ? 'bg-brand-500 border-brand-500 text-brand-foreground shadow-sm'
           : 'bg-surface-2 border-border-default text-text-secondary hover:bg-surface-3'
       )}
     >
@@ -164,8 +191,8 @@ function AccessibilityToggle({label, isChecked, onChange}: {label: string, isChe
         )}
       >
         <div className={clsx(
-          'absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all duration-fast shadow-sm',
-          isChecked ? 'right-0.5' : 'left-0.5'
+          'absolute top-0.5 w-3 h-3 rounded-full transition-all duration-fast shadow-sm',
+          isChecked ? 'right-0.5 bg-brand-foreground' : 'left-0.5 bg-white'
         )} />
       </button>
     </div>

@@ -187,7 +187,7 @@ export default function LibraryTab() {
           <button
             onClick={handleSaveCurrent}
             disabled={isSaving}
-            className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-brand-600 text-white rounded-md text-xs font-medium hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-50"
+            className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-brand-600 text-brand-foreground rounded-md text-xs font-medium hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-50"
           >
             {isSaving ? (
               <RefreshCw size={12} className="animate-spin" />

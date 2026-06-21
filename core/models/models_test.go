@@ -87,6 +87,23 @@ func TestThemeModeConstants(t *testing.T) {
 		{"dark", ThemeDark},
 		{"light", ThemeLight},
 		{"system", ThemeSystem},
+		{"midnight", ThemeMidnight},
+		{"warm", ThemeWarm},
+		{"tokyo-night", ThemeTokyoNight},
+		{"one-dark", ThemeOneDark},
+		{"dracula", ThemeDracula},
+		{"nord", ThemeNord},
+		{"gruvbox-dark", ThemeGruvboxDark},
+		{"gruvbox-light", ThemeGruvboxLight},
+		{"catppuccin-mocha", ThemeCatppuccinMocha},
+		{"catppuccin-latte", ThemeCatppuccinLatte},
+		{"rose-pine", ThemeRosePine},
+		{"rose-pine-moon", ThemeRosePineMoon},
+		{"rose-pine-dawn", ThemeRosePineDawn},
+		{"github-dark", ThemeGithubDark},
+		{"github-light", ThemeGithubLight},
+		{"kanagawa", ThemeKanagawa},
+		{"everforest", ThemeEverforest},
 	}
 	for _, tc := range tests {
 		if string(tc.val) != tc.name {

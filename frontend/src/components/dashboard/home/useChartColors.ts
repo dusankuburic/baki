@@ -34,7 +34,7 @@ export function useChartColors(): ChartColors {
       warning: readVar('--warning', '#eab308'),
       error: readVar('--error', '#ef4444'),
       brand400: readVar('--brand-400', '#818cf8'),
-      brand500: readVar('--brand-500', '#6366f1'),
+      brand500: readVar('--brand-500', '#5b61ef'),
       brand600: readVar('--brand-600', '#4f46e5'),
       surface3: readVar('--surface-3', '#26262d'),
       borderStrong: readVar('--border-strong', '#3f3f47'),

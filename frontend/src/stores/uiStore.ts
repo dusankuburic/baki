@@ -3,7 +3,7 @@ import {registerStoreReset} from './storeRegistry'
 import type {FlowDiff} from '@/types'
 
 export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'library' | 'portfolio'
-export type ResolvedTheme = 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord'
+export type ResolvedTheme = 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord' | 'gruvbox-dark' | 'gruvbox-light' | 'catppuccin-mocha' | 'catppuccin-latte' | 'rose-pine' | 'rose-pine-moon' | 'rose-pine-dawn' | 'github-dark' | 'github-light' | 'kanagawa' | 'everforest'
 export type SidebarTab = 'explorer' | 'variables' | 'library'
 export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
 

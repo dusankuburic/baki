@@ -45,7 +45,7 @@ export function FindingsChartCard({
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12,
+                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
                 }}
                 labelStyle={{color: 'var(--text-primary)'}}
               />

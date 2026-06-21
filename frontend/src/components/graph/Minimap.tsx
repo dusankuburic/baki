@@ -79,11 +79,15 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     const vpX2 = (vp.x2 - bounds.x1) * scale + offsetX
     const vpY2 = (vp.y2 - bounds.y1) * scale + offsetY
 
-    ctx.strokeStyle = 'rgba(99, 102, 241, 0.6)'
+    const brand = tokens?.brand500 || '#5b61ef'
+    ctx.strokeStyle = brand
     ctx.lineWidth = 1.5
+    ctx.globalAlpha = 0.6
     ctx.strokeRect(vpX1, vpY1, vpX2 - vpX1, vpY2 - vpY1)
-    ctx.fillStyle = 'rgba(99, 102, 241, 0.08)'
+    ctx.globalAlpha = 0.08
+    ctx.fillStyle = brand
     ctx.fillRect(vpX1, vpY1, vpX2 - vpX1, vpY2 - vpY1)
+    ctx.globalAlpha = 1
   }, [cy, width, height, getDotColor])
 
   // Pan the main graph so the clicked/dragged minimap point is centered.

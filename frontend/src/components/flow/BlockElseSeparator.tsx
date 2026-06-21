@@ -16,7 +16,7 @@ export default function BlockElseSeparator({blockId, collapsed}: BlockElseSepara
         <div
             className="relative flex items-center gap-2 max-w-[450px] w-full rounded-lg select-none overflow-hidden"
             style={{
-                backgroundColor: 'rgba(16, 185, 129, 0.06)',
+                backgroundColor: 'var(--block-condition-bg)',
                 padding: '8px 10px 8px 14px',
             }}
         >

@@ -23,7 +23,7 @@ export default function TokenCounter({promptTokens, completionTokens, inputCostP
   return (
     <div className="flex items-center gap-1.5 px-3 py-1">
       <Activity size={10} className="text-text-tertiary/50" />
-      <span className="text-2xs text-text-tertiary">
+      <span className="text-2xs text-text-tertiary tabular-nums">
         {formatCompact(total)} tokens
         {promptTokens > 0 && completionTokens > 0 && (
           <span className="text-text-tertiary/50"> ({formatCompact(promptTokens)} in / {formatCompact(completionTokens)} out)</span>

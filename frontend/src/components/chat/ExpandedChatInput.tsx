@@ -100,7 +100,7 @@ export default function ExpandedChatInput({
                 onClose()
               }}
               disabled={!value.trim()}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-lg shadow-brand-500/20 transition-all font-medium text-sm"
+              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-brand-foreground shadow-lg shadow-brand-500/20 transition-all font-medium text-sm"
             >
               <Send size={16} />
               <span>Send Prompt</span>

@@ -183,7 +183,7 @@ function VariableToken({token}: {token: BlockToken}) {
                 className={clsx(
                     'px-1.5 py-0.5 rounded-md font-mono text-[0.9em] border transition-all duration-fast mx-0.5 leading-none inline-block cursor-pointer',
                     isSelected 
-                        ? 'bg-yellow-400/30 border-yellow-500/50 text-yellow-900 dark:text-yellow-200 shadow-glow-sm' 
+                        ? 'bg-block-string/20 border-block-string/50 text-text-primary shadow-glow-sm' 
                         : 'bg-block-variable-bg text-block-variable border-block-variable/10 hover:bg-block-variable-bg/20 hover:border-block-variable/20'
                 )}
             >

@@ -53,9 +53,9 @@ export default function PaneDivider({onDrag, onResizeEnd, onDoubleClick}: PaneDi
 
     return (
         <div
-            className="w-[3px] flex-shrink-0 cursor-col-resize group relative bg-transparent"
+            className="w-[3px] flex-shrink-0 cursor-col-resize group relative bg-transparent print:hidden"
             style={{
-                backgroundColor: isActive ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+                backgroundColor: isActive ? 'color-mix(in srgb, var(--brand-500) 30%, transparent)' : 'transparent',
                 transition: dragging ? 'none' : 'background-color 120ms var(--ease-out)',
             }}
             onMouseEnter={handleMouseEnter}

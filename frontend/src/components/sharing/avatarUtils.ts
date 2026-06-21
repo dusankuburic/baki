@@ -6,7 +6,7 @@ export function userInitials(name: string): string {
 
 export function userColor(userId: string): string {
   const colors = [
-    '#6366f1', '#8b5cf6', '#ec4899', '#ef4444',
+    '#5b61ef', '#8b5cf6', '#ec4899', '#ef4444',
     '#f97316', '#eab308', '#22c55e', '#06b6d4',
   ]
   let hash = 0

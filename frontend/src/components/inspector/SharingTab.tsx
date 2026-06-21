@@ -145,7 +145,7 @@ export const SharingTab: React.FC = () => {
               <button
                 type="submit"
                 disabled={isAdding || !newEmail}
-                className="px-4 py-1 bg-brand-600 text-white rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors shadow-sm"
+                className="px-4 py-1 bg-brand-600 text-brand-foreground rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors shadow-sm"
               >
                 {isAdding ? 'Inviting...' : 'Invite'}
               </button>

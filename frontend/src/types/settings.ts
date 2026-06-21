@@ -4,7 +4,7 @@
 import type {ProviderID} from './providers';
 import type {RuleConfig} from './analysis';
 
-export type ThemeMode = 'dark' | 'light' | 'system' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord';
+export type ThemeMode = 'dark' | 'light' | 'system' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord' | 'gruvbox-dark' | 'gruvbox-light' | 'catppuccin-mocha' | 'catppuccin-latte' | 'rose-pine' | 'rose-pine-moon' | 'rose-pine-dawn' | 'github-dark' | 'github-light' | 'kanagawa' | 'everforest';
 
 export interface AppSettings {
   version: number;

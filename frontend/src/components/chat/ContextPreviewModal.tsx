@@ -32,7 +32,7 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          <div className="flex items-center justify-between text-xs text-text-secondary">
+          <div className="flex items-center justify-between text-xs text-text-secondary tabular-nums">
             <span>Estimated: ~{preview.estimatedTokens.toLocaleString()} tokens</span>
             <span>Context limit: {preview.contextLimit.toLocaleString()} ({usage}% used)</span>
           </div>
@@ -73,7 +73,7 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
             Cancel
           </button>
           <button
-            className="px-3 py-1.5 text-sm rounded-lg bg-brand-500 hover:bg-brand-600 text-white transition-colors"
+            className="px-3 py-1.5 text-sm rounded-lg bg-brand-500 hover:bg-brand-600 text-brand-foreground transition-colors"
             onClick={onConfirm}
           >
             Send

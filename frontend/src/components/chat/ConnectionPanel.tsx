@@ -134,7 +134,7 @@ export default function ConnectionPanel({
           >
             <span
               className="w-2 h-2 rounded-full shrink-0"
-              style={{backgroundColor: currentProv?.configured ? PROVIDER_COLORS[currentProv.id] ?? '#22c55e' : '#ef4444'}}
+              style={{backgroundColor: currentProv?.configured ? PROVIDER_COLORS[currentProv.id] ?? 'var(--success)' : 'var(--error)'}}
             />
             <span className="truncate text-text-secondary font-medium">
               {currentProv?.name || 'Select provider'}
@@ -168,7 +168,7 @@ export default function ConnectionPanel({
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
-                      style={{backgroundColor: p.configured ? PROVIDER_COLORS[p.id] ?? '#22c55e' : undefined}}
+                      style={{backgroundColor: p.configured ? PROVIDER_COLORS[p.id] ?? 'var(--success)' : undefined}}
                     />
                     <span className="flex-1 truncate">{p.name}</span>
                     {p.id === selectedProvider && p.configured && <Check size={14} className="text-brand-400" />}

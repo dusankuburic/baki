@@ -29,7 +29,7 @@ export default function SeverityFilter({errors, warnings, info, filter, onToggle
           }`}
         >
           <SeverityBadge severity={sev} />
-          <span>{count}</span>
+          <span className="tabular-nums">{count}</span>
         </button>
       ))}
     </div>

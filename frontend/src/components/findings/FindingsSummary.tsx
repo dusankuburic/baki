@@ -21,32 +21,32 @@ export default function FindingsSummary({stats, durationMs, healthScore}: Props)
               {healthScore}
             </div>
           )}
-          <span className="text-sm font-medium text-text-primary">
+          <span className="text-sm font-medium text-text-primary tabular-nums">
             {total} finding{total !== 1 ? 's' : ''}
           </span>
           <div className="flex items-center gap-1.5">
             {stats.errors > 0 && (
               <span className="flex items-center gap-1">
                 <SeverityBadge severity="error" />
-                <span className="text-2xs text-text-secondary">{stats.errors}</span>
+                <span className="text-2xs text-text-secondary tabular-nums">{stats.errors}</span>
               </span>
             )}
             {stats.warnings > 0 && (
               <span className="flex items-center gap-1">
                 <SeverityBadge severity="warning" />
-                <span className="text-2xs text-text-secondary">{stats.warnings}</span>
+                <span className="text-2xs text-text-secondary tabular-nums">{stats.warnings}</span>
               </span>
             )}
             {stats.info > 0 && (
               <span className="flex items-center gap-1">
                 <SeverityBadge severity="info" />
-                <span className="text-2xs text-text-secondary">{stats.info}</span>
+                <span className="text-2xs text-text-secondary tabular-nums">{stats.info}</span>
               </span>
             )}
           </div>
         </div>
-        <span className="text-2xs text-text-tertiary">
-          {stats.blocksAnalyzed} blocks · {stats.rulesRun} rules · {durationMs}ms
+        <span className="text-2xs text-text-tertiary tabular-nums">
+          {stats.rulesRun} rules · {durationMs}ms
         </span>
       </div>
     </div>

@@ -24,7 +24,7 @@ export default function TitleBar() {
 
     return (
         <div
-            className="flex items-center h-8 px-3 border-b border-border-subtle bg-surface-1 flex-shrink-0"
+            className="flex items-center h-8 px-3 border-b border-border-subtle bg-surface-1 flex-shrink-0 print:hidden"
             data-tauri-drag-region
         >
             <span className="text-xs font-medium text-text-tertiary select-none truncate pointer-events-none">
@@ -64,7 +64,7 @@ export default function TitleBar() {
                         </button>
                         <button
                             onClick={() => platform.closeWindow()}
-                            className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-[rgba(239,68,68,0.15)] text-text-tertiary hover:text-[#ef4444] transition-colors duration-fast"
+                            className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-semantic-error/15 text-text-tertiary hover:text-semantic-error transition-colors duration-fast"
                         >
                             <X size={10} />
                         </button>

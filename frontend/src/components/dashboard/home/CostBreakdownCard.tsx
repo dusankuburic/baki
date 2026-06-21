@@ -54,7 +54,7 @@ export function CostBreakdownCard({data, className}: {data: ProviderCost[]; clas
                     borderColor: 'var(--border-subtle)',
                     borderRadius: 8,
                     backdropFilter: 'var(--glass-blur)',
-                    fontSize: 12,
+                    fontSize: 12, fontVariantNumeric: 'tabular-nums',
                   }}
                   formatter={(v) => [`$${Number(v).toFixed(2)}`, 'Cost']}
                 />

@@ -15,7 +15,7 @@ function StatCard({ icon: Icon, label, value, color }: { icon: React.ElementType
         <Icon size={13} className={color} />
         <span className="text-xs text-text-tertiary uppercase tracking-wide">{label}</span>
       </div>
-      <span className="text-3xl font-bold text-text-primary">{value}</span>
+      <span className="text-3xl font-bold text-text-primary tabular-nums">{value}</span>
     </div>
   )
 }

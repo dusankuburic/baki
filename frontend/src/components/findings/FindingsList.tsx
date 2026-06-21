@@ -128,7 +128,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-text-primary truncate">{group.title}</span>
-                        <span className="text-2xs text-text-tertiary shrink-0">{group.findings.length}×</span>
+                        <span className="text-2xs text-text-tertiary shrink-0 tabular-nums">{group.findings.length}×</span>
                       </div>
                       {!isCollapsed && (
                         <p className="text-2xs text-text-secondary mt-1 leading-relaxed">{group.description}</p>

@@ -28,7 +28,7 @@ export default function StatusBar() {
     const findingTotal = report ? report.stats.errors + report.stats.warnings + report.stats.info : 0
 
     return (
-        <div className="flex items-center h-6 px-3 border-t border-border-subtle bg-surface-1 text-xs text-text-tertiary">
+        <div className="flex items-center h-6 px-3 border-t border-border-subtle bg-surface-1 text-xs text-text-tertiary tabular-nums print:hidden">
             <div className="flex items-center gap-1.5 flex-1">
                 {document ? (
                     <>

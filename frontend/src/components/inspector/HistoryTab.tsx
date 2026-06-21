@@ -83,7 +83,7 @@ export const HistoryTab: React.FC = () => {
           <button
             type="submit"
             disabled={isSaving}
-            className="px-3 py-1.5 bg-brand-600 text-white rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors"
+            className="px-3 py-1.5 bg-brand-600 text-brand-foreground rounded-md text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 transition-colors"
           >
             {isSaving ? 'Saving…' : 'Save'}
           </button>

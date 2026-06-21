@@ -23,7 +23,7 @@ export default function BlockEnd({label, parentType}: BlockEndProps) {
             className={clsx(
                 'flex items-center gap-2 max-w-[450px] w-full',
                 'px-3 py-1.5 rounded-lg border border-dashed',
-                'bg-gray-50/50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800',
+                'bg-surface-2/50 border-border-subtle',
             )}
         >
             <div
