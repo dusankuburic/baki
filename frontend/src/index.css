@@ -911,6 +911,12 @@ html, body, #root {
 
 /* === CHAT MESSAGE BUBBLE STYLES === */
 
+/* Make the last paragraph inline during streaming so the cursor
+   appears on the same line as the text rather than below it. */
+.prose-chat.is-streaming > p:last-child {
+  display: inline;
+}
+
 .streaming-cursor {
   animation: cursor-pulse 1.2s ease-in-out infinite, cursor-wave 0.8s ease-in-out infinite;
 }

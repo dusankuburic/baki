@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Users, UserPlus, Trash2, Shield, Eye, Edit3 } from 'lucide-react'
 import { sharingApi, type Collaborator, type Permission } from '@/api/sharing'
 import { useFlowStore } from '@/stores/flowStore'
 import { useAuthStore } from '@/stores/authStore'
-import { EmptyState, Spinner } from '@/components/shared'
+import { EmptyState, Spinner, useToast } from '@/components/shared'
 import {logger} from '@/lib/logger'
 
 export const SharingTab: React.FC = () => {
@@ -15,6 +15,9 @@ export const SharingTab: React.FC = () => {
   const [newPermission, setNewPermission] = useState<Permission>('viewer')
   const [isAdding, setIsAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
+  const removeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const {error: toastError} = useToast()
 
   const canManage = collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
 
@@ -66,15 +69,26 @@ export const SharingTab: React.FC = () => {
     }
   }
 
-  const handleRemove = async (userId: string) => {
-    if (!document) return
-    if (!confirm('Remove this collaborator?')) return
-    
+  const requestRemove = (userId: string) => {
+    if (removeTimerRef.current) clearTimeout(removeTimerRef.current)
+    setPendingRemoveId(userId)
+    removeTimerRef.current = setTimeout(() => setPendingRemoveId(null), 5000)
+  }
+
+  const cancelRemove = () => {
+    if (removeTimerRef.current) clearTimeout(removeTimerRef.current)
+    setPendingRemoveId(null)
+  }
+
+  const confirmRemove = async () => {
+    if (!document || !pendingRemoveId) return
+    const userId = pendingRemoveId
+    cancelRemove()
     try {
       await sharingApi.removeCollaborator(document.id, userId)
       fetchCollaborators()
     } catch (err) {
-      alert('Failed to remove: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      toastError('Failed to remove: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
   }
 
@@ -88,7 +102,7 @@ export const SharingTab: React.FC = () => {
       })
       fetchCollaborators()
     } catch (err) {
-      alert('Failed to update: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      toastError('Failed to update: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
   }
 
@@ -159,10 +173,26 @@ export const SharingTab: React.FC = () => {
                     <span className="capitalize">{c.permission}</span>
                   </span>
                 </div>
-                {canManage && (
+                {canManage && c.userId !== currentUser?.id && (
                   <div className="flex items-center gap-1">
-                     {c.userId !== currentUser?.id && (
-                       <select
+                    {pendingRemoveId === c.userId ? (
+                      <div className="flex items-center gap-1 animate-fade-in">
+                        <button
+                          onClick={cancelRemove}
+                          className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={confirmRemove}
+                          className="text-2xs text-red-400 hover:bg-red-500/10 px-1.5 py-0.5 rounded font-medium transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <select
                           value={c.permission}
                           onChange={(e) => handleUpdatePermission(c.userId, e.target.value as Permission)}
                           className="bg-transparent border-none text-2xs text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
@@ -171,16 +201,15 @@ export const SharingTab: React.FC = () => {
                           <option value="editor">Editor</option>
                           <option value="admin">Admin</option>
                         </select>
-                     )}
-                     {c.userId !== currentUser?.id && (
-                      <button
-                        onClick={() => handleRemove(c.userId)}
-                        className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Remove access"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                     )}
+                        <button
+                          onClick={() => requestRemove(c.userId)}
+                          className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remove access"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

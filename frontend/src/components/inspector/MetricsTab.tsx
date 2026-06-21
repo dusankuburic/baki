@@ -4,6 +4,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {csvCell, downloadBlob} from '@/lib/csv'
+import {formatCount} from '@/lib/format'
 import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
 import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
 import clsx from 'clsx'
@@ -145,9 +146,9 @@ export default function MetricsTab() {
         <HealthTrend />
 
         <div className="grid grid-cols-2 gap-2">
-          <StatCard label="Subflows" value={metrics.subflowCount} />
-          <StatCard label="Total Blocks" value={metrics.totalBlocks} />
-          <StatCard label="Total Variables" value={metrics.totalVariables} />
+          <StatCard label="Subflows" value={formatCount(metrics.subflowCount)} />
+          <StatCard label="Total Blocks" value={formatCount(metrics.totalBlocks)} />
+          <StatCard label="Total Variables" value={formatCount(metrics.totalVariables)} />
           <StatCard label="Avg Cyclomatic" value={metrics.avgCyclomatic.toFixed(1)} />
           <StatCard label="Max Cyclomatic" value={metrics.maxCyclomatic} warn={metrics.maxCyclomatic > 20} />
           <StatCard label="Max Cognitive" value={metrics.maxCognitive} warn={metrics.maxCognitive > 30} />
@@ -178,7 +179,7 @@ export default function MetricsTab() {
                 .map(rp => (
                   <div key={rp.ruleId} className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-0">
                     <span className="text-xs text-text-primary flex-1 truncate">{rp.ruleName}</span>
-                    <span className="text-xs text-text-tertiary tabular-nums">{rp.findingCount} findings</span>
+                    <span className="text-xs text-text-tertiary tabular-nums">{formatCount(rp.findingCount)} findings</span>
                     <span className={clsx('text-xs font-mono tabular-nums', rp.durationMs > 50 ? 'text-amber-400' : 'text-text-tertiary')}>
                       {rp.durationMs}ms
                     </span>

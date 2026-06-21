@@ -8,7 +8,6 @@ interface Props {
 }
 
 const SCROLL_UPDATE_THROTTLE = 120 // ms between scroll updates
-const SCROLL_THRESHOLD = 100 // pixels from bottom to trigger auto-scroll
 
 function ChatMessageList({children, isStreaming}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -20,9 +19,8 @@ function ChatMessageList({children, isStreaming}: Props) {
     if (!el) return
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
     setShowScrollBtn(!nearBottom)
-    if (!nearBottom) {
-      userScrolledRef.current = true
-    }
+    // Reset tracking when user scrolls back to bottom so auto-scroll resumes
+    userScrolledRef.current = !nearBottom
   }, [])
 
   const scrollToBottom = useCallback((smooth = true) => {
@@ -36,45 +34,37 @@ function ChatMessageList({children, isStreaming}: Props) {
     setShowScrollBtn(false)
   }, [])
 
+  // Reset user-scroll tracking and jump to bottom when a new stream starts
   useEffect(() => {
     if (isStreaming) {
       userScrolledRef.current = false
+      const el = containerRef.current
+      if (el) el.scrollTop = el.scrollHeight
     }
   }, [isStreaming])
 
-  // Throttled smooth scroll during streaming
+  // Smooth auto-scroll during streaming (interval-based, respects user scroll)
   useEffect(() => {
-    if (!isStreaming || userScrolledRef.current) return
-
+    if (!isStreaming) return
     const interval = setInterval(() => {
+      if (userScrolledRef.current) return
       const el = containerRef.current
       if (!el) return
-
       const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-      if (distanceToBottom < SCROLL_THRESHOLD) {
+      if (distanceToBottom > 2) {
         el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
       }
     }, SCROLL_UPDATE_THROTTLE)
-
     return () => clearInterval(interval)
   }, [isStreaming])
 
+  // Instant scroll to bottom when non-streaming messages are added
   useEffect(() => {
-    if (isStreaming && !userScrolledRef.current) {
+    if (!isStreaming && !userScrolledRef.current) {
       const el = containerRef.current
-      if (el) {
-        el.scrollTop = el.scrollHeight
-      }
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
     }
-  }, [isStreaming, children])
-
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    if (!userScrolledRef.current) {
-      scrollToBottom(false)
-    }
-  }, [children, scrollToBottom])
+  }, [children, isStreaming])
 
   return (
     <div className="flex-1 overflow-hidden relative">

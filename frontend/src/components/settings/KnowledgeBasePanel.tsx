@@ -1,11 +1,13 @@
-import {useState, useEffect, useMemo} from 'react'
+import {useState, useEffect, useMemo, useCallback} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {request} from '@/api/client'
 import {Trash2, FileText, Loader2, Upload} from 'lucide-react'
 import Button from '@/components/shared/Button'
+import {useConfirm, useToast, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
+import {relativeTime, absoluteTime} from '@/lib/time'
 
 interface KnowledgeDoc {
   id: string
@@ -28,34 +30,30 @@ export default function KnowledgeBasePanel() {
   
   const [docs, setDocs] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const maxFileSizeMB = useSettingsStore(s => s.settings.parser.maxFileSizeMB)
+  const {confirm} = useConfirm()
+  const {success: toastSuccess, error: toastError} = useToast()
 
-  const loadDocs = async () => {
+  const loadDocs = useCallback(async () => {
     if (!activeOrgId) return
     setLoading(true)
+    setLoadError(null)
     try {
       const res = await request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
       setDocs(res || [])
     } catch (e) {
       logger.warn(e)
+      setLoadError('Failed to load documents')
     } finally {
       setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    let cancelled = false
-    if (!activeOrgId) return
-    setLoading(true)
-    request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
-      .then(res => { if (!cancelled) setDocs(res || []) })
-      .catch(e => { if (!cancelled) logger.warn(e) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
   }, [activeOrgId])
+
+  useEffect(() => { loadDocs() }, [loadDocs])
 
   const handleUpload = async () => {
     if (!activeOrgId || !selectedFile) return
@@ -73,21 +71,33 @@ export default function KnowledgeBasePanel() {
         content
       })
       setSelectedFile(null)
+      toastSuccess('Document added')
       loadDocs()
     } catch (e) {
       setUploadError('Upload failed: ' + e)
+      toastError('Upload failed')
     } finally {
       setUploading(false)
     }
   }
 
   const handleDelete = async (docId: string) => {
-    if (!activeOrgId || !confirm('Delete this document?')) return
+    if (!activeOrgId) return
+    const filename = docs.find(d => d.id === docId)?.filename
+    const ok = await confirm({
+      title: 'Delete document',
+      message: filename ? `Delete "${filename}" from the knowledge base?` : 'Delete this document?',
+      danger: true,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
     try {
       await request(`/api/orgs/${activeOrgId}/knowledge/${docId}`, {}, 'DELETE')
+      toastSuccess('Document deleted')
       loadDocs()
     } catch (e) {
       logger.warn(e)
+      toastError('Failed to delete document')
     }
   }
 
@@ -145,6 +155,8 @@ export default function KnowledgeBasePanel() {
         <h3 className="text-sm font-medium text-text-primary">Indexed Documents</h3>
         {loading ? (
           <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>
+        ) : loadError ? (
+          <ErrorState message={loadError} onRetry={loadDocs} />
         ) : docs.length === 0 ? (
           <div className="text-center py-12 bg-surface-1 rounded-lg border border-dashed border-border-default text-text-tertiary">
             No documents indexed yet.
@@ -153,13 +165,13 @@ export default function KnowledgeBasePanel() {
           <div className="grid gap-2">
             {docs.map(doc => (
               <div key={doc.id} className="flex items-center justify-between p-3 bg-surface-2 border border-border-default rounded-lg group hover:border-brand-500/50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-brand-500/10 rounded">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="p-2 bg-brand-500/10 rounded shrink-0">
                     <FileText className="w-5 h-5 text-brand-500" />
                   </div>
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">{doc.filename}</div>
-                    <div className="text-xs text-text-tertiary">Indexed on {new Date(doc.createdAt).toLocaleDateString()}</div>
+                  <div className="min-w-0">
+                    <div title={doc.filename} className="text-sm font-medium text-text-primary truncate">{doc.filename}</div>
+                    <div className="text-xs text-text-tertiary" title={absoluteTime(doc.createdAt)}>Indexed {relativeTime(doc.createdAt)}</div>
                   </div>
                 </div>
                 {canManage && (

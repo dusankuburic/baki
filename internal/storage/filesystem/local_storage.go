@@ -17,12 +17,15 @@ import (
 
 // LocalStorageBackend implements StorageBackend for local file system storage
 type LocalStorageBackend struct {
-	dataDir string
-	mu      sync.RWMutex // guards users, orgs, and sharing maps
-	flowMu  sync.Mutex   // guards SaveFlow version-bump + write (OCC)
-	users   map[string]*interfaces.User
-	orgs    map[string]*interfaces.Organisation
-	sharing map[string][]*interfaces.Collaborator
+	dataDir    string
+	mu         sync.RWMutex // guards users, orgs, and sharing maps
+	flowMu     sync.Mutex   // guards SaveFlow version-bump + write (OCC)
+	triageMu   sync.Mutex   // guards finding-status read-modify-write
+	apiTokenMu sync.Mutex   // guards api-token directory read-modify-write
+	users      map[string]*interfaces.User
+	orgs       map[string]*interfaces.Organisation
+	sharing    map[string][]*interfaces.Collaborator
+	apiTokens  map[string]*interfaces.APIToken // guarded by apiTokenMu
 }
 
 // atomicWrite writes data to path durably: it writes to a sibling temp file
@@ -370,11 +373,21 @@ func (b *LocalStorageBackend) GetDailyUsage(ctx context.Context, userID, orgID s
 	return 0, nil
 }
 
-func (b *LocalStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error { return nil }
-func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error { return nil }
-func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) { return nil, nil }
-func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error { return nil }
-func (b *LocalStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) { return nil, nil }
+func (b *LocalStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *interfaces.KnowledgeDocument) error {
+	return nil
+}
+func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error {
+	return nil
+}
+func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
+	return nil, nil
+}
+func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error {
+	return nil
+}
+func (b *LocalStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+	return nil, nil
+}
 
 // Audit log — not persisted in local mode.
 func (b *LocalStorageBackend) SaveAuditEvent(ctx context.Context, event *interfaces.AuditEvent) error {
@@ -416,7 +429,7 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 		General: interfaces.GeneralSettings{
 			FirstRunCompleted: false,
 			LastUsedVersion:   "",
-			CheckForUpdates:    "weekly",
+			CheckForUpdates:   "weekly",
 		},
 		Appearance: interfaces.AppearanceSettings{
 			Theme:   "dark",
@@ -424,7 +437,7 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 		},
 		Layout: interfaces.LayoutSettings{
 			SidebarWidth:    280,
-			InspectorWidth: 320,
+			InspectorWidth:  320,
 			ChatPanelHeight: nil,
 		},
 		AI: interfaces.AISettings{
@@ -647,6 +660,12 @@ func (lsb *LocalStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *interf
 
 func (lsb *LocalStorageBackend) LoadFlowHealth(ctx context.Context, flowID string) (*interfaces.HealthSnapshot, error) {
 	return nil, nil
+}
+
+// LoadFlowHealthBatch: local mode doesn't persist analysis snapshots, so there is
+// no health to return — an empty (non-nil) map, matching the cloud contract.
+func (lsb *LocalStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
+	return map[string]*interfaces.HealthSnapshot{}, nil
 }
 
 func (lsb *LocalStorageBackend) FlowDashboardData(ctx context.Context, ownerID string, days int) (*interfaces.DashboardData, error) {

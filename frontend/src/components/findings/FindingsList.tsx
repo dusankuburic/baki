@@ -11,6 +11,7 @@ interface Props {
   findings: Finding[]
   blockLookup: BlockLookup
   onFixWithAI?: (finding: Finding) => void
+  sortMode?: 'default' | 'severity' | 'count'
 }
 
 interface RuleGroup {
@@ -48,8 +49,7 @@ function groupByRule(findings: Finding[]): RuleGroup[] {
       })
     }
   }
-  const order: Record<Severity, number> = {error: 0, warning: 1, info: 2}
-  return Array.from(map.values()).sort((a, b) => order[a.severity] - order[b.severity])
+  return Array.from(map.values())
 }
 
 const sevColor: Record<Severity, string> = {
@@ -58,11 +58,21 @@ const sevColor: Record<Severity, string> = {
   info: 'border-l-blue-500',
 }
 
-export default function FindingsList({findings, blockLookup, onFixWithAI}: Props) {
+export default function FindingsList({findings, blockLookup, onFixWithAI, sortMode = 'severity'}: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const suppressMany = useAnalysisStore(s => s.suppressMany)
 
-  const groups = useMemo(() => groupByRule(findings), [findings])
+  const groups = useMemo(() => {
+    const g = groupByRule(findings)
+    if (sortMode === 'severity') {
+      const order: Record<Severity, number> = {error: 0, warning: 1, info: 2}
+      return [...g].sort((a, b) => order[a.severity] - order[b.severity])
+    }
+    if (sortMode === 'count') {
+      return [...g].sort((a, b) => b.findings.length - a.findings.length)
+    }
+    return g
+  }, [findings, sortMode])
 
   // Flatten groups → header/card rows for the virtualizer. A collapsed group
   // contributes only its header; groupEnd marks the last visible row of a group

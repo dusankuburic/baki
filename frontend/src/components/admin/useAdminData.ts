@@ -1,9 +1,11 @@
 import {useState, useEffect, useCallback, useRef} from 'react'
 import {adminApi, type MigrationStatus, type AuditEvent} from '@/api/admin'
 import {type AuthUser} from '@/api/auth'
+import {useConfirm} from '@/components/shared'
 import {logger} from '@/lib/logger'
 
 export function useAdminData(isAdmin: boolean) {
+  const {confirm} = useConfirm()
   const [migrationStatus, setMigrationStatus] = useState<MigrationStatus | null>(null)
   const [users, setUsers] = useState<AuthUser[]>([])
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
@@ -58,7 +60,12 @@ export function useAdminData(isAdmin: boolean) {
   }, [isAdmin, fetchStatus, fetchUsers, fetchAudit])
 
   const startMigration = useCallback(async () => {
-    if (!confirm('Start data migration from filesystem to database? This will skip already migrated flows.')) return
+    const ok = await confirm({
+      title: 'Start migration',
+      message: 'Start data migration from filesystem to database? This will skip already migrated flows.',
+      confirmLabel: 'Start migration',
+    })
+    if (!ok) return
     setError(null)
     setIsStarting(true)
     try {
@@ -69,11 +76,17 @@ export function useAdminData(isAdmin: boolean) {
     } finally {
       setIsStarting(false)
     }
-  }, [fetchStatus])
+  }, [fetchStatus, confirm])
 
   const changeRole = useCallback(async (userId: string, newRole: string, currentUserId?: string) => {
     if (userId === currentUserId && newRole !== 'admin') {
-      if (!confirm('You are about to remove your own administrator privileges. Are you sure?')) return
+      const ok = await confirm({
+        title: 'Remove your admin access',
+        message: 'You are about to remove your own administrator privileges. Are you sure?',
+        danger: true,
+        confirmLabel: 'Remove access',
+      })
+      if (!ok) return
     }
     try {
       await adminApi.setUserRole(userId, newRole)
@@ -81,7 +94,7 @@ export function useAdminData(isAdmin: boolean) {
     } catch (err) {
       setError('Failed to change role: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
-  }, [fetchUsers])
+  }, [fetchUsers, confirm])
 
   const filterAudit = useCallback((action: string) => {
     auditActionRef.current = action

@@ -1,18 +1,33 @@
+import {useState, useEffect} from 'react'
 import clsx from 'clsx'
-
-type ConnectionState = 'connected' | 'connecting' | 'disconnected' | 'error'
+import {subscribeConnectionState, getEventConnectionState, type EventConnectionState} from '@/api/client'
 
 interface Props {
-  state: ConnectionState
   provider?: string
+  isStreaming?: boolean
 }
 
-export default function ConnectionStatus({state, provider}: Props) {
-  const statusLabels = {
-    connected: 'Connected',
+type DisplayState = 'ready' | 'streaming' | 'connecting' | 'reconnecting'
+
+function toDisplayState(sse: EventConnectionState, isStreaming?: boolean): DisplayState {
+  if (sse === 'reconnecting') return 'reconnecting'
+  if (sse === 'connecting') return 'connecting'
+  if (sse === 'open') return isStreaming ? 'streaming' : 'ready'
+  return 'ready' // 'idle' — SSE not active between streams; backend is up
+}
+
+export default function ConnectionStatus({provider, isStreaming}: Props) {
+  const [sseState, setSseState] = useState<EventConnectionState>(getEventConnectionState)
+
+  useEffect(() => subscribeConnectionState(setSseState), [])
+
+  const display = toDisplayState(sseState, isStreaming)
+
+  const labels: Record<DisplayState, string> = {
+    ready: 'Ready',
+    streaming: 'Streaming',
     connecting: 'Connecting...',
-    disconnected: 'Disconnected',
-    error: 'Connection Error'
+    reconnecting: 'Reconnecting...',
   }
 
   return (
@@ -20,16 +35,15 @@ export default function ConnectionStatus({state, provider}: Props) {
       <span
         className={clsx(
           'w-1.5 h-1.5 rounded-full',
-          state === 'connected' && 'bg-success shadow-[0_0_8px_var(--success)]',
-          state === 'connecting' && 'bg-warning animate-pulse-soft',
-          state === 'disconnected' && 'bg-text-disabled',
-          state === 'error' && 'bg-error animate-pulse-soft shadow-[0_0_8px_var(--error)]'
+          display === 'ready' && 'bg-success shadow-[0_0_8px_var(--success)]',
+          display === 'streaming' && 'bg-brand-400 animate-pulse-soft shadow-[0_0_8px_var(--brand-400)]',
+          (display === 'connecting' || display === 'reconnecting') && 'bg-warning animate-pulse-soft',
         )}
       />
       <span className="text-2xs text-text-tertiary">
-        {statusLabels[state]}
+        {labels[display]}
       </span>
-      {provider && state === 'connected' && (
+      {provider && (display === 'ready' || display === 'streaming') && (
         <span className="text-2xs text-text-tertiary/60">· {provider}</span>
       )}
     </div>

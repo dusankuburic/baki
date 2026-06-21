@@ -21,6 +21,15 @@ type FakeBackend struct {
 	// conversation persistence can be round-tripped in tests. nil-safe: the methods
 	// below tolerate a zero-valued FakeBackend built with a struct literal.
 	Conversations map[string][]interfaces.ChatMessage
+	// FindingStatuses (flowID -> findingKey -> status) and Baselines (flowID ->
+	// baseline) back the triage methods. Lazily initialized, so a struct-literal
+	// FakeBackend works without NewFakeBackend.
+	FindingStatuses map[string]map[string]*interfaces.FindingStatus
+	Baselines       map[string]*interfaces.FlowBaseline
+	// APITokens is keyed by token ID. Lazily initialized.
+	APITokens map[string]*interfaces.APIToken
+	// FlowHealth lets tests seed persisted per-flow health (flowID -> snapshot).
+	FlowHealth map[string]*interfaces.HealthSnapshot
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -152,7 +161,7 @@ func (m *FakeBackend) LoadUserByID(_ context.Context, _ string) (*interfaces.Use
 func (m *FakeBackend) LoadUsersByIDs(_ context.Context, _ []string) (map[string]*interfaces.User, error) {
 	return map[string]*interfaces.User{}, nil
 }
-func (m *FakeBackend) CountUsers(_ context.Context) (int, error)             { return 0, nil }
+func (m *FakeBackend) CountUsers(_ context.Context) (int, error) { return 0, nil }
 func (m *FakeBackend) ListUsers(_ context.Context, _, _ int) ([]*interfaces.User, error) {
 	return nil, nil
 }
@@ -202,8 +211,20 @@ func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, er
 func (m *FakeBackend) SaveFlowAnalysis(_ context.Context, _ *interfaces.FlowAnalysis) error {
 	return nil
 }
-func (m *FakeBackend) LoadFlowHealth(_ context.Context, _ string) (*interfaces.HealthSnapshot, error) {
+func (m *FakeBackend) LoadFlowHealth(_ context.Context, flowID string) (*interfaces.HealthSnapshot, error) {
+	if h, ok := m.FlowHealth[flowID]; ok {
+		return h, nil
+	}
 	return nil, nil
+}
+func (m *FakeBackend) LoadFlowHealthBatch(_ context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
+	out := make(map[string]*interfaces.HealthSnapshot, len(flowIDs))
+	for _, id := range flowIDs {
+		if h, ok := m.FlowHealth[id]; ok {
+			out[id] = h
+		}
+	}
+	return out, nil
 }
 func (m *FakeBackend) FlowDashboardData(_ context.Context, _ string, _ int) (*interfaces.DashboardData, error) {
 	return &interfaces.DashboardData{ByCategory: map[string]int{}}, nil
@@ -248,6 +269,105 @@ func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ []interfaces.Know
 }
 func (m *FakeBackend) SearchKnowledge(_ context.Context, _ string, _ []float32, _ int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
+}
+
+// ---- Finding triage & baselines ----
+func (m *FakeBackend) SetFindingStatus(_ context.Context, st *interfaces.FindingStatus) error {
+	if m.FindingStatuses == nil {
+		m.FindingStatuses = make(map[string]map[string]*interfaces.FindingStatus)
+	}
+	if m.FindingStatuses[st.FlowID] == nil {
+		m.FindingStatuses[st.FlowID] = make(map[string]*interfaces.FindingStatus)
+	}
+	if st.UpdatedAt.IsZero() {
+		st.UpdatedAt = time.Now()
+	}
+	cp := *st
+	m.FindingStatuses[st.FlowID][st.FindingKey] = &cp
+	return nil
+}
+
+func (m *FakeBackend) ListFindingStatuses(_ context.Context, flowID string) ([]*interfaces.FindingStatus, error) {
+	byKey := m.FindingStatuses[flowID]
+	out := make([]*interfaces.FindingStatus, 0, len(byKey))
+	for _, v := range byKey {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FindingKey < out[j].FindingKey })
+	return out, nil
+}
+
+func (m *FakeBackend) DeleteFindingStatus(_ context.Context, flowID, findingKey string) error {
+	if byKey := m.FindingStatuses[flowID]; byKey != nil {
+		delete(byKey, findingKey)
+	}
+	return nil
+}
+
+func (m *FakeBackend) GetFlowBaseline(_ context.Context, flowID string) (*interfaces.FlowBaseline, error) {
+	if b, ok := m.Baselines[flowID]; ok {
+		return b, nil
+	}
+	return nil, nil
+}
+
+func (m *FakeBackend) SetFlowBaseline(_ context.Context, b *interfaces.FlowBaseline) error {
+	if m.Baselines == nil {
+		m.Baselines = make(map[string]*interfaces.FlowBaseline)
+	}
+	if b.CreatedAt.IsZero() {
+		b.CreatedAt = time.Now()
+	}
+	cp := *b
+	m.Baselines[b.FlowID] = &cp
+	return nil
+}
+
+func (m *FakeBackend) ClearFlowBaseline(_ context.Context, flowID string) error {
+	delete(m.Baselines, flowID)
+	return nil
+}
+
+// ---- API tokens ----
+func (m *FakeBackend) CreateAPIToken(_ context.Context, t *interfaces.APIToken) error {
+	if m.APITokens == nil {
+		m.APITokens = make(map[string]*interfaces.APIToken)
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now()
+	}
+	cp := *t
+	m.APITokens[t.ID] = &cp
+	return nil
+}
+
+func (m *FakeBackend) GetAPITokenByHash(_ context.Context, tokenHash string) (*interfaces.APIToken, error) {
+	for _, t := range m.APITokens {
+		if t.TokenHash == tokenHash {
+			cp := *t
+			return &cp, nil
+		}
+	}
+	return nil, interfaces.ErrNotFound
+}
+
+func (m *FakeBackend) ListAPITokens(_ context.Context, userID string) ([]*interfaces.APIToken, error) {
+	out := make([]*interfaces.APIToken, 0)
+	for _, t := range m.APITokens {
+		if t.UserID == userID {
+			cp := *t
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *FakeBackend) DeleteAPIToken(_ context.Context, userID, id string) error {
+	if t, ok := m.APITokens[id]; ok && t.UserID == userID {
+		delete(m.APITokens, id)
+	}
+	return nil
 }
 
 // ---- Audit log ----

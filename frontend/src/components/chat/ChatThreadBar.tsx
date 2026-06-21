@@ -77,7 +77,12 @@ function ThreadTab({thread, isActive, onSelect, onClose, onRename}: {
 
   const commitEdit = () => {
     const trimmed = editValue.trim()
-    if (trimmed && trimmed !== thread.title) {
+    if (!trimmed) {
+      setEditValue(thread.title)
+      setEditing(false)
+      return
+    }
+    if (trimmed !== thread.title) {
       onRename(thread.id, trimmed)
     }
     setEditing(false)
@@ -109,7 +114,10 @@ function ThreadTab({thread, isActive, onSelect, onClose, onRename}: {
           onClick={e => e.stopPropagation()}
         />
       ) : (
-        <span className={clsx('truncate text-2xs', isActive ? 'text-text-secondary font-medium' : 'text-text-tertiary')}>
+        <span
+          title={thread.title || 'New chat'}
+          className={clsx('truncate text-2xs', isActive ? 'text-text-secondary font-medium' : 'text-text-tertiary')}
+        >
           {label}
         </span>
       )}

@@ -2,8 +2,8 @@
 // implementations (filesystem and database/postgres) run against, so the two
 // can't quietly drift apart on return-shape semantics like
 //
-//   * "not found" → nil vs interfaces.ErrNotFound
-//   * "empty list" → nil slice vs non-nil empty slice
+//   - "not found" → nil vs interfaces.ErrNotFound
+//   - "empty list" → nil slice vs non-nil empty slice
 //
 // The historical motivation: `LoadConversation` returned a non-nil empty
 // slice on the filesystem backend and a `nil` slice on Postgres, so frontend
@@ -368,6 +368,185 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 		if findFlow(all, flow.ID) == nil {
 			t.Errorf("AllFlows: seeded flow %s missing from enumeration", flow.ID)
+		}
+	})
+
+	t.Run("ListFindingStatuses_empty_returns_non_nil_slice", func(t *testing.T) {
+		got, err := b.ListFindingStatuses(ctx, "no-such-flow-"+runID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil {
+			t.Errorf("empty finding statuses: expected non-nil empty slice, got nil")
+		}
+		if len(got) != 0 {
+			t.Errorf("empty finding statuses: expected length 0, got %d", len(got))
+		}
+	})
+
+	t.Run("FindingStatus_upsert_list_delete_roundtrip", func(t *testing.T) {
+		owner := "contract-triage-owner-" + runID
+		flowID := "contract-flow-triage-" + runID
+		if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
+			ID: flowID, Name: "Triage Flow", Content: json.RawMessage(`{}`), OwnerID: owner,
+		}); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+
+		st := &interfaces.FindingStatus{
+			FlowID: flowID, FindingKey: "hardcoded-credential:blk-1", RuleID: "hardcoded-credential",
+			Status: "suppressed", Justification: "test secret", AssigneeID: "u1", UpdatedBy: owner,
+		}
+		if err := b.SetFindingStatus(ctx, st); err != nil {
+			t.Fatalf("SetFindingStatus: %v", err)
+		}
+
+		got, err := b.ListFindingStatuses(ctx, flowID)
+		if err != nil {
+			t.Fatalf("ListFindingStatuses: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 status, got %d", len(got))
+		}
+		if got[0].Status != "suppressed" || got[0].Justification != "test secret" || got[0].AssigneeID != "u1" {
+			t.Errorf("status round-trip mismatch: %+v", got[0])
+		}
+		if got[0].UpdatedAt.IsZero() {
+			t.Errorf("expected UpdatedAt to be set by the backend")
+		}
+
+		// Upsert: same key updates in place rather than inserting a duplicate.
+		st.Status = "resolved"
+		if err := b.SetFindingStatus(ctx, st); err != nil {
+			t.Fatalf("SetFindingStatus update: %v", err)
+		}
+		got, _ = b.ListFindingStatuses(ctx, flowID)
+		if len(got) != 1 {
+			t.Fatalf("upsert should not add a row; got %d", len(got))
+		}
+		if got[0].Status != "resolved" {
+			t.Errorf("upsert: expected status=resolved, got %q", got[0].Status)
+		}
+
+		// Delete is idempotent: a second delete of a missing key is not an error.
+		if err := b.DeleteFindingStatus(ctx, flowID, st.FindingKey); err != nil {
+			t.Fatalf("DeleteFindingStatus: %v", err)
+		}
+		if err := b.DeleteFindingStatus(ctx, flowID, st.FindingKey); err != nil {
+			t.Fatalf("DeleteFindingStatus (idempotent): %v", err)
+		}
+		got, _ = b.ListFindingStatuses(ctx, flowID)
+		if len(got) != 0 {
+			t.Errorf("expected 0 statuses after delete, got %d", len(got))
+		}
+	})
+
+	t.Run("APIToken_create_lookup_list_delete", func(t *testing.T) {
+		// A token belongs to a user; create the owner so the FK (Postgres) holds.
+		owner := "contract-token-owner-" + runID
+		if err := b.CreateUser(ctx, &interfaces.User{
+			ID: owner, Email: "contract-token-" + runID + "@example.com", Password: "hash",
+		}); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+
+		hash := "contract-token-hash-" + runID
+		tok := &interfaces.APIToken{ID: "contract-tok-" + runID, UserID: owner, Name: "ci", TokenHash: hash}
+		if err := b.CreateAPIToken(ctx, tok); err != nil {
+			t.Fatalf("CreateAPIToken: %v", err)
+		}
+
+		// Lookup by hash is the auth path.
+		got, err := b.GetAPITokenByHash(ctx, hash)
+		if err != nil {
+			t.Fatalf("GetAPITokenByHash: %v", err)
+		}
+		if got.UserID != owner || got.Name != "ci" {
+			t.Errorf("token round-trip mismatch: %+v", got)
+		}
+
+		// Unknown hash ⇒ ErrNotFound (so a bad token is rejected, not matched).
+		if _, err := b.GetAPITokenByHash(ctx, "no-such-hash-"+runID); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("missing token hash: expected ErrNotFound, got %v", err)
+		}
+
+		list, err := b.ListAPITokens(ctx, owner)
+		if err != nil {
+			t.Fatalf("ListAPITokens: %v", err)
+		}
+		if len(list) != 1 || list[0].ID != tok.ID {
+			t.Fatalf("expected the owner's single token, got %+v", list)
+		}
+
+		// A different user cannot delete it (scoped delete is a no-op).
+		if err := b.DeleteAPIToken(ctx, "someone-else-"+runID, tok.ID); err != nil {
+			t.Fatalf("DeleteAPIToken (wrong owner): %v", err)
+		}
+		if _, err := b.GetAPITokenByHash(ctx, hash); err != nil {
+			t.Error("token must survive a delete attempt by a non-owner")
+		}
+
+		// Owner delete removes it; revoked ⇒ no longer found (auth rejects it).
+		if err := b.DeleteAPIToken(ctx, owner, tok.ID); err != nil {
+			t.Fatalf("DeleteAPIToken: %v", err)
+		}
+		if _, err := b.GetAPITokenByHash(ctx, hash); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("deleted token: expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("FlowBaseline_missing_then_set_clear", func(t *testing.T) {
+		owner := "contract-baseline-owner-" + runID
+		flowID := "contract-flow-baseline-" + runID
+		if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
+			ID: flowID, Name: "Baseline Flow", Content: json.RawMessage(`{}`), OwnerID: owner,
+		}); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+
+		// Missing baseline: (nil, nil), not ErrNotFound.
+		bl, err := b.GetFlowBaseline(ctx, flowID)
+		if err != nil {
+			t.Fatalf("GetFlowBaseline missing: %v", err)
+		}
+		if bl != nil {
+			t.Errorf("expected nil baseline before set, got %+v", bl)
+		}
+
+		keys := []string{"r1:b1", "r2:b2"}
+		if err := b.SetFlowBaseline(ctx, &interfaces.FlowBaseline{FlowID: flowID, Keys: keys, CreatedBy: owner}); err != nil {
+			t.Fatalf("SetFlowBaseline: %v", err)
+		}
+		bl, err = b.GetFlowBaseline(ctx, flowID)
+		if err != nil {
+			t.Fatalf("GetFlowBaseline: %v", err)
+		}
+		if bl == nil || len(bl.Keys) != 2 {
+			t.Fatalf("expected baseline with 2 keys, got %+v", bl)
+		}
+		if bl.CreatedAt.IsZero() {
+			t.Errorf("expected CreatedAt to be set by the backend")
+		}
+
+		// Replace (one baseline per flow): a second set overwrites, not appends.
+		if err := b.SetFlowBaseline(ctx, &interfaces.FlowBaseline{FlowID: flowID, Keys: []string{"r3:b3"}, CreatedBy: owner}); err != nil {
+			t.Fatalf("SetFlowBaseline replace: %v", err)
+		}
+		bl, _ = b.GetFlowBaseline(ctx, flowID)
+		if bl == nil || len(bl.Keys) != 1 || bl.Keys[0] != "r3:b3" {
+			t.Errorf("expected baseline replaced to single key r3:b3, got %+v", bl)
+		}
+
+		if err := b.ClearFlowBaseline(ctx, flowID); err != nil {
+			t.Fatalf("ClearFlowBaseline: %v", err)
+		}
+		bl, _ = b.GetFlowBaseline(ctx, flowID)
+		if bl != nil {
+			t.Errorf("expected nil baseline after clear, got %+v", bl)
+		}
+		// Clear is idempotent.
+		if err := b.ClearFlowBaseline(ctx, flowID); err != nil {
+			t.Errorf("ClearFlowBaseline (idempotent): %v", err)
 		}
 	})
 }

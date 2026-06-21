@@ -139,6 +139,15 @@ func applyEnvVars(cfg *Config) error {
 		}
 		cfg.Server.Port = p
 	}
+	if v := os.Getenv("PAD_SCAN_INTERVAL"); v != "" {
+		cfg.Governance.ScanInterval = v
+	}
+	if v := os.Getenv("PAD_NOTIFY_WEBHOOK_URL"); v != "" {
+		cfg.Governance.NotifyWebhookURL = v
+	}
+	if v := os.Getenv("PAD_NOTIFY_TEAMS_URL"); v != "" {
+		cfg.Governance.NotifyTeamsURL = v
+	}
 	if v := os.Getenv("PAD_DATA_DIR"); v != "" {
 		cfg.Storage.DataDir = v
 	}
@@ -300,13 +309,13 @@ const minSecretLength = 32
 // knownWeakSecrets are placeholder/example values that must never be used as a
 // real signing secret in cloud mode.
 var knownWeakSecrets = map[string]bool{
-	"change-me-in-production":         true,
-	"change-me":                       true,
+	"change-me-in-production":           true,
+	"change-me":                         true,
 	"change-me-to-a-long-random-secret": true,
-	"changeme":                        true,
-	"secret":                          true,
-	"password":                        true,
-	"test":                            true,
+	"changeme":                          true,
+	"secret":                            true,
+	"password":                          true,
+	"test":                              true,
 }
 
 // isWeakSecret reports whether a secret is too short or a known placeholder.

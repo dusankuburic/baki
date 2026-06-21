@@ -57,14 +57,12 @@ func DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
 
 	oldMap := make(map[string]models.Finding)
 	for _, f := range old.Findings {
-		key := f.RuleID + ":" + f.BlockID
-		oldMap[key] = f
+		oldMap[f.Key()] = f
 	}
 
 	newMap := make(map[string]models.Finding)
 	for _, f := range new.Findings {
-		key := f.RuleID + ":" + f.BlockID
-		newMap[key] = f
+		newMap[f.Key()] = f
 	}
 
 	for key, f := range newMap {
@@ -95,4 +93,44 @@ func DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
 		diff.Persisted = []models.Finding{}
 	}
 	return diff
+}
+
+// ComputeDrift returns the findings in report whose stable Key (RuleID:BlockID)
+// is not present in baselineKeys — the "new since baseline" set used for
+// ratcheting and drift alerts.
+//
+// A nil baselineKeys means no baseline has been recorded: every finding is then
+// reported as new and HasBaseline is false, so callers can distinguish "new
+// because nothing is accepted yet" from "genuinely new since an accepted
+// baseline". A non-nil (even empty) slice means a baseline exists.
+func ComputeDrift(flowID string, report *models.AnalysisReport, baselineKeys []string) *models.BaselineDrift {
+	drift := &models.BaselineDrift{
+		FlowID:      flowID,
+		HasBaseline: baselineKeys != nil,
+		New:         []models.Finding{},
+	}
+	if report == nil {
+		return drift
+	}
+
+	base := make(map[string]bool, len(baselineKeys))
+	for _, k := range baselineKeys {
+		base[k] = true
+	}
+
+	for _, f := range report.Findings {
+		if base[f.Key()] {
+			continue
+		}
+		drift.New = append(drift.New, f)
+		switch f.Severity {
+		case models.SeverityError:
+			drift.NewErrors++
+		case models.SeverityWarning:
+			drift.NewWarnings++
+		case models.SeverityInfo:
+			drift.NewInfo++
+		}
+	}
+	return drift
 }

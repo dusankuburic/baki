@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
-import {Download, FileText, Search, GitCompareArrows, Layers} from 'lucide-react'
+import {Download, FileText, Search, GitCompareArrows, Layers, ArrowUpDown} from 'lucide-react'
 import {analysisApi} from '@/api'
 import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -43,6 +43,10 @@ export default function FindingsTab() {
   const [diffLoading, setDiffLoading] = useState(false)
   const [dedupGroups, setDedupGroups] = useState<Map<string, number> | null>(null)
   const [dedupLoading, setDedupLoading] = useState(false)
+  const [sortMode, setSortMode] = useState<'default' | 'severity' | 'count'>('severity')
+  const cycleSortMode = useCallback(() => {
+    setSortMode(m => m === 'severity' ? 'count' : m === 'count' ? 'default' : 'severity')
+  }, [])
 
   // Leave the diff view when switching documents or after a fresh analysis.
   useEffect(() => {
@@ -267,6 +271,18 @@ export default function FindingsTab() {
           Re-analyze
         </button>
         <button
+          onClick={cycleSortMode}
+          title={sortMode === 'severity' ? 'Sort: by severity — click for count' : sortMode === 'count' ? 'Sort: by count — click for rule order' : 'Sort: rule order — click for severity'}
+          className={clsx(
+            'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0',
+            sortMode !== 'severity'
+              ? 'text-brand-400 bg-brand-500/10'
+              : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3'
+          )}
+        >
+          <ArrowUpDown size={12} />
+        </button>
+        <button
           onClick={handleShowDiff}
           disabled={diffLoading}
           title="Compare with previous run"
@@ -360,7 +376,7 @@ export default function FindingsTab() {
               </div>
             )
           ) : (
-            <FindingsList findings={findings} blockLookup={blockLookup} onFixWithAI={handleFixWithAI} />
+            <FindingsList findings={findings} blockLookup={blockLookup} onFixWithAI={handleFixWithAI} sortMode={sortMode} />
           )}
         </>
       )}

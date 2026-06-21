@@ -4,6 +4,11 @@ export type Severity = 'error' | 'warning' | 'info';
 
 export interface Finding {
   id: string;
+  // Stable, content-derived identity (ruleId:blockId) from the backend. Unlike
+  // `id` (a per-run index like "F-001" that shifts as findings come and go),
+  // `fingerprint` survives re-analysis — use it to key triage state, suppressions,
+  // and baselines. Optional for backward compatibility with older payloads.
+  fingerprint?: string;
   ruleId: string;
   severity: Severity;
   title: string;
@@ -14,6 +19,36 @@ export interface Finding {
   autoFixHint?: string;
   category?: string;
   metadata?: Record<string, unknown>;
+}
+
+// Triage lifecycle for a finding. Mirrors the backend's validTriageStatuses.
+export type TriageStatus =
+  | 'open'
+  | 'acknowledged'
+  | 'in_progress'
+  | 'resolved'
+  | 'suppressed';
+
+// Persisted, team-shared triage state for one finding, keyed by its stable
+// fingerprint (findingKey == Finding.fingerprint == ruleId:blockId).
+export interface FindingStatus {
+  flowId: string;
+  findingKey: string;
+  ruleId?: string;
+  status: TriageStatus;
+  justification?: string;
+  assigneeId?: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+// The accepted set of finding keys for a flow. Findings whose fingerprint is not
+// in `keys` are "new since baseline".
+export interface FlowBaseline {
+  flowId: string;
+  keys: string[];
+  createdBy?: string;
+  createdAt: string;
 }
 
 export interface RuleProfile {

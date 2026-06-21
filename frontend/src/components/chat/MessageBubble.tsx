@@ -115,8 +115,8 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
   }
 
   return (
-    <div className="prose-chat break-words">
-      <ReactMarkdown 
+    <div className={clsx('prose-chat break-words', isStreaming && 'is-streaming')}>
+      <ReactMarkdown
         remarkPlugins={markdownPlugins}
         components={markdownComponents}
       >

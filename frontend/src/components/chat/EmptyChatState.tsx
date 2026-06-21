@@ -3,9 +3,10 @@ import {FileText, MessageSquare} from 'lucide-react'
 interface Props {
   hasDoc: boolean
   hasThread: boolean
+  onCreateThread?: () => void
 }
 
-export default function EmptyChatState({hasDoc, hasThread}: Props) {
+export default function EmptyChatState({hasDoc, hasThread, onCreateThread}: Props) {
   if (hasDoc && hasThread) return null
 
   return (
@@ -21,7 +22,7 @@ export default function EmptyChatState({hasDoc, hasThread}: Props) {
                 No flow loaded
               </h3>
               <p className="text-xs text-text-tertiary">
-                Open a PAD flow file to start analyzing with AI
+                Open or drag-drop a .pad file to begin
               </p>
             </div>
           </>
@@ -34,9 +35,17 @@ export default function EmptyChatState({hasDoc, hasThread}: Props) {
               <h3 className="text-sm font-medium text-text-secondary mb-1">
                 No active conversation
               </h3>
-              <p className="text-xs text-text-tertiary">
-                Click "New chat" to start a new conversation
+              <p className="text-xs text-text-tertiary mb-3">
+                Start a conversation to analyze your flow with AI
               </p>
+              {onCreateThread && (
+                <button
+                  onClick={onCreateThread}
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium rounded-lg transition-colors"
+                >
+                  Start a conversation
+                </button>
+              )}
             </div>
           </>
         )}

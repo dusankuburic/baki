@@ -43,17 +43,17 @@ type IdentityLink struct {
 
 // User represents a system user in the storage backend.
 type User struct {
-	ID          string    `json:"id"`
-	Email       string    `json:"email"`
-	EmailVerified bool    `json:"emailVerified"`
-	FailedLoginAttempts int `json:"-"`
-	LockedUntil *time.Time `json:"-"`
-	Password    string    `json:"-"` // Bcrypt hash — never serialized to clients
-	Role        auth.Role `json:"role"`
-	DisplayName string    `json:"displayName"`
-	AvatarURL   string    `json:"avatarUrl"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID                  string     `json:"id"`
+	Email               string     `json:"email"`
+	EmailVerified       bool       `json:"emailVerified"`
+	FailedLoginAttempts int        `json:"-"`
+	LockedUntil         *time.Time `json:"-"`
+	Password            string     `json:"-"` // Bcrypt hash — never serialized to clients
+	Role                auth.Role  `json:"role"`
+	DisplayName         string     `json:"displayName"`
+	AvatarURL           string     `json:"avatarUrl"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
 }
 
 // RefreshTokenInfo describes a single issued refresh token, surfaced to users
@@ -138,6 +138,11 @@ type StorageBackend interface {
 	// single flow, or (nil, nil) when the flow has never been analyzed. Caller
 	// authorization is the caller's responsibility — this is a pure read.
 	LoadFlowHealth(ctx context.Context, flowID string) (*HealthSnapshot, error)
+	// LoadFlowHealthBatch resolves health snapshots for many flows in one query
+	// (avoids N+1 in the portfolio view). The returned map omits flows that have
+	// never been analyzed; it is never nil. Caller authorization is the caller's
+	// responsibility — pass only flow IDs the caller may see.
+	LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*HealthSnapshot, error)
 	FlowDashboardData(ctx context.Context, ownerID string, days int) (*DashboardData, error)
 	// FlowDashboardAdvanced returns trend, cost-by-provider, rule-frequency,
 	// activity-feed, complexity-scatter, and security-posture data.
@@ -164,6 +169,35 @@ type StorageBackend interface {
 	SaveFlowVersion(ctx context.Context, v *FlowVersion) error
 	ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*FlowVersion, error)
 	LoadFlowVersion(ctx context.Context, flowID string, version int) (*FlowVersion, error)
+
+	// Finding triage & baselines
+	// SetFindingStatus upserts the triage state for one finding (keyed by
+	// FlowID + FindingKey).
+	SetFindingStatus(ctx context.Context, st *FindingStatus) error
+	// ListFindingStatuses returns all persisted triage states for a flow.
+	// Implementations return a non-nil (possibly empty) slice.
+	ListFindingStatuses(ctx context.Context, flowID string) ([]*FindingStatus, error)
+	// DeleteFindingStatus removes triage state for one finding, resetting it to
+	// the implicit "open" state. Missing records are not an error (idempotent).
+	DeleteFindingStatus(ctx context.Context, flowID, findingKey string) error
+	// GetFlowBaseline returns the flow's accepted-findings baseline, or
+	// (nil, nil) when none has been set.
+	GetFlowBaseline(ctx context.Context, flowID string) (*FlowBaseline, error)
+	// SetFlowBaseline replaces the flow's baseline (one baseline per flow).
+	SetFlowBaseline(ctx context.Context, b *FlowBaseline) error
+	// ClearFlowBaseline removes the flow's baseline. Idempotent.
+	ClearFlowBaseline(ctx context.Context, flowID string) error
+
+	// API tokens (machine credentials)
+	CreateAPIToken(ctx context.Context, t *APIToken) error
+	// GetAPITokenByHash resolves a token by its hash for authentication, or
+	// returns ErrNotFound. Revocation is a delete, so a revoked token is not found.
+	GetAPITokenByHash(ctx context.Context, tokenHash string) (*APIToken, error)
+	// ListAPITokens returns a user's tokens (metadata only; never the hash to clients).
+	ListAPITokens(ctx context.Context, userID string) ([]*APIToken, error)
+	// DeleteAPIToken removes a token owned by userID. Scoped to the owner so one
+	// user cannot revoke another's; idempotent.
+	DeleteAPIToken(ctx context.Context, userID, id string) error
 }
 
 // Organisation represents a team or workspace that owns shared flows.
@@ -328,56 +362,56 @@ type DashboardData struct {
 // DashboardAdvancedData extends DashboardData with trend, cost, rule, activity,
 // complexity, and security sections. Returned by FlowDashboardAdvanced.
 type DashboardAdvancedData struct {
-	HealthTrend  []DailyHealthPoint
-	CostByProv   []ProviderCost
-	RuleFreq     []RuleFrequency
-	Activity     []ActivityEntry
-	Complexity   []FlowComplexityPoint
-	Security     DashboardSecurity
+	HealthTrend []DailyHealthPoint
+	CostByProv  []ProviderCost
+	RuleFreq    []RuleFrequency
+	Activity    []ActivityEntry
+	Complexity  []FlowComplexityPoint
+	Security    DashboardSecurity
 }
 
 // DailyHealthPoint is one day of the health-score trend chart.
 type DailyHealthPoint struct {
-	Date        string
-	AvgHealth   int
-	FlowCount   int
+	Date      string
+	AvgHealth int
+	FlowCount int
 }
 
 // ProviderCost aggregates AI spend by provider for the donut chart.
 type ProviderCost struct {
-	Provider string
-	Cost     float64
+	Provider  string
+	Cost      float64
 	TokensIn  int
 	TokensOut int
 }
 
 // RuleFrequency is one rule's finding count across all of the owner's flows.
 type RuleFrequency struct {
-	Rule    string
-	Count   int
+	Rule        string
+	Count       int
 	TopSeverity string // "error", "warning", or "info"
 }
 
 // ActivityEntry is one row of the dashboard activity feed.
 type ActivityEntry struct {
-	Action   string
-	FlowName string
+	Action    string
+	FlowName  string
 	CreatedAt time.Time
 }
 
 // FlowComplexityPoint is one flow's position on the complexity scatter.
 type FlowComplexityPoint struct {
-	FlowID      string
-	FlowName    string
-	BlockCount  int
+	FlowID       string
+	FlowName     string
+	BlockCount   int
 	FindingCount int
 	HealthScore  int
 }
 
 // DashboardSecurity summarizes the security posture for the dashboard.
 type DashboardSecurity struct {
-	FailedLogins24h  int
-	LockedAccounts   int
+	FailedLogins24h    int
+	LockedAccounts     int
 	CredentialFindings int
 }
 
@@ -575,4 +609,43 @@ type FlowVersion struct {
 	Metadata  FlowMetadata
 	CreatedBy string
 	CreatedAt time.Time
+}
+
+// FindingStatus is the persisted, team-shared triage state for one finding,
+// keyed by the flow and the finding's stable key (models.Finding.Key —
+// "ruleID:blockID"). Because the key is content-derived (not a per-run
+// positional index), triage state survives re-analysis: suppressing or
+// resolving a finding sticks even as other findings come and go.
+type FindingStatus struct {
+	FlowID        string    `json:"flowId"`
+	FindingKey    string    `json:"findingKey"`
+	RuleID        string    `json:"ruleId,omitempty"`
+	Status        string    `json:"status"` // open, acknowledged, in_progress, resolved, suppressed
+	Justification string    `json:"justification,omitempty"`
+	AssigneeID    string    `json:"assigneeId,omitempty"`
+	UpdatedBy     string    `json:"updatedBy,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// APIToken is a scoped, revocable machine credential (personal access token)
+// that authenticates programmatic API calls as its owning user — no interactive
+// login. Only the token's SHA-256 hash is persisted; the raw value is shown once
+// at creation and is unrecoverable afterwards. Revocation deletes the row.
+type APIToken struct {
+	ID        string     `json:"id"`
+	UserID    string     `json:"userId"`
+	Name      string     `json:"name"`
+	TokenHash string     `json:"-"` // sha256 hex; never serialized to clients
+	CreatedAt time.Time  `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"` // nil ⇒ no expiry
+}
+
+// FlowBaseline is the set of finding keys accepted as a flow's baseline.
+// Findings whose key is in the set are "known"; anything else is "new since
+// baseline" — the basis for ratcheting/gating (only fail on new findings).
+type FlowBaseline struct {
+	FlowID    string    `json:"flowId"`
+	Keys      []string  `json:"keys"`
+	CreatedBy string    `json:"createdBy,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
 }

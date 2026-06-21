@@ -1,6 +1,7 @@
 import {memo} from 'react'
 import clsx from 'clsx'
 import type {LibraryFlow} from '@/api/library'
+import {relativeTime, absoluteTime} from '@/lib/time'
 
 interface LibraryListProps {
   items: LibraryFlow[]
@@ -41,7 +42,7 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen}: LibraryListProps
                 )}
               </div>
               <div className="text-xs truncate">{flow.ownerDisplayName ?? '—'}</div>
-              <div className="text-xs">{new Date(flow.updatedAt).toLocaleDateString()}</div>
+              <div className="text-xs" title={absoluteTime(flow.updatedAt)}>{relativeTime(flow.updatedAt)}</div>
               <div className="text-xs text-right tabular-nums">{flow.blockCount}</div>
               <div className="text-xs text-right tabular-nums">{flow.subflowCount}</div>
             </li>

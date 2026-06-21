@@ -61,6 +61,30 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 
 // LoadFlowHealth returns the latest persisted analysis snapshot for a single
 // flow. Returns (nil, nil) when the flow has never been analyzed.
+func (b *PostgresStorageBackend) LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*interfaces.HealthSnapshot, error) {
+	out := make(map[string]*interfaces.HealthSnapshot, len(flowIDs))
+	if len(flowIDs) == 0 {
+		return out, nil
+	}
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT flow_id, health_score, errors, warnings, info, analyzed_at
+		FROM flow_analysis WHERE flow_id = ANY($1)`, flowIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load flow health batch: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var h interfaces.HealthSnapshot
+		if err := rows.Scan(&id, &h.HealthScore, &h.Errors, &h.Warnings, &h.Info, &h.AnalyzedAt); err != nil {
+			return nil, fmt.Errorf("scan flow health batch: %w", err)
+		}
+		hh := h
+		out[id] = &hh
+	}
+	return out, rows.Err()
+}
+
 func (b *PostgresStorageBackend) LoadFlowHealth(ctx context.Context, flowID string) (*interfaces.HealthSnapshot, error) {
 	row := b.query(ctx).QueryRowContext(ctx, `
 		SELECT health_score, errors, warnings, info, analyzed_at

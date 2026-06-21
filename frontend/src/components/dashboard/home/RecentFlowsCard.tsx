@@ -3,6 +3,7 @@ import {FileText} from 'lucide-react'
 import {CardShell, CardPlaceholder} from './CardShell'
 import type {RecentFlowStub} from '@/types'
 import {useUIStore} from '@/stores/uiStore'
+import {relativeTime, absoluteTime} from '@/lib/time'
 
 // RecentFlowsCard lists the most recently updated flows with their latest health
 // score (or “—” when never analyzed). Rows open the flow.
@@ -38,8 +39,8 @@ export function RecentFlowsCard({
                 className="w-full flex items-center gap-3 py-2 px-1 text-left rounded-md hover:bg-surface-3/60 transition-colors"
               >
                 <FileText size={15} className="text-text-tertiary shrink-0" />
-                <span className="flex-1 truncate text-sm text-text-primary">{f.name || 'Untitled flow'}</span>
-                <span className="text-2xs text-text-tertiary tabular-nums shrink-0">{relativeTime(f.updatedAt)}</span>
+                <span title={f.name || 'Untitled flow'} className="flex-1 truncate text-sm text-text-primary">{f.name || 'Untitled flow'}</span>
+                <span title={absoluteTime(f.updatedAt)} className="text-2xs text-text-tertiary tabular-nums shrink-0">{relativeTime(f.updatedAt)}</span>
                 <HealthBadge score={f.healthScore} />
               </button>
             </li>
@@ -62,18 +63,4 @@ function HealthBadge({score}: {score: number | null}) {
       {score}
     </span>
   )
-}
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ''
-  const secs = Math.max(0, (Date.now() - then) / 1000)
-  if (secs < 60) return 'now'
-  const mins = secs / 60
-  if (mins < 60) return `${Math.floor(mins)}m`
-  const hrs = mins / 60
-  if (hrs < 24) return `${Math.floor(hrs)}h`
-  const days = hrs / 24
-  if (days < 7) return `${Math.floor(days)}d`
-  return `${Math.floor(days / 7)}w`
 }

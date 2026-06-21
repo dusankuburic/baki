@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useState, lazy, Suspense} from 'react'
-import {ErrorBoundary, ToastProvider, useToast} from './components/shared'
+import {ErrorBoundary, ToastProvider, ConfirmProvider, useToast} from './components/shared'
 import CommandPalette from './components/search/CommandPalette'
 import GlobalSearchOverlay from './components/search/GlobalSearchOverlay'
 import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
@@ -170,7 +170,9 @@ export default function App() {
     return (
         <ErrorBoundary>
             <ToastProvider>
-                <AppInner />
+                <ConfirmProvider>
+                    <AppInner />
+                </ConfirmProvider>
             </ToastProvider>
         </ErrorBoundary>
     )

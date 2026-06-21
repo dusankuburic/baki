@@ -5,7 +5,7 @@ import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
-import {Button, useToast} from '@/components/shared'
+import {Button, useToast, useConfirm} from '@/components/shared'
 import type {FlowDocument, PagedResponse} from '@/types'
 import {logger} from '@/lib/logger'
 import LibraryFilterRail from './LibraryFilterRail'
@@ -41,6 +41,7 @@ export default function LibraryWorkspace() {
   const orgs = useOrgStore(s => s.organisations)
   const loadOrgs = useOrgStore(s => s.loadOrgs)
   const toast = useToast()
+  const {confirm} = useConfirm()
 
   const [items, setItems] = useState<LibraryFlow[]>([])
   const [total, setTotal] = useState(0)
@@ -124,7 +125,13 @@ export default function LibraryWorkspace() {
   }, [setDocument, setMainPaneView, toast])
 
   const handleDelete = useCallback(async (flow: LibraryFlow) => {
-    if (!confirm(`Delete "${flow.name}" from the cloud library? This cannot be undone.`)) return
+    const ok = await confirm({
+      title: 'Delete flow',
+      message: `Delete "${flow.name}" from the cloud library? This cannot be undone.`,
+      danger: true,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
     try {
       await libraryApi.delete(flow.id)
       setItems(prev => prev.filter(f => f.id !== flow.id))
@@ -134,7 +141,7 @@ export default function LibraryWorkspace() {
     } catch (e) {
       toast.error('Failed to delete', {description: e instanceof Error ? e.message : String(e)})
     }
-  }, [selectedFlowId, setSelectedFlow, toast])
+  }, [selectedFlowId, setSelectedFlow, toast, confirm])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const showEmpty = !isLoading && items.length === 0

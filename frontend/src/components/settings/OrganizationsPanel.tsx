@@ -3,6 +3,7 @@ import {Building2, Plus, Trash2, UserPlus, X, AlertCircle} from 'lucide-react'
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
+import {useConfirm} from '@/components/shared'
 
 const ROLES: OrgRole[] = ['admin', 'member', 'viewer', 'guest']
 
@@ -25,6 +26,7 @@ export default function OrganizationsPanel() {
   const setMemberRole = useOrgStore(s => s.setMemberRole)
   const clearError = useOrgStore(s => s.clearError)
   const currentUser = useAuthStore(s => s.user)
+  const {confirm} = useConfirm()
 
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -73,7 +75,13 @@ export default function OrganizationsPanel() {
 
   const handleRemoveMember = async (userId: string) => {
     if (!selected) return
-    if (!window.confirm('Remove this member from the organization?')) return
+    const ok = await confirm({
+      title: 'Remove member',
+      message: 'Remove this member from the organization?',
+      danger: true,
+      confirmLabel: 'Remove',
+    })
+    if (!ok) return
     try {
       await removeMember(selected.id, userId)
     } catch {
@@ -91,7 +99,13 @@ export default function OrganizationsPanel() {
   }
 
   const handleDeleteOrg = async (org: Organisation) => {
-    if (!window.confirm(`Delete organization "${org.name}"? This cannot be undone.`)) return
+    const ok = await confirm({
+      title: 'Delete organization',
+      message: `Delete organization "${org.name}"? This cannot be undone.`,
+      danger: true,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
     try {
       await deleteOrg(org.id)
     } catch {
@@ -187,7 +201,7 @@ export default function OrganizationsPanel() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-text-primary truncate">{org.name}</span>
+                      <span title={org.name} className="text-sm font-semibold text-text-primary truncate">{org.name}</span>
                       {isOwner && (
                         <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">Owner</span>
                       )}
@@ -224,11 +238,11 @@ export default function OrganizationsPanel() {
                               )}
                             >
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm text-text-primary truncate">
+                                <p title={m.user?.displayName || m.user?.email || m.userId} className="text-sm text-text-primary truncate">
                                   {m.user?.displayName || m.user?.email || m.userId}
                                 </p>
                                 {m.user?.email && m.user.displayName && (
-                                  <p className="text-xs text-text-tertiary truncate">{m.user.email}</p>
+                                  <p title={m.user.email} className="text-xs text-text-tertiary truncate">{m.user.email}</p>
                                 )}
                               </div>
                               {canManageMembers ? (

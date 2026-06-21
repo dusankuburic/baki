@@ -13,18 +13,18 @@ import (
 var variableRefRegex = regexp.MustCompile(`%([^%]+)%`)
 
 type RuleContext struct {
-	Flow         *models.FlowDocument
-	AllBlocks    map[string]*models.Block
-	BlocksByName map[string][]*models.Block
-	BlocksByType map[models.BlockType][]*models.Block
-	Settings     *models.AppSettings
-	ParentMap    map[string]string
-	SiblingMap   map[string][]*models.Block
-	SiblingKey   map[string]string
-	UsedVariables map[string]bool
-	BlockIndex   map[string]int
+	Flow            *models.FlowDocument
+	AllBlocks       map[string]*models.Block
+	BlocksByName    map[string][]*models.Block
+	BlocksByType    map[models.BlockType][]*models.Block
+	Settings        *models.AppSettings
+	ParentMap       map[string]string
+	SiblingMap      map[string][]*models.Block
+	SiblingKey      map[string]string
+	UsedVariables   map[string]bool
+	BlockIndex      map[string]int
 	TerminatorIndex map[string]int
-	BlockDepth   map[string]int
+	BlockDepth      map[string]int
 	// WritersByVar maps a variable name to the IDs of blocks that write it
 	// (via the _output or _var property). ReadersByVar maps a variable name to
 	// the IDs of blocks that read it (variable appears in block.Variables).
@@ -83,21 +83,21 @@ type Rule interface {
 
 func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *RuleContext {
 	ctx := &RuleContext{
-		Flow:         flow,
-		AllBlocks:    make(map[string]*models.Block),
-		BlocksByName: make(map[string][]*models.Block),
-		BlocksByType: make(map[models.BlockType][]*models.Block),
-		ParentMap:    make(map[string]string),
-		SiblingMap:   make(map[string][]*models.Block),
-		SiblingKey:   make(map[string]string),
-		UsedVariables: make(map[string]bool),
-		BlockIndex:   make(map[string]int),
+		Flow:            flow,
+		AllBlocks:       make(map[string]*models.Block),
+		BlocksByName:    make(map[string][]*models.Block),
+		BlocksByType:    make(map[models.BlockType][]*models.Block),
+		ParentMap:       make(map[string]string),
+		SiblingMap:      make(map[string][]*models.Block),
+		SiblingKey:      make(map[string]string),
+		UsedVariables:   make(map[string]bool),
+		BlockIndex:      make(map[string]int),
 		TerminatorIndex: make(map[string]int),
-		BlockDepth:   make(map[string]int),
-		WritersByVar: make(map[string][]string),
-		ReadersByVar: make(map[string][]string),
-		sigCache:     make(map[string]string),
-		Settings:     settings,
+		BlockDepth:      make(map[string]int),
+		WritersByVar:    make(map[string][]string),
+		ReadersByVar:    make(map[string][]string),
+		sigCache:        make(map[string]string),
+		Settings:        settings,
 	}
 
 	for i := range flow.Subflows {
@@ -400,6 +400,7 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 
 	for i := range findings {
 		findings[i].ID = fmt.Sprintf("F-%03d", i+1)
+		findings[i].Fingerprint = findings[i].Key()
 	}
 
 	report.Metrics = ComputeFlowMetrics(flow, report)

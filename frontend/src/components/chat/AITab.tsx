@@ -10,13 +10,16 @@ import {
   ContextPreviewModal, PromptTemplates, SourceFilePicker,
   ChatToolbar, ChatThreadBar,
 } from '.'
-import {useState, useEffect, useMemo} from 'react'
+import {useState, useEffect, useMemo, useCallback} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import StreamingProgress from './StreamingProgress'
+import StreamingBubble from './StreamingBubble'
 import type {ProviderID} from '@/types'
 import ConnectionStatus from './ConnectionStatus'
 import EmptyChatState from './EmptyChatState'
+import ChatErrorBoundary from './ChatErrorBoundary'
+import ChatSearchBar from './ChatSearchBar'
 
 const WELCOME_MESSAGES: Record<string, string> = {
   copilot: 'GitHub Copilot is ready — ask about your PAD flow, request code, or analyze findings.',
@@ -52,7 +55,7 @@ export default function AITab() {
   const {
     doc, selectedBlockId, activeThreadId, activeThread, activeThreadMessages,
     flowThreads, isCurrentThreadStreaming, showThinking,
-    streamingText, streamingMessageId, streamingTokens,
+    streamingTokens,
     sourceFiles, contextPreview, pendingMessage, toolStatus,
     switchThread,
     handleSend, handlePreviewContext, handleResend, handleExport,
@@ -64,6 +67,10 @@ export default function AITab() {
   } = useAIChat({selectedModel})
 
   const [suggestedPrompts, setSuggestedPrompts] = useState<string[]>([])
+  const [msgSearch, setMsgSearch] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const toggleSearch = useCallback(() => setSearchOpen(v => !v), [])
+  const closeSearch = useCallback(() => { setSearchOpen(false); setMsgSearch('') }, [])
 
   const contextBlockId = activeThread?.contextBlockId ?? null
 
@@ -78,6 +85,12 @@ export default function AITab() {
     }).catch((err) => { logger.warn('Failed to load suggested prompts', err) })
   }, [selectedBlockId, hasFindings])
 
+  const displayedMessages = useMemo(() => {
+    if (!searchOpen || !msgSearch.trim()) return activeThreadMessages
+    const q = msgSearch.toLowerCase()
+    return activeThreadMessages.filter(m => m.content.toLowerCase().includes(q))
+  }, [activeThreadMessages, searchOpen, msgSearch])
+
   if (!configured) {
     return <ApiKeyMissingState />
   }
@@ -89,10 +102,11 @@ export default function AITab() {
   const configuredProviders = providers.filter(p => p.configured || p.id === 'demo')
   const showCost = aiSettings.showCostEstimates && currentModelDetail && currentModelDetail.inputCostPerM > 0
   const messages = activeThreadMessages
-  const lastAssistantIdx = messages.reduce((acc, m, i) => m.role === 'assistant' ? i : acc, -1)
+  const lastAssistantIdx = displayedMessages.reduce((acc, m, i) => m.role === 'assistant' ? i : acc, -1)
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming
 
   return (
+    <ChatErrorBoundary key={activeThreadId ?? 'no-thread'}>
     <div className="flex flex-col h-full min-h-0">
       {/* Pinned header — provider/model selector, connection status, thread tabs.
           flex-shrink-0 keeps it anchored while only the message list scrolls. */}
@@ -116,7 +130,7 @@ export default function AITab() {
 
         <div className="px-3 py-1.5">
           <ConnectionStatus
-            state={isCurrentThreadStreaming ? 'connected' : 'connected'}
+            isStreaming={isCurrentThreadStreaming}
             provider={currentModelDetail?.displayName}
           />
         </div>
@@ -175,7 +189,17 @@ export default function AITab() {
           onCompact={handleCompact}
           useTools={activeThread?.useTools ?? false}
           onToggleTools={() => setThreadUseTools(!(activeThread?.useTools ?? false))}
+          onToggleSearch={toggleSearch}
+          searchActive={searchOpen}
         />
+        {searchOpen && (
+          <ChatSearchBar
+            query={msgSearch}
+            onChange={setMsgSearch}
+            matchCount={displayedMessages.length}
+            onClose={closeSearch}
+          />
+        )}
       </div>
 
       {/* Scroll region — exactly one of welcome / messages / empty-state fills it
@@ -199,7 +223,7 @@ export default function AITab() {
             </div>
           ) : (
             <ChatMessageList isStreaming={isCurrentThreadStreaming}>
-              {messages.map((m, i) => (
+              {displayedMessages.map((m, i) => (
                 <MessageBubble
                   key={m.id}
                   message={m}
@@ -214,21 +238,11 @@ export default function AITab() {
                   isThinking
                 />
               )}
-              {isCurrentThreadStreaming && streamingText && (
-                <MessageBubble
-                  message={{
-                    id: streamingMessageId || 'streaming',
-                    role: 'assistant',
-                    content: streamingText,
-                    timestamp: new Date().toISOString(),
-                  }}
-                  isStreaming
-                />
-              )}
+              {isCurrentThreadStreaming && <StreamingBubble />}
             </ChatMessageList>
           )
         ) : (
-          <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} />
+          <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} onCreateThread={handleCreateThread} />
         )}
       </div>
 
@@ -273,5 +287,6 @@ export default function AITab() {
         />
       )}
     </div>
+    </ChatErrorBoundary>
   )
 }

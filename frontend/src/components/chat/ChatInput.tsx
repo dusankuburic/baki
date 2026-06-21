@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import {Square, Eye, ArrowUp, Maximize2, FileText, X} from 'lucide-react'
 import {useRef, useEffect, useCallback, useState, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 import FileAutocomplete from './FileAutocomplete'
 import SlashCommandAutocomplete from './SlashCommandAutocomplete'
 import ExpandedChatInput from './ExpandedChatInput'
@@ -28,6 +29,8 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   
   const activeThreadId = useChatStore(s => s.activeThreadId)
   const streaming = useChatStore(s => s.activeStreamId !== null)
+  const provider = useChatStore(s => s.selectedProvider)
+  const aiSettings = useSettingsStore(s => s.settings.ai)
   
   const history = useMemo(() => {
     if (!activeThreadId) return []
@@ -164,6 +167,11 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   }
 
   const hasContent = value.trim().length > 0 || taggedFiles.length > 0
+  const tokenEstimate = Math.ceil(value.length / 4)
+  const providerCfg = aiSettings.providers[provider as keyof typeof aiSettings.providers]
+  const maxTokens = (providerCfg as {maxTokens?: number} | undefined)?.maxTokens ?? 4096
+  const tokenPct = tokenEstimate / maxTokens
+  const tokenClass = tokenPct >= 0.95 ? 'text-error' : tokenPct >= 0.8 ? 'text-warning' : 'text-text-tertiary'
 
   return (
     <div className="px-3 pb-3 pt-1">
@@ -267,6 +275,9 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
                 <span className="text-[10px] font-medium text-text-tertiary group-hover:text-text-secondary transition-colors">Exclude context</span>
               </label>
             </div>
+            <span className={clsx('text-[10px] tabular-nums', tokenClass)}>
+              ~{tokenEstimate.toLocaleString()} tokens
+            </span>
           </div>
         )}
 

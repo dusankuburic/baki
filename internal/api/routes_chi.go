@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"pad-analyzer/internal/api/middleware"
 	"github.com/go-chi/chi/v5"
+	"pad-analyzer/internal/api/middleware"
 )
 
 func registerRoutes(rt *Router, r chi.Router) {
@@ -44,7 +44,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Put("/settings", h.Sys.handleUpdateSettings)
 		r.Get("/settings/user", h.Sys.handleGetSettings)
 		r.Post("/settings/user", h.Sys.handleUpdateSettings)
-		r.Get("/settings/org/{id}", h.Sys.handleGetOrgSettings)   // member-only
+		r.Get("/settings/org/{id}", h.Sys.handleGetOrgSettings)     // member-only
 		r.Post("/settings/org/{id}", h.Sys.handleUpdateOrgSettings) // admin-only
 		r.Get("/info", h.Sys.handleAppInfo)
 		r.Post("/log-error", h.Sys.handleLogError)
@@ -75,6 +75,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Route("/api/library", func(r chi.Router) {
 		r.Get("/", h.Library.handleLibraryList)
 		r.Post("/", h.Library.handleLibraryCreate)
+		r.Get("/portfolio", h.Library.handlePortfolio) // org-wide governance fleet view
 		r.Route("/{id}", func(r chi.Router) {
 			r.Get("/", h.Library.handleLibraryGet)
 			r.Put("/", h.Library.handleLibraryUpdate)
@@ -123,6 +124,15 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Get("/rules", h.Analysis.handleGetRules)
 		r.Post("/rule/enabled", h.Analysis.handleSetRuleEnabled)
 		r.Post("/rule/config", h.Analysis.handleUpdateRuleConfig)
+		// Finding triage & baselines (persistent, team-shared; cloud mode only)
+		r.Post("/triage/list", h.Analysis.handleListFindingStatuses)
+		r.Post("/triage/set", h.Analysis.handleSetFindingStatus)
+		r.Post("/triage/clear", h.Analysis.handleClearFindingStatus)
+		r.Post("/baseline/get", h.Analysis.handleGetBaseline)
+		r.Post("/baseline/set", h.Analysis.handleSetBaseline)
+		r.Post("/baseline/clear", h.Analysis.handleClearBaseline)
+		r.Post("/baseline/drift", h.Analysis.handleBaselineDrift)
+		r.Post("/policy/evaluate", h.Analysis.handleEvaluatePolicy) // gate a flow against a policy
 	})
 
 	// --- Welcome Dashboard (BFF) ---
@@ -162,6 +172,10 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/change-password", h.Auth.handleAuthChangePassword)
 		r.Get("/sessions", h.Auth.handleAuthSessions)
 		r.Delete("/sessions/{id}", h.Auth.handleAuthSessionRevoke)
+		// Machine API tokens (PATs) for headless/CI access (cloud mode)
+		r.Get("/tokens", h.Auth.handleListAPITokens)
+		r.Post("/tokens", h.Auth.handleCreateAPIToken)
+		r.Delete("/tokens/{id}", h.Auth.handleDeleteAPIToken)
 		r.Route("/sso", func(r chi.Router) {
 			r.Get("/info", h.Auth.handleSSOInfo)
 			r.Get("/start", h.Auth.handleSSOStart)

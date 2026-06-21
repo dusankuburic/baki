@@ -526,4 +526,86 @@ CREATE POLICY rls_flow_analysis_history_visible ON flow_analysis_history FOR ALL
                OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
     )
 );
+
+-- ── api_tokens: machine credentials (PATs). No RLS — like refresh_tokens, this
+-- is auth infrastructure looked up by hash during the request BEFORE any user
+-- context exists; access is scoped by user_id in the query and by the secret hash. ──
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id         TEXT        PRIMARY KEY,
+    user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT        NOT NULL DEFAULT '',
+    token_hash TEXT        UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens (user_id);
+
+-- ── finding_status: persistent, team-shared triage state, one row per finding ──
+CREATE TABLE IF NOT EXISTS finding_status (
+    flow_id       TEXT        NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    finding_key   TEXT        NOT NULL,
+    rule_id       TEXT        NOT NULL DEFAULT '',
+    status        TEXT        NOT NULL DEFAULT 'open',
+    justification TEXT        NOT NULL DEFAULT '',
+    assignee_id   TEXT        NOT NULL DEFAULT '',
+    updated_by    TEXT        NOT NULL DEFAULT '',
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (flow_id, finding_key)
+);
+
+-- ── flow_baselines: accepted set of finding keys per flow (one row per flow) ──
+CREATE TABLE IF NOT EXISTS flow_baselines (
+    flow_id    TEXT        PRIMARY KEY REFERENCES flows(id) ON DELETE CASCADE,
+    keys       JSONB       NOT NULL DEFAULT '[]',
+    created_by TEXT        NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- RLS: triage and baseline rows follow their flow's visibility (owner,
+-- collaborator, or org member) — identical to flow_analysis_history above.
+ALTER TABLE finding_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finding_status FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS rls_finding_status_visible ON finding_status;
+CREATE POLICY rls_finding_status_visible ON finding_status FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = finding_status.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = finding_status.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
+
+ALTER TABLE flow_baselines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flow_baselines FORCE  ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS rls_flow_baselines_visible ON flow_baselines;
+CREATE POLICY rls_flow_baselines_visible ON flow_baselines FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_baselines.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = flow_baselines.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
 `

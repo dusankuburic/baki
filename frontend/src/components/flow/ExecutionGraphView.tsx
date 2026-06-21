@@ -16,7 +16,8 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  
+  const [matchCount, setMatchCount] = useState<number | null>(null)
+
   const flowDoc = useFlowStore(s => s.document)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
@@ -155,6 +156,21 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
             'border-color': '#eab308',
             'border-width': 2
           }
+        },
+        // Search highlight + dim
+        {
+          selector: 'node.search-match',
+          style: {
+            'border-color': '#6366f1',
+            'border-width': 4,
+            'background-color': cssVar('--surface-3')
+          }
+        },
+        {
+          selector: '.search-dim',
+          style: {
+            'opacity': 0.2
+          }
         }
       ],
       minZoom: 0.1,
@@ -204,12 +220,32 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
     loadGraph()
   }, [flowDoc?.id, report?.generatedAt, subflowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Highlight matched nodes (and dim the rest) live as the query changes; re-runs
+  // after a (re)load so highlights survive graph refreshes. Also drives the count.
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy) return
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) {
+      cy.elements().removeClass('search-match search-dim')
+      setMatchCount(null)
+      return
+    }
+    const matched = cy.nodes().filter(n => String(n.data('label') ?? '').toLowerCase().includes(q))
+    cy.batch(() => {
+      cy.elements().removeClass('search-match search-dim')
+      matched.addClass('search-match')
+      cy.elements().not(matched).addClass('search-dim')
+    })
+    setMatchCount(matched.length)
+  }, [searchQuery, loading])
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
     if (!cyRef.current || !searchQuery) return
     const cy = cyRef.current
-    const nodes = cy.nodes().filter(n => 
-      n.data('label').toLowerCase().includes(searchQuery.toLowerCase())
+    const nodes = cy.nodes().filter(n =>
+      String(n.data('label') ?? '').toLowerCase().includes(searchQuery.toLowerCase())
     )
     if (nodes.length > 0) {
       cy.nodes().unselect()
@@ -232,13 +268,18 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         <div className="pl-2 text-text-tertiary">
           <Search size={14} />
         </div>
-        <input 
+        <input
           type="text"
           placeholder="Find subflow..."
           className="bg-transparent border-none outline-none text-xs w-48 h-8 placeholder:text-text-tertiary"
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
         />
+        {searchQuery.trim() && matchCount !== null && (
+          <span className="pr-2 text-2xs text-text-tertiary tabular-nums shrink-0 select-none">
+            {matchCount === 0 ? 'No matches' : `${matchCount} match${matchCount === 1 ? '' : 'es'}`}
+          </span>
+        )}
       </form>
 
       {loading && (

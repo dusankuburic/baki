@@ -2,6 +2,7 @@ import {memo} from 'react'
 import clsx from 'clsx'
 import {FileCode, Users, Clock} from 'lucide-react'
 import type {LibraryFlow} from '@/api/library'
+import {relativeTime, absoluteTime} from '@/lib/time'
 
 interface LibraryGridProps {
   items: LibraryFlow[]
@@ -32,9 +33,7 @@ function SelectableCard({flow, selected, onClick, onDoubleClick}: {
   onClick: () => void
   onDoubleClick: () => void
 }) {
-  const updated = new Date(flow.updatedAt).toLocaleDateString(undefined, {
-    month: 'short', day: 'numeric', year: 'numeric',
-  })
+  const updated = relativeTime(flow.updatedAt)
   return (
     <button
       type="button"
@@ -73,7 +72,7 @@ function SelectableCard({flow, selected, onClick, onDoubleClick}: {
             <span className="truncate">{flow.ownerDisplayName}</span>
           </span>
         )}
-        <span className="flex items-center gap-1 ml-auto flex-shrink-0">
+        <span className="flex items-center gap-1 ml-auto flex-shrink-0" title={absoluteTime(flow.updatedAt)}>
           <Clock size={12} />
           {updated}
         </span>

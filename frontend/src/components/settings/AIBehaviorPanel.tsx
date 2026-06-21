@@ -2,6 +2,7 @@ import {useState} from 'react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
+import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import type {ProviderID, AIProviderConfig} from '@/types'
 
@@ -87,12 +88,13 @@ export default function AIBehaviorPanel() {
               </p>
             </div>
             <div className="w-24">
-              <Input
-                type="number"
+              <NumberField
                 step="0.5"
-                min="0"
+                min={0}
+                fallback={0}
+                integer={false}
                 value={ai.dailyBudget}
-                onChange={(e) => updateAI({dailyBudget: parseFloat(e.target.value) || 0})}
+                onCommit={(v) => updateAI({dailyBudget: v})}
               />
             </div>
           </div>
@@ -164,23 +166,23 @@ function ProviderAdvancedSettings({config, onUpdate}: {config: AIProviderConfig;
 
       <div>
         <label className="text-xs font-medium text-text-secondary block mb-1.5">Max Tokens</label>
-        <Input
-          type="number"
+        <NumberField
           min={1}
           max={32000}
+          fallback={4096}
           value={config.maxTokens}
-          onChange={(e) => onUpdate({maxTokens: parseInt(e.target.value) || 4096})}
+          onCommit={(v) => onUpdate({maxTokens: v})}
         />
       </div>
 
       <div>
         <label className="text-xs font-medium text-text-secondary block mb-1.5">Context Token Budget</label>
-        <Input
-          type="number"
+        <NumberField
           min={100}
           max={128000}
+          fallback={4000}
           value={config.contextTokenBudget}
-          onChange={(e) => onUpdate({contextTokenBudget: parseInt(e.target.value) || 4000})}
+          onCommit={(v) => onUpdate({contextTokenBudget: v})}
         />
         <p className="text-2xs text-text-tertiary mt-1">
           Max tokens used for flow context.

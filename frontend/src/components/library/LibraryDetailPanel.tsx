@@ -1,8 +1,9 @@
-import {useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {Activity, Calendar, FileCode, GitBranch, Trash2, User, Users, X} from 'lucide-react'
 import {libraryApi, type LibraryFlow, type LibraryFlowVersion} from '@/api/library'
-import {Button, Spinner} from '@/components/shared'
+import {Button, Spinner, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
+import {relativeTime, absoluteTime} from '@/lib/time'
 import {useOrgStore} from '@/stores/orgStore'
 
 interface Props {
@@ -18,31 +19,33 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const orgs = useOrgStore(s => s.organisations)
+  const reqRef = useRef(0)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!flowId) {
       setFlow(null)
       setVersions([])
       setError(null)
       return
     }
-    let cancelled = false
+    const my = ++reqRef.current
     setLoading(true)
     setError(null)
     Promise.all([libraryApi.get(flowId), libraryApi.versions(flowId, 10).catch(() => [])])
       .then(([f, v]) => {
-        if (cancelled) return
+        if (my !== reqRef.current) return
         setFlow(f)
         setVersions(v)
       })
       .catch(e => {
-        if (cancelled) return
+        if (my !== reqRef.current) return
         logger.warn('Library: detail load failed', e)
         setError(e instanceof Error ? e.message : String(e))
       })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+      .finally(() => { if (my === reqRef.current) setLoading(false) })
   }, [flowId])
+
+  useEffect(() => { load() }, [load])
 
   if (!flowId) {
     return (
@@ -57,11 +60,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
   }
 
   if (error) {
-    return (
-      <div className="p-4 text-sm text-semantic-error">
-        {error}
-      </div>
-    )
+    return <ErrorState message={error} onRetry={load} />
   }
 
   if (!flow) return null
@@ -93,7 +92,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
         <Section title="Overview">
           <Row icon={User} label="Owner" value={flow.ownerDisplayName ?? flow.ownerId} />
           <Row icon={Users} label="Organisation" value={orgName} />
-          <Row icon={Calendar} label="Last updated" value={new Date(flow.updatedAt).toLocaleString()} />
+          <Row icon={Calendar} label="Last updated" value={<span title={absoluteTime(flow.updatedAt)}>{relativeTime(flow.updatedAt)}</span>} />
           <Row icon={FileCode} label="Blocks / subflows" value={`${flow.blockCount} / ${flow.subflowCount}`} />
           <Row icon={GitBranch} label="Version" value={`#${flow.version}`} />
         </Section>
@@ -127,7 +126,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
                 <li key={v.id} className="text-xs text-text-secondary">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="font-medium text-text-primary">v{v.version}</span>
-                    <span className="text-text-tertiary">{new Date(v.createdAt).toLocaleDateString()}</span>
+                    <span className="text-text-tertiary" title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
                   </div>
                   {v.comment && <div className="text-text-muted truncate">{v.comment}</div>}
                 </li>

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { History, Plus, Tag } from 'lucide-react'
 import { versionsApi, type FlowVersion } from '@/api/admin'
 import { useFlowStore } from '@/stores/flowStore'
-import { EmptyState, Spinner } from '@/components/shared'
+import { EmptyState, ErrorState, Spinner } from '@/components/shared'
+import { relativeTime, absoluteTime } from '@/lib/time'
 
 export const HistoryTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -98,7 +99,7 @@ export const HistoryTab: React.FC = () => {
           <div className="flex justify-center p-8"><Spinner size={20} /></div>
         ) : versions.length === 0 ? (
           error ? (
-            <div className="text-center py-8 text-red-500 text-xs">{error}</div>
+            <ErrorState message={error} onRetry={fetchVersions} />
           ) : (
             <EmptyState
               title="No history yet"
@@ -118,7 +119,7 @@ export const HistoryTab: React.FC = () => {
                     {v.comment || <span className="text-text-tertiary italic">No comment</span>}
                   </p>
                   <p className="text-2xs text-text-tertiary mt-0.5">
-                    {new Date(v.createdAt).toLocaleString()}
+                    <span title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
                     {v.metadata?.blockCount != null && (
                       <span className="ml-2 text-text-muted">{v.metadata.blockCount} blocks</span>
                     )}

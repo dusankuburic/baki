@@ -1,6 +1,6 @@
 import Switch from '@/components/shared/Switch'
 import {useSettingsStore} from '@/stores/settingsStore'
-import Input from '@/components/shared/Input'
+import {NumberField} from '@/components/shared'
 
 export default function ParserPanel() {
   const parser = useSettingsStore(s => s.settings.parser)
@@ -45,12 +45,12 @@ export default function ParserPanel() {
             <div className="pl-4">
               <label className="text-xs font-medium text-text-secondary block mb-1.5">Spaces per Indent</label>
               <div className="w-24">
-                <Input
-                  type="number"
+                <NumberField
                   min={1}
                   max={8}
+                  fallback={4}
                   value={parser.spacesPerIndent}
-                  onChange={(e) => updateParser({spacesPerIndent: parseInt(e.target.value) || 4})}
+                  onCommit={(v) => updateParser({spacesPerIndent: v})}
                 />
               </div>
             </div>
@@ -60,12 +60,12 @@ export default function ParserPanel() {
         <div className="pt-2">
           <label className="text-sm font-medium text-text-primary block mb-2">Maximum File Size (MB)</label>
           <div className="w-32">
-            <Input
-              type="number"
+            <NumberField
               min={1}
               max={500}
+              fallback={50}
               value={parser.maxFileSizeMB}
-              onChange={(e) => updateParser({maxFileSizeMB: parseInt(e.target.value) || 50})}
+              onCommit={(v) => updateParser({maxFileSizeMB: v})}
             />
           </div>
           <p className="text-xs text-text-tertiary mt-2">

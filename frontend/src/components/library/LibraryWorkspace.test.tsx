@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent, waitFor, act} from '@testing-library/react'
 import LibraryWorkspace from './LibraryWorkspace'
 import {ToastProvider} from '@/components/shared/Toast'
+import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -49,7 +50,9 @@ function flow(id: string, overrides: Partial<{name: string; orgId: string; isSha
 function renderWorkspace() {
   return render(
     <ToastProvider>
-      <LibraryWorkspace />
+      <ConfirmProvider>
+        <LibraryWorkspace />
+      </ConfirmProvider>
     </ToastProvider>,
   )
 }

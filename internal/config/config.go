@@ -20,12 +20,27 @@ const (
 
 // Config holds the complete application configuration
 type Config struct {
-	Mode    DeploymentMode
-	Server  ServerConfig
-	Storage StorageConfig
-	Auth    AuthConfig
-	Runtime RuntimeConfig
-	Log     models.LogConfig
+	Mode       DeploymentMode
+	Server     ServerConfig
+	Storage    StorageConfig
+	Auth       AuthConfig
+	Runtime    RuntimeConfig
+	Governance GovernanceConfig
+	Log        models.LogConfig
+}
+
+// GovernanceConfig configures the continuous-governance loop: the periodic flow
+// scanner and its outbound alert channels. All zero values disable the feature
+// (scanning is opt-in), so it has no effect unless an interval and at least one
+// channel are set. Cloud mode only — the scanner needs a storage backend.
+type GovernanceConfig struct {
+	// ScanInterval is how often to re-scan stored flows for drift/regressions
+	// (a duration string like "1h"; empty or non-positive disables scanning).
+	ScanInterval string
+	// NotifyWebhookURL receives raw JSON alert events (generic webhook).
+	NotifyWebhookURL string
+	// NotifyTeamsURL is a Microsoft Teams incoming-webhook URL (MessageCard).
+	NotifyTeamsURL string
 }
 
 // ServerConfig holds HTTP server settings
@@ -74,46 +89,46 @@ type StorageConfig struct {
 }
 
 type RuntimeConfig struct {
-	RateLimitGeneralRPS    float64
-	RateLimitGeneralBurst  float64
-	RateLimitAuthRPS       float64
-	RateLimitAuthBurst     float64
-	RateLimitExpensiveRPS  float64
+	RateLimitGeneralRPS     float64
+	RateLimitGeneralBurst   float64
+	RateLimitAuthRPS        float64
+	RateLimitAuthBurst      float64
+	RateLimitExpensiveRPS   float64
 	RateLimitExpensiveBurst float64
-	RateLimitChatRPS       float64
-	RateLimitChatBurst     float64
-	RateLimitUploadRPS     float64
-	RateLimitUploadBurst   float64
-	CircuitBreakerFailures int
-	CircuitBreakerOpenDur  string
-	RetryMaxAttempts       int
-	RetryBaseDelay         string
-	JWTAccessTTL           string
-	JWTRefreshTTL          string
-	OTLPEndpoint           string
-	RequestTimeout         string
+	RateLimitChatRPS        float64
+	RateLimitChatBurst      float64
+	RateLimitUploadRPS      float64
+	RateLimitUploadBurst    float64
+	CircuitBreakerFailures  int
+	CircuitBreakerOpenDur   string
+	RetryMaxAttempts        int
+	RetryBaseDelay          string
+	JWTAccessTTL            string
+	JWTRefreshTTL           string
+	OTLPEndpoint            string
+	RequestTimeout          string
 }
 
 func DefaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
-		RateLimitGeneralRPS:    1.0,
-		RateLimitGeneralBurst:  20,
-		RateLimitAuthRPS:       5.0 / 60.0,
-		RateLimitAuthBurst:     5,
-		RateLimitExpensiveRPS:  2,
+		RateLimitGeneralRPS:     1.0,
+		RateLimitGeneralBurst:   20,
+		RateLimitAuthRPS:        5.0 / 60.0,
+		RateLimitAuthBurst:      5,
+		RateLimitExpensiveRPS:   2,
 		RateLimitExpensiveBurst: 5,
-		RateLimitChatRPS:       3,
-		RateLimitChatBurst:     10,
-		RateLimitUploadRPS:     1,
-		RateLimitUploadBurst:   3,
-		CircuitBreakerFailures: 5,
-		CircuitBreakerOpenDur:  "30s",
-		RetryMaxAttempts:       3,
-		RetryBaseDelay:         "500ms",
-		JWTAccessTTL:           "15m",
-		JWTRefreshTTL:          "24h",
-		OTLPEndpoint:           "",
-		RequestTimeout:         "30s",
+		RateLimitChatRPS:        3,
+		RateLimitChatBurst:      10,
+		RateLimitUploadRPS:      1,
+		RateLimitUploadBurst:    3,
+		CircuitBreakerFailures:  5,
+		CircuitBreakerOpenDur:   "30s",
+		RetryMaxAttempts:        3,
+		RetryBaseDelay:          "500ms",
+		JWTAccessTTL:            "15m",
+		JWTRefreshTTL:           "24h",
+		OTLPEndpoint:            "",
+		RequestTimeout:          "30s",
 	}
 }
 

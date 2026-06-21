@@ -137,6 +137,9 @@ Backend env vars (see `.env.example`):
 | `PAD_STORAGE` | `local` (filesystem) or `database` (PostgreSQL) | `local` |
 | `PAD_DATABASE_URL` | Postgres DSN (required when `PAD_STORAGE=database`) | — |
 | `PAD_TRUSTED_PROXIES` | Trusted proxy IPs for `X-Forwarded-For` | — |
+| `PAD_SCAN_INTERVAL` | Periodic flow re-scan interval (e.g. `1h`); enables drift/regression alerts (cloud) | — (off) |
+| `PAD_NOTIFY_WEBHOOK_URL` | Generic webhook for governance alerts (raw JSON) | — |
+| `PAD_NOTIFY_TEAMS_URL` | Microsoft Teams incoming-webhook URL for alerts | — |
 
 Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:8080`), **without** a trailing `/api`. Only needed in web mode; the desktop app discovers the sidecar automatically.
 
@@ -168,8 +171,11 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 - **Visualization** — virtualized block view (react-virtuoso); variable lineage graph; execution-graph (DAG) view; flow tree sidebar with breadcrumbs.
 - **AI review** — streaming chat over your flow with GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM, or GitHub Models. Tool-augmented mode for autonomous analysis.
 - **Export** — full analysis reports to PDF or Markdown (works in both desktop and browser); analysis history with regression diffing.
+- **CI/CD** — headless `bakicli` runs static analysis and exits non-zero past a severity threshold (`-fail-on`); emits `text`, `json`, or **SARIF 2.1.0** (`-format sarif`) for GitHub code scanning, Azure DevOps, and other security dashboards. Gate against a named, shareable **policy** (`-policy policy.json`) — a rule set with per-rule severities and a pass/fail threshold.
+- **Governance** *(web mode)* — persistent, team-shared finding triage (status/assignee/justification) and per-flow **baselines** so dashboards and CI can ratchet on *new* findings only; an org-wide **portfolio** view (`GET /api/library/portfolio`) ranks every accessible flow worst-health-first; a periodic scanner re-analyzes stored flows and **alerts on drift or health regressions** via webhook / Microsoft Teams (`PAD_SCAN_INTERVAL` + `PAD_NOTIFY_*`).
 - **Collaboration** *(web mode)* — organizations with role-based access (admin/member/viewer/guest); real-time presence indicators and block selection sync via WebSocket; flow sharing with per-flow collaborator permissions.
 - **SSO** *(web mode)* — OIDC single sign-on with Microsoft Entra ID, Google, Okta, or any OIDC-compliant IdP. Account linking with automatic JIT provisioning.
+- **Machine API tokens** *(web mode)* — scoped, revocable personal access tokens (`POST /api/auth/tokens`) so CI and automation can call the API as a user without an interactive login. Sent as `Authorization: Bearer pad_pat_…`; only the token hash is stored, the raw value is shown once, and the owner's current role applies (revoke = immediate).
 - **Org invites** *(web mode)* — token-based email invites with configurable roles and expiry; pending invite management.
 - **Optimistic concurrency** — version-tracked flow saves prevent silent overwrites; conflict detection with reload prompts.
 - **Offline resilience** — operation queue with localStorage persistence; automatic flush on reconnect; stale-response guards prevent out-of-order overwrites.

@@ -11,7 +11,12 @@ const (
 )
 
 type Finding struct {
-	ID          string                 `json:"id"`
+	ID string `json:"id"`
+	// Fingerprint is a stable, content-derived identity for the finding (see
+	// Key). Unlike ID — a per-run sequential index ("F-001") that shifts when
+	// other findings come or go — Fingerprint survives re-analysis, so triage
+	// state, suppressions, and baselines can be pinned to it.
+	Fingerprint string                 `json:"fingerprint,omitempty"`
 	RuleID      string                 `json:"ruleId"`
 	Severity    Severity               `json:"severity"`
 	Title       string                 `json:"title"`
@@ -24,15 +29,31 @@ type Finding struct {
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// Key returns the stable identity of a finding: the rule that raised it plus the
+// block it points at. Block IDs are flow-unique GUIDs, so RuleID:BlockID
+// uniquely identifies "this rule firing on this block". This is the matching key
+// used by regression diffing (DiffReports), triage status persistence,
+// baselines, and SARIF fingerprints — keep them in sync via this one method.
+//
+// Stability note: block IDs are assigned by the parser (uuid.NewString) at parse
+// time, so a Key is stable across re-analyses of the *same parsed document* (the
+// server stores the parsed doc and re-analyzes it in place) but NOT across
+// independent re-parses of the source text (each parse mints fresh IDs). Cross-
+// parse matching (e.g. a CLI baseline over time) needs a content-derived key,
+// which this method intentionally does not yet provide.
+func (f Finding) Key() string {
+	return f.RuleID + ":" + f.BlockID
+}
+
 type AnalysisReport struct {
-	FlowID        string         `json:"flowId"`
-	FlowName      string         `json:"flowName,omitempty"`
-	GeneratedAt   time.Time      `json:"generatedAt"`
-	Findings      []Finding      `json:"findings"`
-	Stats         AnalysisStats  `json:"stats"`
-	DurationMs    int            `json:"durationMs"`
-	Metrics       *FlowMetrics   `json:"metrics,omitempty"`
-	RuleProfiles  []RuleProfile  `json:"ruleProfiles,omitempty"`
+	FlowID       string        `json:"flowId"`
+	FlowName     string        `json:"flowName,omitempty"`
+	GeneratedAt  time.Time     `json:"generatedAt"`
+	Findings     []Finding     `json:"findings"`
+	Stats        AnalysisStats `json:"stats"`
+	DurationMs   int           `json:"durationMs"`
+	Metrics      *FlowMetrics  `json:"metrics,omitempty"`
+	RuleProfiles []RuleProfile `json:"ruleProfiles,omitempty"`
 }
 
 type AnalysisStats struct {
@@ -44,11 +65,11 @@ type AnalysisStats struct {
 }
 
 type RuleProfile struct {
-	RuleID      string `json:"ruleId"`
-	RuleName    string `json:"ruleName"`
-	DurationMs  int64  `json:"durationMs"`
-	FindingCount int   `json:"findingCount"`
-	BlocksChecked int  `json:"blocksChecked"`
+	RuleID        string `json:"ruleId"`
+	RuleName      string `json:"ruleName"`
+	DurationMs    int64  `json:"durationMs"`
+	FindingCount  int    `json:"findingCount"`
+	BlocksChecked int    `json:"blocksChecked"`
 }
 
 type SubflowMetrics struct {
@@ -129,10 +150,10 @@ type DataFlowAnalysis struct {
 }
 
 type BatchResult struct {
-	FlowID   string              `json:"flowId"`
-	FlowName string              `json:"flowName"`
-	Report   *AnalysisReport     `json:"report"`
-	Error    string              `json:"error,omitempty"`
+	FlowID   string          `json:"flowId"`
+	FlowName string          `json:"flowName"`
+	Report   *AnalysisReport `json:"report"`
+	Error    string          `json:"error,omitempty"`
 }
 
 type BatchAnalysis struct {
@@ -147,16 +168,58 @@ type BatchAnalysis struct {
 }
 
 type AnalysisDiff struct {
-	FlowID         string   `json:"flowId"`
+	FlowID         string    `json:"flowId"`
 	Added          []Finding `json:"added"`
 	Removed        []Finding `json:"removed"`
 	Persisted      []Finding `json:"persisted"`
-	AddedCount     int      `json:"addedCount"`
-	RemovedCount   int      `json:"removedCount"`
-	PersistedCount int      `json:"persistedCount"`
+	AddedCount     int       `json:"addedCount"`
+	RemovedCount   int       `json:"removedCount"`
+	PersistedCount int       `json:"persistedCount"`
 	// HasPrevious is false when no earlier analysis run exists to compare
 	// against (the diff is then "everything added" by construction).
-	HasPrevious    bool     `json:"hasPrevious"`
+	HasPrevious bool `json:"hasPrevious"`
+}
+
+// BaselineDrift reports the findings in a report that are NOT in a flow's
+// accepted baseline — i.e. findings introduced since the baseline was taken.
+// It is the basis for ratcheting/gating: CI and dashboards can fail or alert on
+// New (and especially NewErrors) while ignoring already-accepted findings.
+// When HasBaseline is false (no baseline recorded), every finding is "new" by
+// construction, mirroring AnalysisDiff's "no prior run ⇒ everything added".
+type BaselineDrift struct {
+	FlowID      string    `json:"flowId"`
+	HasBaseline bool      `json:"hasBaseline"`
+	New         []Finding `json:"new"`
+	NewErrors   int       `json:"newErrors"`
+	NewWarnings int       `json:"newWarnings"`
+	NewInfo     int       `json:"newInfo"`
+}
+
+// PortfolioEntry is one flow in the org-wide governance portfolio: its latest
+// persisted health and finding counts, used to rank flows by risk.
+type PortfolioEntry struct {
+	FlowID      string     `json:"flowId"`
+	FlowName    string     `json:"flowName"`
+	OwnerID     string     `json:"ownerId,omitempty"`
+	OwnerName   string     `json:"ownerName,omitempty"`
+	Analyzed    bool       `json:"analyzed"`
+	HealthScore int        `json:"healthScore"`
+	Errors      int        `json:"errors"`
+	Warnings    int        `json:"warnings"`
+	Info        int        `json:"info"`
+	AnalyzedAt  *time.Time `json:"analyzedAt,omitempty"`
+}
+
+// Portfolio is the fleet view: every flow the caller can govern, ranked worst-
+// health-first, with rollup totals. Unanalyzed flows sort last (no health yet).
+type Portfolio struct {
+	Entries       []PortfolioEntry `json:"entries"`
+	TotalFlows    int              `json:"totalFlows"`
+	AnalyzedFlows int              `json:"analyzedFlows"`
+	AvgHealth     int              `json:"avgHealth"`
+	Errors        int              `json:"errors"`
+	Warnings      int              `json:"warnings"`
+	Info          int              `json:"info"`
 }
 
 type GraphNode struct {
@@ -196,14 +259,14 @@ type SubflowHash struct {
 }
 
 type DashboardStats struct {
-	TotalFlowsAnalyzed int                `json:"totalFlowsAnalyzed"`
-	TotalSubflows      int                `json:"totalSubflows"`
-	TotalFindings      int                `json:"totalFindings"`
-	FindingsBySeverity map[string]int     `json:"findingsBySeverity"`
-	FindingsByCategory map[string]int     `json:"findingsByCategory"`
-	FindingsByRule     map[string]int     `json:"findingsByRule"`
-	AvgHealthScore     float64            `json:"avgHealthScore"`
-	TopProblemFlows    []ProblemFlow      `json:"topProblemFlows"`
+	TotalFlowsAnalyzed int            `json:"totalFlowsAnalyzed"`
+	TotalSubflows      int            `json:"totalSubflows"`
+	TotalFindings      int            `json:"totalFindings"`
+	FindingsBySeverity map[string]int `json:"findingsBySeverity"`
+	FindingsByCategory map[string]int `json:"findingsByCategory"`
+	FindingsByRule     map[string]int `json:"findingsByRule"`
+	AvgHealthScore     float64        `json:"avgHealthScore"`
+	TopProblemFlows    []ProblemFlow  `json:"topProblemFlows"`
 }
 
 type ProblemFlow struct {
@@ -214,10 +277,10 @@ type ProblemFlow struct {
 }
 
 type FindingGroup struct {
-	BlockID        string   `json:"blockId"`
+	BlockID        string    `json:"blockId"`
 	Findings       []Finding `json:"findings"`
 	Primary        *Finding  `json:"primary"`
-	DuplicateCount int      `json:"duplicateCount"`
+	DuplicateCount int       `json:"duplicateCount"`
 }
 
 type FlowComparison struct {

@@ -5,9 +5,10 @@ import { VersionConflictError } from '@/api/client'
 import { useFlowStore } from '@/stores/flowStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useOrgStore } from '@/stores/orgStore'
-import { Spinner, useToast } from '@/components/shared'
+import { Spinner, useToast, useConfirm } from '@/components/shared'
 import type { FlowDocument } from '@/types'
 import {logger} from '@/lib/logger'
+import {relativeTime, absoluteTime} from '@/lib/time'
 
 export default function LibraryTab() {
   const [flows, setFlows] = useState<LibraryFlow[]>([])
@@ -21,6 +22,7 @@ export default function LibraryTab() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const toast = useToast()
+  const {confirm, prompt} = useConfirm()
   const abortRef = useRef<AbortController | null>(null)
 
   const fetchLibrary = useCallback(async () => {
@@ -66,7 +68,16 @@ export default function LibraryTab() {
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    if (!confirm('Are you sure you want to delete this flow from the library?')) return
+    const name = flows.find(f => f.id === id)?.name
+    const ok = await confirm({
+      title: 'Delete flow',
+      message: name
+        ? `Delete "${name}" from the library? This cannot be undone.`
+        : 'Delete this flow from the library? This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
     try {
       await libraryApi.delete(id)
       setFlows(prev => prev.filter(f => f.id !== id))
@@ -127,7 +138,13 @@ export default function LibraryTab() {
       return
     }
 
-    const name = prompt('Enter name for the library flow:', currentDoc.name)
+    const name = await prompt({
+      title: 'Save to library',
+      label: 'Flow name',
+      initialValue: currentDoc.name,
+      placeholder: 'Enter a name for the library flow',
+      confirmLabel: 'Save',
+    })
     if (!name) return
 
     setIsSaving(true)
@@ -197,8 +214,8 @@ export default function LibraryTab() {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-text-primary truncate">{f.name}</div>
-                    {f.description && <div className="text-2xs text-text-tertiary truncate">{f.description}</div>}
+                    <div title={f.name} className="text-xs font-semibold text-text-primary truncate">{f.name}</div>
+                    {f.description && <div title={f.description} className="text-2xs text-text-tertiary truncate">{f.description}</div>}
                   </div>
                   {(f.canDelete ?? !f.isSharedWithMe) && (
                     <button
@@ -215,7 +232,7 @@ export default function LibraryTab() {
                     {f.blockCount}
                   </span>
                   <span>·</span>
-                  <span>{new Date(f.updatedAt).toLocaleDateString()}</span>
+                  <span title={absoluteTime(f.updatedAt)}>{relativeTime(f.updatedAt)}</span>
                   {f.isSharedWithMe && (
                     <>
                       <span>·</span>

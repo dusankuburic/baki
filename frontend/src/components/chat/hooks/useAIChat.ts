@@ -22,8 +22,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const provider = useChatStore(s => s.selectedProvider)
   const aiSettings = useSettingsStore(s => s.settings.ai)
 
-  const streamingText = useChatStore(s => s.streamingText)
-  const streamingMessageId = useChatStore(s => s.streamingMessageId)
   const activeStreamId = useChatStore(s => s.activeStreamId)
   const getMessages = useChatStore(s => s.getMessages)
   const appendMessage = useChatStore(s => s.appendMessage)
@@ -63,8 +61,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   const providerRef = useRef(provider)
   useEffect(() => { providerRef.current = provider })
-  const streamingRef = useRef(streamingText)
-  useEffect(() => { streamingRef.current = streamingText })
   const docRef = useRef(doc)
   useEffect(() => { docRef.current = doc })
   const streamingThreadIdRef = useRef<string | null>(null)
@@ -73,35 +69,43 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     streamingThreadIdRef.current = id
     setStreamingThreadIdState(id)
   }, [])
-  const streamingMessageIdRef = useRef(streamingMessageId)
-  useEffect(() => { streamingMessageIdRef.current = streamingMessageId })
+  // Tracks the local message ID for the in-flight stream; set directly in executeSend.
+  const streamingMessageIdRef = useRef<string | null>(null)
   const selectedModelRef = useRef(selectedModel)
   useEffect(() => { selectedModelRef.current = selectedModel })
 
   const accumulatedTextRef = useRef('')
-  const lastUpdateRef = useRef<number | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const firstChunkRef = useRef(false)
   const sendGenRef = useRef(0)
   const teardownRef = useRef<() => void>(() => {})
 
   const isCurrentThreadStreaming = isStreaming && streamingThreadId === activeThreadId
-  const showThinking = isCurrentThreadStreaming && isThinking && !streamingText
+  // showThinking: true between send and first chunk (isThinking transitions false on first chunk)
+  const showThinking = isCurrentThreadStreaming && isThinking
 
-  const onChunk = useCallback((text: string) => {
-    setIsThinking(prev => prev ? false : prev)
-    accumulatedTextRef.current += text
-    const now = Date.now()
-    if (!lastUpdateRef.current) {
-      lastUpdateRef.current = now
-      updateStreamingMessage(accumulatedTextRef.current)
-      setStreamingTokens(Math.ceil(accumulatedTextRef.current.length / 4))
-    } else if (now - lastUpdateRef.current > 80) {
-      lastUpdateRef.current = now
-      updateStreamingMessage(accumulatedTextRef.current)
-      setStreamingTokens(Math.ceil(accumulatedTextRef.current.length / 4))
-    }
+  const flushChunks = useCallback(() => {
+    rafRef.current = null
+    updateStreamingMessage(accumulatedTextRef.current)
+    setStreamingTokens(Math.ceil(accumulatedTextRef.current.length / 4))
   }, [updateStreamingMessage])
 
+  const onChunk = useCallback((text: string) => {
+    setIsThinking(false)
+    accumulatedTextRef.current += text
+    if (!firstChunkRef.current) {
+      // First chunk: flush synchronously so streamingText appears in the same React
+      // render that clears the thinking indicator — no empty-frame gap between them.
+      firstChunkRef.current = true
+      updateStreamingMessage(accumulatedTextRef.current)
+      setStreamingTokens(1)
+    } else if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(flushChunks)
+    }
+  }, [flushChunks, updateStreamingMessage])
+
   const onReplace = useCallback((text: string) => {
+    setIsThinking(false)
     accumulatedTextRef.current = text
     updateStreamingMessage(text)
     setStreamingTokens(Math.ceil(text.length / 4))
@@ -113,12 +117,15 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   }, [])
 
   const onDone = useCallback((tokensOut: number, tokensIn: number) => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
     const content = accumulatedTextRef.current
     const curThreadId = streamingThreadIdRef.current
     const curDoc = docRef.current
 
     updateStreamingMessage(content)
-    lastUpdateRef.current = null
 
     const msg: ChatMessage = {
       id: streamingMessageIdRef.current || crypto.randomUUID(),
@@ -150,7 +157,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   }, [appendMessage, getMessages, endStream, updateThread, updateStreamingMessage, setStreamingThreadId])
 
   const onError = useCallback((error: string) => {
-    const content = streamingRef.current || ''
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+    const content = accumulatedTextRef.current || ''
     const curThreadId = streamingThreadIdRef.current
     const curDoc = docRef.current
     const displayContent = content
@@ -168,7 +179,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (curDoc && curThreadId) appendMessage(curThreadId, msg)
     setStreamingThreadId(null)
     accumulatedTextRef.current = ''
-    lastUpdateRef.current = null
     teardownRef.current()
     endStream()
     setIsThinking(false)
@@ -213,6 +223,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     const req = buildRequest(text, overrideFiles, excludeContext) as ChatRequest | null
     if (!req) return
 
+    const isFirstMessage = getMessages(activeThread.id).length === 0
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -221,12 +233,17 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       contextBlockId: activeThread.contextBlockId ?? undefined,
     }
     appendMessage(activeThread.id, userMsg)
+    if (isFirstMessage && !activeThread.title && text.trim()) {
+      updateThread(activeThread.id, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
+    }
     chatApi.saveConversation(doc.id, activeThread.contextBlockId || 'flow', getMessages(activeThread.id) as ChatMessage[]).catch((err) => { logger.warn('Failed to save conversation', err) })
 
     const msgId = crypto.randomUUID()
+    streamingMessageIdRef.current = msgId
     setStreamingThreadId(activeThread.id)
     accumulatedTextRef.current = ''
-    lastUpdateRef.current = null
+    firstChunkRef.current = false
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
     sendGenRef.current++
     const myGen = sendGenRef.current
     startStream('pending', msgId)
@@ -273,7 +290,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       } as ChatMessage)
       setStreamingThreadId(null)
       accumulatedTextRef.current = ''
-      lastUpdateRef.current = null
       endStream()
       setIsThinking(false)
       setStreamingTokens(0)
@@ -347,11 +363,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (activeStreamId && activeStreamId !== 'pending') {
       chatApi.cancelStream(activeStreamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
     }
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
     endStream()
     teardownRef.current()
     setStreamingThreadId(null)
     accumulatedTextRef.current = ''
-    lastUpdateRef.current = null
     setIsThinking(false)
     setStreamingTokens(0)
   }, [activeStreamId, endStream, setStreamingThreadId])
@@ -366,9 +382,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     isStreaming,
     isCurrentThreadStreaming,
     showThinking,
-    streamingText,
-    streamingMessageId,
-    isThinking,
     streamingTokens,
     sourceFiles,
     contextPreview,

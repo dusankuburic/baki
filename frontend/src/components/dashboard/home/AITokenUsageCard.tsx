@@ -1,6 +1,7 @@
 import {AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid} from 'recharts'
 import {CardShell, CardPlaceholder} from './CardShell'
 import {useChartColors} from './useChartColors'
+import {formatCompact} from '@/lib/format'
 import type {DailyTokenUsage} from '@/types'
 
 // AITokenUsageCard plots prompt vs completion tokens over the gap-filled 14-day
@@ -41,7 +42,7 @@ export function AITokenUsageCard({data, className}: {data: DailyTokenUsage[]; cl
                 stroke={colors.borderStrong}
                 tick={{fill: colors.textTertiary, fontSize: 11, fontFamily: 'var(--font-mono)'}}
                 width={48}
-                tickFormatter={compact}
+                tickFormatter={formatCompact}
               />
               <Tooltip
                 contentStyle={{
@@ -61,10 +62,4 @@ export function AITokenUsageCard({data, className}: {data: DailyTokenUsage[]; cl
       )}
     </CardShell>
   )
-}
-
-function compact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
 }

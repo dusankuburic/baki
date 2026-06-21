@@ -34,6 +34,19 @@ func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.Storage
 	return &LibraryHandler{libSvc: libSvc, security: security, backend: backend}
 }
 
+// handlePortfolio returns the org-wide governance portfolio: every flow the
+// caller can access (optionally filtered by ?orgId=), ranked worst-health-first.
+func (h *LibraryHandler) handlePortfolio(w http.ResponseWriter, r *http.Request) {
+	userID := h.security.CallerID(r)
+	orgID := r.URL.Query().Get("orgId")
+	p, err := h.libSvc.BuildPortfolio(r.Context(), userID, orgID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	render.JSON(w, p)
+}
+
 // SetFlowNotifier wires the WebSocket hub so that library saves broadcast
 // a flow.changed event to all connected viewers.
 func (h *LibraryHandler) SetFlowNotifier(n FlowNotifier) {

@@ -1,6 +1,7 @@
 import {useState} from 'react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {X, Plus, GripVertical} from 'lucide-react'
+import clsx from 'clsx'
 
 const EMPTY_PROMPTS = {block: [], flow: [], finding: [], blockWithFindings: []}
 
@@ -19,29 +20,29 @@ export default function AIPromptsPanel() {
       </p>
 
       <div className="space-y-8">
-        <PromptList 
-          title="Flow Context" 
+        <PromptList
+          title="Flow Context"
           description="Shown when analyzing the entire flow without a specific block selected."
           items={p.flow}
           onChange={(newItems) => updateAI({prompts: {...p, flow: newItems}})}
         />
-        
-        <PromptList 
-          title="Block Context" 
+
+        <PromptList
+          title="Block Context"
           description="Shown when a specific block is selected."
           items={p.block}
           onChange={(newItems) => updateAI({prompts: {...p, block: newItems}})}
         />
 
-        <PromptList 
-          title="Finding Context" 
+        <PromptList
+          title="Finding Context"
           description="Shown when viewing a specific analysis finding."
           items={p.finding}
           onChange={(newItems) => updateAI({prompts: {...p, finding: newItems}})}
         />
 
-        <PromptList 
-          title="Block + Findings Context" 
+        <PromptList
+          title="Block + Findings Context"
           description="Shown when selecting a block that has active analysis findings."
           items={p.blockWithFindings}
           onChange={(newItems) => updateAI({prompts: {...p, blockWithFindings: newItems}})}
@@ -51,8 +52,16 @@ export default function AIPromptsPanel() {
   )
 }
 
+function reorder(arr: string[], from: number, to: number): string[] {
+  const next = [...arr]
+  const [item] = next.splice(from, 1)
+  next.splice(to, 0, item)
+  return next
+}
+
 function PromptList({title, description, items, onChange}: {title: string, description: string, items: string[] | null | undefined, onChange: (items: string[]) => void}) {
   const [newItemText, setNewItemText] = useState('')
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
   // Tolerate a null/undefined list (legacy settings) so add/remove/edit and the
   // render below never spread or map over a non-array.
   const list = items ?? []
@@ -82,10 +91,27 @@ function PromptList({title, description, items, onChange}: {title: string, descr
         <h3 className="text-sm font-medium text-text-primary">{title}</h3>
         <p className="text-xs text-text-tertiary mt-0.5">{description}</p>
       </div>
-      
+
       <div className="p-2 space-y-1">
         {list.map((item, i) => (
-          <div key={i} className="flex items-center gap-2 group p-1">
+          <div
+            key={i}
+            draggable
+            onDragStart={e => { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move' }}
+            onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropIndex(i) }}
+            onDragLeave={() => setDropIndex(null)}
+            onDrop={e => {
+              e.preventDefault()
+              const from = parseInt(e.dataTransfer.getData('text/plain'))
+              if (!isNaN(from) && from !== i) onChange(reorder(list, from, i))
+              setDropIndex(null)
+            }}
+            onDragEnd={() => setDropIndex(null)}
+            className={clsx(
+              'flex items-center gap-2 group p-1 rounded transition-colors',
+              dropIndex === i && 'border-t-2 border-brand-400'
+            )}
+          >
             <GripVertical className="w-4 h-4 text-text-tertiary cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100" />
             <input
               type="text"
@@ -93,7 +119,7 @@ function PromptList({title, description, items, onChange}: {title: string, descr
               value={item}
               onChange={(e) => handleEdit(i, e.target.value)}
             />
-            <button 
+            <button
               onClick={() => handleRemove(i)}
               className="p-1.5 text-text-tertiary hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all duration-fast"
               title="Remove prompt"
@@ -111,7 +137,7 @@ function PromptList({title, description, items, onChange}: {title: string, descr
             value={newItemText}
             onChange={(e) => setNewItemText(e.target.value)}
           />
-          <button 
+          <button
             type="submit"
             disabled={!newItemText.trim()}
             className="p-1.5 text-brand-500 hover:bg-brand-500/10 rounded disabled:opacity-50 disabled:hover:bg-transparent transition-colors"

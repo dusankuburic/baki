@@ -62,6 +62,29 @@ func TestRunAnalysisEmpty(t *testing.T) {
 	}
 }
 
+func TestRunAnalysisPopulatesFingerprint(t *testing.T) {
+	b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Web.Call", 0)
+	b.SubflowID = "sf1"
+	b.Properties = map[string]string{"url": "https://api.example.com/v2/users"}
+	flow := &models.FlowDocument{
+		ID:       "test",
+		Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}},
+	}
+
+	report := RunAnalysis(flow, AllRules(), nil, nil)
+	if len(report.Findings) == 0 {
+		t.Fatal("expected at least one finding to assert fingerprint on")
+	}
+	for _, f := range report.Findings {
+		if f.Fingerprint == "" {
+			t.Errorf("finding %s has empty Fingerprint", f.ID)
+		}
+		if f.Fingerprint != f.Key() {
+			t.Errorf("Fingerprint %q != Key() %q", f.Fingerprint, f.Key())
+		}
+	}
+}
+
 func TestRunAnalysisProgress(t *testing.T) {
 	b := makeBlock("b1", "Click button", models.BlockTypeAction, "WebAutomation.Click", 0)
 	b.SubflowID = "sf1"

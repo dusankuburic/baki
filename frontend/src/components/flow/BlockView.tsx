@@ -1,4 +1,4 @@
-import React, {useMemo, useCallback, useEffect, useRef} from 'react'
+import React, {useMemo, useCallback, useEffect, useRef, useState} from 'react'
 import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
 import BlockCard from './BlockCard'
 import BlockConnector from './BlockConnector'
@@ -9,6 +9,7 @@ import BlockEnd, {isContainerType} from './BlockEnd'
 import LoopControlBlock from './LoopControlBlock'
 import {isLoopControl} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
+import BlockSearchBar from './BlockSearchBar'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {EmptyState} from '@/components/shared'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
@@ -99,15 +100,24 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     const setVisibleBlockId = useFlowStore(s => s.setVisibleBlockId)
     const flattened = useFlattenedBlocks(subflowId)
     const virtuosoRef = useRef<VirtuosoHandle>(null)
+    const [searchActive, setSearchActive] = useState(false)
+    const [searchQuery, setSearchQuery] = useState('')
+    const [searchMatchIdx, setSearchMatchIdx] = useState(0)
+
+    const displayedFlattened = useMemo(() => {
+        if (!searchActive || !searchQuery.trim()) return flattened
+        const q = searchQuery.toLowerCase()
+        return flattened.filter(f => f.block.name.toLowerCase().includes(q))
+    }, [flattened, searchActive, searchQuery])
 
     const handleRangeChanged = React.useCallback((range: {startIndex: number, endIndex: number}) => {
-        if (flattened && flattened.length > 0 && range.startIndex < flattened.length) {
-            const first = flattened[range.startIndex]
+        if (displayedFlattened && displayedFlattened.length > 0 && range.startIndex < displayedFlattened.length) {
+            const first = displayedFlattened[range.startIndex]
             if (first?.block?.id) {
                 setVisibleBlockId(first.block.id)
             }
         }
-    }, [flattened, setVisibleBlockId])
+    }, [displayedFlattened, setVisibleBlockId])
 
     const report = useAnalysisStore(s =>
         document ? s.reports.get(document.id) : undefined
@@ -143,6 +153,13 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
             : Math.max(0, Math.min(flattened.length - 1, curIdx + delta))
         useFlowStore.getState().selectBlock(flattened[next].block.id)
     }, [flattened, selectedBlockId])
+
+    const goToMatch = useCallback((delta: 1 | -1) => {
+        if (!displayedFlattened.length) return
+        const next = (searchMatchIdx + delta + displayedFlattened.length) % displayedFlattened.length
+        setSearchMatchIdx(next)
+        virtuosoRef.current?.scrollToIndex({index: next, behavior: 'smooth', align: 'center'})
+    }, [searchMatchIdx, displayedFlattened])
 
     const navigateFinding = useCallback((delta: 1 | -1) => {
         if (!flattened.length || !report) return
@@ -214,6 +231,30 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         },
     })
 
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                e.preventDefault()
+                setSearchActive(true)
+            }
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [])
+
+    useEffect(() => {
+        setSearchActive(false)
+        setSearchQuery('')
+        setSearchMatchIdx(0)
+    }, [subflowId])
+
+    // Auto-scroll to first match when query changes
+    useEffect(() => {
+        if (searchActive && searchQuery.trim() && displayedFlattened.length > 0) {
+            virtuosoRef.current?.scrollToIndex({index: 0, behavior: 'smooth', align: 'center'})
+        }
+    }, [searchQuery, searchActive])
+
     if (!document || flattened.length === 0) {
         return (
             <div className="w-full h-full flex items-center justify-center">
@@ -226,23 +267,36 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     }
 
     return (
-        <div className="block-view w-full h-full">
-            <Virtuoso
-                ref={virtuosoRef}
-                style={{ height: '100%' }}
-                data={flattened}
-                computeItemKey={(_index, item) => item.block.id}
-                rangeChanged={handleRangeChanged}
-                itemContent={(_index, item) => (
-                    <div className="py-0.5">
-                        <MemoizedBlockItemWrapper
-                            item={item}
-                            findingCounts={findingCounts}
-                            findingSeverities={findingSeverities}
-                        />
-                    </div>
-                )}
-            />
+        <div className="block-view w-full h-full flex flex-col">
+            {searchActive && (
+                <BlockSearchBar
+                    query={searchQuery}
+                    onChange={q => { setSearchQuery(q); setSearchMatchIdx(0) }}
+                    matchIndex={searchMatchIdx}
+                    matchCount={displayedFlattened.length}
+                    onNext={() => goToMatch(1)}
+                    onPrev={() => goToMatch(-1)}
+                    onClose={() => { setSearchActive(false); setSearchQuery(''); setSearchMatchIdx(0) }}
+                />
+            )}
+            <div className="flex-1 min-h-0">
+                <Virtuoso
+                    ref={virtuosoRef}
+                    style={{ height: '100%' }}
+                    data={displayedFlattened}
+                    computeItemKey={(_index, item) => item.block.id}
+                    rangeChanged={handleRangeChanged}
+                    itemContent={(_index, item) => (
+                        <div className="py-0.5">
+                            <MemoizedBlockItemWrapper
+                                item={item}
+                                findingCounts={findingCounts}
+                                findingSeverities={findingSeverities}
+                            />
+                        </div>
+                    )}
+                />
+            </div>
         </div>
     )
 }

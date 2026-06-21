@@ -206,10 +206,29 @@ export default function ConnectionPanel({
       </div>
 
       {demoRemaining !== null && (
-        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-brand-500/10 border border-brand-500/20">
-          <Zap size={11} className="text-brand-400 shrink-0" />
-          <span className="text-2xs text-brand-300">
-            Demo: {demoRemaining} remaining today
+        <div className={clsx(
+          'flex items-center gap-2 px-2.5 py-1.5 rounded-lg border',
+          demoRemaining !== undefined && demoRemaining <= 0
+            ? 'bg-red-500/10 border-red-500/20'
+            : demoRemaining !== undefined && demoRemaining <= 5
+              ? 'bg-amber-500/10 border-amber-500/20'
+              : 'bg-brand-500/10 border-brand-500/20'
+        )}>
+          <Zap size={11} className={clsx(
+            'shrink-0',
+            demoRemaining !== undefined && demoRemaining <= 0 ? 'text-red-400'
+              : demoRemaining !== undefined && demoRemaining <= 5 ? 'text-amber-400'
+              : 'text-brand-400'
+          )} />
+          <span className={clsx(
+            'text-2xs',
+            demoRemaining !== undefined && demoRemaining <= 0 ? 'text-red-300'
+              : demoRemaining !== undefined && demoRemaining <= 5 ? 'text-amber-300'
+              : 'text-brand-300'
+          )}>
+            {demoRemaining !== undefined && demoRemaining <= 0
+              ? 'Demo limit reached'
+              : `Demo: ${demoRemaining} remaining today`}
           </span>
         </div>
       )}

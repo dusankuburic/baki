@@ -12,6 +12,7 @@ import {useChatStore} from '@/stores/chatStore'
 import {useSearchStore} from '@/stores/searchStore'
 import type {Block, VariableHistory} from '@/types'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
+import {useToast} from '@/components/shared'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 
@@ -38,6 +39,7 @@ export default React.memo(function BlockCard({
     onDoubleClick,
 }: BlockCardProps) {
     const [hovered, setHovered] = useState(false)
+    const toast = useToast()
     const Icon = getBlockIcon(block.type) as LucideIcon
     const color = getBlockColor(block.type)
     const displayName = stripBlockKeywords(block.type, block.name)
@@ -128,6 +130,8 @@ export default React.memo(function BlockCard({
                     md += `\n**Variables:** ${block.variables.join(', ')}\n`
                 }
                 writeClipboard(md)
+                    .then(() => toast.success('Copied as Markdown'))
+                    .catch(() => toast.error('Copy failed'))
             }
         },
         {
@@ -135,6 +139,8 @@ export default React.memo(function BlockCard({
             icon: Copy,
             onClick: () => {
                 writeClipboard(block.id)
+                    .then(() => toast.success('Copied block ID'))
+                    .catch(() => toast.error('Copy failed'))
             }
         },
         {

@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import {useChartColors, healthColor} from './useChartColors'
+import {formatCount} from '@/lib/format'
 import type {DashboardOverview, DashboardFindingsAgg} from '@/types'
 
 interface KPI {
@@ -35,13 +36,13 @@ export function KPIStripCard({
     },
     {
       label: 'Findings',
-      value: totalFindings,
+      value: formatCount(totalFindings),
       sub: `${findings.bySeverity.error ?? 0}E · ${findings.bySeverity.warning ?? 0}W · ${findings.bySeverity.info ?? 0}I`,
     },
     {
       label: 'Flows',
-      value: overview.totalFlows,
-      sub: `${overview.totalSubflows} subflows`,
+      value: formatCount(overview.totalFlows),
+      sub: `${formatCount(overview.totalSubflows)} subflows`,
     },
   ]
 

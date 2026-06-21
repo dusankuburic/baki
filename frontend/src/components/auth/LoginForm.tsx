@@ -33,6 +33,7 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   const [remember, setRemember] = useState(false)
   const [sso, setSso] = useState<SSOInfo | null>(null)
   const [ssoError, setSsoError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const login = useAuthStore(s => s.login)
   const register = useAuthStore(s => s.register)
   const loginWithSSOTicket = useAuthStore(s => s.loginWithSSOTicket)
@@ -63,9 +64,10 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     clearError()
+    setFormError(null)
 
     if (isRegister && password !== confirmPassword) {
-      alert("Passwords do not match")
+      setFormError('Passwords do not match')
       return
     }
 
@@ -94,9 +96,9 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
           </p>
         </div>
 
-        {(error || ssoError) && (
+        {(error || ssoError || formError) && (
           <div className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
-            {error || ssoError}
+            {error || ssoError || formError}
           </div>
         )}
 

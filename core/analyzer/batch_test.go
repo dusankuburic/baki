@@ -164,3 +164,65 @@ func makeFlowDoc(id, name string, subflows []models.Subflow) *models.FlowDocumen
 		Subflows: subflows,
 	}
 }
+
+func TestComputeDrift(t *testing.T) {
+	report := &models.AnalysisReport{
+		FlowID: "f1",
+		Findings: []models.Finding{
+			{RuleID: "hardcoded-credential", BlockID: "b1", Severity: models.SeverityError},
+			{RuleID: "dead-code", BlockID: "b2", Severity: models.SeverityWarning},
+			{RuleID: "missing-delay", BlockID: "b3", Severity: models.SeverityInfo},
+		},
+	}
+
+	t.Run("nil baseline treats everything as new", func(t *testing.T) {
+		d := ComputeDrift("f1", report, nil)
+		if d.HasBaseline {
+			t.Error("expected HasBaseline=false for nil baseline")
+		}
+		if len(d.New) != 3 {
+			t.Fatalf("expected 3 new findings, got %d", len(d.New))
+		}
+		if d.NewErrors != 1 || d.NewWarnings != 1 || d.NewInfo != 1 {
+			t.Errorf("unexpected severity counts: %+v", d)
+		}
+	})
+
+	t.Run("baseline filters accepted findings", func(t *testing.T) {
+		// Accept the credential and dead-code findings; only missing-delay is new.
+		baseline := []string{"hardcoded-credential:b1", "dead-code:b2"}
+		d := ComputeDrift("f1", report, baseline)
+		if !d.HasBaseline {
+			t.Error("expected HasBaseline=true for non-nil baseline")
+		}
+		if len(d.New) != 1 {
+			t.Fatalf("expected 1 new finding, got %d", len(d.New))
+		}
+		if d.New[0].Key() != "missing-delay:b3" {
+			t.Errorf("expected missing-delay:b3 as the new finding, got %q", d.New[0].Key())
+		}
+		if d.NewErrors != 0 || d.NewWarnings != 0 || d.NewInfo != 1 {
+			t.Errorf("unexpected severity counts: %+v", d)
+		}
+	})
+
+	t.Run("empty non-nil baseline still counts as having a baseline", func(t *testing.T) {
+		d := ComputeDrift("f1", report, []string{})
+		if !d.HasBaseline {
+			t.Error("expected HasBaseline=true for empty (non-nil) baseline")
+		}
+		if len(d.New) != 3 {
+			t.Errorf("empty baseline accepts nothing; expected 3 new, got %d", len(d.New))
+		}
+	})
+
+	t.Run("nil report yields non-nil empty New", func(t *testing.T) {
+		d := ComputeDrift("f1", nil, []string{"x:y"})
+		if d.New == nil {
+			t.Error("New must be a non-nil slice")
+		}
+		if len(d.New) != 0 {
+			t.Errorf("expected 0 new findings for nil report, got %d", len(d.New))
+		}
+	})
+}

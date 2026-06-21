@@ -10,6 +10,7 @@ import {createAdapter} from '@/platform/adapters'
 import {useSystemStore} from '@/stores/systemStore'
 import {useToast} from '@/components/shared'
 import {csvCell, downloadBlob} from '@/lib/csv'
+import {formatCount} from '@/lib/format'
 import {scoreColor} from '@/lib/scoring'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -235,12 +236,20 @@ export default function AnalyticsDashboard() {
           <Activity size={22} className="text-text-tertiary" />
           <span className="text-sm text-text-secondary">No analyses yet this session</span>
           <span className="text-sm text-text-tertiary">Run an analysis or batch-analyze a folder to populate the dashboard</span>
+          <button
+            onClick={handleBatch}
+            disabled={batchRunning}
+            className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+          >
+            {batchRunning ? <RefreshCw size={14} className="animate-spin" /> : <FolderSearch size={14} />}
+            {batchRunning ? 'Analyzing…' : 'Analyze folder…'}
+          </button>
         </div>
       ) : stats && !isEmpty && (
         <>
           <div className="grid grid-cols-3 gap-2">
-            <StatCard label="Flows Analyzed" value={stats.totalFlowsAnalyzed} />
-            <StatCard label="Total Findings" value={stats.totalFindings} />
+            <StatCard label="Flows Analyzed" value={formatCount(stats.totalFlowsAnalyzed)} />
+            <StatCard label="Total Findings" value={formatCount(stats.totalFindings)} />
             <StatCard
               label="Avg Health"
               value={stats.avgHealthScore.toFixed(0)}
@@ -291,7 +300,7 @@ export default function AnalyticsDashboard() {
                 {stats.topProblemFlows.map(p => (
                   <div key={p.flowId} className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-1">
                     <span className="text-sm text-text-primary flex-1 truncate">{p.flowName || p.flowId.slice(0, 8)}</span>
-                    <span className="text-sm text-text-tertiary tabular-nums">{p.findingCount} findings</span>
+                    <span className="text-sm text-text-tertiary tabular-nums">{formatCount(p.findingCount)} findings</span>
                     <span className={clsx('text-sm font-bold font-mono tabular-nums', scoreColor(p.healthScore))}>{p.healthScore}</span>
                   </div>
                 ))}
@@ -310,13 +319,13 @@ export default function AnalyticsDashboard() {
             </h3>
             <div className="flex items-center gap-3">
               <span className="text-sm text-text-tertiary tabular-nums">
-                {batch.totalFlows} flows · <span className="text-red-400">{batch.totalErrors}E</span>{' '}
-                <span className="text-amber-400">{batch.totalWarnings}W</span>{' '}
-                <span className="text-blue-400">{batch.totalInfo}I</span> · avg health{' '}
+                {formatCount(batch.totalFlows)} flows · <span className="text-red-400">{formatCount(batch.totalErrors)}E</span>{' '}
+                <span className="text-amber-400">{formatCount(batch.totalWarnings)}W</span>{' '}
+                <span className="text-blue-400">{formatCount(batch.totalInfo)}I</span> · avg health{' '}
                 <span className={scoreColor(batch.avgHealthScore)}>{batch.avgHealthScore.toFixed(0)}</span>
               </span>
               <button
-                onClick={() => exportBatchCSV(batch)}
+                onClick={() => { exportBatchCSV(batch); toast.success('Batch results exported') }}
                 title="Export batch results as CSV"
                 aria-label="Export batch results as CSV"
                 className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-surface-3 transition-colors"

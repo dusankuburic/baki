@@ -21,13 +21,15 @@ import (
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/di"
-	"pad-core/logger"
 	padmetrics "pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/scanner"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/telemetry"
+	"pad-core/logger"
 )
 
 var (
@@ -51,6 +53,8 @@ func main() {
 			func(m *api.EventManager) service.Notifier { return m },
 			provideAuthManager,
 			provideOrgService,
+			provideNotifier,
+			provideScanner,
 		),
 		di.ServiceModule,
 		di.APIModule,
@@ -59,6 +63,7 @@ func main() {
 			initTelemetry,
 			initStorageSecrets,
 			initAuditPool,
+			initScanner,
 			startServer,
 		),
 	).Run()
@@ -106,6 +111,48 @@ func loadConfig() *config.Config {
 
 func provideShutdownCh() chan struct{} {
 	return make(chan struct{})
+}
+
+// provideNotifier builds the governance alert dispatcher from config. With no
+// channels configured it is a harmless no-op (Dispatcher.Enabled() == false).
+func provideNotifier(cfg *config.Config) *notify.Dispatcher {
+	return notify.New(notify.Config{
+		WebhookURL: cfg.Governance.NotifyWebhookURL,
+		TeamsURL:   cfg.Governance.NotifyTeamsURL,
+	})
+}
+
+// provideScanner wires the periodic flow scanner. A zero/invalid interval or a
+// missing backend/channel leaves it disabled, so it is opt-in and cloud-only.
+func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher) *scanner.Scanner {
+	var analyze scanner.AnalyzeFunc
+	if analysisSvc != nil {
+		analyze = analysisSvc.AnalyzeFlow
+	}
+	return scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval))
+}
+
+// scanInterval parses the configured scan interval; an empty or invalid value
+// disables scanning (returns 0) rather than failing startup.
+func scanInterval(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		fmt.Fprintf(os.Stderr, "warning: invalid PAD_SCAN_INTERVAL %q; flow scanning disabled\n", s)
+		return 0
+	}
+	return d
+}
+
+// initScanner starts the scanner on app start and stops it on shutdown. Start is
+// a no-op when scanning is disabled.
+func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error { s.Start(); return nil },
+		OnStop:  func(context.Context) error { s.Stop(); return nil },
+	})
 }
 
 func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) *auth.Manager {
@@ -344,7 +391,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			fmt.Fprintf(os.Stderr, "failed to listen: %v\n", err)
 			os.Exit(1)
 		}
-		
+
 		port := listener.Addr().(*net.TCPAddr).Port
 		startupInfo := map[string]any{
 			"port":  port,

@@ -1,6 +1,7 @@
 import {useRef, useEffect} from 'react'
 import {FileText, Folder, X, Trash2} from 'lucide-react'
 import type {RecentFile} from '@/types'
+import {relativeTime, absoluteTime} from '@/lib/time'
 
 type RecentFilesMenuProps = {
     files: RecentFile[]
@@ -8,20 +9,6 @@ type RecentFilesMenuProps = {
     onRemove: (path: string) => void
     onClear: () => void
     onClose: () => void
-}
-
-function formatRelativeTime(dateStr: string): string {
-    const date = new Date(dateStr)
-    const now = Date.now()
-    const diff = now - date.getTime()
-    const minutes = Math.floor(diff / 60000)
-    if (minutes < 1) return 'just now'
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d ago`
-    return date.toLocaleDateString()
 }
 
 function formatSize(bytes: number): string {
@@ -50,7 +37,7 @@ function RecentRow({file, onSelect, onRemove}: {
                 <div className="text-2xs text-text-tertiary truncate">{file.path}</div>
             </div>
             <div className="flex flex-col items-end gap-0.5 shrink min-w-0 max-w-[56px]">
-                <span className="text-2xs text-text-tertiary truncate">{formatRelativeTime(file.lastOpen)}</span>
+                <span title={absoluteTime(file.lastOpen)} className="text-2xs text-text-tertiary truncate">{relativeTime(file.lastOpen)}</span>
                 {!file.isFolder && (
                     <span className="text-2xs text-text-tertiary truncate">{formatSize(file.size)}</span>
                 )}

@@ -7,6 +7,7 @@ import type {BlockLookup} from '@/lib/tree'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {categoryBadgeClass} from '@/lib/findingsColors'
+import {useToast} from '@/components/shared'
 import {ArrowRight, Sparkles, EyeOff, Wrench, ChevronDown, GitBranch} from 'lucide-react'
 
 interface Props {
@@ -19,10 +20,13 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const suppressFinding = useAnalysisStore(s => s.suppressFinding)
+  const unsuppressFinding = useAnalysisStore(s => s.unsuppressFinding)
+  const toast = useToast()
   const [showHint, setShowHint] = useState(false)
   const [showRelated, setShowRelated] = useState(false)
   const [related, setRelated] = useState<Finding[] | null>(null)
   const [relatedLoading, setRelatedLoading] = useState(false)
+  const [relatedError, setRelatedError] = useState(false)
 
   const handleJump = () => {
     selectSubflow(finding.subflowId)
@@ -31,26 +35,33 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
 
   const handleSuppress = () => {
     suppressFinding(finding, 'Dismissed by user')
+    toast.warning('Finding suppressed', {
+      action: {label: 'Undo', onClick: () => unsuppressFinding(finding.id)},
+    })
   }
 
-  const handleRelated = useCallback(async () => {
-    if (showRelated) {
-      setShowRelated(false)
-      return
-    }
-    setShowRelated(true)
-    if (related !== null) return
+  const fetchRelated = useCallback(async () => {
     setRelatedLoading(true)
+    setRelatedError(false)
     try {
       const result = await analysisApi.getRelatedFindings(finding.blockId)
       setRelated(result.filter(f => f.id !== finding.id))
     } catch (err) {
       logger.warn('Failed to load related findings', err)
-      setRelated([])
+      setRelatedError(true)
     } finally {
       setRelatedLoading(false)
     }
-  }, [showRelated, related, finding.id, finding.blockId])
+  }, [finding.id, finding.blockId])
+
+  const handleRelated = useCallback(() => {
+    if (showRelated) {
+      setShowRelated(false)
+      return
+    }
+    setShowRelated(true)
+    if (related === null && !relatedLoading) fetchRelated()
+  }, [showRelated, related, relatedLoading, fetchRelated])
 
   const loc = blockLookup.get(finding.blockId)
   const blockLabel = loc?.name ?? finding.blockId.slice(0, 8)
@@ -143,6 +154,13 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           </span>
           {relatedLoading ? (
             <span className="text-2xs text-text-tertiary">Loading…</span>
+          ) : relatedError ? (
+            <div className="flex items-center gap-2 text-2xs text-text-tertiary">
+              <span>Couldn't load related findings.</span>
+              <button onClick={fetchRelated} className="text-brand-400 hover:text-brand-300 font-medium">
+                Retry
+              </button>
+            </div>
           ) : related && related.length > 0 ? (
             related.map(r => (
               <div key={r.id} className="flex items-center gap-2 text-2xs">

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
@@ -172,8 +173,16 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
-			claims, err := rt.security.AuthMgr.Verify(tokenStr)
-			if err != nil {
+			// Machine tokens (PATs) are verified against storage by hash; JWTs are
+			// verified locally. Both resolve to the same Claims so downstream authz
+			// is identical regardless of credential type.
+			var claims *auth.Claims
+			if auth.IsAPIToken(tokenStr) {
+				claims = rt.verifyAPIToken(r.Context(), tokenStr)
+			} else if c, err := rt.security.AuthMgr.Verify(tokenStr); err == nil {
+				claims = c
+			}
+			if claims == nil {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -186,6 +195,29 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// verifyAPIToken authenticates a machine token: hash → storage lookup → expiry
+// check → resolve the owning user (so a deleted/role-changed user is reflected
+// immediately). Returns nil on any failure, which the caller maps to 401. The
+// owner's *current* role is used, so revoking a token (delete) or demoting the
+// user takes effect at once.
+func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
+	if rt.security.Backend == nil {
+		return nil
+	}
+	tok, err := rt.security.Backend.GetAPITokenByHash(ctx, auth.HashAPIToken(raw))
+	if err != nil || tok == nil {
+		return nil
+	}
+	if tok.ExpiresAt != nil && time.Now().After(*tok.ExpiresAt) {
+		return nil
+	}
+	user, err := rt.security.Backend.LoadUserByID(ctx, tok.UserID)
+	if err != nil || user == nil {
+		return nil
+	}
+	return &auth.Claims{UserID: user.ID, Email: user.Email, Role: user.Role}
 }
 
 // --- WebSocket handler ---

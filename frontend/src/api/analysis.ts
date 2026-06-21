@@ -1,6 +1,16 @@
 import {request} from './client'
 import {useFlowStore} from '@/stores/flowStore'
-import type {AnalysisReport, VariableHistory, GraphData, Rule, RuleConfig, FlowMetrics, DataFlowAnalysis, AnalysisSnapshot, BatchAnalysis, AnalysisDiff, DependencyAnalysis, DashboardStats, SubflowHash, DeduplicateResult, FlowComparison, Finding} from '@/types'
+import type {AnalysisReport, VariableHistory, GraphData, Rule, RuleConfig, FlowMetrics, DataFlowAnalysis, AnalysisSnapshot, BatchAnalysis, AnalysisDiff, DependencyAnalysis, DashboardStats, SubflowHash, DeduplicateResult, FlowComparison, Finding, FindingStatus, FlowBaseline, TriageStatus} from '@/types'
+
+// Input for setFindingStatus. flowId defaults to the active flow.
+export interface SetFindingStatusInput {
+  findingKey: string
+  status: TriageStatus
+  ruleId?: string
+  justification?: string
+  assigneeId?: string
+  flowId?: string
+}
 
 function activeFlowId(): string | undefined {
   return useFlowStore.getState().document?.id
@@ -60,4 +70,24 @@ export const analysisApi = {
 
   compareFlows: (flowAId: string, flowBId: string): Promise<FlowComparison> =>
     request('/api/analysis/compare', {flowAId, flowBId}),
+
+  // --- Finding triage & baselines (persistent, team-shared; cloud mode only) ---
+
+  listFindingStatuses: (flowId: string = activeFlowId() ?? ''): Promise<FindingStatus[]> =>
+    request('/api/analysis/triage/list', {flowId}),
+
+  setFindingStatus: (input: SetFindingStatusInput): Promise<FindingStatus> =>
+    request('/api/analysis/triage/set', {flowId: activeFlowId(), ...input}),
+
+  clearFindingStatus: (findingKey: string, flowId: string = activeFlowId() ?? ''): Promise<void> =>
+    request('/api/analysis/triage/clear', {flowId, findingKey}),
+
+  getBaseline: (flowId: string = activeFlowId() ?? ''): Promise<FlowBaseline | null> =>
+    request('/api/analysis/baseline/get', {flowId}),
+
+  setBaseline: (flowId: string = activeFlowId() ?? ''): Promise<FlowBaseline> =>
+    request('/api/analysis/baseline/set', {flowId}),
+
+  clearBaseline: (flowId: string = activeFlowId() ?? ''): Promise<void> =>
+    request('/api/analysis/baseline/clear', {flowId}),
 }
