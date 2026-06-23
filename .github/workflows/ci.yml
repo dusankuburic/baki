@@ -76,7 +76,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -111,7 +111,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -163,7 +163,7 @@ jobs:
           workspaces: src-tauri
       # tauri-build's build script verifies the frontend dist exists, so produce
       # it before linting the Rust crate.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
