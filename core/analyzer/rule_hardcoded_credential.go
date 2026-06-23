@@ -10,11 +10,13 @@ import (
 
 type HardcodedCredentialRule struct{}
 
-func (r *HardcodedCredentialRule) ID() string          { return "hardcoded-credential" }
-func (r *HardcodedCredentialRule) Name() string         { return "Hardcoded credential detected" }
-func (r *HardcodedCredentialRule) Description() string  { return "String values matching credential patterns." }
+func (r *HardcodedCredentialRule) ID() string   { return "hardcoded-credential" }
+func (r *HardcodedCredentialRule) Name() string { return "Hardcoded credential detected" }
+func (r *HardcodedCredentialRule) Description() string {
+	return "String values matching credential patterns."
+}
 func (r *HardcodedCredentialRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *HardcodedCredentialRule) Category() string     { return "Security" }
+func (r *HardcodedCredentialRule) Category() string                 { return "Security" }
 
 // Patterns use [^%"'\s] for the secret value portion to exclude PAD variable
 // references (%VarName%) which are non-whitespace but not literal secrets.
@@ -119,7 +121,7 @@ func isHighEntropySecret(s string) bool {
 
 func isAlphanumeric(s string) bool {
 	for _, r := range s {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}

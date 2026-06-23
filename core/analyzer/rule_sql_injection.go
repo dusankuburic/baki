@@ -9,11 +9,13 @@ import (
 
 type SqlInjectionRiskRule struct{}
 
-func (r *SqlInjectionRiskRule) ID() string          { return "sql-injection-risk" }
-func (r *SqlInjectionRiskRule) Name() string         { return "SQL injection risk" }
-func (r *SqlInjectionRiskRule) Description() string  { return "SQL statements that interpolate variables directly instead of using parameterized queries." }
+func (r *SqlInjectionRiskRule) ID() string   { return "sql-injection-risk" }
+func (r *SqlInjectionRiskRule) Name() string { return "SQL injection risk" }
+func (r *SqlInjectionRiskRule) Description() string {
+	return "SQL statements that interpolate variables directly instead of using parameterized queries."
+}
 func (r *SqlInjectionRiskRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *SqlInjectionRiskRule) Category() string     { return "Security" }
+func (r *SqlInjectionRiskRule) Category() string                 { return "Security" }
 
 var (
 	sqlActionTypes = []string{

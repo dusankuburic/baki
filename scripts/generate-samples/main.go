@@ -35,7 +35,7 @@ func main() {
 	totalSubflows := 8
 
 	for s := 0; s < totalSubflows; s++ {
-		sb.WriteString(fmt.Sprintf("#Region \"%s\"\n", subflows[s]))
+		fmt.Fprintf(&sb, "#Region \"%s\"\n", subflows[s])
 		sb.WriteString("    COMMENT  Auto-generated subflow for benchmarking\n")
 
 		i := 0
@@ -46,14 +46,14 @@ func main() {
 				for j := 0; j < 5; j++ {
 					a := actions[rand.Intn(len(actions))]
 					sb.WriteString("            ")
-					sb.WriteString(fmt.Sprintf(a.format, rand.Intn(10000), rand.Intn(100)))
+					fmt.Fprintf(&sb, a.format, rand.Intn(10000), rand.Intn(100))
 					sb.WriteString("\n")
 				}
 				sb.WriteString("        ELSE\n")
 				for j := 0; j < 3; j++ {
 					a := actions[rand.Intn(len(actions))]
 					sb.WriteString("            ")
-					sb.WriteString(fmt.Sprintf(a.format, rand.Intn(10000), rand.Intn(100)))
+					fmt.Fprintf(&sb, a.format, rand.Intn(10000), rand.Intn(100))
 					sb.WriteString("\n")
 				}
 				sb.WriteString("        END\n")
@@ -73,7 +73,7 @@ func main() {
 
 			a := actions[rand.Intn(len(actions))]
 			sb.WriteString("    ")
-			sb.WriteString(fmt.Sprintf(a.format, rand.Intn(10000), rand.Intn(100)))
+			fmt.Fprintf(&sb, a.format, rand.Intn(10000), rand.Intn(100))
 			sb.WriteString("\n")
 			i++
 		}

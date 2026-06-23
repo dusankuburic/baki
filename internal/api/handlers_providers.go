@@ -125,4 +125,3 @@ func (h *ProviderHandler) handleGetCopilotUser(w http.ResponseWriter, r *http.Re
 	}
 	render.JSON(w, user)
 }
-

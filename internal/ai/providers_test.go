@@ -112,7 +112,7 @@ func TestClaudeProvider_Chat_401(t *testing.T) {
 		Model:    "claude-sonnet-4-5",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }
@@ -275,7 +275,7 @@ func TestOpenAIProvider_Chat_401(t *testing.T) {
 		Model:    "gpt-4o",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }
@@ -401,7 +401,7 @@ func TestGitHubModelsProvider_Chat_401(t *testing.T) {
 		Model:    "gpt-4o",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }

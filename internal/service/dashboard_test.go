@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"pad-core/analyzer"
-	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
+	"pad-core/analyzer"
+	"pad-core/models"
 )
 
 // stubDashBackend embeds FakeBackend (to satisfy the large StorageBackend
@@ -134,7 +134,7 @@ func TestDashboardService_RecordAnalysis_CloudPersistsByRuleAndCategory(t *testi
 	svc := NewDashboardService(backend, nil, nil)
 
 	report := &models.AnalysisReport{
-		Stats:      models.AnalysisStats{Errors: 2, Warnings: 3, Info: 1},
+		Stats: models.AnalysisStats{Errors: 2, Warnings: 3, Info: 1},
 		Findings: []models.Finding{
 			{RuleID: "hardcoded-credential", Category: "Security", Severity: "error"},
 			{RuleID: "hardcoded-credential", Category: "Security", Severity: "error"},

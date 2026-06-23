@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -102,7 +103,7 @@ func scanOrgInvite(row rowScanner) (*interfaces.OrgInvite, error) {
 	var acceptedAt sql.NullTime
 	if err := row.Scan(&inv.ID, &inv.OrgID, &inv.Email, &roleStr, &inv.InvitedBy,
 		&inv.TokenHash, &inv.ExpiresAt, &acceptedAt, &inv.CreatedAt); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, interfaces.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan org invite: %w", err)

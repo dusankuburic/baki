@@ -143,7 +143,7 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 
 	if s.settings != nil {
 		totalSize := doc.Metadata.FileSize
-		s.settings.AddRecentFile(folderPath, totalSize)
+		_ = s.settings.AddRecentFile(folderPath, totalSize)
 	}
 
 	s.docProvider.SetCurrentDoc(doc)
@@ -175,7 +175,7 @@ func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) 
 		}
 
 		filePath := filepath.Join(folderPath, e.Name())
-		data, err := os.ReadFile(filePath)
+		data, err := os.ReadFile(filePath) // #nosec G304 -- reading flow files from the folder the user opened
 		if err != nil {
 			loadErrors[e.Name()] = "read failed: " + err.Error()
 			continue
@@ -274,19 +274,21 @@ func (s *FlowService) ClearRecentFiles() (err error) {
 func (s *FlowService) RevealInFileManager(path string) (err error) {
 	defer logger.Guard("App.RevealInFileManager", &err)
 
+	// #nosec G204 -- reveals the user's own local flow file in the OS file
+	// manager; the path originates from this desktop session, not remote input.
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", "/select,", path)
+		cmd = exec.Command("explorer", "/select,", path) // #nosec G204
 	case "darwin":
-		cmd = exec.Command("open", "-R", path)
+		cmd = exec.Command("open", "-R", path) // #nosec G204
 	default:
-		cmd = exec.Command("xdg-open", filepath.Dir(path))
+		cmd = exec.Command("xdg-open", filepath.Dir(path)) // #nosec G204
 	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go cmd.Wait()
+	go func() { _ = cmd.Wait() }() // reap the child; exit status is irrelevant
 	return nil
 }
 
@@ -382,7 +384,7 @@ func (s *FlowService) ReadSourceFiles(doc *models.FlowDocument, filenames []stri
 			continue
 		}
 		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- reading subflow files from the opened flow folder
 		if err != nil {
 			if doc.FilePath != "" && filepath.Base(doc.FilePath) == name {
 				data, err2 := os.ReadFile(doc.FilePath)
@@ -436,7 +438,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 		return nil, fmt.Errorf("file too large (%d MB). Max is %d MB", info.Size()/(1024*1024), maxSizeMB)
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- reading a flow file the app was asked to open
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read file: %w", err)
 	}
@@ -483,7 +485,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	}
 
 	if s.settings != nil {
-		s.settings.AddRecentFile(path, info.Size())
+		_ = s.settings.AddRecentFile(path, info.Size())
 	}
 
 	s.notifier.Emit("flow:loaded", doc)

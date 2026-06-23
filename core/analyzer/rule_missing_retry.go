@@ -20,11 +20,13 @@ var transientPrefixes = []string{
 
 type MissingRetryRule struct{}
 
-func (r *MissingRetryRule) ID() string                    { return "missing-retry" }
-func (r *MissingRetryRule) Name() string                   { return "Transient operation without retry" }
-func (r *MissingRetryRule) Description() string            { return "Network/external service actions prone to transient failures that lack retry logic." }
+func (r *MissingRetryRule) ID() string   { return "missing-retry" }
+func (r *MissingRetryRule) Name() string { return "Transient operation without retry" }
+func (r *MissingRetryRule) Description() string {
+	return "Network/external service actions prone to transient failures that lack retry logic."
+}
 func (r *MissingRetryRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *MissingRetryRule) Category() string               { return "Reliability" }
+func (r *MissingRetryRule) Category() string                 { return "Reliability" }
 
 func (r *MissingRetryRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeAction {

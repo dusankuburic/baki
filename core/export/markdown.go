@@ -13,20 +13,20 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 
 	sb.WriteString("# PAD Analyzer — Analysis Report\n\n")
 
-	sb.WriteString(fmt.Sprintf("**Flow:** %s\n", doc.Name))
+	fmt.Fprintf(&sb, "**Flow:** %s\n", doc.Name)
 	if doc.FilePath != "" {
-		sb.WriteString(fmt.Sprintf("**File:** %s\n", doc.FilePath))
+		fmt.Fprintf(&sb, "**File:** %s\n", doc.FilePath)
 	}
-	sb.WriteString(fmt.Sprintf("**Generated:** %s\n", report.GeneratedAt.Format(time.RFC1123)))
-	sb.WriteString(fmt.Sprintf("**Duration:** %dms\n\n", report.DurationMs))
+	fmt.Fprintf(&sb, "**Generated:** %s\n", report.GeneratedAt.Format(time.RFC1123))
+	fmt.Fprintf(&sb, "**Duration:** %dms\n\n", report.DurationMs)
 
 	sb.WriteString("## Summary\n\n")
 	sb.WriteString("| Metric | Count |\n|---|---|\n")
-	sb.WriteString(fmt.Sprintf("| Blocks analyzed | %d |\n", report.Stats.BlocksAnalyzed))
-	sb.WriteString(fmt.Sprintf("| Rules run | %d |\n", report.Stats.RulesRun))
-	sb.WriteString(fmt.Sprintf("| Errors | %d |\n", report.Stats.Errors))
-	sb.WriteString(fmt.Sprintf("| Warnings | %d |\n", report.Stats.Warnings))
-	sb.WriteString(fmt.Sprintf("| Info | %d |\n", report.Stats.Info))
+	fmt.Fprintf(&sb, "| Blocks analyzed | %d |\n", report.Stats.BlocksAnalyzed)
+	fmt.Fprintf(&sb, "| Rules run | %d |\n", report.Stats.RulesRun)
+	fmt.Fprintf(&sb, "| Errors | %d |\n", report.Stats.Errors)
+	fmt.Fprintf(&sb, "| Warnings | %d |\n", report.Stats.Warnings)
+	fmt.Fprintf(&sb, "| Info | %d |\n", report.Stats.Info)
 	sb.WriteString("\n")
 
 	if len(report.Findings) == 0 {
@@ -41,19 +41,19 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 			continue
 		}
 
-		sb.WriteString(fmt.Sprintf("## %s (%d)\n\n", severityTitle(sev), len(findings)))
+		fmt.Fprintf(&sb, "## %s (%d)\n\n", severityTitle(sev), len(findings))
 
 		for i, f := range findings {
-			sb.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, f.Title))
-			sb.WriteString(fmt.Sprintf("- **Rule:** `%s`\n", f.RuleID))
-			sb.WriteString(fmt.Sprintf("- **Severity:** %s\n", f.Severity))
-			sb.WriteString(fmt.Sprintf("- **Block:** %s\n", f.BlockID))
+			fmt.Fprintf(&sb, "### %d. %s\n\n", i+1, f.Title)
+			fmt.Fprintf(&sb, "- **Rule:** `%s`\n", f.RuleID)
+			fmt.Fprintf(&sb, "- **Severity:** %s\n", f.Severity)
+			fmt.Fprintf(&sb, "- **Block:** %s\n", f.BlockID)
 			if f.SubflowID != "" {
-				sb.WriteString(fmt.Sprintf("- **Subflow:** %s\n", f.SubflowID))
+				fmt.Fprintf(&sb, "- **Subflow:** %s\n", f.SubflowID)
 			}
-			sb.WriteString(fmt.Sprintf("\n%s\n", f.Description))
+			fmt.Fprintf(&sb, "\n%s\n", f.Description)
 			if f.Suggestion != "" {
-				sb.WriteString(fmt.Sprintf("\n> **Suggestion:** %s\n", f.Suggestion))
+				fmt.Fprintf(&sb, "\n> **Suggestion:** %s\n", f.Suggestion)
 			}
 			sb.WriteString("\n")
 		}

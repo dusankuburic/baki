@@ -8,11 +8,13 @@ import (
 
 type LargeSubflowRule struct{}
 
-func (r *LargeSubflowRule) ID() string          { return "large-subflow" }
-func (r *LargeSubflowRule) Name() string         { return "Large subflow" }
-func (r *LargeSubflowRule) Description() string  { return "Subflows with too many blocks are hard to maintain, test, and debug." }
+func (r *LargeSubflowRule) ID() string   { return "large-subflow" }
+func (r *LargeSubflowRule) Name() string { return "Large subflow" }
+func (r *LargeSubflowRule) Description() string {
+	return "Subflows with too many blocks are hard to maintain, test, and debug."
+}
 func (r *LargeSubflowRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *LargeSubflowRule) Category() string     { return "Style" }
+func (r *LargeSubflowRule) Category() string                 { return "Style" }
 
 const defaultLargeSubflowThreshold = 50
 

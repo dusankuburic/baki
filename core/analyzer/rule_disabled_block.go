@@ -8,11 +8,13 @@ import (
 
 type DisabledBlockRule struct{}
 
-func (r *DisabledBlockRule) ID() string          { return "disabled-block" }
-func (r *DisabledBlockRule) Name() string         { return "Disabled block" }
-func (r *DisabledBlockRule) Description() string  { return "Disabled blocks left in the flow should be removed or re-enabled before production." }
+func (r *DisabledBlockRule) ID() string   { return "disabled-block" }
+func (r *DisabledBlockRule) Name() string { return "Disabled block" }
+func (r *DisabledBlockRule) Description() string {
+	return "Disabled blocks left in the flow should be removed or re-enabled before production."
+}
 func (r *DisabledBlockRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *DisabledBlockRule) Category() string     { return "Style" }
+func (r *DisabledBlockRule) Category() string                 { return "Style" }
 
 func (r *DisabledBlockRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if !strings.HasPrefix(block.RawType, "DISABLED_") &&

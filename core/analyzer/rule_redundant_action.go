@@ -8,11 +8,13 @@ import (
 
 type RedundantActionRule struct{}
 
-func (r *RedundantActionRule) ID() string                    { return "redundant-action" }
-func (r *RedundantActionRule) Name() string                   { return "Redundant action detected" }
-func (r *RedundantActionRule) Description() string            { return "Actions that have no effect, such as setting a variable to itself or consecutive duplicate conversions." }
+func (r *RedundantActionRule) ID() string   { return "redundant-action" }
+func (r *RedundantActionRule) Name() string { return "Redundant action detected" }
+func (r *RedundantActionRule) Description() string {
+	return "Actions that have no effect, such as setting a variable to itself or consecutive duplicate conversions."
+}
 func (r *RedundantActionRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *RedundantActionRule) Category() string               { return "Performance" }
+func (r *RedundantActionRule) Category() string                 { return "Performance" }
 
 func (r *RedundantActionRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	findings := r.checkSelfAssignment(block, ctx)

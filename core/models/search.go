@@ -22,8 +22,8 @@ type Highlight struct {
 }
 
 type SearchResults struct {
-	Query      SearchQuery   `json:"query"`
+	Query      SearchQuery    `json:"query"`
 	Results    []SearchResult `json:"results"`
-	TotalCount int           `json:"totalCount"`
-	DurationMs int           `json:"durationMs"`
+	TotalCount int            `json:"totalCount"`
+	DurationMs int            `json:"durationMs"`
 }

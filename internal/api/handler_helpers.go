@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
-	"pad-core/models"
 	"pad-analyzer/internal/service"
+	"pad-core/models"
 )
 
 // resolveFlow loads a flow and verifies the caller has at least minPerm access.

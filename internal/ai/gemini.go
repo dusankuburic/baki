@@ -25,8 +25,8 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 
 func (g *GeminiProvider) SupportsTools() bool { return true }
 
-func (g *GeminiProvider) ID() string          { return "gemini" }
-func (g *GeminiProvider) Name() string        { return "Gemini" }
+func (g *GeminiProvider) ID() string           { return "gemini" }
+func (g *GeminiProvider) Name() string         { return "Gemini" }
 func (g *GeminiProvider) ContextLimit() int    { return 1048576 }
 func (g *GeminiProvider) DefaultModel() string { return "gemini-2.5-pro" }
 func (g *GeminiProvider) FreeModel() string    { return "" }
@@ -157,7 +157,7 @@ func toGeminiContents(msgs []Message) []geminiContent {
 			for _, tc := range m.ToolCalls {
 				var args map[string]interface{}
 				if len(tc.Input) > 0 {
-					json.Unmarshal(tc.Input, &args)
+					_ = json.Unmarshal(tc.Input, &args) // best-effort; args stays nil on bad input
 				}
 				parts = append(parts, geminiPart{
 					FunctionCall: &geminiFunctionCall{

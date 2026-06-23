@@ -9,22 +9,22 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/render"
-	"pad-core/models"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
 
 	"github.com/go-chi/chi/v5"
 )
 
 var validProviders = map[string]bool{
-	"openai":       true,
-	"claude":       true,
-	"gemini":       true,
-	"xai":          true,
-	"glm":          true,
+	"openai":        true,
+	"claude":        true,
+	"gemini":        true,
+	"xai":           true,
+	"glm":           true,
 	"github-models": true,
-	"copilot":      true,
-	"demo":         true,
+	"copilot":       true,
+	"demo":          true,
 }
 
 type SystemHandler struct {

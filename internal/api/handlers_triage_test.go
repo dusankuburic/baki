@@ -65,6 +65,73 @@ func TestTriage_SetListClear_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestTriage_SetBatch_AppliesAllInOneRequest(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	seedAnalyzableFlow(t, rt, "flow1", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	batch := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/set-batch", bearer, map[string]any{
+		"flowId": "flow1",
+		"items": []map[string]any{
+			{"findingKey": "unused-variable:b1", "ruleId": "unused-variable", "status": "suppressed", "justification": "bulk"},
+			{"findingKey": "unused-variable:b2", "ruleId": "unused-variable", "status": "suppressed", "justification": "bulk"},
+			{"findingKey": "unused-variable:b3", "ruleId": "unused-variable", "status": "suppressed", "justification": "bulk"},
+		},
+	})
+	checkStatus(t, batch, http.StatusOK)
+	var res struct {
+		Updated int `json:"updated"`
+	}
+	decodeJSON(t, batch, &res)
+	if res.Updated != 3 {
+		t.Fatalf("expected updated=3, got %d", res.Updated)
+	}
+
+	list := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/list", bearer, map[string]any{"flowId": "flow1"})
+	checkStatus(t, list, http.StatusOK)
+	var statuses []*storageif.FindingStatus
+	decodeJSON(t, list, &statuses)
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 persisted statuses, got %d", len(statuses))
+	}
+}
+
+func TestTriage_SetBatch_InvalidItemRejectsWholeBatch(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	seedAnalyzableFlow(t, rt, "flow1", "alice")
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/set-batch", bearer, map[string]any{
+		"flowId": "flow1",
+		"items": []map[string]any{
+			{"findingKey": "unused-variable:b1", "status": "suppressed"},
+			{"findingKey": "unused-variable:b2", "status": "bogus"}, // invalid → rejects all
+		},
+	})
+	checkStatus(t, rr, http.StatusBadRequest)
+
+	// Nothing should have been persisted (validation runs before any write).
+	list := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/list", bearer, map[string]any{"flowId": "flow1"})
+	checkStatus(t, list, http.StatusOK)
+	var statuses []*storageif.FindingStatus
+	decodeJSON(t, list, &statuses)
+	if len(statuses) != 0 {
+		t.Fatalf("expected 0 statuses after rejected batch, got %d", len(statuses))
+	}
+}
+
+func TestTriage_SetBatch_NonOwnerForbidden(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	seedAnalyzableFlow(t, rt, "flow1", "alice")
+	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/triage/set-batch", bearer, map[string]any{
+		"flowId": "flow1",
+		"items":  []map[string]any{{"findingKey": "r1:b1", "status": "resolved"}},
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
 func TestTriage_Set_NonOwnerForbidden(t *testing.T) {
 	rt, _ := newLibraryTestRouter(t)
 	seedAnalyzableFlow(t, rt, "flow1", "alice")

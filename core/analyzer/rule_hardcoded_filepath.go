@@ -9,11 +9,13 @@ import (
 
 type HardcodedFilePathRule struct{}
 
-func (r *HardcodedFilePathRule) ID() string          { return "hardcoded-filepath" }
-func (r *HardcodedFilePathRule) Name() string         { return "Hardcoded file path" }
-func (r *HardcodedFilePathRule) Description() string  { return "Absolute file paths that break when the flow runs on a different machine." }
+func (r *HardcodedFilePathRule) ID() string   { return "hardcoded-filepath" }
+func (r *HardcodedFilePathRule) Name() string { return "Hardcoded file path" }
+func (r *HardcodedFilePathRule) Description() string {
+	return "Absolute file paths that break when the flow runs on a different machine."
+}
 func (r *HardcodedFilePathRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *HardcodedFilePathRule) Category() string     { return "Portability" }
+func (r *HardcodedFilePathRule) Category() string                 { return "Portability" }
 
 var (
 	winAbsPath  = regexp.MustCompile(`[A-Za-z]:[\\][^\s"']+`)

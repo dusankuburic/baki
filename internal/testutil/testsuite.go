@@ -22,7 +22,7 @@ func NewTestSuite(t *testing.T) *TestSuite {
 	return &TestSuite{
 		tempDir: tempDir,
 		cleanup: func() {
-			os.RemoveAll(tempDir)
+			_ = os.RemoveAll(tempDir)
 		},
 	}
 }

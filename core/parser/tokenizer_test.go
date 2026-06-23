@@ -258,7 +258,7 @@ func TestTokenize_GotoLabel(t *testing.T) {
 	tokens := Tokenize(input)
 
 	// Find GOTO and LABEL tokens
-	var gotoIdx, labelIdx int = -1, -1
+	var gotoIdx, labelIdx = -1, -1
 	for i, tok := range tokens {
 		if tok.RawType == "GOTO" {
 			gotoIdx = i

@@ -23,11 +23,13 @@ var falliblePrefixes = []string{
 
 type UnhandledErrorRule struct{}
 
-func (r *UnhandledErrorRule) ID() string          { return "unhandled-error" }
-func (r *UnhandledErrorRule) Name() string         { return "Unhandled error in fallible action" }
-func (r *UnhandledErrorRule) Description() string  { return "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope." }
+func (r *UnhandledErrorRule) ID() string   { return "unhandled-error" }
+func (r *UnhandledErrorRule) Name() string { return "Unhandled error in fallible action" }
+func (r *UnhandledErrorRule) Description() string {
+	return "Actions that commonly fail (network, file, UI automation) where no error handler exists in the surrounding scope."
+}
 func (r *UnhandledErrorRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *UnhandledErrorRule) Category() string     { return "Reliability" }
+func (r *UnhandledErrorRule) Category() string                 { return "Reliability" }
 
 func (r *UnhandledErrorRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeAction {
@@ -43,13 +45,13 @@ func (r *UnhandledErrorRule) Check(block *models.Block, ctx *RuleContext) []mode
 	}
 
 	return []models.Finding{{
-		RuleID:    r.ID(),
-		Severity:  r.DefaultSeverity(),
-		Title:     "Unhandled error in fallible action",
+		RuleID:      r.ID(),
+		Severity:    r.DefaultSeverity(),
+		Title:       "Unhandled error in fallible action",
 		Description: "This action commonly fails but has no error handler in its surrounding scope.",
-		BlockID:   block.ID,
-		SubflowID: block.SubflowID,
-		Suggestion: "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
+		BlockID:     block.ID,
+		SubflowID:   block.SubflowID,
+		Suggestion:  "Wrap this action in a Try/Catch block or add error handler logic to recover from failures.",
 	}}
 }
 

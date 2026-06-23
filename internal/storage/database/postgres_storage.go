@@ -150,6 +150,7 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	}
 
 	if b.azureRefresh != nil {
+		// #nosec G118 -- long-lived background refresh, intentionally not request-scoped.
 		go b.runAzureTokenRefresh()
 	}
 

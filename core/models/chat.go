@@ -17,32 +17,32 @@ type ChatMessage struct {
 }
 
 type ChatRequest struct {
-	FlowID             string        `json:"flowId"`
-	Provider           string        `json:"provider"`
-	Model              string        `json:"model,omitempty"`
-	Messages           []ChatMessage `json:"messages"`
-	UserMessage        string        `json:"userMessage"`
-	ContextBlockID     string        `json:"contextBlockId,omitempty"`
+	FlowID              string        `json:"flowId"`
+	Provider            string        `json:"provider"`
+	Model               string        `json:"model,omitempty"`
+	Messages            []ChatMessage `json:"messages"`
+	UserMessage         string        `json:"userMessage"`
+	ContextBlockID      string        `json:"contextBlockId,omitempty"`
 	SelectedSourceFiles []string      `json:"selectedSourceFiles,omitempty"`
-	SystemPrompt       string        `json:"systemPrompt,omitempty"`
-	Temperature        float64       `json:"temperature,omitempty"`
-	MaxTokens          int           `json:"maxTokens,omitempty"`
-	DemoMode           bool          `json:"demoMode,omitempty"`
+	SystemPrompt        string        `json:"systemPrompt,omitempty"`
+	Temperature         float64       `json:"temperature,omitempty"`
+	MaxTokens           int           `json:"maxTokens,omitempty"`
+	DemoMode            bool          `json:"demoMode,omitempty"`
 	// UseTools opts this request into the read-only tool/agent loop. It only
 	// takes effect when the resolved provider supports tools; otherwise the
 	// normal streaming path runs.
-	UseTools      bool `json:"useTools,omitempty"`
+	UseTools bool `json:"useTools,omitempty"`
 	// ExcludeContext skips injecting flow/block context into the prompt so the
 	// user can ask a free-form question without the document being attached.
 	ExcludeContext bool `json:"excludeContext,omitempty"`
 }
 
 type SourceFileInfo struct {
-	Filename   string `json:"filename"`
-	SubflowID  string `json:"subflowId"`
+	Filename    string `json:"filename"`
+	SubflowID   string `json:"subflowId"`
 	SubflowName string `json:"subflowName"`
-	BlockCount int    `json:"blockCount"`
-	LineCount  int    `json:"lineCount"`
+	BlockCount  int    `json:"blockCount"`
+	LineCount   int    `json:"lineCount"`
 }
 
 type ChatResponse struct {
@@ -103,9 +103,9 @@ type ContextPreview struct {
 }
 
 type ConversationFile struct {
-	Version  int           `json:"version"`
-	FlowKey  string        `json:"flowKey"`
-	Scope    string        `json:"scope"`
-	UpdatedAt time.Time    `json:"updatedAt"`
-	Messages []ChatMessage `json:"messages"`
+	Version   int           `json:"version"`
+	FlowKey   string        `json:"flowKey"`
+	Scope     string        `json:"scope"`
+	UpdatedAt time.Time     `json:"updatedAt"`
+	Messages  []ChatMessage `json:"messages"`
 }

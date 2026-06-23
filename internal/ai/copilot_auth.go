@@ -13,8 +13,9 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-const copilotClientID = "Iv1.b507a08c87ecfe98"
-var copilotTokenExchangeURL = "https://api.github.com/copilot_internal/v2/token"
+const copilotClientID = "Iv1.b507a08c87ecfe98" // #nosec G101 -- public OAuth client ID, not a secret
+
+var copilotTokenExchangeURL = "https://api.github.com/copilot_internal/v2/token" // #nosec G101 -- public API endpoint URL, not a credential
 
 // CopilotSessionToken holds a short-lived Copilot API session token (~30 min).
 type CopilotSessionToken struct {

@@ -8,11 +8,13 @@ import (
 
 type GotoAntipatternRule struct{}
 
-func (r *GotoAntipatternRule) ID() string                    { return "goto-antipattern" }
-func (r *GotoAntipatternRule) Name() string                   { return "GOTO anti-pattern detected" }
-func (r *GotoAntipatternRule) Description() string            { return "GOTO jumps that break scope boundaries, spaghetti control flow, or orphaned labels." }
+func (r *GotoAntipatternRule) ID() string   { return "goto-antipattern" }
+func (r *GotoAntipatternRule) Name() string { return "GOTO anti-pattern detected" }
+func (r *GotoAntipatternRule) Description() string {
+	return "GOTO jumps that break scope boundaries, spaghetti control flow, or orphaned labels."
+}
 func (r *GotoAntipatternRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *GotoAntipatternRule) Category() string               { return "Logic" }
+func (r *GotoAntipatternRule) Category() string                 { return "Logic" }
 
 func (r *GotoAntipatternRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.RawType != "GOTO" {

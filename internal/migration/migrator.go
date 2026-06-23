@@ -30,8 +30,8 @@ import (
 	"fmt"
 	"time"
 
-	"pad-core/logger"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 // errSkipped is returned by migrateOneFlow when the item is already present in dst.
@@ -39,12 +39,12 @@ var errSkipped = errors.New("already migrated")
 
 // Result summarises the outcome of a migration run.
 type Result struct {
-	FlowsMigrated  int
-	FlowsSkipped   int
-	FlowsFailed    int
-	SettingsMoved  bool
-	Errors         []MigrationError
-	Duration       time.Duration
+	FlowsMigrated int
+	FlowsSkipped  int
+	FlowsFailed   int
+	SettingsMoved bool
+	Errors        []MigrationError
+	Duration      time.Duration
 }
 
 // MigrationError captures a per-item failure without stopping the run.

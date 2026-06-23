@@ -5,9 +5,9 @@ import (
 	"math"
 	"sort"
 
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // DashboardService assembles the welcome ("home") dashboard payload and persists

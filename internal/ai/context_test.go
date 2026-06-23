@@ -11,16 +11,16 @@ import (
 // stubProvider satisfies the Provider interface with just EstimateTokens.
 type stubProvider struct{}
 
-func (stubProvider) SupportsTools() bool             { return false }
-func (stubProvider) ID() string                      { return "stub" }
-func (stubProvider) Name() string                    { return "Stub" }
-func (stubProvider) Models(_ context.Context) ([]ModelInfo, error) { return nil, nil }
-func (stubProvider) DefaultModel() string            { return "" }
-func (stubProvider) FreeModel() string               { return "" }
-func (stubProvider) ContextLimit() int               { return 100_000 }
-func (stubProvider) PricePerMillionTokens() Pricing  { return Pricing{} }
+func (stubProvider) SupportsTools() bool                                      { return false }
+func (stubProvider) ID() string                                               { return "stub" }
+func (stubProvider) Name() string                                             { return "Stub" }
+func (stubProvider) Models(_ context.Context) ([]ModelInfo, error)            { return nil, nil }
+func (stubProvider) DefaultModel() string                                     { return "" }
+func (stubProvider) FreeModel() string                                        { return "" }
+func (stubProvider) ContextLimit() int                                        { return 100_000 }
+func (stubProvider) PricePerMillionTokens() Pricing                           { return Pricing{} }
 func (stubProvider) Embed(_ context.Context, _ []string) ([][]float32, error) { return nil, nil }
-func (stubProvider) EstimateTokens(text string) int  { return EstimateTokens(text) }
+func (stubProvider) EstimateTokens(text string) int                           { return EstimateTokens(text) }
 func (stubProvider) Chat(_ context.Context, _ Request) (*Response, error) {
 	return nil, nil
 }

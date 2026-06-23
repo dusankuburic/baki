@@ -13,7 +13,7 @@ import (
 // LoadRaw reads configuration from the given JSON file without validating.
 // The caller is responsible for calling Validate on the returned Config.
 func LoadRaw(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- config path is operator-supplied, not request input
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Default(), nil
@@ -42,7 +42,7 @@ func LoadFromEnvRaw() (*Config, error) {
 // Load reads configuration from the given JSON file.
 // If the file does not exist it returns Default() without an error.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- config path is operator-supplied, not request input
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Default(), nil

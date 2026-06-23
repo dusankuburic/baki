@@ -27,11 +27,13 @@ var sinkPrefixes = []struct {
 
 type SensitiveDataExposureRule struct{}
 
-func (r *SensitiveDataExposureRule) ID() string                    { return "sensitive-exposure" }
-func (r *SensitiveDataExposureRule) Name() string                   { return "Sensitive data exposure" }
-func (r *SensitiveDataExposureRule) Description() string            { return "Variables with sensitive names (passwords, tokens, keys) written to files, logs, or displayed in UI." }
+func (r *SensitiveDataExposureRule) ID() string   { return "sensitive-exposure" }
+func (r *SensitiveDataExposureRule) Name() string { return "Sensitive data exposure" }
+func (r *SensitiveDataExposureRule) Description() string {
+	return "Variables with sensitive names (passwords, tokens, keys) written to files, logs, or displayed in UI."
+}
 func (r *SensitiveDataExposureRule) DefaultSeverity() models.Severity { return models.SeverityError }
-func (r *SensitiveDataExposureRule) Category() string               { return "Security" }
+func (r *SensitiveDataExposureRule) Category() string                 { return "Security" }
 
 func (r *SensitiveDataExposureRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeAction {

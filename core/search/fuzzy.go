@@ -5,7 +5,7 @@ import "unicode/utf8"
 func Levenshtein(a, b string) int {
 	la := utf8.RuneCountInString(a)
 	lb := utf8.RuneCountInString(b)
-	
+
 	if la == 0 {
 		return lb
 	}
@@ -39,7 +39,7 @@ func Levenshtein(a, b string) int {
 			del := prev[j] + 1
 			ins := curr[j-1] + 1
 			sub := prev[j-1] + cost
-			
+
 			m := del
 			if ins < m {
 				m = ins

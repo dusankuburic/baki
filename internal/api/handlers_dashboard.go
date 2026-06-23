@@ -6,8 +6,8 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-core/models"
 	"pad-analyzer/internal/service"
+	"pad-core/models"
 )
 
 // DashboardHandler serves the welcome ("home") dashboard BFF endpoint.

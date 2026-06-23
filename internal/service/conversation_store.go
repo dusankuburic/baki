@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
 )
 
 // toStorageMessages converts domain chat messages to the storage-layer type for
@@ -155,15 +155,15 @@ func atomicWriteConv(dir, dest string, data []byte) error {
 		return fmt.Errorf("create temp conversation file: %w", err)
 	}
 	tmpName := tmp.Name()
-	cleanup := func() { os.Remove(tmpName) }
+	cleanup := func() { _ = os.Remove(tmpName) }
 
 	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		cleanup()
 		return fmt.Errorf("chmod temp conversation file: %w", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		cleanup()
 		return fmt.Errorf("write temp conversation file: %w", err)
 	}

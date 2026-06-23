@@ -10,17 +10,17 @@ import (
 )
 
 type CustomRuleConfig struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Severity    string `json:"severity"`
-	Category    string `json:"category"`
-	RawTypeMatch string `json:"rawTypeMatch"`
-	NameMatch    string `json:"nameMatch"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	Severity     string            `json:"severity"`
+	Category     string            `json:"category"`
+	RawTypeMatch string            `json:"rawTypeMatch"`
+	NameMatch    string            `json:"nameMatch"`
 	PropertyHas  map[string]string `json:"propertyHas"`
 	PropertyNot  map[string]string `json:"propertyNot"`
-	TypeMatch    string `json:"typeMatch"`
-	Suggestion   string `json:"suggestion"`
+	TypeMatch    string            `json:"typeMatch"`
+	Suggestion   string            `json:"suggestion"`
 }
 
 type CustomRule struct {
@@ -31,7 +31,7 @@ type CustomRule struct {
 }
 
 func LoadCustomRules(path string) ([]Rule, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- custom-rules path is operator-configured
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -80,11 +80,11 @@ func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {
 	return r, nil
 }
 
-func (r *CustomRule) ID() string                    { return r.config.ID }
-func (r *CustomRule) Name() string                   { return r.config.Name }
-func (r *CustomRule) Description() string            { return r.config.Description }
+func (r *CustomRule) ID() string                       { return r.config.ID }
+func (r *CustomRule) Name() string                     { return r.config.Name }
+func (r *CustomRule) Description() string              { return r.config.Description }
 func (r *CustomRule) DefaultSeverity() models.Severity { return r.sev }
-func (r *CustomRule) Category() string               { return r.config.Category }
+func (r *CustomRule) Category() string                 { return r.config.Category }
 
 func (r *CustomRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if r.config.TypeMatch != "" {

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	
 	"pad-analyzer/internal/storage/filesystem"
 )
 

@@ -95,9 +95,9 @@ func (g *GitHubModelsProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 }
 
 func (g *GitHubModelsProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	return g.openaiBase.chat(ctx, req)
+	return g.chat(ctx, req)
 }
 
 func (g *GitHubModelsProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	return g.openaiBase.stream(ctx, req, onChunk)
+	return g.stream(ctx, req, onChunk)
 }

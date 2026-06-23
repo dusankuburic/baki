@@ -51,13 +51,13 @@ func InitWith(opts Options) error {
 			return fmt.Errorf("logger: AppDataDir required when not StdoutOnly")
 		}
 		logDir := filepath.Join(opts.AppDataDir, "logs")
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, 0750); err != nil {
 			return err
 		}
 		rotateLogs(logDir)
 
 		logFile := filepath.Join(logDir, "pad-analyzer.log")
-		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 -- log path under the app's own data dir
 		if err != nil {
 			return err
 		}

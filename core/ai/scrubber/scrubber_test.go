@@ -70,7 +70,7 @@ func TestScrubDocument(t *testing.T) {
 						Type:    "ACTION",
 						RawType: "WebAutomation.PopulateTextField",
 						Properties: map[string]string{
-							"Text": "my_secret_password",
+							"Text":    "my_secret_password",
 							"Element": "Input_Field",
 						},
 					},
@@ -107,6 +107,52 @@ func TestScrubDocument(t *testing.T) {
 	b2 := scrubbed.Subflows[0].Blocks[1]
 	if b2.Properties["ConnectionString"] != "[REDACTED]" {
 		t.Errorf("Expected Database.Connect ConnectionString to be redacted, got %s", b2.Properties["ConnectionString"])
+	}
+
+	// The original document must be left untouched (deep-copy contract). This
+	// guards the typed clone, which — unlike the prior JSON round-trip — could
+	// alias the caller's Properties maps if cloneBlocks regressed.
+	if got := doc.Subflows[0].Blocks[0].Properties["Text"]; got != "my_secret_password" {
+		t.Errorf("original document was mutated: Text = %q, want unchanged", got)
+	}
+	if got := doc.Subflows[0].Blocks[1].Properties["ConnectionString"]; got != "Server=localhost;Password=admin;" {
+		t.Errorf("original document was mutated: ConnectionString = %q, want unchanged", got)
+	}
+}
+
+// TestScrubDocument_NestedChildrenDeepCopied verifies that secrets in nested
+// child blocks are masked in the copy while the original child stays untouched —
+// exercising the recursive cloneBlocks path.
+func TestScrubDocument_NestedChildrenDeepCopied(t *testing.T) {
+	doc := &models.FlowDocument{
+		ID: "flow-nested",
+		Subflows: []models.Subflow{{
+			ID: "sf-1",
+			Blocks: []models.Block{{
+				ID:   "loop-1",
+				Type: "LOOP",
+				Children: []models.Block{{
+					ID:      "child-1",
+					Type:    "ACTION",
+					RawType: "Database.Connect",
+					Properties: map[string]string{
+						"ConnectionString": "Server=db;Password=hunter2;",
+					},
+				}},
+			}},
+		}},
+	}
+
+	scrubbed, err := ScrubDocument(doc)
+	if err != nil {
+		t.Fatalf("ScrubDocument failed: %v", err)
+	}
+
+	if got := scrubbed.Subflows[0].Blocks[0].Children[0].Properties["ConnectionString"]; got != "[REDACTED]" {
+		t.Errorf("nested child secret not redacted in copy: %q", got)
+	}
+	if got := doc.Subflows[0].Blocks[0].Children[0].Properties["ConnectionString"]; got != "Server=db;Password=hunter2;" {
+		t.Errorf("original nested child was mutated: %q", got)
 	}
 }
 
@@ -165,11 +211,11 @@ func TestScrubDocument_SensitiveFieldNames(t *testing.T) {
 						Type:    "ACTION",
 						RawType: "CustomConnector.Invoke", // not enumerated
 						Properties: map[string]string{
-							"Password":     "pw1",          // short, low entropy
-							"Api_Key":      "abc",          // separator + short
-							"AccessToken":  "xyz",
-							"Endpoint":     "https://api.example.com/v1",
-							"RequestName":  "Get daily report",
+							"Password":    "pw1", // short, low entropy
+							"Api_Key":     "abc", // separator + short
+							"AccessToken": "xyz",
+							"Endpoint":    "https://api.example.com/v1",
+							"RequestName": "Get daily report",
 						},
 					},
 				},

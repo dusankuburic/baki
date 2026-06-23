@@ -8,11 +8,13 @@ import (
 
 type MissingDelayRule struct{}
 
-func (r *MissingDelayRule) ID() string          { return "missing-delay" }
-func (r *MissingDelayRule) Name() string         { return "Web action without wait" }
-func (r *MissingDelayRule) Description() string  { return "Two consecutive WebAutomation/UIAutomation actions with no wait between them." }
+func (r *MissingDelayRule) ID() string   { return "missing-delay" }
+func (r *MissingDelayRule) Name() string { return "Web action without wait" }
+func (r *MissingDelayRule) Description() string {
+	return "Two consecutive WebAutomation/UIAutomation actions with no wait between them."
+}
 func (r *MissingDelayRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *MissingDelayRule) Category() string     { return "Reliability" }
+func (r *MissingDelayRule) Category() string                 { return "Reliability" }
 
 func (r *MissingDelayRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if !isWebOrUIAction(block.RawType) {
@@ -42,13 +44,13 @@ func (r *MissingDelayRule) Check(block *models.Block, ctx *RuleContext) []models
 	}
 
 	return []models.Finding{{
-		RuleID:     r.ID(),
-		Severity:   r.DefaultSeverity(),
-		Title:      "Web action without wait",
+		RuleID:      r.ID(),
+		Severity:    r.DefaultSeverity(),
+		Title:       "Web action without wait",
 		Description: "Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.",
-		BlockID:    block.ID,
-		SubflowID:  block.SubflowID,
-		Suggestion: "Add a 'Wait for element' or 'Delay' action between UI automation steps to improve reliability.",
+		BlockID:     block.ID,
+		SubflowID:   block.SubflowID,
+		Suggestion:  "Add a 'Wait for element' or 'Delay' action between UI automation steps to improve reliability.",
 	}}
 }
 

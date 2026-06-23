@@ -80,7 +80,7 @@ func TestReportToMarkdown_SeverityGrouping(t *testing.T) {
 	if errIdx == -1 || warnIdx == -1 || infoIdx == -1 {
 		t.Fatalf("missing severity sections: errors=%d warnings=%d info=%d", errIdx, warnIdx, infoIdx)
 	}
-	if !(errIdx < warnIdx && warnIdx < infoIdx) {
+	if errIdx >= warnIdx || warnIdx >= infoIdx {
 		t.Errorf("severity sections out of order: errors=%d warnings=%d info=%d", errIdx, warnIdx, infoIdx)
 	}
 

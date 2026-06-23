@@ -11,7 +11,7 @@ func ConfigDir() (string, error) {
 		return "", err
 	}
 	appDir := filepath.Join(dir, "pad-analyzer")
-	if err := os.MkdirAll(appDir, 0755); err != nil {
+	if err := os.MkdirAll(appDir, 0750); err != nil {
 		return "", err
 	}
 	return appDir, nil
@@ -23,7 +23,7 @@ func CacheDir() (string, error) {
 		return "", err
 	}
 	appDir := filepath.Join(dir, "pad-analyzer")
-	if err := os.MkdirAll(appDir, 0755); err != nil {
+	if err := os.MkdirAll(appDir, 0750); err != nil {
 		return "", err
 	}
 	return appDir, nil
@@ -35,7 +35,7 @@ func LogDir() (string, error) {
 		return "", err
 	}
 	logDir := filepath.Join(dir, "logs")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return "", err
 	}
 	return logDir, nil

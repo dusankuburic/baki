@@ -89,7 +89,7 @@ func (m *smtpMailer) sendImplicitTLS(ctx context.Context, addr string, auth smtp
 		_ = conn.Close()
 		return fmt.Errorf("mail: smtp client: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if auth != nil {
 		if err := c.Auth(auth); err != nil {
 			return fmt.Errorf("mail: auth: %w", err)

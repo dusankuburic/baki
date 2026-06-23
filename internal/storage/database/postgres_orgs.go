@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
-	"pad-core/logger"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 // ---- Organisation operations ----

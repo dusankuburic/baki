@@ -214,9 +214,9 @@ func (s *parseState) processToken(tok Token) {
 				endBlk := &models.Block{
 					ID: uuid.NewString(), Name: "End On Block Error", Type: models.BlockTypeEnd,
 					RawType: "END", Indent: tok.Indent, LineNumber: tok.Line,
-					SubflowID: s.current.id, ParentID: top.ID, 
-					Properties: map[string]string{"_parentType": string(top.Type)}, 
-					Variables: []string{},
+					SubflowID: s.current.id, ParentID: top.ID,
+					Properties: map[string]string{"_parentType": string(top.Type)},
+					Variables:  []string{},
 				}
 				endBlk.Tokens = tokenizeBlock(endBlk)
 				top.ChildPtrs = append(top.ChildPtrs, endBlk)
@@ -244,9 +244,9 @@ func (s *parseState) processToken(tok Token) {
 				endBlk := &models.Block{
 					ID: uuid.NewString(), Name: name, Type: models.BlockTypeEnd,
 					RawType: "END", Indent: tok.Indent, LineNumber: tok.Line,
-					SubflowID: s.current.id, ParentID: top.ID, 
-					Properties: map[string]string{"_parentType": string(top.Type)}, 
-					Variables: []string{},
+					SubflowID: s.current.id, ParentID: top.ID,
+					Properties: map[string]string{"_parentType": string(top.Type)},
+					Variables:  []string{},
 				}
 				endBlk.Tokens = tokenizeBlock(endBlk)
 				top.ChildPtrs = append(top.ChildPtrs, endBlk)
@@ -427,16 +427,17 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 
 	// Handle CALL actions (Run subflow) - strip "Call " to match stripBlockKeywords
 	if blk.RawType == "CALL" || blk.RawType == "DISABLED_CALL" ||
-	   blk.RawType == "FlowControl.RunSubflow" || blk.RawType == "FlowControl.RunDesktopFlow" {
+		blk.RawType == "FlowControl.RunSubflow" || blk.RawType == "FlowControl.RunDesktopFlow" {
 		target := ""
-		if blk.RawType == "CALL" || blk.RawType == "DISABLED_CALL" {
+		switch blk.RawType {
+		case "CALL", "DISABLED_CALL":
 			if strings.HasPrefix(blk.Name, "Call ") {
 				target = strings.TrimPrefix(blk.Name, "Call ")
 				target = strings.TrimSuffix(target, " (disabled)")
 			}
-		} else if blk.RawType == "FlowControl.RunSubflow" {
+		case "FlowControl.RunSubflow":
 			target = blk.Properties["SubflowName"]
-		} else if blk.RawType == "FlowControl.RunDesktopFlow" {
+		case "FlowControl.RunDesktopFlow":
 			target = blk.Properties["DesktopFlow"]
 		}
 
@@ -567,12 +568,13 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 	name := blk.Name
 	// For conditions and loops, blk.Name already contains the full expression
 	// which stripBlockKeywords would further trim.
-	if blk.Type == models.BlockTypeCondition {
+	switch blk.Type {
+	case models.BlockTypeCondition:
 		name = strings.TrimPrefix(name, "IF ")
 		name = strings.TrimPrefix(name, "If ")
 		name = strings.TrimSuffix(name, " THEN")
 		name = strings.TrimSuffix(name, " Then")
-	} else if blk.Type == models.BlockTypeLoop {
+	case models.BlockTypeLoop:
 		// ForEach: emit variable-styled tokens for both the iteration variable and
 		// the collection — "LOOP FOREACH CurrentItem IN List" → %CurrentItem% IN %List%.
 		// Both become clickable variable tokens in the UI (lineage, usage count).
@@ -618,14 +620,14 @@ func tokenizeBlock(blk *models.Block) []models.BlockToken {
 		name = strings.TrimPrefix(name, "LOOP WHILE ")
 		name = strings.TrimPrefix(name, "LOOP ")
 		name = strings.TrimPrefix(name, "Loop ")
-	} else if blk.Type == models.BlockTypeSwitch {
+	case models.BlockTypeSwitch:
 		name = strings.TrimPrefix(name, "SWITCH ")
 		name = strings.TrimPrefix(name, "Switch ")
 		// SWITCH arguments are variables/expressions but often lack % signs in the text code
 		if !strings.Contains(name, "%") && !strings.Contains(name, "'") && !strings.Contains(name, `"`) {
 			name = "%" + name + "%"
 		}
-	} else if blk.Type == models.BlockTypeCase {
+	case models.BlockTypeCase:
 		name = strings.TrimPrefix(name, "CASE ")
 		name = strings.TrimPrefix(name, "Case ")
 	}
@@ -641,10 +643,10 @@ func tokenizeVariables(text string) []models.BlockToken {
 	// We need to find both %variables% and string literals.
 	// Since % can contain strings and strings can contain %, we need to be careful.
 	// In PAD, %expression% is usually the top level.
-	
+
 	varMatches := reVariableRef.FindAllStringSubmatchIndex(text, -1)
 	tokens := make([]models.BlockToken, 0, len(varMatches)*2+1)
-	
+
 	lastPos := 0
 	for _, m := range varMatches {
 		if m[0] > lastPos {

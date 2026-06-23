@@ -12,11 +12,13 @@ import (
 // structural terminators.
 type SubflowNoErrorHandlerRule struct{}
 
-func (r *SubflowNoErrorHandlerRule) ID() string              { return "subflow-no-error-handler" }
-func (r *SubflowNoErrorHandlerRule) Name() string             { return "Subflow without error handler" }
-func (r *SubflowNoErrorHandlerRule) Description() string      { return "Non-trivial subflows that contain no error handler block." }
+func (r *SubflowNoErrorHandlerRule) ID() string   { return "subflow-no-error-handler" }
+func (r *SubflowNoErrorHandlerRule) Name() string { return "Subflow without error handler" }
+func (r *SubflowNoErrorHandlerRule) Description() string {
+	return "Non-trivial subflows that contain no error handler block."
+}
 func (r *SubflowNoErrorHandlerRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *SubflowNoErrorHandlerRule) Category() string         { return "Reliability" }
+func (r *SubflowNoErrorHandlerRule) Category() string                 { return "Reliability" }
 
 func (r *SubflowNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	// Fire once per subflow by triggering only on the first top-level block
@@ -45,12 +47,12 @@ func (r *SubflowNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext)
 	}
 
 	return []models.Finding{{
-		RuleID:    r.ID(),
-		Severity:  r.DefaultSeverity(),
-		Title:     "Subflow without error handler",
+		RuleID:      r.ID(),
+		Severity:    r.DefaultSeverity(),
+		Title:       "Subflow without error handler",
 		Description: fmt.Sprintf("Subflow %q has action blocks but no error handler. Unhandled errors will silently terminate the subflow.", sf.Name),
-		SubflowID: sf.ID,
-		Suggestion: "Add a Try/Catch or On Block Error handler to protect against unexpected failures.",
+		SubflowID:   sf.ID,
+		Suggestion:  "Add a Try/Catch or On Block Error handler to protect against unexpected failures.",
 	}}
 }
 

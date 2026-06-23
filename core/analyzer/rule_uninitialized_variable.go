@@ -1,17 +1,19 @@
 package analyzer
 
 import (
-	"strings"
 	"pad-core/models"
+	"strings"
 )
 
 type UninitializedVariableRule struct{}
 
-func (r *UninitializedVariableRule) ID() string          { return "uninitialized-variable" }
-func (r *UninitializedVariableRule) Name() string         { return "Variable used before being initialized" }
-func (r *UninitializedVariableRule) Description() string  { return "Detects variables that are referenced but never assigned in the flow." }
+func (r *UninitializedVariableRule) ID() string   { return "uninitialized-variable" }
+func (r *UninitializedVariableRule) Name() string { return "Variable used before being initialized" }
+func (r *UninitializedVariableRule) Description() string {
+	return "Detects variables that are referenced but never assigned in the flow."
+}
 func (r *UninitializedVariableRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *UninitializedVariableRule) Category() string     { return "Logic" }
+func (r *UninitializedVariableRule) Category() string                 { return "Logic" }
 
 func (r *UninitializedVariableRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	findings := []models.Finding{}

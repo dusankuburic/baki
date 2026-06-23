@@ -120,7 +120,7 @@ func TestDemoLimiter_ConcurrentReserve_NoLostIncrements(t *testing.T) {
 func TestDemoLimiter_Remaining_AfterExhaustion(t *testing.T) {
 	l := newTestLimiter(t)
 	for i := 0; i < l.dailyLimit; i++ {
-		l.ReserveForDisplay() //nolint:errcheck
+		l.ReserveForDisplay()
 	}
 
 	got, err := l.Remaining()

@@ -5,8 +5,8 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
-	"pad-core/logger"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 // AuthzService is the single source of truth for flow- and org-level

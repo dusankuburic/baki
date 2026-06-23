@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-core/models"
 	"pad-analyzer/internal/testutil"
+	"pad-core/models"
 )
 
 // TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine verifies that a
@@ -29,10 +29,10 @@ func TestStreamChatMessage_CancelBeforeBegin_ReleasesGoroutine(t *testing.T) {
 	)
 
 	svc := &ChatService{
-		notifier: notifier,
+		notifier:      notifier,
 		flowCache:     &FlowService{},
 		analysisCache: &AnalysisService{},
-		factory:  factory,
+		factory:       factory,
 	}
 
 	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "unknown"})
@@ -130,10 +130,10 @@ func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
 	)
 
 	svc := &ChatService{
-		notifier: notifier,
+		notifier:      notifier,
 		flowCache:     &FlowService{},
 		analysisCache: &AnalysisService{},
-		factory:  factory,
+		factory:       factory,
 	}
 
 	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "unknown"})
@@ -163,16 +163,16 @@ func TestStreamChatMessage_CancelAfterBegin_EmitsError(t *testing.T) {
 func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
 	factory := ai.NewProviderFactory(
-		func(scope, provider string) (string, error) {return "", fmt.Errorf("no key")},
+		func(scope, provider string) (string, error) { return "", fmt.Errorf("no key") },
 		nil,
 		nil,
 		nil,
 	)
 	svc := &ChatService{
-		notifier: notifier,
+		notifier:      notifier,
 		flowCache:     &FlowService{},
 		analysisCache: &AnalysisService{},
-		factory:  factory,
+		factory:       factory,
 	}
 
 	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "unknown"})
@@ -213,12 +213,12 @@ func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 
 func TestNormalizeChatParams(t *testing.T) {
 	cases := []struct {
-		name      string
-		temp      float64
-		maxTok    int
-		ctxLimit  int
-		maxOutput int
-		wantTemp  float64
+		name       string
+		temp       float64
+		maxTok     int
+		ctxLimit   int
+		maxOutput  int
+		wantTemp   float64
 		wantMaxTok int
 	}{
 		{"in range untouched", 0.7, 1000, 128000, 0, 0.7, 1000},

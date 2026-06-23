@@ -26,7 +26,7 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	}
 }
 
-func (o *OpenAIProvider) SupportsTools() bool  { return true }
+func (o *OpenAIProvider) SupportsTools() bool { return true }
 
 func (o *OpenAIProvider) ID() string           { return "openai" }
 func (o *OpenAIProvider) Name() string         { return "OpenAI" }
@@ -47,11 +47,11 @@ func (o *OpenAIProvider) Models(_ context.Context) ([]ModelInfo, error) {
 }
 
 func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	return o.openaiBase.chat(ctx, req)
+	return o.chat(ctx, req)
 }
 
 func (o *OpenAIProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	return o.openaiBase.stream(ctx, req, onChunk)
+	return o.stream(ctx, req, onChunk)
 }
 
 func (o *OpenAIProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {

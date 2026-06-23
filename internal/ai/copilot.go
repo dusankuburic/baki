@@ -53,7 +53,7 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 	}
 }
 
-func (p *CopilotProvider) SupportsTools() bool   { return false }
+func (p *CopilotProvider) SupportsTools() bool { return false }
 
 func (p *CopilotProvider) ID() string           { return "copilot" }
 func (p *CopilotProvider) Name() string         { return "GitHub Copilot" }

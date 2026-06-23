@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -262,9 +263,10 @@ func TestRefreshToken_ConcurrentRevoke_OnlyOneSucceeds(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			err := store.RevokeRefreshToken(context.Background(), jti)
-			if err == nil {
+			switch {
+			case err == nil:
 				atomic.AddInt64(&successCount, 1)
-			} else if err == interfaces.ErrTokenAlreadyRevoked {
+			case errors.Is(err, interfaces.ErrTokenAlreadyRevoked):
 				atomic.AddInt64(&replayCount, 1)
 			}
 		}()

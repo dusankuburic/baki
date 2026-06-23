@@ -105,7 +105,7 @@ func TestMetricsGuard_PublicViaTrustedProxyXFF(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.RemoteAddr = "10.0.0.1:12345" // private (trusted proxy)
+	req.RemoteAddr = "10.0.0.1:12345"            // private (trusted proxy)
 	req.Header.Set("X-Forwarded-For", "8.8.8.8") // spoofed public XFF
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)

@@ -11,10 +11,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 
-	"pad-core/analyzer"
 	"pad-analyzer/internal/auth"
-	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
+	"pad-core/analyzer"
+	"pad-core/logger"
 	"pad-core/models"
 )
 

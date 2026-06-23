@@ -39,11 +39,11 @@ func TestValidateEmail(t *testing.T) {
 // (72 because bcrypt ignores bytes past 72) and at least 3 character classes.
 func TestValidatePasswordStrength(t *testing.T) {
 	reject := map[string]string{
-		"too short":             "Aa1!",                    // 4 chars
-		"11 chars":              "Password12!"[:11],        // boundary below min
-		"only lowercase":        "aaaaaaaaaaaa",            // 12, 1 class
-		"two classes":           "abcABCabcABC",            // 12, lower+upper only
-		"over 72 bytes":         strings.Repeat("Aa1", 25), // 75 chars, 3 classes but too long
+		"too short":      "Aa1!",                    // 4 chars
+		"11 chars":       "Password12!"[:11],        // boundary below min
+		"only lowercase": "aaaaaaaaaaaa",            // 12, 1 class
+		"two classes":    "abcABCabcABC",            // 12, lower+upper only
+		"over 72 bytes":  strings.Repeat("Aa1", 25), // 75 chars, 3 classes but too long
 	}
 	for name, pw := range reject {
 		if err := validatePasswordStrength(pw); err == nil {
@@ -52,9 +52,9 @@ func TestValidatePasswordStrength(t *testing.T) {
 	}
 
 	accept := map[string]string{
-		"4 classes":            "Password123!",            // 12 chars
-		"3 classes":            "abcDEF123xyz",            // lower+upper+digit
-		"exactly 72 bytes":     strings.Repeat("Aa1", 24), // 72 chars, 3 classes
+		"4 classes":        "Password123!",            // 12 chars
+		"3 classes":        "abcDEF123xyz",            // lower+upper+digit
+		"exactly 72 bytes": strings.Repeat("Aa1", 24), // 72 chars, 3 classes
 	}
 	for name, pw := range accept {
 		if err := validatePasswordStrength(pw); err != nil {

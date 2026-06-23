@@ -36,9 +36,9 @@ type Block struct {
 	Children   []Block           `json:"children"`
 	Properties map[string]string `json:"properties"`
 	Variables  []string          `json:"variables"`
-	Tokens    []BlockToken      `json:"tokens,omitempty"`
-	ParentID  string            `json:"parentId,omitempty"`
-	SubflowID string            `json:"subflowId"`
+	Tokens     []BlockToken      `json:"tokens,omitempty"`
+	ParentID   string            `json:"parentId,omitempty"`
+	SubflowID  string            `json:"subflowId"`
 
 	ChildPtrs []*Block `json:"-"`
 }

@@ -48,7 +48,7 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 
 // NewLocalStorageBackend creates a new local file system storage backend
 func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
@@ -77,7 +77,7 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 	flowPath := filepath.Join(lsb.dataDir, "flows", flow.ID+".json")
 
 	// Create flows directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(flowPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(flowPath), 0750); err != nil {
 		return fmt.Errorf("failed to create flows directory: %w", err)
 	}
 
@@ -101,7 +101,7 @@ func (lsb *LocalStorageBackend) TransferFlowOwner(_ context.Context, _, _, _ str
 func (lsb *LocalStorageBackend) LoadFlow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	flowPath := filepath.Join(lsb.dataDir, "flows", id+".json")
 
-	data, err := os.ReadFile(flowPath)
+	data, err := os.ReadFile(flowPath) // #nosec G304 -- flowPath = dataDir/flows/<id>.json, not raw user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, interfaces.ErrNotFound
@@ -196,7 +196,7 @@ func (lsb *LocalStorageBackend) CountFlows(ctx context.Context, filter interface
 		if file.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(flowsDir, file.Name()))
+		data, err := os.ReadFile(filepath.Join(flowsDir, file.Name())) // #nosec G304 -- enumerating the backend's own flows dir
 		if err != nil {
 			continue
 		}
@@ -277,7 +277,7 @@ func (lsb *LocalStorageBackend) SaveSettings(ctx context.Context, settings *inte
 func (lsb *LocalStorageBackend) LoadSettings(ctx context.Context) (*interfaces.AppSettings, error) {
 	settingsPath := filepath.Join(lsb.dataDir, "settings.json")
 
-	data, err := os.ReadFile(settingsPath)
+	data, err := os.ReadFile(settingsPath) // #nosec G304 -- settingsPath is the backend's own dataDir-relative file
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Return default settings if file doesn't exist
@@ -319,7 +319,7 @@ func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, sc
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 
 	// Create conversations directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(conversationPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(conversationPath), 0750); err != nil {
 		return fmt.Errorf("failed to create conversations directory: %w", err)
 	}
 
@@ -339,7 +339,7 @@ func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, sc
 func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, scope string) ([]interfaces.ChatMessage, error) {
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 
-	data, err := os.ReadFile(conversationPath)
+	data, err := os.ReadFile(conversationPath) // #nosec G304 -- conversationPath is derived from the backend's own dataDir + ids
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []interfaces.ChatMessage{}, nil

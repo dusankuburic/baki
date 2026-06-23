@@ -58,11 +58,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # v7+ installs golangci-lint v2, which is required to analyze go1.25
+      # modules (v1 is built with go1.24 and aborts). The whole tree is clean,
+      # so the linter gates all code (no only-new-issues escape hatch).
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           args: --timeout=5m
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: latest
           working-directory: core

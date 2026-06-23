@@ -114,6 +114,75 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 	render.JSON(w, st)
 }
 
+// handleBatchSetFindingStatus applies the same lifecycle update to many findings
+// of one flow in a single request, collapsing the N round-trips the client would
+// otherwise make (e.g. bulk-suppressing a rule's findings). Authorization is
+// checked once for the flow; all items are validated up-front so a bad item
+// rejects the whole batch before any write.
+func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.triageAvailable(w) {
+		return
+	}
+	var req struct {
+		FlowID string `json:"flowId"`
+		Items  []struct {
+			FindingKey    string `json:"findingKey"`
+			RuleID        string `json:"ruleId"`
+			Status        string `json:"status"`
+			Justification string `json:"justification"`
+			AssigneeID    string `json:"assigneeId"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	const maxBatch = 1000
+	if len(req.Items) == 0 {
+		render.Error(w, fmt.Errorf("items is required"), http.StatusBadRequest)
+		return
+	}
+	if len(req.Items) > maxBatch {
+		render.Error(w, fmt.Errorf("too many items (max %d)", maxBatch), http.StatusBadRequest)
+		return
+	}
+	for i, it := range req.Items {
+		if it.FindingKey == "" {
+			render.Error(w, fmt.Errorf("items[%d]: findingKey is required", i), http.StatusBadRequest)
+			return
+		}
+		if !validTriageStatuses[it.Status] {
+			render.Error(w, fmt.Errorf("items[%d]: invalid status %q", i, it.Status), http.StatusBadRequest)
+			return
+		}
+	}
+
+	userID := h.security.CallerID(r)
+	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	for _, it := range req.Items {
+		st := &storageif.FindingStatus{
+			FlowID:        req.FlowID,
+			FindingKey:    it.FindingKey,
+			RuleID:        it.RuleID,
+			Status:        it.Status,
+			Justification: it.Justification,
+			AssigneeID:    it.AssigneeID,
+			UpdatedBy:     userID,
+		}
+		if err := h.backend.SetFindingStatus(r.Context(), st); err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFindingTriage, "flow", req.FlowID,
+		map[string]string{"batch": fmt.Sprintf("%d", len(req.Items)), "status": req.Items[0].Status})
+	render.JSON(w, map[string]int{"updated": len(req.Items)})
+}
+
 func (h *AnalysisHandler) handleClearFindingStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return

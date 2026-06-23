@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -285,7 +286,7 @@ func TestXAIProvider_Chat_401(t *testing.T) {
 		Model:    "grok-3-mini",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }
@@ -417,7 +418,7 @@ func TestGLMProvider_Chat_401(t *testing.T) {
 		Model:    "glm-5.1",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }

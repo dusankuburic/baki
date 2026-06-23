@@ -8,11 +8,13 @@ import (
 
 type ErrorSwallowRule struct{}
 
-func (r *ErrorSwallowRule) ID() string                    { return "error-swallow" }
-func (r *ErrorSwallowRule) Name() string                   { return "Error handler swallows errors" }
-func (r *ErrorSwallowRule) Description() string            { return "Error handlers that catch errors but don't log, re-raise, or set any error variable." }
+func (r *ErrorSwallowRule) ID() string   { return "error-swallow" }
+func (r *ErrorSwallowRule) Name() string { return "Error handler swallows errors" }
+func (r *ErrorSwallowRule) Description() string {
+	return "Error handlers that catch errors but don't log, re-raise, or set any error variable."
+}
 func (r *ErrorSwallowRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *ErrorSwallowRule) Category() string               { return "Reliability" }
+func (r *ErrorSwallowRule) Category() string                 { return "Reliability" }
 
 func (r *ErrorSwallowRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeErrorHandler {

@@ -1,18 +1,67 @@
-run:
-  timeout: 5m
+# golangci-lint v2 config. v2 is required to analyze go1.25 modules; v1 (built
+# with go1.24) aborts with a "language version too low" error. CI must use
+# golangci-lint-action@v7+ to install a v2 binary.
+version: "2"
 
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
-    - staticcheck
+    - staticcheck   # v2 folds the old gosimple checks into staticcheck
     - unused
     - misspell
-    - gofmt
+    # Security & correctness (improvement roadmap — docs/IMPROVEMENTS.md)
+    - gosec        # security heuristics: SQLi, weak crypto, hardcoded secrets
+    - errorlint    # correct wrapped-error comparison (errors.Is/As)
+    - bodyclose    # ensure HTTP response bodies are closed
+    - nolintlint   # keep //nolint directives honest and specific
+    # contextcheck is intentionally NOT enabled: this codebase deliberately uses
+    # ctx-less settings/parser APIs and detached background contexts (logging,
+    # websocket lifecycle, cleanup goroutines). Satisfying it means threading ctx
+    # through public APIs — a separate refactor, not lint debt. See docs/IMPROVEMENTS.md.
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        # Idiomatic ignores: cleanup Close/Rollback on rows/stmts/conns, and
+        # deadline/Close on websocket conns in read/write pumps.
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Conn).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
+        - (*github.com/gorilla/websocket.Conn).Close
+        - (*github.com/gorilla/websocket.Conn).SetReadDeadline
+        - (*github.com/gorilla/websocket.Conn).SetWriteDeadline
+        - fmt.Fprintf
+        - fmt.Fprint
+        - fmt.Fprintln
+        - io.WriteString # used to feed hash.Hash, which never errors
+    gosec:
+      # G104 (unhandled errors) is fully redundant with errcheck, which handles
+      # the idiomatic ignores precisely via exclude-functions above.
+      excludes:
+        - G104
+    nolintlint:
+      require-specific: true
+      allow-unused: false
+  exclusions:
+    rules:
+      # Test files routinely ignore Write/Encode errors on in-memory servers,
+      # embed dummy credentials/fixtures, and build synthetic *http.Response
+      # values with nil bodies; linting those adds noise, not safety.
+      - path: _test.go
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+      # Dev-only scripts (sample generators, build helpers) are not shipped.
+      - path: scripts/
+        linters:
+          - gosec
+          - errcheck
 
-linters-settings:
-  errcheck:
-    exclude-functions:
-      - (io.Closer).Close
+formatters:
+  enable:
+    - gofmt

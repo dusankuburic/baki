@@ -6,11 +6,13 @@ import (
 
 type DeadDataRule struct{}
 
-func (r *DeadDataRule) ID() string                    { return "dead-data" }
-func (r *DeadDataRule) Name() string                   { return "Dead data path" }
-func (r *DeadDataRule) Description() string            { return "Variables set but only read by blocks that are themselves dead code (after terminators)." }
+func (r *DeadDataRule) ID() string   { return "dead-data" }
+func (r *DeadDataRule) Name() string { return "Dead data path" }
+func (r *DeadDataRule) Description() string {
+	return "Variables set but only read by blocks that are themselves dead code (after terminators)."
+}
 func (r *DeadDataRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *DeadDataRule) Category() string               { return "Logic" }
+func (r *DeadDataRule) Category() string                 { return "Logic" }
 
 func (r *DeadDataRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeVariable {

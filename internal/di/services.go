@@ -7,13 +7,13 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
-	"pad-core/analyzer"
-	"pad-core/cache"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/analyzer"
+	"pad-core/cache"
 )
 
 func ProvideDocumentProvider(mode config.DeploymentMode, storageBackend storageif.StorageBackend) service.DocumentProvider {

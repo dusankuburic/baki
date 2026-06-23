@@ -28,7 +28,7 @@ func isRetryable(err error) bool {
 func backoff(ctx context.Context, attempt int, lastErr error, baseDelay time.Duration) error {
 	d := baseDelay << attempt // 500ms, 1s, 2s, …
 	// Full jitter: random in [0, d] to avoid thundering-herd alignment.
-	d = time.Duration(rand.Int63n(int64(d) + 1))
+	d = time.Duration(rand.Int63n(int64(d) + 1)) // #nosec G404 -- jitter only, not security-sensitive
 	if hint := retryAfterFrom(lastErr); hint > d {
 		d = hint
 	}

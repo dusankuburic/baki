@@ -184,10 +184,18 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       return {suppressedKeys: keys, suppressedFindings: [...state.suppressedFindings, ...added]}
     })
     if (!isTauri()) {
-      for (const f of toAdd) {
-        analysisApi.setFindingStatus({findingKey: findingKey(f), ruleId: f.ruleId, status: 'suppressed', justification: reason})
-          .catch(err => logger.warn('Failed to persist suppression', err))
-      }
+      const addedKeys = new Set(toAdd.map(findingKey))
+      analysisApi.setFindingStatusBatch(
+        toAdd.map(f => ({findingKey: findingKey(f), ruleId: f.ruleId, status: 'suppressed' as const, justification: reason})),
+      ).catch(err => {
+        logger.warn('Failed to persist bulk suppression', err)
+        // Roll back the optimistic update so local state matches the server.
+        set(state => {
+          const keys = new Set(state.suppressedKeys)
+          for (const k of addedKeys) keys.delete(k)
+          return {suppressedKeys: keys, suppressedFindings: state.suppressedFindings.filter(s => !addedKeys.has(s.key))}
+        })
+      })
     }
   },
 

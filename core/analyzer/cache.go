@@ -13,10 +13,10 @@ import (
 )
 
 type CachedReport struct {
-	Hash      string                `json:"hash"`
+	Hash      string                 `json:"hash"`
 	Report    *models.AnalysisReport `json:"report"`
-	CreatedAt time.Time             `json:"createdAt"`
-	Seq       int64                 `json:"-"`
+	CreatedAt time.Time              `json:"createdAt"`
+	Seq       int64                  `json:"-"`
 }
 
 type AnalysisCache struct {

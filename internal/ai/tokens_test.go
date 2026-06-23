@@ -29,7 +29,7 @@ func TestTruncateToTokenLimit(t *testing.T) {
 	text := "This is a slightly longer sentence meant to be truncated at exactly ten tokens."
 	// 14 words, ~15 tokens
 	result := TruncateToTokenLimit(text, 10)
-	
+
 	// The result should end with "..."
 	if !strings.HasSuffix(result, "...") {
 		t.Errorf("expected truncated text to end with '...', got: %q", result)
@@ -46,4 +46,3 @@ func TestTruncateToTokenLimit(t *testing.T) {
 		t.Errorf("short text should not be truncated")
 	}
 }
-

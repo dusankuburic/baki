@@ -127,6 +127,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		// Finding triage & baselines (persistent, team-shared; cloud mode only)
 		r.Post("/triage/list", h.Analysis.handleListFindingStatuses)
 		r.Post("/triage/set", h.Analysis.handleSetFindingStatus)
+		r.Post("/triage/set-batch", h.Analysis.handleBatchSetFindingStatus)
 		r.Post("/triage/clear", h.Analysis.handleClearFindingStatus)
 		r.Post("/baseline/get", h.Analysis.handleGetBaseline)
 		r.Post("/baseline/set", h.Analysis.handleSetBaseline)

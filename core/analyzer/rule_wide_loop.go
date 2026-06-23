@@ -6,11 +6,13 @@ import (
 
 type WideLoopRule struct{}
 
-func (r *WideLoopRule) ID() string                    { return "wide-loop" }
-func (r *WideLoopRule) Name() string                   { return "Loop body is too large" }
-func (r *WideLoopRule) Description() string            { return "Loops containing more than N action blocks, indicating logic that should be extracted to subflows." }
+func (r *WideLoopRule) ID() string   { return "wide-loop" }
+func (r *WideLoopRule) Name() string { return "Loop body is too large" }
+func (r *WideLoopRule) Description() string {
+	return "Loops containing more than N action blocks, indicating logic that should be extracted to subflows."
+}
 func (r *WideLoopRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *WideLoopRule) Category() string               { return "Style" }
+func (r *WideLoopRule) Category() string                 { return "Style" }
 
 func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeLoop {

@@ -69,7 +69,7 @@ func TestCircuitBreaker_OpensAtThreshold(t *testing.T) {
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold {
-		cbCall(t, cb) //nolint:errcheck
+		cbCall(t, cb)
 	}
 
 	err := cbCall(t, cb)
@@ -111,7 +111,7 @@ func TestCircuitBreaker_ClosesOnSuccessAfterOpen(t *testing.T) {
 
 	// Open the circuit.
 	for range cbFailureThreshold {
-		cbCall(t, cb) //nolint:errcheck
+		cbCall(t, cb)
 	}
 	if !errors.Is(cbCall(t, cb), ErrCircuitOpen) {
 		t.Fatal("circuit should be open")
@@ -143,7 +143,7 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold {
-		cbCall(t, cb) //nolint:errcheck
+		cbCall(t, cb)
 	}
 
 	// Fast-forward past open window to enter half-open.
@@ -178,7 +178,7 @@ func TestCircuitBreaker_NonRetryableProbeDoesNotWedge(t *testing.T) {
 	cb := NewCircuitBreakerProvider(newCBStub(errs...))
 
 	for range cbFailureThreshold {
-		cbCall(t, cb) //nolint:errcheck
+		cbCall(t, cb)
 	}
 	if !errors.Is(cbCall(t, cb), ErrCircuitOpen) {
 		t.Fatal("circuit should be open after threshold")
@@ -219,7 +219,7 @@ func TestCircuitBreaker_PersistsAcrossInstances(t *testing.T) {
 	// fresh instance, exactly as repeated For() calls would.
 	for range cbFailureThreshold {
 		cb := NewCircuitBreakerProvider(newCBStub(ErrProviderDown))
-		cbCall(t, cb) //nolint:errcheck
+		cbCall(t, cb)
 	}
 
 	// A brand-new instance must now see the circuit open.

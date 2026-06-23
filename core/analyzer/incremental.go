@@ -64,7 +64,8 @@ func detectCycles(adj map[string][]string, nodes map[string]bool) [][]string {
 	dfs = func(node string) {
 		color[node] = gray
 		for _, next := range adj[node] {
-			if color[next] == gray {
+			switch color[next] {
+			case gray:
 				cycle := []string{next}
 				cur := node
 				for cur != next && cur != "" {
@@ -75,7 +76,7 @@ func detectCycles(adj map[string][]string, nodes map[string]bool) [][]string {
 					cycle = append([]string{next}, cycle...)
 				}
 				cycles = append(cycles, cycle)
-			} else if color[next] == white {
+			case white:
 				parent[next] = node
 				dfs(next)
 			}
@@ -180,7 +181,8 @@ func fnvBuilder() *fnvHasher {
 
 func (f *fnvHasher) write(s string) {
 	for _, c := range s {
-		f.h ^= uint32(c)
+		f.h ^= uint32(c) // #nosec G115 -- rune always fits in uint32; FNV-1a hashing
+
 		f.h *= 16777619
 	}
 }

@@ -7,12 +7,12 @@ import (
 	"io"
 	"net/http"
 
-	"pad-core/analyzer"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-core/models"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/analyzer"
+	"pad-core/models"
 )
 
 type AnalysisHandler struct {
@@ -41,7 +41,7 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	userID := h.security.CallerID(r)
 	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
 	if err != nil {
@@ -104,7 +104,7 @@ func (h *AnalysisHandler) handleGetExecutionGraph(w http.ResponseWriter, r *http
 		}
 		flowID = req.FlowID
 	}
-	
+
 	userID := h.security.CallerID(r)
 	doc, err := h.flowSvc.GetAuthorized(r.Context(), flowID, userID, "viewer")
 	if err != nil {
@@ -356,7 +356,7 @@ func (h *AnalysisHandler) handleExportHTML(w http.ResponseWriter, r *http.Reques
 	html := h.analysisSvc.GenerateHTMLReport(report)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", "inline; filename=\"analysis-report.html\"")
-	w.Write([]byte(html))
+	_, _ = w.Write([]byte(html))
 }
 
 func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.Request) {
@@ -420,10 +420,10 @@ func (h *AnalysisHandler) handleDeduplicate(w http.ResponseWriter, r *http.Reque
 
 	deduped, groups := h.analysisSvc.DeduplicateFindings(report)
 	render.JSON(w, map[string]interface{}{
-		"deduplicated": deduped,
-		"groups":       groups,
+		"deduplicated":  deduped,
+		"groups":        groups,
 		"originalCount": len(report.Findings),
-		"dedupedCount": len(deduped),
+		"dedupedCount":  len(deduped),
 	})
 }
 

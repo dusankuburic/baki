@@ -13,8 +13,8 @@ type Notifier interface {
 // NilNotifier is a no-op implementation of Notifier.
 type NilNotifier struct{}
 
-func (n NilNotifier) Emit(name string, data any)             {}
-func (n NilNotifier) EmitTo(userID, name string, data any)   {}
+func (n NilNotifier) Emit(name string, data any)           {}
+func (n NilNotifier) EmitTo(userID, name string, data any) {}
 
 // GlobalNotifier is a concrete implementation of Notifier that allows
 // multiple subscribers to listen for emitted events.

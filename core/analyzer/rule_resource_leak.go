@@ -27,8 +27,8 @@ var resourcePairs = []resourcePair{
 
 type ResourceLeakRule struct{}
 
-func (r *ResourceLeakRule) ID() string          { return "resource-leak" }
-func (r *ResourceLeakRule) Name() string         { return "Resource opened but never closed" }
+func (r *ResourceLeakRule) ID() string   { return "resource-leak" }
+func (r *ResourceLeakRule) Name() string { return "Resource opened but never closed" }
 func (r *ResourceLeakRule) Description() string {
 	return "Actions that open files, connections, or application instances without a corresponding close action."
 }

@@ -12,6 +12,15 @@ export interface SetFindingStatusInput {
   flowId?: string
 }
 
+// One item of a batch finding-status update (flowId is shared across the batch).
+export interface BatchFindingStatusItem {
+  findingKey: string
+  status: TriageStatus
+  ruleId?: string
+  justification?: string
+  assigneeId?: string
+}
+
 function activeFlowId(): string | undefined {
   return useFlowStore.getState().document?.id
 }
@@ -78,6 +87,10 @@ export const analysisApi = {
 
   setFindingStatus: (input: SetFindingStatusInput): Promise<FindingStatus> =>
     request('/api/analysis/triage/set', {flowId: activeFlowId(), ...input}),
+
+  // Apply the same status to many findings of one flow in a single request.
+  setFindingStatusBatch: (items: BatchFindingStatusItem[], flowId: string = activeFlowId() ?? ''): Promise<{updated: number}> =>
+    request('/api/analysis/triage/set-batch', {flowId, items}),
 
   clearFindingStatus: (findingKey: string, flowId: string = activeFlowId() ?? ''): Promise<void> =>
     request('/api/analysis/triage/clear', {flowId, findingKey}),

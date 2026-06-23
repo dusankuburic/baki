@@ -134,6 +134,7 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		return
 	}
 	// Pool was never initialized (e.g. local mode / tests): best-effort save.
+	// #nosec G118 -- detached best-effort audit write; must not be tied to request ctx.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {

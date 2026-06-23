@@ -59,13 +59,14 @@ func wrapBlocksAsDiff(blocks []models.Block, change models.ChangeType) []models.
 			bd.Old = &blocks[i]
 		}
 		res = append(res, bd)
-		
-		// Recursively wrap children? 
-		// Actually, for a completely added/removed subflow, 
+
+		// Recursively wrap children?
+		// Actually, for a completely added/removed subflow,
 		// we might just want a flat list or the root blocks.
 		// Let's stick to root blocks for now, but usually diffs are flat.
+		// #nosec G602 -- i is always a valid index (from `range blocks`).
 		if len(blocks[i].Children) > 0 {
-			res = append(res, wrapBlocksAsDiff(blocks[i].Children, change)...)
+			res = append(res, wrapBlocksAsDiff(blocks[i].Children, change)...) // #nosec G602
 		}
 	}
 	return res

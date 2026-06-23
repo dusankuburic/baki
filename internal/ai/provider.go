@@ -32,9 +32,9 @@ type EmbedResponse struct {
 }
 
 type ModelInfo struct {
-	ID           string  `json:"id"`
-	DisplayName  string  `json:"displayName"`
-	ContextLimit int     `json:"contextLimit"`
+	ID           string `json:"id"`
+	DisplayName  string `json:"displayName"`
+	ContextLimit int    `json:"contextLimit"`
 	// MaxOutputTokens is the model's maximum completion length, which is far
 	// smaller than ContextLimit (the input window). Zero means unknown — callers
 	// that clamp MaxTokens against it should leave the value untouched in that

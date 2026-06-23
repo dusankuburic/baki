@@ -68,7 +68,7 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 		flow.OwnerID, flow.OrganizationID, now, now, expectedVer,
 	).Scan(&newVersion)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return interfaces.ErrVersionConflict
 		}
 		return fmt.Errorf("upsert flow: %w", err)
@@ -371,6 +371,7 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 	// Delete all blobs related to this flow (content + versions)
 	if b.blobClient != nil {
 		prefix := fmt.Sprintf("flows/%s/", id)
+		// #nosec G118 -- intentionally detached with its own bounded timeout (see below).
 		go func() {
 			// Detached goroutine: a panic (e.g. inside the azblob SDK) would
 			// otherwise take down the whole process, so recover per the project

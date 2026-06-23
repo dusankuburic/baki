@@ -201,13 +201,13 @@ func provideOrgService(backend storageif.StorageBackend) *collaboration.OrgServi
 }
 
 func initLogger(cfg *config.Config) {
-	logger.InitWith(logger.Options{
+	_ = logger.InitWith(logger.Options{
 		Level:      cfg.Log.Level,
 		StdoutOnly: cfg.Mode == config.ModeCloud,
 	})
 	if cfg.Mode != config.ModeCloud {
 		configDir, _ := storage.ConfigDir()
-		logger.Init(configDir, false)
+		_ = logger.Init(configDir, false)
 	}
 }
 
@@ -414,6 +414,9 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		// http.ResponseController.SetWriteDeadline for non-streaming routes.
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
+		// MaxHeaderBytes caps total request header size to guard against
+		// header-bomb DoS. Made explicit rather than relying on the 1 MB default.
+		MaxHeaderBytes: 1 << 20,
 	}
 
 	lc.Append(fx.Hook{

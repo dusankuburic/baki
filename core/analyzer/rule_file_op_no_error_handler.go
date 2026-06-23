@@ -26,11 +26,13 @@ var fileOperationPrefixes = []string{
 
 type FileOpNoErrorHandlerRule struct{}
 
-func (r *FileOpNoErrorHandlerRule) ID() string                    { return "file-op-no-error-handler" }
-func (r *FileOpNoErrorHandlerRule) Name() string                   { return "File operation without error handler" }
-func (r *FileOpNoErrorHandlerRule) Description() string            { return "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler." }
+func (r *FileOpNoErrorHandlerRule) ID() string   { return "file-op-no-error-handler" }
+func (r *FileOpNoErrorHandlerRule) Name() string { return "File operation without error handler" }
+func (r *FileOpNoErrorHandlerRule) Description() string {
+	return "File/Folder operations that commonly fail (locks, permissions, missing paths) without an error handler."
+}
 func (r *FileOpNoErrorHandlerRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *FileOpNoErrorHandlerRule) Category() string               { return "Reliability" }
+func (r *FileOpNoErrorHandlerRule) Category() string                 { return "Reliability" }
 
 func (r *FileOpNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeAction {

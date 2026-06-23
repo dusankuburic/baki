@@ -122,7 +122,7 @@ func main() {
 }
 
 func loadPolicy(path string) (models.Policy, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- policy path is a CLI argument supplied by the operator
 	if err != nil {
 		return models.Policy{}, err
 	}
@@ -160,7 +160,7 @@ func load(target string) (*models.FlowDocument, error) {
 	if info.IsDir() {
 		return parser.ParseFolder(target)
 	}
-	data, err := os.ReadFile(target)
+	data, err := os.ReadFile(target) // #nosec G304 -- target is a CLI argument supplied by the operator
 	if err != nil {
 		return nil, err
 	}

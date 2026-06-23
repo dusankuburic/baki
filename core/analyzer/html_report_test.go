@@ -58,8 +58,8 @@ func TestGenerateHTMLReport(t *testing.T) {
 
 	t.Run("low_health_uses_bad_class", func(t *testing.T) {
 		report := &models.AnalysisReport{
-			FlowID: "f2",
-			Stats:  models.AnalysisStats{Errors: 5},
+			FlowID:  "f2",
+			Stats:   models.AnalysisStats{Errors: 5},
 			Metrics: &models.FlowMetrics{HealthScore: 30},
 		}
 		html := GenerateHTMLReport(report)

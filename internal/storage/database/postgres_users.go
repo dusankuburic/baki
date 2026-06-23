@@ -168,6 +168,8 @@ func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []strin
 	if len(args) == 0 {
 		return out, nil
 	}
+	// #nosec G202 -- placeholders contains only generated "$N" tokens, never user
+	// input; all id values are passed as parameterized args below.
 	q := `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE id IN (` +
 		strings.Join(placeholders, ",") + `)`
 	rows, err := b.db.QueryContext(ctx, q, args...)
@@ -460,6 +462,7 @@ func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter int
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
+	// #nosec G202 -- only generated "$N" placeholders are concatenated; all values are parameterized args.
 	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", i, i+1)
 	args = append(args, limit, offset)
 

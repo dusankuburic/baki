@@ -50,7 +50,7 @@ func (lsb *LocalStorageBackend) readStatuses(flowID string) (map[string]*interfa
 // writeStatuses persists the per-flow finding-status map. Callers must hold triageMu.
 func (lsb *LocalStorageBackend) writeStatuses(flowID string, m map[string]*interfaces.FindingStatus) error {
 	path := lsb.triagePath(flowID)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("create triage dir: %w", err)
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -133,7 +133,7 @@ func (lsb *LocalStorageBackend) SetFlowBaseline(ctx context.Context, bl *interfa
 		return fmt.Errorf("baseline requires flowId")
 	}
 	path := lsb.baselinePath(bl.FlowID)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("create baseline dir: %w", err)
 	}
 	if bl.CreatedAt.IsZero() {

@@ -7,10 +7,13 @@ import type {Finding, AnalysisReport} from '@/types'
 vi.mock('@/api', () => ({
   analysisApi: {
     setFindingStatus: vi.fn().mockResolvedValue({}),
+    setFindingStatusBatch: vi.fn().mockResolvedValue({updated: 0}),
     clearFindingStatus: vi.fn().mockResolvedValue(undefined),
     listFindingStatuses: vi.fn().mockResolvedValue([]),
   },
 }))
+
+import {analysisApi} from '@/api'
 
 function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
     return {
@@ -60,6 +63,16 @@ describe('suppression', () => {
         expect(state.isSuppressed(f3())).toBe(true)
         // f1 must not be duplicated in the list
         expect(state.suppressedFindings.filter(x => x.key === findingKey(f1()))).toHaveLength(1)
+    })
+
+    it('suppressMany persists the batch in a single request', () => {
+        vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
+        useAnalysisStore.getState().suppressMany([f1(), f2(), f3()], 'bulk')
+        // One HTTP call for the whole batch, not one per finding.
+        expect(analysisApi.setFindingStatusBatch).toHaveBeenCalledTimes(1)
+        const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0][0]
+        expect(items).toHaveLength(3)
+        expect(items.every(i => i.status === 'suppressed')).toBe(true)
     })
 
     it('unsuppressFinding restores a single finding', () => {

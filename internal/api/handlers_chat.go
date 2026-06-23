@@ -7,8 +7,8 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-core/models"
 	"pad-analyzer/internal/service"
+	"pad-core/models"
 )
 
 type ChatHandler struct {
@@ -27,7 +27,7 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
 	if !ok {
 		return
@@ -116,7 +116,7 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
 	if !ok {
 		return

@@ -359,7 +359,7 @@ func TestGeminiProvider_Chat_400_ApiKeyError(t *testing.T) {
 		Model:    "gemini-2.5-pro",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }

@@ -83,12 +83,12 @@ func TestWriteSubflowOutline_Truncates(t *testing.T) {
 func TestBuildContext_SelectedBlock_WithChildren_ShowsNestedCount(t *testing.T) {
 	child := &models.Block{ID: "c1", Name: "Inner", Type: models.BlockTypeAction}
 	block := &models.Block{
-		ID:       "b1",
-		Name:     "Outer Loop",
-		Type:     models.BlockTypeLoop,
-		RawType:  "Loop.ForEach",
+		ID:        "b1",
+		Name:      "Outer Loop",
+		Type:      models.BlockTypeLoop,
+		RawType:   "Loop.ForEach",
 		SubflowID: "sf1",
-		Children: []models.Block{*child},
+		Children:  []models.Block{*child},
 	}
 	doc := makeMinimalDoc("ChildFlow")
 	doc.BlocksByID["b1"] = block

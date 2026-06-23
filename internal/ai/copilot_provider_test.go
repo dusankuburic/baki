@@ -160,7 +160,7 @@ func TestCopilotProvider_Chat_401_ReturnsErrApiKeyInvalid(t *testing.T) {
 		Model:    "gpt-4o",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	})
-	if err != ErrApiKeyInvalid {
+	if !errors.Is(err, ErrApiKeyInvalid) {
 		t.Errorf("expected ErrApiKeyInvalid, got %v", err)
 	}
 }

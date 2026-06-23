@@ -15,8 +15,8 @@ import (
 var update = flag.Bool("update", false, "update golden files")
 
 type normalizedDoc struct {
-	Name        string           `json:"name"`
-	Subflows    []normalizedSF   `json:"subflows"`
+	Name        string              `json:"name"`
+	Subflows    []normalizedSF      `json:"subflows"`
 	ParseErrors []models.ParseError `json:"parseErrors,omitempty"`
 	Metadata    struct {
 		BlockCount   int `json:"blockCount"`
@@ -32,15 +32,15 @@ type normalizedSF struct {
 }
 
 type normalizedBlk struct {
-	Name       string               `json:"name"`
-	Type       models.BlockType     `json:"type"`
-	RawType    string               `json:"rawType"`
-	Indent     int                  `json:"indent"`
-	LineNumber int                  `json:"lineNumber"`
-	Properties map[string]string    `json:"properties"`
-	Variables  []string             `json:"variables"`
-	Tokens     []models.BlockToken  `json:"tokens,omitempty"`
-	Children   []normalizedBlk      `json:"children"`
+	Name       string              `json:"name"`
+	Type       models.BlockType    `json:"type"`
+	RawType    string              `json:"rawType"`
+	Indent     int                 `json:"indent"`
+	LineNumber int                 `json:"lineNumber"`
+	Properties map[string]string   `json:"properties"`
+	Variables  []string            `json:"variables"`
+	Tokens     []models.BlockToken `json:"tokens,omitempty"`
+	Children   []normalizedBlk     `json:"children"`
 }
 
 func normalizeDoc(doc *models.FlowDocument) normalizedDoc {

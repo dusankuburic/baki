@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
+	"pad-core/logger"
 )
 
 func (s circuitState) String() string {
@@ -28,7 +28,7 @@ const (
 type circuitState int
 
 const (
-	circuitClosed   circuitState = iota
+	circuitClosed circuitState = iota
 	circuitOpen
 	circuitHalfOpen
 )
@@ -199,7 +199,7 @@ func (cb *CircuitBreakerProvider) transitionLocked(next circuitState) {
 		return
 	}
 	cb.st.state = next
-	provider := cb.Provider.ID()
+	provider := cb.ID()
 	metrics.RecordCircuitBreakerTransition(provider, next.String())
 	if next == circuitClosed {
 		logger.Info("AI circuit breaker closed", "provider", provider)

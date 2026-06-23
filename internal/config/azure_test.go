@@ -64,10 +64,10 @@ func TestResolveAzureSecrets_PartialValues(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name                  string
-		authSecret            string
-		databaseURL           string
-		expectAuthUntouched   bool
+		name                   string
+		authSecret             string
+		databaseURL            string
+		expectAuthUntouched    bool
 		expectDBURLOverwritten bool
 	}{
 		{

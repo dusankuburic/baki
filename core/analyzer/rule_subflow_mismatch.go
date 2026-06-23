@@ -8,11 +8,13 @@ import (
 
 type SubflowMismatchRule struct{}
 
-func (r *SubflowMismatchRule) ID() string                    { return "subflow-mismatch" }
-func (r *SubflowMismatchRule) Name() string                   { return "Subflow call parameter mismatch" }
-func (r *SubflowMismatchRule) Description() string            { return "Subflow calls where output variables aren't captured or input variables may be missing." }
+func (r *SubflowMismatchRule) ID() string   { return "subflow-mismatch" }
+func (r *SubflowMismatchRule) Name() string { return "Subflow call parameter mismatch" }
+func (r *SubflowMismatchRule) Description() string {
+	return "Subflow calls where output variables aren't captured or input variables may be missing."
+}
 func (r *SubflowMismatchRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *SubflowMismatchRule) Category() string               { return "Logic" }
+func (r *SubflowMismatchRule) Category() string                 { return "Logic" }
 
 func (r *SubflowMismatchRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeSubflow && block.RawType != "CALL" {

@@ -49,7 +49,7 @@ func TestHistoryStore_RecordWithMetrics(t *testing.T) {
 	store := NewHistoryStore(dir)
 
 	report := &models.AnalysisReport{
-		FlowID: "flow-1",
+		FlowID:  "flow-1",
 		Metrics: &models.FlowMetrics{HealthScore: 72},
 	}
 	doc := &models.FlowDocument{ID: "flow-1"}

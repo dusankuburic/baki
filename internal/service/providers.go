@@ -121,7 +121,6 @@ func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, pro
 
 	var chatErr error
 	for _, model := range testModels {
-		chatErr = nil
 		_, chatErr = provider.Chat(ctx, ai.Request{
 			Model:       model,
 			Messages:    []ai.Message{{Role: "user", Content: "Hi"}},
@@ -235,4 +234,3 @@ func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (use
 	}
 	return s.auth.GetUser(ctx, token)
 }
-

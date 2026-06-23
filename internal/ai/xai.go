@@ -47,9 +47,9 @@ func (x *XAIProvider) Models(_ context.Context) ([]ModelInfo, error) {
 }
 
 func (x *XAIProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	return x.openaiBase.chat(ctx, req)
+	return x.chat(ctx, req)
 }
 
 func (x *XAIProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	return x.openaiBase.stream(ctx, req, onChunk)
+	return x.stream(ctx, req, onChunk)
 }

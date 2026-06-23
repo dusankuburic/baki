@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -330,7 +331,7 @@ func TestLocalStorage_SaveFlow_VersionConflict(t *testing.T) {
 		Version: 0,
 	}
 	err := rt.security.Backend.SaveFlow(context.Background(), stale)
-	if err != interfaces.ErrVersionConflict {
+	if !errors.Is(err, interfaces.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict for stale version, got %v", err)
 	}
 }

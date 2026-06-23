@@ -7,8 +7,8 @@ type EventType string
 
 const (
 	// Presence events
-	EventPresenceJoin  EventType = "presence.join"
-	EventPresenceLeave EventType = "presence.leave"
+	EventPresenceJoin   EventType = "presence.join"
+	EventPresenceLeave  EventType = "presence.leave"
 	EventPresenceUpdate EventType = "presence.update"
 
 	// Cursor / selection events

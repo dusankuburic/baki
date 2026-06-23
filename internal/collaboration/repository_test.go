@@ -81,12 +81,12 @@ func TestMemOrgStore_ListOrgsForUser(t *testing.T) {
 
 	store.SaveOrg(ctx, &interfaces.Organisation{
 		ID: "org-1", Name: "Org 1", OwnerID: "user-1",
-		Members: []interfaces.OrgMember{{UserID: "user-1", Role: auth.RoleAdmin, JoinedAt: now()}},
+		Members:   []interfaces.OrgMember{{UserID: "user-1", Role: auth.RoleAdmin, JoinedAt: now()}},
 		CreatedAt: now(), UpdatedAt: now(),
 	})
 	store.SaveOrg(ctx, &interfaces.Organisation{
 		ID: "org-2", Name: "Org 2", OwnerID: "user-2",
-		Members: []interfaces.OrgMember{{UserID: "user-2", Role: auth.RoleAdmin, JoinedAt: now()}},
+		Members:   []interfaces.OrgMember{{UserID: "user-2", Role: auth.RoleAdmin, JoinedAt: now()}},
 		CreatedAt: now(), UpdatedAt: now(),
 	})
 	store.SaveOrg(ctx, &interfaces.Organisation{

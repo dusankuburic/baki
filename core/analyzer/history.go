@@ -11,19 +11,19 @@ import (
 )
 
 type AnalysisSnapshot struct {
-	Timestamp string `json:"timestamp"`
-	FlowID    string `json:"flowId"`
-	Hash      string `json:"hash"`
-	Errors    int    `json:"errors"`
-	Warnings  int    `json:"warnings"`
-	Info      int    `json:"info"`
-	HealthScore int  `json:"healthScore"`
-	DurationMs int   `json:"durationMs"`
+	Timestamp   string `json:"timestamp"`
+	FlowID      string `json:"flowId"`
+	Hash        string `json:"hash"`
+	Errors      int    `json:"errors"`
+	Warnings    int    `json:"warnings"`
+	Info        int    `json:"info"`
+	HealthScore int    `json:"healthScore"`
+	DurationMs  int    `json:"durationMs"`
 }
 
 type HistoryStore struct {
-	mu       sync.Mutex
-	dir      string
+	mu         sync.Mutex
+	dir        string
 	maxPerFlow int
 }
 
@@ -53,15 +53,15 @@ func (h *HistoryStore) Record(flowID string, report *models.AnalysisReport, doc 
 		snapshot.HealthScore = report.Metrics.HealthScore
 	}
 
-	if err := os.MkdirAll(h.dir, 0755); err != nil {
+	if err := os.MkdirAll(h.dir, 0750); err != nil {
 		return
 	}
 
 	path := filepath.Join(h.dir, flowID+".json")
 	var snapshots []AnalysisSnapshot
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path = h.dir/<flowID>.json, not raw user input
 	if err == nil {
-		json.Unmarshal(data, &snapshots)
+		_ = json.Unmarshal(data, &snapshots) // best-effort; a corrupt file is treated as empty history
 	}
 
 	// Skip duplicate snapshots: re-analyzing unchanged content (cache hits,
@@ -82,7 +82,7 @@ func (h *HistoryStore) Record(flowID string, report *models.AnalysisReport, doc 
 	}
 
 	encoded, _ := json.Marshal(snapshots)
-	os.WriteFile(path, encoded, 0644)
+	_ = os.WriteFile(path, encoded, 0600) // best-effort trend persistence; internal app data
 }
 
 func (h *HistoryStore) Load(flowID string) []AnalysisSnapshot {
@@ -94,12 +94,12 @@ func (h *HistoryStore) Load(flowID string) []AnalysisSnapshot {
 	}
 
 	path := filepath.Join(h.dir, flowID+".json")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path = h.dir/<flowID>.json, not raw user input
 	if err != nil {
 		return nil
 	}
 
 	var snapshots []AnalysisSnapshot
-	json.Unmarshal(data, &snapshots)
+	_ = json.Unmarshal(data, &snapshots) // best-effort; a corrupt file yields no history
 	return snapshots
 }

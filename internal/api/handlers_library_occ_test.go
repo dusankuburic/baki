@@ -173,7 +173,7 @@ func TestFakeBackend_OCC_VersionZeroSkipsCheck(t *testing.T) {
 	_ = b.SaveFlow(ctx, doc) // version=0
 	doc.Version = 0
 	_ = b.SaveFlow(ctx, doc) // version=1
-	doc.Version = 0 // version=0 should skip check even though DB has 1
+	doc.Version = 0          // version=0 should skip check even though DB has 1
 	doc.Name = "force overwrite"
 	err := b.SaveFlow(ctx, doc)
 	if err != nil {

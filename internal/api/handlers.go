@@ -62,5 +62,7 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 	}
 
+	// #nosec G703 -- path is validated by http.Dir.Open (rejects traversal) above;
+	// any miss falls back to the constant index.html.
 	http.ServeFile(w, r, servedFile)
 }

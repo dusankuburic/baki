@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"pad-core/models"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
 )
 
 // DocumentProvider abstracts the difference between single-user (local)

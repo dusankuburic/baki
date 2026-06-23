@@ -2,22 +2,22 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"encoding/json"
 	"strings"
 	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-core/ai/scrubber"
-	"pad-core/logger"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/metrics"
-	"pad-core/models"
 	"pad-analyzer/internal/rag"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/ai/scrubber"
+	"pad-core/logger"
+	"pad-core/models"
 
 	"github.com/google/uuid"
 )
@@ -588,7 +588,7 @@ func (lsb *ChatService) GetConversation(ctx context.Context, doc *models.FlowDoc
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path derived from configDir+provider+flowID, not raw user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []models.ChatMessage{}, nil
@@ -618,7 +618,7 @@ func (lsb *ChatService) SaveConversation(ctx context.Context, doc *models.FlowDo
 		return err
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create conversations directory: %w", err)
 	}
 
@@ -669,7 +669,7 @@ func (lsb *ChatService) ExportConversation(ctx context.Context, doc *models.Flow
 	for _, m := range msgs {
 		fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", m.Role, m.Timestamp.Format(time.RFC3339), m.Content)
 	}
-	return os.WriteFile(path, []byte(b.String()), 0644)
+	return os.WriteFile(path, []byte(b.String()), 0644) // #nosec G306 -- user-chosen export path; world-readable is intended for sharing
 }
 
 func (s *ChatService) GetDemoRemaining() (int, error) {

@@ -9,15 +9,17 @@ import (
 
 type HardcodedURLRule struct{}
 
-func (r *HardcodedURLRule) ID() string          { return "hardcoded-url" }
-func (r *HardcodedURLRule) Name() string         { return "Hardcoded URL" }
-func (r *HardcodedURLRule) Description() string  { return "Hardcoded URLs and API endpoints that should be parameterized for different environments." }
+func (r *HardcodedURLRule) ID() string   { return "hardcoded-url" }
+func (r *HardcodedURLRule) Name() string { return "Hardcoded URL" }
+func (r *HardcodedURLRule) Description() string {
+	return "Hardcoded URLs and API endpoints that should be parameterized for different environments."
+}
 func (r *HardcodedURLRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *HardcodedURLRule) Category() string     { return "Portability" }
+func (r *HardcodedURLRule) Category() string                 { return "Portability" }
 
 var (
-	urlPattern      = regexp.MustCompile(`(?i)\b(https?://|ftp://|www\.)[^\s"')\]}>.,;]+`)
-	padVariableRef  = regexp.MustCompile(`%[A-Za-z_][A-Za-z0-9_]*%`)
+	urlPattern     = regexp.MustCompile(`(?i)\b(https?://|ftp://|www\.)[^\s"')\]}>.,;]+`)
+	padVariableRef = regexp.MustCompile(`%[A-Za-z_][A-Za-z0-9_]*%`)
 )
 
 func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {

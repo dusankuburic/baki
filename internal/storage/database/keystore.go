@@ -13,8 +13,8 @@ import (
 	"io"
 	"time"
 
-	"pad-core/logger"
 	"pad-analyzer/internal/storage"
+	"pad-core/logger"
 )
 
 const keystoreTimeout = 5 * time.Second
@@ -97,7 +97,7 @@ func (s *EncryptedKeyStore) decrypt(encoded string, aad []byte) (string, error) 
 }
 
 // Save upserts the encrypted key for a (scope, provider) pair. An empty scope
-// is the legacy/local namespace (stored as user_id = '').
+// is the legacy/local namespace (stored as user_id = ”).
 func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 	ct, err := s.encrypt(key, keyAAD(scope, provider))
 	if err != nil {

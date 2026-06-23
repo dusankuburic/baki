@@ -1,7 +1,7 @@
 package analyzer
 
 import (
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 -- content fingerprint for dedup, not a security primitive
 	"encoding/hex"
 	"sort"
 	"strings"
@@ -11,11 +11,13 @@ import (
 
 type DuplicateActionRule struct{}
 
-func (r *DuplicateActionRule) ID() string          { return "duplicate-action" }
-func (r *DuplicateActionRule) Name() string         { return "Repeated action pattern" }
-func (r *DuplicateActionRule) Description() string  { return "3+ identical actions in sequence (same RawType and similar properties)." }
+func (r *DuplicateActionRule) ID() string   { return "duplicate-action" }
+func (r *DuplicateActionRule) Name() string { return "Repeated action pattern" }
+func (r *DuplicateActionRule) Description() string {
+	return "3+ identical actions in sequence (same RawType and similar properties)."
+}
 func (r *DuplicateActionRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *DuplicateActionRule) Category() string     { return "Style" }
+func (r *DuplicateActionRule) Category() string                 { return "Style" }
 
 func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	minRepeats := 3
@@ -68,14 +70,14 @@ func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []mod
 	}
 
 	return []models.Finding{{
-		RuleID:     r.ID(),
-		Severity:   r.DefaultSeverity(),
-		Title:      "Repeated action pattern",
+		RuleID:      r.ID(),
+		Severity:    r.DefaultSeverity(),
+		Title:       "Repeated action pattern",
 		Description: "This action is repeated multiple times in sequence.",
-		BlockID:    block.ID,
-		SubflowID:  block.SubflowID,
-		Suggestion: "Consider extracting these repeated actions into a subflow.",
-		Metadata:   map[string]any{"repeatCount": matching},
+		BlockID:     block.ID,
+		SubflowID:   block.SubflowID,
+		Suggestion:  "Consider extracting these repeated actions into a subflow.",
+		Metadata:    map[string]any{"repeatCount": matching},
 	}}
 }
 
@@ -96,6 +98,6 @@ func blockSignature(b *models.Block) string {
 		sb.WriteByte(';')
 	}
 
-	h := md5.Sum([]byte(sb.String()))
+	h := md5.Sum([]byte(sb.String())) // #nosec G401 -- content fingerprint for dedup, not security
 	return hex.EncodeToString(h[:])
 }

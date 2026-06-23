@@ -26,8 +26,8 @@ func (s *auditStub) Stream(_ context.Context, _ Request, onChunk func(Chunk)) er
 	return nil
 }
 func (s *auditStub) Models(_ context.Context) ([]ModelInfo, error) { return s.models, nil }
-func (s *auditStub) PricePerMillionTokens() Pricing { return s.price }
-func (s *auditStub) ID() string                     { return "stub" }
+func (s *auditStub) PricePerMillionTokens() Pricing                { return s.price }
+func (s *auditStub) ID() string                                    { return "stub" }
 
 // awaitMetric runs a Chat through the audited wrapper and returns the recorded
 // metric (recording is async). Fails the test if nothing is recorded.

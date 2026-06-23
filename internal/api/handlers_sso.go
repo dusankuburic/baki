@@ -91,6 +91,8 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload, _ := json.Marshal(flow)
+	// #nosec G124 -- HttpOnly+SameSite are always set; Secure is set whenever the
+	// request is TLS (it can't be unconditional for local HTTP dev).
 	http.SetCookie(w, &http.Cookie{
 		Name:     ssoFlowCookie,
 		Value:    base64.RawURLEncoding.EncodeToString(payload),
@@ -115,6 +117,7 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 	metrics.RecordAuthOp("sso_callback")
 
 	// Always clear the flow cookie — each cookie is good for one attempt.
+	// #nosec G124 -- HttpOnly+SameSite always set; Secure tracks request TLS.
 	http.SetCookie(w, &http.Cookie{
 		Name: ssoFlowCookie, Value: "", Path: "/api/auth/sso", MaxAge: -1,
 		HttpOnly: true, Secure: requestIsTLS(r), SameSite: http.SameSiteLaxMode,

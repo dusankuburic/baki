@@ -2,6 +2,7 @@ package collaboration
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"pad-analyzer/internal/auth"
@@ -59,7 +60,7 @@ func TestGet_ExistingOrg(t *testing.T) {
 
 func TestGet_NotFoundReturnsError(t *testing.T) {
 	_, err := newSvc().Get(context.Background(), "nonexistent")
-	if err != ErrOrgNotFound {
+	if !errors.Is(err, ErrOrgNotFound) {
 		t.Errorf("expected ErrOrgNotFound, got %v", err)
 	}
 }
@@ -100,7 +101,7 @@ func TestAddMember_DuplicateReturnsError(t *testing.T) {
 	svc.AddMember(context.Background(), org.ID, "u2", auth.RoleMember)
 
 	err := svc.AddMember(context.Background(), org.ID, "u2", auth.RoleMember)
-	if err != ErrAlreadyMember {
+	if !errors.Is(err, ErrAlreadyMember) {
 		t.Errorf("expected ErrAlreadyMember, got %v", err)
 	}
 }
@@ -133,7 +134,7 @@ func TestRemoveMember_LastAdminBlocked(t *testing.T) {
 	org, _ := svc.Create(context.Background(), "Test", "owner")
 
 	err := svc.RemoveMember(context.Background(), org.ID, "owner")
-	if err != ErrLastAdmin {
+	if !errors.Is(err, ErrLastAdmin) {
 		t.Errorf("expected ErrLastAdmin, got %v", err)
 	}
 }
@@ -143,7 +144,7 @@ func TestRemoveMember_NotFoundReturnsError(t *testing.T) {
 	org, _ := svc.Create(context.Background(), "Test", "owner")
 
 	err := svc.RemoveMember(context.Background(), org.ID, "ghost")
-	if err != ErrMemberNotFound {
+	if !errors.Is(err, ErrMemberNotFound) {
 		t.Errorf("expected ErrMemberNotFound, got %v", err)
 	}
 }
@@ -170,7 +171,7 @@ func TestSetRole_DemoteLastAdminBlocked(t *testing.T) {
 	org, _ := svc.Create(context.Background(), "Test", "owner")
 
 	err := svc.SetRole(context.Background(), org.ID, "owner", auth.RoleMember)
-	if err != ErrLastAdmin {
+	if !errors.Is(err, ErrLastAdmin) {
 		t.Errorf("expected ErrLastAdmin, got %v", err)
 	}
 }
@@ -194,13 +195,13 @@ func TestDelete_RemovesOrg(t *testing.T) {
 	if err := svc.Delete(context.Background(), org.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := svc.Get(context.Background(), org.ID); err != ErrOrgNotFound {
+	if _, err := svc.Get(context.Background(), org.ID); !errors.Is(err, ErrOrgNotFound) {
 		t.Error("expected org to be gone after Delete")
 	}
 }
 
 func TestDelete_NotFoundReturnsError(t *testing.T) {
-	if err := newSvc().Delete(context.Background(), "ghost"); err != ErrOrgNotFound {
+	if err := newSvc().Delete(context.Background(), "ghost"); !errors.Is(err, ErrOrgNotFound) {
 		t.Errorf("expected ErrOrgNotFound, got %v", err)
 	}
 }

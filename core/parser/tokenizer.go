@@ -8,12 +8,16 @@ import (
 func computeIndent(line string) int {
 	n := 0
 	for _, ch := range line {
-		if ch == ' ' {
+		switch ch {
+		case ' ':
 			n++
-		} else if ch == '\t' {
+		case '\t':
 			n += 4
-		} else {
-			break
+		default:
+			// Stop at the first non-whitespace rune: indentation is leading
+			// whitespace only. (Must return, not break — a switch `break` would
+			// only exit the switch and keep counting interior whitespace.)
+			return n
 		}
 	}
 	return n

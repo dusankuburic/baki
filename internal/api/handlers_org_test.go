@@ -2,8 +2,8 @@ package api
 
 import (
 	"net/http"
-	"testing"
 	"pad-analyzer/internal/storage/filesystem"
+	"testing"
 )
 
 // createOrg creates an org via the API and returns its ID.
@@ -96,7 +96,7 @@ func TestHandleOrgMemberAdd_OK(t *testing.T) {
 	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
 	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
-	
+
 	// Seed a user to add
 	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
 
@@ -142,7 +142,7 @@ func TestHandleOrgMemberRemove_OK(t *testing.T) {
 	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
 	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
-	
+
 	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
 		"email": "member1@example.com", "role": "member",
 	})
@@ -171,7 +171,7 @@ func TestHandleOrgMemberSetRole_OK(t *testing.T) {
 	rt := newTestRouter(fs, false)
 	orgID := createOrg(t, rt, "Team")
 	seedUserWithRole(t, rt, "member1", "member1@example.com", "member")
-	
+
 	doRequest(t, rt, http.MethodPost, "/api/orgs/"+orgID+"/members", map[string]any{
 		"email": "member1@example.com", "role": "member",
 	})
@@ -180,7 +180,7 @@ func TestHandleOrgMemberSetRole_OK(t *testing.T) {
 		"role": "admin",
 	})
 	checkStatus(t, rr, http.StatusOK)
-	}
+}
 
 func TestHandleOrgMemberSetRole_UnknownOrgReturns404(t *testing.T) {
 	rt := newTestRouter(nil, false)

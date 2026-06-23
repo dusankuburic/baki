@@ -1,7 +1,7 @@
 package scrubber
 
 import (
-	"encoding/json"
+	"maps"
 	"math"
 	"pad-core/models"
 	"regexp"
@@ -24,26 +24,26 @@ var secretRegexes = []*regexp.Regexp{
 // values must always be masked, regardless of their content. This is a belt-and-
 // suspenders layer on top of the field-name and regex/entropy passes below.
 var sensitiveActions = map[string][]string{
-	"WebAutomation.PopulateTextField": {"Text"},
-	"Database.Connect":                {"ConnectionString"},
-	"Database.OpenSQLConnection":      {"ConnectionString"},
-	"Database.OpenODBCConnection":     {"ConnectionString"},
-	"Excel.LaunchExcel":               {"Password"},
-	"Excel.LaunchAndOpen":             {"Password"},
-	"Cryptography.DecryptTextWithAES": {"Passphrase", "Key"},
-	"Cryptography.EncryptTextWithAES": {"Passphrase", "Key"},
+	"WebAutomation.PopulateTextField":     {"Text"},
+	"Database.Connect":                    {"ConnectionString"},
+	"Database.OpenSQLConnection":          {"ConnectionString"},
+	"Database.OpenODBCConnection":         {"ConnectionString"},
+	"Excel.LaunchExcel":                   {"Password"},
+	"Excel.LaunchAndOpen":                 {"Password"},
+	"Cryptography.DecryptTextWithAES":     {"Passphrase", "Key"},
+	"Cryptography.EncryptTextWithAES":     {"Passphrase", "Key"},
 	"Cryptography.DecryptFromFileWithAES": {"Passphrase", "Key"},
 	"Cryptography.EncryptToFileWithAES":   {"Passphrase", "Key"},
 	"Cryptography.HashText":               {"Key"},
 	"Cryptography.HashFromFile":           {"Key"},
-	"Email.ConnectToExchange":  {"Password"},
-	"Email.ConnectToIMAP":      {"Password"},
-	"Email.RetrieveEmailMessages": {"Password"},
-	"Outlook.LaunchOutlook":    {"Password"},
-	"FTP.OpenConnection":       {"Password"},
-	"FTP.OpenSecureConnection": {"Password"},
-	"ActiveDirectory.Connect":  {"Password"},
-	"Terminal.Open":            {"Password"},
+	"Email.ConnectToExchange":             {"Password"},
+	"Email.ConnectToIMAP":                 {"Password"},
+	"Email.RetrieveEmailMessages":         {"Password"},
+	"Outlook.LaunchOutlook":               {"Password"},
+	"FTP.OpenConnection":                  {"Password"},
+	"FTP.OpenSecureConnection":            {"Password"},
+	"ActiveDirectory.Connect":             {"Password"},
+	"Terminal.Open":                       {"Password"},
 }
 
 // sensitiveFieldNames is the set of property keys (normalized: lowercased with
@@ -77,19 +77,24 @@ func isSensitiveFieldName(k string) bool {
 }
 
 // ScrubDocument returns a deep copy of the FlowDocument with secrets masked.
+//
+// It clones only what scrubBlock mutates — each block's Properties map and the
+// Children tree — plus the slices that structurally contain them. This avoids
+// the previous full json.Marshal→json.Unmarshal round-trip, which serialized the
+// entire flow (potentially 10k+ blocks) twice on the AI hot path. Read-only
+// fields (Variables, Tokens, metadata) are shallow-copied since the scrubber
+// never mutates them. The error return is retained for API compatibility.
 func ScrubDocument(doc *models.FlowDocument) (*models.FlowDocument, error) {
 	if doc == nil {
 		return nil, nil
 	}
 
-	// Deep copy via JSON
-	data, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	var copyDoc models.FlowDocument
-	if err := json.Unmarshal(data, &copyDoc); err != nil {
-		return nil, err
+	copyDoc := *doc // shallow copy of top-level scalar/metadata fields
+	copyDoc.Subflows = make([]models.Subflow, len(doc.Subflows))
+	for i := range doc.Subflows {
+		sf := doc.Subflows[i] // copies Subflow scalar fields + slice headers
+		sf.Blocks = cloneBlocks(doc.Subflows[i].Blocks)
+		copyDoc.Subflows[i] = sf
 	}
 
 	for i := range copyDoc.Subflows {
@@ -99,10 +104,36 @@ func ScrubDocument(doc *models.FlowDocument) (*models.FlowDocument, error) {
 		}
 	}
 
-	// Rebuild indexes since we just unmarshaled
+	// The transient lookup maps copied above still reference the original blocks;
+	// drop and rebuild them against the cloned tree (mirrors the prior behaviour
+	// where the maps were absent after unmarshal and rebuilt here).
+	copyDoc.BlocksByID = nil
+	copyDoc.BlockSubflow = nil
+	copyDoc.SubflowsByID = nil
 	copyDoc.RebuildIndexes()
 
 	return &copyDoc, nil
+}
+
+// cloneBlocks deep-copies a block tree, duplicating each block's Properties map
+// and Children slice recursively so masking never mutates the caller's document.
+func cloneBlocks(src []models.Block) []models.Block {
+	if src == nil {
+		return nil
+	}
+	out := make([]models.Block, len(src))
+	for i := range src {
+		b := src[i] // copies scalar fields + slice headers (Variables, Tokens)
+		if src[i].Properties != nil {
+			props := make(map[string]string, len(src[i].Properties))
+			maps.Copy(props, src[i].Properties)
+			b.Properties = props
+		}
+		b.Children = cloneBlocks(src[i].Children)
+		b.ChildPtrs = nil // transient (json:"-"); not used by the scrubbed copy
+		out[i] = b
+	}
+	return out
 }
 
 func scrubBlock(b *models.Block) {

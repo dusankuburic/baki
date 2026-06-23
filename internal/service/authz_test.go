@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"pad-analyzer/internal/auth"
@@ -149,7 +150,7 @@ func TestAuthz_CheckFlowAccessByID(t *testing.T) {
 	if err := authz.CheckFlowAccessByID(ctx, "f1", "mallory", "viewer"); err == nil {
 		t.Error("stranger should be denied by ID")
 	}
-	if err := authz.CheckFlowAccessByID(ctx, "missing", "bob", "viewer"); err != storageif.ErrNotFound {
+	if err := authz.CheckFlowAccessByID(ctx, "missing", "bob", "viewer"); !errors.Is(err, storageif.ErrNotFound) {
 		t.Errorf("expected ErrNotFound for missing flow, got %v", err)
 	}
 }

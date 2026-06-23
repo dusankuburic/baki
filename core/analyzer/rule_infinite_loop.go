@@ -8,11 +8,13 @@ import (
 
 type InfiniteLoopRiskRule struct{}
 
-func (r *InfiniteLoopRiskRule) ID() string          { return "infinite-loop-risk" }
-func (r *InfiniteLoopRiskRule) Name() string         { return "Loop may run forever" }
-func (r *InfiniteLoopRiskRule) Description() string  { return "LOOP blocks with no recognizable exit condition." }
+func (r *InfiniteLoopRiskRule) ID() string   { return "infinite-loop-risk" }
+func (r *InfiniteLoopRiskRule) Name() string { return "Loop may run forever" }
+func (r *InfiniteLoopRiskRule) Description() string {
+	return "LOOP blocks with no recognizable exit condition."
+}
 func (r *InfiniteLoopRiskRule) DefaultSeverity() models.Severity { return models.SeverityError }
-func (r *InfiniteLoopRiskRule) Category() string     { return "Reliability" }
+func (r *InfiniteLoopRiskRule) Category() string                 { return "Reliability" }
 
 func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeLoop {

@@ -7,9 +7,9 @@ import (
 	"runtime"
 
 	"pad-analyzer/internal/config"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
-	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 var (

@@ -20,11 +20,13 @@ var timeoutRequiredPrefixes = []string{
 
 type MissingTimeoutRule struct{}
 
-func (r *MissingTimeoutRule) ID() string                    { return "missing-timeout" }
-func (r *MissingTimeoutRule) Name() string                   { return "Network operation without timeout" }
-func (r *MissingTimeoutRule) Description() string            { return "Network/UI automation actions that may hang because no explicit timeout is configured." }
+func (r *MissingTimeoutRule) ID() string   { return "missing-timeout" }
+func (r *MissingTimeoutRule) Name() string { return "Network operation without timeout" }
+func (r *MissingTimeoutRule) Description() string {
+	return "Network/UI automation actions that may hang because no explicit timeout is configured."
+}
 func (r *MissingTimeoutRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (r *MissingTimeoutRule) Category() string               { return "Reliability" }
+func (r *MissingTimeoutRule) Category() string                 { return "Reliability" }
 
 func (r *MissingTimeoutRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeAction {

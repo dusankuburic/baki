@@ -6,11 +6,13 @@ import (
 
 type EmptyBranchRule struct{}
 
-func (r *EmptyBranchRule) ID() string                    { return "empty-branch" }
-func (r *EmptyBranchRule) Name() string                   { return "Empty condition branch" }
-func (r *EmptyBranchRule) Description() string            { return "IF/SWITCH/CASE branches with no action blocks inside." }
+func (r *EmptyBranchRule) ID() string   { return "empty-branch" }
+func (r *EmptyBranchRule) Name() string { return "Empty condition branch" }
+func (r *EmptyBranchRule) Description() string {
+	return "IF/SWITCH/CASE branches with no action blocks inside."
+}
 func (r *EmptyBranchRule) DefaultSeverity() models.Severity { return models.SeverityInfo }
-func (r *EmptyBranchRule) Category() string               { return "Style" }
+func (r *EmptyBranchRule) Category() string                 { return "Style" }
 
 func (r *EmptyBranchRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	switch block.Type {

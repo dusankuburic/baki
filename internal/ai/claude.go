@@ -28,8 +28,8 @@ func NewClaudeProvider(apiKey string) *ClaudeProvider {
 
 func (c *ClaudeProvider) SupportsTools() bool { return true }
 
-func (c *ClaudeProvider) ID() string          { return "claude" }
-func (c *ClaudeProvider) Name() string        { return "Claude" }
+func (c *ClaudeProvider) ID() string           { return "claude" }
+func (c *ClaudeProvider) Name() string         { return "Claude" }
 func (c *ClaudeProvider) ContextLimit() int    { return 200000 }
 func (c *ClaudeProvider) DefaultModel() string { return "claude-sonnet-4-6" }
 func (c *ClaudeProvider) FreeModel() string    { return "" }
@@ -89,9 +89,9 @@ type claudeSystemBlock struct {
 }
 
 type claudeTool struct {
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	InputSchema json.RawMessage     `json:"input_schema"`
+	Name         string              `json:"name"`
+	Description  string              `json:"description"`
+	InputSchema  json.RawMessage     `json:"input_schema"`
 	CacheControl *claudeCacheControl `json:"cache_control,omitempty"`
 }
 
@@ -115,13 +115,13 @@ type claudeBlock struct {
 }
 
 type claudeResponse struct {
-	ID         string           `json:"id"`
-	Type       string           `json:"type"`
-	Role       string           `json:"role"`
-	Content    []claudeContent  `json:"content"`
-	Model      string           `json:"model"`
-	StopReason string           `json:"stop_reason"`
-	Usage      claudeUsage      `json:"usage"`
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	Role       string          `json:"role"`
+	Content    []claudeContent `json:"content"`
+	Model      string          `json:"model"`
+	StopReason string          `json:"stop_reason"`
+	Usage      claudeUsage     `json:"usage"`
 }
 
 type claudeContent struct {

@@ -65,9 +65,10 @@ func BuildExecutionGraph(doc *models.FlowDocument, report *models.AnalysisReport
 
 	if report != nil {
 		for _, f := range report.Findings {
-			if f.Severity == models.SeverityError {
+			switch f.Severity {
+			case models.SeverityError:
 				errCounts[f.SubflowID]++
-			} else if f.Severity == models.SeverityWarning {
+			case models.SeverityWarning:
 				warnCounts[f.SubflowID]++
 			}
 		}

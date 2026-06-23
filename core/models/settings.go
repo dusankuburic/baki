@@ -28,14 +28,14 @@ const (
 )
 
 type AppSettings struct {
-	Version    int              `json:"version"`
-	General    GeneralSettings  `json:"general"`
-	Appearance AppearanceSettings `json:"appearance"`
-	Layout     LayoutSettings   `json:"layout"`
-	AI         AISettings       `json:"ai"`
-	Parser     ParserSettings   `json:"parser"`
-	Analysis   AnalysisSettings `json:"analysis"`
-	RecentFiles []RecentFile    `json:"recentFiles"`
+	Version     int                `json:"version"`
+	General     GeneralSettings    `json:"general"`
+	Appearance  AppearanceSettings `json:"appearance"`
+	Layout      LayoutSettings     `json:"layout"`
+	AI          AISettings         `json:"ai"`
+	Parser      ParserSettings     `json:"parser"`
+	Analysis    AnalysisSettings   `json:"analysis"`
+	RecentFiles []RecentFile       `json:"recentFiles"`
 }
 
 type GeneralSettings struct {
@@ -55,12 +55,12 @@ type AppearanceSettings struct {
 }
 
 type LayoutSettings struct {
-	SidebarWidth          int    `json:"sidebarWidth"`
-	InspectorWidth        int    `json:"inspectorWidth"`
-	SidebarCollapsed      bool   `json:"sidebarCollapsed"`
-	InspectorCollapsed    bool   `json:"inspectorCollapsed"`
+	SidebarWidth           int    `json:"sidebarWidth"`
+	InspectorWidth         int    `json:"inspectorWidth"`
+	SidebarCollapsed       bool   `json:"sidebarCollapsed"`
+	InspectorCollapsed     bool   `json:"inspectorCollapsed"`
 	LastActiveInspectorTab string `json:"lastActiveInspectorTab"`
-	LastViewMode          string `json:"lastViewMode"`
+	LastViewMode           string `json:"lastViewMode"`
 }
 
 type AIPromptsConfig struct {
@@ -71,15 +71,15 @@ type AIPromptsConfig struct {
 }
 
 type AISettings struct {
-	ActiveProvider          string                    `json:"activeProvider"`
-	EmbeddingProvider       string                    `json:"embeddingProvider"`
+	ActiveProvider          string                      `json:"activeProvider"`
+	EmbeddingProvider       string                      `json:"embeddingProvider"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
-	DemoMode                DemoModeSettings          `json:"demoMode"`
-	ShowCostEstimates       bool                      `json:"showCostEstimates"`
-	SaveConversationHistory bool                      `json:"saveConversationHistory"`
-	SystemPromptSuffix      string                    `json:"systemPromptSuffix,omitempty"`
-	DailyBudget             float64                   `json:"dailyBudget"`
-	Prompts                 AIPromptsConfig           `json:"prompts"`
+	DemoMode                DemoModeSettings            `json:"demoMode"`
+	ShowCostEstimates       bool                        `json:"showCostEstimates"`
+	SaveConversationHistory bool                        `json:"saveConversationHistory"`
+	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
+	DailyBudget             float64                     `json:"dailyBudget"`
+	Prompts                 AIPromptsConfig             `json:"prompts"`
 }
 
 type AIProviderConfig struct {
@@ -98,21 +98,21 @@ type DemoModeSettings struct {
 }
 
 type ParserSettings struct {
-	MaxFileSizeMB   int  `json:"maxFileSizeMB"`
-	PreserveComments bool `json:"preserveComments"`
+	MaxFileSizeMB     int  `json:"maxFileSizeMB"`
+	PreserveComments  bool `json:"preserveComments"`
 	TreatTabsAsSpaces bool `json:"treatTabsAsSpaces"`
-	SpacesPerIndent  int  `json:"spacesPerIndent"`
+	SpacesPerIndent   int  `json:"spacesPerIndent"`
 }
 
 type AnalysisSettings struct {
-	Rules            map[string]RuleConfig `json:"rules"`
-	AutoAnalyzeOnOpen bool                 `json:"autoAnalyzeOnOpen"`
+	Rules             map[string]RuleConfig `json:"rules"`
+	AutoAnalyzeOnOpen bool                  `json:"autoAnalyzeOnOpen"`
 }
 
 type RuleConfig struct {
-	Enabled   bool              `json:"enabled"`
-	Severity  string            `json:"severity"`
-	Options   map[string]interface{} `json:"options,omitempty"`
+	Enabled  bool                   `json:"enabled"`
+	Severity string                 `json:"severity"`
+	Options  map[string]interface{} `json:"options,omitempty"`
 }
 
 // Clone returns a copy safe for a caller to read (and mutate) without affecting
@@ -235,43 +235,43 @@ func DefaultSettings() *AppSettings {
 			},
 		},
 		Parser: ParserSettings{
-			MaxFileSizeMB:    50,
-			PreserveComments: true,
+			MaxFileSizeMB:     50,
+			PreserveComments:  true,
 			TreatTabsAsSpaces: true,
-			SpacesPerIndent:  4,
+			SpacesPerIndent:   4,
 		},
 		Analysis: AnalysisSettings{
 			AutoAnalyzeOnOpen: true,
 			Rules: map[string]RuleConfig{
-				"unhandled-error":         {Enabled: true, Severity: "warning"},
-				"infinite-loop-risk":      {Enabled: true, Severity: "error"},
-				"deep-nesting":            {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxDepth": 6}},
-				"hardcoded-credential":    {Enabled: true, Severity: "error"},
-				"dead-code":               {Enabled: true, Severity: "info"},
-				"missing-delay":           {Enabled: true, Severity: "info"},
-				"duplicate-action":        {Enabled: true, Severity: "info", Options: map[string]interface{}{"minRepeats": 3}},
-				"unused-variable":         {Enabled: true, Severity: "info"},
-				"slow-pattern":            {Enabled: true, Severity: "warning"},
-				"empty-handler":           {Enabled: true, Severity: "warning"},
-				"uninitialized-variable":  {Enabled: true, Severity: "warning"},
-				"resource-leak":           {Enabled: true, Severity: "warning"},
+				"unhandled-error":          {Enabled: true, Severity: "warning"},
+				"infinite-loop-risk":       {Enabled: true, Severity: "error"},
+				"deep-nesting":             {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxDepth": 6}},
+				"hardcoded-credential":     {Enabled: true, Severity: "error"},
+				"dead-code":                {Enabled: true, Severity: "info"},
+				"missing-delay":            {Enabled: true, Severity: "info"},
+				"duplicate-action":         {Enabled: true, Severity: "info", Options: map[string]interface{}{"minRepeats": 3}},
+				"unused-variable":          {Enabled: true, Severity: "info"},
+				"slow-pattern":             {Enabled: true, Severity: "warning"},
+				"empty-handler":            {Enabled: true, Severity: "warning"},
+				"uninitialized-variable":   {Enabled: true, Severity: "warning"},
+				"resource-leak":            {Enabled: true, Severity: "warning"},
 				"subflow-no-error-handler": {Enabled: true, Severity: "info"},
-				"goto-antipattern":        {Enabled: true, Severity: "warning"},
-				"empty-branch":            {Enabled: true, Severity: "info"},
-				"redundant-action":        {Enabled: true, Severity: "info"},
+				"goto-antipattern":         {Enabled: true, Severity: "warning"},
+				"empty-branch":             {Enabled: true, Severity: "info"},
+				"redundant-action":         {Enabled: true, Severity: "info"},
 				"file-op-no-error-handler": {Enabled: true, Severity: "warning"},
-				"missing-timeout":         {Enabled: true, Severity: "warning"},
-				"sensitive-exposure":      {Enabled: true, Severity: "error"},
-				"error-swallow":           {Enabled: true, Severity: "warning"},
-				"missing-retry":           {Enabled: true, Severity: "info"},
-				"wide-loop":               {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 20}},
-				"subflow-mismatch":        {Enabled: true, Severity: "warning"},
-				"dead-data":               {Enabled: true, Severity: "info"},
-				"hardcoded-filepath":      {Enabled: true, Severity: "info"},
-				"sql-injection-risk":      {Enabled: true, Severity: "warning"},
-				"hardcoded-url":           {Enabled: true, Severity: "info"},
-				"large-subflow":           {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 50}},
-				"disabled-block":          {Enabled: true, Severity: "info"},
+				"missing-timeout":          {Enabled: true, Severity: "warning"},
+				"sensitive-exposure":       {Enabled: true, Severity: "error"},
+				"error-swallow":            {Enabled: true, Severity: "warning"},
+				"missing-retry":            {Enabled: true, Severity: "info"},
+				"wide-loop":                {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 20}},
+				"subflow-mismatch":         {Enabled: true, Severity: "warning"},
+				"dead-data":                {Enabled: true, Severity: "info"},
+				"hardcoded-filepath":       {Enabled: true, Severity: "info"},
+				"sql-injection-risk":       {Enabled: true, Severity: "warning"},
+				"hardcoded-url":            {Enabled: true, Severity: "info"},
+				"large-subflow":            {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 50}},
+				"disabled-block":           {Enabled: true, Severity: "info"},
 			},
 		},
 	}

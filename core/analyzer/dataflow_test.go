@@ -42,7 +42,7 @@ func TestDataFlowIndexParity(t *testing.T) {
 	blocks := []models.Block{
 		mk("w1", "Variables.SetVariable", 1, "X"),
 		mk("r1", "Display.ShowMessage", 2, "", "X"),
-		mk("w2", "Variables.SetVariable", 3, "Y", "X"), // reads X, writes Y
+		mk("w2", "Variables.SetVariable", 3, "Y", "X"),   // reads X, writes Y
 		mk("self", "Variables.SetVariable", 4, "Z", "Z"), // writes and reads Z (self-assign)
 		mk("r2", "Display.ShowMessage", 5, "", "Y", "Z"),
 	}

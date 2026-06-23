@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 
 	"github.com/google/uuid"
 )
@@ -15,11 +15,11 @@ import (
 type UsageRecorder func(ctx context.Context, metric *interfaces.UsageMetric) error
 
 type auditedProvider struct {
-	inner       Provider
-	recorder    UsageRecorder
-	scope       string
-	providerID  string
-	recordSem   chan struct{}
+	inner      Provider
+	recorder   UsageRecorder
+	scope      string
+	providerID string
+	recordSem  chan struct{}
 }
 
 // NewAuditedProvider wraps an existing provider and intercepts Chat and Stream
@@ -111,7 +111,7 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	outputCost := (float64(tokensOut) / 1000000.0) * pricing.OutputCostPerM
 
 	metric := interfaces.UsageMetric{
-		ID:   uuid.NewString(),
+		ID:     uuid.NewString(),
 		UserID: p.scope,
 		// OrgID is carried on the request (set by the caller from the flow's
 		// OrganizationID) rather than fixed at construction time, so the same
@@ -127,6 +127,7 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	}
 
 	// Asynchronously record the usage so it doesn't block the caller
+	// #nosec G118 -- intentionally detached: usage logging must outlive the request ctx.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -146,10 +147,10 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 }
 
 // Delegate everything else to the inner provider
-func (p *auditedProvider) SupportsTools() bool     { return p.inner.SupportsTools() }
-func (p *auditedProvider) ID() string              { return p.inner.ID() }
-func (p *auditedProvider) Name() string            { return p.inner.Name() }
-func (p *auditedProvider) ContextLimit() int       { return p.inner.ContextLimit() }
+func (p *auditedProvider) SupportsTools() bool            { return p.inner.SupportsTools() }
+func (p *auditedProvider) ID() string                     { return p.inner.ID() }
+func (p *auditedProvider) Name() string                   { return p.inner.Name() }
+func (p *auditedProvider) ContextLimit() int              { return p.inner.ContextLimit() }
 func (p *auditedProvider) PricePerMillionTokens() Pricing { return p.inner.PricePerMillionTokens() }
 func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return p.inner.Embed(ctx, text)
@@ -158,5 +159,5 @@ func (p *auditedProvider) EstimateTokens(t string) int { return p.inner.Estimate
 func (p *auditedProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	return p.inner.Models(ctx)
 }
-func (p *auditedProvider) DefaultModel() string    { return p.inner.DefaultModel() }
-func (p *auditedProvider) FreeModel() string       { return p.inner.FreeModel() }
+func (p *auditedProvider) DefaultModel() string { return p.inner.DefaultModel() }
+func (p *auditedProvider) FreeModel() string    { return p.inner.FreeModel() }

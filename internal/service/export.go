@@ -34,7 +34,7 @@ func (s *ExportService) CompareCurrentWith(newDoc *models.FlowDocument, oldPath 
 	}
 
 	// Load and parse old version
-	data, err := os.ReadFile(oldPath)
+	data, err := os.ReadFile(oldPath) // #nosec G304 -- reading a flow file the app was asked to diff
 	if err != nil {
 		return nil, fmt.Errorf("read old file: %w", err)
 	}
@@ -65,7 +65,7 @@ func (s *ExportService) ExportMarkdown(doc *models.FlowDocument, report *models.
 		if err = validateUserPath(path); err != nil {
 			return nil, err
 		}
-		if err = os.WriteFile(path, content, 0644); err != nil {
+		if err = os.WriteFile(path, content, 0644); err != nil { // #nosec G306 -- user-chosen export path; world-readable is intended for sharing
 			return nil, fmt.Errorf("write file: %w", err)
 		}
 	}
@@ -93,7 +93,7 @@ func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.Analy
 		if err = validateUserPath(path); err != nil {
 			return nil, err
 		}
-		if err = os.WriteFile(path, pdfBytes, 0644); err != nil {
+		if err = os.WriteFile(path, pdfBytes, 0644); err != nil { // #nosec G306 -- user-chosen export path; world-readable is intended for sharing
 			return nil, fmt.Errorf("write file: %w", err)
 		}
 	}

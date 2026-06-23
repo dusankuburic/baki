@@ -147,11 +147,11 @@ func TestCustomRule(t *testing.T) {
 
 	t.Run("propertyHas filter works", func(t *testing.T) {
 		cr, err := NewCustomRule(CustomRuleConfig{
-			ID:          "custom-2",
-			Name:        "HTTP without body",
-			Description: "HTTP request with empty body",
+			ID:           "custom-2",
+			Name:         "HTTP without body",
+			Description:  "HTTP request with empty body",
 			RawTypeMatch: "Http\\..*",
-			PropertyHas: map[string]string{"method": "GET"},
+			PropertyHas:  map[string]string{"method": "GET"},
 		})
 		if err != nil {
 			t.Fatal(err)

@@ -9,9 +9,11 @@ import (
 	"strings"
 )
 
-const githubClientID = "Ov23liihCNhg6umzjTqT"
+const githubClientID = "Ov23liihCNhg6umzjTqT" // #nosec G101 -- public OAuth client ID, not a secret
+
 var githubDeviceCodeURL = "https://github.com/login/device/code"
-var githubTokenURL = "https://github.com/login/oauth/access_token"
+var githubTokenURL = "https://github.com/login/oauth/access_token" // #nosec G101 -- public OAuth endpoint URL, not a credential
+
 const githubUserURL = "https://api.github.com/user"
 
 type GitHubAuth struct {

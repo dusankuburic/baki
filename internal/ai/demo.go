@@ -102,7 +102,7 @@ func (l *DemoLimiter) loadState() (*demoState, error) {
 
 func (l *DemoLimiter) saveState(state *demoState) error {
 	dir := filepath.Dir(l.counterFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return err
 	}
 	data, err := json.Marshal(state)
@@ -112,7 +112,7 @@ func (l *DemoLimiter) saveState(state *demoState) error {
 	// Atomic write: temp file then rename, so a crash mid-write can't leave a
 	// truncated counter file (which loadState would then reject as corrupt).
 	tmp := l.counterFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, l.counterFile); err != nil {
@@ -132,10 +132,10 @@ func NewDemoProvider() *DemoProvider {
 	}
 }
 
-func (d *DemoProvider) SupportsTools() bool  { return false }
+func (d *DemoProvider) SupportsTools() bool { return false }
 
-func (d *DemoProvider) ID() string          { return "demo" }
-func (d *DemoProvider) Name() string        { return "Demo" }
+func (d *DemoProvider) ID() string           { return "demo" }
+func (d *DemoProvider) Name() string         { return "Demo" }
 func (d *DemoProvider) ContextLimit() int    { return 200000 }
 func (d *DemoProvider) DefaultModel() string { return "demo" }
 func (d *DemoProvider) FreeModel() string    { return "" }
@@ -162,10 +162,10 @@ func (d *DemoProvider) Chat(ctx context.Context, req Request) (*Response, error)
 	}
 
 	payload := map[string]interface{}{
-		"messages":      req.Messages,
-		"systemPrompt":  req.SystemPrompt,
-		"maxTokens":     orDefault(req.MaxTokens, 4096),
-		"temperature":   req.Temperature,
+		"messages":     req.Messages,
+		"systemPrompt": req.SystemPrompt,
+		"maxTokens":    orDefault(req.MaxTokens, 4096),
+		"temperature":  req.Temperature,
 	}
 	jsonBody, err := json.Marshal(payload)
 	if err != nil {
@@ -218,11 +218,11 @@ func (d *DemoProvider) Stream(ctx context.Context, req Request, onChunk func(Chu
 	}
 
 	payload := map[string]interface{}{
-		"messages":      req.Messages,
-		"systemPrompt":  req.SystemPrompt,
-		"maxTokens":     orDefault(req.MaxTokens, 4096),
-		"temperature":   req.Temperature,
-		"stream":        true,
+		"messages":     req.Messages,
+		"systemPrompt": req.SystemPrompt,
+		"maxTokens":    orDefault(req.MaxTokens, 4096),
+		"temperature":  req.Temperature,
+		"stream":       true,
 	}
 	jsonBody, err := json.Marshal(payload)
 	if err != nil {

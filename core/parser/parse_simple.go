@@ -100,7 +100,7 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 	for _, entry := range txtFiles {
 		filePath := filepath.Join(folderPath, entry.Name())
 		logger.Debug("Parsing file", "name", entry.Name())
-		data, err := os.ReadFile(filePath)
+		data, err := os.ReadFile(filePath) // #nosec G304 -- reading .txt files from the folder being parsed
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
 		}

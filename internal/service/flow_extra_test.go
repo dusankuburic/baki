@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-core/models"
 	"pad-analyzer/internal/storage"
+	"pad-core/models"
 )
 
 // newTestSettingsStore creates a SettingsStore backed by a temp file.
