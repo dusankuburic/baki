@@ -1,3 +1,7 @@
+# WARNING: This base config is for local development. It serves the app over
+# plaintext HTTP (no TLS), so credentials and JWTs travel unencrypted. For
+# production, layer docker-compose.prod.yml on top (PAD_BEHIND_PROXY=true behind
+# a TLS-terminating proxy) — never deploy this file on its own.
 services:
   app:
     build: .

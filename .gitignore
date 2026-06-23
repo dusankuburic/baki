@@ -6,6 +6,7 @@ skills-lock.json
 
 # Build output
 build/bin/
+baki-backend
 *.exe
 *.exe~
 *.dll

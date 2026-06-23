@@ -140,6 +140,10 @@ Backend env vars (see `.env.example`):
 | `PAD_SCAN_INTERVAL` | Periodic flow re-scan interval (e.g. `1h`); enables drift/regression alerts (cloud) | — (off) |
 | `PAD_NOTIFY_WEBHOOK_URL` | Generic webhook for governance alerts (raw JSON) | — |
 | `PAD_NOTIFY_TEAMS_URL` | Microsoft Teams incoming-webhook URL for alerts | — |
+| `PAD_SMTP_HOST` / `PAD_SMTP_PORT` | SMTP relay for transactional email (port 587 STARTTLS or 465 TLS) | — / `587` |
+| `PAD_SMTP_USERNAME` / `PAD_SMTP_PASSWORD` | SMTP auth credentials | — |
+| `PAD_EMAIL_FROM` | From address for outbound email (enables email when set with host) | — |
+| `PAD_APP_BASE_URL` | Public origin used to build links in emails | — |
 
 Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:8080`), **without** a trailing `/api`. Only needed in web mode; the desktop app discovers the sidecar automatically.
 
@@ -168,13 +172,25 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 
 - **Parsing** — single `.txt` exports or full flow folders (`Main.txt` + subflows); implicit subflow detection.
 - **Static analysis** — 15+ rules: hardcoded credentials, dead code, deep nesting, duplicate actions, empty error handlers, infinite loops, resource leaks, uninitialized variables, redundant actions, … with Error/Warning/Info severities and configurable thresholds.
+- **Inline suppression** — silence a reviewed false-positive directly in the flow with a PAD comment placed immediately before the action: `# pad-ignore` (all rules on the next block) or `# pad-ignore[hardcoded-credential, deep-nesting]` (specific rules). Because it lives in the flow source it is honored everywhere — the app, `bakicli`, baselines, and CI gates — and suppressed counts surface in the report stats.
 - **Visualization** — virtualized block view (react-virtuoso); variable lineage graph; execution-graph (DAG) view; flow tree sidebar with breadcrumbs.
 - **AI review** — streaming chat over your flow with GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM, or GitHub Models. Tool-augmented mode for autonomous analysis.
 - **Export** — full analysis reports to PDF or Markdown (works in both desktop and browser); analysis history with regression diffing.
-- **CI/CD** — headless `bakicli` runs static analysis and exits non-zero past a severity threshold (`-fail-on`); emits `text`, `json`, or **SARIF 2.1.0** (`-format sarif`) for GitHub code scanning, Azure DevOps, and other security dashboards. Gate against a named, shareable **policy** (`-policy policy.json`) — a rule set with per-rule severities and a pass/fail threshold.
+- **CI/CD** — headless `bakicli` runs static analysis and exits non-zero past a severity threshold (`-fail-on`); emits `text`, `json`, or **SARIF 2.1.0** (`-format sarif`) for GitHub code scanning, Azure DevOps, and other security dashboards. Gate against a named, shareable **policy** (`-policy policy.json`) — a rule set with per-rule severities and a pass/fail threshold. A packaged **GitHub Action** (`action.yml`, used by `.github/workflows/pad-analysis.yml`) builds the CLI, **uploads SARIF to the Security tab** (so findings annotate changed lines inline on pull requests), writes a job-summary table, and fails the build on the chosen threshold/policy:
+
+  ```yaml
+  - uses: actions/checkout@v4
+  - uses: <owner>/baki@v1          # or `uses: ./` from within this repo
+    with:
+      flow-path: ./flows
+      fail-on: error               # error | warning | info | none (report-only)
+      # policy: ./pad-policy.json   # optional, overrides fail-on
+    # needs: permissions: { security-events: write }
+  ```
 - **Governance** *(web mode)* — persistent, team-shared finding triage (status/assignee/justification) and per-flow **baselines** so dashboards and CI can ratchet on *new* findings only; an org-wide **portfolio** view (Command Palette → "Flow Portfolio", or `GET /api/library/portfolio`) ranks every accessible flow worst-health-first; a periodic scanner re-analyzes stored flows and **alerts on drift or health regressions** via webhook / Microsoft Teams (`PAD_SCAN_INTERVAL` + `PAD_NOTIFY_*`).
 - **Collaboration** *(web mode)* — organizations with role-based access (admin/member/viewer/guest); real-time presence indicators and block selection sync via WebSocket; flow sharing with per-flow collaborator permissions.
 - **SSO** *(web mode)* — OIDC single sign-on with Microsoft Entra ID, Google, Okta, or any OIDC-compliant IdP. Account linking with automatic JIT provisioning.
+- **Account email** *(web mode)* — transactional email for **password reset** (`/api/auth/forgot-password` → `/api/auth/reset-password`, single-use 1-hour token, all sessions revoked on reset), **email verification** (`/api/auth/verify-email`, sent on registration), and **org-invite delivery**. Configure an SMTP relay via `PAD_SMTP_*` + `PAD_EMAIL_FROM`; without it the app uses a log-only mailer so non-email deployments still work (links land in the server log). Reset endpoints never reveal whether an email exists.
 - **Machine API tokens** *(web mode)* — scoped, revocable personal access tokens (managed under **Settings → API Tokens**, or `POST /api/auth/tokens`) so CI and automation can call the API as a user without an interactive login. Sent as `Authorization: Bearer pad_pat_…`; only the token hash is stored, the raw value is shown once, and the owner's current role applies (revoke = immediate).
 - **Org invites** *(web mode)* — token-based email invites with configurable roles and expiry; pending invite management.
 - **Optimistic concurrency** — version-tracked flow saves prevent silent overwrites; conflict detection with reload prompts.

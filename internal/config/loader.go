@@ -148,6 +148,28 @@ func applyEnvVars(cfg *Config) error {
 	if v := os.Getenv("PAD_NOTIFY_TEAMS_URL"); v != "" {
 		cfg.Governance.NotifyTeamsURL = v
 	}
+	if v := os.Getenv("PAD_SMTP_HOST"); v != "" {
+		cfg.Email.SMTPHost = v
+	}
+	if v := os.Getenv("PAD_SMTP_PORT"); v != "" {
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: PAD_SMTP_PORT is not a valid integer: %w", err)
+		}
+		cfg.Email.SMTPPort = p
+	}
+	if v := os.Getenv("PAD_SMTP_USERNAME"); v != "" {
+		cfg.Email.Username = v
+	}
+	if v := os.Getenv("PAD_SMTP_PASSWORD"); v != "" {
+		cfg.Email.Password = v
+	}
+	if v := os.Getenv("PAD_EMAIL_FROM"); v != "" {
+		cfg.Email.From = v
+	}
+	if v := os.Getenv("PAD_APP_BASE_URL"); v != "" {
+		cfg.Email.AppBaseURL = v
+	}
 	if v := os.Getenv("PAD_DATA_DIR"); v != "" {
 		cfg.Storage.DataDir = v
 	}

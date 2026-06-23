@@ -216,8 +216,12 @@ func printText(report *models.AnalysisReport, quiet bool) {
 		} else {
 			fmt.Printf("n/a")
 		}
-		fmt.Printf(" | errors: %d  warnings: %d  info: %d\n\n",
+		fmt.Printf(" | errors: %d  warnings: %d  info: %d",
 			report.Stats.Errors, report.Stats.Warnings, report.Stats.Info)
+		if report.Stats.Suppressed > 0 {
+			fmt.Printf("  (suppressed: %d)", report.Stats.Suppressed)
+		}
+		fmt.Print("\n\n")
 	}
 
 	for _, f := range report.Findings {

@@ -91,7 +91,9 @@ const ToastListContext = React.createContext<ToastData[]>([])
 
 function ToastList() {
     const toasts = React.useContext(ToastListContext)
-    const removeToast = React.useContext(ToastActionsContext)!.removeToast
+    const actions = React.useContext(ToastActionsContext)
+    if (!actions) return null
+    const removeToast = actions.removeToast
     return (
         <div className="fixed bottom-4 right-4 z-toast flex flex-col-reverse gap-2">
             {toasts.map(toast => (

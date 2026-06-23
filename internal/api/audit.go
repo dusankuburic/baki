@@ -119,7 +119,13 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		Meta:         meta,
 		CreatedAt:    time.Now().UTC(),
 	}
-	if auditCh != nil && !auditClosed.Load() {
+	if auditCh != nil {
+		if auditClosed.Load() {
+			// Pool is shutting down: drop rather than spawn an unbounded number
+			// of detached goroutines as requests drain.
+			slog.Warn("audit pool closed, dropping event", "action", action)
+			return
+		}
 		select {
 		case auditCh <- event:
 		default:
@@ -127,6 +133,7 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		}
 		return
 	}
+	// Pool was never initialized (e.g. local mode / tests): best-effort save.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {

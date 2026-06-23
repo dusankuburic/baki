@@ -13,6 +13,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
@@ -67,7 +68,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
 	}
-	
+
 	// Cloud mode always runs with a blacklist (main.go creates one whenever
 	// auth is enabled); single-use SSO tickets and logout revocation depend
 	// on it, so the test router mirrors that.
@@ -83,15 +84,15 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc)
 	analysisSvc := service.NewAnalysisService(notifier, settings, nil)
 	exportSvc := service.NewExportService(notifier, flowSvc, analysisSvc)
-	
+
 	demo := ai.NewDemoLimiter("")
 	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil, nil)
 	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo, backend, config.ModeLocal)
-	
+
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
 	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.CurrentSecretStore())
-	
+
 	security := &SecurityConfig{
 		JWTEnabled:     jwtEnabled,
 		LocalUserID:    "local",
@@ -102,9 +103,9 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
 	}
-	
+
 	eventManager := NewEventManager(make(chan struct{}))
-	
+
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc)
 	handlers := Handlers{
 		Sys:       NewSystemHandler(sysSvc, security, backend),
@@ -114,10 +115,10 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security),
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
 		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
-		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore),
+		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{})),
 		Admin:     NewAdminHandler(backend, security),
 		Provider:  NewProviderHandler(providerSvc, security),
-		Org:       NewOrgHandler(orgSvc, backend, nil, security),
+		Org:       NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{})),
 		Sharing:   NewSharingHandler(backend, flowSvc, security),
 	}
 

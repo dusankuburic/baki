@@ -75,8 +75,20 @@ export const authApi = {
   updateProfile: (profile: UpdateProfileRequest): Promise<AuthUser> =>
     request('/api/auth/profile', profile, 'PUT'),
 
+  // The backend decodes the JSON key `oldPassword`; map the param to it.
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
-    request('/api/auth/change-password', { currentPassword, newPassword }),
+    request('/api/auth/change-password', { oldPassword: currentPassword, newPassword }),
+
+  // Account recovery / verification (pre-authentication). forgotPassword always
+  // resolves for any input — the server never reveals whether an email exists.
+  forgotPassword: (email: string): Promise<{ status: string }> =>
+    request('/api/auth/forgot-password', { email }),
+
+  resetPassword: (token: string, newPassword: string): Promise<{ status: string }> =>
+    request('/api/auth/reset-password', { token, newPassword }),
+
+  verifyEmail: (token: string): Promise<{ status: string }> =>
+    request('/api/auth/verify-email', { token }),
 
   listSessions: (): Promise<SessionInfo[]> =>
     request('/api/auth/sessions', undefined, 'GET'),

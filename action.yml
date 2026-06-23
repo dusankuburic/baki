@@ -1,0 +1,114 @@
+name: 'PAD Flow Analysis'
+description: 'Static analysis for Power Automate Desktop flows. Emits SARIF for GitHub code scanning and gates the build on a severity threshold or policy.'
+author: 'baki'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  flow-path:
+    description: 'Path to a PAD flow file or folder to analyze.'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Minimum severity that fails the build: error, warning, info, or none (report-only).'
+    required: false
+    default: 'error'
+  policy:
+    description: 'Optional path to a policy JSON file. When set it is the authoritative gate (overrides fail-on).'
+    required: false
+    default: ''
+  sarif-file:
+    description: 'Path to write the SARIF report.'
+    required: false
+    default: 'pad-analysis.sarif'
+  upload-sarif:
+    description: 'Upload the SARIF report to GitHub code scanning (requires security-events: write).'
+    required: false
+    default: 'true'
+
+outputs:
+  sarif-file:
+    description: 'Path to the generated SARIF report.'
+    value: ${{ inputs.sarif-file }}
+  exit-code:
+    description: 'The analyzer gate exit code (0 = passed, 1 = threshold/policy violated).'
+    value: ${{ steps.analyze.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.sum
+
+    - name: Build bakicli
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: go build -o "${{ runner.temp }}/bakicli" ./cmd/bakicli
+
+    - name: Analyze flows (SARIF + gate)
+      id: analyze
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=()
+        if [ -n "${{ inputs.policy }}" ]; then
+          args+=(-policy "${{ inputs.policy }}")
+        else
+          gate="${{ inputs.fail-on }}"
+          # bakicli only knows error/warning/info; "none" means report-only, so
+          # run with the loosest real threshold and ignore the exit code below.
+          [ "$gate" = "none" ] && gate="info"
+          args+=(-fail-on "$gate")
+        fi
+        # bakicli writes the full SARIF to stdout *before* applying the gate, so
+        # the report is complete even when the gate then exits non-zero.
+        set +e
+        "${{ runner.temp }}/bakicli" -format sarif "${args[@]}" "${{ inputs.flow-path }}" > "${{ inputs.sarif-file }}"
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Job summary
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        report="${{ runner.temp }}/pad-report.json"
+        "${{ runner.temp }}/bakicli" -format json -quiet "${{ inputs.flow-path }}" > "$report" || true
+        {
+          echo "## PAD Flow Analysis"
+          echo ""
+          if [ -s "$report" ]; then
+            echo "| Severity | Count |"
+            echo "|---|---:|"
+            echo "| 🔴 Errors | $(jq '.stats.errors' "$report") |"
+            echo "| 🟠 Warnings | $(jq '.stats.warnings' "$report") |"
+            echo "| 🔵 Info | $(jq '.stats.info' "$report") |"
+            echo "| 🤫 Suppressed (inline) | $(jq '.stats.suppressed' "$report") |"
+            echo ""
+            echo "Health score: **$(jq '.metrics.healthScore // "n/a"' "$report")/100** · blocks analyzed: $(jq '.stats.blocksAnalyzed' "$report")"
+          else
+            echo "_No report produced._"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: pad-analysis
+
+    - name: Enforce gate
+      if: ${{ inputs.fail-on != 'none' }}
+      shell: bash
+      run: |
+        code="${{ steps.analyze.outputs.exit-code }}"
+        if [ "$code" != "0" ]; then
+          echo "::error::PAD analysis gate failed (fail-on=${{ inputs.fail-on }}, policy=${{ inputs.policy }})."
+          exit "$code"
+        fi

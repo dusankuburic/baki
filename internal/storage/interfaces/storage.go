@@ -198,6 +198,33 @@ type StorageBackend interface {
 	// DeleteAPIToken removes a token owned by userID. Scoped to the owner so one
 	// user cannot revoke another's; idempotent.
 	DeleteAPIToken(ctx context.Context, userID, id string) error
+
+	// One-shot user tokens (password reset, email verification). Only the hash
+	// is stored; the raw value lives only in the email link sent to the user.
+	CreateUserToken(ctx context.Context, t *UserToken) error
+	// ConsumeUserToken atomically redeems a valid (unused, unexpired) token of
+	// the given purpose, marks it used, and returns the owning user ID. It
+	// returns ErrNotFound when no such token exists, so a token cannot be
+	// replayed.
+	ConsumeUserToken(ctx context.Context, purpose, tokenHash string) (userID string, err error)
+	// SetUserEmailVerified marks a user's email as verified.
+	SetUserEmailVerified(ctx context.Context, userID string) error
+}
+
+// UserToken purposes.
+const (
+	TokenPurposePasswordReset = "password_reset"
+	TokenPurposeEmailVerify   = "email_verify"
+)
+
+// UserToken is a single-use credential for an out-of-band flow (password reset
+// or email verification). Stored hashed; redeemed via ConsumeUserToken.
+type UserToken struct {
+	TokenHash string    `json:"-"`
+	Purpose   string    `json:"purpose"`
+	UserID    string    `json:"userId"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // Organisation represents a team or workspace that owns shared flows.

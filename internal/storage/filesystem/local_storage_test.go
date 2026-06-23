@@ -2,6 +2,8 @@ package filesystem
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"pad-analyzer/internal/storage/contract"
@@ -168,7 +170,7 @@ func TestLocalStorageBackend_SaveAndLoadSettings(t *testing.T) {
 		General: interfaces.GeneralSettings{
 			FirstRunCompleted: true,
 			LastUsedVersion:   "1.0.0",
-			CheckForUpdates:    "weekly",
+			CheckForUpdates:   "weekly",
 		},
 		Appearance: interfaces.AppearanceSettings{
 			Theme:   "dark",
@@ -237,4 +239,104 @@ func TestLocalStorageBackend_Ping(t *testing.T) {
 	// Ping should succeed
 	err := storage.Ping(ctx)
 	testutil.AssertNoError(t, err, "Ping failed")
+}
+
+// TestLocalStorageBackend_SaveFlow_OCCIncrementsVersion verifies that saving an
+// existing flow at its current version bumps the stored version by one.
+func TestLocalStorageBackend_SaveFlow_OCCIncrementsVersion(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	testutil.AssertNoError(t, err, "NewLocalStorageBackend")
+	ctx := context.Background()
+
+	flow := createTestFlow("occ-flow")
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, flow), "first save")
+
+	loaded, err := storage.LoadFlow(ctx, "occ-flow")
+	testutil.AssertNoError(t, err, "load after first save")
+	testutil.AssertEqual(t, 0, loaded.Version, "initial version should be 0")
+
+	// Save again at the loaded version: OCC should accept and bump to 1.
+	loaded.Name = "Updated"
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, loaded), "second save")
+
+	reloaded, err := storage.LoadFlow(ctx, "occ-flow")
+	testutil.AssertNoError(t, err, "load after second save")
+	testutil.AssertEqual(t, 1, reloaded.Version, "version should bump to 1")
+	testutil.AssertEqual(t, "Updated", reloaded.Name, "name should be updated")
+}
+
+// TestLocalStorageBackend_SaveFlow_VersionConflict verifies that saving a flow
+// against a stale version is rejected with ErrVersionConflict and leaves the
+// stored flow untouched.
+func TestLocalStorageBackend_SaveFlow_VersionConflict(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	testutil.AssertNoError(t, err, "NewLocalStorageBackend")
+	ctx := context.Background()
+
+	flow := createTestFlow("conflict-flow")
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, flow), "first save")
+
+	// Two readers grab the same version-0 snapshot.
+	readerA, err := storage.LoadFlow(ctx, "conflict-flow")
+	testutil.AssertNoError(t, err, "load reader A")
+	readerB, err := storage.LoadFlow(ctx, "conflict-flow")
+	testutil.AssertNoError(t, err, "load reader B")
+
+	// A writes first and wins (version -> 1).
+	readerA.Name = "A wins"
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, readerA), "reader A save")
+
+	// B writes against the now-stale version 0 and must be rejected.
+	readerB.Name = "B loses"
+	err = storage.SaveFlow(ctx, readerB)
+	if !errors.Is(err, interfaces.ErrVersionConflict) {
+		t.Fatalf("expected ErrVersionConflict, got %v", err)
+	}
+
+	// The losing write must not have been applied.
+	final, err := storage.LoadFlow(ctx, "conflict-flow")
+	testutil.AssertNoError(t, err, "load final")
+	testutil.AssertEqual(t, "A wins", final.Name, "stored name should be A's")
+	testutil.AssertEqual(t, 1, final.Version, "version should be 1")
+}
+
+// TestLocalStorageBackend_SaveFlow_ConcurrentRetry hammers SaveFlow from many
+// goroutines using a read-modify-write-with-retry loop. flowMu must serialize
+// the OCC check+write so that every increment lands exactly once and no update
+// is silently lost. Run with -race to also catch data races.
+func TestLocalStorageBackend_SaveFlow_ConcurrentRetry(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	testutil.AssertNoError(t, err, "NewLocalStorageBackend")
+	ctx := context.Background()
+
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, createTestFlow("hot-flow")), "seed save")
+
+	const writers = 16
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for range writers {
+		go func() {
+			defer wg.Done()
+			for {
+				cur, err := storage.LoadFlow(ctx, "hot-flow")
+				if err != nil {
+					t.Errorf("load: %v", err)
+					return
+				}
+				if err := storage.SaveFlow(ctx, cur); err == nil {
+					return // committed our increment
+				} else if !errors.Is(err, interfaces.ErrVersionConflict) {
+					t.Errorf("unexpected save error: %v", err)
+					return
+				}
+				// Conflict: another writer won the race; retry with fresh state.
+			}
+		}()
+	}
+	wg.Wait()
+
+	final, err := storage.LoadFlow(ctx, "hot-flow")
+	testutil.AssertNoError(t, err, "load final")
+	// Seed left version 0; each of the writers commits exactly one increment.
+	testutil.AssertEqual(t, writers, final.Version, "every writer's increment should land exactly once")
 }

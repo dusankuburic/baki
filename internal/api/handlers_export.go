@@ -11,10 +11,10 @@ import (
 )
 
 type ExportHandler struct {
-	exportSvc  *service.ExportService
-	flowSvc    *service.FlowService
+	exportSvc   *service.ExportService
+	flowSvc     *service.FlowService
 	analysisSvc *service.AnalysisService
-	security   *SecurityConfig
+	security    *SecurityConfig
 }
 
 func NewExportHandler(exportSvc *service.ExportService, flowSvc *service.FlowService, analysisSvc *service.AnalysisService, security *SecurityConfig) *ExportHandler {
@@ -34,14 +34,14 @@ func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	userID := h.security.CallerID(r)
 	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	
+
 	diff, err := h.exportSvc.CompareCurrentWith(doc, req.Path)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -63,14 +63,14 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	userID := h.security.CallerID(r)
 	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	
+
 	report, _ := h.analysisSvc.CurrentReport(doc)
 	if report == nil {
 		render.Error(w, fmt.Errorf("no analysis report available — run analysis first"), http.StatusConflict)
@@ -82,9 +82,11 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, map[string]string{
-		"status":  "ok",
-		"content": string(content),
+	// Return base64 under `data`, mirroring PDF, so the web download path
+	// (data:...;base64,res.data in export.ts) works consistently.
+	render.JSON(w, map[string]any{
+		"status": "ok",
+		"data":   base64.StdEncoding.EncodeToString(content),
 	})
 }
 
@@ -101,14 +103,14 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	
+
 	userID := h.security.CallerID(r)
 	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
 	if err != nil {
 		render.Error(w, err, 0)
 		return
 	}
-	
+
 	report, _ := h.analysisSvc.CurrentReport(doc)
 	if report == nil {
 		render.Error(w, fmt.Errorf("no analysis report available — run analysis first"), http.StatusConflict)

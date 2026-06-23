@@ -15,10 +15,10 @@ import (
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-core/logger"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/sso"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 // SSOClient abstracts the OIDC relying party (internal/sso.Client) so handler
@@ -71,10 +71,18 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	}
 	metrics.RecordAuthOp("sso_start")
 
+	// State, Nonce, and a PKCE verifier (two tokens = 86 chars, within PKCE's
+	// 43-128 bounds). Any crypto/rand failure fails the request rather than
+	// weakening the login flow.
+	toks, err := randomTokens(4)
+	if err != nil {
+		render.Error(w, fmt.Errorf("failed to initialize login: %w", err), http.StatusInternalServerError)
+		return
+	}
 	flow := ssoFlowState{
-		State:    randomToken(),
-		Nonce:    randomToken(),
-		Verifier: randomToken() + randomToken(), // 86 chars, within PKCE's 43-128 bounds
+		State:    toks[0],
+		Nonce:    toks[1],
+		Verifier: toks[2] + toks[3],
 	}
 	authURL, err := h.ssoClient.AuthCodeURL(r.Context(), flow.State, flow.Nonce, flow.Verifier)
 	if err != nil {
@@ -307,13 +315,27 @@ func requestIsTLS(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
-// randomToken returns a 43-character URL-safe random string (256 bits).
-func randomToken() string {
+// randomToken returns a 43-character URL-safe random string (256 bits). It
+// returns an error rather than panicking on crypto/rand failure so the HTTP
+// handler can fail the request cleanly instead of crashing the process.
+func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is unrecoverable; surface loudly rather than
-		// silently weakening the login flow.
-		panic(fmt.Sprintf("sso: crypto/rand unavailable: %v", err))
+		return "", fmt.Errorf("sso: crypto/rand unavailable: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// randomTokens returns n independent random tokens, failing fast if crypto/rand
+// is unavailable.
+func randomTokens(n int) ([]string, error) {
+	toks := make([]string, n)
+	for i := range toks {
+		t, err := randomToken()
+		if err != nil {
+			return nil, err
+		}
+		toks[i] = t
+	}
+	return toks, nil
 }

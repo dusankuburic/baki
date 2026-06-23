@@ -1,5 +1,6 @@
 import {Component, type ReactNode} from 'react'
 import {systemApi} from '@/api'
+import {logger} from '@/lib/logger'
 
 type ErrorBoundaryProps = {
     children: ReactNode
@@ -20,7 +21,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
     }
 
     componentDidCatch(error: Error, info: React.ErrorInfo) {
-        console.error('ErrorBoundary caught:', error, info)
+        logger.error('ErrorBoundary caught:', error, info)
         try {
             systemApi.logError({
                 message: error.message,

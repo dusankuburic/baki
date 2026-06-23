@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,9 +17,10 @@ import (
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-core/logger"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 type AuthHandler struct {
@@ -29,11 +31,20 @@ type AuthHandler struct {
 	// (cloud mode with PAD_SSO_* set and a Postgres backend).
 	ssoClient     SSOClient
 	identityStore IdentityStore
+	// email renders/sends transactional mail (password reset, verification).
+	// Always non-nil — falls back to a log-only mailer when SMTP is unset.
+	email *mailer.Service
 }
 
-func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identityStore IdentityStore) *AuthHandler {
-	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security, ssoClient: ssoClient, identityStore: identityStore}
+func NewAuthHandler(tokenStore RefreshTokenStore, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identityStore IdentityStore, email *mailer.Service) *AuthHandler {
+	return &AuthHandler{tokenStore: tokenStore, backend: backend, security: security, ssoClient: ssoClient, identityStore: identityStore, email: email}
 }
+
+// Password reset and email verification token lifetimes.
+const (
+	passwordResetTTL = time.Hour
+	emailVerifyTTL   = 24 * time.Hour
+)
 
 func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
@@ -87,6 +98,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	}
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRegister, "user", user.ID, nil)
+	h.sendVerificationEmail(r.Context(), user)
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"user": map[string]any{
@@ -95,6 +107,33 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 			"role":  user.Role,
 		},
 	})
+}
+
+// sendVerificationEmail issues an email-verification token and mails the link.
+// Best-effort: failures are logged but never block registration, since email is
+// optional and a user can request a resend later.
+func (h *AuthHandler) sendVerificationEmail(ctx context.Context, user *storageif.User) {
+	if h.email == nil || user.Email == "" {
+		return
+	}
+	raw, hash, err := auth.GenerateOpaqueToken()
+	if err != nil {
+		logger.Error("verification token generation failed", "error", err, "userID", user.ID)
+		return
+	}
+	tok := &storageif.UserToken{
+		TokenHash: hash,
+		Purpose:   storageif.TokenPurposeEmailVerify,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().UTC().Add(emailVerifyTTL),
+	}
+	if err := h.backend.CreateUserToken(ctx, tok); err != nil {
+		logger.Error("storing verification token failed", "error", err, "userID", user.ID)
+		return
+	}
+	if err := h.email.SendEmailVerification(ctx, user.Email, raw); err != nil {
+		logger.Error("sending verification email failed", "error", err, "userID", user.ID)
+	}
 }
 
 func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -503,6 +542,145 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 	}
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", claims.UserID, nil)
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// handleAuthForgotPassword issues a password-reset token and emails its link.
+// It always responds 200 with the same body whether or not the email exists, so
+// the endpoint cannot be used to enumerate accounts.
+func (h *AuthHandler) handleAuthForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if !h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("password reset not available in local mode"), http.StatusForbidden)
+		return
+	}
+	metrics.RecordAuthOp("forgot_password")
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	ok := map[string]string{"status": "ok"}
+	email, err := validateEmail(req.Email)
+	if err != nil || h.backend == nil {
+		render.JSON(w, ok) // never reveal validation/availability details
+		return
+	}
+
+	user, err := h.backend.LoadUserByEmail(r.Context(), email)
+	if err != nil {
+		render.JSON(w, ok) // unknown email — respond identically
+		return
+	}
+
+	raw, hash, err := auth.GenerateOpaqueToken()
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	tok := &storageif.UserToken{
+		TokenHash: hash,
+		Purpose:   storageif.TokenPurposePasswordReset,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().UTC().Add(passwordResetTTL),
+	}
+	if err := h.backend.CreateUserToken(r.Context(), tok); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := h.email.SendPasswordReset(r.Context(), user.Email, raw); err != nil {
+		logger.Error("sending password reset email failed", "error", err, "userID", user.ID)
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", user.ID, map[string]string{"step": "reset_requested"})
+	render.JSON(w, ok)
+}
+
+// handleAuthResetPassword redeems a reset token and sets a new password,
+// revoking all of the user's existing sessions.
+func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Request) {
+	if !h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("password reset not available in local mode"), http.StatusForbidden)
+		return
+	}
+	metrics.RecordAuthOp("reset_password")
+	var req struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.Token == "" {
+		render.Error(w, fmt.Errorf("token is required"), http.StatusBadRequest)
+		return
+	}
+	if err := validatePasswordStrength(req.NewPassword); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+
+	userID, err := h.backend.ConsumeUserToken(r.Context(), storageif.TokenPurposePasswordReset, auth.HashOpaqueToken(req.Token))
+	if err != nil {
+		render.Error(w, fmt.Errorf("invalid or expired reset token"), http.StatusBadRequest)
+		return
+	}
+
+	hashed, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := h.backend.UpdateUserPassword(r.Context(), userID, hashed); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	if h.tokenStore != nil {
+		if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), userID); err != nil {
+			logger.Error("failed to revoke sessions after password reset", "error", err, "userID", userID)
+		}
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPasswordChange, "user", userID, map[string]string{"step": "reset_completed"})
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// handleAuthVerifyEmail redeems an email-verification token and marks the user's
+// email verified.
+func (h *AuthHandler) handleAuthVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	if !h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("email verification not available in local mode"), http.StatusForbidden)
+		return
+	}
+	metrics.RecordAuthOp("verify_email")
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.Token == "" {
+		render.Error(w, fmt.Errorf("token is required"), http.StatusBadRequest)
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+	userID, err := h.backend.ConsumeUserToken(r.Context(), storageif.TokenPurposeEmailVerify, auth.HashOpaqueToken(req.Token))
+	if err != nil {
+		render.Error(w, fmt.Errorf("invalid or expired verification token"), http.StatusBadRequest)
+		return
+	}
+	if err := h.backend.SetUserEmailVerified(r.Context(), userID); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

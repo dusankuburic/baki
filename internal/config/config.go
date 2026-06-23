@@ -26,7 +26,27 @@ type Config struct {
 	Auth       AuthConfig
 	Runtime    RuntimeConfig
 	Governance GovernanceConfig
+	Email      EmailConfig
 	Log        models.LogConfig
+}
+
+// EmailConfig configures transactional email (password reset, email
+// verification, org invites). It is fully optional: when SMTPHost/From are
+// unset, the app falls back to a log-only mailer (links are written to the
+// server log) so non-email deployments keep working. AppBaseURL is the public
+// origin used to build links in emails, e.g. https://app.example.com.
+type EmailConfig struct {
+	SMTPHost   string
+	SMTPPort   int
+	Username   string
+	Password   string
+	From       string
+	AppBaseURL string
+}
+
+// Enabled reports whether SMTP delivery is configured.
+func (e EmailConfig) Enabled() bool {
+	return e.SMTPHost != "" && e.From != ""
 }
 
 // GovernanceConfig configures the continuous-governance loop: the periodic flow

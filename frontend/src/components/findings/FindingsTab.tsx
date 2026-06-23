@@ -219,9 +219,13 @@ export default function FindingsTab() {
     )
   }
 
+  // Unreachable given the guards above (report is set whenever we get here),
+  // but this narrows the type so the render below needs no non-null assertions.
+  if (!report) return null
+
   return (
     <div className="flex flex-col h-full">
-      <FindingsSummary stats={report!.stats} durationMs={report!.durationMs} healthScore={report!.metrics?.healthScore} />
+      <FindingsSummary stats={report.stats} durationMs={report.durationMs} healthScore={report.metrics?.healthScore} />
       <div className="px-3 py-1.5 flex items-center justify-between border-b border-border-subtle gap-2">
         <div className="flex items-center gap-1">
           {([
@@ -279,6 +283,7 @@ export default function FindingsTab() {
         </button>
         <button
           onClick={cycleSortMode}
+          aria-label="Change findings sort order"
           title={sortMode === 'severity' ? 'Sort: by severity — click for count' : sortMode === 'count' ? 'Sort: by count — click for rule order' : 'Sort: rule order — click for severity'}
           className={clsx(
             'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0',
@@ -312,11 +317,12 @@ export default function FindingsTab() {
         >
           <Layers size={12} />
         </button>
-        {report!.findings.length > 0 && (
+        {report.findings.length > 0 && (
           <>
             <button
               onClick={handleExportCSV}
               className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+              aria-label="Export findings as CSV"
               title="Export as CSV"
             >
               <Download size={12} />
@@ -324,6 +330,7 @@ export default function FindingsTab() {
             <button
               onClick={handleExportHTML}
               className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+              aria-label="Export findings as HTML"
               title="Export as HTML"
             >
               <FileText size={12} />
@@ -333,7 +340,7 @@ export default function FindingsTab() {
       </div>
       {dedupGroups && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-brand-400 bg-brand-500/5 border-b border-border-subtle">
-          <span>Grouped: {findings.length} unique findings ({report!.findings.length - findings.length} duplicates folded)</span>
+          <span>Grouped: {findings.length} unique findings ({report.findings.length - findings.length} duplicates folded)</span>
           <button
             onClick={() => setDedupGroups(null)}
             className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
@@ -357,7 +364,7 @@ export default function FindingsTab() {
         <AnalysisDiffView diff={diff} blockLookup={blockLookup} onBack={() => setDiff(null)} onFixWithAI={handleFixWithAI} />
       ) : (
         <>
-          {report!.findings.length > 0 && (
+          {report.findings.length > 0 && (
             <div className="px-3 py-1.5 border-b border-border-subtle">
               <div className="relative">
                 <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-disabled" />
@@ -372,7 +379,7 @@ export default function FindingsTab() {
             </div>
           )}
           {findings.length === 0 ? (
-            report!.findings.length === 0 ? (
+            report.findings.length === 0 ? (
               <EmptyState
                 title="No findings"
                 description="The analysis didn't detect any issues. Your flow looks good!"

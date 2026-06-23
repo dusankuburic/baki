@@ -37,6 +37,7 @@ interface OrgState {
   setActiveOrg: (id: string | null) => void
   createOrg: (name: string) => Promise<Organisation>
   inviteMember: (orgId: string, email: string, role: OrgRole) => Promise<void>
+  acceptInvite: (token: string) => Promise<void>
   removeMember: (orgId: string, userId: string) => Promise<void>
   setMemberRole: (orgId: string, userId: string, role: OrgRole) => Promise<void>
   deleteOrg: (orgId: string) => Promise<void>
@@ -95,11 +96,27 @@ export const useOrgStore = create<OrgState>()(persist((set, get) => ({
     if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
     set({ isBusy: true, error: null })
     try {
-      await request(`/api/orgs/${orgId}/members`, { email, role })
-      await get().loadOrgs()
+      // Create a token invite — the backend emails the invitee a link they
+      // accept via acceptInvite (POST /api/invites/{token}/accept). The member
+      // list only changes once they accept, so no loadOrgs() here.
+      await request(`/api/orgs/${orgId}/invites`, { email, role })
       set({ isBusy: false })
     } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to invite member' })
+      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to send invite' })
+      throw err
+    }
+  },
+
+  acceptInvite: async (token) => {
+    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+    set({ isBusy: true, error: null })
+    try {
+      const org = await request<Organisation>(`/api/invites/${token}/accept`, {})
+      await get().loadOrgs()
+      if (org?.id) set({ activeOrgId: org.id })
+      set({ isBusy: false })
+    } catch (err) {
+      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to accept invite' })
       throw err
     }
   },
@@ -121,7 +138,7 @@ export const useOrgStore = create<OrgState>()(persist((set, get) => ({
     if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
     set({ isBusy: true, error: null })
     try {
-      await request(`/api/orgs/${orgId}/members/${userId}/role`, { role })
+      await request(`/api/orgs/${orgId}/members/${userId}/role`, { role }, 'PUT')
       await get().loadOrgs()
       set({ isBusy: false })
     } catch (err) {

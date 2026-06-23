@@ -126,8 +126,14 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	query := q.Get("q")
 	sort := q.Get("sort")
 	scope := service.LibraryScope(q.Get("scope"))
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, ok := parseIntParam(w, q.Get("limit"), "limit", 0)
+	if !ok {
+		return
+	}
+	offset, ok := parseIntParam(w, q.Get("offset"), "offset", 0)
+	if !ok {
+		return
+	}
 
 	docs, err := h.libSvc.ListLibraryFlows(r.Context(), userID, orgID, scope, query, sort, limit, offset)
 	if err != nil {
@@ -325,7 +331,10 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, ok := parseIntParam(w, r.URL.Query().Get("limit"), "limit", 0)
+	if !ok {
+		return
+	}
 	versions, err := h.backend.ListFlowVersions(r.Context(), id, limit)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -411,7 +420,14 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	vn, _ := strconv.Atoi(chi.URLParam(r, "vn"))
+	vn, ok := parseIntParam(w, chi.URLParam(r, "vn"), "version", 0)
+	if !ok {
+		return
+	}
+	if vn <= 0 {
+		render.Error(w, fmt.Errorf("invalid version: must be a positive integer"), http.StatusBadRequest)
+		return
+	}
 	v, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
 	if err != nil {
 		render.Error(w, err, 0)

@@ -246,7 +246,8 @@ export default function FlowTree({
                             <button
                                 className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-2 transition-colors"
                                 onClick={() => {
-                                    writeClipboard(ctxMenu.row.blockData!.lineNumber.toString())
+                                    const ln = ctxMenu.row.blockData?.lineNumber
+                                    if (ln != null) writeClipboard(ln.toString())
                                     setCtxMenu(null)
                                 }}
                             >
@@ -258,10 +259,10 @@ export default function FlowTree({
                             <button
                                 className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-2 transition-colors"
                                 onClick={() => {
-                                    if (ctxMenu!.row.kind === 'subflow') {
-                                        onToggleSubflowExpand(ctxMenu!.row.id)
+                                    if (ctxMenu.row.kind === 'subflow') {
+                                        onToggleSubflowExpand(ctxMenu.row.id)
                                     } else {
-                                        onToggleBlockExpand(ctxMenu!.row.id)
+                                        onToggleBlockExpand(ctxMenu.row.id)
                                     }
                                     setCtxMenu(null)
                                 }}
@@ -275,7 +276,7 @@ export default function FlowTree({
                             <button
                                 className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-2 transition-colors"
                                 onClick={() => {
-                                    onSelectSubflow(ctxMenu!.row.id)
+                                    onSelectSubflow(ctxMenu.row.id)
                                     setCtxMenu(null)
                                 }}
                             >

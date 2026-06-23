@@ -384,9 +384,15 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 		findings = []models.Finding{}
 	}
 
+	// Honor inline `# pad-ignore` directives in the flow source before stats,
+	// metrics, IDs and fingerprints are derived, so a suppressed finding is
+	// invisible to every downstream consumer (UI, CLI gate, baselines, SARIF).
+	findings, suppressedCount := applyInlineSuppressions(findings, collectInlineSuppressions(flow))
+
 	stats := computeStats(findings)
 	stats.BlocksAnalyzed = ctx.totalBlocks
 	stats.RulesRun = len(enabledRules)
+	stats.Suppressed = suppressedCount
 
 	elapsed := time.Since(start)
 	report := &models.AnalysisReport{

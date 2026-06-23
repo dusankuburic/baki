@@ -28,6 +28,9 @@ type FakeBackend struct {
 	Baselines       map[string]*interfaces.FlowBaseline
 	// APITokens is keyed by token ID. Lazily initialized.
 	APITokens map[string]*interfaces.APIToken
+	// UserTokens is keyed by token hash (password reset / email verify). Lazily
+	// initialized.
+	UserTokens map[string]*interfaces.UserToken
 	// FlowHealth lets tests seed persisted per-flow health (flowID -> snapshot).
 	FlowHealth map[string]*interfaces.HealthSnapshot
 }
@@ -369,6 +372,26 @@ func (m *FakeBackend) DeleteAPIToken(_ context.Context, userID, id string) error
 	}
 	return nil
 }
+
+func (m *FakeBackend) CreateUserToken(_ context.Context, t *interfaces.UserToken) error {
+	if m.UserTokens == nil {
+		m.UserTokens = make(map[string]*interfaces.UserToken)
+	}
+	cp := *t
+	m.UserTokens[t.TokenHash] = &cp
+	return nil
+}
+
+func (m *FakeBackend) ConsumeUserToken(_ context.Context, purpose, tokenHash string) (string, error) {
+	t, ok := m.UserTokens[tokenHash]
+	if !ok || t.Purpose != purpose || time.Now().After(t.ExpiresAt) {
+		return "", interfaces.ErrNotFound
+	}
+	delete(m.UserTokens, tokenHash)
+	return t.UserID, nil
+}
+
+func (m *FakeBackend) SetUserEmailVerified(_ context.Context, _ string) error { return nil }
 
 // ---- Audit log ----
 func (m *FakeBackend) SaveAuditEvent(_ context.Context, _ *interfaces.AuditEvent) error {

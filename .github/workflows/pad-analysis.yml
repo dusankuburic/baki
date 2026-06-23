@@ -15,7 +15,7 @@ on:
         description: 'Path to PAD flow file or folder'
         default: '.'
       fail_on:
-        description: 'Minimum severity that causes a non-zero exit: error, warning, info'
+        description: 'Minimum severity that fails the build: error, warning, info, none'
         default: 'error'
   workflow_call:
     inputs:
@@ -28,6 +28,9 @@ on:
 
 permissions:
   contents: read
+  # Required for the analyzer to publish findings to the Security tab and to
+  # annotate changed lines inline on pull requests.
+  security-events: write
 
 jobs:
   analyze:
@@ -38,30 +41,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Analyze PAD flows
+        uses: ./
         with:
-          go-version-file: go.mod
-          cache: true
+          flow-path: ${{ inputs.flow_path || '.' }}
+          fail-on: ${{ inputs.fail_on || 'error' }}
+          sarif-file: pad-analysis.sarif
+          upload-sarif: 'true'
 
-      - name: Build bakicli
-        run: go build -o bakicli ./cmd/bakicli
-
-      - name: Analyze flows
-        id: analysis
-        run: |
-          FLOW_PATH="${{ inputs.flow_path }}"
-          FAIL_ON="${{ inputs.fail_on }}"
-
-          ./bakicli \
-            -format json \
-            -fail-on "$FAIL_ON" \
-            "$FLOW_PATH" | tee analysis-report.json
-
-      - name: Upload analysis report
+      - name: Upload SARIF artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pad-analysis-report
-          path: analysis-report.json
+          name: pad-analysis-sarif
+          path: pad-analysis.sarif
           retention-days: 30

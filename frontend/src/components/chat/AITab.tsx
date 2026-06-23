@@ -80,9 +80,11 @@ export default function AITab() {
   }, [contextBlockId, _analysisReport])
 
   useEffect(() => {
+    let active = true
     chatApi.getSuggestedPrompts(!!selectedBlockId, hasFindings).then((ps: string[] | null) => {
-      setSuggestedPrompts(ps || [])
+      if (active) setSuggestedPrompts(ps || [])
     }).catch((err) => { logger.warn('Failed to load suggested prompts', err) })
+    return () => { active = false }
   }, [selectedBlockId, hasFindings])
 
   const displayedMessages = useMemo(() => {
@@ -265,8 +267,8 @@ export default function AITab() {
             <TokenCounter
               promptTokens={totalTokensIn}
               completionTokens={totalTokensOut}
-              inputCostPerM={showCost ? currentModelDetail!.inputCostPerM : undefined}
-              outputCostPerM={showCost ? currentModelDetail!.outputCostPerM : undefined}
+              inputCostPerM={showCost ? currentModelDetail?.inputCostPerM : undefined}
+              outputCostPerM={showCost ? currentModelDetail?.outputCostPerM : undefined}
             />
           )}
 

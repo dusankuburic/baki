@@ -9,6 +9,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -101,6 +102,7 @@ var APIModule = fx.Options(
 		api.NewDashboardHandler,
 		api.NewExportHandler,
 		api.NewAuthHandler,
+		func(cfg *config.Config) *mail.Service { return mail.NewService(cfg.Email) },
 		api.NewAdminHandler,
 		api.NewProviderHandler,
 		api.NewOrgHandler,

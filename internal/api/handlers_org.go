@@ -10,8 +10,10 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/rag"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 type OrgHandler struct {
@@ -19,10 +21,11 @@ type OrgHandler struct {
 	backend   storageif.StorageBackend
 	knowledge *rag.KnowledgeService
 	security  *SecurityConfig
+	email     *mailer.Service
 }
 
-func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig) *OrgHandler {
-	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security}
+func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service) *OrgHandler {
+	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security, email: email}
 }
 
 // requireMember verifies the caller is a member of the org identified by the
@@ -304,7 +307,8 @@ func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request)
 func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
-	if h.requireAdmin(w, r) == nil {
+	org := h.requireAdmin(w, r)
+	if org == nil {
 		return
 	}
 
@@ -341,6 +345,14 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 	}
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgInviteCreate, "org", id, map[string]string{"email": email, "role": string(role)})
+
+	// Email the invitee their link. Best-effort: the raw token is still returned
+	// so an admin can share it manually if SMTP isn't configured or delivery fails.
+	if h.email != nil {
+		if err := h.email.SendOrgInvite(r.Context(), email, org.Name, token); err != nil {
+			logger.Error("sending org invite email failed", "error", err, "org", id, "email", email)
+		}
+	}
 
 	render.JSON(w, map[string]any{
 		"invite": invite,

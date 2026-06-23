@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
@@ -31,8 +30,14 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 	}
 
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, ok := parseIntParam(w, q.Get("limit"), "limit", 50)
+	if !ok {
+		return
+	}
+	offset, ok := parseIntParam(w, q.Get("offset"), "offset", 0)
+	if !ok {
+		return
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -118,8 +123,14 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 	}
 
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, ok := parseIntParam(w, q.Get("limit"), "limit", 0)
+	if !ok {
+		return
+	}
+	offset, ok := parseIntParam(w, q.Get("offset"), "offset", 0)
+	if !ok {
+		return
+	}
 	filter := storageif.AuditFilter{
 		UserID: q.Get("userId"),
 		Action: q.Get("action"),

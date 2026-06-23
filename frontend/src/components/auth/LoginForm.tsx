@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Mail, Lock, LogIn, UserPlus, KeyRound } from 'lucide-react'
+import { Mail, Lock, LogIn, UserPlus, KeyRound, Send } from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
 import { useAuthStore } from '@/stores/authStore'
@@ -34,6 +34,12 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   const [sso, setSso] = useState<SSOInfo | null>(null)
   const [ssoError, setSsoError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  // Forgot-password sub-flow: a small email-only form reachable from the login
+  // view. `forgotSent` shows a deliberately generic confirmation (the API never
+  // reveals whether the address exists).
+  const [forgot, setForgot] = useState(false)
+  const [forgotSent, setForgotSent] = useState(false)
+  const [forgotLoading, setForgotLoading] = useState(false)
   const login = useAuthStore(s => s.login)
   const register = useAuthStore(s => s.register)
   const loginWithSSOTicket = useAuthStore(s => s.loginWithSSOTicket)
@@ -61,6 +67,29 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
     window.location.href = `${cfg.apiUrl}/api/auth/sso/start`
   }
 
+  async function handleForgotSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setFormError(null)
+    setForgotLoading(true)
+    try {
+      await authApi.forgotPassword(email)
+      setForgotSent(true)
+    } catch {
+      // Even on error we show the generic confirmation so the endpoint can't be
+      // used to probe for accounts.
+      setForgotSent(true)
+    } finally {
+      setForgotLoading(false)
+    }
+  }
+
+  function backToLogin() {
+    setForgot(false)
+    setForgotSent(false)
+    setFormError(null)
+    clearError()
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     clearError()
@@ -81,6 +110,58 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
     } catch {
       // error is set in the store
     }
+  }
+
+  if (forgot) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-surface-1">
+        <form
+          onSubmit={handleForgotSubmit}
+          className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
+        >
+          <div className="flex flex-col gap-1 mb-2">
+            <h1 className="text-xl font-semibold text-text-primary">Reset your password</h1>
+            <p className="text-sm text-text-muted">
+              {forgotSent
+                ? 'If an account exists for that address, we’ve sent a reset link.'
+                : 'Enter your account email and we’ll send you a reset link.'}
+            </p>
+          </div>
+
+          {!forgotSent && (
+            <>
+              <Input
+                id="forgot-email"
+                type="email"
+                placeholder="Email"
+                icon={Mail}
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                autoFocus
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                fullWidth
+                loading={forgotLoading}
+                icon={Send}
+                disabled={forgotLoading || !email}
+              >
+                Send reset link
+              </Button>
+            </>
+          )}
+
+          <div className="text-center text-sm text-text-muted">
+            <button type="button" className="text-brand-500 hover:underline font-medium" onClick={backToLogin}>
+              Back to sign in
+            </button>
+          </div>
+        </form>
+      </div>
+    )
   }
 
   return (
@@ -147,6 +228,16 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
           />
           Keep me signed in on this device
         </label>
+
+        {!isRegister && (
+          <button
+            type="button"
+            className="text-sm text-brand-500 hover:underline font-medium self-start -mt-2"
+            onClick={() => { clearError(); setFormError(null); setForgot(true) }}
+          >
+            Forgot password?
+          </button>
+        )}
 
         <Button
           type="submit"

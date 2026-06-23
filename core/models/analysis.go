@@ -62,6 +62,10 @@ type AnalysisStats struct {
 	Info           int `json:"info"`
 	BlocksAnalyzed int `json:"blocksAnalyzed"`
 	RulesRun       int `json:"rulesRun"`
+	// Suppressed counts findings hidden by inline `# pad-ignore` directives in
+	// the flow source (see analyzer suppression). They are excluded from
+	// Errors/Warnings/Info and from the findings list.
+	Suppressed int `json:"suppressed"`
 }
 
 type RuleProfile struct {

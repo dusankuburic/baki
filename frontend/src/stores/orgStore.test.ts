@@ -179,6 +179,56 @@ describe('deleteOrg', () => {
   })
 })
 
+// ---- inviteMember (token invite) ----
+
+describe('inviteMember', () => {
+  // Regression: must hit the invites endpoint (which emails a token), not the
+  // direct-add /members endpoint — otherwise the invite email never fires.
+  it('POSTs to the org invites endpoint', async () => {
+    mockRequest.mockResolvedValue(undefined)
+
+    await useOrgStore.getState().inviteMember('org-1', 'new@example.com', 'member')
+
+    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/invites', { email: 'new@example.com', role: 'member' })
+  })
+})
+
+// ---- acceptInvite ----
+
+describe('acceptInvite', () => {
+  it('accepts the token, reloads orgs, and activates the joined org', async () => {
+    const joined: Organisation = { ...fakeOrg, id: 'org-9', name: 'Joined' }
+    // 1st call: accept -> returns the org; 2nd call: loadOrgs -> returns list.
+    mockRequest.mockResolvedValueOnce(joined).mockResolvedValueOnce([joined])
+
+    await useOrgStore.getState().acceptInvite('tok-abc')
+
+    expect(mockRequest).toHaveBeenNthCalledWith(1, '/api/invites/tok-abc/accept', {})
+    expect(useOrgStore.getState().activeOrgId).toBe('org-9')
+  })
+
+  it('sets an error when the token is invalid', async () => {
+    mockRequest.mockRejectedValue(new Error('invite not found'))
+
+    await expect(useOrgStore.getState().acceptInvite('bad')).rejects.toThrow()
+    expect(useOrgStore.getState().error).toBe('invite not found')
+  })
+})
+
+// ---- setMemberRole ----
+
+describe('setMemberRole', () => {
+  // Regression: the role route is registered PUT-only (routes_chi.go). Sending
+  // the default POST returned 405 and member-role changes silently failed.
+  it('sends PUT to the member role endpoint', async () => {
+    mockRequest.mockResolvedValue(undefined)
+
+    await useOrgStore.getState().setMemberRole('org-1', 'u2', 'admin')
+
+    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/members/u2/role', { role: 'admin' }, 'PUT')
+  })
+})
+
 // ---- clearError ----
 
 describe('clearError', () => {

@@ -540,6 +540,19 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 );
 CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens (user_id);
 
+-- ── user_tokens: one-shot credentials for password reset & email verification.
+-- No RLS — like api_tokens, this is auth infrastructure looked up by hash before
+-- a user context exists; the secret hash is the access control. ──
+CREATE TABLE IF NOT EXISTS user_tokens (
+    token_hash TEXT        PRIMARY KEY,
+    purpose    TEXT        NOT NULL,
+    user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS user_tokens_user_idx ON user_tokens (user_id);
+
 -- ── finding_status: persistent, team-shared triage state, one row per finding ──
 CREATE TABLE IF NOT EXISTS finding_status (
     flow_id       TEXT        NOT NULL REFERENCES flows(id) ON DELETE CASCADE,

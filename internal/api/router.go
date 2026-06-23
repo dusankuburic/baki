@@ -329,7 +329,17 @@ func (rt *Router) isOriginAllowed(origin string) bool {
 		return true
 	}
 	for _, o := range rt.AllowedOrigins {
-		if o == "*" || strings.EqualFold(o, origin) {
+		// A "*" wildcard is only honored when auth is disabled. In cloud/auth
+		// mode requests are credentialed, and reflecting an arbitrary origin
+		// alongside credentials defeats the same-origin policy, so an explicit
+		// allowlist is required.
+		if o == "*" {
+			if !rt.security.JWTEnabled {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(o, origin) {
 			return true
 		}
 	}
@@ -368,6 +378,11 @@ var publicRoutes = map[string]bool{
 	"/api/auth/login":    true,
 	"/api/auth/refresh":  true,
 	"/api/auth/logout":   true,
+	// Password recovery and email verification are pre-authentication: the user
+	// either has no session or is acting on a one-time emailed token.
+	"/api/auth/forgot-password": true,
+	"/api/auth/reset-password":  true,
+	"/api/auth/verify-email":    true,
 	// SSO endpoints are pre-authentication by definition: the browser hits
 	// start/callback before it has any token, and exchange carries its own
 	// single-use ticket credential.

@@ -13,8 +13,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"golang.org/x/sync/errgroup"
-	"pad-core/logger"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 // SaveFlow upserts a flow document. When flow.Version > 0 and the row
@@ -380,8 +380,12 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 					logger.Warn("DeleteFlow blob cleanup goroutine panicked", "flow_id", id, "err", r)
 				}
 			}()
-			// Use a background context as the request context might be cancelled
-			if err := b.deleteBlobs(context.Background(), prefix); err != nil {
+			// Detach from the request context (which may be cancelled once the
+			// HTTP handler returns) but bound the work so a slow/hung blob store
+			// can't leak this goroutine indefinitely.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := b.deleteBlobs(ctx, prefix); err != nil {
 				logger.Warn("failed to delete flow blobs", "flow_id", id, "error", err)
 			}
 		}()

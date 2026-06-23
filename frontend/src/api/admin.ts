@@ -58,7 +58,7 @@ export const adminApi = {
     request('/api/admin/users/list', undefined, 'GET'),
 
   setUserRole: (userId: string, role: string): Promise<void> =>
-    request(`/api/admin/users/${userId}/role`, { role }),
+    request(`/api/admin/users/${userId}/role`, { role }, 'PUT'),
 
   listAuditEvents: (filter: AuditFilter = {}): Promise<AuditEvent[]> => {
     const params = new URLSearchParams()

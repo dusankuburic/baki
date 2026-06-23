@@ -16,6 +16,10 @@ services:
           cpus: '0.5'
           memory: 1G
   db:
+    # Pin to an immutable digest in production (the base file's floating
+    # postgres:16-alpine can silently change). Bump deliberately when applying
+    # Postgres security patches.
+    image: postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
     deploy:
       resources:
         limits:
