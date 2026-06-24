@@ -267,10 +267,14 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 		dbCfg.ConnMaxIdleTime = d
 	}
 
-	// Apply Azure Blob Storage config if available
-	if cfg.Storage.AzureStorageAccount != "" && cfg.Storage.AzureStorageContainer != "" {
+	// Apply Azure Blob Storage config if available. Blob storage is enabled when a
+	// container is set together with an auth source: an account name (Managed
+	// Identity) or a connection string (emulator / non-MI).
+	if cfg.Storage.AzureStorageContainer != "" &&
+		(cfg.Storage.AzureStorageAccount != "" || cfg.Storage.AzureBlobConnectionString != "") {
 		dbCfg.AzureStorageAccount = cfg.Storage.AzureStorageAccount
 		dbCfg.AzureStorageContainer = cfg.Storage.AzureStorageContainer
+		dbCfg.AzureBlobConnectionString = cfg.Storage.AzureBlobConnectionString
 	}
 
 	pgBackend, err := storagedb.New(context.Background(), dbCfg)

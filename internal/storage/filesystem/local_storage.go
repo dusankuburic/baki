@@ -117,6 +117,18 @@ func (lsb *LocalStorageBackend) LoadFlow(ctx context.Context, id string) (*inter
 	return &flow, nil
 }
 
+// LoadFlowHeader returns the flow's metadata with nil Content. The filesystem
+// backend stores content inline, so this just loads and drops it — kept in
+// interface parity with the database backend (which skips a blob fetch).
+func (lsb *LocalStorageBackend) LoadFlowHeader(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
+	flow, err := lsb.LoadFlow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	flow.Content = nil
+	return flow, nil
+}
+
 // ListFlows lists flow documents matching the given filter
 func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
 	flowsDir := filepath.Join(lsb.dataDir, "flows")

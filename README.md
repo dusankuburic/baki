@@ -136,6 +136,7 @@ Backend env vars (see `.env.example`):
 | `PAD_AUTH_SECRET` | JWT signing secret (required when auth enabled) | — |
 | `PAD_STORAGE` | `local` (filesystem) or `database` (PostgreSQL) | `local` |
 | `PAD_DATABASE_URL` | Postgres DSN (required when `PAD_STORAGE=database`) | — |
+| `PAD_AZURE_STORAGE_ACCOUNT` / `PAD_AZURE_STORAGE_CONTAINER` | Offload flow content to Azure Blob Storage (both required together; database backend) | — (off) |
 | `PAD_TRUSTED_PROXIES` | Trusted proxy IPs for `X-Forwarded-For` | — |
 | `PAD_SCAN_INTERVAL` | Periodic flow re-scan interval (e.g. `1h`); enables drift/regression alerts (cloud) | — (off) |
 | `PAD_NOTIFY_WEBHOOK_URL` | Generic webhook for governance alerts (raw JSON) | — |
@@ -146,6 +147,29 @@ Backend env vars (see `.env.example`):
 | `PAD_APP_BASE_URL` | Public origin used to build links in emails | — |
 
 Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:8080`), **without** a trailing `/api`. Only needed in web mode; the desktop app discovers the sidecar automatically.
+
+**Azure Blob Storage (optional).** When `PAD_AZURE_STORAGE_ACCOUNT` and `PAD_AZURE_STORAGE_CONTAINER` are both set, large flow content is stored in blob storage while Postgres keeps a placeholder + metadata. Auth uses `DefaultAzureCredential` (Managed Identity in Azure, `az` CLI locally); grant the identity the **Storage Blob Data Contributor** role on the account. The container must already exist — the server probes reachability at startup and **logs a warning but does not fail boot**; the readiness probe (`/readyz`) keeps the instance out of rotation until blob is reachable. Current content is keyed by the row's version (`flows/{id}/content.v{N}.json`), so a save whose transaction later rolls back leaves an unreferenced orphan blob rather than corrupting the live flow. For the Azurite emulator or non-MI scenarios, set `PAD_AZURE_BLOB_CONNECTION_STRING` instead of the account name (Managed Identity remains the production default).
+
+#### Azure Container Apps deployment (ops runbook)
+
+1. **Identity & RBAC** — assign a (user-assigned) managed identity to the Container App and grant it **Storage Blob Data Contributor** on the storage account. For Postgres, set `PAD_DATABASE_URL` with `password=managed-identity` and grant the identity the AAD login role; the server injects a fresh Entra token per connection.
+2. **Container** — pre-create the blob container (the app does not create it):
+   ```bash
+   az storage container create --account-name <acct> --name flows --auth-mode login
+   ```
+3. **Recoverability** — enable blob **soft-delete** and **versioning** on the account so an accidental/buggy delete is recoverable (the DB remains the source of truth):
+   ```bash
+   az storage account blob-service-properties update --account-name <acct> \
+     --enable-delete-retention true --delete-retention-days 14 --enable-versioning true
+   ```
+4. **Lifecycle policy** — reclaim orphaned/superseded blobs (the version-keyed scheme leaves orphans on rollback/supersession). The current `content.v{N}` is rewritten on every save, so a "delete blobs under `flows/` not modified in 30 days" rule expires only stale ones:
+   ```bash
+   az storage account management-policy create --account-name <acct> --policy @lifecycle.json
+   # lifecycle.json: a rule with filters.prefixMatch ["flows/"] and
+   # actions.baseBlob.delete.daysAfterModificationGreaterThan 30
+   ```
+5. **Probes** — set the ACA `livenessProbe` to `GET /healthz` and `readinessProbe` to `GET /readyz` (the latter checks DB *and* blob reachability).
+6. **Observability** — alert on `pad_blob_operations_total{status="error"}` and `{status="throttled"}` (429s ⇒ throttling/scale), blob-op duration p99 (`pad_blob_operation_duration_seconds`), and readiness failures.
 
 AI provider keys are set in-app under **Settings → Providers** (`Ctrl + ,`). Desktop stores them in the OS keyring; web stores them server-side. Supported: GitHub Copilot (OAuth device flow or PAT), GitHub Models, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM.
 

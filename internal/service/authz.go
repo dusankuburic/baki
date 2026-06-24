@@ -93,7 +93,9 @@ func (a *AuthzService) CheckFlowAccessByID(ctx context.Context, flowID, userID, 
 	if a.storage == nil { // Local mode
 		return nil
 	}
-	doc, err := a.storage.LoadFlow(ctx, flowID)
+	// Header only — authorization needs owner/org, not the (blob-backed) content,
+	// so this must not download or depend on the content blob.
+	doc, err := a.storage.LoadFlowHeader(ctx, flowID)
 	if err != nil {
 		return err
 	}

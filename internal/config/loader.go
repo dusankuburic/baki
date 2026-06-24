@@ -248,6 +248,9 @@ func applyEnvVars(cfg *Config) error {
 	if v := os.Getenv("PAD_AZURE_STORAGE_CONTAINER"); v != "" {
 		cfg.Storage.AzureStorageContainer = v
 	}
+	if v := os.Getenv("PAD_AZURE_BLOB_CONNECTION_STRING"); v != "" {
+		cfg.Storage.AzureBlobConnectionString = v
+	}
 	// Runtime tuning parameters
 	if v := os.Getenv("PAD_RATE_LIMIT_GENERAL_RPS"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
@@ -375,8 +378,14 @@ func Validate(cfg *Config) error {
 	if cfg.Storage.Backend == StorageDatabase && cfg.Storage.DatabaseURL == "" {
 		return errors.New("config: storage.database_url is required when storage.backend is database")
 	}
-	// Azure Blob Storage must be fully configured or not at all.
-	if (cfg.Storage.AzureStorageAccount != "" || cfg.Storage.AzureStorageContainer != "") &&
+	// Azure Blob Storage: a container is required, plus exactly one auth source —
+	// either an account name (Managed Identity, the prod default) or a connection
+	// string (emulator / non-MI). A bare account or bare container is a misconfig.
+	if cfg.Storage.AzureBlobConnectionString != "" {
+		if cfg.Storage.AzureStorageContainer == "" {
+			return errors.New("config: PAD_AZURE_STORAGE_CONTAINER must be set when PAD_AZURE_BLOB_CONNECTION_STRING is set")
+		}
+	} else if (cfg.Storage.AzureStorageAccount != "" || cfg.Storage.AzureStorageContainer != "") &&
 		(cfg.Storage.AzureStorageAccount == "" || cfg.Storage.AzureStorageContainer == "") {
 		return errors.New("config: PAD_AZURE_STORAGE_ACCOUNT and PAD_AZURE_STORAGE_CONTAINER must both be set to enable blob storage")
 	}

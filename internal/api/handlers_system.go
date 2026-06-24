@@ -206,6 +206,22 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 			render.Error(w, errors.New("database unavailable"), http.StatusServiceUnavailable)
 			return
 		}
+		// When the backend offloads flow content to blob storage, broken blob
+		// auth/config would let the pod serve traffic while returning empty
+		// flows. Gate readiness on blob reachability too (no-op when unconfigured).
+		if bc, ok := h.backend.(blobHealthChecker); ok {
+			if err := bc.CheckBlob(ctx); err != nil {
+				render.Error(w, errors.New("blob storage unavailable"), http.StatusServiceUnavailable)
+				return
+			}
+		}
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// blobHealthChecker is implemented by storage backends that offload content to
+// blob storage (currently the PostgreSQL backend). Optional: backends without
+// blob storage simply don't implement it and the readiness check is skipped.
+type blobHealthChecker interface {
+	CheckBlob(ctx context.Context) error
 }

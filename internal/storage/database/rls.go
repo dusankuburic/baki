@@ -4,11 +4,60 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 )
 
 type contextKey string
 
 const rlsTxKey contextKey = "rls_tx"
+
+const postCommitKey contextKey = "post_commit_hooks"
+
+// hasRLSTx reports whether ctx carries an RLS transaction.
+func hasRLSTx(ctx context.Context) bool {
+	tx, ok := ctx.Value(rlsTxKey).(*sql.Tx)
+	return ok && tx != nil
+}
+
+// PostCommitRegistry collects work that must run only after the request's RLS
+// transaction commits successfully (e.g. deleting blobs that back a row being
+// removed). The RLS middleware creates one per request and runs it post-commit.
+type PostCommitRegistry struct {
+	mu    sync.Mutex
+	hooks []func()
+}
+
+// WithPostCommit returns a context carrying a fresh registry plus the registry,
+// so the RLS middleware can run the hooks after a successful commit.
+func WithPostCommit(ctx context.Context) (context.Context, *PostCommitRegistry) {
+	reg := &PostCommitRegistry{}
+	return context.WithValue(ctx, postCommitKey, reg), reg
+}
+
+// Run executes and clears the registered hooks. Called by the RLS middleware
+// only after the transaction commits.
+func (r *PostCommitRegistry) Run() {
+	r.mu.Lock()
+	hooks := r.hooks
+	r.hooks = nil
+	r.mu.Unlock()
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
+// RegisterPostCommit schedules fn to run after the request's RLS transaction
+// commits. When there is no registry on the context (no RLS tx — the caller is
+// in autocommit, so the surrounding write is already durable) fn runs inline.
+func RegisterPostCommit(ctx context.Context, fn func()) {
+	if reg, ok := ctx.Value(postCommitKey).(*PostCommitRegistry); ok && reg != nil {
+		reg.mu.Lock()
+		reg.hooks = append(reg.hooks, fn)
+		reg.mu.Unlock()
+		return
+	}
+	fn()
+}
 
 // DBTX is the common interface between *sql.DB and *sql.Tx. All tenant-scoped
 // queries should call b.query(ctx) to get the right executor — if an RLS

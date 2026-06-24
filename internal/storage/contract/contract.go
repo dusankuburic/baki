@@ -332,6 +332,47 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
+	t.Run("LoadFlowHeader_returns_metadata_without_content", func(t *testing.T) {
+		owner := "contract-hdr-owner-" + runID
+		flow := &interfaces.FlowDocument{
+			ID:       "contract-flow-hdr-" + runID,
+			Name:     "Header Flow",
+			Content:  json.RawMessage(`{"big":"` + strings.Repeat("y", 1000) + `"}`),
+			Metadata: interfaces.FlowMetadata{BlockCount: 5, SubflowCount: 1},
+			OwnerID:  owner,
+		}
+		if err := b.SaveFlow(ctx, flow); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+
+		hdr, err := b.LoadFlowHeader(ctx, flow.ID)
+		if err != nil {
+			t.Fatalf("LoadFlowHeader: %v", err)
+		}
+		if len(hdr.Content) != 0 {
+			t.Errorf("LoadFlowHeader: expected nil content, got %d bytes", len(hdr.Content))
+		}
+		if hdr.OwnerID != owner {
+			t.Errorf("LoadFlowHeader: OwnerID=%q want %q", hdr.OwnerID, owner)
+		}
+		if hdr.Metadata.BlockCount != 5 {
+			t.Errorf("LoadFlowHeader: metadata lost, BlockCount=%d want 5", hdr.Metadata.BlockCount)
+		}
+
+		// LoadFlow (with content) must still return the full payload.
+		full, err := b.LoadFlow(ctx, flow.ID)
+		if err != nil {
+			t.Fatalf("LoadFlow: %v", err)
+		}
+		if len(full.Content) == 0 {
+			t.Errorf("LoadFlow: expected content present, got empty")
+		}
+
+		if _, err := b.LoadFlowHeader(ctx, "no-such-flow-"+runID); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("LoadFlowHeader(missing): expected ErrNotFound, got %v", err)
+		}
+	})
+
 	t.Run("ListFlows_unscoped_matches_nothing_AllFlows_enumerates", func(t *testing.T) {
 		// Both real backends must agree: an unscoped filter (no UserID, no
 		// OrganizationID, no AllFlows) is a defense-in-depth no-match, while

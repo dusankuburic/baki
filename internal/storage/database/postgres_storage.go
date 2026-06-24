@@ -9,9 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/jackc/pgx/v5"
@@ -37,22 +38,9 @@ func isPgErrCode(err error, code string) bool {
 	return false
 }
 
-// azureRefreshState holds the credential and pgx config needed to keep the
-// Managed Identity token alive for connections opened after each refresh cycle.
-// mu protects pgxCfg.Password from being read by a connection open while the
-// refresh goroutine is rewriting it.
-type azureRefreshState struct {
-	mu       sync.Mutex
-	provider *azureTokenProvider
-	pgxCfg   *pgx.ConnConfig
-}
-
 // PostgresStorageBackend implements interfaces.StorageBackend using PostgreSQL.
 type PostgresStorageBackend struct {
-	db           *sql.DB
-	azureRefresh *azureRefreshState // non-nil when using Azure Managed Identity
-	stopCh       chan struct{}
-	closeOnce    sync.Once
+	db *sql.DB
 
 	blobClient *azblob.Client
 	container  string
@@ -68,6 +56,9 @@ type Config struct {
 
 	AzureStorageAccount   string
 	AzureStorageContainer string
+	// AzureBlobConnectionString, when set, builds the blob client from a
+	// connection string (emulator / non-MI) instead of account + Managed Identity.
+	AzureBlobConnectionString string
 }
 
 func DefaultConfig(dsn string) Config {
@@ -81,57 +72,96 @@ func DefaultConfig(dsn string) Config {
 }
 
 // New opens a PostgreSQL connection, configures the pool, and runs migrations.
-// ctx governs the application lifetime: it is used for migrations and, when
-// Azure Managed Identity is configured, drives the background token-refresh
-// goroutine (cancelled on SIGTERM / graceful shutdown).
+// ctx is used for migrations and, when Azure Managed Identity is configured, for
+// the initial token validation. With Managed Identity a fresh Entra token is
+// injected per connection by azureMIConnector, so there is no background
+// refresh goroutine to manage.
 func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	pgxCfg, err := pgx.ParseConfig(cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
 
-	b := &PostgresStorageBackend{stopCh: make(chan struct{})}
+	b := &PostgresStorageBackend{}
 
-	// Initialize Azure Blob Storage if configured
-	if cfg.AzureStorageAccount != "" && cfg.AzureStorageContainer != "" {
-		cred, err := azidentity.NewDefaultAzureCredential(nil)
-		if err != nil {
-			return nil, fmt.Errorf("azure: failed to obtain credential for blob storage: %w", err)
+	// Initialize Azure Blob Storage if configured: a container plus an auth source
+	// (account name → Managed Identity, the prod default; or a connection string
+	// → emulator / non-MI).
+	if cfg.AzureStorageContainer != "" && (cfg.AzureStorageAccount != "" || cfg.AzureBlobConnectionString != "") {
+		// Explicit retry policy: the SDK retries on 429/5xx by default, but we set
+		// bounds so a slow/unavailable blob backend can't extend a request
+		// unboundedly. MaxRetryDelay caps backoff; TryTimeout bounds each attempt.
+		blobOpts := &azblob.ClientOptions{
+			ClientOptions: azcore.ClientOptions{
+				Retry: policy.RetryOptions{
+					MaxRetries:    4,
+					RetryDelay:    1 * time.Second,
+					MaxRetryDelay: 30 * time.Second,
+					TryTimeout:    30 * time.Second,
+				},
+			},
 		}
-		serviceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", cfg.AzureStorageAccount)
-		client, err := azblob.NewClient(serviceURL, cred, nil)
-		if err != nil {
-			return nil, fmt.Errorf("azure: failed to create blob client: %w", err)
+		var client *azblob.Client
+		if cfg.AzureBlobConnectionString != "" {
+			c, err := azblob.NewClientFromConnectionString(cfg.AzureBlobConnectionString, blobOpts)
+			if err != nil {
+				return nil, fmt.Errorf("azure: failed to create blob client from connection string: %w", err)
+			}
+			client = c
+		} else {
+			cred, err := azidentity.NewDefaultAzureCredential(nil)
+			if err != nil {
+				return nil, fmt.Errorf("azure: failed to obtain credential for blob storage: %w", err)
+			}
+			serviceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", cfg.AzureStorageAccount)
+			c, err := azblob.NewClient(serviceURL, cred, blobOpts)
+			if err != nil {
+				return nil, fmt.Errorf("azure: failed to create blob client: %w", err)
+			}
+			client = c
 		}
 		b.blobClient = client
 		b.container = cfg.AzureStorageContainer
+		// Probe the container so misconfiguration surfaces in logs immediately,
+		// but do NOT fail startup: a transient blob outage during a pod restart
+		// must not block boot (the DB may be perfectly healthy). The readiness
+		// probe (CheckBlob) keeps the pod out of rotation until blob is reachable.
+		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err = client.ServiceClient().NewContainerClient(cfg.AzureStorageContainer).GetProperties(checkCtx, nil)
+		cancel()
+		if err != nil {
+			slog.Warn("azure: blob container not reachable at startup (check name, credentials, and the Storage Blob Data Contributor role); readiness will gate traffic until it recovers",
+				"container", cfg.AzureStorageContainer, "error", err)
+		}
 		slog.Info("azure: blob storage enabled", "account", cfg.AzureStorageAccount, "container", cfg.AzureStorageContainer)
 	}
 
-	connStr := stdlib.RegisterConnConfig(pgxCfg)
+	otelOpts := []otelsql.Option{
+		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
+		otelsql.WithDBName(pgxCfg.Database),
+	}
 
+	var db *sql.DB
 	if pgxCfg.Password == "managed-identity" {
+		// Managed Identity: a fresh Entra token is injected per connection by the
+		// connector (no shared mutable password field, so no data race with the
+		// driver opening connections). Validate once up front to fail fast on bad
+		// credentials / RBAC.
 		provider, err := newAzureTokenProvider()
 		if err != nil {
 			return nil, fmt.Errorf("azure: create credential: %w", err)
 		}
-		token, err := provider.GetToken(ctx)
-		if err != nil {
+		if _, err := provider.GetAccessToken(ctx); err != nil {
 			return nil, fmt.Errorf("azure: initial token fetch: %w", err)
 		}
-		pgxCfg.Password = token
-		// Re-register so the pool's connStr picks up the resolved token.
-		stdlib.UnregisterConnConfig(connStr)
-		connStr = stdlib.RegisterConnConfig(pgxCfg)
-		b.azureRefresh = &azureRefreshState{provider: provider, pgxCfg: pgxCfg}
-	}
-
-	db, err := otelsql.Open("pgx", connStr,
-		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
-		otelsql.WithDBName(pgxCfg.Database),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("open pgx with otel: %w", err)
+		db = otelsql.OpenDB(newAzureMIConnector(provider, pgxCfg), otelOpts...)
+	} else {
+		connStr := stdlib.RegisterConnConfig(pgxCfg)
+		var err error
+		db, err = otelsql.Open("pgx", connStr, otelOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("open pgx with otel: %w", err)
+		}
 	}
 
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
@@ -149,54 +179,25 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	if b.azureRefresh != nil {
-		// #nosec G118 -- long-lived background refresh, intentionally not request-scoped.
-		go b.runAzureTokenRefresh()
-	}
-
 	return b, nil
-}
-
-// runAzureTokenRefresh refreshes the Managed Identity token every 20 minutes so
-// that new connections opened after each cycle always get a valid token.
-// Azure tokens expire after ~24 hours; refreshing every 20 minutes gives ample
-// margin.  Existing idle connections are cycled out naturally by ConnMaxLifetime
-// (default 1 hour), so they too will pick up fresh tokens before expiry.
-//
-// The pgxCfg.Password field is mutated under azureRefresh.mu because pgx may
-// read it concurrently when opening new pooled connections.
-func (b *PostgresStorageBackend) runAzureTokenRefresh() {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("azure token refresh goroutine panicked", "err", r)
-		}
-	}()
-	ticker := time.NewTicker(20 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-b.stopCh:
-			return
-		case <-ticker.C:
-			token, err := b.azureRefresh.provider.GetToken(context.Background())
-			if err != nil {
-				slog.Error("azure: managed identity token refresh failed", "err", err)
-				continue
-			}
-			b.azureRefresh.mu.Lock()
-			b.azureRefresh.pgxCfg.Password = token
-			b.azureRefresh.mu.Unlock()
-			slog.Info("azure: managed identity token refreshed")
-		}
-	}
 }
 
 func (b *PostgresStorageBackend) Ping(ctx context.Context) error {
 	return b.db.PingContext(ctx)
 }
 
+// CheckBlob verifies that the configured blob container is reachable. It returns
+// nil when blob storage is not configured (nothing to check), so it is safe to
+// call unconditionally from a readiness probe.
+func (b *PostgresStorageBackend) CheckBlob(ctx context.Context) error {
+	if b.blobClient == nil {
+		return nil
+	}
+	_, err := b.blobClient.ServiceClient().NewContainerClient(b.container).GetProperties(ctx, nil)
+	return err
+}
+
 func (b *PostgresStorageBackend) Close() error {
-	b.closeOnce.Do(func() { close(b.stopCh) })
 	return b.db.Close()
 }
 

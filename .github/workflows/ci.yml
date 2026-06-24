@@ -17,15 +17,49 @@ jobs:
   go-test:
     name: Go Tests
     runs-on: ubuntu-latest
+    # Postgres backs the storage contract / RLS / DB+blob E2E tests (they skip
+    # when DATABASE_URL is unset). A service container is fine here — unlike
+    # Azurite it needs no command override.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: baki
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      # Azurite backs the blob-storage integration tests in
+      # internal/storage/database (they skip when AZURITE_CONNECTION_STRING is
+      # unset). Run it via `docker run` rather than a service container so we can
+      # pass --skipApiVersionCheck: the azblob SDK sends a newer x-ms-version
+      # than published Azurite images accept, and GitHub service containers
+      # cannot override the command/args.
+      - name: Start Azurite
+        run: |
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite \
+            azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck
+          for i in $(seq 1 30); do
+            (exec 3<>/dev/tcp/127.0.0.1/10000) 2>/dev/null && { echo "azurite ready"; break; }
+            sleep 1
+          done
       - name: Vet
         run: go vet ./... ./core/...
       - name: Test
+        env:
+          AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          DATABASE_URL: "postgres://postgres:postgres@localhost:5432/baki?sslmode=disable"
         run: go test -race -count=1 -coverprofile=coverage.out ./... ./core/...
       - name: Upload coverage
         if: github.event_name == 'push'

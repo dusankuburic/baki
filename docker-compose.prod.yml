@@ -10,6 +10,11 @@ services:
       - PAD_STORAGE=database
       - PAD_DATABASE_URL=${PAD_DATABASE_URL:?PAD_DATABASE_URL must be set}
       - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:?PAD_ALLOWED_ORIGINS must be set}
+      # Azure Blob Storage offload (optional). Set both to enable it (Managed
+      # Identity auth); the readiness probe (/readyz) gates traffic on blob
+      # reachability. Leave unset to keep flow content in Postgres.
+      - PAD_AZURE_STORAGE_ACCOUNT=${PAD_AZURE_STORAGE_ACCOUNT:-}
+      - PAD_AZURE_STORAGE_CONTAINER=${PAD_AZURE_STORAGE_CONTAINER:-}
     deploy:
       resources:
         limits:

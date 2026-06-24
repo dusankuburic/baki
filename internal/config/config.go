@@ -106,6 +106,11 @@ type StorageConfig struct {
 	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
 	AzureStorageAccount   string
 	AzureStorageContainer string
+	// AzureBlobConnectionString, when set, builds the blob client from a
+	// connection string instead of account name + Managed Identity. Intended for
+	// the Azurite emulator and non-MI/local scenarios; Managed Identity (via
+	// AzureStorageAccount) remains the production default.
+	AzureBlobConnectionString string
 }
 
 type RuntimeConfig struct {

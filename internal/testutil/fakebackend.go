@@ -69,6 +69,15 @@ func (m *FakeBackend) LoadFlow(_ context.Context, id string) (*interfaces.FlowDo
 	return nil, interfaces.ErrNotFound
 }
 
+func (m *FakeBackend) LoadFlowHeader(_ context.Context, id string) (*interfaces.FlowDocument, error) {
+	if f, ok := m.Flows[id]; ok {
+		cp := *f
+		cp.Content = nil
+		return &cp, nil
+	}
+	return nil, interfaces.ErrNotFound
+}
+
 func (m *FakeBackend) ListFlows(_ context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
 	var result []*interfaces.FlowDocument
 	for _, f := range m.Flows {

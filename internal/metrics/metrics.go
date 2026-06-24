@@ -12,6 +12,7 @@ package metrics
 import (
 	"database/sql"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -112,6 +113,21 @@ var (
 		},
 		[]string{"op"},
 	)
+	blobOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_blob_operations_total",
+			Help: "Number of Azure Blob Storage operations by type and outcome",
+		},
+		[]string{"op", "status"},
+	)
+	blobOpDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "pad_blob_operation_duration_seconds",
+			Help:    "Duration of Azure Blob Storage operations by type",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"op"},
+	)
 )
 
 // registry is process-local. Tests are hermetic (no leftover series between
@@ -135,6 +151,8 @@ var registry = func() *prometheus.Registry {
 		wsConnectionsActive,
 		flowOps,
 		authOps,
+		blobOps,
+		blobOpDuration,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -231,4 +249,14 @@ func RecordFlowOp(op string) {
 // (e.g. "login", "register", "logout", "refresh").
 func RecordAuthOp(op string) {
 	authOps.WithLabelValues(op).Inc()
+}
+
+// RecordBlobOp records the outcome and duration of an Azure Blob Storage
+// operation. op is one of "upload", "download", "delete", "list"; status is one
+// of "ok", "not_found", "throttled", "error". Surfaces blob latency, 404s
+// (potential data loss), and 429 throttling to the Prometheus/Azure Monitor
+// pipeline.
+func RecordBlobOp(op, status string, dur time.Duration) {
+	blobOps.WithLabelValues(op, status).Inc()
+	blobOpDuration.WithLabelValues(op).Observe(dur.Seconds())
 }

@@ -78,8 +78,9 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		if h.backend != nil {
 			// Load the existing version so OCC applies. If the flow is new,
 			// version stays 0 (insert path). If it exists, passing the current
-			// version prevents silent clobbering of prior edits.
-			existing, err := h.backend.LoadFlow(r.Context(), doc.ID)
+			// version prevents silent clobbering of prior edits. Header only —
+			// we need the version, not the content blob.
+			existing, err := h.backend.LoadFlowHeader(r.Context(), doc.ID)
 			if err == nil && existing != nil {
 				libDoc.Version = existing.Version
 			} else if err != nil && !errors.Is(err, storageif.ErrNotFound) {

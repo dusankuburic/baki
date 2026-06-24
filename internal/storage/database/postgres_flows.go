@@ -13,9 +13,43 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"golang.org/x/sync/errgroup"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
+
+// maxBlobContentBytes bounds the size of a single flow-content blob. The whole
+// payload is held in memory on upload (UploadBuffer) and download
+// (bytes.Buffer), so a hard cap prevents an oversized flow from spiking memory.
+// Flow JSON is normally well under 1 MiB; 50 MiB is a generous ceiling.
+const maxBlobContentBytes = 50 << 20
+
+// flowContentKey is the version-keyed blob key for a flow's current content.
+// Keying by the DB version — the single source of truth for "which blob is
+// current" — means a racing or rolled-back write leaves an orphan under an
+// unreferenced version instead of clobbering the live content. The OCC version
+// space (flows.version) is distinct from the snapshot space (flow_versions.version
+// used by SaveFlowVersion), so this "content.vN" key never collides with a
+// snapshot under "versions/N".
+func flowContentKey(flowID string, version int) string {
+	return fmt.Sprintf("flows/%s/content.v%d.json", flowID, version)
+}
+
+// legacyFlowContentKey is the original version-agnostic key. LoadFlow falls
+// back to it so flows written before the versioned scheme remain readable.
+func legacyFlowContentKey(flowID string) string {
+	return fmt.Sprintf("flows/%s/content.json", flowID)
+}
+
+// blobErrStatus classifies an azblob error into a metric status label,
+// distinguishing Azure throttling (429) from other failures.
+func blobErrStatus(err error) string {
+	var respErr *azcore.ResponseError
+	if errors.As(err, &respErr) && respErr.StatusCode == 429 {
+		return "throttled"
+	}
+	return "error"
+}
 
 // SaveFlow upserts a flow document. When flow.Version > 0 and the row
 // already exists, the UPDATE is conditional on the current DB version
@@ -27,19 +61,53 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 		content = []byte("{}")
 	}
 
+	// The version bump (DB) and the content upload (blob) must commit together,
+	// or a failed upload could leave the row pointing at a version whose blob
+	// never landed (then LoadFlow hard-errors). Inside an RLS request the
+	// surrounding transaction already provides this (it commits only after the
+	// handler succeeds). Without one — e.g. BeginRLS failed and the request runs
+	// in autocommit — wrap the work in a local transaction so the version bump is
+	// rolled back if the upload fails.
+	if b.blobClient != nil && !hasRLSTx(ctx) {
+		tx, err := b.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("save flow: begin tx: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+		if err := b.saveFlowTx(WithRLSTx(ctx, tx), flow, content); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("save flow: commit: %w", err)
+		}
+		committed = true
+		return nil
+	}
+	return b.saveFlowTx(ctx, flow, content)
+}
+
+// saveFlowTx performs the conditional upsert and (when blob storage is
+// configured) the content upload, using whatever executor b.query(ctx) resolves
+// to. content is the caller's normalized content ("{}" when empty).
+func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interfaces.FlowDocument, content []byte) error {
 	// When blob storage is configured the content lives in the blob and the DB
-	// row only holds a "{}" placeholder. The blob MUST be written *after* the
-	// optimistic-concurrency check below succeeds, never before: the blob key is
-	// keyed by flow ID only (not version), so uploading first lets an OCC-losing
-	// writer overwrite the winner's content in the blob even though its DB update
-	// is rejected — silently corrupting the flow. Deferring the upload until the
-	// conditional UPDATE returns a row means a version conflict leaves the blob
-	// untouched. SaveFlow and the upload run inside the request's RLS
-	// transaction, so if the upload fails the transaction rolls back and undoes
-	// the version bump. (Residual: the blob write is not transactional, so a
-	// COMMIT failure *after* a successful upload leaves new blob content under an
-	// un-bumped row — a narrow dual-write window, far rarer than the corruption
-	// the ordering above prevents.)
+	// row only holds a "{}" placeholder. Two safeguards prevent dual-write
+	// corruption:
+	//   1. The blob is written *after* the optimistic-concurrency check below
+	//      succeeds, so a rejected concurrent writer never touches the blob.
+	//   2. The blob is keyed by the *new* DB version (flowContentKey), and
+	//      LoadFlow resolves content by the version stored on the row. The DB
+	//      version is therefore the single source of truth for "which blob is
+	//      current": if the upload succeeds but the surrounding transaction's
+	//      COMMIT later fails, the row stays at the previous version and still
+	//      points at the previous (correct) blob — the new blob is just an
+	//      unreferenced orphan, not corruption. (Orphans are reclaimed by a
+	//      storage lifecycle policy / the prefix delete in DeleteFlow.)
 	dbContent := content
 	if b.blobClient != nil {
 		dbContent = []byte("{}")
@@ -75,10 +143,10 @@ func (b *PostgresStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.
 	}
 
 	// OCC check passed — only now is it safe to persist the real content to the
-	// blob, so a rejected concurrent write can never clobber the stored content.
+	// blob, under the new version's key so a rejected concurrent write can never
+	// clobber the stored content.
 	if b.blobClient != nil {
-		blobKey := fmt.Sprintf("flows/%s/content.json", flow.ID)
-		if err := b.uploadBlob(ctx, blobKey, content); err != nil {
+		if err := b.uploadBlob(ctx, flowContentKey(flow.ID, newVersion), content); err != nil {
 			return err
 		}
 	}
@@ -98,8 +166,9 @@ func (b *PostgresStorageBackend) TransferFlowOwner(ctx context.Context, flowID, 
 	return nil
 }
 
-// LoadFlow retrieves a flow document by ID.
-func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
+// loadFlowRow reads the flow's DB row (no blob download). Content is the raw DB
+// value — a "{}" placeholder when blob storage is configured.
+func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	row := b.query(ctx).QueryRowContext(ctx,
 		`SELECT id, name, description, content, metadata, owner_id, org_id, created_at, updated_at, version
 		 FROM flows WHERE id = $1`, id)
@@ -121,20 +190,58 @@ func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*inte
 	if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
+	return &flow, nil
+}
 
-	// Download from Blob Storage if configured and DB content is placeholder
+// LoadFlowHeader retrieves a flow's metadata (owner, org, version, …) WITHOUT
+// fetching its content blob. Callers that only need to authorize, check
+// existence, or read the version (authz, OCC pre-checks) must use this so they
+// don't pay a blob round-trip and don't fail when blob storage is briefly
+// unavailable. Content is always nil.
+func (b *PostgresStorageBackend) LoadFlowHeader(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
+	flow, err := b.loadFlowRow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	flow.Content = nil
+	return flow, nil
+}
+
+// LoadFlow retrieves a flow document by ID, including its content (from blob
+// storage when configured).
+func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
+	flow, err := b.loadFlowRow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Download from Blob Storage if configured and DB content is placeholder.
 	if b.blobClient != nil && (len(flow.Content) == 0 || string(flow.Content) == "{}" || string(flow.Content) == "null") {
-		blobKey := fmt.Sprintf("flows/%s/content.json", flow.ID)
-		content, err := b.downloadBlob(ctx, blobKey)
+		content, err := b.downloadBlob(ctx, flowContentKey(flow.ID, flow.Version))
 		if err != nil {
-			// If not found in blob, we log and proceed (maybe it's old data)
-			logger.Warn("failed to download flow content from blob", "flow_id", flow.ID, "error", err)
-		} else if content != nil {
+			// Blob storage is unreachable/unreadable. Returning a hollow flow with
+			// empty content would silently corrupt the caller's view, so fail loudly.
+			return nil, fmt.Errorf("load flow %s: content unavailable in blob storage: %w", flow.ID, err)
+		}
+		if content == nil {
+			// Fall back to the legacy version-agnostic key for flows written
+			// before the versioned scheme.
+			content, err = b.downloadBlob(ctx, legacyFlowContentKey(flow.ID))
+			if err != nil {
+				return nil, fmt.Errorf("load flow %s: content unavailable in blob storage: %w", flow.ID, err)
+			}
+		}
+		if content != nil {
 			flow.Content = content
+		} else if flow.Metadata.BlockCount > 0 {
+			// Both keys 404 on a row whose metadata records blocks: the content
+			// blob is missing though it should exist — data loss, not a
+			// legitimately empty flow. Fail rather than returning a hollow {}.
+			return nil, fmt.Errorf("load flow %s: content blob missing though metadata records %d block(s)", flow.ID, flow.Metadata.BlockCount)
 		}
 	}
 
-	return &flow, nil
+	return flow, nil
 }
 
 // flowFilterWhere builds the WHERE clause and args for a FlowFilter. Shared by
@@ -336,11 +443,18 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 							err = nil
 						}
 					}()
-					blobKey := fmt.Sprintf("flows/%s/content.json", f.ID)
-					content, err := b.downloadBlob(gctx, blobKey)
+					content, err := b.downloadBlob(gctx, flowContentKey(f.ID, f.Version))
 					if err != nil {
 						logger.Warn("failed to download flow content in list", "flow_id", f.ID, "error", err)
 						return nil // log and continue to avoid failing the entire list
+					}
+					if content == nil {
+						// Fall back to the legacy version-agnostic key.
+						content, err = b.downloadBlob(gctx, legacyFlowContentKey(f.ID))
+						if err != nil {
+							logger.Warn("failed to download legacy flow content in list", "flow_id", f.ID, "error", err)
+							return nil
+						}
 					}
 					if content != nil {
 						f.Content = content
@@ -368,28 +482,32 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 		return interfaces.ErrNotFound
 	}
 
-	// Delete all blobs related to this flow (content + versions)
+	// Delete all blobs related to this flow (content + versions). Defer the
+	// cleanup until the DB delete is durably committed: deleting blobs while the
+	// surrounding RLS transaction is still open would orphan a surviving row's
+	// content if the request later rolls back. RegisterPostCommit runs the hook
+	// after commit, or immediately when there is no RLS tx (autocommit — the
+	// delete is already durable).
 	if b.blobClient != nil {
 		prefix := fmt.Sprintf("flows/%s/", id)
-		// #nosec G118 -- intentionally detached with its own bounded timeout (see below).
-		go func() {
-			// Detached goroutine: a panic (e.g. inside the azblob SDK) would
-			// otherwise take down the whole process, so recover per the project
-			// convention for background goroutines.
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Warn("DeleteFlow blob cleanup goroutine panicked", "flow_id", id, "err", r)
+		RegisterPostCommit(ctx, func() {
+			// #nosec G118 -- intentionally detached with its own bounded timeout so
+			// a slow/hung blob store can't block request teardown or leak.
+			go func() {
+				// Recover: a panic in the azblob SDK would otherwise crash the
+				// process (project convention for background goroutines).
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Warn("DeleteFlow blob cleanup goroutine panicked", "flow_id", id, "err", r)
+					}
+				}()
+				cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := b.deleteBlobs(cctx, prefix); err != nil {
+					logger.Warn("failed to delete flow blobs", "flow_id", id, "error", err)
 				}
 			}()
-			// Detach from the request context (which may be cancelled once the
-			// HTTP handler returns) but bound the work so a slow/hung blob store
-			// can't leak this goroutine indefinitely.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := b.deleteBlobs(ctx, prefix); err != nil {
-				logger.Warn("failed to delete flow blobs", "flow_id", id, "error", err)
-			}
-		}()
+		})
 	}
 
 	return nil
@@ -524,10 +642,16 @@ func (b *PostgresStorageBackend) uploadBlob(ctx context.Context, key string, dat
 	if b.blobClient == nil {
 		return nil
 	}
+	if len(data) > maxBlobContentBytes {
+		return fmt.Errorf("upload blob %s: content size %d bytes exceeds limit of %d bytes", key, len(data), maxBlobContentBytes)
+	}
+	start := time.Now()
 	_, err := b.blobClient.UploadBuffer(ctx, b.container, key, data, &azblob.UploadBufferOptions{})
 	if err != nil {
+		metrics.RecordBlobOp("upload", blobErrStatus(err), time.Since(start))
 		return fmt.Errorf("upload blob %s: %w", key, err)
 	}
+	metrics.RecordBlobOp("upload", "ok", time.Since(start))
 	return nil
 }
 
@@ -535,41 +659,116 @@ func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) (
 	if b.blobClient == nil {
 		return nil, nil
 	}
+	start := time.Now()
 	resp, err := b.blobClient.DownloadStream(ctx, b.container, key, &azblob.DownloadStreamOptions{})
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
+			metrics.RecordBlobOp("download", "not_found", time.Since(start))
 			return nil, nil
 		}
+		metrics.RecordBlobOp("download", blobErrStatus(err), time.Since(start))
 		return nil, fmt.Errorf("download blob %s: %w", key, err)
 	}
 	defer resp.Body.Close()
 	var buf bytes.Buffer
-	_, err = buf.ReadFrom(resp.Body)
-	if err != nil {
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		metrics.RecordBlobOp("download", "error", time.Since(start))
 		return nil, fmt.Errorf("read blob %s: %w", key, err)
 	}
+	metrics.RecordBlobOp("download", "ok", time.Since(start))
 	return buf.Bytes(), nil
 }
+
+// maxBlobBatchOps is the Azure Blob Batch limit of sub-requests per batch.
+const maxBlobBatchOps = 256
 
 func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string) error {
 	if b.blobClient == nil {
 		return nil
 	}
+	svc := b.blobClient.ServiceClient()
 	pager := b.blobClient.NewListBlobsFlatPager(b.container, &azblob.ListBlobsFlatOptions{
 		Prefix: &prefix,
 	})
-	for pager.More() {
-		resp, err := pager.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("list blobs for deletion: %w", err)
+
+	var failed int
+	names := make([]string, 0, maxBlobBatchOps)
+
+	// flush deletes the accumulated blob names in a single Blob Batch request
+	// (one round trip for up to 256 blobs instead of one DELETE each).
+	flush := func() error {
+		if len(names) == 0 {
+			return nil
 		}
-		for _, blob := range resp.Segment.BlobItems {
-			_, err := b.blobClient.DeleteBlob(ctx, b.container, *blob.Name, &azblob.DeleteBlobOptions{})
-			if err != nil {
-				logger.Warn("failed to delete blob", "key", *blob.Name, "error", err)
+		start := time.Now()
+		bb, err := svc.NewBatchBuilder()
+		if err != nil {
+			metrics.RecordBlobOp("delete", "error", time.Since(start))
+			return fmt.Errorf("create blob delete batch: %w", err)
+		}
+		for _, name := range names {
+			if err := bb.Delete(b.container, name, nil); err != nil {
+				metrics.RecordBlobOp("delete", "error", time.Since(start))
+				return fmt.Errorf("queue blob %q for batch delete: %w", name, err)
 			}
 		}
+		resp, err := svc.SubmitBatch(ctx, bb, nil)
+		if err != nil {
+			metrics.RecordBlobOp("delete", blobErrStatus(err), time.Since(start))
+			return fmt.Errorf("submit blob delete batch: %w", err)
+		}
+		// The batch call succeeded as a whole; individual sub-requests can still
+		// fail (e.g. a blob deleted concurrently). Count those but don't abort —
+		// they're surfaced via the returned error so leaks stay observable.
+		batchFailed := 0
+		for _, item := range resp.Responses {
+			if item != nil && item.Error != nil {
+				batchFailed++
+				name := ""
+				if item.BlobName != nil {
+					name = *item.BlobName
+				}
+				logger.Warn("failed to delete blob in batch", "key", name, "error", item.Error)
+			}
+		}
+		failed += batchFailed
+		status := "ok"
+		if batchFailed > 0 {
+			status = "error"
+		}
+		metrics.RecordBlobOp("delete", status, time.Since(start))
+		names = names[:0]
+		return nil
+	}
+
+	for pager.More() {
+		start := time.Now()
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			metrics.RecordBlobOp("list", blobErrStatus(err), time.Since(start))
+			return fmt.Errorf("list blobs for deletion: %w", err)
+		}
+		metrics.RecordBlobOp("list", "ok", time.Since(start))
+		for _, blob := range page.Segment.BlobItems {
+			if blob.Name == nil {
+				continue
+			}
+			names = append(names, *blob.Name)
+			if len(names) == maxBlobBatchOps {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	// Surface partial failures so the caller (and its metric/log) can see that
+	// blobs leaked, rather than silently returning nil.
+	if failed > 0 {
+		return fmt.Errorf("delete blobs under %q: %d blob(s) failed to delete", prefix, failed)
 	}
 	return nil
 }
@@ -707,14 +906,17 @@ func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID str
 		}
 	}
 
-	// Download from Blob Storage if configured and DB content is placeholder
+	// Download from Blob Storage if configured and DB content is placeholder.
 	if b.blobClient != nil && (len(v.Content) == 0 || string(v.Content) == "{}" || string(v.Content) == "null") {
 		blobKey := fmt.Sprintf("flows/%s/versions/%d/content.json", v.FlowID, v.Version)
 		content, err := b.downloadBlob(ctx, blobKey)
 		if err != nil {
-			logger.Warn("failed to download flow version content from blob", "flow_id", v.FlowID, "version", v.Version, "error", err)
-		} else if content != nil {
+			return nil, fmt.Errorf("load flow version %s/%d: content unavailable in blob storage: %w", v.FlowID, v.Version, err)
+		}
+		if content != nil {
 			v.Content = content
+		} else if v.Metadata.BlockCount > 0 {
+			return nil, fmt.Errorf("load flow version %s/%d: content blob missing though metadata records %d block(s)", v.FlowID, v.Version, v.Metadata.BlockCount)
 		}
 	}
 

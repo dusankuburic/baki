@@ -75,6 +75,12 @@ type StorageBackend interface {
 	// preserves the original owner_id/org_id to prevent hijacking.
 	TransferFlowOwner(ctx context.Context, flowID, newOwnerID, newOrgID string) error
 	LoadFlow(ctx context.Context, id string) (*FlowDocument, error)
+	// LoadFlowHeader returns a flow's metadata (owner, org, version, …) WITHOUT
+	// its content. Callers that only authorize, check existence, or read the
+	// version should use this so they avoid a content fetch (and, for the
+	// database backend, do not depend on blob-storage availability). Content is
+	// always nil on the returned document.
+	LoadFlowHeader(ctx context.Context, id string) (*FlowDocument, error)
 	ListFlows(ctx context.Context, filter FlowFilter) ([]*FlowDocument, error)
 	// CountFlows returns the total number of flows matching the filter,
 	// ignoring Limit/Offset — used for list pagination totals.

@@ -80,6 +80,7 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		}
 
 		ctx := storagedb.WithRLSTx(r.Context(), tx)
+		ctx, postCommit := storagedb.WithPostCommit(ctx)
 		r = r.WithContext(ctx)
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -103,7 +104,12 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		}
 		if err := tx.Commit(); err != nil {
 			slog.Warn("rls: failed to commit transaction", "err", err)
+			return
 		}
+		// Run deferred work only after the write is durably committed (e.g. blob
+		// cleanup for a deleted flow), so a rolled-back request never deletes data
+		// that still has a surviving row.
+		postCommit.Run()
 	})
 }
 
