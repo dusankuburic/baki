@@ -19,18 +19,32 @@ import (
 // read-modify-write of the triage map is serialized by triageMu so concurrent
 // status updates can't clobber each other; writes are atomic (temp + rename).
 
-func (lsb *LocalStorageBackend) triagePath(flowID string) string {
-	return filepath.Join(lsb.dataDir, "triage", flowID+".json")
+// triagePath and baselinePath build the on-disk path for a flow's triage /
+// baseline file, rejecting any flowID that could traverse outside the data dir
+// (defense-in-depth parity with the service-layer convFilePath; flowIDs are
+// server-generated UUIDs, but the path builder should not trust that alone).
+func (lsb *LocalStorageBackend) triagePath(flowID string) (string, error) {
+	if !safePathSegment(flowID) {
+		return "", fmt.Errorf("invalid flow id %q", flowID)
+	}
+	return filepath.Join(lsb.dataDir, "triage", flowID+".json"), nil
 }
 
-func (lsb *LocalStorageBackend) baselinePath(flowID string) string {
-	return filepath.Join(lsb.dataDir, "baselines", flowID+".json")
+func (lsb *LocalStorageBackend) baselinePath(flowID string) (string, error) {
+	if !safePathSegment(flowID) {
+		return "", fmt.Errorf("invalid flow id %q", flowID)
+	}
+	return filepath.Join(lsb.dataDir, "baselines", flowID+".json"), nil
 }
 
 // readStatuses loads the per-flow finding-status map, returning an empty map
 // (never nil) when the flow has no triage file yet. Callers must hold triageMu.
 func (lsb *LocalStorageBackend) readStatuses(flowID string) (map[string]*interfaces.FindingStatus, error) {
-	data, err := os.ReadFile(lsb.triagePath(flowID))
+	path, err := lsb.triagePath(flowID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- path is dataDir + a flowID validated by triagePath (safePathSegment rejects traversal)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]*interfaces.FindingStatus{}, nil
@@ -49,7 +63,10 @@ func (lsb *LocalStorageBackend) readStatuses(flowID string) (map[string]*interfa
 
 // writeStatuses persists the per-flow finding-status map. Callers must hold triageMu.
 func (lsb *LocalStorageBackend) writeStatuses(flowID string, m map[string]*interfaces.FindingStatus) error {
-	path := lsb.triagePath(flowID)
+	path, err := lsb.triagePath(flowID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("create triage dir: %w", err)
 	}
@@ -111,7 +128,11 @@ func (lsb *LocalStorageBackend) DeleteFindingStatus(ctx context.Context, flowID,
 }
 
 func (lsb *LocalStorageBackend) GetFlowBaseline(ctx context.Context, flowID string) (*interfaces.FlowBaseline, error) {
-	data, err := os.ReadFile(lsb.baselinePath(flowID))
+	path, err := lsb.baselinePath(flowID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- path is dataDir + a flowID validated by baselinePath (safePathSegment rejects traversal)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -132,7 +153,10 @@ func (lsb *LocalStorageBackend) SetFlowBaseline(ctx context.Context, bl *interfa
 	if bl == nil || bl.FlowID == "" {
 		return fmt.Errorf("baseline requires flowId")
 	}
-	path := lsb.baselinePath(bl.FlowID)
+	path, err := lsb.baselinePath(bl.FlowID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return fmt.Errorf("create baseline dir: %w", err)
 	}
@@ -150,7 +174,11 @@ func (lsb *LocalStorageBackend) SetFlowBaseline(ctx context.Context, bl *interfa
 }
 
 func (lsb *LocalStorageBackend) ClearFlowBaseline(ctx context.Context, flowID string) error {
-	if err := os.Remove(lsb.baselinePath(flowID)); err != nil && !os.IsNotExist(err) {
+	path, err := lsb.baselinePath(flowID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove baseline: %w", err)
 	}
 	return nil

@@ -106,7 +106,7 @@ func (p *CopilotProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("copilot models API error: status %d, body: %s", resp.StatusCode, string(body))
 	}

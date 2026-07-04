@@ -4,6 +4,7 @@ import AITab from './AITab'
 import { chatApi, providersApi, flowApi } from '@/api'
 import { useFlowStore } from '@/stores/flowStore'
 import { useChatStore } from '@/stores/chatStore'
+import { ToastProvider } from '@/components/shared/Toast'
 import type { ConversationFile } from '@/types'
 import type { ProviderInfo } from '@/types'
 
@@ -13,6 +14,7 @@ vi.mock('@/api', () => ({
     getSuggestedPrompts: vi.fn(),
     getDemoRemaining: vi.fn(),
     stream: vi.fn(),
+    streamChatMessage: vi.fn(),
     getConversation: vi.fn(),
     saveConversation: vi.fn(),
     clearConversation: vi.fn(),
@@ -48,7 +50,7 @@ beforeEach(() => {
 
 describe('AITab', () => {
   it('shows setup prompt when no providers are configured', async () => {
-    await act(async () => { render(<AITab />) })
+    await act(async () => { render(<ToastProvider><AITab /></ToastProvider>) })
     // listProviders resolves [] → configured stays false → shows ApiKeyMissingState
     expect(screen.getByText('Add an API key to start')).toBeInTheDocument()
   })
@@ -62,7 +64,7 @@ describe('AITab', () => {
       },
     ] as ProviderInfo[])
 
-    render(<AITab />)
+    render(<ToastProvider><AITab /></ToastProvider>)
 
     // After the listProviders effect resolves, configured becomes true and the flow document is null.
     await waitFor(() => {
@@ -72,7 +74,7 @@ describe('AITab', () => {
   })
 
   it('shows "Open settings" button in unconfigured state', async () => {
-    await act(async () => { render(<AITab />) })
+    await act(async () => { render(<ToastProvider><AITab /></ToastProvider>) })
     expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument()
   })
 })

@@ -1,143 +1,42 @@
-import {useCallback, useMemo, useRef, Fragment, lazy, Suspense, useState, memo} from 'react'
+import {Fragment, lazy, Suspense, memo, useState, useMemo} from 'react'
 import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
 import {Spinner, ErrorBoundary} from '@/components/shared'
-import {UserProfile} from '@/components/auth/UserProfile'
-import {AdminDashboard} from '@/components/admin/AdminDashboard'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import Breadcrumbs from './Breadcrumbs'
+import {SystemViewRouter, isSystemView} from './SystemViewRouter'
+import PaneDivider from '@/components/layout/PaneDivider'
+import {useUIStore} from '@/stores/uiStore'
+import {useFlowStore} from '@/stores/flowStore'
+import type {EditorGroup} from '@/stores/editorStore'
+import type {FlowDocument} from '@/types'
+import {useEditorGroups} from '@/hooks/useEditorGroups'
 
 // GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
 // its lazy siblings below.
 const GraphView = lazy(() => import('@/components/graph/GraphView'))
 const ExecutionGraphView = lazy(() => import('@/components/flow/ExecutionGraphView'))
 const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffView'))
-const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDashboard'))
-// HomeDashboard pulls in recharts (~100KB+); lazy-load keeps it out of the entry chunk.
-const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
-// LibraryWorkspace pulls in the multi-pane browse experience and its helpers;
-// lazy keeps it out of the entry chunk and only loads when the user opens it.
-const LibraryWorkspace = lazy(() => import('@/components/library/LibraryWorkspace'))
-const PortfolioView = lazy(() => import('@/components/dashboard/PortfolioView'))
-import PaneDivider from '@/components/layout/PaneDivider'
-import {useUIStore} from '@/stores/uiStore'
-import {useFlowStore} from '@/stores/flowStore'
-import {useEditorStore, type EditorGroup} from '@/stores/editorStore'
-import type {FlowDocument} from '@/types'
 
+// MainPane is a thin router: system views (profile/admin/dashboards/library/
+// portfolio) delegate to SystemViewRouter; everything else is the flow editor,
+// which owns the document-dependent split-pane groups.
 export default function MainPane() {
-    // All hooks must run unconditionally on every render (Rules of Hooks).
-    // The profile/admin/empty views are handled by early returns AFTER the hooks.
     const mainPaneView = useUIStore(s => s.mainPaneView)
+    if (isSystemView(mainPaneView)) {
+        return <SystemViewRouter view={mainPaneView} />
+    }
+    return <FlowEditorPane mainPaneView={mainPaneView} />
+}
+
+// FlowEditorPane renders the no-document empty/error state, or the split editor
+// groups for the loaded document. Editor-group state and divider math come from
+// the useEditorGroups hook.
+function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
     const document = useFlowStore(s => s.document)
     const parseError = useFlowStore(s => s.parseError)
-    const groups = useEditorStore(s => s.groups)
-    const focusedGroupIndex = useEditorStore(s => s.focusedGroupIndex)
-    const groupWidths = useEditorStore(s => s.groupWidths)
-    const focusGroup = useEditorStore(s => s.focusGroup)
-    const openInGroup = useEditorStore(s => s.openInGroup)
-    const closeTab = useEditorStore(s => s.closeTab)
-    const closeAllTabs = useEditorStore(s => s.closeAllTabs)
-    const closeOtherTabs = useEditorStore(s => s.closeOtherTabs)
-    const closeGroup = useEditorStore(s => s.closeGroup)
-    const moveTabToGroup = useEditorStore(s => s.moveTabToGroup)
-    const setGroupWidths = useEditorStore(s => s.setGroupWidths)
-    const containerRef = useRef<HTMLDivElement>(null)
-
-    const widths = useMemo(() => {
-        if (groups.length <= 1) return [1]
-        if (groupWidths.length === groups.length) return groupWidths
-        return groups.map(() => 1 / groups.length)
-    }, [groups.length, groupWidths])
-
-    const handleColumnDrag = useCallback((leftIndex: number, delta: number) => {
-        if (groups.length < 2) return
-        const containerWidth = containerRef.current?.clientWidth ?? 1
-        const fraction = delta / containerWidth
-        const newWidths = [...widths]
-        const left = newWidths[leftIndex] + fraction
-        const right = newWidths[leftIndex + 1] - fraction
-        if (left < 0.1 || right < 0.1) return
-        newWidths[leftIndex] = left
-        newWidths[leftIndex + 1] = right
-        setGroupWidths(newWidths)
-    }, [widths, groups.length, setGroupWidths])
-
-    const handleResetDivider = useCallback(() => {
-        setGroupWidths(groups.map(() => 1 / groups.length))
-    }, [groups.length, setGroupWidths])
-
-    if (mainPaneView === 'profile') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-y-auto p-4">
-                    <UserProfile />
-                </div>
-            </div>
-        )
-    }
-
-    if (mainPaneView === 'admin') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-y-auto p-4">
-                    <AdminDashboard />
-                </div>
-            </div>
-        )
-    }
-
-    if (mainPaneView === 'dashboard') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-y-auto p-4">
-                    <Suspense fallback={<Spinner />}>
-                        <AnalyticsDashboard />
-                    </Suspense>
-                </div>
-            </div>
-        )
-    }
-
-    if (mainPaneView === 'home') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-hidden">
-                    <Suspense fallback={<Spinner />}>
-                        <HomeDashboard />
-                    </Suspense>
-                </div>
-            </div>
-        )
-    }
-
-    if (mainPaneView === 'library') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <Suspense fallback={<Spinner />}>
-                    <LibraryWorkspace />
-                </Suspense>
-            </div>
-        )
-    }
-
-    if (mainPaneView === 'portfolio') {
-        return (
-            <div className="flex flex-col h-full bg-surface-1">
-                <MainPaneToolbar />
-                <div className="flex-1 overflow-hidden">
-                    <Suspense fallback={<Spinner />}>
-                        <PortfolioView />
-                    </Suspense>
-                </div>
-            </div>
-        )
-    }
+    const editor = useEditorGroups()
 
     if (!document) {
         return (
@@ -167,18 +66,20 @@ export default function MainPane() {
         )
     }
 
+    const {groups, focusedGroupIndex, widths} = editor
+
     return (
         <div className="flex flex-col h-full">
             <MainPaneToolbar />
             <ParseErrorsBanner />
-            <div ref={containerRef} className="flex-1 flex overflow-hidden">
+            <div ref={editor.containerRef} className="flex-1 flex overflow-hidden">
                 {groups.map((group, gi) => (
                     <Fragment key={`group-${gi}`}>
                         {gi > 0 && (
                             <PaneDivider
-                                onDrag={(delta) => handleColumnDrag(gi - 1, delta)}
+                                onDrag={(delta) => editor.handleColumnDrag(gi - 1, delta)}
                                 onResizeEnd={() => {}}
-                                onDoubleClick={handleResetDivider}
+                                onDoubleClick={editor.handleResetDivider}
                             />
                         )}
                         <div
@@ -186,7 +87,7 @@ export default function MainPane() {
                             style={{flex: `${widths[gi]} 0 0`, minWidth: 200}}
                             onMouseDown={(e) => {
                                 if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.group-header')) {
-                                    if (gi !== focusedGroupIndex) focusGroup(gi)
+                                    if (gi !== focusedGroupIndex) editor.focusGroup(gi)
                                 }
                             }}
                             onDragOver={(e) => {
@@ -198,7 +99,7 @@ export default function MainPane() {
                                 if (!data) return
                                 try {
                                     const {fromGroup, subflowId} = JSON.parse(data)
-                                    if (fromGroup !== gi) moveTabToGroup(fromGroup, subflowId, gi)
+                                    if (fromGroup !== gi) editor.moveTabToGroup(fromGroup, subflowId, gi)
                                 } catch { /* ignore invalid drop data */ }
                             }}
                         >
@@ -208,11 +109,11 @@ export default function MainPane() {
                                 groupIndex={gi}
                                 isFocused={gi === focusedGroupIndex}
                                 totalGroups={groups.length}
-                                onSelectTab={(subflowId) => openInGroup(subflowId, gi)}
-                                onCloseTab={(subflowId) => closeTab(gi, subflowId)}
-                                onCloseAllTabs={() => closeAllTabs(gi)}
-                                onCloseOtherTabs={(subflowId) => closeOtherTabs(gi, subflowId)}
-                                onCloseGroup={() => closeGroup(gi)}
+                                onSelectTab={(subflowId) => editor.openInGroup(subflowId, gi)}
+                                onCloseTab={(subflowId) => editor.closeTab(gi, subflowId)}
+                                onCloseAllTabs={() => editor.closeAllTabs(gi)}
+                                onCloseOtherTabs={(subflowId) => editor.closeOtherTabs(gi, subflowId)}
+                                onCloseGroup={() => editor.closeGroup(gi)}
                             />
                             {group.activeTabId && gi === focusedGroupIndex && <Breadcrumbs />}
                             <div className="flex-1 flex flex-col overflow-hidden">

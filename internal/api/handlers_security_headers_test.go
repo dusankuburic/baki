@@ -98,6 +98,7 @@ func TestServeStatic_CSPOnIndexHtml(t *testing.T) {
 		"default-src 'self'",
 		"frame-ancestors 'none'",
 		"base-uri 'none'",
+		"object-src 'none'",
 	} {
 		if !strings.Contains(csp, expected) {
 			t.Errorf("CSP missing %q. Got: %s", expected, csp)

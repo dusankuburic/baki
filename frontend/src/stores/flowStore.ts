@@ -102,22 +102,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       historyIndex: firstId ? 0 : -1,
     })
 
-    // Clear search results and analysis UI state from the previous flow
-    // so the user doesn't see stale data that belongs to another document.
-    useSearchStore.getState().clear()
-    useAnalysisStore.getState().setVariableLineage(null)
-    useAnalysisStore.getState().setFindingSearch('')
-    useAnalysisStore.getState().setProtectedFlowId(doc?.id ?? null)
-    // Clear the active chat thread so the new flow doesn't show the previous
-    // flow's conversation. useChatConversations will auto-create a thread for
-    // the new flow when the AITab mounts.
-    useChatStore.setState({activeThreadId: null})
-
-    if (firstId) {
-      useEditorStore.getState().openInGroup(firstId, 0)
-    } else {
-      useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})
-    }
+    // Clear derived per-flow UI state (search, analysis, chat, editor) via the
+    // shared coordinator so the cross-store reset contract lives in one place.
+    resetDerivedStateForFlow(doc)
   },
 
   setVisibleBlockId: (id) => {
@@ -267,10 +254,12 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       visibleBlockId: null,
       navigationHistory: [], historyIndex: -1,
     })
+    // Logout teardown. This intentionally differs from resetDerivedStateForFlow
+    // (the flow-switch path): it also resets editor group widths, and it leaves
+    // the chat activeThreadId alone because the chat store self-resets via its
+    // own registerStoreReset handler in the logout cascade.
     useSearchStore.getState().clear()
-    useAnalysisStore.getState().setVariableLineage(null)
-    useAnalysisStore.getState().setFindingSearch('')
-    useAnalysisStore.getState().setProtectedFlowId(null)
+    clearAnalysisState(null)
     useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [100]})
   },
 
@@ -288,3 +277,38 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
 // Reset on logout (see storeRegistry). reset() also clears search/analysis/editor.
 registerStoreReset(() => useFlowStore.getState().reset())
+
+// ---- Cross-store reset coordinator ----
+//
+// flowStore "owns" the active document, but several other stores hold UI state
+// derived from it (search results, analysis lineage/findings, the active chat
+// thread, editor groups). When the document changes that derived state must be
+// cleared so the user never sees data belonging to another flow. These helpers
+// centralize that cascade so the cross-store dependency is explicit and
+// unit-testable instead of inlined inside setDocument/reset.
+
+// clearAnalysisState resets the analysis store's document-derived fields. Shared
+// by the flow-switch coordinator (resetDerivedStateForFlow) and the logout
+// teardown (reset).
+function clearAnalysisState(flowId: string | null) {
+  useAnalysisStore.getState().setVariableLineage(null)
+  useAnalysisStore.getState().setFindingSearch('')
+  useAnalysisStore.getState().setProtectedFlowId(flowId)
+}
+
+// resetDerivedStateForFlow clears all per-flow UI state in the stores that
+// derive from the active document when a flow is loaded or switched. Called by
+// setDocument; exported so it can be unit-tested in isolation.
+export function resetDerivedStateForFlow(doc: FlowDocument | null) {
+  const firstId = doc?.subflows[0]?.id ?? null
+  useSearchStore.getState().clear()
+  clearAnalysisState(doc?.id ?? null)
+  // Clear the active chat thread so the new flow doesn't show the previous
+  // flow's conversation; useChatConversations auto-creates one on AITab mount.
+  useChatStore.setState({activeThreadId: null})
+  if (firstId) {
+    useEditorStore.getState().openInGroup(firstId, 0)
+  } else {
+    useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})
+  }
+}

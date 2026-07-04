@@ -46,14 +46,26 @@ func StaticTokenMiddleware(token string, next http.Handler) http.Handler {
 	})
 }
 
-// ExtractToken pulls the bearer token from the Authorization header or the
-// ?token= query parameter.  Returns the raw token string (without the
-// "Bearer " prefix).
+// ExtractToken pulls the bearer token from the Authorization header. As a
+// narrow exception, it also reads ?token= from the query string, but ONLY for
+// the /api/events SSE endpoint: browsers cannot set headers on EventSource
+// requests, so the access token has to ride in the URL there. Accepting ?token=
+// on every /api/ route would leak 15-minute access JWTs into proxy/WAF/browser
+// logs and Referer headers; restricting it to the SSE path confines that
+// exposure to the one endpoint that needs it. Returns the raw token string
+// (without the "Bearer " prefix).
 func ExtractToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); h != "" {
 		if after, ok := strings.CutPrefix(h, "Bearer "); ok {
 			return after
 		}
 	}
-	return r.URL.Query().Get("token")
+	if r.URL.Path == sseTokenPath {
+		return r.URL.Query().Get("token")
+	}
+	return ""
 }
+
+// sseTokenPath is the only route permitted to carry the access token in the
+// query string (see ExtractToken).
+const sseTokenPath = "/api/events"

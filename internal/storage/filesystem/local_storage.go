@@ -46,6 +46,18 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// safePathSegment reports whether s is safe to use as a single on-disk path
+// segment (no separators, no parent-dir escape, non-empty). It mirrors
+// service.safeConvComponent so every flowID/scope-keyed path in this backend
+// gets the same traversal defense-in-depth as the service-layer convFilePath,
+// rather than relying solely on upstream UUID generation + authorization.
+func safePathSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, `/\`) && !strings.Contains(s, "..")
+}
+
 // NewLocalStorageBackend creates a new local file system storage backend
 func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
@@ -328,6 +340,9 @@ func (lsb *LocalStorageBackend) LoadOrgSettings(ctx context.Context, orgID strin
 
 // SaveConversation saves a conversation to the local file system
 func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, scope string, messages []interfaces.ChatMessage) error {
+	if !safePathSegment(scope) || !safePathSegment(flowID) {
+		return fmt.Errorf("invalid conversation identifier")
+	}
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 
 	// Create conversations directory if it doesn't exist
@@ -349,6 +364,9 @@ func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, sc
 
 // LoadConversation loads a conversation from the local file system
 func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, scope string) ([]interfaces.ChatMessage, error) {
+	if !safePathSegment(scope) || !safePathSegment(flowID) {
+		return nil, fmt.Errorf("invalid conversation identifier")
+	}
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 
 	data, err := os.ReadFile(conversationPath) // #nosec G304 -- conversationPath is derived from the backend's own dataDir + ids
@@ -370,6 +388,9 @@ func (lsb *LocalStorageBackend) LoadConversation(ctx context.Context, flowID, sc
 // DeleteConversation removes the on-disk conversation for a flow+scope. A
 // missing file is treated as success so the operation is idempotent.
 func (lsb *LocalStorageBackend) DeleteConversation(ctx context.Context, flowID, scope string) error {
+	if !safePathSegment(scope) || !safePathSegment(flowID) {
+		return fmt.Errorf("invalid conversation identifier")
+	}
 	conversationPath := filepath.Join(lsb.dataDir, "conversations", scope, flowID+".json")
 	if err := os.Remove(conversationPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete conversation file: %w", err)
@@ -605,6 +626,34 @@ func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id strin
 		return nil
 	}
 	return interfaces.ErrNotFound
+}
+
+// DeleteUser erases a local user record. Desktop/local mode is single-user and
+// not subject to GDPR multi-tenant erasure semantics, so this only removes the
+// in-memory user entry (idempotent). Flow files on disk are left untouched.
+func (lsb *LocalStorageBackend) DeleteUser(ctx context.Context, id string) error {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
+	delete(lsb.users, id)
+	return nil
+}
+
+// ExportUserData returns a minimal data export for a local user. Local mode has
+// no per-user token/audit tables, so only the profile is included.
+func (lsb *LocalStorageBackend) ExportUserData(ctx context.Context, id string) (*interfaces.UserDataExport, error) {
+	lsb.mu.Lock()
+	defer lsb.mu.Unlock()
+	u, ok := lsb.users[id]
+	if !ok {
+		return nil, interfaces.ErrNotFound
+	}
+	cp := *u
+	return &interfaces.UserDataExport{User: &cp, ExportedAt: time.Now().UTC()}, nil
+}
+
+// PurgeExpiredData is a no-op in local mode (no expiring token/invite tables).
+func (lsb *LocalStorageBackend) PurgeExpiredData(ctx context.Context, auditRetentionDays int) (*interfaces.PurgeResult, error) {
+	return &interfaces.PurgeResult{}, nil
 }
 
 func (lsb *LocalStorageBackend) UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error {

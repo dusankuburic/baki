@@ -253,3 +253,93 @@ func TestPostgres_RefreshTokenRotation(t *testing.T) {
 		}
 	}
 }
+
+// TestPostgres_Migrations_RecordedAndIdempotent verifies the versioned
+// migration runner: after boot the schema_migrations table records the
+// baseline, CurrentSchemaVersion reports it, and re-opening the DB does NOT
+// re-apply (the version is stable). The baseline SQL is idempotent so this is
+// safe regardless of whether the shared test DB predates versioning.
+func TestPostgres_Migrations_RecordedAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	b := openTestDB(t)
+
+	v, err := b.CurrentSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("CurrentSchemaVersion: %v", err)
+	}
+	if v < 1 {
+		t.Fatalf("expected schema version >= 1 after migrate, got %d", v)
+	}
+
+	// The schema_migrations row for the baseline must exist.
+	var name string
+	err = b.DB().QueryRowContext(ctx,
+		`SELECT name FROM schema_migrations WHERE version = 1`).Scan(&name)
+	if err != nil {
+		t.Fatalf("schema_migrations v1 row missing: %v", err)
+	}
+	if name != "baseline" {
+		t.Errorf("schema_migrations v1 name = %q, want \"baseline\"", name)
+	}
+
+	// Re-open: migrate must be a no-op (version unchanged, no error).
+	b2 := openTestDB(t)
+	v2, err := b2.CurrentSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("CurrentSchemaVersion (re-open): %v", err)
+	}
+	if v2 != v {
+		t.Errorf("re-opening the DB changed schema version: %d → %d (must be idempotent)", v, v2)
+	}
+}
+
+// TestPostgres_FlowDashboardAdvanced_NoErrorOnHappyPath is the regression test
+// for the missing rows.Err() checks: FlowDashboardAdvanced previously iterated
+// five *sql.Rows sets without ever calling rows.Err(), silently returning
+// truncated data on mid-stream errors. After the fix each loop checks Err().
+// This test seeds a flow for the owner and asserts the call returns cleanly
+// (the new Err() checks must not misclassify a successful iteration as an
+// error) and that the complexity scatter populated from the flow's metadata.
+func TestPostgres_FlowDashboardAdvanced_NoErrorOnHappyPath(t *testing.T) {
+	b := openTestDB(t)
+	ctx := context.Background()
+
+	owner := "dash-owner-advanced-test"
+	flow := &interfaces.FlowDocument{
+		ID:      "dash-flow-advanced-test",
+		Name:    "Dash Flow",
+		OwnerID: owner,
+		Content: []byte(`{"subflows":[]}`),
+		Metadata: interfaces.FlowMetadata{
+			BlockCount:   7,
+			SubflowCount: 1,
+			ParsedAt:     time.Now().UTC(),
+		},
+	}
+	if err := b.SaveFlow(ctx, flow); err != nil {
+		t.Fatalf("SaveFlow: %v", err)
+	}
+	t.Cleanup(func() { b.DeleteFlow(ctx, flow.ID) })
+
+	out, err := b.FlowDashboardAdvanced(ctx, owner, 30)
+	if err != nil {
+		t.Fatalf("FlowDashboardAdvanced returned error on happy path: %v", err)
+	}
+	if out == nil {
+		t.Fatal("FlowDashboardAdvanced returned nil data with no error")
+	}
+	// The flow's metadata carries BlockCount, so the complexity scatter should
+	// include it — proves the compRows loop ran to completion and Err() was nil.
+	found := false
+	for _, c := range out.Complexity {
+		if c.FlowID == flow.ID {
+			if c.BlockCount != 7 {
+				t.Errorf("complexity BlockCount: want 7, got %d", c.BlockCount)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected flow %q in Complexity scatter, got %+v", flow.ID, out.Complexity)
+	}
+}

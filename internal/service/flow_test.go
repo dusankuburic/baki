@@ -1,11 +1,12 @@
 package service
 
 import (
+	"context"
 	"testing"
 
+	"pad-core/cache"
 	"pad-core/models"
 	"pad-core/parser"
-	"pad-core/search"
 )
 
 // simpleFlow is minimal valid PAD content used as a test fixture.
@@ -31,9 +32,8 @@ func makeTestDoc(t *testing.T, text string) (*FlowService, *models.FlowDocument)
 	if err != nil {
 		t.Fatalf("ParseText: %v", err)
 	}
-	svc := &FlowService{
-		idxCache: make(map[string]*search.SearchIndex),
-	}
+	svc := &FlowService{}
+	svc.idxCache, _ = cache.NewLRUCache(maxSearchIndexCache)
 	return svc, doc
 }
 
@@ -127,5 +127,32 @@ func TestFlowService_RecentFiles_nil_settings(t *testing.T) {
 	}
 	if files != nil {
 		t.Errorf("expected nil files when no settings, got %v", files)
+	}
+}
+
+// TestFlowService_SearchIndexCacheIsBounded confirms the search-index cache
+// evicts once it reaches its cap, so a long-lived process can't grow it without
+// limit (the OOM risk the production-readiness review flagged).
+func TestFlowService_SearchIndexCacheIsBounded(t *testing.T) {
+	svc := &FlowService{}
+	svc.idxCache, _ = cache.NewLRUCache(2)
+	ctx := context.Background()
+
+	svc.idxCache.Set(ctx, "a", "a", 0)
+	svc.idxCache.Set(ctx, "b", "b", 0)
+	// Touch "a" so "b" becomes least-recently-used, then overflow the cap.
+	if _, ok := svc.idxCache.Get(ctx, "a"); !ok {
+		t.Fatal("expected key a present")
+	}
+	svc.idxCache.Set(ctx, "c", "c", 0)
+
+	if _, ok := svc.idxCache.Get(ctx, "b"); ok {
+		t.Error("expected LRU to evict b after overflow, but it was present")
+	}
+	if _, ok := svc.idxCache.Get(ctx, "a"); !ok {
+		t.Error("expected recently-used a to survive")
+	}
+	if _, ok := svc.idxCache.Get(ctx, "c"); !ok {
+		t.Error("expected newly-added c to be present")
 	}
 }

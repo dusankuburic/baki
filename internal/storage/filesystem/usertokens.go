@@ -54,3 +54,29 @@ func (lsb *LocalStorageBackend) SetUserEmailVerified(ctx context.Context, userID
 	u.EmailVerified = true
 	return nil
 }
+
+// InvalidateUserTokens marks every unused, unexpired token of the given
+// purposes owned by userID as used (delete, matching the single-use semantics
+// of ConsumeUserToken). Desktop mode is single-user/unauthenticated so this is
+// exercised primarily by tests, but it mirrors the Postgres behaviour.
+func (lsb *LocalStorageBackend) InvalidateUserTokens(ctx context.Context, userID string, purposes ...string) error {
+	if len(purposes) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(purposes))
+	for _, p := range purposes {
+		wanted[p] = struct{}{}
+	}
+	lsb.userTokenMu.Lock()
+	defer lsb.userTokenMu.Unlock()
+	for hash, t := range lsb.userTokens {
+		if t.UserID != userID {
+			continue
+		}
+		if _, ok := wanted[t.Purpose]; !ok {
+			continue
+		}
+		delete(lsb.userTokens, hash)
+	}
+	return nil
+}

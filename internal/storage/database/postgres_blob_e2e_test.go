@@ -200,10 +200,7 @@ func TestE2E_A4_DeleteRemovesAllBlobs(t *testing.T) {
 	// Cleanup runs as a post-commit goroutine (autocommit ⇒ fired immediately),
 	// so poll until the prefix is empty.
 	deadline := time.Now().Add(15 * time.Second)
-	for {
-		if b.countBlobs(t, prefix) == 0 {
-			break
-		}
+	for b.countBlobs(t, prefix) > 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("blobs under %q not removed within timeout", prefix)
 		}

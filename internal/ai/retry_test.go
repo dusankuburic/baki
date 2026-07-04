@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -115,6 +116,98 @@ func TestRetry_Stream_RetriesWhenFailedBeforeAnyChunk(t *testing.T) {
 	}
 	if stub.streamCall != 2 {
 		t.Errorf("expected 2 Stream calls (1 retry), got %d", stub.streamCall)
+	}
+}
+
+// TestRetry_Stream_RetriesErrorChunkBeforeContent covers the mid-SSE failure
+// mode: the parser surfaces an upstream error event as Chunk{Error} and
+// returns nil. Before any content has been delivered that is equivalent to a
+// pre-stream failure, so it must be held back from the caller and retried.
+func TestRetry_Stream_RetriesErrorChunkBeforeContent(t *testing.T) {
+	stub := &retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{TokensIn: 5}) // metadata only — must not count as content
+			onChunk(Chunk{Error: fmt.Errorf("%w: overloaded", ErrProviderDown)})
+			return nil
+		},
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{Text: "ok"})
+			onChunk(Chunk{Done: true})
+			return nil
+		},
+	}}
+	rp := NewRetryingProvider(stub)
+
+	var got string
+	errChunks := 0
+	err := rp.Stream(context.Background(), Request{}, func(c Chunk) {
+		got += c.Text
+		if c.Error != nil {
+			errChunks++
+		}
+	})
+	if err != nil {
+		t.Fatalf("expected success on retry, got %v", err)
+	}
+	if got != "ok" {
+		t.Errorf("expected streamed content 'ok', got %q", got)
+	}
+	if errChunks != 0 {
+		t.Errorf("held-back error chunk leaked to the caller %d time(s)", errChunks)
+	}
+	if stub.streamCall != 2 {
+		t.Errorf("expected 2 Stream calls (1 retry), got %d", stub.streamCall)
+	}
+}
+
+// TestRetry_Stream_ErrorChunkAfterContentForwardedNotRetried: once text has
+// been delivered the partial stream cannot be replayed — the error chunk must
+// pass through to the caller unchanged and the attempt must not repeat.
+func TestRetry_Stream_ErrorChunkAfterContentForwardedNotRetried(t *testing.T) {
+	stub := &retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{Text: "partial"})
+			onChunk(Chunk{Error: fmt.Errorf("%w: overloaded", ErrProviderDown)})
+			return nil
+		},
+	}}
+	rp := NewRetryingProvider(stub)
+
+	errChunks := 0
+	err := rp.Stream(context.Background(), Request{}, func(c Chunk) {
+		if c.Error != nil {
+			errChunks++
+		}
+	})
+	if err != nil {
+		t.Fatalf("expected nil return (error travels as chunk after content), got %v", err)
+	}
+	if errChunks != 1 {
+		t.Errorf("expected the post-content error chunk delivered once, got %d", errChunks)
+	}
+	if stub.streamCall != 1 {
+		t.Errorf("expected exactly 1 Stream call (no replay after partial output), got %d", stub.streamCall)
+	}
+}
+
+// TestRetry_Stream_PermanentErrorChunkReturnedNotRetried: a pre-content error
+// chunk that is not retryable is converted into a returned error (so callers
+// and outer wrappers see a real failure) without burning retry attempts.
+func TestRetry_Stream_PermanentErrorChunkReturnedNotRetried(t *testing.T) {
+	stub := &retryStub{streamPlan: []func(onChunk func(Chunk)) error{
+		func(onChunk func(Chunk)) error {
+			onChunk(Chunk{Error: errors.New("invalid request")})
+			return nil
+		},
+	}}
+	rp := NewRetryingProvider(stub)
+
+	err := rp.Stream(context.Background(), Request{}, func(Chunk) {})
+	if err == nil || err.Error() != "invalid request" {
+		t.Fatalf("expected the chunk error returned, got %v", err)
+	}
+	if stub.streamCall != 1 {
+		t.Errorf("expected exactly 1 Stream call for permanent error, got %d", stub.streamCall)
 	}
 }
 

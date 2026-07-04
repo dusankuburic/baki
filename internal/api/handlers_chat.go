@@ -17,11 +17,19 @@ type ChatHandler struct {
 	common  *SecurityConfig
 }
 
+// maxChatMessageBodyBytes bounds request bodies that carry user-authored chat
+// content. A single chat turn (plus any inline attachments) has no legitimate
+// need for more than this — large flow content is pulled server-side from the
+// flow doc, not embedded in the request body. This is tighter than the global
+// 10 MiB cap in router.go.
+const maxChatMessageBodyBytes = 1 << 20 // 1 MiB
+
 func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, common *SecurityConfig) *ChatHandler {
 	return &ChatHandler{chatSvc: chatSvc, flowSvc: flowSvc, common: common}
 }
 
 func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatMessageBodyBytes)
 	var req models.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -52,7 +60,21 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 	if !h.ownsStream(w, r, req.ID) {
 		return
 	}
-	h.chatSvc.BeginStream(req.ID)
+	// A stream that finished before the client began (fail-fast pre-stream
+	// errors) emitted its terminal event before the SSE subscription existed;
+	// return that state in the begin response so the client isn't left waiting
+	// for events that will never arrive.
+	if res := h.chatSvc.BeginStream(r.Context(), req.ID); res != nil {
+		render.JSON(w, map[string]any{
+			"status":    "finished",
+			"text":      res.Text,
+			"done":      res.Done,
+			"error":     res.Error,
+			"tokensIn":  res.TokensIn,
+			"tokensOut": res.TokensOut,
+		})
+		return
+	}
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -73,7 +95,8 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 
 func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		From int    `json:"from,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -82,7 +105,7 @@ func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request)
 	if !h.ownsStream(w, r, req.ID) {
 		return
 	}
-	res, err := h.chatSvc.ResumeStream(req.ID)
+	res, err := h.chatSvc.ResumeStream(r.Context(), req.ID, req.From)
 	if err != nil {
 		render.Error(w, err, http.StatusNotFound)
 		return
@@ -98,7 +121,7 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	if !h.common.JWTEnabled {
 		return true
 	}
-	owner := h.chatSvc.OwnerOf(streamID)
+	owner := h.chatSvc.OwnerOf(r.Context(), streamID)
 	caller := h.common.CallerID(r)
 	if owner == "" || owner != caller {
 		http.Error(w, "Forbidden", http.StatusForbidden)
@@ -134,6 +157,7 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 	if !h.common.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatMessageBodyBytes)
 	var req struct {
 		FlowID   string               `json:"flowId"`
 		Provider string               `json:"provider"`

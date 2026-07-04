@@ -55,7 +55,6 @@ export default function AITab() {
   const {
     doc, selectedBlockId, activeThreadId, activeThread, activeThreadMessages,
     flowThreads, isCurrentThreadStreaming, showThinking,
-    streamingTokens,
     sourceFiles, contextPreview, pendingMessage, toolStatus,
     switchThread,
     handleSend, handlePreviewContext, handleResend, handleExport,
@@ -257,12 +256,8 @@ export default function AITab() {
               <span className="truncate">{toolStatus}…</span>
             </div>
           )}
-          {isCurrentThreadStreaming && streamingTokens > 0 ? (
-            <StreamingProgress
-              tokens={streamingTokens}
-              isStreaming={isCurrentThreadStreaming}
-              estimatedTokens={undefined}
-            />
+          {isCurrentThreadStreaming ? (
+            <StreamingProgress />
           ) : (
             <TokenCounter
               promptTokens={totalTokensIn}

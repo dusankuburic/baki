@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"pad-core/logger"
@@ -67,10 +69,33 @@ type Dispatcher struct {
 	timeout   time.Duration
 }
 
+// validateAlertURL enforces HTTPS for outbound governance alert URLs. The
+// payload carries flow names and finding counts (internal details an attacker
+// couldn't otherwise enumerate); sending it over plaintext HTTP would expose
+// them on any in-path host. http://localhost / 127.0.0.1 / [::1] are permitted
+// for local development; everything else must be https://. Returns the URL
+// unchanged when acceptable, or an explanatory error.
+func validateAlertURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("invalid alert URL %q: %w", raw, err)
+	}
+	host := u.Hostname()
+	if u.Scheme == "https" {
+		return raw, nil
+	}
+	if u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+		return raw, nil
+	}
+	return "", fmt.Errorf("alert URL %q must use https (or http://localhost for dev); governance payloads carry internal flow details and must not be sent in plaintext", raw)
+}
+
 // New builds a Dispatcher from cfg. Channels with empty URLs are omitted, so the
 // returned dispatcher may have zero notifiers (Enabled() == false) — that's a
-// valid, no-op configuration.
-func New(cfg Config) *Dispatcher {
+// valid, no-op configuration. Non-HTTPS URLs are rejected with an error so the
+// caller can surface the misconfiguration rather than silently leaking alert
+// payloads over plaintext.
+func New(cfg Config) (*Dispatcher, error) {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -79,12 +104,20 @@ func New(cfg Config) *Dispatcher {
 
 	var notifiers []Notifier
 	if cfg.WebhookURL != "" {
-		notifiers = append(notifiers, &WebhookNotifier{URL: cfg.WebhookURL, Client: client})
+		u, err := validateAlertURL(cfg.WebhookURL)
+		if err != nil {
+			return nil, err
+		}
+		notifiers = append(notifiers, &WebhookNotifier{URL: u, Client: client})
 	}
 	if cfg.TeamsURL != "" {
-		notifiers = append(notifiers, &TeamsNotifier{URL: cfg.TeamsURL, Client: client})
+		u, err := validateAlertURL(cfg.TeamsURL)
+		if err != nil {
+			return nil, err
+		}
+		notifiers = append(notifiers, &TeamsNotifier{URL: u, Client: client})
 	}
-	return &Dispatcher{notifiers: notifiers, timeout: timeout}
+	return &Dispatcher{notifiers: notifiers, timeout: timeout}, nil
 }
 
 // Enabled reports whether any channel is configured. Nil-safe.

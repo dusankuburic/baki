@@ -66,9 +66,12 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
         ]
         
         const cy = cyRef.current
-        cy.elements().remove()
-        cy.add(elements)
-        
+        // Batch the remove+add so the whole swap restyles once, not per element.
+        cy.batch(() => {
+          cy.elements().remove()
+          cy.add(elements)
+        })
+
         cy.layout({
           name: 'dagre',
           rankDir: 'LR',
@@ -192,7 +195,11 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
       instance.destroy()
       cyRef.current = null
     }
-  }, [resolvedTheme, subflowId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resolvedTheme]) // eslint-disable-line react-hooks/exhaustive-deps
+  // ↑ The Cytoscape instance and its style are derived only from the theme's
+  // CSS vars (getComputedStyle), so it is created once per theme change rather
+  // than recreated on every subflow switch. The loadGraph effect below handles
+  // subflowId changes by swapping elements on the reused instance.
 
   // Sync zoom from toolbar
   useEffect(() => {

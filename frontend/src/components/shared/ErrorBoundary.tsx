@@ -27,7 +27,12 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
                 message: error.message,
                 stack: error.stack || '',
                 componentStack: info.componentStack || '',
-                url: window.location.href,
+                // Send the pathname only — never the full href. Recovery/SSO
+                // tokens (#resetPassword=…, #verifyEmail=…, #invite=…, the SSO
+                // ticket) live in the fragment, and a render error during a
+                // deep-link load could otherwise capture them into the error
+                // report before the fragment is cleared.
+                url: window.location.pathname,
             })
         } catch {
             // backend not available during SSR or tests

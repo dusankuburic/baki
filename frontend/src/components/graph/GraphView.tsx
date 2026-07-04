@@ -92,8 +92,13 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     const c = cyRef.current
 
     const elements = blocksToElements(subflow)
-    c.elements().remove()
-    c.add(elements)
+    // Batch the remove+add so Cytoscape defers style recalculation and repaints
+    // once for the whole swap instead of per-element (a large subflow otherwise
+    // triggers N intermediate restyles).
+    c.batch(() => {
+      c.elements().remove()
+      c.add(elements)
+    })
 
     if (elements.length > 0) {
       c.layout({

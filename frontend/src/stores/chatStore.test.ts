@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach} from 'vitest'
-import {useChatStore} from './chatStore'
+import {useChatStore, MAX_CONCURRENT_STREAMS} from './chatStore'
 import type {ChatMessage} from '@/types'
 
 function makeMessage(id: string, role: 'user' | 'assistant', content = 'hello'): ChatMessage {
@@ -12,9 +12,7 @@ beforeEach(() => {
         threads: [],
         activeThreadId: null,
         conversations: new Map(),
-        activeStreamId: null,
-        streamingMessageId: null,
-        streamingText: '',
+        streams: {},
         selectedProvider: 'claude',
     })
 })
@@ -185,31 +183,120 @@ describe('compactThread', () => {
     })
 })
 
-// ---- streaming ----
+// ---- streaming (per-thread) ----
 
 describe('streaming', () => {
-    it('startStream sets activeStreamId and messageId', () => {
-        useChatStore.getState().startStream('stream1', 'msg1')
-        const state = useChatStore.getState()
-        expect(state.activeStreamId).toBe('stream1')
-        expect(state.streamingMessageId).toBe('msg1')
-        expect(state.streamingText).toBe('')
+    it('startStream reserves a per-thread slot with thinking defaults', () => {
+        useChatStore.getState().startStream('t1', 'stream1', 'msg1')
+        const slot = useChatStore.getState().streams['t1']
+        expect(slot).toEqual({streamId: 'stream1', messageId: 'msg1', text: '', isThinking: true, tokens: 0, toolStatus: null})
     })
 
-    it('updateStreamingMessage updates text', () => {
-        useChatStore.getState().startStream('stream1', 'msg1')
-        useChatStore.getState().updateStreamingMessage('Hello world')
-        expect(useChatStore.getState().streamingText).toBe('Hello world')
+    it('updateStreamingMessage updates the slot text', () => {
+        useChatStore.getState().startStream('t1', 'stream1', 'msg1')
+        useChatStore.getState().updateStreamingMessage('t1', 'Hello world')
+        expect(useChatStore.getState().streams['t1']!.text).toBe('Hello world')
     })
 
-    it('endStream clears streaming state', () => {
-        useChatStore.getState().startStream('stream1', 'msg1')
-        useChatStore.getState().updateStreamingMessage('partial')
-        useChatStore.getState().endStream()
+    it('updateStreamingMessage is a no-op for a thread with no slot', () => {
+        useChatStore.getState().updateStreamingMessage('nope', 'Hello world')
+        expect(useChatStore.getState().streams['nope']).toBeUndefined()
+    })
+
+    it('endStream clears the slot', () => {
+        useChatStore.getState().startStream('t1', 'stream1', 'msg1')
+        useChatStore.getState().endStream('t1')
+        expect(useChatStore.getState().streams['t1']).toBeUndefined()
+    })
+
+    it('endStream is a no-op for a thread with no slot', () => {
+        useChatStore.getState().endStream('nope')
+        expect(useChatStore.getState().streams['nope']).toBeUndefined()
+    })
+
+    it('setStreamMeta patches only the allowed fields', () => {
+        useChatStore.getState().startStream('t1', 'stream1', 'msg1')
+        useChatStore.getState().setStreamMeta('t1', {isThinking: false, tokens: 42, toolStatus: 'Searching flow'})
+        const slot = useChatStore.getState().streams['t1']!
+        expect(slot.isThinking).toBe(false)
+        expect(slot.tokens).toBe(42)
+        expect(slot.toolStatus).toBe('Searching flow')
+        expect(slot.streamId).toBe('stream1') // unchanged
+    })
+
+    it('updateStream patches text AND meta in one atomic update', () => {
+        useChatStore.getState().startStream('t1', 'stream1', 'msg1')
+        useChatStore.getState().updateStream('t1', {text: 'Hello', isThinking: false, tokens: 3})
+        const slot = useChatStore.getState().streams['t1']!
+        expect(slot.text).toBe('Hello')
+        expect(slot.isThinking).toBe(false)
+        expect(slot.tokens).toBe(3)
+        expect(slot.streamId).toBe('stream1') // untouched fields preserved
+    })
+
+    it('updateStream is a no-op for a thread with no slot', () => {
+        useChatStore.getState().updateStream('nope', {text: 'x', tokens: 1})
+        expect(useChatStore.getState().streams['nope']).toBeUndefined()
+    })
+
+    it('several threads can stream concurrently', () => {
+        useChatStore.getState().startStream('t1', 's1', 'm1')
+        useChatStore.getState().startStream('t2', 's2', 'm2')
         const state = useChatStore.getState()
-        expect(state.activeStreamId).toBeNull()
-        expect(state.streamingMessageId).toBeNull()
-        expect(state.streamingText).toBe('')
+        expect(Object.keys(state.streams)).toHaveLength(2)
+        expect(state.streams['t1']!.streamId).toBe('s1')
+        expect(state.streams['t2']!.streamId).toBe('s2')
+    })
+
+    it('one stream per thread: a second startStream in the same thread overwrites', () => {
+        useChatStore.getState().startStream('t1', 's1', 'm1')
+        useChatStore.getState().startStream('t1', 's2', 'm2')
+        const slot = useChatStore.getState().streams['t1']!
+        expect(slot.streamId).toBe('s2')
+        expect(slot.messageId).toBe('m2')
+        expect(Object.keys(useChatStore.getState().streams)).toHaveLength(1)
+    })
+})
+
+// ---- concurrency cap ----
+
+describe('concurrency cap', () => {
+    it('activeStreamCount reflects the number of streaming threads', () => {
+        expect(useChatStore.getState().activeStreamCount()).toBe(0)
+        useChatStore.getState().startStream('t1', 's1', 'm1')
+        expect(useChatStore.getState().activeStreamCount()).toBe(1)
+        useChatStore.getState().startStream('t2', 's2', 'm2')
+        expect(useChatStore.getState().activeStreamCount()).toBe(2)
+    })
+
+    it(`canStartStream is false at MAX_CONCURRENT_STREAMS (${MAX_CONCURRENT_STREAMS})`, () => {
+        expect(useChatStore.getState().canStartStream()).toBe(true)
+        for (let i = 0; i < MAX_CONCURRENT_STREAMS; i++) {
+            useChatStore.getState().startStream(`t${i}`, `s${i}`, `m${i}`)
+        }
+        expect(useChatStore.getState().activeStreamCount()).toBe(MAX_CONCURRENT_STREAMS)
+        expect(useChatStore.getState().canStartStream()).toBe(false)
+        // Freeing one slot re-enables starts.
+        useChatStore.getState().endStream('t0')
+        expect(useChatStore.getState().canStartStream()).toBe(true)
+    })
+})
+
+// ---- closeThread drops in-flight stream ----
+
+describe('closeThread stream cleanup', () => {
+    it('closing a streaming thread drops its slot', () => {
+        useChatStore.getState().startStream('t1', 's1', 'm1')
+        useChatStore.getState().closeThread('t1') // closeThread tolerates a non-created id
+        expect(useChatStore.getState().streams['t1']).toBeUndefined()
+    })
+
+    it('closing one streaming thread leaves the others intact', () => {
+        useChatStore.getState().startStream('t1', 's1', 'm1')
+        useChatStore.getState().startStream('t2', 's2', 'm2')
+        useChatStore.getState().closeThread('t1')
+        expect(useChatStore.getState().streams['t1']).toBeUndefined()
+        expect(useChatStore.getState().streams['t2']).toBeDefined()
     })
 })
 

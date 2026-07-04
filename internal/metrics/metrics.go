@@ -128,6 +128,41 @@ var (
 		},
 		[]string{"op"},
 	)
+	auditDroppedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_audit_dropped_total",
+			Help: "Audit events not persisted to the DB (pool full/closed) and diverted to the structured-log fallback sink, by reason.",
+		},
+		[]string{"reason"},
+	)
+	panicRecoveredTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_panics_total",
+			Help: "Panics recovered (HTTP handlers, background goroutines) forwarded to the error-reporting sink, by location.",
+		},
+		[]string{"location"},
+	)
+	errorsReportedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_errors_reported_total",
+			Help: "Notable errors forwarded to the error-reporting sink for aggregation/triage, by location.",
+		},
+		[]string{"location"},
+	)
+	usageDroppedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_usage_dropped_total",
+			Help: "AI usage metrics not recorded (recorder saturated / queue full) and dropped to bound goroutines, by reason.",
+		},
+		[]string{"reason"},
+	)
+	aiPricingFallbackTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_ai_pricing_fallback_total",
+			Help: "AI usage priced from provider-default pricing because the model wasn't in the pricing catalog, by provider and model.",
+		},
+		[]string{"provider", "model"},
+	)
 )
 
 // registry is process-local. Tests are hermetic (no leftover series between
@@ -153,6 +188,11 @@ var registry = func() *prometheus.Registry {
 		authOps,
 		blobOps,
 		blobOpDuration,
+		auditDroppedTotal,
+		panicRecoveredTotal,
+		errorsReportedTotal,
+		usageDroppedTotal,
+		aiPricingFallbackTotal,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -259,4 +299,44 @@ func RecordAuthOp(op string) {
 func RecordBlobOp(op, status string, dur time.Duration) {
 	blobOps.WithLabelValues(op, status).Inc()
 	blobOpDuration.WithLabelValues(op).Observe(dur.Seconds())
+}
+
+// RecordAuditDropped bumps the audit_dropped_total counter for an event that
+// could not be enqueued to the DB pool (reason "full" or "closed"). Such events
+// are diverted to the structured-log fallback sink so the data isn't lost, and
+// this counter lets ops alert when the DB sink can't keep up.
+func RecordAuditDropped(reason string) {
+	auditDroppedTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordPanic bumps the panics_total counter for a recovered panic at the given
+// location (e.g. "http", "scanner", "audit"). Always recorded, even when no
+// external error-aggregation sink (Sentry/App Insights) is configured, so
+// recovered panics surface in the Prometheus/alert pipeline regardless.
+func RecordPanic(location string) {
+	panicRecoveredTotal.WithLabelValues(location).Inc()
+}
+
+// RecordError bumps the errors_reported_total counter for a notable error
+// forwarded to the error-reporting sink from the given location.
+func RecordError(location string) {
+	errorsReportedTotal.WithLabelValues(location).Inc()
+}
+
+// RecordUsageDropped bumps the usage_dropped_total counter for an AI usage
+// metric that could not be recorded (recorder saturated). Dropping bounds the
+// number of in-flight recording goroutines so a stalled DB recorder can't
+// exhaust memory under sustained AI traffic; the counter surfaces the loss so
+// ops can alert on it.
+func RecordUsageDropped(reason string) {
+	usageDroppedTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordPricingFallback bumps the ai_pricing_fallback_total counter when a
+// model isn't in the pricing catalog and usage was costed from the provider's
+// default pricing instead. A sustained/growing count for a given provider
+// means the catalog has drifted behind that provider's model lineup and
+// should be updated.
+func RecordPricingFallback(provider, model string) {
+	aiPricingFallbackTotal.WithLabelValues(provider, model).Inc()
 }

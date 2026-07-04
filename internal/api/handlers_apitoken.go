@@ -18,6 +18,11 @@ import (
 // storage backend (cloud mode); the raw token is returned exactly once, at
 // creation, and only its hash is ever stored.
 
+const (
+	defaultAPITokenLifetimeDays = 90
+	maxAPITokenLifetimeDays     = 365
+)
+
 func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -51,10 +56,16 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 		TokenHash: hash,
 		CreatedAt: time.Now().UTC(),
 	}
-	if req.ExpiresInDays > 0 {
-		exp := tok.CreatedAt.AddDate(0, 0, req.ExpiresInDays)
-		tok.ExpiresAt = &exp
+	days := req.ExpiresInDays
+	if days <= 0 {
+		days = defaultAPITokenLifetimeDays
 	}
+	if days > maxAPITokenLifetimeDays {
+		render.Error(w, fmt.Errorf("token lifetime cannot exceed %d days", maxAPITokenLifetimeDays), http.StatusBadRequest)
+		return
+	}
+	exp := tok.CreatedAt.AddDate(0, 0, days)
+	tok.ExpiresAt = &exp
 
 	if err := h.backend.CreateAPIToken(r.Context(), tok); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)

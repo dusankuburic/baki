@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
@@ -102,9 +103,15 @@ var ServiceModule = fx.Options(
 			backend storageif.StorageBackend,
 			knowledge *rag.KnowledgeService,
 			mode config.DeploymentMode,
+			redisClient *redis.Client,
 		) *service.ChatService {
 			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, demo, backend, mode)
 			svc.SetKnowledgeService(knowledge)
+			// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
+			svc.SetResumeBackplane(redisClient)
+			// Drop the scrubbed-context cache when a flow changes in place,
+			// routed through FlowService so LibraryService has no direct chat dep.
+			flowSvc.OnInvalidateFlow(svc.InvalidateChatContext)
 			return svc
 		},
 		func(

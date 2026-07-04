@@ -1,4 +1,4 @@
-import { request } from './client'
+import { request, requestBlob } from './client'
 
 export interface LoginRequest {
   email: string
@@ -115,4 +115,12 @@ export const authApi = {
 
   revokeApiToken: (id: string): Promise<void> =>
     request(`/api/auth/tokens/${id}`, undefined, 'DELETE'),
+
+  // Self-service GDPR data-subject export (downloads a JSON bundle).
+  exportAccount: (): Promise<Blob> =>
+    requestBlob('/api/auth/account/export', 'GET'),
+
+  // Self-service account erasure. confirmEmail must match the caller's email.
+  deleteAccount: (confirmEmail: string): Promise<{ status: string }> =>
+    request('/api/auth/account', { confirmEmail }, 'DELETE'),
 }

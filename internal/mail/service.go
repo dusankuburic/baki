@@ -18,10 +18,11 @@ type Service struct {
 }
 
 // NewService builds the email service from config, choosing an SMTP or log-only
-// mailer automatically.
-func NewService(cfg config.EmailConfig) *Service {
+// mailer automatically. mode is passed through so the log-only fallback never
+// writes token-bearing bodies to the log in cloud mode.
+func NewService(cfg config.EmailConfig, mode config.DeploymentMode) *Service {
 	return &Service{
-		mailer:  New(cfg),
+		mailer:  New(cfg, mode),
 		baseURL: strings.TrimRight(cfg.AppBaseURL, "/"),
 	}
 }

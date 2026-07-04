@@ -18,6 +18,8 @@ import (
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
+
+	"go.uber.org/fx"
 )
 
 type mockNotifier = service.NilNotifier
@@ -49,6 +51,13 @@ func (m *memIdentityStore) LoadIdentityLink(_ context.Context, provider, subject
 	}
 	return nil, storageif.ErrNotFound
 }
+
+// noopLifecycle is a stand-in fx.Lifecycle for tests that construct a Router
+// directly; it discards registered hooks (the WS hub's OnStop close is a no-op
+// with a nil backplane anyway).
+type noopLifecycle struct{}
+
+func (noopLifecycle) Append(fx.Hook) {}
 
 func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 	return newTestRouterSSO(backend, jwtEnabled, nil, nil)
@@ -115,14 +124,14 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security),
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
 		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
-		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{})),
+		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
 		Admin:     NewAdminHandler(backend, security),
 		Provider:  NewProviderHandler(providerSvc, security),
-		Org:       NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{})),
+		Org:       NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
 		Sharing:   NewSharingHandler(backend, flowSvc, security),
 	}
 
-	return NewRouter(security, eventManager, handlers, cfg, make(chan struct{}), nil)
+	return NewRouter(noopLifecycle{}, security, eventManager, handlers, cfg, make(chan struct{}), nil, nil)
 }
 
 func newJWTTestRouter(t *testing.T) *Router {

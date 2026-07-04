@@ -97,6 +97,33 @@ const markdownComponents = {
   }
 }
 
+// StableMarkdown re-renders only when its content string changes (memo
+// compares strings by value). During streaming the completed portion of the
+// message routes through it, so react-markdown re-parses only the growing
+// tail on each animation-frame flush instead of the whole message.
+const StableMarkdown = memo(function StableMarkdown({content}: {content: string}) {
+  return (
+    <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>
+      {content}
+    </ReactMarkdown>
+  )
+})
+
+// splitStreamingContent splits streamed markdown at the last completed
+// paragraph boundary so the (large) head can be memoized. It never splits
+// inside an unterminated ``` fence — a fence torn across two parsers would
+// render as garbage. Constructs that span blank lines (loose lists, multi-
+// paragraph quotes) may render with slightly different spacing while the
+// stream is live; the final message is parsed in one piece as before.
+export function splitStreamingContent(content: string): [head: string, tail: string] {
+  const idx = content.lastIndexOf('\n\n')
+  if (idx < 0) return ['', content]
+  const head = content.slice(0, idx + 2)
+  const fences = (head.match(/```/g) || []).length
+  if (fences % 2 === 1) return ['', content]
+  return [head, content.slice(idx + 2)]
+}
+
 function renderContent(content: string, isUser: boolean, isStreaming?: boolean) {
   if (isUser) {
     const parts = content.split(MENTION_REGEX)
@@ -114,17 +141,27 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
     )
   }
 
+  if (isStreaming) {
+    const [head, tail] = splitStreamingContent(content)
+    return (
+      <div className="prose-chat break-words is-streaming">
+        {head !== '' && <StableMarkdown content={head} />}
+        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>
+          {tail}
+        </ReactMarkdown>
+        <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
+      </div>
+    )
+  }
+
   return (
-    <div className={clsx('prose-chat break-words', isStreaming && 'is-streaming')}>
+    <div className="prose-chat break-words">
       <ReactMarkdown
         remarkPlugins={markdownPlugins}
         components={markdownComponents}
       >
         {content}
       </ReactMarkdown>
-      {isStreaming && (
-        <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
-      )}
     </div>
   )
 }

@@ -80,6 +80,22 @@ func (m *EventManager) EmitTo(userID, name string, data any) {
 	m.deliver(Event{Name: name, Data: data, TargetUser: userID})
 }
 
+// HasSubscriber satisfies the service.Notifier interface. It reports whether
+// EmitTo(userID, …) would currently reach at least one connected SSE client;
+// a "" userID matches any client, mirroring deliver's local-mode broadcast
+// semantics. Services use it to detect abandoned work — e.g. a chat stream
+// whose tab closed without sending /cancel.
+func (m *EventManager) HasSubscriber(userID string) bool {
+	m.clientsMu.Lock()
+	defer m.clientsMu.Unlock()
+	for _, clientUser := range m.clients {
+		if userID == "" || clientUser == userID {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *EventManager) deliver(ev Event) {
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()

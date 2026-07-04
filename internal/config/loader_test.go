@@ -33,7 +33,7 @@ func TestLoad_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	data := `{"Mode":"cloud","Server":{"Host":"0.0.0.0","Port":8080},"Storage":{"Backend":"database","DatabaseURL":"postgres://localhost/test"},"Auth":{"Enabled":false}}`
+	data := `{"Mode":"cloud","Server":{"Host":"0.0.0.0","Port":8080,"BehindProxy":true},"Storage":{"Backend":"database","DatabaseURL":"postgres://localhost/test"},"Auth":{"Enabled":true,"Secret":"a-long-random-cloud-signing-secret"}}`
 	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +71,38 @@ func TestValidate_AuthSecretRequired(t *testing.T) {
 	}
 }
 
+// TestValidate_CloudRequiresAuth is the regression test for the misconfig
+// footgun: cloud (multi-tenant) mode with auth disabled silently bypasses JWT,
+// RLS, and role checks. Validation must reject it so an operator who forgets
+// PAD_AUTH_ENABLED=true can't deploy an unauthenticated multi-tenant system.
+func TestValidate_CloudRequiresAuth(t *testing.T) {
+	cfg := cloudCfg()
+	cfg.Auth.Enabled = false
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected validation error for cloud mode with auth disabled")
+	}
+}
+
+// TestLoadFromEnv_NormalizesStorageCase confirms PAD_STORAGE is case-folded so
+// "LOCAL"/"Database" typos don't fall through to an unknown backend (which in
+// cloud mode would silently run with no storage backend).
+func TestLoadFromEnv_NormalizesStorageCase(t *testing.T) {
+	t.Setenv("PAD_MODE", "local")
+	t.Setenv("PAD_STORAGE", "LOCAL") // capitalised — would be unknown without normalization
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("capitalised PAD_STORAGE should be accepted (case-folded): %v", err)
+	}
+	if cfg.Storage.Backend != StorageLocal {
+		t.Errorf("PAD_STORAGE=LOCAL normalized to %q, want %q", cfg.Storage.Backend, StorageLocal)
+	}
+
+	t.Setenv("PAD_STORAGE", "garbage")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected error for unknown PAD_STORAGE value")
+	}
+}
+
 func TestValidate_DatabaseURLRequired(t *testing.T) {
 	cfg := Default()
 	cfg.Storage.Backend = StorageDatabase
@@ -90,6 +122,9 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	original.Mode = ModeCloud
 	original.Storage.Backend = StorageDatabase
 	original.Storage.DatabaseURL = "postgres://localhost/test"
+	original.Auth.Enabled = true
+	original.Auth.Secret = "a-sufficiently-long-random-secret-value-123456"
+	original.Server.BehindProxy = true // satisfy the cloud-mode TLS posture check
 
 	if err := Save(original, path); err != nil {
 		t.Fatalf("save failed: %v", err)

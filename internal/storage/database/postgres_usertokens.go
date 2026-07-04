@@ -46,3 +46,22 @@ func (b *PostgresStorageBackend) SetUserEmailVerified(ctx context.Context, userI
 		`UPDATE users SET email_verified = TRUE WHERE id = $1`, userID)
 	return err
 }
+
+// InvalidateUserTokens stamps used_at on every unused, unexpired token of the
+// given purposes owned by userID. Called from the password-change and
+// password-reset handlers so all other outstanding reset / verify links for the
+// account become unredeemable immediately (defense against leaked-link account
+// takeover). Safe to call with zero purposes (no-op).
+func (b *PostgresStorageBackend) InvalidateUserTokens(ctx context.Context, userID string, purposes ...string) error {
+	if len(purposes) == 0 {
+		return nil
+	}
+	_, err := b.query(ctx).ExecContext(ctx,
+		`UPDATE user_tokens
+		    SET used_at = $1
+		  WHERE user_id = $2
+		    AND purpose = ANY($3)
+		    AND used_at IS NULL`,
+		time.Now().UTC(), userID, purposes)
+	return err
+}

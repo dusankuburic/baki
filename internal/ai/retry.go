@@ -101,9 +101,14 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 	return nil, lastErr
 }
 
-// Stream retries only when the underlying provider fails BEFORE emitting any
-// chunk. Once a chunk has been delivered to the caller, a partial stream cannot
-// be safely replayed, so the error is returned as-is.
+// Stream retries only when the stream fails before any content reaches the
+// caller. A provider can fail two ways: by returning an error, or by emitting
+// an error Chunk mid-SSE (e.g. Claude's `error` event) and returning nil. An
+// error chunk that arrives before any content is held back and converted into
+// a returned error so it retries like a pre-stream failure. Once content
+// (text, done, or tool calls — metadata-only chunks like TokensIn don't count)
+// has been delivered, a partial stream cannot be safely replayed, so errors
+// are passed through as-is.
 func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	var lastErr error
 	for attempt := range rp.maxAttempts {
@@ -112,12 +117,22 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 				return err
 			}
 		}
-		emitted := false
+		delivered := false
+		var heldErr error
 		err := rp.Provider.Stream(ctx, req, func(c Chunk) {
-			emitted = true
+			if c.Error != nil && !delivered {
+				heldErr = c.Error
+				return
+			}
+			if c.Text != "" || c.Done || len(c.ToolCalls) > 0 {
+				delivered = true
+			}
 			onChunk(c)
 		})
-		if err == nil || !isRetryable(err) || emitted {
+		if err == nil {
+			err = heldErr
+		}
+		if err == nil || !isRetryable(err) || delivered {
 			return err
 		}
 		lastErr = err

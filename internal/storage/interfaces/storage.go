@@ -65,6 +65,30 @@ type RefreshTokenInfo struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// UserDataExport is the data-subject access / portability bundle returned by
+// ExportUserData. It contains only the user's own data; collaborator-authored
+// content on shared flows is out of scope.
+type UserDataExport struct {
+	User        *User           `json:"user"`
+	Flows       []*FlowDocument `json:"flows"`
+	Settings    *AppSettings    `json:"settings"`
+	AuditEvents []*AuditEvent   `json:"auditEvents"`
+	APITokens   []*APIToken     `json:"apiTokens"`
+	ExportedAt  time.Time       `json:"exportedAt"`
+}
+
+// PurgeResult reports how many stale rows a PurgeExpiredData run removed.
+type PurgeResult struct {
+	RefreshTokens       int `json:"refreshTokens"`
+	APITokens           int `json:"apiTokens"`
+	UserTokens          int `json:"userTokens"`
+	OrgInvites          int `json:"orgInvites"`
+	AuditEvents         int `json:"auditEvents"`
+	FlowAnalysisHistory int `json:"flowAnalysisHistory"`
+	UsageMetrics        int `json:"usageMetrics"`
+	TokenBlacklist      int `json:"tokenBlacklist"`
+}
+
 // StorageBackend defines the interface for storage implementations
 // This allows abstraction between local file system and cloud database storage
 type StorageBackend interface {
@@ -120,6 +144,24 @@ type StorageBackend interface {
 	// UpdateUserProfile updates the user's display name and avatar URL. Either
 	// value may be empty (to clear it).
 	UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error
+
+	// DeleteUser performs GDPR-style account erasure for the given user. It
+	// deletes the user's owned flows (cascading versions/analysis/triage) and
+	// all per-user rows (tokens, settings, usage, org memberships, invites for
+	// their email), and anonymizes PII they authored on shared rows
+	// (audit_events email/IP, flow_versions.created_by, finding_status
+	// .updated_by) so the security/forensic trail is retained without personal
+	// data. Idempotent: a missing user is not an error.
+	DeleteUser(ctx context.Context, userID string) error
+	// ExportUserData assembles a data-subject access / portability export for
+	// the user (profile, owned flows, settings, audit history). Returns
+	// ErrNotFound if the user does not exist.
+	ExportUserData(ctx context.Context, userID string) (*UserDataExport, error)
+	// PurgeExpiredData removes stale rows whose retention has elapsed: expired
+	// refresh/api/user tokens, expired or accepted org invites, and audit_events
+	// older than auditRetentionDays (0 = keep audit history indefinitely). It
+	// returns counts of what was removed. Intended for a periodic background job.
+	PurgeExpiredData(ctx context.Context, auditRetentionDays int) (*PurgeResult, error)
 
 	// Organisation operations
 	SaveOrg(ctx context.Context, org *Organisation) error
@@ -213,6 +255,14 @@ type StorageBackend interface {
 	// returns ErrNotFound when no such token exists, so a token cannot be
 	// replayed.
 	ConsumeUserToken(ctx context.Context, purpose, tokenHash string) (userID string, err error)
+	// InvalidateUserTokens marks every unused, unexpired token of the given
+	// purposes for userID as used. Used when the user changes (or resets) their
+	// password so that all other outstanding password-reset / email-verify
+	// links for that account stop working immediately — otherwise an older
+	// reset link leaked to an attacker would still redeem after the user
+	// believes the account is recovered (account takeover). A no-op (nil error)
+	// when no matching rows exist.
+	InvalidateUserTokens(ctx context.Context, userID string, purposes ...string) error
 	// SetUserEmailVerified marks a user's email as verified.
 	SetUserEmailVerified(ctx context.Context, userID string) error
 }

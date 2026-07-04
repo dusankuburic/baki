@@ -60,6 +60,22 @@ func errStreamMalformed(provider string, n int) error {
 	return fmt.Errorf("%s stream had %d undecodable event(s) and no terminal marker", provider, n)
 }
 
+// classifyClaudeStreamError maps a mid-stream `error` event onto the shared
+// sentinel errors, mirroring how ClaudeProvider maps HTTP statuses on the
+// initial response (429 → ErrRateLimited, 5xx/overloaded → ErrProviderDown).
+// Without this the retry and circuit-breaker wrappers see only an opaque
+// error and treat an overloaded provider as a permanent, non-tripping failure.
+// Unknown types stay plain errors (permanent — surfaced, never retried).
+func classifyClaudeStreamError(errType, msg string) error {
+	switch errType {
+	case "rate_limit_error":
+		return fmt.Errorf("%w: claude stream error: %s", ErrRateLimited, msg)
+	case "overloaded_error", "api_error":
+		return fmt.Errorf("%w: claude stream error: %s", ErrProviderDown, msg)
+	}
+	return fmt.Errorf("claude stream error: %s", msg)
+}
+
 // Note on cancellation: every provider builds its request with
 // http.NewRequestWithContext, so cancelling the caller's context aborts the body
 // read and ends the scanner loop (surfacing via scanner.Err()). No explicit
@@ -183,6 +199,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 		case "error":
 			var parsed struct {
 				Error struct {
+					Type    string `json:"type"`
 					Message string `json:"message"`
 				} `json:"error"`
 			}
@@ -190,7 +207,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				parseErrors++
 				continue
 			}
-			onChunk(Chunk{Error: fmt.Errorf("claude stream error: %s", parsed.Error.Message)})
+			onChunk(Chunk{Error: classifyClaudeStreamError(parsed.Error.Type, parsed.Error.Message)})
 			return nil
 		}
 

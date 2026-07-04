@@ -7,11 +7,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/fx"
 
@@ -21,8 +22,10 @@ import (
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/di"
+	"pad-analyzer/internal/errreport"
 	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/scanner"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
@@ -58,12 +61,14 @@ func main() {
 		),
 		di.ServiceModule,
 		di.APIModule,
+		redisx.Module,
 		fx.Invoke(
 			initLogger,
 			initTelemetry,
 			initStorageSecrets,
 			initAuditPool,
 			initScanner,
+			initRetentionPurge,
 			startServer,
 		),
 	).Run()
@@ -115,11 +120,18 @@ func provideShutdownCh() chan struct{} {
 
 // provideNotifier builds the governance alert dispatcher from config. With no
 // channels configured it is a harmless no-op (Dispatcher.Enabled() == false).
-func provideNotifier(cfg *config.Config) *notify.Dispatcher {
-	return notify.New(notify.Config{
+// A non-HTTPS alert URL is a configuration error (governance payloads carry
+// internal flow details and must not be sent in plaintext) — fail startup so
+// the operator fixes the URL rather than silently leaking alerts.
+func provideNotifier(cfg *config.Config) (*notify.Dispatcher, error) {
+	d, err := notify.New(notify.Config{
 		WebhookURL: cfg.Governance.NotifyWebhookURL,
 		TeamsURL:   cfg.Governance.NotifyTeamsURL,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("notify: %w", err)
+	}
+	return d, nil
 }
 
 // provideScanner wires the periodic flow scanner. A zero/invalid interval or a
@@ -152,6 +164,71 @@ func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error { s.Start(); return nil },
 		OnStop:  func(context.Context) error { s.Stop(); return nil },
+	})
+}
+
+// parseGovernanceDuration parses an optional duration string, returning 0
+// (disabled) on empty/invalid with a stderr warning naming the env var.
+func parseGovernanceDuration(env, val string) time.Duration {
+	if val == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil || d <= 0 {
+		fmt.Fprintf(os.Stderr, "warning: invalid %s %q; disabled\n", env, val)
+		return 0
+	}
+	return d
+}
+
+// initRetentionPurge periodically purges expired tokens/invites and aged-out
+// audit rows (GDPR data-minimisation). Disabled when no interval is set or there
+// is no backend. An immediate sweep runs on start so a freshly-started instance
+// clears stale rows right away.
+func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
+	interval := parseGovernanceDuration("PAD_RETENTION_PURGE_INTERVAL", cfg.Governance.RetentionPurgeInterval)
+	if interval <= 0 || backend == nil {
+		return
+	}
+	stop := make(chan struct{})
+	sweep := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("retention purge panicked", "err", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		res, err := backend.PurgeExpiredData(ctx, cfg.Governance.AuditRetentionDays)
+		if err != nil {
+			logger.Warn("retention purge failed", "err", err)
+			return
+		}
+		logger.Info("retention purge complete",
+			"refresh_tokens", res.RefreshTokens, "api_tokens", res.APITokens,
+			"user_tokens", res.UserTokens, "org_invites", res.OrgInvites,
+			"audit_events", res.AuditEvents,
+			"flow_analysis_history", res.FlowAnalysisHistory,
+			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist)
+	}
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			go sweep()
+			go func() {
+				t := time.NewTicker(interval)
+				defer t.Stop()
+				for {
+					select {
+					case <-stop:
+						return
+					case <-t.C:
+						sweep()
+					}
+				}
+			}()
+			return nil
+		},
+		OnStop: func(context.Context) error { close(stop); return nil },
 	})
 }
 
@@ -209,6 +286,12 @@ func initLogger(cfg *config.Config) {
 		configDir, _ := storage.ConfigDir()
 		_ = logger.Init(configDir, false)
 	}
+	// Forward recovered background-goroutine panics to the error-reporting
+	// funnel so they surface in the exception metrics / sink alongside HTTP
+	// panics, not only in the log.
+	logger.SetPanicHook(func(operation string, r any, stack []byte) {
+		errreport.CapturePanic(context.Background(), operation, r, stack, errreport.Attrs{"operation": operation})
+	})
 }
 
 func initTelemetry(lc fx.Lifecycle, cfg *config.Config) {
@@ -220,6 +303,13 @@ func initTelemetry(lc fx.Lifecycle, cfg *config.Config) {
 				fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", otelErr)
 			} else {
 				shutdown = otelShutdown
+				// Forward captured panics/errors to the OTLP pipeline as
+				// exception events (App Insights, etc.). Only when an exporter
+				// is configured — otherwise errreport stays metrics-only.
+				if telemetry.TracingEnabled(cfg.Runtime.OTLPEndpoint) {
+					errreport.Register(telemetry.NewOTelSink())
+					logger.Info("errreport: OpenTelemetry exception sink registered")
+				}
 			}
 			return nil
 		},
@@ -244,6 +334,17 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 
 	// Build pool config, applying operator overrides from PAD_DB_* env vars.
 	dbCfg := storagedb.DefaultConfig(cfg.Storage.DatabaseURL)
+	// Resolve the TLS requirement: explicit PAD_DB_REQUIRE_SSL wins; otherwise
+	// cloud mode requires TLS by default (credentials over plaintext is a
+	// security bug), local mode leaves it optional for bundled/dev Postgres.
+	switch strings.ToLower(cfg.Storage.DBRequireSSL) {
+	case "true", "1", "yes":
+		dbCfg.RequireSSL = true
+	case "false", "0", "no":
+		dbCfg.RequireSSL = false
+	default:
+		dbCfg.RequireSSL = cfg.Mode == config.ModeCloud
+	}
 	if cfg.Storage.DBMaxOpenConns > 0 {
 		dbCfg.MaxOpenConns = cfg.Storage.DBMaxOpenConns
 	}
@@ -335,31 +436,43 @@ func initAuditPool(lc fx.Lifecycle, backend storageif.StorageBackend) {
 	})
 }
 
-func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService) {
+func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService, redisClient *redis.Client) {
 	var routerWithLimits http.Handler = router
 	var rateLimiters []*apimw.RateLimiter
 
 	if cfg.Mode == config.ModeCloud {
-		generalRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst, cfg.Server.TrustedProxies).SetGroup("general")
-		authRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitAuthRPS, cfg.Runtime.RateLimitAuthBurst, cfg.Server.TrustedProxies).SetGroup("auth")
-		analysisRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst, cfg.Server.TrustedProxies).SetGroup("analysis")
-		chatRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst, cfg.Server.TrustedProxies).SetGroup("chat")
-		uploadRl := apimw.NewRateLimiter(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst, cfg.Server.TrustedProxies).SetGroup("upload")
+		// When the Redis backplane is configured, build the limiters on the
+		// shared store so the effective limit does not scale with replica count
+		// (#1). Otherwise each limiter is in-process (correct for single-replica).
+		newRL := func(rps, burst float64) *apimw.RateLimiter {
+			return apimw.NewRateLimiterRedis(redisClient, rps, burst, cfg.Server.TrustedProxies)
+		}
+		generalRl := newRL(cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst).SetGroup("general")
+		authRl := newRL(cfg.Runtime.RateLimitAuthRPS, cfg.Runtime.RateLimitAuthBurst).SetGroup("auth")
+		analysisRl := newRL(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst).SetGroup("analysis")
+		chatRl := newRL(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst).SetGroup("chat")
+		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup("upload")
+		if redisClient != nil {
+			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL != "")
+		}
 		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl)
 
+		// rateLimitersByGroup maps the rateLimitGroup classifier to its limiter
+		// so the per-request dispatch is a single lookup.
+		rateLimitersByGroup := map[string]*apimw.RateLimiter{
+			"general":  generalRl,
+			"auth":     authRl,
+			"analysis": analysisRl,
+			"chat":     chatRl,
+			"upload":   uploadRl,
+		}
+
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
-			if path == "/api/auth/login" || path == "/api/auth/refresh" || path == "/api/auth/register" || path == "/api/auth/change-password" {
-				authRl.Limit(router).ServeHTTP(w, r)
-			} else if r.Method == "POST" && strings.HasPrefix(path, "/api/analysis/") {
-				analysisRl.Limit(router).ServeHTTP(w, r)
-			} else if r.Method == "POST" && path == "/api/chat/stream" {
-				chatRl.Limit(router).ServeHTTP(w, r)
-			} else if r.Method == "POST" && path == "/api/flow/upload" {
-				uploadRl.Limit(router).ServeHTTP(w, r)
-			} else {
-				generalRl.Limit(router).ServeHTTP(w, r)
+			rl, ok := rateLimitersByGroup[rateLimitGroup(r.Method, r.URL.Path)]
+			if !ok {
+				rl = generalRl
 			}
+			rl.Limit(router).ServeHTTP(w, r)
 		})
 	}
 
@@ -371,7 +484,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 	handler := otelhttp.NewHandler(
 		apimw.Recovery(
 			apimw.RequestTimeout(timeoutDur)(
-				middleware.Compress(5)(
+				apimw.Compress(
 					apimw.AccessLog(cfg.Server.TrustedProxies)(apimw.Metrics(routerWithLimits)),
 				),
 			),
@@ -390,16 +503,28 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			os.Exit(1)
 		}
 	} else {
-		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		// Local mode binds loopback only. The port is normally 0 (ephemeral,
+		// reported to the Tauri shell via the CONFIG line below), but an
+		// explicitly configured port (PAD_PORT / config file) is honoured so
+		// browser-based local development can use a stable address.
+		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to listen: %v\n", err)
 			os.Exit(1)
 		}
 
 		port := listener.Addr().(*net.TCPAddr).Port
+		tokenPath, err := writeSessionSecret(cfg.Auth.Secret)
+		if err != nil {
+			// Writing the secret to a 0600 file is how the Tauri shell receives
+			// it without the signing key landing in stdout/logs. If that fails
+			// we cannot safely hand off the credential, so fail closed.
+			fmt.Fprintf(os.Stderr, "failed to persist session secret: %v\n", err)
+			os.Exit(1)
+		}
 		startupInfo := map[string]any{
-			"port":  port,
-			"token": cfg.Auth.Secret,
+			"port":      port,
+			"tokenPath": tokenPath,
 		}
 		infoJSON, _ := json.Marshal(startupInfo)
 		fmt.Printf("CONFIG:%s\n", string(infoJSON))
@@ -465,4 +590,88 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			return server.Shutdown(shutdownCtx)
 		},
 	})
+}
+
+// Rate-limit group labels returned by rateLimitGroup. Kept as unexported consts
+// (not string-typed enums) because they double as the limiter's group name in
+// metrics/logs.
+const (
+	rlGroupAuth     = "auth"
+	rlGroupAnalysis = "analysis"
+	rlGroupChat     = "chat"
+	rlGroupUpload   = "upload"
+	rlGroupGeneral  = "general"
+)
+
+// authRateLimitPaths is the set of auth-shaped endpoints that share the tighter
+// auth rate-limit bucket. It deliberately includes the password-recovery
+// endpoints (forgot-password / reset-password): those send email and run bcrypt
+// on the reset path, so leaving them on the looser "general" bucket enabled
+// email-flooding / SMTP cost amplification by attackers rotating source IPs.
+var authRateLimitPaths = map[string]struct{}{
+	"/api/auth/login":           {},
+	"/api/auth/refresh":         {},
+	"/api/auth/register":        {},
+	"/api/auth/change-password": {},
+	"/api/auth/forgot-password": {},
+	"/api/auth/reset-password":  {},
+	// verify-email and sso/exchange are unauthenticated, token-consuming
+	// credential endpoints; keep them on the tighter auth bucket rather than the
+	// looser general one so they can't be flooded by rotating source IPs.
+	"/api/auth/verify-email": {},
+	"/api/auth/sso/exchange": {},
+}
+
+// rateLimitGroup classifies a request into its rate-limit group. It is a pure
+// function (no I/O) so the routing policy can be unit-tested independently of
+// the fx wiring. Order matters only in that the explicit checks take precedence
+// over the general fallback.
+func rateLimitGroup(method, path string) string {
+	if _, ok := authRateLimitPaths[path]; ok {
+		return rlGroupAuth
+	}
+	if method == "POST" {
+		if strings.HasPrefix(path, "/api/analysis/") {
+			return rlGroupAnalysis
+		}
+		if path == "/api/chat/stream" {
+			return rlGroupChat
+		}
+		if path == "/api/flow/upload" {
+			return rlGroupUpload
+		}
+	}
+	return rlGroupGeneral
+}
+
+// writeSessionSecret persists the auto-generated JWT signing secret to a 0600
+// file under the app config dir and returns its path. The Tauri shell reads the
+// secret back from this path instead of receiving it on the backend's stdout —
+// emitting the signing key on stdout meant anyone with access to the backend
+// process's stdout (container logs, systemd journal, the parent shell's
+// scrollback, or the Tauri app's own stdout mirror log) could forge arbitrary
+// JWTs. Writing to a permission-restricted file confines the secret to the
+// filesystem ACL instead of the process's log streams.
+//
+// Used only in local/desktop mode (cloud mode requires an explicit
+// PAD_AUTH_SECRET and never reaches the stdout CONFIG handshake).
+func writeSessionSecret(secret string) (string, error) {
+	configDir, err := storage.ConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve config dir: %w", err)
+	}
+	path := filepath.Join(configDir, "session.key")
+	// Write via a temp file + rename so a crash mid-write can't leave a partial
+	// secret that the shell would fail to parse. O_WRONLY|O_CREATE|O_TRUNC and
+	// 0600 keep the file readable only by the owning user.
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		return "", fmt.Errorf("write session key: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		// Chmod is belt-and-suspenders: WriteFile already applies the mask, but
+		// an existing file's mode is only updated on rewrite if the umask
+		// allows it — force it explicitly so a pre-existing 0644 file is fixed.
+		return "", fmt.Errorf("chmod session key: %w", err)
+	}
+	return path, nil
 }

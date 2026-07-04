@@ -28,11 +28,20 @@ type FakeBackend struct {
 	Baselines       map[string]*interfaces.FlowBaseline
 	// APITokens is keyed by token ID. Lazily initialized.
 	APITokens map[string]*interfaces.APIToken
+	// Users backs DeleteUser/ExportUserData for account-lifecycle tests. Lazily
+	// initialized. (The existing LoadUserByID/CreateUser stubs are intentionally
+	// left untouched to avoid changing other suites' behaviour.)
+	Users        map[string]*interfaces.User
+	DeletedUsers []string
 	// UserTokens is keyed by token hash (password reset / email verify). Lazily
 	// initialized.
 	UserTokens map[string]*interfaces.UserToken
 	// FlowHealth lets tests seed persisted per-flow health (flowID -> snapshot).
 	FlowHealth map[string]*interfaces.HealthSnapshot
+	// DailyUsage / UsageErr let tests drive GetDailyUsage (e.g. to verify the
+	// AI budget check fails closed on a store error).
+	DailyUsage float64
+	UsageErr   error
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -181,6 +190,34 @@ func (m *FakeBackend) ListAdmins(_ context.Context) ([]*interfaces.User, error) 
 func (m *FakeBackend) UpdateUserRole(_ context.Context, _ string, _ auth.Role) error {
 	return nil
 }
+
+func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
+	if m.Users == nil {
+		m.Users = make(map[string]*interfaces.User)
+	}
+	if _, ok := m.Users[id]; !ok {
+		return nil // idempotent, matching the postgres implementation
+	}
+	delete(m.Users, id)
+	m.DeletedUsers = append(m.DeletedUsers, id)
+	return nil
+}
+
+func (m *FakeBackend) ExportUserData(_ context.Context, id string) (*interfaces.UserDataExport, error) {
+	if m.Users == nil {
+		return nil, interfaces.ErrNotFound
+	}
+	u, ok := m.Users[id]
+	if !ok {
+		return nil, interfaces.ErrNotFound
+	}
+	cp := *u
+	return &interfaces.UserDataExport{User: &cp, ExportedAt: time.Now().UTC()}, nil
+}
+
+func (m *FakeBackend) PurgeExpiredData(_ context.Context, _ int) (*interfaces.PurgeResult, error) {
+	return &interfaces.PurgeResult{}, nil
+}
 func (m *FakeBackend) UpdateUserPassword(_ context.Context, _, _ string) error { return nil }
 func (m *FakeBackend) UpdateUserProfile(_ context.Context, _, _, _ string) error {
 	return nil
@@ -216,7 +253,7 @@ func (m *FakeBackend) SaveUsageMetric(_ context.Context, _ *interfaces.UsageMetr
 	return nil
 }
 func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, error) {
-	return 0, nil
+	return m.DailyUsage, m.UsageErr
 }
 
 // ---- Dashboard ----
@@ -401,6 +438,28 @@ func (m *FakeBackend) ConsumeUserToken(_ context.Context, purpose, tokenHash str
 }
 
 func (m *FakeBackend) SetUserEmailVerified(_ context.Context, _ string) error { return nil }
+
+// InvalidateUserTokens mirrors the real backend: removes every unused token of
+// the given purposes for userID. Stored in memory on the fake, so callers can
+// assert post-state directly.
+func (m *FakeBackend) InvalidateUserTokens(_ context.Context, userID string, purposes ...string) error {
+	if len(purposes) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(purposes))
+	for _, p := range purposes {
+		wanted[p] = struct{}{}
+	}
+	for hash, t := range m.UserTokens {
+		if t.UserID != userID {
+			continue
+		}
+		if _, ok := wanted[t.Purpose]; ok {
+			delete(m.UserTokens, hash)
+		}
+	}
+	return nil
+}
 
 // ---- Audit log ----
 func (m *FakeBackend) SaveAuditEvent(_ context.Context, _ *interfaces.AuditEvent) error {

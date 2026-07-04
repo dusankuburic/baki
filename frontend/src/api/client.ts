@@ -98,29 +98,67 @@ async function ensureFreshToken(path: string): Promise<void> {
     }
 }
 
-async function doFetch(path: string, body: unknown, method: string): Promise<Response> {
+// refreshOnUnauthorized runs the shared refresh-and-invalidate sequence used by
+// every 401 path: dedupe concurrent refreshes via refreshInFlight (see comment
+// above), then invalidate the cached backend config so the next request picks
+// up the rotated token. Callers keep their own status/refreshCallback guard
+// and try/catch around this, since what happens after a successful refresh
+// differs (inline retry vs. reconnect-and-backoff).
+async function refreshOnUnauthorized(): Promise<void> {
+    if (!refreshInFlight) {
+        refreshInFlight = refreshCallback!().finally(() => { refreshInFlight = null })
+    }
+    await refreshInFlight
+    invalidateConfigCache()
+}
+
+// Default timeout for a normal request/requestBlob call. Everything under
+// request()/requestBlob() is a metadata call against our own backend (the
+// actual AI response streams separately over SSE via connectEvents), so this
+// only needs to cover ordinary DB-backed round trips — a hung connection
+// shouldn't be able to block the UI indefinitely. A handful of genuinely slow
+// endpoints (bulk flow upload/folder-load, folder-wide batch analysis) pass an
+// explicit longer override at their call site.
+const DEFAULT_TIMEOUT_MS = 30_000
+// requestBlob is used for file downloads (e.g. the account data-export bundle),
+// which can legitimately take longer than a typical JSON round trip.
+const DEFAULT_BLOB_TIMEOUT_MS = 90_000
+
+async function doFetch(path: string, body: unknown, method: string, timeoutMs: number): Promise<Response> {
     const cfg = await getBackendConfig()
     const token = sessionToken || cfg.token;
-    return fetch(`${cfg.apiUrl}${path}`, {
-        method,
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+        return await fetch(`${cfg.apiUrl}${path}`, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+            },
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+            signal: controller.signal,
+        })
+    } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+            throw new Error(`Request timed out: ${path}`, { cause: err })
+        }
+        throw err
+    } finally {
+        clearTimeout(timer)
+    }
 }
 
 // Auth endpoints must never trigger the 401→refresh retry: a 401 from the
 // refresh endpoint would recursively call refresh again, producing a storm.
 const AUTH_PATHS = ['/api/auth/refresh', '/api/auth/login', '/api/auth/register']
 
-export async function request<T>(path: string, body?: unknown, method: string = 'POST'): Promise<T> {
+export async function request<T>(path: string, body?: unknown, method: string = 'POST', timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<T> {
     // Proactively refresh an already-expired access token so we don't make a
     // doomed first request (and log a 401) before the retry below.
     await ensureFreshToken(path)
 
-    let response = await doFetch(path, body, method)
+    let response = await doFetch(path, body, method, timeoutMs)
 
     // Attempt one token refresh on 401.
     // refreshInFlight deduplicates concurrent 401s: without it, two simultaneous
@@ -128,12 +166,8 @@ export async function request<T>(path: string, body?: unknown, method: string = 
     // refresh token; the second call's token is already rotated → 401 → logout.
     if (response.status === 401 && refreshCallback && !AUTH_PATHS.includes(path)) {
         try {
-            if (!refreshInFlight) {
-                refreshInFlight = refreshCallback().finally(() => { refreshInFlight = null })
-            }
-            await refreshInFlight
-            invalidateConfigCache()   // force re-read of new token
-            response = await doFetch(path, body, method)
+            await refreshOnUnauthorized()
+            response = await doFetch(path, body, method, timeoutMs)
         } catch {
             // refresh failed — fall through to throw below
         }
@@ -157,6 +191,27 @@ export async function request<T>(path: string, body?: unknown, method: string = 
     return response.json().catch(() => {
         throw new Error('Server returned a non-JSON response')
     }) as Promise<T>
+}
+
+// requestBlob is request() for binary/file downloads (e.g. the data-export
+// bundle). It mirrors request()'s proactive-refresh + 401-retry behaviour but
+// returns the response body as a Blob instead of parsing JSON.
+export async function requestBlob(path: string, method: string = 'GET', timeoutMs: number = DEFAULT_BLOB_TIMEOUT_MS): Promise<Blob> {
+    await ensureFreshToken(path)
+    let response = await doFetch(path, undefined, method, timeoutMs)
+    if (response.status === 401 && refreshCallback && !AUTH_PATHS.includes(path)) {
+        try {
+            await refreshOnUnauthorized()
+            response = await doFetch(path, undefined, method, timeoutMs)
+        } catch {
+            // refresh failed — fall through to throw below
+        }
+    }
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Request failed' }))
+        throw new Error((error as { error?: string }).error || 'Request failed')
+    }
+    return response.blob()
 }
 
 /**
@@ -241,8 +296,7 @@ async function connectEvents(): Promise<void> {
         if (response.status === 401 && refreshCallback) {
             // Token expired mid-session: refresh once, then let the backoff retry.
             try {
-                await refreshCallback()
-                invalidateConfigCache()
+                await refreshOnUnauthorized()
             } catch {
                 // refresh failed — fall through to reconnect/backoff
             }

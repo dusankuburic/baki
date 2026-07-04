@@ -3,6 +3,10 @@ import type {FlowDiff} from '@/types'
 import {createAdapter} from '@/platform/adapters'
 import {isTauri} from '@/platform/guards'
 
+// Rendering + base64-encoding a large flow's PDF/Markdown report can take
+// longer than the default request timeout.
+const EXPORT_TIMEOUT_MS = 90_000
+
 export const exportApi = {
   exportPDF: async (): Promise<string> => {
     let path = ''
@@ -14,7 +18,7 @@ export const exportApi = {
       path = p
     }
 
-    const res: {data: string} = await request('/api/export/pdf', {path})
+    const res: {data: string} = await request('/api/export/pdf', {path}, 'POST', EXPORT_TIMEOUT_MS)
     
     if (!isTauri() && res.data) {
       const link = document.createElement('a')
@@ -37,7 +41,7 @@ export const exportApi = {
       path = p
     }
 
-    const res: {data: string} = await request('/api/export/markdown', {path})
+    const res: {data: string} = await request('/api/export/markdown', {path}, 'POST', EXPORT_TIMEOUT_MS)
     
     if (!isTauri() && res.data) {
       const link = document.createElement('a')

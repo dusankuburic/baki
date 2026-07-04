@@ -33,7 +33,7 @@ func TestRole_IsValid(t *testing.T) {
 func TestManager_IssueAndVerifyWSTicket(t *testing.T) {
 	mgr := newTestManager()
 
-	ticket, exp, err := mgr.IssueWSTicket("user-1", "alice@example.com", RoleMember)
+	ticket, exp, err := mgr.IssueWSTicket("user-1", "alice@example.com", RoleMember, "src-jti-1", time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatalf("IssueWSTicket: %v", err)
 	}
@@ -54,6 +54,15 @@ func TestManager_IssueAndVerifyWSTicket(t *testing.T) {
 	if claims.ID == "" {
 		t.Error("ticket must carry a jti for single-use tracking")
 	}
+	// The source access-token JTI/expiry must round-trip so the WebSocket
+	// handler can re-check the access token's revocation (logout) and enforce
+	// its expiry on the live socket.
+	if claims.SrcJTI != "src-jti-1" {
+		t.Errorf("SrcJTI round-trip: got %q, want %q", claims.SrcJTI, "src-jti-1")
+	}
+	if claims.SrcExp == nil || claims.SrcExp.IsZero() {
+		t.Error("SrcExp must be populated when an access expiry is provided")
+	}
 }
 
 func TestManager_AccessTokenIsNotAValidWSTicket(t *testing.T) {
@@ -67,7 +76,7 @@ func TestManager_AccessTokenIsNotAValidWSTicket(t *testing.T) {
 
 func TestManager_WSTicketIsNotAValidAccessToken(t *testing.T) {
 	mgr := newTestManager()
-	ticket, _, _ := mgr.IssueWSTicket("u1", "a@b.com", RoleMember)
+	ticket, _, _ := mgr.IssueWSTicket("u1", "a@b.com", RoleMember, "", time.Time{})
 
 	if _, err := mgr.Verify(ticket); err == nil {
 		t.Fatal("a WS ticket must not verify as an access token (audience mismatch)")
@@ -78,7 +87,7 @@ func TestManager_WSTicketWrongSecretRejected(t *testing.T) {
 	mgr1 := newTestManager()
 	mgr2 := NewManagerWithTTL("a-different-secret-value", 2*time.Second, 5*time.Second, "test-issuer", "test-audience", nil)
 
-	ticket, _, _ := mgr1.IssueWSTicket("u1", "a@b.com", RoleViewer)
+	ticket, _, _ := mgr1.IssueWSTicket("u1", "a@b.com", RoleViewer, "", time.Time{})
 	if _, err := mgr2.VerifyWSTicket(ticket); err == nil {
 		t.Fatal("ticket signed with a different secret must be rejected")
 	}
@@ -265,20 +274,37 @@ func TestMiddleware_InvalidToken_Returns401(t *testing.T) {
 	}
 }
 
-func TestMiddleware_TokenInQuery_IsAccepted(t *testing.T) {
+func TestMiddleware_TokenInQuery_AcceptedOnlyOnSSEPath(t *testing.T) {
 	mgr := newTestManager()
 	pair, _ := mgr.Issue("u1", "a@b.com", RoleViewer)
 
-	called := false
-	handler := Middleware(mgr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-	}))
+	// On the SSE endpoint, the query fallback must still work (EventSource
+	// cannot set headers), so the handler is called.
+	t.Run("sse path accepts query token", func(t *testing.T) {
+		called := false
+		handler := Middleware(mgr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/api/events?token="+pair.AccessToken, nil)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		if !called {
+			t.Error("expected handler to be called with token in query on /api/events")
+		}
+	})
 
-	req := httptest.NewRequest(http.MethodGet, "/?token="+pair.AccessToken, nil)
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-	if !called {
-		t.Error("expected handler to be called with token in query")
-	}
+	// On every other route the query fallback is refused to keep access JWTs
+	// out of proxy/browser logs — the handler must NOT be called.
+	t.Run("non-sse path rejects query token", func(t *testing.T) {
+		called := false
+		handler := Middleware(mgr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/api/flow/upload?token="+pair.AccessToken, nil)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		if called {
+			t.Error("handler must NOT be called when token is only in query on a non-SSE path")
+		}
+	})
 }
 
 // ---- StaticTokenMiddleware (legacy) ----

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +36,60 @@ func cbCall(t *testing.T, cb *CircuitBreakerProvider) error {
 	t.Helper()
 	_, err := cb.Chat(context.Background(), Request{})
 	return err
+}
+
+// cbStreamStub replays a fixed chunk sequence and returns nil, mimicking the
+// SSE parsers' behavior of delivering upstream errors as Chunk{Error}.
+type cbStreamStub struct {
+	Provider
+	chunks []Chunk
+}
+
+func (s *cbStreamStub) Stream(_ context.Context, _ Request, onChunk func(Chunk)) error {
+	for _, c := range s.chunks {
+		onChunk(c)
+	}
+	return nil
+}
+
+func (s *cbStreamStub) ID() string { return "stream-stub" }
+
+// TestCircuitBreaker_StreamErrorChunkTripsCircuit: a stream that ends with a
+// retryable error chunk (and a nil return) must count as a failure — before
+// the fix it was recorded as a success, so a provider that always streamed an
+// error event could never open the circuit.
+func TestCircuitBreaker_StreamErrorChunkTripsCircuit(t *testing.T) {
+	resetBreakerRegistry()
+	stub := &cbStreamStub{chunks: []Chunk{
+		{Text: "partial"},
+		{Error: fmt.Errorf("%w: overloaded", ErrProviderDown)},
+	}}
+	cb := NewCircuitBreakerProvider(stub)
+
+	for range cbFailureThreshold {
+		if err := cb.Stream(context.Background(), Request{}, func(Chunk) {}); err != nil {
+			t.Fatalf("Stream returned %v, want nil (the error travels as a chunk)", err)
+		}
+	}
+	err := cb.Stream(context.Background(), Request{}, func(Chunk) {})
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected ErrCircuitOpen after %d error-chunk streams, got %v", cbFailureThreshold, err)
+	}
+}
+
+// TestCircuitBreaker_StreamPermanentErrorChunkDoesNotTrip mirrors record()'s
+// closed-circuit rule: non-retryable errors (bad request, cancel) must not
+// open the circuit for everyone.
+func TestCircuitBreaker_StreamPermanentErrorChunkDoesNotTrip(t *testing.T) {
+	resetBreakerRegistry()
+	stub := &cbStreamStub{chunks: []Chunk{{Error: errors.New("invalid request")}}}
+	cb := NewCircuitBreakerProvider(stub)
+
+	for range cbFailureThreshold + 1 {
+		if err := cb.Stream(context.Background(), Request{}, func(Chunk) {}); err != nil {
+			t.Fatalf("expected circuit to stay closed on permanent error chunks, got %v", err)
+		}
+	}
 }
 
 // TestCircuitBreaker_StaysClosedBelowThreshold verifies that fewer than

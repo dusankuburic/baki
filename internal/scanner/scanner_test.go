@@ -40,6 +40,18 @@ func newCapture(t *testing.T) *capture {
 	return c
 }
 
+// mustNotifier builds a dispatcher for the (localhost httptest) webhook URL.
+// notify.New now returns an error to reject plaintext remote URLs; test URLs
+// are always valid http://127.0.0.1 so the error can't fire here.
+func mustNotifier(t *testing.T, url string) *notify.Dispatcher {
+	t.Helper()
+	d, err := notify.New(notify.Config{WebhookURL: url})
+	if err != nil {
+		t.Fatalf("notify.New: %v", err)
+	}
+	return d
+}
+
 func (c *capture) all() []notify.Event {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -93,7 +105,7 @@ func TestScanOnce_DriftAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), notify.New(notify.Config{WebhookURL: cap.srv.URL}), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -113,7 +125,7 @@ func TestScanOnce_NoBaselineNoAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), notify.New(notify.Config{WebhookURL: cap.srv.URL}), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -130,7 +142,7 @@ func TestScanOnce_HealthRegression(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), notify.New(notify.Config{WebhookURL: cap.srv.URL}), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -151,7 +163,7 @@ func TestScanOnce_NoRegressionWhenHealthImproves(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), notify.New(notify.Config{WebhookURL: cap.srv.URL}), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -170,7 +182,7 @@ func TestScanOnce_DedupsRepeatAlerts(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), notify.New(notify.Config{WebhookURL: cap.srv.URL}), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
 
 	s.ScanOnce(context.Background())
 	s.ScanOnce(context.Background()) // identical state — must not re-alert

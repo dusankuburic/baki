@@ -11,10 +11,18 @@ import (
 )
 
 // Claims are the custom JWT claims stored in every access token.
+//
+// SrcJTI / SrcExp are ONLY populated on WebSocket connect tickets: they carry
+// the JTI and expiry of the ACCESS token that authorized the ticket-issuance
+// request, so the WebSocket handler can re-check the access token's revocation
+// (logout / explicit revoke) and close the connection when the access token
+// expires. They are omitted (omitempty) on ordinary access tokens.
 type Claims struct {
-	UserID string `json:"uid"`
-	Email  string `json:"email"`
-	Role   Role   `json:"role"`
+	UserID string           `json:"uid"`
+	Email  string           `json:"email"`
+	Role   Role             `json:"role"`
+	SrcJTI string           `json:"src_jti,omitempty"`
+	SrcExp *jwt.NumericDate `json:"src_exp,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -150,22 +158,30 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 // IssueWSTicket creates a short-lived, single-use ticket the client exchanges
 // for a WebSocket connection. It keeps the long-lived access token out of the
 // WS URL (which is otherwise recorded in proxy/server logs and browser history).
-// Returns the signed ticket and its expiry.
-func (m *Manager) IssueWSTicket(userID, email string, role Role) (string, time.Time, error) {
+//
+// accessJTI / accessExp are the JTI and expiry of the access token that
+// authorized this request; they are embedded in the ticket so the WebSocket
+// handler can re-check the access token's revocation (logout) and enforce its
+// expiry on the live socket. Returns the signed ticket and its expiry.
+func (m *Manager) IssueWSTicket(userID, email string, role Role, accessJTI string, accessExp time.Time) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(wsTicketTTL)
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
 		Role:   role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ID:        uuid.NewString(),
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			Subject:   userID,
-			Issuer:    m.issuer,
-			Audience:  jwt.ClaimStrings{wsTicketAudience},
-		},
+		SrcJTI: accessJTI,
+	}
+	if !accessExp.IsZero() {
+		claims.SrcExp = jwt.NewNumericDate(accessExp)
+	}
+	claims.RegisteredClaims = jwt.RegisteredClaims{
+		ID:        uuid.NewString(),
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(expiresAt),
+		Subject:   userID,
+		Issuer:    m.issuer,
+		Audience:  jwt.ClaimStrings{wsTicketAudience},
 	}
 	ticket, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
 	if err != nil {

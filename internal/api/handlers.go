@@ -46,6 +46,16 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 
 	if isFallback || strings.HasSuffix(path, "/index.html") {
 		w.Header().Set("Cache-Control", "no-cache")
+		// Content-Security-Policy for the SPA shell.
+		//   - script-src: the inline theme-bootstrap script in index.html is
+		//     hash-pinned (no 'unsafe-inline'); bundled scripts come from 'self'.
+		//   - style-src: 'unsafe-inline' is retained because the SPA and its
+		//     third-party components (graph/toast/editor libs) inject <style>
+		//     at runtime. Removing it without a per-request nonce scheme breaks
+		//     the UI in ways unit tests can't detect, so it is a deliberate
+		//     trade-off documented here rather than an oversight.
+		//   - object-src 'none': there are no <object>/<embed> payloads, so
+		//     legacy plugin content is blocked outright.
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
 				"script-src 'self' 'sha256-ukxiLLS3A6HuiM7piLMSGXuqzQQJAY0uuePIfYP+vdA='; "+
@@ -53,6 +63,7 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 				"img-src 'self' data:; "+
 				"font-src 'self'; "+
 				"connect-src 'self' ws: wss:; "+
+				"object-src 'none'; "+
 				"frame-ancestors 'none'; "+
 				"base-uri 'none'; "+
 				"form-action 'self'")

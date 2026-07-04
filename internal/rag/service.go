@@ -18,6 +18,18 @@ type SettingsProvider interface {
 	Get() *models.AppSettings
 }
 
+// maxKnowledgeChunks bounds the number of embedding calls a single document can
+// fan out into, so a large upload can't spike cost or trip provider rate limits.
+const maxKnowledgeChunks = 500
+
+// maxQueryRunes caps the chat query sent to the embeddings API. The request
+// body limit alone (10 MiB) would otherwise allow a ~2.5M-token embedding
+// request — far above any provider's per-request cap and billed per token, so a
+// simple script cycling chat messages could run up a large bill and trip rate
+// limits that degrade chat for everyone. 4000 runes is well above any realistic
+// natural-language question yet cheap to embed.
+const maxQueryRunes = 4000
+
 type KnowledgeService struct {
 	store    interfaces.StorageBackend
 	factory  *ai.ProviderFactory
@@ -63,6 +75,9 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	}
 
 	chunks := chunkText(content, 1000) // ~1000 runes per chunk
+	if len(chunks) > maxKnowledgeChunks {
+		return fmt.Errorf("document too large: %d chunks exceeds limit of %d", len(chunks), maxKnowledgeChunks)
+	}
 
 	embeddings, err := provider.Embed(ctx, chunks)
 	if err != nil {
@@ -103,6 +118,13 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	provider, err := s.embedder(scope)
 	if err != nil {
 		return "", err
+	}
+
+	// Truncate the query before embedding: an oversized message (up to the 10
+	// MiB body limit) would otherwise become a multi-million-token embedding
+	// request — billed per token and above every provider's per-request cap.
+	if utf8.RuneCountInString(query) > maxQueryRunes {
+		query = string([]rune(query)[:maxQueryRunes])
 	}
 
 	emb, err := provider.Embed(ctx, []string{query})

@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"log/slog"
 )
 
 // ---- Schema migration ----
@@ -13,14 +15,39 @@ import (
 // so it does not collide with locks taken by other software sharing the DB.
 const migrationLockKey int64 = 0x70616461_6E616C7A // "padanalz" in hex bytes
 
-// migrate runs the embedded schema, serializing concurrent startups across
-// replicas using a PostgreSQL session-level advisory lock. Without the lock,
-// two pods starting simultaneously can both execute the DO $$ ... $$ migration
-// blocks (e.g. provider_keys PK rebuild) and one of them will fail with a
-// duplicate-object or constraint-violation error.
+// migration is a single forward-only schema step. The baseline is the entire
+// original idempotent schema; subsequent steps are appended in order. Each step
+// is applied at most once (recorded in schema_migrations) under the advisory
+// lock, so two pods starting concurrently can't both apply the same step.
 //
-// pg_advisory_lock is automatically released when the session ends, so we
-// dedicate a single connection to the migration and release the lock
+// There is intentionally no automatic down/rollback path — DDL changes are
+// forward-compatible by discipline (CREATE/ALTER ... IF NOT EXISTS, additive
+// columns with defaults). A bad change requires manual SQL to reverse, so keep
+// new steps additive and small.
+type migration struct {
+	version int
+	name    string
+	sql     string
+}
+
+// migrations is the ordered, append-only set of schema versions. Version 1 is
+// the baseline: the entire original idempotent schema, recorded so existing
+// deployments stop re-running it every boot and so future steps build on a
+// known version. Append new versions only at the end; never edit or reorder an
+// already-shipped step.
+var migrations = []migration{
+	{version: 1, name: "baseline", sql: schemaBaseline},
+}
+
+// migrate applies every pending migration, serializing concurrent startups
+// across replicas using a PostgreSQL session-level advisory lock. Without the
+// lock, two pods starting simultaneously can both execute a migration block and
+// one will fail with a duplicate-object or constraint-violation error.
+//
+// Each step runs in its own transaction together with its version record, so a
+// failure rolls both back and the step is retried on the next boot. The lock is
+// held for the whole run; pg_advisory_lock is released when the session ends,
+// so we dedicate a single connection to the migration and release the lock
 // explicitly before returning it to the pool.
 func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	conn, err := b.db.Conn(ctx)
@@ -37,13 +64,92 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
 	}()
 
-	if _, err := conn.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("execute schema: %w", err)
+	if err := ensureMigrationsTable(ctx, conn); err != nil {
+		return fmt.Errorf("ensure schema_migrations table: %w", err)
+	}
+
+	current, err := currentVersion(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	applied := 0
+	for _, m := range migrations {
+		if m.version <= current {
+			continue
+		}
+		if err := applyMigration(ctx, conn, m); err != nil {
+			return fmt.Errorf("apply migration v%d %q: %w", m.version, m.name, err)
+		}
+		slog.Info("schema migration applied", "version", m.version, "name", m.name, "from", current)
+		current = m.version
+		applied++
+	}
+
+	latest := migrations[len(migrations)-1].version
+	if applied == 0 {
+		slog.Info("schema up to date", "version", latest)
+	} else {
+		slog.Info("schema migrations complete", "version", latest)
 	}
 	return nil
 }
 
-const schema = `
+// ensureMigrationsTable creates the version-tracking table if it does not yet
+// exist. Existing deployments that predate versioning get it created on first
+// boot; their already-applied baseline is then recorded as v1 by applyMigration
+// (the baseline SQL is fully idempotent, so re-running it is a no-op).
+func ensureMigrationsTable(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version    INTEGER    PRIMARY KEY,
+		name       TEXT       NOT NULL,
+		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`)
+	return err
+}
+
+func currentVersion(ctx context.Context, conn *sql.Conn) (int, error) {
+	var v int
+	err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v)
+	return v, err
+}
+
+// applyMigration runs one step's SQL and records its version in a single
+// transaction, so a half-applied step can never be marked complete.
+func applyMigration(ctx context.Context, conn *sql.Conn, m migration) (err error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, m.sql); err != nil {
+		return fmt.Errorf("exec sql: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`, m.version, m.name); err != nil {
+		return fmt.Errorf("record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// CurrentSchemaVersion reports the highest applied migration version, or 0 when
+// no backend/migrations table exists (local mode). Exposed for health/observability.
+func (b *PostgresStorageBackend) CurrentSchemaVersion(ctx context.Context) (int, error) {
+	if b == nil || b.db == nil {
+		return 0, nil
+	}
+	var v int
+	err := b.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	return v, nil
+}
+
+const schemaBaseline = `
 CREATE TABLE IF NOT EXISTS users (
 	id          TEXT        PRIMARY KEY,
 	email       TEXT        UNIQUE NOT NULL,

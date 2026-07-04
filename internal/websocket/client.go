@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"pad-core/logger"
 )
@@ -31,8 +32,12 @@ type Client struct {
 	blockMu         sync.Mutex
 	selectedBlockID string
 
-	hub          *Hub
-	flowID       string
+	hub    *Hub
+	flowID string
+	// connID uniquely identifies this connection in the shared presence store
+	// (a user may hold several connections across replicas). Stable for the
+	// connection's lifetime.
+	connID       string
 	conn         *websocket.Conn
 	send         chan Envelope
 	disconnected atomic.Bool // set once when Send or Run tears down the connection
@@ -57,6 +62,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 		DisplayName: displayName,
 		hub:         hub,
 		flowID:      flowID,
+		connID:      uuid.NewString(),
 		conn:        conn,
 		send:        make(chan Envelope, sendBufferCap),
 	}
@@ -178,6 +184,9 @@ func (c *Client) writePump() {
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
+			// Piggyback a presence heartbeat on the ping so this client's shared
+			// presence entry keeps its TTL refreshed (no-op single-replica).
+			c.hub.writePresence(c)
 		}
 	}
 }
@@ -191,6 +200,9 @@ func (c *Client) handleIncoming(env Envelope) {
 	case EventPresenceUpdate:
 		if p, ok := parsePayload[PresencePayload](env.Payload); ok {
 			c.SetSelectedBlockID(p.SelectedBlockID)
+			// Reflect the new selection in the shared presence store so peers'
+			// Presence() queries see it (no-op single-replica).
+			c.hub.writePresence(c)
 		}
 		c.hub.Broadcast(c.flowID, c.UserID, env, c)
 

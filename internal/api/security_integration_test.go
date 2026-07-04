@@ -111,44 +111,54 @@ func TestHandleEvents_DisconnectsAtTokenExpiry(t *testing.T) {
 
 // --- Audit pool shutdown safety ---
 
-func TestAuditPool_ConcurrentLogAuditShutdown_NoPanic(t *testing.T) {
-	// Use a fake backend that blocks briefly to ensure overlap.
-	type fakeAuditBackend struct {
-		saveCount int64
-	}
-	backend := &fakeAuditBackend{}
+// TestAuditEnqueue_RecoversSendOnClosedChannel proves the recover guard catches
+// the TOCTOU window: ShutdownAuditPool sets auditClosed and closes the channel
+// as two separate statements, so a sender that already passed the
+// auditClosed.Load() check (returned false) reaches the send AFTER the channel
+// was closed. We reproduce that exact ordering deterministically by closing the
+// channel WITHOUT setting the flag, forcing auditEnqueue onto the send path
+// into a closed channel. The recover must convert the panic into ("closed").
+func TestAuditEnqueue_RecoversSendOnClosedChannel(t *testing.T) {
+	ch := make(chan *interfaces.AuditEvent, 1)
+	auditCh = ch
+	auditClosed.Store(false)
+	close(ch) // intentionally do NOT set the flag: forces the send-then-recover path
 
-	// We can't use the real InitAuditPool (it uses sync.Once), so test
-	// the atomic guard logic directly.
-	var closed atomic.Bool
-	var wg sync.WaitGroup
-
-	// Simulate concurrent logAudit calls
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("panic during concurrent audit: %v", r)
-				}
-			}()
-			// Simulate the auditClosed check + send pattern
-			if !closed.Load() {
-				atomic.AddInt64(&backend.saveCount, 1)
-			}
-		}()
+	sent, reason := auditEnqueue(&interfaces.AuditEvent{Action: AuditActionFlowUpload})
+	if sent || reason != "closed" {
+		t.Fatalf("got (sent=%v, reason=%q), want (false, \"closed\")", sent, reason)
 	}
 
-	// Simulate shutdown concurrently
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		closed.Store(true)
-	}()
+	auditCh = nil
+	auditClosed.Store(false)
+}
 
-	wg.Wait()
-	// Test passes if no panic occurs
+// TestAuditEnqueue_DivertsWhenFull confirms a full queue returns ("full") and a
+// pool closed via the flag (the fast path) returns ("closed") so callers route
+// to the fallback sink instead of dropping silently.
+func TestAuditEnqueue_DivertsWhenFull(t *testing.T) {
+	auditCh = make(chan *interfaces.AuditEvent, 1)
+	auditClosed.Store(false)
+
+	// Fill the queue.
+	auditCh <- &interfaces.AuditEvent{Action: AuditActionFlowUpload}
+
+	sent, reason := auditEnqueue(&interfaces.AuditEvent{Action: AuditActionFlowDelete})
+	if sent || reason != "full" {
+		t.Fatalf("full queue: got (sent=%v, reason=%q), want (false, \"full\")", sent, reason)
+	}
+
+	// Close the pool via the flag fast path; the send is never attempted so no
+	// recover is needed and there is no send-vs-close race here.
+	auditClosed.Store(true)
+	sent, reason = auditEnqueue(&interfaces.AuditEvent{Action: AuditActionFlowDelete})
+	if sent || reason != "closed" {
+		t.Fatalf("closed pool: got (sent=%v, reason=%q), want (false, \"closed\")", sent, reason)
+	}
+
+	// Leave package state clean so other tests don't observe a closed channel.
+	auditCh = nil
+	auditClosed.Store(false)
 }
 
 // --- Invite email binding ---

@@ -76,3 +76,58 @@ func TestSetUserEmailVerified(t *testing.T) {
 		t.Error("expected EmailVerified=true after SetUserEmailVerified")
 	}
 }
+
+// TestInvalidateUserTokens_RevokesOutstandingTokensForUser is the regression
+// test for the account-takeover fix: after a password change/reset, every other
+// outstanding reset/verify token for that user must become unredeemable, while
+// tokens for other users and other purposes are untouched.
+func TestInvalidateUserTokens_RevokesOutstandingTokensForUser(t *testing.T) {
+	b, _ := NewLocalStorageBackend(t.TempDir())
+	ctx := context.Background()
+	future := time.Now().Add(time.Hour)
+
+	tokens := []struct {
+		hash    string
+		purpose string
+		user    string
+	}{
+		{"reset-A", interfaces.TokenPurposePasswordReset, "alice"}, // consumed by reset
+		{"reset-B", interfaces.TokenPurposePasswordReset, "alice"}, // must be invalidated
+		{"verify-A", interfaces.TokenPurposeEmailVerify, "alice"},  // must be invalidated
+		{"reset-C", interfaces.TokenPurposePasswordReset, "bob"},   // other user: untouched
+	}
+	for _, tk := range tokens {
+		if err := b.CreateUserToken(ctx, &interfaces.UserToken{
+			TokenHash: tk.hash, Purpose: tk.purpose, UserID: tk.user, ExpiresAt: future,
+		}); err != nil {
+			t.Fatalf("CreateUserToken %s: %v", tk.hash, err)
+		}
+	}
+
+	// Alice resets her password using reset-A.
+	if _, err := b.ConsumeUserToken(ctx, interfaces.TokenPurposePasswordReset, "reset-A"); err != nil {
+		t.Fatalf("consume reset-A: %v", err)
+	}
+	// Invalidate all other alice reset/verify tokens (what the handler does next).
+	if err := b.InvalidateUserTokens(ctx, "alice",
+		interfaces.TokenPurposePasswordReset, interfaces.TokenPurposeEmailVerify); err != nil {
+		t.Fatalf("InvalidateUserTokens: %v", err)
+	}
+
+	// reset-B (alice) and verify-A (alice) must now be unredeemable.
+	if _, err := b.ConsumeUserToken(ctx, interfaces.TokenPurposePasswordReset, "reset-B"); !errors.Is(err, interfaces.ErrNotFound) {
+		t.Errorf("alice reset-B: expected ErrNotFound after invalidation, got %v", err)
+	}
+	if _, err := b.ConsumeUserToken(ctx, interfaces.TokenPurposeEmailVerify, "verify-A"); !errors.Is(err, interfaces.ErrNotFound) {
+		t.Errorf("alice verify-A: expected ErrNotFound after invalidation, got %v", err)
+	}
+	// bob's token is in a different purpose scope for a different user — still valid.
+	if _, err := b.ConsumeUserToken(ctx, interfaces.TokenPurposePasswordReset, "reset-C"); err != nil {
+		t.Errorf("bob reset-C: expected success (other user), got %v", err)
+	}
+
+	// Empty purposes is a no-op (never panics, never deletes anything).
+	if err := b.InvalidateUserTokens(ctx, "alice"); err != nil {
+		t.Fatalf("InvalidateUserTokens with no purposes: %v", err)
+	}
+}

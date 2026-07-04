@@ -16,6 +16,7 @@ type auditStub struct {
 	price        Pricing
 	resp         *Response
 	streamChunks []Chunk
+	streamErr    error // returned after replaying streamChunks
 }
 
 func (s *auditStub) Chat(_ context.Context, _ Request) (*Response, error) { return s.resp, nil }
@@ -23,11 +24,12 @@ func (s *auditStub) Stream(_ context.Context, _ Request, onChunk func(Chunk)) er
 	for _, c := range s.streamChunks {
 		onChunk(c)
 	}
-	return nil
+	return s.streamErr
 }
 func (s *auditStub) Models(_ context.Context) ([]ModelInfo, error) { return s.models, nil }
 func (s *auditStub) PricePerMillionTokens() Pricing                { return s.price }
 func (s *auditStub) ID() string                                    { return "stub" }
+func (s *auditStub) EstimateTokens(t string) int                   { return len(t) / 4 }
 
 // awaitMetric runs a Chat through the audited wrapper and returns the recorded
 // metric (recording is async). Fails the test if nothing is recorded.
@@ -72,6 +74,7 @@ func TestAudited_NilRecorderDoesNotPanic(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let the record goroutine run (it must no-op)
 }
 
+// TestAudited_PricesFromCatalogWhenModelKnown guards the catalog-price path.
 func TestAudited_PricesFromCatalogWhenModelKnown(t *testing.T) {
 	stub := &auditStub{
 		models: []ModelInfo{{ID: "known", Pricing: Pricing{InputCostPerM: 3, OutputCostPerM: 15}}},
@@ -113,4 +116,119 @@ func TestAudited_FallsBackToProviderPriceForUnknownModel(t *testing.T) {
 	if got, want := m.EstimatedCost, 12.0; got != want {
 		t.Errorf("EstimatedCost = %v, want %v (provider fallback price), not $0", got, want)
 	}
+}
+
+// TestAudited_RecordsEstimatedUsageOnTruncatedStream: a stream that ends
+// without a Done chunk (truncation, mid-stream error) still consumed provider
+// tokens — usage must be recorded from estimates instead of silently counting
+// as $0 against the daily budget.
+func TestAudited_RecordsEstimatedUsageOnTruncatedStream(t *testing.T) {
+	stub := &auditStub{
+		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		streamChunks: []Chunk{{Text: "some partial output before the stream died"}},
+		streamErr:    errStreamTruncated("stub"),
+	}
+	ch := make(chan *interfaces.UsageMetric, 1)
+	rec := func(_ context.Context, m *interfaces.UsageMetric) error {
+		ch <- m
+		return nil
+	}
+	ap := NewAuditedProvider(stub, rec, "user-1", "stub")
+
+	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "a reasonably sized user prompt"}}}
+	if err := ap.Stream(context.Background(), req, func(Chunk) {}); err == nil {
+		t.Fatal("expected the truncation error to propagate")
+	}
+
+	select {
+	case m := <-ch:
+		if m.CompletionTokens == 0 {
+			t.Error("CompletionTokens = 0, want an estimate from the streamed text")
+		}
+		if m.PromptTokens == 0 {
+			t.Error("PromptTokens = 0, want an estimate from the request")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no usage metric recorded for the truncated stream")
+	}
+}
+
+// TestAudited_NoUsageForStreamThatNeverStarted: a failure before the provider
+// produced anything (circuit open, connection refused) must not bill an
+// input-token estimate for a call that consumed nothing.
+func TestAudited_NoUsageForStreamThatNeverStarted(t *testing.T) {
+	stub := &auditStub{
+		models:    []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		streamErr: ErrCircuitOpen,
+	}
+	recorded := make(chan *interfaces.UsageMetric, 1)
+	rec := func(_ context.Context, m *interfaces.UsageMetric) error {
+		recorded <- m
+		return nil
+	}
+	ap := NewAuditedProvider(stub, rec, "user-1", "stub")
+
+	if err := ap.Stream(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "prompt"}}}, func(Chunk) {}); err == nil {
+		t.Fatal("expected the stream error to propagate")
+	}
+	select {
+	case m := <-recorded:
+		t.Fatalf("usage recorded for a stream that never started: %+v", m)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestAudited_RecorderBoundedUnderSaturation is the regression test for the
+// unbounded-goroutine bug: record() used to spawn a goroutine per finished AI
+// request that then blocked on recordSem (size 16). A slow recorder under load
+// piled up goroutines without limit. After the fix the semaphore acquire is
+// non-blocking — at most maxConcurrentRecords recorders run at once, and the
+// rest of the metrics are dropped (not parked as goroutines).
+func TestAudited_RecorderBoundedUnderSaturation(t *testing.T) {
+	stub := &auditStub{
+		models: []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		resp:   &Response{TokensIn: 10, TokensOut: 10},
+	}
+
+	const oversubscribe = maxConcurrentRecords * 8 // well beyond the semaphore cap
+
+	started := make(chan struct{}, oversubscribe)
+	release := make(chan struct{})
+	rec := func(_ context.Context, _ *interfaces.UsageMetric) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release // block until the test lets all recorders finish
+		return nil
+	}
+
+	ap := NewAuditedProvider(stub, rec, "user-1", "stub")
+
+	// Fire many Chats; each attempts an async record. Chat returns immediately.
+	for i := 0; i < oversubscribe; i++ {
+		if _, err := ap.Chat(context.Background(), Request{Model: "m"}); err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+	}
+
+	// Wait for the recorder-started count to reach the cap, then confirm it
+	// plateaus there (the remainder must be dropped, not parked as goroutines).
+	deadline := time.Now().Add(2 * time.Second)
+	for len(started) < maxConcurrentRecords && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := len(started); got != maxConcurrentRecords {
+		t.Fatalf("recorder started %d times, want exactly %d (the semaphore cap)", got, maxConcurrentRecords)
+	}
+
+	// Give the dropped paths a moment to run; the started count must NOT grow
+	// past the cap — that would mean extra recorders were parked, not dropped.
+	time.Sleep(30 * time.Millisecond)
+	if got := len(started); got > maxConcurrentRecords {
+		t.Errorf("recorder started %d times, exceeded cap %d (drops not working)", got, maxConcurrentRecords)
+	}
+
+	// Release the in-flight recorders so the goroutines exit cleanly.
+	close(release)
 }

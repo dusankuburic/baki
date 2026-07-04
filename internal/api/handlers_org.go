@@ -82,10 +82,17 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 	if h.requireMember(w, r) == nil {
 		return
 	}
+	limit, ok := clampListLimit(w, r.URL.Query().Get("limit"))
+	if !ok {
+		return
+	}
 	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+	if len(docs) > limit {
+		docs = docs[:limit]
 	}
 	render.JSON(w, docs)
 }

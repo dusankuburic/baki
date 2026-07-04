@@ -53,6 +53,11 @@ type Config struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+	// RequireSSL, when true, refuses to open a DSN whose sslmode does not
+	// enforce an encrypted connection (sslmode=disable/allow/prefer or unset).
+	// This is a fail-fast guard so a misconfigured cloud deployment carrying
+	// credentials over plaintext is caught at boot rather than silently allowed.
+	RequireSSL bool
 
 	AzureStorageAccount   string
 	AzureStorageContainer string
@@ -80,6 +85,14 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	pgxCfg, err := pgx.ParseConfig(cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+
+	// Fail fast on an insecure connection when the operator (or cloud-mode
+	// default) requires TLS. Checked after parsing so a malformed DSN still
+	// surfaces its real error, and before any network/blob setup so it never
+	// depends on a reachable server.
+	if cfg.RequireSSL && !sslModeIsSecure(cfg.DSN) {
+		return nil, fmt.Errorf("postgres: TLS required but DSN sslmode=%q is insecure; use sslmode=require or verify-full", sslModeFromDSN(cfg.DSN))
 	}
 
 	b := &PostgresStorageBackend{}

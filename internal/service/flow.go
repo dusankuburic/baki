@@ -34,12 +34,26 @@ type FlowService struct {
 	// and tokenises every block, so rebuilding it on every search-as-you-type
 	// keystroke is wasteful; a flow's content is immutable for a given ID
 	// (a new upload/parse yields a new ID), and in-place cloud updates call
-	// InvalidateSearchIndex.
-	idxMu    sync.RWMutex
-	idxCache map[string]*search.SearchIndex
+	// InvalidateSearchIndex. It is a bounded LRU so a long-lived process opening
+	// many distinct flows can't grow it without limit.
+	idxCache cache.Cache
+
+	// invalidateCbs holds flow-invalidation callbacks registered by other
+	// services (e.g. ChatService's scrubbed-context cache) that must be dropped
+	// when a flow changes in place. Registering here avoids a direct dependency
+	// from LibraryService → ChatService (which would cycle, since ChatService
+	// already depends on FlowService).
+	invalidateMu  sync.Mutex
+	invalidateCbs []func(flowID string)
 }
 
+// maxSearchIndexCache bounds the number of cached search indexes (one per
+// distinct flow). Each index is roughly proportional to block count, so this
+// caps worst-case memory regardless of how many flows are opened over uptime.
+const maxSearchIndexCache = 64
+
 func NewFlowService(notifier Notifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
+	idxCache, _ := cache.NewLRUCache(maxSearchIndexCache) // size > 0 ⇒ error impossible
 	return &FlowService{
 		notifier:    notifier,
 		settings:    settings,
@@ -47,7 +61,7 @@ func NewFlowService(notifier Notifier, settings SettingsProvider, docProvider Do
 		storage:     storage,
 		authz:       authz,
 		astCache:    astCache,
-		idxCache:    make(map[string]*search.SearchIndex),
+		idxCache:    idxCache,
 	}
 }
 
@@ -74,9 +88,24 @@ func (s *FlowService) DocProvider() DocumentProvider {
 }
 
 func (s *FlowService) InvalidateSearchIndex(flowID string) {
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	delete(s.idxCache, flowID)
+	s.idxCache.Delete(context.Background(), flowID)
+	// Fan out to any registered derived caches (e.g. ChatService's scrubbed
+	// context) so an in-place flow edit invalidates them too. Snapshot under
+	// the lock so a callback may register another callback without deadlock.
+	s.invalidateMu.Lock()
+	cbs := append([]func(string){}, s.invalidateCbs...)
+	s.invalidateMu.Unlock()
+	for _, cb := range cbs {
+		cb(flowID)
+	}
+}
+
+// OnInvalidateFlow registers a callback invoked from InvalidateSearchIndex
+// whenever a flow's derived caches must be dropped. See FlowService doc comment.
+func (s *FlowService) OnInvalidateFlow(cb func(flowID string)) {
+	s.invalidateMu.Lock()
+	defer s.invalidateMu.Unlock()
+	s.invalidateCbs = append(s.invalidateCbs, cb)
 }
 
 func (s *FlowService) FindBlockByID(doc *models.FlowDocument, blockID string) *models.Block {
@@ -304,21 +333,11 @@ func (s *FlowService) SearchFlow(doc *models.FlowDocument, query models.SearchQu
 }
 
 func (s *FlowService) searchIndexFor(doc *models.FlowDocument) *search.SearchIndex {
-	s.idxMu.RLock()
-	if idx, ok := s.idxCache[doc.ID]; ok {
-		s.idxMu.RUnlock()
-		return idx
-	}
-	s.idxMu.RUnlock()
-
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	// Check again under write lock
-	if idx, ok := s.idxCache[doc.ID]; ok {
-		return idx
+	if v, ok := s.idxCache.Get(context.Background(), doc.ID); ok {
+		return v.(*search.SearchIndex)
 	}
 	idx := search.NewSearchIndex(doc.ID, doc)
-	s.idxCache[doc.ID] = idx
+	s.idxCache.Set(context.Background(), doc.ID, idx, 0)
 	return idx
 }
 

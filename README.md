@@ -168,8 +168,9 @@ Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:
    # lifecycle.json: a rule with filters.prefixMatch ["flows/"] and
    # actions.baseBlob.delete.daysAfterModificationGreaterThan 30
    ```
-5. **Probes** — set the ACA `livenessProbe` to `GET /healthz` and `readinessProbe` to `GET /readyz` (the latter checks DB *and* blob reachability).
-6. **Observability** — alert on `pad_blob_operations_total{status="error"}` and `{status="throttled"}` (429s ⇒ throttling/scale), blob-op duration p99 (`pad_blob_operation_duration_seconds`), and readiness failures.
+ 5. **Probes** — set the ACA `livenessProbe` to `GET /healthz` and `readinessProbe` to `GET /readyz` (the latter checks DB *and* blob reachability).
+ 6. **Observability** — alert on `pad_blob_operations_total{status="error"}` and `{status="throttled"}` (429s ⇒ throttling/scale), blob-op duration p99 (`pad_blob_operation_duration_seconds`), and readiness failures.
+ 7. **Disaster recovery** — database backup/restore (PITR + geo-restore), RPO/RTO targets, a quarterly restore drill, and cutover steps are in [`docs/DR_RUNBOOK.md`](docs/DR_RUNBOOK.md). Provisioning a geo-redundant-backed-up Postgres via IaC is in [`infra/postgres.bicep`](infra/postgres.bicep).
 
 AI provider keys are set in-app under **Settings → Providers** (`Ctrl + ,`). Desktop stores them in the OS keyring; web stores them server-side. Supported: GitHub Copilot (OAuth device flow or PAT), GitHub Models, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM.
 

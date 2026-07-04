@@ -1,6 +1,9 @@
 import {describe, it, expect, beforeEach} from 'vitest'
-import {useFlowStore} from './flowStore'
+import {useFlowStore, resetDerivedStateForFlow} from './flowStore'
 import {useEditorStore} from './editorStore'
+import {useSearchStore} from './searchStore'
+import {useAnalysisStore} from './analysisStore'
+import {useChatStore} from './chatStore'
 import type {Block, FlowDocument, Subflow} from '@/types'
 
 // ---- helpers ----
@@ -32,6 +35,42 @@ function makeDoc(...subflows: Subflow[]): FlowDocument {
 beforeEach(() => {
     useFlowStore.getState().reset()
     useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})
+})
+
+// ---- cross-store reset coordinator (F4) ----
+
+describe('resetDerivedStateForFlow', () => {
+    it('clears search, analysis, chat thread, and opens first subflow in editor', () => {
+        // Seed stale derived state from a "previous" flow.
+        useSearchStore.setState({query: 'stale', results: [{id: 'x'} as never]})
+        useAnalysisStore.getState().setProtectedFlowId('old-flow')
+        useAnalysisStore.getState().setFindingSearch('stale')
+        useChatStore.setState({activeThreadId: 'old-thread'})
+        useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})
+
+        const doc = makeDoc(makeSubflow('sf1'), makeSubflow('sf2'))
+        resetDerivedStateForFlow(doc)
+
+        expect(useSearchStore.getState().query ?? '').toBe('')
+        expect(useAnalysisStore.getState().protectedFlowId).toBe('doc1')
+        expect(useAnalysisStore.getState().findingSearch).toBe('')
+        expect(useChatStore.getState().activeThreadId).toBeNull()
+        // First subflow opened in editor group 0.
+        expect(useEditorStore.getState().groups[0].activeTabId).toBe('sf1')
+    })
+
+    it('with a null document clears derived state and empties editor groups', () => {
+        useEditorStore.setState({groups: [{tabs: ['sf1'], activeTabId: 'sf1'}], focusedGroupIndex: 0})
+        useChatStore.setState({activeThreadId: 't'})
+
+        resetDerivedStateForFlow(null)
+
+        expect(useAnalysisStore.getState().protectedFlowId).toBeNull()
+        expect(useChatStore.getState().activeThreadId).toBeNull()
+        const groups = useEditorStore.getState().groups
+        expect(groups[0].tabs).toHaveLength(0)
+        expect(groups[0].activeTabId).toBeNull()
+    })
 })
 
 // ---- setDocument ----

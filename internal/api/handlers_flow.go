@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
@@ -15,19 +17,81 @@ import (
 	"pad-core/models"
 )
 
+// maxConcurrentUploadsPerUser bounds the number of in-flight uploads a single
+// user may have. Each upload can be up to the global body limit (10 MiB) / 50
+// MiB blob cap, so without a per-user guard one account could fan out many
+// concurrent large parses and DB writes. The request-timeout middleware bounds
+// how long an overflowing request waits before it is rejected.
+const maxConcurrentUploadsPerUser = 3
+
+// uploadLimiter is a per-user counting semaphore that throttles concurrent
+// uploads. Slots are cheap channels keyed by user ID; an empty userID (local /
+// unauthenticated) bypasses the limit.
+type uploadLimiter struct {
+	mu   sync.Mutex
+	sems map[string]chan struct{}
+}
+
+func newUploadLimiter() *uploadLimiter {
+	return &uploadLimiter{sems: make(map[string]chan struct{})}
+}
+
+// acquire reserves an upload slot for userID, returning a release callback. If
+// the user already holds maxConcurrentUploadsPerUser uploads it waits until the
+// request context is cancelled (request timeout / client disconnect), in which
+// case ok is false and the caller should reject with 429.
+func (l *uploadLimiter) acquire(ctx context.Context, userID string) (release func(), ok bool) {
+	if userID == "" {
+		return func() {}, true
+	}
+	l.mu.Lock()
+	sem, exists := l.sems[userID]
+	if !exists {
+		sem = make(chan struct{}, maxConcurrentUploadsPerUser)
+		l.sems[userID] = sem
+	}
+	l.mu.Unlock()
+	select {
+	case sem <- struct{}{}:
+		return func() {
+			<-sem
+			// Drop the entry once the last holder releases so the map doesn't
+			// grow unboundedly with lifetime-distinct-user count (a monotonic
+			// memory leak in multi-tenant cloud). A fresh channel is recreated
+			// on the user's next upload via the !exists branch above.
+			//
+			// The identity check (cur == sem) guards a release-vs-release race:
+			// if another release already deleted this entry and a later upload
+			// recreated a *different* channel under the same userID, we must
+			// not delete that newer channel. len==0 also guarantees no sender
+			// is currently blocked on this sem (a blocked sender only exists
+			// when the buffered channel is full, i.e. len==cap>0).
+			l.mu.Lock()
+			if cur, ok := l.sems[userID]; ok && cur == sem && len(sem) == 0 {
+				delete(l.sems, userID)
+			}
+			l.mu.Unlock()
+		}, true
+	case <-ctx.Done():
+		return func() {}, false
+	}
+}
+
 type FlowHandler struct {
-	flowSvc     *service.FlowService
-	docProvider service.DocumentProvider
-	backend     storageif.StorageBackend
-	security    *SecurityConfig
+	flowSvc       *service.FlowService
+	docProvider   service.DocumentProvider
+	backend       storageif.StorageBackend
+	security      *SecurityConfig
+	uploadLimiter *uploadLimiter
 }
 
 func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentProvider, backend storageif.StorageBackend, security *SecurityConfig) *FlowHandler {
 	return &FlowHandler{
-		flowSvc:     flowSvc,
-		docProvider: docProvider,
-		backend:     backend,
-		security:    security,
+		flowSvc:       flowSvc,
+		docProvider:   docProvider,
+		backend:       backend,
+		security:      security,
+		uploadLimiter: newUploadLimiter(),
 	}
 }
 
@@ -35,6 +99,12 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
 	}
+	release, ok := h.uploadLimiter.acquire(r.Context(), h.security.CallerID(r))
+	if !ok {
+		render.Error(w, fmt.Errorf("too many concurrent uploads; retry shortly"), http.StatusTooManyRequests)
+		return
+	}
+	defer release()
 	metrics.RecordFlowOp("upload")
 	var req struct {
 		Name  string            `json:"name"`

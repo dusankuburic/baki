@@ -24,3 +24,22 @@ func parseIntParam(w http.ResponseWriter, raw, name string, def int) (value int,
 	}
 	return v, true
 }
+
+// maxListItems bounds unbounded list responses so a large table can't force a
+// huge payload into memory and over the wire. Callers may request a smaller
+// page via ?limit=; values <= 0 or above the cap collapse to the cap.
+const maxListItems = 200
+
+// clampListLimit parses an optional ?limit= query value (defaulting to
+// maxListItems) and clamps it into [1, maxListItems]. On a malformed value it
+// writes a 400 and returns ok=false.
+func clampListLimit(w http.ResponseWriter, raw string) (limit int, ok bool) {
+	limit, ok = parseIntParam(w, raw, "limit", maxListItems)
+	if !ok {
+		return 0, false
+	}
+	if limit <= 0 || limit > maxListItems {
+		limit = maxListItems
+	}
+	return limit, true
+}

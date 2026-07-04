@@ -1,19 +1,19 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
-import {Download, FileText, Search, GitCompareArrows, Layers, ArrowUpDown} from 'lucide-react'
+import {Search} from 'lucide-react'
 import {analysisApi} from '@/api'
 import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
-import {EmptyState, Spinner, useToast} from '@/components/shared'
-import {categoryColors, categoryBackgrounds} from '@/lib/findingsColors'
+import {EmptyState, useToast} from '@/components/shared'
 import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
+import FindingsToolbar from './FindingsToolbar'
+import AnalysisRunner from './AnalysisRunner'
 import AnalysisDiffView from './AnalysisDiffView'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
-import type {AnalysisDiff, Finding, Severity, AnalysisReport} from '@/types'
-import clsx from 'clsx'
+import type {AnalysisDiff, Finding, AnalysisReport} from '@/types'
 
 export default function FindingsTab() {
   const doc = useFlowStore(s => s.document)
@@ -24,18 +24,14 @@ export default function FindingsTab() {
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
   const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
   const setProgress = useAnalysisStore(s => s.setProgress)
-  const severityFilter = useAnalysisStore(s => s.severityFilter)
-  const categoryFilter = useAnalysisStore(s => s.categoryFilter)
   const appendMessage = useChatStore(s => s.appendMessage)
   const createThread = useChatStore(s => s.createThread)
   const updateThread = useChatStore(s => s.updateThread)
   const switchThread = useChatStore(s => s.switchThread)
-  const toggleSeverityFilter = useAnalysisStore(s => s.toggleSeverityFilter)
-  const setSeverityFilter = useAnalysisStore(s => s.setSeverityFilter)
-  const toggleCategoryFilter = useAnalysisStore(s => s.toggleCategoryFilter)
-  const allCategories: FindingCategory[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
   const findingSearch = useAnalysisStore(s => s.findingSearch)
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
+  const severityFilter = useAnalysisStore(s => s.severityFilter)
+  const categoryFilter = useAnalysisStore(s => s.categoryFilter)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
   const suppressedKeys = useAnalysisStore(s => s.suppressedKeys)
   const loadSuppressions = useAnalysisStore(s => s.loadSuppressions)
@@ -193,30 +189,10 @@ export default function FindingsTab() {
     )
   }
 
-  if (!report && !isAnalyzing) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
-        <span className="text-sm text-text-tertiary">No analysis run yet</span>
-        <button
-          onClick={handleAnalyze}
-          className="px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors"
-        >
-          Run Analysis
-        </button>
-      </div>
-    )
-  }
-
-  if (isAnalyzing) {
-    const pct = progress.total > 0 ? Math.round(progress.current / progress.total * 100) : 0
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
-        <Spinner size={24} />
-        <span className="text-sm text-text-secondary tabular-nums">
-          Analyzing... {pct}% ({progress.ruleName})
-        </span>
-      </div>
-    )
+  // Pre-report states: the Run Analysis CTA and the analyzing spinner are owned
+  // by AnalysisRunner. Shown when there is no report or an analysis is in flight.
+  if (isAnalyzing || !report) {
+    return <AnalysisRunner onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} progress={progress} />
   }
 
   // Unreachable given the guards above (report is set whenever we get here),
@@ -226,118 +202,19 @@ export default function FindingsTab() {
   return (
     <div className="flex flex-col h-full">
       <FindingsSummary stats={report.stats} durationMs={report.durationMs} healthScore={report.metrics?.healthScore} />
-      <div className="px-3 py-1.5 flex items-center justify-between border-b border-border-subtle gap-2">
-        <div className="flex items-center gap-1">
-          {([
-            {s: 'error' as Severity, label: 'Errors', color: 'text-red-500', bg: 'bg-red-500/10'},
-            {s: 'warning' as Severity, label: 'Warnings', color: 'text-amber-500', bg: 'bg-amber-500/10'},
-            {s: 'info' as Severity, label: 'Info', color: 'text-blue-500', bg: 'bg-blue-500/10'},
-          ]).map(({s, label, color, bg}) => (
-            <button
-              key={s}
-              onClick={() => toggleSeverityFilter(s)}
-              className={clsx(
-                'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
-                severityFilter.has(s)
-                  ? `${bg} ${color} border-transparent`
-                  : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
-              )}
-            >
-              {label}
-            </button>
-          ))}
-          <span className="text-border-subtle mx-0.5">|</span>
-          {allCategories.map(cat => {
-            return (
-              <button
-                key={cat}
-                onClick={() => toggleCategoryFilter(cat)}
-                className={clsx(
-                  'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
-                  categoryFilter.has(cat)
-                    ? `${categoryBackgrounds[cat] ?? 'bg-surface-3'} ${categoryColors[cat] ?? 'text-text-tertiary'} border-transparent`
-                    : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
-                )}
-              >
-                {cat}
-              </button>
-            )
-          })}
-          {(severityFilter.size < 3 || categoryFilter.size < 5) && (
-            <button
-              onClick={() => {
-                setSeverityFilter(new Set(['error', 'warning', 'info']))
-                useAnalysisStore.getState().setCategoryFilter(new Set(allCategories))
-              }}
-              className="text-2xs text-text-tertiary hover:text-text-secondary transition-colors ml-1"
-            >
-              All
-            </button>
-          )}
-        </div>
-        <button
-          onClick={handleAnalyze}
-          className="text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-brand-500/10 transition-colors flex-shrink-0"
-        >
-          Re-analyze
-        </button>
-        <button
-          onClick={cycleSortMode}
-          aria-label="Change findings sort order"
-          title={sortMode === 'severity' ? 'Sort: by severity — click for count' : sortMode === 'count' ? 'Sort: by count — click for rule order' : 'Sort: rule order — click for severity'}
-          className={clsx(
-            'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0',
-            sortMode !== 'severity'
-              ? 'text-brand-400 bg-brand-500/10'
-              : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3'
-          )}
-        >
-          <ArrowUpDown size={12} />
-        </button>
-        <button
-          onClick={handleShowDiff}
-          disabled={diffLoading}
-          title="Compare with previous run"
-          aria-label="Compare findings with previous analysis run"
-          className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0 disabled:opacity-50"
-        >
-          <GitCompareArrows size={12} />
-        </button>
-        <button
-          onClick={handleToggleDedup}
-          disabled={dedupLoading}
-          title={dedupGroups ? 'Show all findings' : 'Group duplicate findings'}
-          aria-label="Toggle duplicate grouping"
-          className={clsx(
-            'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0 disabled:opacity-50',
-            dedupGroups
-              ? 'text-brand-400 bg-brand-500/10'
-              : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3'
-          )}
-        >
-          <Layers size={12} />
-        </button>
-        {report.findings.length > 0 && (
-          <>
-            <button
-              onClick={handleExportCSV}
-              className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
-              aria-label="Export findings as CSV"
-              title="Export as CSV"
-            >
-              <Download size={12} />
-            </button>
-            <button
-              onClick={handleExportHTML}
-              className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
-              aria-label="Export findings as HTML"
-              title="Export as HTML"
-            >
-              <FileText size={12} />
-            </button>
-          </>
-        )}
-      </div>
+      <FindingsToolbar
+        onReanalyze={handleAnalyze}
+        onShowDiff={handleShowDiff}
+        diffLoading={diffLoading}
+        onToggleDedup={handleToggleDedup}
+        dedupActive={dedupGroups !== null}
+        dedupLoading={dedupLoading}
+        onExportCSV={handleExportCSV}
+        onExportHTML={handleExportHTML}
+        sortMode={sortMode}
+        onCycleSortMode={cycleSortMode}
+        hasFindings={report.findings.length > 0}
+      />
       {dedupGroups && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-brand-400 bg-brand-500/5 border-b border-border-subtle">
           <span>Grouped: {findings.length} unique findings ({report.findings.length - findings.length} duplicates folded)</span>

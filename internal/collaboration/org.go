@@ -323,9 +323,16 @@ func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail 
 	if time.Now().UTC().After(invite.ExpiresAt) {
 		return nil, ErrInviteExpired
 	}
-	// Verify the caller's email matches the invite email to prevent
-	// token sharing — only the invited user should be able to accept.
-	if userEmail != "" && invite.Email != userEmail {
+	// Require the caller to have a verified email claim and match the invite
+	// email. The userEmail != "" guard used to silently SKIP the check when the
+	// caller's JWT had no email — which meant anyone who obtained the invite
+	// token (leaked via referrer, copy-paste, a mail-system backup) could accept
+	// it and become a member with the invite's role (potentially admin). Reject
+	// when the caller has no email rather than falling through.
+	if userEmail == "" {
+		return nil, ErrInviteNotFound
+	}
+	if invite.Email != userEmail {
 		return nil, ErrInviteNotFound
 	}
 

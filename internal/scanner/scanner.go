@@ -24,6 +24,13 @@ import (
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
+// perFlowScanTimeout bounds the analysis of a single flow within a tick. The
+// tick-level context already bounds the whole sweep; this ensures one slow flow
+// (or a provider hang) can't monopolize the tick or delay shutdown — the scan
+// moves on to the next flow and, because each fctx derives from the tick ctx,
+// a shutdown that cancels the tick is observed before starting further flows.
+const perFlowScanTimeout = 30 * time.Second
+
 // AnalyzeFunc analyzes a parsed flow document. In production this is wired to
 // AnalysisService.AnalyzeFlow (which respects rule config); tests inject a stub.
 type AnalyzeFunc func(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error)
@@ -38,21 +45,30 @@ type Scanner struct {
 	mu      sync.Mutex
 	lastSig map[string]string // (flowID|eventType) -> last alert signature, for dedup
 
-	stop     chan struct{}
-	stopOnce sync.Once
+	// rootCtx is cancelled by Stop so an in-flight sweep bails out promptly
+	// instead of running until the per-tick timeout elapses. Without it, Stop
+	// only prevents the NEXT tick; the current sweep keeps scanning every flow
+	// for up to PAD_SCAN_INTERVAL (e.g. 1h), racing fx's shutdown timeout.
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+	stop       chan struct{}
+	stopOnce   sync.Once
 }
 
 // New creates a Scanner. interval <= 0 disables periodic scanning (Start is a
 // no-op), but ScanOnce can still be invoked directly (e.g. from a test or an
 // admin "scan now" action).
 func New(backend storageif.StorageBackend, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration) *Scanner {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Scanner{
-		backend:  backend,
-		analyze:  analyze,
-		notifier: notifier,
-		interval: interval,
-		lastSig:  make(map[string]string),
-		stop:     make(chan struct{}),
+		backend:    backend,
+		analyze:    analyze,
+		notifier:   notifier,
+		interval:   interval,
+		lastSig:    make(map[string]string),
+		rootCtx:    ctx,
+		rootCancel: cancel,
+		stop:       make(chan struct{}),
 	}
 }
 
@@ -86,16 +102,24 @@ func (s *Scanner) loop() {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), s.interval)
+			// Derive the tick ctx from rootCtx so Stop cancels an in-flight
+			// sweep (not just the next tick): ScanOnce checks ctx.Err() between
+			// flows, so cancelling rootCtx makes the current sweep exit at the
+			// next flow boundary rather than running for up to PAD_SCAN_INTERVAL.
+			ctx, cancel := context.WithTimeout(s.rootCtx, s.interval)
 			s.ScanOnce(ctx)
 			cancel()
 		}
 	}
 }
 
-// Stop halts the scan loop. Safe to call multiple times.
+// Stop halts the scan loop and cancels any in-flight sweep. Safe to call
+// multiple times.
 func (s *Scanner) Stop() {
-	s.stopOnce.Do(func() { close(s.stop) })
+	s.stopOnce.Do(func() {
+		s.rootCancel()
+		close(s.stop)
+	})
 }
 
 // ScanOnce scans every stored flow once. Errors are logged, never returned, so a
@@ -110,7 +134,12 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 		return
 	}
 	for _, f := range flows {
-		s.scanFlow(ctx, f)
+		if ctx.Err() != nil {
+			return
+		}
+		fctx, cancel := context.WithTimeout(ctx, perFlowScanTimeout)
+		s.scanFlow(fctx, f)
+		cancel()
 	}
 }
 

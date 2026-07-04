@@ -148,8 +148,19 @@ func applyEnvVars(cfg *Config) error {
 	if v := os.Getenv("PAD_NOTIFY_TEAMS_URL"); v != "" {
 		cfg.Governance.NotifyTeamsURL = v
 	}
+	if v := os.Getenv("PAD_RETENTION_PURGE_INTERVAL"); v != "" {
+		cfg.Governance.RetentionPurgeInterval = v
+	}
+	if v := os.Getenv("PAD_AUDIT_RETENTION_DAYS"); v != "" {
+		if days, err := strconv.Atoi(v); err == nil && days >= 0 {
+			cfg.Governance.AuditRetentionDays = days
+		}
+	}
 	if v := os.Getenv("PAD_SMTP_HOST"); v != "" {
 		cfg.Email.SMTPHost = v
+	}
+	if v := os.Getenv("PAD_REDIS_URL"); v != "" {
+		cfg.Redis.URL = v
 	}
 	if v := os.Getenv("PAD_SMTP_PORT"); v != "" {
 		p, err := strconv.Atoi(v)
@@ -174,7 +185,17 @@ func applyEnvVars(cfg *Config) error {
 		cfg.Storage.DataDir = v
 	}
 	if v := os.Getenv("PAD_STORAGE"); v != "" {
-		cfg.Storage.Backend = StorageBackend(v)
+		// Normalise case/whitespace so a capitalised "Database" or "LOCAL"
+		// isn't silently treated as an unknown backend — without this, the
+		// cloud-mode storage check below passes vacuously (the literal
+		// "Database" != "database") and the deployment runs with NO backend.
+		norm := strings.ToLower(strings.TrimSpace(v))
+		switch norm {
+		case "local", "database":
+			cfg.Storage.Backend = StorageBackend(norm)
+		default:
+			return fmt.Errorf("PAD_STORAGE=%q: unknown backend (use \"local\" or \"database\")", v)
+		}
 	}
 	if v := os.Getenv("PAD_DATABASE_URL"); v != "" {
 		cfg.Storage.DatabaseURL = v
@@ -241,6 +262,9 @@ func applyEnvVars(cfg *Config) error {
 	}
 	if v := os.Getenv("PAD_DB_CONN_MAX_IDLE_TIME"); v != "" {
 		cfg.Storage.DBConnMaxIdleTime = v
+	}
+	if v := os.Getenv("PAD_DB_REQUIRE_SSL"); v != "" {
+		cfg.Storage.DBRequireSSL = v
 	}
 	if v := os.Getenv("PAD_AZURE_STORAGE_ACCOUNT"); v != "" {
 		cfg.Storage.AzureStorageAccount = v
@@ -356,6 +380,16 @@ func isWeakSecret(s string) bool {
 func Validate(cfg *Config) error {
 	if cfg.Mode != ModeLocal && cfg.Mode != ModeCloud {
 		return fmt.Errorf("config: unknown deployment mode %q", cfg.Mode)
+	}
+	// Cloud (multi-tenant) mode MUST enforce authentication. The entire authz
+	// stack is gated on Auth.Enabled: RequireRole returns true unconditionally,
+	// the JWT middleware falls back to a single shared bearer token, and the
+	// RLS transaction wrapper becomes a no-op. An operator who sets
+	// PAD_MODE=cloud but forgets PAD_AUTH_ENABLED=true would otherwise deploy a
+	// system where every tenant's data is reachable with no real auth. Fail
+	// closed instead of silently running unauthenticated.
+	if cfg.Mode == ModeCloud && !cfg.Auth.Enabled {
+		return errors.New("config: cloud mode requires PAD_AUTH_ENABLED=true (multi-tenant deployments must enforce authentication)")
 	}
 	if cfg.Auth.Enabled && cfg.Auth.Secret == "" {
 		return errors.New("config: auth.secret is required when auth.enabled is true")

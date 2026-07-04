@@ -176,6 +176,9 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/change-password", h.Auth.handleAuthChangePassword)
 		r.Get("/sessions", h.Auth.handleAuthSessions)
 		r.Delete("/sessions/{id}", h.Auth.handleAuthSessionRevoke)
+		// Self-service account erasure (GDPR) + data-subject export.
+		r.Delete("/account", h.Auth.handleAuthDeleteAccount)
+		r.Get("/account/export", h.Auth.handleAuthExportAccount)
 		// Machine API tokens (PATs) for headless/CI access (cloud mode)
 		r.Get("/tokens", h.Auth.handleListAPITokens)
 		r.Post("/tokens", h.Auth.handleCreateAPIToken)

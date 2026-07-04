@@ -27,6 +27,10 @@ func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.R
 	if _, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, "viewer"); !ok {
 		return
 	}
+	limit, ok := clampListLimit(w, r.URL.Query().Get("limit"))
+	if !ok {
+		return
+	}
 	if h.backend == nil {
 		render.JSON(w, []storageif.Collaborator{})
 		return
@@ -35,6 +39,9 @@ func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.R
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+	if len(collabs) > limit {
+		collabs = collabs[:limit]
 	}
 	render.JSON(w, collabs)
 }

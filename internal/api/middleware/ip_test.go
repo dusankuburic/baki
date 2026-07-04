@@ -33,11 +33,25 @@ func TestClientIP_TrustedProxyUsesXFF(t *testing.T) {
 }
 
 func TestClientIP_TrustedProxyMultipleXFF(t *testing.T) {
+	// The trusted proxy appends the real observed client IP as the RIGHTMOST
+	// entry; anything to its left is client-supplied and must not be trusted.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "198.51.100.42, 10.0.0.2, 10.0.0.3")
+	req.Header.Set("X-Forwarded-For", "198.51.100.42, 10.0.0.2, 203.0.113.7")
+	if ip := ClientIP(req, []string{"10.0.0.0/8"}); ip != "203.0.113.7" {
+		t.Errorf("expected rightmost (proxy-appended) XFF IP, got %s", ip)
+	}
+}
+
+func TestClientIP_SpoofedLeftmostXFFIgnored(t *testing.T) {
+	// A client pre-populates X-Forwarded-For to try to control the reported IP.
+	// The trusted proxy appends the real client IP after it, so the rightmost
+	// (real) value wins and the spoofed leftmost is ignored.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 198.51.100.42")
 	if ip := ClientIP(req, []string{"10.0.0.0/8"}); ip != "198.51.100.42" {
-		t.Errorf("expected first XFF IP, got %s", ip)
+		t.Errorf("spoofed leftmost XFF should be ignored, got %s", ip)
 	}
 }
 

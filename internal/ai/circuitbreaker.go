@@ -128,12 +128,27 @@ func (cb *CircuitBreakerProvider) Embed(ctx context.Context, text []string) ([][
 	return res, err
 }
 
+// Stream counts mid-stream failures too: the SSE parsers surface an upstream
+// error event as a Chunk{Error} and then return nil, which would otherwise be
+// recorded as a success — a provider that always streams an error event could
+// never trip the breaker. record() still filters by isRetryable, so permanent
+// or caller-cancelled errors don't open the circuit.
 func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	if err := cb.check(); err != nil {
 		return err
 	}
-	err := cb.Provider.Stream(ctx, req, onChunk)
-	cb.record(err)
+	var chunkErr error
+	err := cb.Provider.Stream(ctx, req, func(c Chunk) {
+		if c.Error != nil {
+			chunkErr = c.Error
+		}
+		onChunk(c)
+	})
+	outcome := err
+	if outcome == nil {
+		outcome = chunkErr
+	}
+	cb.record(outcome)
 	return err
 }
 

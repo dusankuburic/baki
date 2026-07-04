@@ -19,7 +19,9 @@ import (
 	_ "pad-analyzer/docs"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/redis/go-redis/v9"
 	httpSwagger "github.com/swaggo/http-swagger"
+	"go.uber.org/fx"
 )
 
 // Handlers groups all feature-specific HTTP handlers.
@@ -59,12 +61,14 @@ type Router struct {
 }
 
 func NewRouter(
+	lc fx.Lifecycle,
 	security *SecurityConfig,
 	eventManager *EventManager,
 	handlers Handlers,
 	cfg *config.Config,
 	shutdownCh chan struct{},
 	flowChecker wshub.FlowAccessChecker,
+	redisClient *redis.Client,
 ) *Router {
 	rt := &Router{
 		security:       security,
@@ -73,12 +77,17 @@ func NewRouter(
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		trustedProxies: cfg.Server.TrustedProxies,
 		staticDir:      cfg.Server.StaticDir,
-		hub:            wshub.NewHub(),
-		flowChecker:    flowChecker,
-		usedTickets:    make(map[string]time.Time),
-		shutdownCh:     shutdownCh,
-		mux:            chi.NewRouter(),
+		// nil client (PAD_REDIS_URL unset) → in-memory hub; otherwise a Redis
+		// pub/sub + presence backplane so presence/broadcasts span replicas.
+		hub:         wshub.NewHubWithRedis(redisClient),
+		flowChecker: flowChecker,
+		usedTickets: make(map[string]time.Time),
+		shutdownCh:  shutdownCh,
+		mux:         chi.NewRouter(),
 	}
+
+	// Release the hub's backplane subscriber on shutdown (no-op in-memory).
+	lc.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
 
 	// Wire the WebSocket hub as a flow-change notifier so that library
 	// saves broadcast to all connected viewers.
@@ -244,7 +253,18 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if rt.security.AuthMgr != nil {
 		isRevoked = rt.security.AuthMgr.IsRevoked
 	}
-	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins, rt.flowChecker, claims.ID, isRevoked)(w, r)
+	// Pass the SOURCE access token's JTI/expiry (carried in the ticket via
+	// SrcJTI/SrcExp), NOT the ticket's own JTI: the ticket JTI is only
+	// blacklisted for ~30s at consumption, so re-checking it would never fire
+	// after that. The access-token JTI is what logout/revoke actually
+	// blacklists, so the WS re-authz goroutine can disconnect a logged-out
+	// user's live socket.
+	accessJTI := claims.SrcJTI
+	var accessExp time.Time
+	if claims.SrcExp != nil {
+		accessExp = claims.SrcExp.Time
+	}
+	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins, rt.flowChecker, accessJTI, accessExp, isRevoked)(w, r)
 }
 
 // --- Ticket store ---

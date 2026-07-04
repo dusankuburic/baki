@@ -257,6 +257,16 @@ func (h *AuthHandler) resolveSSOUser(ctx context.Context, ident *sso.Identity) (
 			if err := h.backend.SaveUser(ctx, existing); err != nil {
 				return nil, fmt.Errorf("failed to harden account — try again")
 			}
+			// Invalidate any outstanding password-reset / email-verify tokens
+			// for this account. Clearing the password closes the shadow-login
+			// vector, but an attacker who created the shadow registration could
+			// have already requested a reset link — without this, that link
+			// would remain redeemable and let them re-arm a known password
+			// AFTER the legitimate owner takes the account over via SSO.
+			if err := h.backend.InvalidateUserTokens(ctx, existing.ID,
+				storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
+				logger.Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
+			}
 			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "email", ident.Email)
 		}
 

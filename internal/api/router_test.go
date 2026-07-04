@@ -46,16 +46,27 @@ func TestRouter_WrongToken_Returns401(t *testing.T) {
 	}
 }
 
-func TestRouter_TokenInQuery_IsAccepted(t *testing.T) {
+func TestRouter_TokenInQuery_RejectedOnNonSSEPath(t *testing.T) {
 	rt := newLocalTestRouter()
 
+	// Non-SSE path: token in query must be rejected (401) so access JWTs don't
+	// leak into proxy/browser logs. The Authorization header is the only
+	// accepted channel outside /api/events (whose acceptance is covered by the
+	// auth package's ExtractToken/Middleware unit tests).
 	req := httptest.NewRequest(http.MethodGet, "/api/system/info?token="+testToken, nil)
 	rr := httptest.NewRecorder()
 	rt.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("non-SSE path: token in query must be rejected, got status %d", rr.Code)
+	}
 
-	// 401 would mean the auth check failed; anything else means we passed auth
+	// Sanity: the same token via the header still works on this path.
+	req = httptest.NewRequest(http.MethodGet, "/api/system/info", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rr = httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
 	if rr.Code == http.StatusUnauthorized {
-		t.Error("token in query should be accepted")
+		t.Error("non-SSE path: same token via header should be accepted")
 	}
 }
 

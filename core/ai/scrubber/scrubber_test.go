@@ -252,3 +252,41 @@ func TestNormalizeFieldName(t *testing.T) {
 		}
 	}
 }
+
+// TestLooksLikeHighEntropySecret_LengthTieredAndPathGuard pins the S3 tuning:
+// the entropy threshold is lowered for long opaque strings (so a 64-char hex
+// token entropying ~3.7 is caught, where the old flat >4.0 bar missed it), while
+// filesystem paths — which also clear the entropy bar — are excluded so the AI
+// keeps them for analysing file/folder actions. Entropies were measured with
+// shannonEntropy; see the S3 note in docs/IMPROVEMENTS.md.
+func TestLooksLikeHighEntropySecret_LengthTieredAndPathGuard(t *testing.T) {
+	// Long opaque hex token (64 chars, entropy ~3.67): previously missed by the
+	// flat >4.0 threshold, now caught by the len>50 ⇒ >3.5 tier.
+	hexToken := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if !looksLikeHighEntropySecret(hexToken) {
+		t.Errorf("expected long low-entropy hex token (len>50) to be flagged, got false (entropy=%.2f)", shannonEntropy(hexToken))
+	}
+
+	// Filesystem paths: long, space-free, entropy >4.0, but NOT secrets. The
+	// path guard must keep them regardless of the entropy tier.
+	for _, path := range []string{
+		`C:\Users\john.doe\Documents\Projects\Reports\Quarterly`, // Windows, entropy ~4.24
+		"/home/john.doe/projects/reports/quarterly/2024/final",   // POSIX, entropy ~4.25
+	} {
+		if looksLikeHighEntropySecret(path) {
+			t.Errorf("expected filesystem path to be preserved (path guard), got flagged: %q", path)
+		}
+	}
+
+	// Short opaque token (len ≤ 50) still needs the strict >4.0 bar; a short
+	// low-entropy identifier must not be masked.
+	shortIdent := "server-prod-us-east-1-primary" // 29 chars, entropy < 4.0, no spaces
+	if looksLikeHighEntropySecret(shortIdent) {
+		t.Errorf("expected short low-entropy identifier to be left intact, got flagged: %q", shortIdent)
+	}
+
+	// Sanity: the existing high-entropy 39-char token stays flagged.
+	if !looksLikeHighEntropySecret("a8F3kZ9pQ2rL7mW4xY1nB6tV0cD5eH8jK3gS2uP") {
+		t.Error("expected the canonical 39-char high-entropy token to be flagged")
+	}
+}

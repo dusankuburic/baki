@@ -16,6 +16,24 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
+// resolveEndpoint returns the OTLP endpoint to use, falling back from the
+// explicitly-configured value to the standard OTEL_EXPORTER_OTLP_ENDPOINT env
+// var. An empty result means tracing/export is disabled.
+func resolveEndpoint(otlpEndpoint string) string {
+	if otlpEndpoint != "" {
+		return otlpEndpoint
+	}
+	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+}
+
+// TracingEnabled reports whether an OTLP exporter is configured (so spans are
+// actually exported). Used to decide whether to register the exception sink:
+// with no exporter, forwarding exceptions to spans would be dropped anyway, so
+// errreport stays in its metrics-only default.
+func TracingEnabled(otlpEndpoint string) bool {
+	return resolveEndpoint(otlpEndpoint) != ""
+}
+
 // Init initializes the OpenTelemetry SDK.
 // It sets up the OTLP exporter if APPLICATIONINSIGHTS_CONNECTION_STRING or
 // OTEL_EXPORTER_OTLP_ENDPOINT is provided.
@@ -44,10 +62,7 @@ func Init(ctx context.Context, serviceName, version, otlpEndpoint string) (func(
 	// 3. Setup Exporter
 	// We check for OTEL_EXPORTER_OTLP_ENDPOINT (standard)
 	// Azure Application Insights can be configured to receive OTLP via this endpoint.
-	endpoint := otlpEndpoint
-	if endpoint == "" {
-		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	}
+	endpoint := resolveEndpoint(otlpEndpoint)
 	if endpoint != "" {
 		slog.Info("telemetry: initializing OTLP exporter", "endpoint", endpoint)
 		exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpoint(endpoint))

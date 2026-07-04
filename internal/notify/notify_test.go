@@ -96,7 +96,10 @@ func TestDispatcher_FansOutToAllChannels(t *testing.T) {
 	}))
 	defer teams.Close()
 
-	d := New(Config{WebhookURL: webhook.URL, TeamsURL: teams.URL})
+	d, err := New(Config{WebhookURL: webhook.URL, TeamsURL: teams.URL})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if !d.Enabled() {
 		t.Fatal("expected dispatcher to be enabled with two channels")
 	}
@@ -111,7 +114,10 @@ func TestDispatcher_FansOutToAllChannels(t *testing.T) {
 }
 
 func TestDispatcher_DisabledWhenNoChannels(t *testing.T) {
-	d := New(Config{})
+	d, err := New(Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	if d.Enabled() {
 		t.Error("dispatcher with no URLs should be disabled")
 	}
@@ -140,7 +146,10 @@ func TestDispatcher_FailingChannelDoesNotPropagateOrBlockOthers(t *testing.T) {
 	defer good.Close()
 
 	// webhook (bad) first, teams (good) second — the good channel must still fire.
-	d := New(Config{WebhookURL: bad.URL, TeamsURL: good.URL})
+	d, err := New(Config{WebhookURL: bad.URL, TeamsURL: good.URL})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	d.Dispatch(context.Background(), sampleEvent()) // logs the failure, does not panic
 
 	if goodHits.Load() != 1 {
@@ -158,5 +167,35 @@ func TestWebhookNotifier_RespectsTimeout(t *testing.T) {
 	n := &WebhookNotifier{URL: srv.URL, Client: &http.Client{Timeout: 25 * time.Millisecond}}
 	if err := n.Notify(context.Background(), sampleEvent()); err == nil {
 		t.Error("expected a timeout error from a slow endpoint")
+	}
+}
+
+// TestNew_RejectsPlaintextAlertURL is the regression test for the cleartext-
+// alert leak: governance payloads carry internal flow names / finding counts,
+// so a non-HTTPS alert URL must be rejected at construction rather than
+// silently broadcasting those details in plaintext over the wire.
+func TestNew_RejectsPlaintextAlertURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"https accepted", "https://hooks.example.com/baki", false},
+		{"http localhost accepted (dev)", "http://localhost:9000/hook", false},
+		{"http 127.0.0.1 accepted (dev)", "http://127.0.0.1:9000/hook", false},
+		{"plaintext remote rejected", "http://hooks.internal.local/baki", true},
+		{"ftp rejected", "ftp://hooks.example.com/baki", true},
+		{"empty accepted (channel disabled)", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := New(Config{WebhookURL: c.url})
+			if c.wantErr && err == nil {
+				t.Errorf("expected error for URL %q, got nil", c.url)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("unexpected error for URL %q: %v", c.url, err)
+			}
+		})
 	}
 }

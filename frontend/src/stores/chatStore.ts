@@ -2,6 +2,12 @@ import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {ChatMessage, ProviderID} from '@/types'
 
+// Mirrors the backend per-caller concurrency cap in internal/service/chat.go
+// (maxConcurrentStreamsPerScope). The backend is authoritative; this constant
+// lets the client give immediate feedback (disable Send + tooltip) instead of
+// waiting for a rejected POST. Keep the two in sync.
+export const MAX_CONCURRENT_STREAMS = 3
+
 export interface ChatThread {
   id: string
   flowId: string
@@ -15,13 +21,25 @@ export interface ChatThread {
   useTools?: boolean
 }
 
+// StreamSlot is one thread's in-flight AI response. Streams are per-thread so
+// several threads can generate in parallel; the thinking/tokens/tool state
+// lives here (not in hook-local state) so a background thread's progress
+// survives switching tabs away and back.
+export interface StreamSlot {
+  streamId: string
+  messageId: string
+  text: string
+  isThinking: boolean
+  tokens: number
+  toolStatus: string | null
+}
+
 interface ChatState {
   threads: ChatThread[]
   activeThreadId: string | null
   conversations: Map<string, ChatMessage[]>
-  activeStreamId: string | null
-  streamingMessageId: string | null
-  streamingText: string
+  // streams maps threadId → its in-flight response; absent = not streaming.
+  streams: Record<string, StreamSlot>
   selectedProvider: ProviderID
   pendingMessage: {text: string; contextBlockId?: string} | null
 
@@ -30,9 +48,18 @@ interface ChatState {
   removeMessage: (threadId: string, messageId: string) => void
   clearThreadMessages: (threadId: string) => void
   compactThread: (threadId: string, keepPairs: number) => void
-  updateStreamingMessage: (text: string) => void
-  startStream: (streamId: string, messageId: string) => void
-  endStream: () => void
+  updateStreamingMessage: (threadId: string, text: string) => void
+  startStream: (threadId: string, streamId: string, messageId: string) => void
+  endStream: (threadId: string) => void
+  setStreamMeta: (threadId: string, patch: Partial<Pick<StreamSlot, 'isThinking' | 'tokens' | 'toolStatus'>>) => void
+  // updateStream patches text AND meta in one atomic set, halving the per-frame
+  // subscriber notifications during streaming (the high-frequency RAF-coalesced
+  // flush otherwise issues two set() calls — text + tokens — at 60fps).
+  updateStream: (threadId: string, patch: Partial<Pick<StreamSlot, 'text' | 'isThinking' | 'tokens' | 'toolStatus'>>) => void
+  // activeStreamCount is the number of threads currently generating. Used by
+  // the client-side cap guard (see MAX_CONCURRENT_STREAMS).
+  activeStreamCount: () => number
+  canStartStream: () => boolean
 
   createThread: (flowId: string) => string
   switchThread: (threadId: string) => void
@@ -52,9 +79,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   threads: [],
   activeThreadId: null,
   conversations: new Map(),
-  activeStreamId: null,
-  streamingMessageId: null,
-  streamingText: '',
+  streams: {},
   selectedProvider: 'claude',
   pendingMessage: null,
 
@@ -98,19 +123,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return {conversations: next}
   }),
 
-  updateStreamingMessage: (text) => set({streamingText: text}),
-
-  startStream: (streamId, messageId) => set({
-    activeStreamId: streamId,
-    streamingMessageId: messageId,
-    streamingText: '',
+  updateStreamingMessage: (threadId, text) => set(state => {
+    const slot = state.streams[threadId]
+    if (!slot) return state
+    return {streams: {...state.streams, [threadId]: {...slot, text}}}
   }),
 
-  endStream: () => set({
-    activeStreamId: null,
-    streamingMessageId: null,
-    streamingText: '',
+  startStream: (threadId, streamId, messageId) => set(state => ({
+    streams: {
+      ...state.streams,
+      [threadId]: {streamId, messageId, text: '', isThinking: true, tokens: 0, toolStatus: null},
+    },
+  })),
+
+  endStream: (threadId) => set(state => {
+    if (!(threadId in state.streams)) return state
+    const next = {...state.streams}
+    delete next[threadId]
+    return {streams: next}
   }),
+
+  setStreamMeta: (threadId, patch) => set(state => {
+    const slot = state.streams[threadId]
+    if (!slot) return state
+    return {streams: {...state.streams, [threadId]: {...slot, ...patch}}}
+  }),
+
+  updateStream: (threadId, patch) => set(state => {
+    const slot = state.streams[threadId]
+    if (!slot) return state
+    return {streams: {...state.streams, [threadId]: {...slot, ...patch}}}
+  }),
+
+  activeStreamCount: () => Object.keys(get().streams).length,
+  canStartStream: () => get().activeStreamCount() < MAX_CONCURRENT_STREAMS,
 
   createThread: (flowId) => {
     const id = crypto.randomUUID()
@@ -144,10 +190,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const remaining = state.threads.filter(t => t.id !== threadId)
     const next = new Map(state.conversations)
     next.delete(threadId)
+    // Drop any in-flight stream slot with the thread; late events for its
+    // streamId find no slot and are ignored.
+    let streams = state.streams
+    if (threadId in streams) {
+      streams = {...streams}
+      delete streams[threadId]
+    }
     const activeThreadId = state.activeThreadId === threadId
       ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
       : state.activeThreadId
-    return {threads: remaining, conversations: next, activeThreadId}
+    return {threads: remaining, conversations: next, activeThreadId, streams}
   }),
 
   updateThread: (threadId, patch) => set(state => ({
@@ -180,6 +233,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
 // Reset on logout (see storeRegistry).
 registerStoreReset(() => useChatStore.setState({
-  threads: [], activeThreadId: null, conversations: new Map(), activeStreamId: null,
-  streamingMessageId: null, streamingText: '', pendingMessage: null, selectedProvider: 'claude',
+  threads: [], activeThreadId: null, conversations: new Map(), streams: {},
+  pendingMessage: null, selectedProvider: 'claude',
 }))

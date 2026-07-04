@@ -2,18 +2,30 @@ import {request} from './client'
 import {createAdapter} from '@/platform/adapters'
 import type {ChatRequest, ChatMessage, ConversationFile, ContextPreview} from '@/types'
 
+// BeginStreamResult reports whether the stream is live (events arrive over
+// SSE) or already finished — a fail-fast pre-stream error emits its terminal
+// event before the client subscribes, so /begin returns that state directly.
+export interface BeginStreamResult {
+  status: 'ok' | 'finished'
+  text?: string
+  done?: boolean
+  error?: string
+  tokensIn?: number
+  tokensOut?: number
+}
+
 export const chatApi = {
   streamChatMessage: (req: ChatRequest): Promise<string> =>
     request('/api/chat/stream', req),
 
-  beginStream: (id: string): Promise<void> =>
+  beginStream: (id: string): Promise<BeginStreamResult> =>
     request('/api/chat/begin', {id}),
 
   cancelStream: (id: string): Promise<void> =>
     request('/api/chat/cancel', {id}),
 
-  resumeStream: (id: string): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
-    request('/api/chat/resume', {id}),
+  resumeStream: (id: string, from = 0): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
+    request('/api/chat/resume', {id, from}),
 
   getConversation: (flowId: string, provider: string): Promise<ConversationFile> =>
     request('/api/chat/get', {flowId, provider}),

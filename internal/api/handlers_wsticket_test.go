@@ -77,7 +77,7 @@ func TestWS_RejectsAccessTokenAsTicket(t *testing.T) {
 // is NOT a 401, while the replay IS a 401.)
 func TestWS_TicketIsSingleUse(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	ticket, _, err := rt.security.AuthMgr.IssueWSTicket("user-1", "alice@example.com", auth.RoleAdmin)
+	ticket, _, err := rt.security.AuthMgr.IssueWSTicket("user-1", "alice@example.com", auth.RoleAdmin, "", time.Time{})
 	if err != nil {
 		t.Fatalf("IssueWSTicket: %v", err)
 	}

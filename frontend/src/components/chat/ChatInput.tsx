@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import {Square, Eye, ArrowUp, Maximize2, FileText, X} from 'lucide-react'
 import {useRef, useEffect, useCallback, useState, useMemo} from 'react'
-import {useChatStore} from '@/stores/chatStore'
+import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import FileAutocomplete from './FileAutocomplete'
 import SlashCommandAutocomplete from './SlashCommandAutocomplete'
@@ -28,7 +28,12 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   
   const activeThreadId = useChatStore(s => s.activeThreadId)
-  const streaming = useChatStore(s => s.activeStreamId !== null)
+  // Per-thread streaming: the Send/Stop toggle reflects ONLY the active thread
+  // so the user can keep composing in other idle threads while one generates.
+  const streaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
+  // Global cap (mirrors backend): once MAX_CONCURRENT_STREAMS threads are
+  // generating, disable Send across the board with a tooltip.
+  const atCap = useChatStore(s => Object.keys(s.streams).length >= MAX_CONCURRENT_STREAMS)
   const provider = useChatStore(s => s.selectedProvider)
   const aiSettings = useSettingsStore(s => s.settings.ai)
   
@@ -39,6 +44,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   }, [activeThreadId])
 
   const isDisabled = disabled || streaming
+  const capTooltip = atCap && !streaming ? `${MAX_CONCURRENT_STREAMS} chats are generating — wait for one to finish or stop it` : undefined
 
   useEffect(() => {
     onFilesChange?.(taggedFiles)
@@ -247,10 +253,11 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!hasContent || isDisabled}
+                disabled={!hasContent || isDisabled || atCap}
+                title={capTooltip}
                 className={clsx(
                   'p-1.5 rounded-lg transition-all',
-                  hasContent 
+                  hasContent && !atCap
                     ? 'bg-brand-500 text-brand-foreground shadow-lg shadow-brand-500/20 hover:bg-brand-600'
                     : 'text-text-tertiary hover:bg-surface-3'
                 )}

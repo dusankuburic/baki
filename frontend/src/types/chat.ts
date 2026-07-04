@@ -30,6 +30,10 @@ export interface ChatRequest {
   demoMode?: boolean;
   excludeContext?: boolean;
   useTools?: boolean;
+  // C-1: client-generated stream ID. When set, the client subscribes its SSE
+  // listener before POSTing create, so the backend emits immediately with no
+  // /chat/begin round-trip. Omitted ⇒ legacy two-POST handshake.
+  clientStreamId?: string;
 }
 
 export interface ChatResponse {

@@ -65,7 +65,8 @@ func (s *ExportService) ExportMarkdown(doc *models.FlowDocument, report *models.
 		if err = validateUserPath(path); err != nil {
 			return nil, err
 		}
-		if err = os.WriteFile(path, content, 0644); err != nil { // #nosec G306 -- user-chosen export path; world-readable is intended for sharing
+		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
+		if err = os.WriteFile(path, content, 0644); err != nil {
 			return nil, fmt.Errorf("write file: %w", err)
 		}
 	}
@@ -93,7 +94,8 @@ func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.Analy
 		if err = validateUserPath(path); err != nil {
 			return nil, err
 		}
-		if err = os.WriteFile(path, pdfBytes, 0644); err != nil { // #nosec G306 -- user-chosen export path; world-readable is intended for sharing
+		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
+		if err = os.WriteFile(path, pdfBytes, 0644); err != nil {
 			return nil, fmt.Errorf("write file: %w", err)
 		}
 	}

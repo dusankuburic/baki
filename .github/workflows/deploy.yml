@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
     inputs:
       environment:
@@ -62,9 +62,30 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  scan:
+    name: Vulnerability scan
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      # GHCR images are private; authenticate so Trivy can pull by digest.
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # S4 (IMPROVEMENTS.md): gate releases on image vulnerability scanning.
+      # Fails the job (and therefore deploy) on any HIGH/CRITICAL finding that
+      # has a published fix; unfixed issues are reported but non-blocking.
+      - uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
   deploy:
     name: Deploy to ${{ github.event.inputs.environment || 'staging' }}
-    needs: build-and-push
+    needs: [build-and-push, scan]
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'staging' }}
     steps:
@@ -76,20 +97,22 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: azure/container-apps-deploy-action@v2
+      # Deploy the hardened IaC (infra/main.bicep) so the container
+      # securityContext (#19: non-root, cap-drop-ALL, read-only root fs) and
+      # reproducible environment (#13) are applied at deploy time. The image is
+      # pinned by digest from the build job — a floating tag can't sneak in.
+      # The resource group must pre-exist (the Bicep is resource-group scoped).
+      - uses: azure/arm-deploy-action@v2
         with:
-          appSourcePath: .
-          acrName: ${{ secrets.AZURE_ACR_NAME }}
-          containerAppName: ${{ secrets.AZURE_CONTAINER_APP_NAME }}
-          resourceGroup: ${{ secrets.AZURE_RESOURCE_GROUP }}
-          imageToDeploy: ${{ needs.build-and-push.outputs.image-tag }}
-          environmentVariables: |
-            PAD_AUTH_SECRET=${{ secrets.PAD_AUTH_SECRET }}
-            PAD_DATABASE_URL=${{ secrets.PAD_DATABASE_URL }}
-            PAD_MODE=cloud
-            PAD_AUTH_ENABLED=true
-            PAD_STORAGE=database
-            PAD_BEHIND_PROXY=true
+          resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          template: infra/main.bicep
+          parameters: >
+            appName=${{ secrets.AZURE_CONTAINER_APP_NAME }}
+            image=ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
+            authSecret=${{ secrets.PAD_AUTH_SECRET }}
+            databaseUrl=${{ secrets.PAD_DATABASE_URL }}
+            keyVaultUrl=${{ secrets.PAD_KEYVAULT_URL }}
+            storageAccountResourceId=${{ secrets.AZURE_STORAGE_ACCOUNT_ID }}
 
       - name: Smoke test
         shell: bash

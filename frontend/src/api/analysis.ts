@@ -1,5 +1,9 @@
 import {request} from './client'
 import {useFlowStore} from '@/stores/flowStore'
+
+// Folder-wide batch analysis can run rules over many flows, well beyond the
+// default request timeout.
+const BATCH_ANALYSIS_TIMEOUT_MS = 300_000
 import type {AnalysisReport, VariableHistory, GraphData, Rule, RuleConfig, FlowMetrics, DataFlowAnalysis, AnalysisSnapshot, BatchAnalysis, AnalysisDiff, DependencyAnalysis, DashboardStats, SubflowHash, DeduplicateResult, FlowComparison, Finding, FindingStatus, FlowBaseline, TriageStatus} from '@/types'
 
 // Input for setFindingStatus. flowId defaults to the active flow.
@@ -54,7 +58,7 @@ export const analysisApi = {
     request('/api/analysis/history', {flowId: activeFlowId()}),
 
   batchAnalyze: (folderPath: string): Promise<BatchAnalysis> =>
-    request('/api/analysis/batch', {folderPath}),
+    request('/api/analysis/batch', {folderPath}, 'POST', BATCH_ANALYSIS_TIMEOUT_MS),
 
   getDiff: (): Promise<AnalysisDiff> =>
     request('/api/analysis/diff', {flowId: activeFlowId()}),

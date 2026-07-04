@@ -2,15 +2,18 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"pad-analyzer/internal/sso"
 	"pad-analyzer/internal/storage/filesystem"
+	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
 // fakeSSOClient stands in for the OIDC relying party: AuthCodeURL returns a
@@ -306,4 +309,49 @@ func TestSSOEndpoints_404WhenNotConfigured(t *testing.T) {
 	}
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/sso/exchange", "", map[string]any{"ticket": "x"})
 	checkStatus(t, rr, http.StatusNotFound)
+}
+
+// TestSSOCallback_HardeningInvalidatesOutstandingResetToken is the regression
+// test for the SSO account-takeover gap: when a verified SSO identity links an
+// existing UNVERIFIED local account, resolveSSOUser strips the shadow password
+// to prevent the original (attacker) credential from being used. But until the
+// fix that path used SaveUser, not UpdateUserPassword, so outstanding
+// password-reset tokens for the shadow account stayed valid — letting an
+// attacker who requested a reset link before the SSO link re-arm a known
+// password AFTER the legitimate owner took the account over. The reset token
+// must be invalidated when the password is stripped.
+func TestSSOCallback_HardeningInvalidatesOutstandingResetToken(t *testing.T) {
+	rt, client, _ := newSSOTestRig(t)
+	ctx := context.Background()
+
+	// Shadow account: unverified email (seedUserWithRole leaves EmailVerified
+	// false) carrying an attacker-set password.
+	seedUserWithRole(t, rt, "u-shadow", "shadow@example.com", "member")
+
+	// Attacker has an outstanding reset token for this account.
+	resetTok := &storageif.UserToken{
+		TokenHash: "shadow-reset-hash",
+		Purpose:   storageif.TokenPurposePasswordReset,
+		UserID:    "u-shadow",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := rt.security.Backend.CreateUserToken(ctx, resetTok); err != nil {
+		t.Fatalf("CreateUserToken: %v", err)
+	}
+
+	// Legitimate owner authenticates via SSO with a verified email — this
+	// triggers the hardening branch in resolveSSOUser.
+	client.identities["code-harden"] = &sso.Identity{
+		Subject: "sub-harden", Email: "shadow@example.com", EmailVerified: true,
+	}
+	cookie, state := startSSOFlow(t, rt)
+	rr := completeCallback(t, rt, cookie, state, "code-harden")
+	checkStatus(t, rr, http.StatusFound)
+	ticketFromRedirect(t, rr) // success redirect → linking + hardening completed
+
+	// The attacker's reset token must now be unredeemable.
+	_, err := rt.security.Backend.ConsumeUserToken(ctx, storageif.TokenPurposePasswordReset, "shadow-reset-hash")
+	if !errors.Is(err, storageif.ErrNotFound) {
+		t.Errorf("expected reset token invalidated after SSO hardening, got err=%v", err)
+	}
 }

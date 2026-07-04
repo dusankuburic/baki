@@ -102,7 +102,7 @@ var APIModule = fx.Options(
 		api.NewDashboardHandler,
 		api.NewExportHandler,
 		api.NewAuthHandler,
-		func(cfg *config.Config) *mail.Service { return mail.NewService(cfg.Email) },
+		func(cfg *config.Config) *mail.Service { return mail.NewService(cfg.Email, cfg.Mode) },
 		api.NewAdminHandler,
 		api.NewProviderHandler,
 		api.NewOrgHandler,

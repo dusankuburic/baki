@@ -1,5 +1,5 @@
 # Stage 1: Build the frontend
-FROM node:20-alpine AS frontend-builder
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -9,7 +9,7 @@ ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 
 # Stage 2: Build the backend
-FROM golang:1.25-alpine AS backend-builder
+FROM golang:1.25-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY core/go.mod core/go.sum ./core/
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o baki-backend main.go
 
 # Stage 3: Final lean image
-FROM alpine:3.21
+FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 RUN apk add --no-cache ca-certificates wget
 
 RUN addgroup -g 1000 -S pad && adduser -u 1000 -S pad -G pad \

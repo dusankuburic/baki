@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/metrics"
@@ -55,7 +56,8 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	start := time.Now()
 	var tokensIn, tokensOut int
-	var sawChunkErr bool
+	var sawChunkErr, sawDone bool
+	var streamed strings.Builder
 
 	wrappedOnChunk := func(c Chunk) {
 		if c.TokensIn > 0 {
@@ -67,7 +69,9 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		if c.Error != nil {
 			sawChunkErr = true
 		}
+		streamed.WriteString(c.Text)
 		if c.Done {
+			sawDone = true
 			metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
 			p.record(ctx, req.Model, req.OrgID, tokensIn, tokensOut)
 		}
@@ -78,6 +82,27 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 	metrics.ObserveAIRequest(p.providerID, time.Since(start).Seconds())
 	if err != nil || sawChunkErr {
 		metrics.RecordAIError(p.providerID)
+	}
+	// A stream that ended without a Done chunk (truncation, mid-stream error,
+	// cancel) still consumed provider tokens; usage arrives on the Done chunk,
+	// so those streams previously recorded nothing and their cost never counted
+	// against the daily budget. Record whatever the provider reported, falling
+	// back to estimates. Gated on evidence that the request actually reached
+	// the provider (some output or an upstream error event) so failures before
+	// the request was accepted — circuit open, connection refused — aren't
+	// billed an input-token estimate for a call that consumed nothing.
+	if !sawDone && (streamed.Len() > 0 || tokensIn > 0 || tokensOut > 0 || sawChunkErr) {
+		if tokensOut == 0 {
+			tokensOut = p.inner.EstimateTokens(streamed.String())
+		}
+		if tokensIn == 0 {
+			tokensIn = p.inner.EstimateTokens(req.SystemPrompt)
+			for _, m := range req.Messages {
+				tokensIn += p.inner.EstimateTokens(m.Content)
+			}
+		}
+		metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
+		p.record(ctx, req.Model, req.OrgID, tokensIn, tokensOut)
 	}
 	return err
 }
@@ -104,6 +129,7 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	}
 	if !found {
 		pricing = p.inner.PricePerMillionTokens()
+		metrics.RecordPricingFallback(p.providerID, modelID)
 		logger.Warn("AI usage priced from provider default — model not in catalog",
 			"provider", p.providerID, "model", modelID)
 	}
@@ -126,17 +152,33 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 		CreatedAt:        time.Now(),
 	}
 
-	// Asynchronously record the usage so it doesn't block the caller
+	// Asynchronously record the usage so it doesn't block the caller.
+	//
+	// The semaphore acquire is NON-blocking: when maxConcurrentRecords recorders
+	// are already in flight we DROP this metric (counted via
+	// metrics.RecordUsageDropped) rather than spawning another goroutine that
+	// parks on the send. This bounds the goroutine count to maxConcurrentRecords
+	// under any load — previously each finished AI request spawned a goroutine
+	// that blocked on recordSem, so a slow DB recorder under traffic could grow
+	// the goroutine set without limit (OOM). Usage metrics are best-effort, so
+	// shedding under saturation is the correct backpressure signal.
 	// #nosec G118 -- intentionally detached: usage logging must outlive the request ctx.
+	select {
+	case p.recordSem <- struct{}{}:
+	default:
+		metrics.RecordUsageDropped("saturated")
+		logger.Warn("AI usage metric dropped — recorder saturated",
+			"provider", p.providerID, "model", modelID)
+		return
+	}
 	go func() {
 		defer func() {
+			<-p.recordSem
 			if r := recover(); r != nil {
 				logger.Warn("AI usage recording panicked",
 					"provider", p.providerID, "model", modelID, "panic", r)
 			}
 		}()
-		p.recordSem <- struct{}{}
-		defer func() { <-p.recordSem }()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := p.recorder(ctx, &metric); err != nil {

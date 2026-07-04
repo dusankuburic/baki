@@ -46,27 +46,48 @@ const (
 	emailVerifyTTL   = 24 * time.Hour
 )
 
+// credentials is the shared {email, password} JSON body of the register and
+// login endpoints. Extracted so the decode + email-normalization logic lives in
+// one place instead of being duplicated across the two handlers.
+type credentials struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// decodeCredentials reads the request body and returns the normalized email
+// (lowercased/trimmed via validateEmail) together with the raw password.
+//
+// Two errors are returned so each caller can apply its own policy:
+//   - err:      a malformed/missing JSON body (both handlers treat this as 400).
+//   - emailErr: an email-validation failure. Register treats it as a 400, but
+//     login ignores it and lets the user lookup decide, so that an empty or
+//     malformed email yields 401 "invalid credentials" rather than revealing
+//     input-validation rules (and without changing the login response shape).
+func decodeCredentials(r *http.Request) (email, password string, emailErr error, err error) {
+	var c credentials
+	if err = json.NewDecoder(r.Body).Decode(&c); err != nil {
+		return "", "", nil, err
+	}
+	email, emailErr = validateEmail(c.Email)
+	return email, c.Password, emailErr, nil
+}
+
 func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("registration not available in local mode"), http.StatusForbidden)
 		return
 	}
 	metrics.RecordAuthOp("register")
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	email, err := validateEmail(req.Email)
+	email, password, emailErr, err := decodeCredentials(r)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	if err := validatePasswordStrength(req.Password); err != nil {
+	if emailErr != nil {
+		render.Error(w, emailErr, http.StatusBadRequest)
+		return
+	}
+	if err := validatePasswordStrength(password); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -76,7 +97,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	hashed, err := auth.HashPassword(req.Password)
+	hashed, err := auth.HashPassword(password)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -142,16 +163,14 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.RecordAuthOp("login")
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Login ignores the email-validation error (emailErr) and normalizes only:
+	// an empty/malformed email proceeds to the lookup and returns 401, matching
+	// the long-standing response shape and avoiding leaking input rules.
+	email, password, _, err := decodeCredentials(r)
+	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-
-	email, _ := validateEmail(req.Email) // normalization only here; load handles mismatch
 
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
@@ -167,7 +186,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		// leak whether an email exists. bcrypt is expensive; if we
 		// return immediately for non-existent users, attackers can
 		// enumerate your user list.
-		auth.CheckPasswordHash(req.Password, "$2a$12$R.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v")
+		auth.CheckPasswordHash(password, "$2a$12$R.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v.8j9.v")
 
 		render.Error(w, fmt.Errorf("invalid credentials"), http.StatusUnauthorized)
 		return
@@ -178,7 +197,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	// account returns in ~1ms (DB lookup only) while an unlocked account
 	// with a wrong password takes ~50ms (DB + bcrypt), allowing attackers
 	// to distinguish locked from unlocked accounts by timing.
-	passwordValid := auth.CheckPasswordHash(req.Password, user.Password)
+	passwordValid := auth.CheckPasswordHash(password, user.Password)
 
 	// Check lock status AFTER bcrypt so timing is consistent.
 	if user.LockedUntil != nil && time.Now().UTC().Before(*user.LockedUntil) {
@@ -403,6 +422,77 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// handleAuthDeleteAccount performs self-service account erasure (GDPR "right to
+// be forgotten"). It requires the caller to confirm by supplying their own
+// email — auth is Bearer (not cookies), but the confirmation still guards
+// against stolen-token / drive-by deletion. The caller's current access token
+// is revoked immediately so the erased account can't keep acting until its
+// short-lived JWT would have expired.
+func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		ConfirmEmail string `json:"confirmEmail"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if claims.Email == "" || !strings.EqualFold(strings.TrimSpace(req.ConfirmEmail), claims.Email) {
+		render.Error(w, fmt.Errorf("confirmation email does not match the account"), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.backend.DeleteUser(r.Context(), claims.UserID); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
+		if tokClaims, err := h.security.AuthMgr.VerifyIgnoreExpiry(tokenStr); err == nil && tokClaims.ID != "" {
+			h.security.AuthMgr.Revoke(tokClaims)
+		}
+	}
+
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAccountDelete, "user", claims.UserID, nil)
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// handleAuthExportAccount returns a data-subject access / portability bundle for
+// the caller's own account.
+func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Request) {
+	claims := auth.ClaimsFromContext(r.Context())
+	if claims == nil {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
+		return
+	}
+	export, err := h.backend.ExportUserData(r.Context(), claims.UserID)
+	if err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			render.Error(w, err, http.StatusNotFound)
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionDataExport, "user", claims.UserID, nil)
+
+	filename := fmt.Sprintf("baki-account-export-%s.json", claims.UserID)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	render.JSON(w, export)
+}
+
 // handleAuthSessions lists the caller's active sessions (non-revoked,
 // non-expired refresh tokens). In local (non-JWT) mode, or if no token store
 // is configured, it returns an empty list.
@@ -533,6 +623,15 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Invalidate any outstanding password-reset / email-verify tokens: a user
+	// who changes their password through the logged-in UI must not remain
+	// recoverable via a previously-issued reset link (defense against leaked
+	// links being redeemed after the password is already rotated).
+	if err := h.backend.InvalidateUserTokens(r.Context(), user.ID,
+		storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
+		logger.Error("failed to invalidate outstanding reset/verify tokens after password change", "error", err, "userID", user.ID)
+	}
+
 	if h.tokenStore != nil {
 		if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), user.ID); err != nil {
 			logger.Error("failed to revoke user refresh tokens after password change", "error", err, "userID", user.ID)
@@ -640,6 +739,13 @@ func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Revoke all other outstanding reset / verify tokens for this user so a
+	// previously-issued (and possibly leaked) reset link can't be redeemed
+	// after the user has already recovered the account.
+	if err := h.backend.InvalidateUserTokens(r.Context(), userID,
+		storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
+		logger.Error("failed to invalidate outstanding reset/verify tokens after reset", "error", err, "userID", userID)
+	}
 	if h.tokenStore != nil {
 		if err := h.tokenStore.RevokeUserRefreshTokens(r.Context(), userID); err != nil {
 			logger.Error("failed to revoke sessions after password reset", "error", err, "userID", userID)
@@ -739,13 +845,20 @@ func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	var userID, email string
 	var role auth.Role
+	// accessJTI/accessExp carry the authenticating access token's identity so
+	// the eventual WebSocket connection can re-check revocation (logout) and
+	// enforce the access token's expiry. Empty in local/static-token mode.
+	var accessJTI string
+	var accessExp time.Time
 	if claims != nil {
 		userID, email, role = claims.UserID, claims.Email, claims.Role
+		accessJTI = claims.ID
+		accessExp = claims.ExpiresAt.Time
 	} else {
 		userID, email, role = h.security.LocalUserID, h.security.LocalName, auth.RoleAdmin
 	}
 
-	ticket, _, err := h.security.AuthMgr.IssueWSTicket(userID, email, role)
+	ticket, _, err := h.security.AuthMgr.IssueWSTicket(userID, email, role, accessJTI, accessExp)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

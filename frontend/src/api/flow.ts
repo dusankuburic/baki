@@ -1,4 +1,8 @@
 import {request} from './client'
+
+// Bulk flow uploads and folder loads can involve parsing many/large files
+// server-side, well beyond the default request timeout.
+const BULK_LOAD_TIMEOUT_MS = 300_000
 import { createAdapter } from '@/platform/adapters'
 import type {FlowDocument, RecentFile, SearchQuery, SearchResults, SourceFileInfo} from '@/types'
 
@@ -15,7 +19,7 @@ export const flowApi = {
       try {
         const data = JSON.parse(result)
         if (data && data.__is_web_upload__) {
-          return request('/api/flow/upload', data)
+          return request('/api/flow/upload', data, 'POST', BULK_LOAD_TIMEOUT_MS)
         }
       } catch {
         // Not a JSON string, must be a path
@@ -36,24 +40,24 @@ export const flowApi = {
       try {
         const data = JSON.parse(result)
         if (data && data.__is_web_upload__) {
-          return request('/api/flow/upload', data)
+          return request('/api/flow/upload', data, 'POST', BULK_LOAD_TIMEOUT_MS)
         }
       } catch {
         // Not a JSON string, must be a path
       }
     }
 
-    return request('/api/flow/load-folder', {path: result})
+    return request('/api/flow/load-folder', {path: result}, 'POST', BULK_LOAD_TIMEOUT_MS)
   },
 
   loadFlowFromPath: (path: string): Promise<FlowDocument | null> =>
     request('/api/flow/load-path', {path}),
 
   loadFlowFolder: (path: string): Promise<FlowDocument | null> =>
-    request('/api/flow/load-folder', {path}),
+    request('/api/flow/load-folder', {path}, 'POST', BULK_LOAD_TIMEOUT_MS),
 
   uploadFlow: (name: string, files: Record<string, string>): Promise<FlowDocument | null> =>
-    request('/api/flow/upload', {name, files}),
+    request('/api/flow/upload', {name, files}, 'POST', BULK_LOAD_TIMEOUT_MS),
 
   recentFiles: (): Promise<RecentFile[]> =>
     request('/api/flow/recent', undefined, 'GET'),

@@ -256,6 +256,9 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		}
 		out.HealthTrend = append(out.HealthTrend, p)
 	}
+	if err := trendRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate health trend: %w", err)
+	}
 
 	// B. Cost breakdown by provider.
 	costRows, err := b.query(ctx).QueryContext(ctx, `
@@ -277,6 +280,9 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 			return nil, fmt.Errorf("scan cost: %w", err)
 		}
 		out.CostByProv = append(out.CostByProv, pc)
+	}
+	if err := costRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate cost by provider: %w", err)
 	}
 
 	// C. Rule frequency distribution (jsonb fan-out on flow_analysis.by_rule).
@@ -300,6 +306,9 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		}
 		out.RuleFreq = append(out.RuleFreq, rf)
 	}
+	if err := ruleRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rule frequency: %w", err)
+	}
 
 	// D. Activity feed from audit_events.
 	actRows, err := b.query(ctx).QueryContext(ctx, `
@@ -320,6 +329,9 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 			return nil, fmt.Errorf("scan activity: %w", err)
 		}
 		out.Activity = append(out.Activity, ae)
+	}
+	if err := actRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate activity: %w", err)
 	}
 
 	// E. Flow complexity scatter: blocks vs findings, colored by health.
@@ -344,6 +356,9 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 			return nil, fmt.Errorf("scan complexity: %w", err)
 		}
 		out.Complexity = append(out.Complexity, cp)
+	}
+	if err := compRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate complexity: %w", err)
 	}
 
 	// F. Security posture.

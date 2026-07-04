@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import {Plus, X, MessageSquare} from 'lucide-react'
-import {useState, useRef, useEffect} from 'react'
+import {useState, useRef, useEffect, useMemo} from 'react'
+import {useChatStore} from '@/stores/chatStore'
 import type {ChatThread} from '@/stores/chatStore'
 
 interface Props {
@@ -14,6 +15,11 @@ interface Props {
 
 export default function ChatThreadBar({threads, activeThreadId, onSelect, onCreate, onClose, onRename}: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Streaming thread ids — a Set so the `.has()` lookup in the render loop is
+  // O(1) and the selector only emits a new reference when the set of streaming
+  // threads actually changes (keys join into a stable string key).
+  const streamingKey = useChatStore(s => Object.keys(s.streams).sort().join('|'))
+  const streamingIds = useMemo(() => new Set(streamingKey ? streamingKey.split('|') : []), [streamingKey])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -33,6 +39,7 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
             key={thread.id}
             thread={thread}
             isActive={thread.id === activeThreadId}
+            isStreaming={streamingIds.has(thread.id)}
             onSelect={onSelect}
             onClose={onClose}
             onRename={onRename}
@@ -50,9 +57,10 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
   )
 }
 
-function ThreadTab({thread, isActive, onSelect, onClose, onRename}: {
+function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename}: {
   thread: ChatThread
   isActive: boolean
+  isStreaming: boolean
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onRename: (id: string, title: string) => void
@@ -100,6 +108,12 @@ function ThreadTab({thread, isActive, onSelect, onClose, onRename}: {
       onDoubleClick={handleDoubleClick}
     >
       <MessageSquare size={11} className={clsx('shrink-0', isActive ? 'text-brand-400' : 'text-text-tertiary')} />
+      {isStreaming && (
+        <span
+          className="shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse"
+          title="Generating…"
+        />
+      )}
       {editing ? (
         <input
           ref={inputRef}

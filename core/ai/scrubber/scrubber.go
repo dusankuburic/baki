@@ -17,7 +17,10 @@ var secretRegexes = []*regexp.Regexp{
 	// Specific well-known prefixes (e.g. Stripe, GitHub)
 	regexp.MustCompile(`(?i)\b(sk_[a-zA-Z0-9_]{20,}|pk_[a-zA-Z0-9_]{20,}|ghp_[a-zA-Z0-9]{36}|glpat_[a-zA-Z0-9\-]{20,})\b`),
 	// Connection-string secrets: Password=/PWD= (covers User=;Password= forms).
-	regexp.MustCompile(`(?i)(?:Password|PWD)\s*=\s*([^;]+)`),
+	// The value stops at ';' (connection-string delimiter) or end of line —
+	// letting it run to end-of-text made any prose mentioning "password=…"
+	// swallow the entire rest of the message into the mask.
+	regexp.MustCompile(`(?i)(?:Password|PWD)\s*=\s*([^;\r\n]+)`),
 }
 
 // sensitiveActions maps a PAD action RawType to specific property fields whose
@@ -195,7 +198,39 @@ func looksLikeHighEntropySecret(v string) bool {
 	if strings.Contains(v, "://") {
 		return false
 	}
-	return shannonEntropy(v) > 4.0
+	// Filesystem paths are likewise long, space-free, and regularly clear the
+	// entropy bar (Windows/POSIX paths entropy ~4.2+). Masking them degrades the
+	// AI's analysis of file/folder actions; a credential embedded in such a
+	// value is still caught by the regex pass above.
+	if looksLikePath(v) {
+		return false
+	}
+	// Length-tiered thresholds (S3): a longer opaque string is almost certainly
+	// not prose, so it is treated as a secret at a lower entropy bar — a 64-char
+	// hex token entropies ~3.7, below the 4.0 the short tier requires but clearly
+	// not human-readable. Shorter values keep the stricter bar to avoid masking
+	// identifiers. See scrubber_test.go for the measured boundary cases.
+	threshold := 4.0
+	if len(v) > 50 {
+		threshold = 3.5
+	}
+	return shannonEntropy(v) > threshold
+}
+
+// looksLikePath reports whether v resembles a filesystem path rather than an
+// opaque token: a POSIX root (/), a home shortcut (~/), or a Windows drive root
+// (e.g. C:\). Mid-string separators alone don't qualify, since standard base64
+// tokens legitimately contain '/'.
+func looksLikePath(v string) bool {
+	if strings.HasPrefix(v, `/`) || strings.HasPrefix(v, `~/`) {
+		return true
+	}
+	// Windows drive root: "<letter>:\" or "<letter>:/". v[1] is a continuation
+	// byte for a non-ASCII lead byte, which never equals ':' — safe for UTF-8.
+	if len(v) >= 3 && v[1] == ':' && (v[2] == '\\' || v[2] == '/') {
+		return true
+	}
+	return false
 }
 
 func shannonEntropy(s string) float64 {
@@ -219,6 +254,11 @@ func shannonEntropy(s string) float64 {
 func ScrubText(text string) string {
 	result := text
 	for _, pat := range secretRegexes {
+		// MatchString first: it is cheaper than the replace machinery and the
+		// overwhelmingly common case (chat output, prose context) has no match.
+		if !pat.MatchString(result) {
+			continue
+		}
 		result = pat.ReplaceAllStringFunc(result, func(match string) string {
 			return maskMatch(pat, match)
 		})

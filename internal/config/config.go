@@ -27,7 +27,20 @@ type Config struct {
 	Runtime    RuntimeConfig
 	Governance GovernanceConfig
 	Email      EmailConfig
+	Redis      RedisConfig
 	Log        models.LogConfig
+}
+
+// RedisConfig configures the optional shared backplane. When URL is empty (the
+// default) the app keeps all rate-limit / presence / chat-resume state
+// in-process — correct for single-replica. Setting URL switches those subsystems
+// to a Redis-backed shared store so they work consistently across replicas
+// (PRODUCTION_READINESS.md #1-#3). The backplane is opt-in: nothing changes
+// unless URL is set.
+type RedisConfig struct {
+	// URL is a redis://[user:pass@]host:port/[db] connection string. Empty =
+	// backplane disabled (in-memory, single-replica).
+	URL string
 }
 
 // EmailConfig configures transactional email (password reset, email
@@ -61,6 +74,14 @@ type GovernanceConfig struct {
 	NotifyWebhookURL string
 	// NotifyTeamsURL is a Microsoft Teams incoming-webhook URL (MessageCard).
 	NotifyTeamsURL string
+	// RetentionPurgeInterval is how often to purge expired tokens/invites and
+	// aged-out audit rows (a duration string like "24h"; empty or non-positive
+	// disables the periodic purge). Cloud mode only — the purge needs a DB.
+	RetentionPurgeInterval string
+	// AuditRetentionDays is how long audit_events are kept before the purge
+	// deletes them (0 = keep audit history indefinitely; only expired tokens
+	// and invites are purged).
+	AuditRetentionDays int
 }
 
 // ServerConfig holds HTTP server settings
@@ -102,6 +123,14 @@ type StorageConfig struct {
 	DBMaxIdleConns    int
 	DBConnMaxLifetime string // duration string, e.g. "1h"
 	DBConnMaxIdleTime string // duration string, e.g. "5m"
+
+	// DBRequireSSL controls whether the Postgres DSN must enforce TLS.
+	// It is a raw tri-state string parsed from PAD_DB_REQUIRE_SSL:
+	// "true"/"1"/"yes" ⇒ require, "false"/"0"/"no" ⇒ allow plaintext, empty ⇒
+	// fall back to the deployment default (required in cloud mode, optional in
+	// local mode). Resolved to a bool in main.provideStorageBackend where the
+	// deployment mode is known.
+	DBRequireSSL string
 
 	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
 	AzureStorageAccount   string

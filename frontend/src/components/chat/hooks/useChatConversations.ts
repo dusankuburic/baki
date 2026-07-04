@@ -2,7 +2,8 @@ import {useState, useEffect} from 'react'
 import {useChatStore, type ChatThread} from '@/stores/chatStore'
 import {chatApi, flowApi} from '@/api'
 import {logger} from '@/lib/logger'
-import type {ChatMessage, SourceFileInfo, ConversationFile, FlowDocument} from '@/types'
+import {parseChatMessages} from '@/lib/chatMessage'
+import type {SourceFileInfo, ConversationFile, FlowDocument} from '@/types'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
@@ -49,10 +50,10 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
       let cancelled = false
       chatApi.getConversation(doc.id, 'flow').then((conv: ConversationFile) => {
         if (cancelled) return
-        if (conv?.messages?.length > 0) {
-          for (const m of conv.messages) {
-            appendMessage(id, m as ChatMessage)
-          }
+        // Validate the backend payload at the boundary instead of trusting the
+        // shape (F5): malformed entries are dropped before reaching the store.
+        for (const m of parseChatMessages(conv?.messages)) {
+          appendMessage(id, m)
         }
       }).catch((err) => { if (!cancelled) logger.warn('Failed to load flow conversation', err) })
       return () => { cancelled = true }
@@ -69,10 +70,8 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
     let cancelled = false
     chatApi.getConversation(doc.id, scope).then((conv: ConversationFile) => {
       if (cancelled) return
-      if (conv?.messages) {
-        for (const m of conv.messages) {
-          appendMessage(activeThreadId, m as ChatMessage)
-        }
+      for (const m of parseChatMessages(conv?.messages)) {
+        appendMessage(activeThreadId, m)
       }
     }).catch((err) => { logger.warn('Failed to load thread conversation', err) })
     return () => { cancelled = true }

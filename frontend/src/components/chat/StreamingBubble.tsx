@@ -2,21 +2,22 @@ import {memo, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import MessageBubble from './MessageBubble'
 
-// Reads streamingText directly from the store so AITab does not re-render
-// on every chunk — only StreamingBubble does.
+// Reads the active thread's streaming slot directly from the store so AITab
+// does not re-render on every chunk — only StreamingBubble does. The slot is
+// per-thread (chatStore.streams), so this naturally tracks whichever thread
+// is active; background threads stream without rendering here.
 const StreamingBubble = memo(() => {
-  const streamingText = useChatStore(s => s.streamingText)
-  const streamingMessageId = useChatStore(s => s.streamingMessageId)
+  const slot = useChatStore(s => (s.activeThreadId ? s.streams[s.activeThreadId] : undefined))
   // Stable timestamp per stream (avoids the displayed time flickering at 60fps)
-  const timestamp = useMemo(() => new Date().toISOString(), [streamingMessageId])
+  const timestamp = useMemo(() => new Date().toISOString(), [slot?.messageId])
 
-  if (!streamingText) return null
+  if (!slot || !slot.text) return null
   return (
     <MessageBubble
       message={{
-        id: streamingMessageId || 'streaming',
+        id: slot.messageId || 'streaming',
         role: 'assistant',
-        content: streamingText,
+        content: slot.text,
         timestamp,
       }}
       isStreaming

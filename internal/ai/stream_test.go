@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -165,6 +166,41 @@ func TestParseClaudeSSE_Error(t *testing.T) {
 	}
 	if gotErr == nil {
 		t.Fatal("expected chunk error")
+	}
+}
+
+// TestParseClaudeSSE_ErrorClassified: mid-stream error events must map onto
+// the shared sentinel errors (like the HTTP-status mapping on the initial
+// response) so the retry and circuit-breaker wrappers can act on them.
+func TestParseClaudeSSE_ErrorClassified(t *testing.T) {
+	cases := []struct {
+		errType string
+		want    error
+	}{
+		{"rate_limit_error", ErrRateLimited},
+		{"overloaded_error", ErrProviderDown},
+		{"api_error", ErrProviderDown},
+	}
+	for _, c := range cases {
+		t.Run(c.errType, func(t *testing.T) {
+			input := "event: error\n" +
+				"data: {\"error\": {\"type\": \"" + c.errType + "\", \"message\": \"boom\"}}\n\n"
+			var gotErr error
+			if err := parseClaudeSSE(strings.NewReader(input), func(chunk Chunk) {
+				if chunk.Error != nil {
+					gotErr = chunk.Error
+				}
+			}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !errors.Is(gotErr, c.want) {
+				t.Errorf("chunk error = %v, want errors.Is(%v)", gotErr, c.want)
+			}
+		})
+	}
+	// Unknown types stay plain (permanent) errors.
+	if err := classifyClaudeStreamError("invalid_request_error", "bad"); isRetryable(err) {
+		t.Errorf("unknown error type classified as retryable: %v", err)
 	}
 }
 

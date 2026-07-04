@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/api/render"
@@ -27,10 +28,20 @@ var validProviders = map[string]bool{
 	"demo":          true,
 }
 
+// readinessFailureThreshold is the number of consecutive failed readiness
+// probes required before the handler reports 503. This tolerates transient
+// Azure latency spikes so a single slow Ping doesn't flap the pod out of
+// rotation. State is per-instance (sufficient: a flapping replica reports its
+// own readiness independently).
+const readinessFailureThreshold = 3
+
 type SystemHandler struct {
 	sysSvc   *service.SystemService
 	security *SecurityConfig
 	backend  storageif.StorageBackend // may be nil in local/filesystem mode
+
+	readyMu       sync.Mutex
+	readyFailures int
 }
 
 func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend) *SystemHandler {
@@ -39,7 +50,7 @@ func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, b
 
 func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
-	settings, err := h.sysSvc.GetUserSettings(userID)
+	settings, err := h.sysSvc.GetUserSettings(r.Context(), userID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -55,7 +66,7 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 	}
 
 	userID := h.security.CallerID(r)
-	if err := h.sysSvc.UpdateUserSettings(userID, req); err != nil {
+	if err := h.sysSvc.UpdateUserSettings(r.Context(), userID, req); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -70,7 +81,7 @@ func (h *SystemHandler) handleGetOrgSettings(w http.ResponseWriter, r *http.Requ
 	if !requireOrgMember(w, r, h.security, orgID) {
 		return
 	}
-	settings, err := h.sysSvc.GetOrgSettings(orgID)
+	settings, err := h.sysSvc.GetOrgSettings(r.Context(), orgID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -90,7 +101,7 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	if err := h.sysSvc.UpdateOrgSettings(orgID, req); err != nil {
+	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -197,24 +208,39 @@ func (h *SystemHandler) handleLiveness(w http.ResponseWriter, r *http.Request) {
 func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	// Readiness checks that the service can serve traffic.
 	// The orchestrator (AKS / ACA) uses this to gate traffic routing.
-	// Return 503 if the database is unreachable so the pod is removed from
-	// the load-balancer rotation until connectivity is restored.
+	// Return 503 only after N consecutive failures so a transient Azure
+	// latency spike doesn't flap the pod out of rotation; a healthy probe
+	// resets the streak.
 	if h.backend != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if err := h.backend.Ping(ctx); err != nil {
-			render.Error(w, errors.New("database unavailable"), http.StatusServiceUnavailable)
-			return
-		}
+
+		checkErr := h.backend.Ping(ctx)
 		// When the backend offloads flow content to blob storage, broken blob
 		// auth/config would let the pod serve traffic while returning empty
 		// flows. Gate readiness on blob reachability too (no-op when unconfigured).
-		if bc, ok := h.backend.(blobHealthChecker); ok {
-			if err := bc.CheckBlob(ctx); err != nil {
-				render.Error(w, errors.New("blob storage unavailable"), http.StatusServiceUnavailable)
-				return
+		if checkErr == nil {
+			if bc, ok := h.backend.(blobHealthChecker); ok {
+				checkErr = bc.CheckBlob(ctx)
 			}
 		}
+
+		if checkErr != nil {
+			h.readyMu.Lock()
+			h.readyFailures++
+			failed := h.readyFailures >= readinessFailureThreshold
+			h.readyMu.Unlock()
+			if failed {
+				render.Error(w, errors.New("database unavailable"), http.StatusServiceUnavailable)
+			} else {
+				render.JSON(w, map[string]string{"status": "ok"})
+			}
+			return
+		}
+
+		h.readyMu.Lock()
+		h.readyFailures = 0
+		h.readyMu.Unlock()
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
 }

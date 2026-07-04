@@ -24,7 +24,8 @@ func TestRateLimiter_GetIP_TrustsXFFFromConfiguredProxy(t *testing.T) {
 		{"untrusted peer ignores XFF", "8.8.8.8:1234", "1.2.3.4", "8.8.8.8"},
 		{"trusted IP honors XFF", "10.0.0.1:1234", "1.2.3.4", "1.2.3.4"},
 		{"trusted CIDR honors XFF", "192.168.5.5:1234", "1.2.3.4", "1.2.3.4"},
-		{"trusted IP picks first XFF entry", "10.0.0.1:1234", "1.2.3.4, 5.6.7.8", "1.2.3.4"},
+		{"trusted IP picks rightmost (proxy-appended) XFF entry", "10.0.0.1:1234", "1.2.3.4, 5.6.7.8", "5.6.7.8"},
+		{"spoofed leftmost XFF is ignored", "10.0.0.1:1234", "6.6.6.6, 5.6.7.8", "5.6.7.8"},
 		{"trusted but no XFF falls back to peer", "10.0.0.1:1234", "", "10.0.0.1"},
 		{"IPv6 peer", "[::1]:1234", "", "::1"},
 	}
@@ -40,6 +41,26 @@ func TestRateLimiter_GetIP_TrustsXFFFromConfiguredProxy(t *testing.T) {
 				t.Errorf("getIP() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRateLimiter_GetIP_SpoofedXFFCannotRotateBucket is the F1 regression: a
+// client behind a trusted proxy that rotates the leftmost X-Forwarded-For value
+// must still map to a single bucket key (the proxy-appended rightmost IP), so it
+// can't dodge the per-IP limiter by forging the header.
+func TestRateLimiter_GetIP_SpoofedXFFCannotRotateBucket(t *testing.T) {
+	rl := NewRateLimiter(60, 20, []string{"10.0.0.1"})
+	newReq := func(xff string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "10.0.0.1:1234" // trusted proxy peer
+		req.Header.Set("X-Forwarded-For", xff)
+		return req
+	}
+	// Real client 203.0.113.7 rotates the forged leftmost entry each request.
+	first := rl.key(rl.getIP(newReq("1.1.1.1, 203.0.113.7")))
+	second := rl.key(rl.getIP(newReq("2.2.2.2, 203.0.113.7")))
+	if first != second {
+		t.Fatalf("spoofed leftmost XFF produced different bucket keys (%q vs %q) — limiter bypassable", first, second)
 	}
 }
 

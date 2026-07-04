@@ -35,6 +35,13 @@ type ChatRequest struct {
 	// ExcludeContext skips injecting flow/block context into the prompt so the
 	// user can ask a free-form question without the document being attached.
 	ExcludeContext bool `json:"excludeContext,omitempty"`
+	// ClientStreamID, when set, is a client-generated UUID used as the stream
+	// identifier. It lets the client subscribe its SSE listener BEFORE creating
+	// the stream, so the backend can begin emitting immediately without the
+	// extra /chat/begin round-trip (C-1). Must be a UUID; collisions are
+	// rejected. When absent the backend generates the ID and the client must
+	// send /chat/begin after subscribing (legacy two-POST handshake).
+	ClientStreamID string `json:"clientStreamId,omitempty"`
 }
 
 type SourceFileInfo struct {

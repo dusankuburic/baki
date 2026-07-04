@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName":              { "value": "baki-backend" },
+    "image":                { "value": "ghcr.io/ORG/baki-backend:latest" },
+    "minReplicas":          { "value": 1 },
+    "maxReplicas":          { "value": 1 },
+    "cpu":                  { "value": "0.5" },
+    "memory":               { "value": "1.0Gi" },
+    "keyVaultUrl":          { "value": "" },
+    "storageAccountResourceId": { "value": "" },
+    "authSecret":           { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-auth-secret" } },
+    "databaseUrl":          { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-database-url" } }
+  }
+}

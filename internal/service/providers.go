@@ -214,9 +214,40 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
 		}
 		result.Token = ""
+		// C-4: pre-warm the Copilot session-token cache so the first chat turn
+		// doesn't pay the session-token exchange RTT on the critical path.
+		// ListProviders will also warm it on next session load, but firing it
+		// now covers the turn the user sends immediately after connecting.
+		s.preWarmCopilot(scope)
 	}
 
 	return result, nil
+}
+
+// preWarmCopilot best-effort resolves the configured Copilot GitHub token and
+// triggers a background session-token exchange so the cache is primed before
+// the first chat turn. Fire-and-forget: errors are logged and swallowed (the
+// token will be exchanged lazily on first Stream if this fails). The context
+// is detached from the caller and bounded so a slow exchange can't linger.
+func (s *ProviderService) preWarmCopilot(scope string) {
+	if s.copilotAuth == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// OAuth device-flow token (global scope) first, then manual PAT.
+		token, err := s.secrets.Get("", "copilot-oauth-token")
+		if err != nil || token == "" {
+			token, err = s.secrets.Get(scope, "copilot")
+			if err != nil || token == "" {
+				return // not configured — nothing to warm
+			}
+		}
+		if _, err := s.copilotAuth.GetSessionToken(ctx, token); err != nil {
+			logger.Warn("copilot session-token pre-warm failed", "error", err)
+		}
+	}()
 }
 
 func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {

@@ -48,8 +48,22 @@ func ClientIP(r *http.Request, trustedProxies []string) string {
 	if xff == "" {
 		return remoteIP
 	}
-	if idx := strings.IndexByte(xff, ','); idx >= 0 {
-		return strings.TrimSpace(xff[:idx])
+	return rightmostForwardedFor(xff)
+}
+
+// rightmostForwardedFor returns the last (rightmost) entry of an X-Forwarded-For
+// header — the address the trusted proxy directly observed and appended. The
+// LEFTMOST entry is client-supplied and trivially forgeable (a client can send
+// "X-Forwarded-For: <anything>" and the proxy appends the real IP after it), so
+// trusting it lets a client rotate the value to dodge per-IP rate limits and
+// spoof audit-log source IPs. The rightmost entry is written by the trusted
+// proxy and cannot be forged by the client. Callers MUST only use this after
+// confirming the immediate peer is a trusted proxy. Assumes a single trusted
+// proxy hop (the deployment model); with multiple hops this is the innermost
+// proxy's address.
+func rightmostForwardedFor(xff string) string {
+	if idx := strings.LastIndexByte(xff, ','); idx >= 0 {
+		return strings.TrimSpace(xff[idx+1:])
 	}
 	return strings.TrimSpace(xff)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -44,6 +45,8 @@ const (
 	AuditActionOrgMemberRemove = "org.member_remove"
 	AuditActionOrgMemberRole   = "org.member_role"
 	AuditActionProfileUpdate   = "user.profile_update"
+	AuditActionAccountDelete   = "user.account_delete"
+	AuditActionDataExport      = "user.data_export"
 	AuditActionSessionRevoke   = "auth.session_revoke"
 	AuditActionSSOLogin        = "auth.sso_login"
 	AuditActionLoginFailure    = "auth.login_failure"
@@ -81,6 +84,33 @@ func ShutdownAuditPool() {
 	auditWg.Wait()
 }
 
+// auditEnqueue attempts to deliver event to the audit worker pool. Returns
+// (true, "") when enqueued. When the pool is shutting down it returns
+// (false, "closed"); when the bounded queue is full it returns (false, "full").
+//
+// It is safe to call concurrently with ShutdownAuditPool: a send that races
+// with close() is recovered rather than panicking. The atomic flag above is a
+// fast path — ShutdownAuditPool sets the flag and closes the channel as two
+// separate statements, so a goroutine that observed auditClosed == false just
+// before the close() would otherwise panic on the send. The recover closes that
+// residual TOCTOU window.
+func auditEnqueue(event *storageif.AuditEvent) (sent bool, reason string) {
+	defer func() {
+		if r := recover(); r != nil {
+			sent, reason = false, "closed"
+		}
+	}()
+	if auditClosed.Load() {
+		return false, "closed"
+	}
+	select {
+	case auditCh <- event:
+		return true, ""
+	default:
+		return false, "full"
+	}
+}
+
 func auditWorker(backend storageif.StorageBackend) {
 	defer auditWg.Done()
 	defer func() {
@@ -95,6 +125,26 @@ func auditWorker(backend storageif.StorageBackend) {
 		}
 		cancel()
 	}
+}
+
+// auditFallback emits an event to the structured-log sink (stderr → container
+// logs → Log Analytics) when it can't be enqueued to the DB pool. This keeps the
+// event discoverable instead of silently lost; pair with the pad_audit_dropped_total
+// metric to alert when the DB sink falls behind.
+func auditFallback(reason string, event *storageif.AuditEvent) {
+	metrics.RecordAuditDropped(reason)
+	slog.Error("audit event diverted to log fallback sink",
+		"reason", reason,
+		"audit_id", event.ID,
+		"user_id", event.UserID,
+		"email", event.Email,
+		"action", event.Action,
+		"resource_type", event.ResourceType,
+		"resource_id", event.ResourceID,
+		"ip", event.IP,
+		"meta", event.Meta,
+		"created_at", event.CreatedAt,
+	)
 }
 
 func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Request, trustedProxies []string, action, resourceType, resourceID string, meta map[string]string) {
@@ -120,16 +170,12 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 		CreatedAt:    time.Now().UTC(),
 	}
 	if auditCh != nil {
-		if auditClosed.Load() {
-			// Pool is shutting down: drop rather than spawn an unbounded number
-			// of detached goroutines as requests drain.
-			slog.Warn("audit pool closed, dropping event", "action", action)
-			return
-		}
-		select {
-		case auditCh <- event:
-		default:
-			slog.Warn("audit pool full, dropping event", "action", action)
+		if _, reason := auditEnqueue(event); reason != "" {
+			// "closed" (shutting down) or "full" (pool saturated under load):
+			// divert the event to structured logs so it isn't silently dropped
+			// (the DB sink is the system of record, container logs are the
+			// durable fallback).
+			auditFallback(reason, event)
 		}
 		return
 	}

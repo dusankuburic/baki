@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -89,6 +90,48 @@ func TestCopilotProvider_Pricing_IsZero(t *testing.T) {
 		t.Errorf("Copilot pricing should be zero (subscription-based), got %+v", pricing)
 	}
 	// We can't easily test p.Models() here without a mock server or pre-filling the cache
+}
+
+// TestCopilotProvider_Models_BoundedErrorBodyRead is the regression test for the
+// unbounded io.ReadAll on the /models error path: the server returning an error
+// status with a multi-megabyte body used to buffer the whole thing into memory
+// (OOM risk on a misbehaving / compromised upstream). The read must now be
+// capped at 10 MiB like every other response-body read in the package.
+func TestCopilotProvider_Models_BoundedErrorBodyRead(t *testing.T) {
+	const capBytes = 10 << 20 // matches the LimitReader cap used across the package
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		// Overshoot the cap by 1 MiB; append a trailing marker that only an
+		// UNcapped read could ever observe.
+		w.Write(bytes.Repeat([]byte{'x'}, capBytes))
+		w.Write([]byte("TAIL_MARKER" + strings.Repeat("y", 1<<20)))
+	}))
+	defer server.Close()
+
+	orig := copilotModelsURL
+	defer func() { copilotModelsURL = orig }()
+	copilotModelsURL = server.URL + "/models"
+
+	p := NewCopilotProvider("tok")
+	p.client = server.Client()
+
+	_, err := p.Models(context.Background())
+	if err == nil {
+		t.Fatal("expected error from 500 response, got nil")
+	}
+	// The trailing marker lives beyond the 10 MiB cap, so it must NOT appear:
+	// its presence would mean the body read was unbounded.
+	if strings.Contains(err.Error(), "TAIL_MARKER") {
+		t.Error("error body contains the beyond-cap marker — read was not bounded by LimitReader")
+	}
+	// And the captured body length must be exactly the cap, not the full payload.
+	const prefix = "copilot models API error: status 500, body: "
+	if e := err.Error(); strings.HasPrefix(e, prefix) {
+		bodyLen := len(e) - len(prefix)
+		if bodyLen > capBytes {
+			t.Errorf("error body length = %d bytes, expected at most cap %d bytes", bodyLen, capBytes)
+		}
+	}
 }
 
 // --- Chat ---

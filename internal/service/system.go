@@ -31,10 +31,16 @@ func NewSystemService(settings SettingsProvider, secrets SecretStore, notifier N
 	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode}
 }
 
-func (s *SystemService) GetSettings() (settings *models.AppSettings, err error) {
+// B5: the settings methods thread the caller's context.Context through to the
+// storage backend so a client disconnect / cancellation propagates to the DB
+// call (previously these dropped the request context via context.Background(),
+// keeping requests alive past client cancellation). The in-memory fallbacks
+// (SettingsProvider, secrets) don't do I/O so ctx is passed but unused there.
+
+func (s *SystemService) GetSettings(ctx context.Context) (settings *models.AppSettings, err error) {
 	defer logger.Guard("SystemService.GetSettings", &err)
 	if s.backend != nil {
-		ifaceSettings, err := s.backend.LoadSettings(context.Background())
+		ifaceSettings, err := s.backend.LoadSettings(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load settings: %w", err)
 		}
@@ -46,10 +52,10 @@ func (s *SystemService) GetSettings() (settings *models.AppSettings, err error) 
 	return s.settings.Get(), nil
 }
 
-func (s *SystemService) UpdateSettings(settings models.AppSettings) (err error) {
+func (s *SystemService) UpdateSettings(ctx context.Context, settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateSettings", &err)
 	if s.backend != nil {
-		if err := s.backend.SaveSettings(context.Background(), s.fromModel(&settings)); err != nil {
+		if err := s.backend.SaveSettings(ctx, s.fromModel(&settings)); err != nil {
 			return fmt.Errorf("persist settings: %w", err)
 		}
 		s.notifier.Emit("settings:changed", settings)
@@ -66,48 +72,48 @@ func (s *SystemService) UpdateSettings(settings models.AppSettings) (err error) 
 	return nil
 }
 
-func (s *SystemService) GetUserSettings(userID string) (settings *models.AppSettings, err error) {
+func (s *SystemService) GetUserSettings(ctx context.Context, userID string) (settings *models.AppSettings, err error) {
 	defer logger.Guard("SystemService.GetUserSettings", &err)
 	if s.backend == nil {
-		return s.GetSettings()
+		return s.GetSettings(ctx)
 	}
-	ifaceSettings, err := s.backend.LoadUserSettings(context.Background(), userID)
+	ifaceSettings, err := s.backend.LoadUserSettings(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	return s.toModel(ifaceSettings), nil
 }
 
-func (s *SystemService) UpdateUserSettings(userID string, settings models.AppSettings) (err error) {
+func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateUserSettings", &err)
 	if s.backend == nil {
-		return s.UpdateSettings(settings)
+		return s.UpdateSettings(ctx, settings)
 	}
-	if err := s.backend.SaveUserSettings(context.Background(), userID, s.fromModel(&settings)); err != nil {
+	if err := s.backend.SaveUserSettings(ctx, userID, s.fromModel(&settings)); err != nil {
 		return err
 	}
 	s.notifier.EmitTo(userID, "settings:changed", settings)
 	return nil
 }
 
-func (s *SystemService) GetOrgSettings(orgID string) (settings *models.AppSettings, err error) {
+func (s *SystemService) GetOrgSettings(ctx context.Context, orgID string) (settings *models.AppSettings, err error) {
 	defer logger.Guard("SystemService.GetOrgSettings", &err)
 	if s.backend == nil {
-		return s.GetSettings()
+		return s.GetSettings(ctx)
 	}
-	ifaceSettings, err := s.backend.LoadOrgSettings(context.Background(), orgID)
+	ifaceSettings, err := s.backend.LoadOrgSettings(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
 	return s.toModel(ifaceSettings), nil
 }
 
-func (s *SystemService) UpdateOrgSettings(orgID string, settings models.AppSettings) (err error) {
+func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateOrgSettings", &err)
 	if s.backend == nil {
-		return s.UpdateSettings(settings)
+		return s.UpdateSettings(ctx, settings)
 	}
-	if err := s.backend.SaveOrgSettings(context.Background(), orgID, s.fromModel(&settings)); err != nil {
+	if err := s.backend.SaveOrgSettings(ctx, orgID, s.fromModel(&settings)); err != nil {
 		return err
 	}
 	s.notifier.Emit("settings:changed", settings)
