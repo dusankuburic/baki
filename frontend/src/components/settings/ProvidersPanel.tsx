@@ -4,6 +4,8 @@ import GitHubLoginButton from '@/components/chat/GitHubLoginButton'
 import CopilotLoginButton from '@/components/chat/CopilotLoginButton'
 import {providersApi} from '@/api'
 import {logger} from '@/lib/logger'
+import {useChatStore} from '@/stores/chatStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 
 interface ProviderEntry {
   id: string
@@ -16,6 +18,9 @@ export default function ProvidersPanel() {
   const [_providers, setProviders] = useState<ProviderEntry[]>([])
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [copilotUser, setCopilotUser] = useState<string | null>(null)
+  const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
+  const setProvider = useChatStore(s => s.setProvider)
+  const updateAI = useSettingsStore(s => s.updateAI)
 
   const refresh = useCallback(() => {
     providersApi.listProviders().then((ps: {id?: string; name?: string; configured?: boolean; authType?: string}[] | null) => {
@@ -28,7 +33,25 @@ export default function ProvidersPanel() {
     }).catch((err) => { logger.warn('Failed to load providers', err) })
     providersApi.getGitHubUser().then((u: {login?: string} | null) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
     providersApi.getCopilotUser().then((u: {login?: string} | null) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
-  }, [])
+    // Bump the epoch so AITab's useProviderSetup re-runs listProviders and
+    // discovers the new/removed configuration.
+    bumpProviderEpoch()
+  }, [bumpProviderEpoch])
+
+  // handleCopilotAuthComplete / handleGithubAuthComplete: called by the device-
+  // flow login buttons when OAuth succeeds. Refreshes state + switches the
+  // active provider so the chat is immediately usable without manual selection.
+  const handleCopilotAuthComplete = useCallback(() => {
+    refresh()
+    setProvider('copilot')
+    updateAI({activeProvider: 'copilot'})
+  }, [refresh, setProvider, updateAI])
+
+  const handleGithubAuthComplete = useCallback(() => {
+    refresh()
+    setProvider('github-models')
+    updateAI({activeProvider: 'github-models'})
+  }, [refresh, setProvider, updateAI])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -73,7 +96,7 @@ export default function ProvidersPanel() {
                 </button>
               </div>
             ) : (
-              <GitHubLoginButton />
+              <GitHubLoginButton onAuthComplete={handleGithubAuthComplete} />
             )}
           </div>
         </ProviderSection>
@@ -95,7 +118,7 @@ export default function ProvidersPanel() {
                 </button>
               </div>
             ) : (
-              <CopilotLoginButton onAuthComplete={refresh} />
+              <CopilotLoginButton onAuthComplete={handleCopilotAuthComplete} />
             )}
             {!copilotUser && (
               <details className="text-xs text-text-tertiary">

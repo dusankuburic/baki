@@ -69,7 +69,16 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Get("/source-files", h.Flow.handleGetSourceFiles)
 		r.Post("/read-sources", h.Flow.handleReadSourceFiles)
 		r.Post("/open-from-system", h.Flow.handleOnFileOpenFromSystem)
+		r.Post("/suppress-in-source", h.Flow.handleSuppressInSource)
+		r.Post("/apply-fix", h.Flow.handleApplyFix)
+		r.Post("/preview-fix", h.Flow.handlePreviewFix)
+		r.Post("/reimport", h.Flow.handleReimport)
+		// Share links (read-only public report)
+		r.Post("/share/create", h.Flow.handleCreateShare)
+		r.Post("/share/list", h.Flow.handleListShares)
+		r.Post("/share/revoke", h.Flow.handleRevokeShare)
 	})
+	r.Get("/api/shared", h.Analysis.handleViewShared) // unauthenticated: ?token=...
 
 	// --- Library (Cloud CRUD) ---
 	r.Route("/api/library", func(r chi.Router) {
@@ -107,6 +116,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// --- Analysis & Export ---
 	r.Route("/api/analysis", func(r chi.Router) {
 		r.Post("/analyze", h.Analysis.handleAnalyzeFlow)
+		r.Post("/analyze-raw", h.Analysis.handleAnalyzeRaw)
 		r.Post("/lineage", h.Analysis.handleGetVariableLineage)
 		r.Post("/graph", h.Analysis.handleGetExecutionGraph)
 		r.Post("/metrics", h.Analysis.handleGetMetrics)
@@ -115,6 +125,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/diff", h.Analysis.handleDiff)
 		r.Post("/history", h.Analysis.handleGetHistory)
 		r.Post("/export/html", h.Analysis.handleExportHTML)
+		r.Post("/export/sarif", h.Analysis.handleExportSARIF)
 		r.Get("/dependencies", h.Analysis.handleGetDependencies)
 		r.Get("/dashboard", h.Analysis.handleGetDashboard)
 		r.Post("/subflow-hashes", h.Analysis.handleGetSubflowHashes)
@@ -134,6 +145,10 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/baseline/clear", h.Analysis.handleClearBaseline)
 		r.Post("/baseline/drift", h.Analysis.handleBaselineDrift)
 		r.Post("/policy/evaluate", h.Analysis.handleEvaluatePolicy) // gate a flow against a policy
+		// Finding comments (team-shared review threads)
+		r.Post("/comments/list", h.Analysis.handleListComments)
+		r.Post("/comments/add", h.Analysis.handleAddComment)
+		r.Post("/comments/delete", h.Analysis.handleDeleteComment)
 	})
 
 	// --- Welcome Dashboard (BFF) ---

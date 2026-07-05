@@ -20,15 +20,36 @@ const (
 
 // Config holds the complete application configuration
 type Config struct {
-	Mode       DeploymentMode
-	Server     ServerConfig
-	Storage    StorageConfig
-	Auth       AuthConfig
-	Runtime    RuntimeConfig
-	Governance GovernanceConfig
-	Email      EmailConfig
-	Redis      RedisConfig
-	Log        models.LogConfig
+	Mode          DeploymentMode
+	Server        ServerConfig
+	Storage       StorageConfig
+	Auth          AuthConfig
+	Runtime       RuntimeConfig
+	Governance    GovernanceConfig
+	Email         EmailConfig
+	Redis         RedisConfig
+	PowerPlatform PowerPlatformConfig
+	Log           models.LogConfig
+}
+
+// PowerPlatformConfig configures the optional connector that ingests desktop
+// flows from a Power Platform environment (the "monitor my live automation
+// fleet" value prop). All fields must be set for the connector to enable; with
+// any absent the connector is a no-op. Cloud mode only — ingestion stores flows
+// into the library, which needs the DB backend. The format bridge (PAD's cloud
+// JSON action schema → the parser's format) is the de-risking core; see
+// internal/connector/padcloud.
+type PowerPlatformConfig struct {
+	// TenantID is the Azure AD tenant ("common" for multi-tenant device flow).
+	TenantID string
+	// ClientID is the registered Azure app's client ID (device-flow, public client).
+	ClientID string
+	// EnvironmentID is the Power Platform environment to enumerate desktop flows from.
+	EnvironmentID string
+	// Scope is the OAuth scope (default the Power Platform API).
+	Scope string
+	// IngestInterval is how often to pull (duration string; empty disables).
+	IngestInterval string
 }
 
 // RedisConfig configures the optional shared backplane. When URL is empty (the

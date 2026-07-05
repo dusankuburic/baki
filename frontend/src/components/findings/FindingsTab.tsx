@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
 import {Search} from 'lucide-react'
-import {analysisApi} from '@/api'
+import {analysisApi, flowApi} from '@/api'
 import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
@@ -11,7 +11,7 @@ import FindingsList from './FindingsList'
 import FindingsToolbar from './FindingsToolbar'
 import AnalysisRunner from './AnalysisRunner'
 import AnalysisDiffView from './AnalysisDiffView'
-import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
+import {exportFindingsCSV, exportFindingsHTML, exportFindingsSARIF} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
 import type {AnalysisDiff, Finding, AnalysisReport} from '@/types'
 
@@ -35,6 +35,7 @@ export default function FindingsTab() {
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
   const suppressedKeys = useAnalysisStore(s => s.suppressedKeys)
   const loadSuppressions = useAnalysisStore(s => s.loadSuppressions)
+  const loadBaseline = useAnalysisStore(s => s.loadBaseline)
   const toast = useToast()
   const [diff, setDiff] = useState<AnalysisDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
@@ -54,8 +55,11 @@ export default function FindingsTab() {
   // Pull persisted, team-shared suppressions for the active flow (cloud mode;
   // a no-op on desktop). Keeps suppressions in sync across users/sessions.
   useEffect(() => {
-    if (doc?.id) void loadSuppressions(doc.id)
-  }, [doc?.id, loadSuppressions])
+    if (doc?.id) {
+      void loadSuppressions(doc.id)
+      void loadBaseline(doc.id)
+    }
+  }, [doc?.id, loadSuppressions, loadBaseline])
 
   // Build a blockId → label index once per document so the findings list can
   // resolve each row's block name in O(1), instead of walking the whole block
@@ -169,8 +173,11 @@ export default function FindingsTab() {
 
   const handleExportCSV = useCallback(() => {
     if (!report) return
-    exportFindingsCSV(report, doc?.id ?? 'report')
-  }, [report, doc])
+    // Export the actively-filtered view (severity/category/search/dedup), not
+    // the raw report — a triager who filters to "errors only" expects exactly
+    // that in the CSV.
+    exportFindingsCSV(findings, doc?.id ?? 'report')
+  }, [report, findings, doc])
 
   const handleExportHTML = useCallback(async () => {
     if (!doc) return
@@ -178,6 +185,27 @@ export default function FindingsTab() {
       await exportFindingsHTML(doc.id)
     } catch (err) {
       toast.error('HTML export failed: ' + (err as Error).message)
+    }
+  }, [doc, toast])
+
+  const handleExportSARIF = useCallback(async () => {
+    if (!doc) return
+    try {
+      await exportFindingsSARIF(doc.id)
+    } catch (err) {
+      toast.error('SARIF export failed: ' + (err as Error).message)
+    }
+  }, [doc, toast])
+
+  const handleShare = useCallback(async () => {
+    if (!doc) return
+    try {
+      const result = await flowApi.createShare(doc.id)
+      const url = `${window.location.origin}/shared?token=${result.token}`
+      await navigator.clipboard.writeText(url)
+      toast.success('Share link copied to clipboard', {description: url})
+    } catch (err) {
+      toast.error('Failed to create share link', {description: String(err)})
     }
   }, [doc, toast])
 
@@ -211,6 +239,8 @@ export default function FindingsTab() {
         dedupLoading={dedupLoading}
         onExportCSV={handleExportCSV}
         onExportHTML={handleExportHTML}
+        onExportSARIF={handleExportSARIF}
+        onShare={handleShare}
         sortMode={sortMode}
         onCycleSortMode={cycleSortMode}
         hasFindings={report.findings.length > 0}

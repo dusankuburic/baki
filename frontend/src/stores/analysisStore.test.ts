@@ -183,3 +183,83 @@ describe('reset', () => {
         expect(s.severityFilter.has('info')).toBe(true)
     })
 })
+
+describe('saved filter views', () => {
+    it('saveCurrentView stores the current severity + category filters', () => {
+        const s = useAnalysisStore.getState()
+        s.setSeverityFilter(new Set(['error', 'warning']))
+        s.saveCurrentView('Errors+Warnings', new Set(['error', 'warning']), new Set(['Security']))
+        const views = useAnalysisStore.getState().savedViews
+        expect(views.some(v => v.name === 'Errors+Warnings')).toBe(true)
+        const view = views.find(v => v.name === 'Errors+Warnings')!
+        expect(view.severities).toEqual(['error', 'warning'])
+        expect(view.categories).toEqual(['Security'])
+    })
+
+    it('saveCurrentView replaces an existing view with the same name', () => {
+        const s = useAnalysisStore.getState()
+        s.saveCurrentView('MyView', new Set(['error']), new Set(['Security']))
+        s.saveCurrentView('MyView', new Set(['warning', 'info']), new Set(['Reliability']))
+        const views = useAnalysisStore.getState().savedViews
+        expect(views.filter(v => v.name === 'MyView')).toHaveLength(1)
+        expect(views.find(v => v.name === 'MyView')!.severities).toEqual(['warning', 'info'])
+    })
+
+    it('deleteSavedView removes a view by name', () => {
+        const s = useAnalysisStore.getState()
+        s.saveCurrentView('ToDelete', new Set(['error']), new Set(['Security']))
+        expect(useAnalysisStore.getState().savedViews.some(v => v.name === 'ToDelete')).toBe(true)
+        useAnalysisStore.getState().deleteSavedView('ToDelete')
+        expect(useAnalysisStore.getState().savedViews.some(v => v.name === 'ToDelete')).toBe(false)
+    })
+})
+
+describe('finding triage status', () => {
+    it('setFindingTriage stores non-open status in triageMap', () => {
+        const f = makeFinding('f1', {blockId: 'b1'})
+        useAnalysisStore.getState().setFindingTriage(f, 'acknowledged')
+        const key = findingKey(f)
+        const triage = useAnalysisStore.getState().triageMap.get(key)
+        expect(triage).toBeDefined()
+        expect(triage!.status).toBe('acknowledged')
+    })
+
+    it('setFindingTriage with open removes the entry from triageMap', () => {
+        const f = makeFinding('f1', {blockId: 'b1'})
+        useAnalysisStore.getState().setFindingTriage(f, 'resolved')
+        useAnalysisStore.getState().setFindingTriage(f, 'open')
+        const key = findingKey(f)
+        expect(useAnalysisStore.getState().triageMap.has(key)).toBe(false)
+    })
+
+    it('setFindingTriage persists via setFindingStatus in cloud mode', () => {
+        vi.mocked(analysisApi.setFindingStatus).mockClear()
+        const f = makeFinding('f1', {blockId: 'b1'})
+        useAnalysisStore.getState().setFindingTriage(f, 'in_progress')
+        expect(analysisApi.setFindingStatus).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('bulk finding selection', () => {
+    it('toggleFindingSelection adds and removes a finding', () => {
+        useAnalysisStore.getState().toggleFindingSelection('f1')
+        expect(useAnalysisStore.getState().selectedFindingIds.has('f1')).toBe(true)
+        useAnalysisStore.getState().toggleFindingSelection('f1')
+        expect(useAnalysisStore.getState().selectedFindingIds.has('f1')).toBe(false)
+    })
+
+    it('selectAllFindings toggles all given ids', () => {
+        const s = useAnalysisStore.getState()
+        s.selectAllFindings(['f1', 'f2', 'f3'])
+        expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(3)
+        // Toggle again deselects all
+        useAnalysisStore.getState().selectAllFindings(['f1', 'f2', 'f3'])
+        expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(0)
+    })
+
+    it('clearFindingSelection empties the set', () => {
+        useAnalysisStore.getState().selectAllFindings(['f1', 'f2'])
+        useAnalysisStore.getState().clearFindingSelection()
+        expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(0)
+    })
+})

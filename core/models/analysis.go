@@ -10,37 +10,63 @@ const (
 	SeverityInfo    Severity = "info"
 )
 
+// Confidence expresses how sure a rule is about a given finding — separating
+// "we're sure" (regex secret match, an open without a close) from "maybe"
+// (Shannon-entropy guess, name-heuristic uninitialized variable). Findings sort
+// by severity × confidence so a triager hits the sure-fire issues first, and a
+// low-confidence finding can carry a "maybe" affordance in the UI. Defaults to
+// Medium when a rule doesn't say.
+type Confidence string
+
+const (
+	ConfidenceHigh   Confidence = "high"
+	ConfidenceMedium Confidence = "medium"
+	ConfidenceLow    Confidence = "low"
+)
+
 type Finding struct {
 	ID string `json:"id"`
 	// Fingerprint is a stable, content-derived identity for the finding (see
-	// Key). Unlike ID — a per-run sequential index ("F-001") that shifts when
-	// other findings come or go — Fingerprint survives re-analysis, so triage
-	// state, suppressions, and baselines can be pinned to it.
+	// ContentKey in the analyzer). Unlike ID — a per-run sequential index
+	// ("F-001") that shifts when other findings come or go — Fingerprint
+	// survives re-analysis AND re-imports/re-parses, so triage state,
+	// suppressions, baselines, and SARIF can be pinned to it.
 	Fingerprint string                 `json:"fingerprint,omitempty"`
 	RuleID      string                 `json:"ruleId"`
 	Severity    Severity               `json:"severity"`
+	// Confidence is the rule's certainty about this finding (high/medium/low).
+	// Stamped by the engine (per-rule default, overridable by the rule). Drives
+	// severity×confidence triage ordering.
+	Confidence  Confidence             `json:"confidence,omitempty"`
 	Title       string                 `json:"title"`
 	Description string                 `json:"description"`
 	BlockID     string                 `json:"blockId"`
 	SubflowID   string                 `json:"subflowId"`
 	Suggestion  string                 `json:"suggestion,omitempty"`
 	AutoFixHint string                 `json:"autoFixHint,omitempty"`
+	// AutoFix names a deterministic fix the user can apply in one click from the
+	// findings UI (desktop: edits the source file, re-parses, re-analyzes).
+	// Empty means no automatic fix is available (only the AutoFixHint prose or
+	// "Fix with AI"). Current values: "wrap-error-handler" (resolves
+	// unhandled-error / file-op-no-error-handler), "suppress" (pad-ignore).
+	AutoFix     string                 `json:"autoFix,omitempty"`
 	Category    string                 `json:"category,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// Key returns the stable identity of a finding: the rule that raised it plus the
+// Key returns the in-run identity of a finding: the rule that raised it plus the
 // block it points at. Block IDs are flow-unique GUIDs, so RuleID:BlockID
-// uniquely identifies "this rule firing on this block". This is the matching key
-// used by regression diffing (DiffReports), triage status persistence,
-// baselines, and SARIF fingerprints — keep them in sync via this one method.
+// uniquely identifies "this rule firing on this block" WITHIN one parsed run.
+//
+// For cross-run identity (diff, baseline, triage, SARIF), use Fingerprint
+// instead — it is content-derived (rule + subflow/name/line/subject) and
+// survives re-imports and CLI re-runs, whereas Key() changes every re-parse.
 //
 // Stability note: block IDs are assigned by the parser (uuid.NewString) at parse
-// time, so a Key is stable across re-analyses of the *same parsed document* (the
-// server stores the parsed doc and re-analyzes it in place) but NOT across
-// independent re-parses of the source text (each parse mints fresh IDs). Cross-
-// parse matching (e.g. a CLI baseline over time) needs a content-derived key,
-// which this method intentionally does not yet provide.
+// time, so a Key is stable only across re-analyses of the *same parsed
+// document* (the cloud server stores the parsed doc and re-analyzes it in
+// place) but NOT across independent re-parses of the source text. Fingerprint
+// covers the cross-parse case.
 func (f Finding) Key() string {
 	return f.RuleID + ":" + f.BlockID
 }
@@ -50,10 +76,15 @@ type AnalysisReport struct {
 	FlowName     string        `json:"flowName,omitempty"`
 	GeneratedAt  time.Time     `json:"generatedAt"`
 	Findings     []Finding     `json:"findings"`
-	Stats        AnalysisStats `json:"stats"`
-	DurationMs   int           `json:"durationMs"`
-	Metrics      *FlowMetrics  `json:"metrics,omitempty"`
-	RuleProfiles []RuleProfile `json:"ruleProfiles,omitempty"`
+	// Groups are the per-block finding clusters produced by DeduplicateFindings
+	// (run in the default analysis path). Each group's Primary is the
+	// representative finding; DuplicateCount is how many same-block, same-subject
+	// duplicates were folded into it. Drives the UI's "N similar" affordance.
+	Groups       []FindingGroup `json:"groups,omitempty"`
+	Stats        AnalysisStats  `json:"stats"`
+	DurationMs   int            `json:"durationMs"`
+	Metrics      *FlowMetrics   `json:"metrics,omitempty"`
+	RuleProfiles []RuleProfile  `json:"ruleProfiles,omitempty"`
 }
 
 type AnalysisStats struct {

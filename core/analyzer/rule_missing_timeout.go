@@ -54,8 +54,9 @@ func (r *MissingTimeoutRule) Check(block *models.Block, ctx *RuleContext) []mode
 }
 
 func requiresTimeout(rawType string) bool {
+	rt := strings.ToLower(rawType)
 	for _, prefix := range timeoutRequiredPrefixes {
-		if strings.HasPrefix(rawType, prefix) {
+		if strings.HasPrefix(rt, strings.ToLower(prefix)) {
 			return true
 		}
 	}

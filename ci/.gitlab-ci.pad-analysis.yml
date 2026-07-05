@@ -1,0 +1,86 @@
+# GitLab CI template for PAD Flow Analysis.
+#
+# Usage in your .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/<org>/baki/main/ci/.gitlab-ci.pad-analysis.yml'
+#
+#   pad-analysis:
+#     extends: .pad-analysis
+#     variables:
+#       FLOW_PATH: './flows'
+#       FAIL_ON: 'error'
+#       # BASELINE: 'baseline.json'   # ratchet: fail only on NEW findings
+#       # POLICY: 'policy.json'       # authoritative gate (overrides FAIL_ON)
+#
+# This template builds bakicli from source, runs analysis with SARIF output,
+# publishes the SARIF report as a GitLab artifact (compatible with GitLab's
+# SARIF-based code quality display), and fails the pipeline on threshold breach.
+
+.pad-analysis:
+  image: golang:1.23-alpine
+  variables:
+    FLOW_PATH: '.'
+    FAIL_ON: 'error'
+    BASELINE: ''
+    POLICY: ''
+    SARIF_FILE: 'pad-analysis.sarif'
+  before_script:
+    - apk add --no-cache jq
+    - cd /baki && go build -o /usr/local/bin/bakicli ./cmd/bakicli
+    - cd "$CI_PROJECT_DIR"
+  script:
+    - |
+      set -euo pipefail
+      args=()
+      if [ -n "$POLICY" ]; then
+        args+=(-policy "$POLICY")
+      else
+        gate="$FAIL_ON"
+        [ "$gate" = "none" ] && gate="info"
+        args+=(-fail-on "$gate")
+      fi
+      if [ -n "$BASELINE" ]; then
+        args+=(-baseline "$BASELINE")
+      fi
+      # SARIF is emitted before the gate exits non-zero, so the report is complete.
+      set +e
+      bakicli -format sarif "${args[@]}" "$FLOW_PATH" > "$SARIF_FILE"
+      code=$?
+      set -e
+      echo "Gate exit code: $code"
+      # Print a summary to the job log
+      bakicli -format json -quiet "$FLOW_PATH" > pad-report.json || true
+      if [ -s pad-report.json ]; then
+        echo ""
+        echo "=== PAD Flow Analysis ==="
+        echo "Errors:   $(jq '.stats.errors' pad-report.json)"
+        echo "Warnings: $(jq '.stats.warnings' pad-report.json)"
+        echo "Info:     $(jq '.stats.info' pad-report.json)"
+        echo "Health:   $(jq '.metrics.healthScore // "n/a"' pad-report.json)/100"
+        echo "=========================="
+      fi
+      # Save the exit code for the after_script gate check
+      echo "$code" > .gate-exit-code
+    # Fail the job if the gate failed (unless fail-on=none)
+    - |
+      if [ "$FAIL_ON" != "none" ]; then
+        code=$(cat .gate-exit-code)
+        if [ "$code" != "0" ]; then
+          exit "$code"
+        fi
+      fi
+  after_script:
+    - |
+      # Link the SARIF report for GitLab's code quality display
+      if [ -f "$SARIF_FILE" ]; then
+        echo "SARIF report available at: $SARIF_FILE"
+      fi
+  artifacts:
+    when: always
+    reports:
+      codequality: pad-analysis.sarif
+    paths:
+      - pad-analysis.sarif
+      - pad-report.json
+    expire_in: 30 days

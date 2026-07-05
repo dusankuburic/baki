@@ -4,7 +4,7 @@ import {useFlowStore} from '@/stores/flowStore'
 // Folder-wide batch analysis can run rules over many flows, well beyond the
 // default request timeout.
 const BATCH_ANALYSIS_TIMEOUT_MS = 300_000
-import type {AnalysisReport, VariableHistory, GraphData, Rule, RuleConfig, FlowMetrics, DataFlowAnalysis, AnalysisSnapshot, BatchAnalysis, AnalysisDiff, DependencyAnalysis, DashboardStats, SubflowHash, DeduplicateResult, FlowComparison, Finding, FindingStatus, FlowBaseline, TriageStatus} from '@/types'
+import type {AnalysisReport, VariableHistory, GraphData, Rule, RuleConfig, FlowMetrics, DataFlowAnalysis, AnalysisSnapshot, BatchAnalysis, AnalysisDiff, DependencyAnalysis, DashboardStats, SubflowHash, DeduplicateResult, FlowComparison, Finding, FindingStatus, FlowBaseline, BaselineDrift, TriageStatus, FindingComment} from '@/types'
 
 // Input for setFindingStatus. flowId defaults to the active flow.
 export interface SetFindingStatusInput {
@@ -66,6 +66,9 @@ export const analysisApi = {
   exportHTML: (): Promise<string> =>
     request('/api/analysis/export/html', {flowId: activeFlowId()}),
 
+  exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<unknown> =>
+    request('/api/analysis/export/sarif', {flowId}),
+
   getDependencies: (): Promise<DependencyAnalysis> =>
     request('/api/analysis/dependencies', undefined, 'GET'),
 
@@ -107,4 +110,18 @@ export const analysisApi = {
 
   clearBaseline: (flowId: string = activeFlowId() ?? ''): Promise<void> =>
     request('/api/analysis/baseline/clear', {flowId}),
+
+  baselineDrift: (flowId: string = activeFlowId() ?? ''): Promise<BaselineDrift> =>
+    request('/api/analysis/baseline/drift', {flowId}),
+
+  // --- Finding comments (persistent, team-shared; cloud mode only) ---
+
+  listComments: (flowId: string, findingKey: string): Promise<FindingComment[]> =>
+    request('/api/analysis/comments/list', {flowId, findingKey}),
+
+  addComment: (flowId: string, findingKey: string, body: string): Promise<FindingComment> =>
+    request('/api/analysis/comments/add', {flowId, findingKey, body}),
+
+  deleteComment: (flowId: string, commentId: string): Promise<void> =>
+    request('/api/analysis/comments/delete', {flowId, commentId}),
 }

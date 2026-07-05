@@ -1,13 +1,15 @@
-import {List, Network, Map, History, Minus, Plus, Maximize2, Download, Expand, ChevronLeft, ChevronRight, MapPin, Flame, LayoutDashboard, BarChart3, User, Shield, Cloud} from 'lucide-react'
+import {List, Network, Map, History, Minus, Plus, Maximize2, Download, Expand, ChevronLeft, ChevronRight, MapPin, Flame, LayoutDashboard, BarChart3, User, Shield, Cloud, RefreshCw} from 'lucide-react'
+import {useState} from 'react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import IconButton from '@/components/shared/IconButton'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {useAuthStore} from '@/stores/authStore'
-import {exportApi} from '@/api'
+import {useAnalysisStore} from '@/stores/analysisStore'
+import {exportApi, flowApi, analysisApi} from '@/api'
 import {useToast} from '@/components/shared/Toast'
-import type {FlowDiff} from '@/types'
+import type {FlowDiff, AnalysisReport} from '@/types'
 
 type SystemView = 'home' | 'dashboard' | 'library' | 'profile' | 'admin'
 const SYSTEM_VIEW_TITLES: Record<SystemView, string> = {
@@ -33,6 +35,11 @@ export default function MainPaneToolbar() {
     const historyIndex = useFlowStore(s => s.historyIndex)
     const goBack = useFlowStore(s => s.goBack)
     const goForward = useFlowStore(s => s.goForward)
+    const setDocument = useFlowStore(s => s.setDocument)
+    const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
+    const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
+    const setReport = useAnalysisStore(s => s.setReport)
+    const [reimporting, setReimporting] = useState(false)
 
     const activeTabId = groups[focusedGroupIndex]?.activeTabId ?? null
     const subflow = activeTabId && document
@@ -97,6 +104,28 @@ export default function MainPaneToolbar() {
             }
         } catch (e) {
             toast.error('Comparison failed: ' + (e as Error).message)
+        }
+    }
+
+    // handleReimport re-reads the current flow's source file (desktop), re-
+    // parses it, and auto-re-analyzes — the pragmatic fix-loop accelerator for
+    // after the user edits in Power Automate Desktop. One click instead of
+    // navigating the file picker + clicking Analyze.
+    const handleReimport = async () => {
+        if (!document) return
+        setReimporting(true)
+        const gen = beginAnalyzing()
+        try {
+            const fresh = await flowApi.reimport(document.id)
+            setDocument(fresh)
+            const r = await analysisApi.analyzeFlow()
+            if (r) setReport(fresh.id, r as AnalysisReport)
+            toast.success('Flow re-imported and re-analyzed')
+        } catch (e) {
+            toast.error('Re-import failed: ' + (e as Error).message)
+        } finally {
+            if (useAnalysisStore.getState().analyzingGen === gen) setAnalyzing(false)
+            setReimporting(false)
         }
     }
 
@@ -188,6 +217,7 @@ export default function MainPaneToolbar() {
                         className={complexityMode ? 'text-semantic-warning bg-semantic-warning/10' : ''}
                     />
                 )}
+                <IconButton icon={RefreshCw} size="sm" label={reimporting ? 'Re-importing…' : 'Re-import flow'} disabled={reimporting} onClick={handleReimport} />
                 <IconButton icon={Expand} size="sm" label="Fullscreen" onClick={() => { try { window.document.documentElement.requestFullscreen() } catch { /* fullscreen not supported */ } }} />
                 <IconButton icon={Download} size="sm" label="Export PDF" onClick={() => handleExport('pdf')} />
             </div>

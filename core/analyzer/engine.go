@@ -1,8 +1,11 @@
 package analyzer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +14,86 @@ import (
 )
 
 var variableRefRegex = regexp.MustCompile(`%([^%]+)%`)
+
+// subjectMetaKeys are the metadata keys that name WHAT a finding is about. They
+// disambiguate two findings of the same rule on the same block (e.g. two
+// uninitialized variables) so each gets a distinct content key. Must stay in
+// sync with dedup.go's subjectKeys.
+var subjectMetaKeys = []string{"variable", "property", "resource"}
+
+// ruleConfidence is a per-rule default certainty for findings. Rules not listed
+// default to Medium. A rule may still set Confidence explicitly on a finding to
+// override (e.g. hardcoded-credential raises to High on a regex match and
+// leaves Medium on an entropy-only guess). Drives severity×confidence triage
+// ordering and the UI's "maybe" affordance.
+var ruleConfidence = map[string]models.Confidence{
+	// High — deterministic, low false-positive rate.
+	"hardcoded-credential":  models.ConfidenceHigh,
+	"sensitive-exposure":    models.ConfidenceHigh,
+	"sql-injection-risk":    models.ConfidenceHigh,
+	"resource-leak":         models.ConfidenceHigh,
+	"infinite-loop-risk":    models.ConfidenceHigh,
+	"empty-handler":         models.ConfidenceHigh,
+	"empty-branch":          models.ConfidenceHigh,
+	"redundant-action":      models.ConfidenceHigh,
+	// Low — heuristic / style, frequent false positives.
+	"uninitialized-variable": models.ConfidenceLow,
+	"unused-variable":        models.ConfidenceLow,
+	"deep-nesting":           models.ConfidenceLow,
+	"wide-loop":              models.ConfidenceLow,
+	"large-subflow":          models.ConfidenceLow,
+	"hardcoded-url":          models.ConfidenceLow,
+	"hardcoded-filepath":     models.ConfidenceLow,
+}
+
+// ruleAutoFix maps a rule to the deterministic fix the user can apply in one
+// click from the findings UI (desktop: edits the source, re-parses, re-
+// analyzes). Findings for rules not listed carry no AutoFix (only prose/AI).
+// Keep the fixType values in sync with FlowService.ApplyFix.
+var ruleAutoFix = map[string]string{
+	"unhandled-error":            "wrap-error-handler",
+	"file-op-no-error-handler":   "wrap-error-handler",
+	"resource-leak":              "insert-close",
+	"missing-timeout":            "set-timeout",
+	"missing-delay":              "insert-delay",
+	"empty-handler":              "insert-handler-log",
+	"uninitialized-variable":     "init-variable",
+	"error-swallow":              "insert-error-log",
+	"hardcoded-credential":       "replace-with-variable",
+	"missing-retry":              "wrap-in-retry",
+	"infinite-loop-risk":         "insert-exit-condition",
+}
+
+// findingContentKey derives a stable identity for a finding from the block's
+// CONTENT (subflow name, rawType, name, line number) plus the rule and the
+// subject — independent of the parser-minted BlockID/SubflowID UUIDs, which
+// change on every re-parse of the same source. This is what Fingerprint is set
+// to, so triage/baseline/diff/SARIF keys survive re-imports and CLI re-runs
+// (the old RuleID:BlockID key rotted every re-parse). Falls back to the legacy
+// Key() when block context is unavailable.
+func findingContentKey(f models.Finding, flow *models.FlowDocument) string {
+	if flow == nil {
+		return f.Key()
+	}
+	block := flow.BlocksByID[f.BlockID]
+	if block == nil {
+		return f.Key()
+	}
+	subflowName := ""
+	if sf := flow.BlockSubflow[f.BlockID]; sf != nil {
+		subflowName = sf.Name
+	}
+	subject := ""
+	for _, k := range subjectMetaKeys {
+		if v, ok := f.Metadata[k].(string); ok && v != "" {
+			subject = v
+			break
+		}
+	}
+	payload := strings.Join([]string{subflowName, block.RawType, block.Name, strconv.Itoa(block.LineNumber), subject}, "|")
+	h := sha256.Sum256([]byte(payload))
+	return f.RuleID + ":" + hex.EncodeToString(h[:8]) // 8 bytes = 16 hex chars; ~1e19 space
+}
 
 type RuleContext struct {
 	Flow            *models.FlowDocument
@@ -389,6 +472,13 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 	// invisible to every downstream consumer (UI, CLI gate, baselines, SARIF).
 	findings, suppressedCount := applyInlineSuppressions(findings, collectInlineSuppressions(flow))
 
+	// Fold same-block, same-subject duplicates (e.g. a rule firing twice on one
+	// block for the same variable) BEFORE stats/IDs/fingerprints, so every
+	// downstream consumer (health score, diff, SARIF, chat context) sees the
+	// de-duplicated set. The per-block groups are exposed on the report for the
+	// UI's "N similar" affordance.
+	findings, groups := DeduplicateFindings(findings)
+
 	stats := computeStats(findings)
 	stats.BlocksAnalyzed = ctx.totalBlocks
 	stats.RulesRun = len(enabledRules)
@@ -400,13 +490,32 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 		FlowName:    flow.Name,
 		GeneratedAt: time.Now(),
 		Findings:    findings,
+		Groups:      groups,
 		Stats:       stats,
 		DurationMs:  int(elapsed.Milliseconds()),
 	}
 
 	for i := range findings {
 		findings[i].ID = fmt.Sprintf("F-%03d", i+1)
-		findings[i].Fingerprint = findings[i].Key()
+		// Fingerprint is content-derived (stable across re-imports/re-parses),
+		// not the legacy RuleID:BlockID, so triage/baseline/diff/SARIF keys
+		// survive a desktop re-import or a CLI re-run. Key() is retained for
+		// in-run uniqueness and legacy matching.
+		findings[i].Fingerprint = findingContentKey(findings[i], flow)
+		// Stamp a per-rule confidence default if the rule didn't set one, so
+		// every finding carries a certainty for severity×confidence ordering.
+		if findings[i].Confidence == "" {
+			if c, ok := ruleConfidence[findings[i].RuleID]; ok {
+				findings[i].Confidence = c
+			} else {
+				findings[i].Confidence = models.ConfidenceMedium
+			}
+		}
+		// Stamp the available one-click auto-fix (if any) so the UI can show
+		// "Apply fix" only where a deterministic fix exists.
+		if findings[i].AutoFix == "" {
+			findings[i].AutoFix = ruleAutoFix[findings[i].RuleID]
+		}
 	}
 
 	report.Metrics = ComputeFlowMetrics(flow, report)

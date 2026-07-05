@@ -42,6 +42,8 @@ type FakeBackend struct {
 	// AI budget check fails closed on a store error).
 	DailyUsage float64
 	UsageErr   error
+	// ShareTokens is keyed by token hash; lazily initialized.
+	ShareTokens map[string]*interfaces.ShareToken
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -478,4 +480,60 @@ func (m *FakeBackend) ListFlowVersions(_ context.Context, _ string, _ int) ([]*i
 }
 func (m *FakeBackend) LoadFlowVersion(_ context.Context, _ string, _ int) (*interfaces.FlowVersion, error) {
 	return nil, interfaces.ErrNotFound
+}
+
+// ---- Finding comments ----
+func (m *FakeBackend) AddFindingComment(_ context.Context, c *interfaces.FindingComment) error {
+	return nil
+}
+func (m *FakeBackend) ListFindingComments(_ context.Context, _, _ string) ([]*interfaces.FindingComment, error) {
+	return []*interfaces.FindingComment{}, nil
+}
+func (m *FakeBackend) DeleteFindingComment(_ context.Context, _, _ string) error {
+	return nil
+}
+
+// ---- Share tokens ----
+func (m *FakeBackend) CreateShareToken(_ context.Context, t *interfaces.ShareToken) error {
+	if m.ShareTokens == nil {
+		m.ShareTokens = make(map[string]*interfaces.ShareToken)
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = time.Now()
+	}
+	cp := *t
+	m.ShareTokens[t.TokenHash] = &cp
+	return nil
+}
+func (m *FakeBackend) GetShareTokenByHash(_ context.Context, tokenHash string) (*interfaces.ShareToken, error) {
+	if m.ShareTokens == nil {
+		return nil, interfaces.ErrNotFound
+	}
+	t, ok := m.ShareTokens[tokenHash]
+	if !ok {
+		return nil, interfaces.ErrNotFound
+	}
+	if t.ExpiresAt != nil && t.ExpiresAt.Before(time.Now()) {
+		return nil, interfaces.ErrNotFound
+	}
+	cp := *t
+	return &cp, nil
+}
+func (m *FakeBackend) ListShareTokens(_ context.Context, flowID string) ([]*interfaces.ShareToken, error) {
+	var out []*interfaces.ShareToken
+	for _, t := range m.ShareTokens {
+		if t.FlowID == flowID {
+			cp := *t
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+func (m *FakeBackend) RevokeShareToken(_ context.Context, flowID, tokenID string) error {
+	for hash, t := range m.ShareTokens {
+		if t.ID == tokenID && t.FlowID == flowID {
+			delete(m.ShareTokens, hash)
+		}
+	}
+	return nil
 }

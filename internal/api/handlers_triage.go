@@ -264,11 +264,16 @@ func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Snapshot the current findings' stable keys as the accepted baseline.
+	// Snapshot the current findings' content-stable fingerprints as the
+	// accepted baseline (survive re-imports/re-parses, unlike the legacy
+	// RuleID:BlockID key).
 	seen := make(map[string]bool, len(report.Findings))
 	keys := make([]string, 0, len(report.Findings))
 	for _, f := range report.Findings {
-		k := f.Key()
+		k := f.Fingerprint
+		if k == "" {
+			k = f.Key()
+		}
 		if !seen[k] {
 			seen[k] = true
 			keys = append(keys, k)

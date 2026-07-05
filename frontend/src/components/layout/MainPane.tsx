@@ -1,14 +1,16 @@
 import {Fragment, lazy, Suspense, memo, useState, useMemo} from 'react'
-import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle} from 'lucide-react'
+import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
-import {Spinner, ErrorBoundary} from '@/components/shared'
+import {Spinner, ErrorBoundary, useToast} from '@/components/shared'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import Breadcrumbs from './Breadcrumbs'
 import {SystemViewRouter, isSystemView} from './SystemViewRouter'
 import PaneDivider from '@/components/layout/PaneDivider'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {flowApi} from '@/api'
+import {SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES} from '@/data/sampleFlow'
 import type {EditorGroup} from '@/stores/editorStore'
 import type {FlowDocument} from '@/types'
 import {useEditorGroups} from '@/hooks/useEditorGroups'
@@ -36,7 +38,30 @@ export default function MainPane() {
 function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
     const document = useFlowStore(s => s.document)
     const parseError = useFlowStore(s => s.parseError)
+    const setDocument = useFlowStore(s => s.setDocument)
+    const toast = useToast()
     const editor = useEditorGroups()
+    const [loadingSample, setLoadingSample] = useState(false)
+    const [showHelp, setShowHelp] = useState(false)
+
+    // Open the bundled sample flow so a first-run user sees a real analysis
+    // without having to export their own flow first. Posts the embedded PAD
+    // text through the normal upload path (parsed server-side), then loads it.
+    const handleOpenSample = async () => {
+        setLoadingSample(true)
+        try {
+            const doc = await flowApi.uploadFlow(SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES)
+            if (doc) {
+                setDocument(doc)
+            } else {
+                toast.error('Could not load the sample flow')
+            }
+        } catch (err) {
+            toast.error('Could not load the sample flow', {description: String(err)})
+        } finally {
+            setLoadingSample(false)
+        }
+    }
 
     if (!document) {
         return (
@@ -58,7 +83,33 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
                                 <FolderOpen size={28} className="text-text-tertiary" />
                             </div>
                             <div className="text-xl font-medium text-text-secondary mb-2">Open a flow to begin</div>
-                            <div className="text-sm text-text-tertiary">Choose from the sidebar or drag a file here</div>
+                            <div className="text-sm text-text-tertiary mb-5">Choose from the sidebar or drag a file here</div>
+                            <button
+                                onClick={handleOpenSample}
+                                disabled={loadingSample}
+                                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium shadow-lg shadow-brand-500/20 hover:bg-brand-600 transition-colors disabled:opacity-50"
+                            >
+                                {loadingSample ? <Spinner size={14} /> : <FlaskConical size={16} />}
+                                {loadingSample ? 'Loading sample…' : 'Try a sample flow'}
+                            </button>
+                            <button
+                                onClick={() => setShowHelp(s => !s)}
+                                className="mt-4 flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+                            >
+                                <HelpCircle size={12} />
+                                How do I export a flow from Power Automate Desktop?
+                            </button>
+                            {showHelp && (
+                                <div className="mt-3 max-w-md text-xs text-text-tertiary bg-surface-2 border border-border-subtle rounded-lg p-4 leading-relaxed">
+                                    <ol className="list-decimal list-inside space-y-1">
+                                        <li>Open your flow in the <strong>Power Automate Desktop</strong> designer.</li>
+                                        <li>Select the actions you want (or the whole flow via the canvas).</li>
+                                        <li>Right-click → <strong>Copy</strong> (or <code>Ctrl+C</code>), then paste into a <code>.txt</code> file — or use the designer's <strong>export</strong> option.</li>
+                                        <li>Save the file and open it here with <strong>Open file</strong>, or drag it onto the window.</li>
+                                    </ol>
+                                    <p className="mt-2 text-text-tertiary/80">The analyzer reads PAD's text export format; a folder of subflow <code>.txt</code> files works too.</p>
+                                </div>
+                            )}
                         </>
                     )}
                 </div>

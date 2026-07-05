@@ -1,12 +1,38 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
-import type {AnalysisReport, Severity, Finding, VariableHistory} from '@/types'
+import type {AnalysisReport, Severity, Finding, VariableHistory, FindingStatus, FlowBaseline, TriageStatus} from '@/types'
 import {toggleSetMember} from '@/lib/collections'
 import {analysisApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {logger} from '@/lib/logger'
+import {useFlowStore} from './flowStore'
 
 export type FindingCategory = 'Security' | 'Reliability' | 'Performance' | 'Style' | 'Logic'
+
+export interface SavedFilterView {
+  name: string
+  severities: Severity[]
+  categories: FindingCategory[]
+}
+
+const SAVED_VIEWS_KEY = 'baki:savedFilterViews'
+
+function loadSavedViews(): SavedFilterView[] {
+  try {
+    const raw = localStorage.getItem(SAVED_VIEWS_KEY)
+    return raw ? JSON.parse(raw) as SavedFilterView[] : []
+  } catch {
+    return []
+  }
+}
+
+function persistSavedViews(views: SavedFilterView[]) {
+  try {
+    localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(views))
+  } catch {
+    // localStorage unavailable (private browsing) — views stay in-memory only
+  }
+}
 
 // findingKey is the stable identity for a finding: the backend's content-derived
 // fingerprint (ruleId:blockId), falling back to computing it locally for older
@@ -36,6 +62,14 @@ interface AnalysisState {
   suppressedKeys: Set<string>
   findingSearch: string
   protectedFlowId: string | null
+  // Triage (cloud mode): per-finding status map (acknowledged / in_progress /
+  // resolved / suppressed). Suppressed entries are also mirrored in
+  // suppressedKeys for the existing suppress UI.
+  triageMap: Map<string, FindingStatus>
+  baseline: FlowBaseline | null
+  baselineNewCount: number | null
+  savedViews: SavedFilterView[]
+  selectedFindingIds: Set<string>
 
   setReport: (flowId: string, report: AnalysisReport) => void
   setAnalyzing: (b: boolean) => void
@@ -53,9 +87,16 @@ interface AnalysisState {
   unsuppressFinding: (finding: Finding) => void
   clearSuppressed: () => void
   isSuppressed: (finding: Finding) => boolean
-  // loadSuppressions pulls persisted, team-shared triage state for a flow (cloud
-  // mode) and replaces the local suppressed set with it.
   loadSuppressions: (flowId: string) => Promise<void>
+  setFindingTriage: (finding: Finding, status: TriageStatus) => void
+  loadBaseline: (flowId: string) => Promise<void>
+  handleSetBaseline: () => Promise<void>
+  handleClearBaseline: () => Promise<void>
+  saveCurrentView: (name: string, severities: Set<Severity>, categories: Set<FindingCategory>) => void
+  deleteSavedView: (name: string) => void
+  toggleFindingSelection: (id: string) => void
+  selectAllFindings: (ids: string[]) => void
+  clearFindingSelection: () => void
   setProtectedFlowId: (id: string | null) => void
   reset: () => void
 }
@@ -79,6 +120,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   suppressedKeys: new Set(),
   findingSearch: '',
   protectedFlowId: null,
+  triageMap: new Map(),
+  baseline: null,
+  baselineNewCount: null,
+  savedViews: loadSavedViews(),
+  selectedFindingIds: new Set(),
 
   setReport: (flowId, report) => set(state => {
     const next = new Map(state.reports)
@@ -220,6 +266,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     try {
       const statuses = await analysisApi.listFindingStatuses(flowId)
       const suppressed = (statuses || []).filter(s => s.status === 'suppressed')
+      const triageMap = new Map<string, FindingStatus>()
+      for (const s of statuses || []) {
+        triageMap.set(s.findingKey, s)
+      }
       set({
         suppressedKeys: new Set(suppressed.map(s => s.findingKey)),
         suppressedFindings: suppressed.map(s => ({
@@ -228,11 +278,121 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           reason: s.justification || '',
           suppressedAt: s.updatedAt,
         })),
+        triageMap,
       })
     } catch (err) {
       logger.warn('Failed to load suppressions', err)
     }
   },
+
+  setFindingTriage: (finding, status) => {
+    const key = findingKey(finding)
+    set(state => {
+      const triageMap = new Map(state.triageMap)
+      if (status === 'open') {
+        triageMap.delete(key)
+      } else {
+        triageMap.set(key, {
+          flowId: useFlowStore.getState().document?.id ?? '',
+          findingKey: key,
+          ruleId: finding.ruleId,
+          status,
+          updatedAt: new Date().toISOString(),
+        })
+      }
+      return {triageMap}
+    })
+    if (!isTauri()) {
+      analysisApi.setFindingStatus({findingKey: key, ruleId: finding.ruleId, status})
+        .catch(err => logger.warn('Failed to persist triage status', err))
+    }
+  },
+
+  loadBaseline: async (flowId) => {
+    if (isTauri() || !flowId) return
+    try {
+      const [bl, drift] = await Promise.all([
+        analysisApi.getBaseline(flowId),
+        analysisApi.baselineDrift(flowId),
+      ])
+      set({baseline: bl, baselineNewCount: drift.hasBaseline ? drift.new.length : null})
+    } catch (err) {
+      logger.warn('Failed to load baseline', err)
+    }
+  },
+
+  handleSetBaseline: async () => {
+    const flowId = useFlowStore.getState().document?.id
+    if (!flowId) return
+    try {
+      await analysisApi.setBaseline(flowId)
+      const drift = await analysisApi.baselineDrift(flowId)
+      set({baseline: await analysisApi.getBaseline(flowId), baselineNewCount: 0})
+      void drift
+    } catch (err) {
+      logger.warn('Failed to set baseline', err)
+      throw err
+    }
+  },
+
+  handleClearBaseline: async () => {
+    const flowId = useFlowStore.getState().document?.id
+    if (!flowId) return
+    try {
+      await analysisApi.clearBaseline(flowId)
+      set({baseline: null, baselineNewCount: null})
+    } catch (err) {
+      logger.warn('Failed to clear baseline', err)
+      throw err
+    }
+  },
+
+  saveCurrentView: (name, severities, categories) => {
+    const view: SavedFilterView = {
+      name,
+      severities: [...severities],
+      categories: [...categories],
+    }
+    set(state => {
+      const views = [...state.savedViews.filter(v => v.name !== name), view]
+      persistSavedViews(views)
+      return {savedViews: views}
+    })
+  },
+
+  deleteSavedView: (name) => {
+    set(state => {
+      const views = state.savedViews.filter(v => v.name !== name)
+      persistSavedViews(views)
+      return {savedViews: views}
+    })
+  },
+
+  toggleFindingSelection: (id) => {
+    set(state => {
+      const ids = new Set(state.selectedFindingIds)
+      if (ids.has(id)) ids.delete(id)
+      else ids.add(id)
+      return {selectedFindingIds: ids}
+    })
+  },
+
+  selectAllFindings: (ids) => {
+    set(state => {
+      const current = state.selectedFindingIds
+      // If all given ids are already selected, deselect them (toggle-all)
+      const allSelected = ids.every(id => current.has(id))
+      const next = new Set(current)
+      if (allSelected) {
+        for (const id of ids) next.delete(id)
+      } else {
+        for (const id of ids) next.add(id)
+      }
+      return {selectedFindingIds: next}
+    })
+  },
+
+  clearFindingSelection: () => set({selectedFindingIds: new Set()}),
 
   setProtectedFlowId: (id) => set({protectedFlowId: id}),
 
@@ -249,6 +409,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     suppressedKeys: new Set(),
     findingSearch: '',
     protectedFlowId: null,
+    triageMap: new Map(),
+    baseline: null,
+    baselineNewCount: null,
+    selectedFindingIds: new Set(),
+    savedViews: [],
   }),
 }))
 

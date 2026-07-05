@@ -50,6 +50,17 @@ func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *model
 	}
 }
 
+// diffKey is the cross-run match key for a finding: the content-stable
+// Fingerprint when set (the engine always sets it), falling back to the legacy
+// RuleID:BlockID Key for findings that predate content-derived fingerprints
+// (hand-built test fixtures, older persisted reports).
+func diffKey(f models.Finding) string {
+	if f.Fingerprint != "" {
+		return f.Fingerprint
+	}
+	return f.Key()
+}
+
 func DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
 	diff := &models.AnalysisDiff{
 		FlowID: new.FlowID,
@@ -57,12 +68,12 @@ func DiffReports(old, new *models.AnalysisReport) *models.AnalysisDiff {
 
 	oldMap := make(map[string]models.Finding)
 	for _, f := range old.Findings {
-		oldMap[f.Key()] = f
+		oldMap[diffKey(f)] = f
 	}
 
 	newMap := make(map[string]models.Finding)
 	for _, f := range new.Findings {
-		newMap[f.Key()] = f
+		newMap[diffKey(f)] = f
 	}
 
 	for key, f := range newMap {
@@ -119,7 +130,11 @@ func ComputeDrift(flowID string, report *models.AnalysisReport, baselineKeys []s
 	}
 
 	for _, f := range report.Findings {
-		if base[f.Key()] {
+		// Match on the content-stable Fingerprint (new baselines) and ALSO the
+		// legacy Key() (baselines recorded before fingerprints became
+		// content-derived), so an existing baseline doesn't suddenly flag every
+		// finding as new after the migration.
+		if base[f.Fingerprint] || base[f.Key()] {
 			continue
 		}
 		drift.New = append(drift.New, f)

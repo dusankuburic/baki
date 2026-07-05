@@ -76,4 +76,39 @@ export const flowApi = {
 
   getSourceFiles: (): Promise<SourceFileInfo[]> =>
     request('/api/flow/source-files', undefined, 'GET'),
+
+  // suppressInSource writes a `# pad-ignore[ruleId]` directive into the flow's
+  // source file before the given block and returns the RE-PARSED document
+  // (desktop only — cloud has no on-disk source). The suppression then travels
+  // with the file (honored by the analyzer, CLI, baselines, CI), unlike a
+  // UI-only suppression. Callers should setDocument(result) and re-analyze.
+  suppressInSource: (flowId: string, blockId: string, ruleId: string): Promise<FlowDocument> =>
+    request('/api/flow/suppress-in-source', {flowId, blockId, ruleId}),
+
+  // applyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler) to a
+  // block in the flow's source file and returns the re-parsed document. Desktop
+  // only. The finding carries the available fixType in its `autoFix` field;
+  // show "Apply fix" only when that is set.
+  applyFix: (flowId: string, blockId: string, fixType: string, ruleId?: string, variable?: string, property?: string): Promise<FlowDocument> =>
+    request('/api/flow/apply-fix', {flowId, blockId, fixType, ruleId, variable, property}),
+
+  previewFix: (flowId: string, blockId: string, fixType: string, ruleId?: string, variable?: string, property?: string): Promise<{original: string, patched: string}> =>
+    request('/api/flow/preview-fix', {flowId, blockId, fixType, ruleId, variable, property}),
+
+  // reimport re-reads the currently-loaded flow's source file (desktop), re-
+  // parses it, and returns the fresh document — so a user who edited the flow
+  // in PAD can refresh in one click. Callers should setDocument(result) + re-
+  // analyze to show what changed.
+  reimport: (flowId: string): Promise<FlowDocument> =>
+    request('/api/flow/reimport', {flowId}),
+
+  // Share links (read-only public report; cloud mode only)
+  createShare: (flowId: string): Promise<{id: string; token: string}> =>
+    request('/api/flow/share/create', {flowId}),
+
+  listShares: (flowId: string): Promise<unknown[]> =>
+    request('/api/flow/share/list', {flowId}),
+
+  revokeShare: (flowId: string, tokenId: string): Promise<void> =>
+    request('/api/flow/share/revoke', {flowId, tokenId}),
 }

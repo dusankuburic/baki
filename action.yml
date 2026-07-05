@@ -18,6 +18,10 @@ inputs:
     description: 'Optional path to a policy JSON file. When set it is the authoritative gate (overrides fail-on).'
     required: false
     default: ''
+  baseline:
+    description: 'Optional path to a baseline JSON file (committed alongside the flow). When set the gate fails only on NEW findings since the baseline (the ratchet) — adopt the gate without fixing everything first. Capture/refresh a clean state with `bakicli -update-baseline <path>`.'
+    required: false
+    default: ''
   sarif-file:
     description: 'Path to write the SARIF report.'
     required: false
@@ -63,6 +67,9 @@ runs:
           # run with the loosest real threshold and ignore the exit code below.
           [ "$gate" = "none" ] && gate="info"
           args+=(-fail-on "$gate")
+        fi
+        if [ -n "${{ inputs.baseline }}" ]; then
+          args+=(-baseline "${{ inputs.baseline }}")
         fi
         # bakicli writes the full SARIF to stdout *before* applying the gate, so
         # the report is complete even when the gate then exits non-zero.

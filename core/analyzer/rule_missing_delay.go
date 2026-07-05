@@ -55,9 +55,11 @@ func (r *MissingDelayRule) Check(block *models.Block, ctx *RuleContext) []models
 }
 
 func isWebOrUIAction(rawType string) bool {
-	return strings.HasPrefix(rawType, "WebAutomation.") || strings.HasPrefix(rawType, "UIAutomation.")
+	rt := strings.ToLower(rawType)
+	return strings.HasPrefix(rt, "webautomation.") || strings.HasPrefix(rt, "uiautomation.")
 }
 
 func isWaitAction(rawType string) bool {
-	return strings.Contains(rawType, "Wait") || strings.Contains(rawType, "Delay")
+	rt := strings.ToLower(rawType)
+	return strings.Contains(rt, "wait") || strings.Contains(rt, "delay")
 }

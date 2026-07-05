@@ -37,7 +37,54 @@ type migration struct {
 // already-shipped step.
 var migrations = []migration{
 	{version: 1, name: "baseline", sql: schemaBaseline},
+	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL},
 }
+
+const commentsAndSharesSQL = `
+CREATE TABLE IF NOT EXISTS finding_comments (
+    id TEXT PRIMARY KEY,
+    flow_id TEXT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    finding_key TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    author_name TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_comments_flow_key ON finding_comments(flow_id, finding_key);
+ALTER TABLE finding_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finding_comments FORCE ROW LEVEL SECURITY;
+CREATE POLICY finding_comments_modify ON finding_comments
+    USING (
+        NOT app_rls_active()
+        OR EXISTS (
+            SELECT 1 FROM flows f
+            WHERE f.id = finding_comments.flow_id
+              AND (f.owner_id = app_current_user_id()
+                   OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+                   OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+        )
+    ) WITH CHECK (
+        NOT app_rls_active()
+        OR EXISTS (
+            SELECT 1 FROM flows f
+            WHERE f.id = finding_comments.flow_id
+              AND (f.owner_id = app_current_user_id()
+                   OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+                   OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+        )
+    );
+
+CREATE TABLE IF NOT EXISTS share_tokens (
+    id TEXT PRIMARY KEY,
+    flow_id TEXT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_flow ON share_tokens(flow_id);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_hash ON share_tokens(token_hash);
+`
 
 // migrate applies every pending migration, serializing concurrent startups
 // across replicas using a PostgreSQL session-level advisory lock. Without the

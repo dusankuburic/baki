@@ -238,9 +238,15 @@ func blockLine(f models.Finding, doc *models.FlowDocument) int {
 
 // fingerprint is a stable per-finding identity (not array position) so SARIF
 // consumers can track a result across re-analysis runs even as other findings
-// come and go. It hashes the canonical finding Key (RuleID:BlockID) so SARIF
-// matching stays consistent with regression diffing and triage state.
+// come and go. It hashes the content-stable Fingerprint (rule + subflow/name/
+// line/subject) so a result tracks across desktop re-imports and CLI re-runs —
+// hashing the legacy Key (RuleID:BlockID) would mint a fresh id every re-parse.
+// Falls back to Key() if Fingerprint is unset (older reports).
 func fingerprint(f models.Finding) string {
-	h := sha256.Sum256([]byte(f.Key()))
+	k := f.Fingerprint
+	if k == "" {
+		k = f.Key()
+	}
+	h := sha256.Sum256([]byte(k))
 	return hex.EncodeToString(h[:8])
 }

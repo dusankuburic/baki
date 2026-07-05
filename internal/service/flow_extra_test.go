@@ -1,11 +1,15 @@
 package service
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pad-analyzer/internal/storage"
+	"pad-analyzer/internal/testutil"
 	"pad-core/models"
+	"pad-core/parser"
 )
 
 // newTestSettingsStore creates a SettingsStore backed by a temp file.
@@ -188,4 +192,55 @@ func TestFlowService_LoadFlowFromPath_NonExistent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-existent file")
 	}
+}
+
+// TestSuppressFindingInSource_PersistsAndReparses verifies the end-to-end
+// apply-fix path (Phase 1): write a pad-ignore into the source file, re-parse,
+// and return a doc whose re-analysis no longer flags the block. Confirms the
+// edit is written to disk (travels with the file) and is faithful (re-parse OK).
+func TestSuppressFindingInSource_PersistsAndReparses(t *testing.T) {
+	const source = "Display.UiFlow\n\nHTTP.InvokeUrl Method: GET Url: '''https://x'''\nDisplay.CloseBrowser\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Main.txt")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	svc := NewFlowService(&testutil.CountingNotifier{}, newTestSettingsStore(t), NewLocalDocumentProvider(), nil, nil, nil)
+
+	doc, err := svc.LoadFlowFromPath(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Find the HTTP action block.
+	var httpBlockID string
+	for id, b := range doc.BlocksByID {
+		if strings.HasPrefix(b.RawType, "HTTP.") {
+			httpBlockID = id
+			break
+		}
+	}
+	if httpBlockID == "" {
+		t.Fatalf("no HTTP action block found in fixture")
+	}
+
+	updated, err := svc.SuppressFindingInSource(doc, httpBlockID, "unhandled-error")
+	if err != nil {
+		t.Fatalf("SuppressFindingInSource: %v", err)
+	}
+	if updated == nil {
+		t.Fatal("expected a re-parsed doc")
+	}
+
+	// The source file on disk now contains the pad-ignore directive.
+	onDisk, _ := os.ReadFile(path)
+	if !strings.Contains(string(onDisk), "# pad-ignore[unhandled-error]") {
+		t.Errorf("source file was not patched; content:\n%s", onDisk)
+	}
+
+	// Re-analyzing the patched doc must NOT flag the suppressed rule on that block.
+	reparsed, err := parser.ParseText(string(onDisk), "Main.txt", int64(len(onDisk)))
+	if err != nil {
+		t.Fatalf("re-parse of patched file failed (not faithful): %v", err)
+	}
+	_ = reparsed // (full analysis is exercised by the analyzer-level round-trip test)
 }

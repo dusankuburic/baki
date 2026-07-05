@@ -14,6 +14,7 @@ import (
 	"time"
 
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/analyzer"
 	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
@@ -530,4 +531,201 @@ func searchBlock(blocks []models.Block, id string) *models.Block {
 		}
 	}
 	return nil
+}
+
+// PatchFlow applies a textual Patch to the flow's source file on disk, writes it
+// back atomically, and re-parses the whole flow so the returned document (and
+// the in-memory current doc) reflect the edit. Desktop/local only — cloud flows
+// have no on-disk source to patch. The patch edits the RAW source (never a
+// re-serialization), preserving PAD's original parameter order/quoting; the
+// re-parse validates the edit is structurally sound.
+//
+// For a multi-file (folder) flow, patch.File selects the subflow file; it must
+// be a bare filename (no path separators) to prevent traversal outside the flow
+// folder. An empty patch.File on a folder flow targets the block's own subflow
+// file (resolved by SuppressFindingInSource) or falls back to Main.
+func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*models.FlowDocument, error) {
+	if doc == nil || doc.FilePath == "" {
+		return nil, fmt.Errorf("patching requires a local source file (desktop mode)")
+	}
+	info, err := os.Stat(doc.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("source not accessible: %w", err)
+	}
+
+	targetPath := doc.FilePath
+	if info.IsDir() {
+		fileName := patch.File
+		if fileName == "" {
+			fileName = "Main.txt"
+		}
+		if !safeConvComponent(fileName) { // reuse the path-traversal guard
+			return nil, fmt.Errorf("invalid patch file %q", fileName)
+		}
+		targetPath = filepath.Join(doc.FilePath, fileName)
+	}
+
+	data, readErr := os.ReadFile(targetPath) // #nosec G304 -- target derived from doc.FilePath + a validated bare filename
+	if readErr != nil {
+		return nil, fmt.Errorf("read source file: %w", readErr)
+	}
+
+	patched := analyzer.ApplyPatch(string(data), patch)
+	dir := filepath.Dir(targetPath)
+	if writeErr := atomicWriteConv(dir, targetPath, []byte(patched)); writeErr != nil {
+		return nil, fmt.Errorf("write source file: %w", writeErr)
+	}
+
+	// Re-parse the whole flow so cross-subflow indexes/state are consistent.
+	if info.IsDir() {
+		return s.LoadFlowFolder(doc.FilePath)
+	}
+	return s.LoadFlowFromPath(doc.FilePath)
+}
+
+// SuppressFindingInSource writes a `# pad-ignore[ruleID]` directive into the
+// flow's source file immediately before the given block, then re-parses — so a
+// suppression travels with the file (honored by the analyzer, CLI gate,
+// baselines, and CI), unlike a UI-only suppression. Returns the re-parsed doc.
+// ruleID "" suppresses all rules on that block.
+func (s *FlowService) SuppressFindingInSource(doc *models.FlowDocument, blockID, ruleID string) (*models.FlowDocument, error) {
+	if doc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+	block := doc.BlocksByID[blockID]
+	if block == nil {
+		// BlocksByID is transient; fall back to a tree walk.
+		for i := range doc.Subflows {
+			if b := searchBlock(doc.Subflows[i].Blocks, blockID); b != nil {
+				block = b
+				break
+			}
+		}
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block %q not found", blockID)
+	}
+	patch := analyzer.SuppressFindingPatch(block, ruleID)
+	// For a folder flow, target the subflow file the block lives in.
+	if doc.FilePath != "" {
+		if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
+			if sf := doc.BlockSubflow[blockID]; sf != nil && sf.SourceFile != "" {
+				patch.File = sf.SourceFile
+			}
+		}
+	}
+	return s.PatchFlow(doc, patch)
+}
+
+// ApplyFix applies a deterministic auto-fix to a block in the flow's source
+// file, then re-parses. fixType selects the fixer:
+//   - "wrap-error-handler": wrap the block in ON BLOCK ERROR … END (resolves
+//     unhandled-error and file-op-no-error-handler).
+//   - "suppress": insert a # pad-ignore[ruleID] directive (same as
+//     SuppressFindingInSource).
+//
+// Returns the re-parsed document. Desktop/local only (PatchFlow needs an
+// on-disk source). Unknown fix types return an error.
+// generateFixPatch resolves the block and builds the patch for the given fix
+// type. Shared by ApplyFix (writes to disk) and PreviewFix (returns text only).
+func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (models.Patch, error) {
+	if doc == nil {
+		return models.Patch{}, fmt.Errorf("no flow loaded")
+	}
+	block := doc.BlocksByID[blockID]
+	if block == nil {
+		for i := range doc.Subflows {
+			if b := searchBlock(doc.Subflows[i].Blocks, blockID); b != nil {
+				block = b
+				break
+			}
+		}
+	}
+	if block == nil {
+		return models.Patch{}, fmt.Errorf("block %q not found", blockID)
+	}
+
+	var patch models.Patch
+	switch fixType {
+	case "wrap-error-handler":
+		patch = analyzer.WrapInErrorHandlerPatch(block)
+	case "insert-close":
+		patch = analyzer.InsertClosePatch(block)
+	case "set-timeout":
+		patch = analyzer.SetTimeoutPatch(block)
+	case "insert-delay":
+		patch = analyzer.InsertDelayPatch(block)
+	case "insert-handler-log":
+		patch = analyzer.InsertHandlerLogPatch(block)
+	case "init-variable":
+		patch = analyzer.InsertVariableInitPatch(block, variable)
+	case "insert-error-log":
+		patch = analyzer.InsertErrorLogPatch(block)
+	case "replace-with-variable":
+		patch = analyzer.ReplaceWithVariablePatch(block, property)
+	case "wrap-in-retry":
+		patch = analyzer.WrapInRetryPatch(block)
+	case "insert-exit-condition":
+		patch = analyzer.InsertExitConditionPatch(block)
+	case "suppress":
+		patch = analyzer.SuppressFindingPatch(block, ruleID)
+	default:
+		return models.Patch{}, fmt.Errorf("unknown fix type %q", fixType)
+	}
+	if doc.FilePath != "" {
+		if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
+			if sf := doc.BlockSubflow[blockID]; sf != nil && sf.SourceFile != "" {
+				patch.File = sf.SourceFile
+			}
+		}
+	}
+	return patch, nil
+}
+
+func (s *FlowService) ApplyFix(doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*models.FlowDocument, error) {
+	patch, err := s.generateFixPatch(doc, blockID, fixType, ruleID, variable, property)
+	if err != nil {
+		return nil, err
+	}
+	return s.PatchFlow(doc, patch)
+}
+
+// PatchPreviewResult holds the before/after source text for a dry-run fix
+// preview. The frontend renders a diff so the user can review the change before
+// committing it to disk.
+type PatchPreviewResult struct {
+	Original string `json:"original"`
+	Patched  string `json:"patched"`
+}
+
+// PreviewFix generates the patch and returns the before/after source text
+// WITHOUT writing to disk. Lets the user review the change before applying.
+func (s *FlowService) PreviewFix(doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*PatchPreviewResult, error) {
+	patch, err := s.generateFixPatch(doc, blockID, fixType, ruleID, variable, property)
+	if err != nil {
+		return nil, err
+	}
+
+	targetPath := doc.FilePath
+	if doc.FilePath != "" {
+		if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
+			fileName := patch.File
+			if fileName == "" {
+				fileName = "Main.txt"
+			}
+			if !safeConvComponent(fileName) {
+				return nil, fmt.Errorf("invalid patch file %q", fileName)
+			}
+			targetPath = filepath.Join(doc.FilePath, fileName)
+		}
+	}
+
+	data, readErr := os.ReadFile(targetPath) // #nosec G304 -- same path logic as PatchFlow
+	if readErr != nil {
+		return nil, fmt.Errorf("read source file: %w", readErr)
+	}
+
+	original := string(data)
+	patched := analyzer.ApplyPatch(original, patch)
+	return &PatchPreviewResult{Original: original, Patched: patched}, nil
 }

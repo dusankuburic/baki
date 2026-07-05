@@ -12,7 +12,9 @@ import (
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
+	"pad-core/export"
 	"pad-core/models"
+	"pad-core/parser"
 )
 
 type AnalysisHandler struct {
@@ -59,8 +61,56 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 	if h.dashboard != nil {
 		h.dashboard.RecordAnalysis(r.Context(), doc, res)
 	}
+	// Webhook notification (best-effort, async, env-configured via
+	// PAD_WEBHOOK_URL). No-op if unset.
+	service.NewWebhookNotifier().NotifyAnalysis(doc.Name, res)
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowAnalyze, "flow", req.FlowID, nil)
 	render.JSON(w, res)
+}
+
+// handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored
+// flow, so CI pipelines and wrappers can POST flow text and get findings JSON
+// (or SARIF) back in one call — no library upload, no Go CLI install. Works in
+// both modes (auth via PAT in cloud; open in local). Body: {files, name,
+// format?} where format is "json" (default) or "sarif". Nothing is persisted.
+func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Files  map[string]string `json:"files"`
+		Name   string            `json:"name"`
+		Format string            `json:"format,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if len(req.Files) == 0 {
+		render.Error(w, fmt.Errorf("no files provided"), http.StatusBadRequest)
+		return
+	}
+
+	// Parse purely (no docProvider side effect — this is stateless).
+	doc, err := parser.ParseFiles(req.Files, req.Name)
+	if err != nil {
+		render.Error(w, fmt.Errorf("parse failed: %w", err), http.StatusBadRequest)
+		return
+	}
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	if req.Format == "sarif" {
+		out, err := export.ReportToSARIF(report, doc)
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/sarif+json")
+		fmt.Fprintf(w, "%s\n", out)
+		return
+	}
+	render.JSON(w, report)
 }
 
 func (h *AnalysisHandler) handleGetVariableLineage(w http.ResponseWriter, r *http.Request) {
@@ -357,6 +407,41 @@ func (h *AnalysisHandler) handleExportHTML(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", "inline; filename=\"analysis-report.html\"")
 	_, _ = w.Write([]byte(html))
+}
+
+// handleExportSARIF emits a SARIF 2.1.0 report for the flow, suitable for
+// GitHub Code Scanning or any SARIF-consuming tool. Mirrors handleExportHTML
+// but uses the SARIF serializer instead of the HTML generator.
+func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	out, err := export.ReportToSARIF(report, doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/sarif+json")
+	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.sarif"`)
+	fmt.Fprintf(w, "%s\n", out)
 }
 
 func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.Request) {

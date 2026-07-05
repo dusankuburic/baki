@@ -1,8 +1,10 @@
-import {GitCompareArrows, Layers, ArrowUpDown, Download, FileText} from 'lucide-react'
-import {useAnalysisStore, type FindingCategory} from '@/stores/analysisStore'
+import {GitCompareArrows, Layers, ArrowUpDown, Download, FileText, ShieldCheck, FileCode, Bookmark, X, Share2} from 'lucide-react'
+import {useAnalysisStore, type FindingCategory, type SavedFilterView} from '@/stores/analysisStore'
 import {categoryColors, categoryBackgrounds} from '@/lib/findingsColors'
+import {isTauri} from '@/platform/guards'
 import type {Severity} from '@/types'
 import clsx from 'clsx'
+import {useState} from 'react'
 
 const ALL_CATEGORIES: FindingCategory[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
 
@@ -23,6 +25,8 @@ export interface FindingsToolbarProps {
     dedupLoading: boolean
     onExportCSV: () => void
     onExportHTML: () => void
+    onExportSARIF: () => void
+    onShare: () => void
     sortMode: 'default' | 'severity' | 'count'
     onCycleSortMode: () => void
     hasFindings: boolean
@@ -37,6 +41,8 @@ export default function FindingsToolbar({
     dedupLoading,
     onExportCSV,
     onExportHTML,
+    onExportSARIF,
+    onShare,
     sortMode,
     onCycleSortMode,
     hasFindings,
@@ -46,6 +52,34 @@ export default function FindingsToolbar({
     const toggleSeverityFilter = useAnalysisStore(s => s.toggleSeverityFilter)
     const setSeverityFilter = useAnalysisStore(s => s.setSeverityFilter)
     const toggleCategoryFilter = useAnalysisStore(s => s.toggleCategoryFilter)
+    const setCategoryFilter = useAnalysisStore(s => s.setCategoryFilter)
+    const baseline = useAnalysisStore(s => s.baseline)
+    const baselineNewCount = useAnalysisStore(s => s.baselineNewCount)
+    const handleSetBaseline = useAnalysisStore(s => s.handleSetBaseline)
+    const handleClearBaseline = useAnalysisStore(s => s.handleClearBaseline)
+    const cloudMode = !isTauri()
+    const savedViews = useAnalysisStore(s => s.savedViews)
+    const saveCurrentView = useAnalysisStore(s => s.saveCurrentView)
+    const deleteSavedView = useAnalysisStore(s => s.deleteSavedView)
+    const [showViews, setShowViews] = useState(false)
+
+    const handleSaveView = () => {
+        setShowViews(false)
+        const name = window.prompt('Name this filter view')
+        if (!name?.trim()) return
+        saveCurrentView(name.trim(), severityFilter, categoryFilter)
+    }
+
+    const handleApplyView = (view: SavedFilterView) => {
+        setShowViews(false)
+        setSeverityFilter(new Set(view.severities))
+        setCategoryFilter(new Set(view.categories as FindingCategory[]))
+    }
+
+    const handleDeleteView = (e: React.MouseEvent, name: string) => {
+        e.stopPropagation()
+        deleteSavedView(name)
+    }
 
     return (
         <div className="px-3 py-1.5 flex items-center justify-between border-b border-border-subtle gap-2">
@@ -96,6 +130,49 @@ export default function FindingsToolbar({
                         All
                     </button>
                 )}
+                <div className="relative">
+                    <button
+                        onClick={() => setShowViews(s => !s)}
+                        className={clsx(
+                            'text-2xs px-1.5 py-0.5 rounded-full border transition-all duration-fast ml-1',
+                            showViews
+                                ? 'bg-brand-500/10 text-brand-400 border-transparent'
+                                : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary',
+                        )}
+                        title="Saved filter views"
+                    >
+                        <Bookmark size={11} />
+                    </button>
+                    {showViews && (
+                        <div className="absolute left-0 top-full mt-1 z-20 bg-surface-2 border border-border-subtle rounded-md shadow-lg py-0.5 min-w-44">
+                            <button
+                                onClick={handleSaveView}
+                                className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1.5 hover:bg-surface-3 transition-colors text-brand-400 font-medium"
+                            >
+                                <Bookmark size={10} />
+                                Save current filters…
+                            </button>
+                            {savedViews.length > 0 && (
+                                <div className="border-t border-border-subtle my-0.5" />
+                            )}
+                            {savedViews.map(view => (
+                                <button
+                                    key={view.name}
+                                    onClick={() => handleApplyView(view)}
+                                    className="flex items-center justify-between w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors group"
+                                >
+                                    <span className="text-text-secondary truncate">{view.name}</span>
+                                    <span
+                                        onClick={(e) => handleDeleteView(e, view.name)}
+                                        className="opacity-0 group-hover:opacity-100 text-text-disabled hover:text-red-400 transition-all ml-2"
+                                    >
+                                        <X size={10} />
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </div>
             <button
                 onClick={onReanalyze}
@@ -157,7 +234,43 @@ export default function FindingsToolbar({
                     >
                         <FileText size={12} />
                     </button>
+                    <button
+                        onClick={onExportSARIF}
+                        className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
+                        aria-label="Export findings as SARIF"
+                        title="Export as SARIF (GitHub Code Scanning)"
+                    >
+                        <FileCode size={12} />
+                    </button>
                 </>
+            )}
+            {cloudMode && (
+                <div className="flex items-center gap-1 flex-shrink-0 border-l border-border-subtle pl-1.5 ml-0.5">
+                    {baselineNewCount !== null && baselineNewCount > 0 && (
+                        <span className="text-2xs font-medium text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full">
+                            {baselineNewCount} new
+                        </span>
+                    )}
+                    <button
+                        onClick={() => baseline ? handleClearBaseline() : handleSetBaseline()}
+                        title={baseline ? 'Clear baseline (track all findings again)' : 'Set current findings as baseline (ratchet)'}
+                        className={clsx(
+                            'text-2xs px-1.5 py-1 rounded transition-colors',
+                            baseline
+                                ? 'text-brand-400 hover:text-brand-300 hover:bg-brand-500/10'
+                                : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
+                        )}
+                    >
+                        <ShieldCheck size={12} />
+                    </button>
+                    <button
+                        onClick={onShare}
+                        title="Create read-only share link"
+                        className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors"
+                    >
+                        <Share2 size={12} />
+                    </button>
+                </div>
             )}
         </div>
     )

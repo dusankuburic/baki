@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	"pad-analyzer/internal/api/render"
@@ -282,6 +283,160 @@ func (h *FlowHandler) handleRevealInFileManager(w http.ResponseWriter, r *http.R
 		return
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// handleReimport re-reads the currently-loaded flow's source file (desktop),
+// re-parses it, and returns the fresh document — so a user who fixed something
+// in Power Automate Desktop can re-import + re-analyze in one click without
+// navigating the file picker. Uses doc.FilePath (the already-loaded path), so
+// there's no path-injection surface. Cloud flows have no on-disk source → 403.
+func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("re-import is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "viewer")
+	if !ok {
+		return
+	}
+	if doc.FilePath == "" {
+		render.Error(w, fmt.Errorf("no source file path on the current flow"), http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(doc.FilePath)
+	if err != nil {
+		render.Error(w, fmt.Errorf("source file not accessible: %w", err), http.StatusInternalServerError)
+		return
+	}
+	metrics.RecordFlowOp("reimport")
+	var fresh *models.FlowDocument
+	if info.IsDir() {
+		fresh, err = h.flowSvc.LoadFlowFolder(doc.FilePath)
+	} else {
+		fresh, err = h.flowSvc.LoadFlowFromPath(doc.FilePath)
+	}
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	// A re-import starts a fresh working context — reset the desktop analytics
+	// cache so dashboards reflect only the re-imported flow.
+	analyzer.DefaultCache.Clear()
+	render.JSON(w, fresh)
+}
+
+// handleSuppressInSource writes a `# pad-ignore[ruleId]` directive into the
+// flow's source file before the given block, re-parses, and returns the updated
+// document. Desktop/local only — cloud flows have no on-disk source. This is
+// the first end-to-end apply-fix: the suppression travels with the file (honored
+// by the analyzer, CLI gate, baselines, CI), unlike a UI-only suppression.
+func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("source-file patching is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
+	var req struct {
+		FlowID  string `json:"flowId"`
+		BlockID string `json:"blockId"`
+		RuleID  string `json:"ruleId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.BlockID == "" {
+		render.Error(w, fmt.Errorf("blockId is required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("patch_suppress")
+	updated, err := h.flowSvc.SuppressFindingInSource(doc, req.BlockID, req.RuleID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, updated)
+}
+
+// handleApplyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler)
+// to a block in the flow's source file, re-parses, and returns the updated
+// document. Desktop/local only. The finding carries the available fixType in
+// its AutoFix field; the frontend shows "Apply fix" only when that is set.
+func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("source-file patching is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
+	var req struct {
+		FlowID   string `json:"flowId"`
+		BlockID  string `json:"blockId"`
+		FixType  string `json:"fixType"`
+		RuleID   string `json:"ruleId"`
+		Variable string `json:"variable"`
+		Property string `json:"property"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.BlockID == "" || req.FixType == "" {
+		render.Error(w, fmt.Errorf("blockId and fixType are required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("patch_fix")
+	updated, err := h.flowSvc.ApplyFix(doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, updated)
+}
+
+// handlePreviewFix returns the before/after source text for a fix WITHOUT
+// writing to disk. The frontend renders a diff so the user can review the
+// change before committing. Desktop/local only (same as apply-fix).
+func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("source-file patching is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
+	var req struct {
+		FlowID   string `json:"flowId"`
+		BlockID  string `json:"blockId"`
+		FixType  string `json:"fixType"`
+		RuleID   string `json:"ruleId"`
+		Variable string `json:"variable"`
+		Property string `json:"property"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.BlockID == "" || req.FixType == "" {
+		render.Error(w, fmt.Errorf("blockId and fixType are required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	result, err := h.flowSvc.PreviewFix(doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, result)
 }
 
 func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {

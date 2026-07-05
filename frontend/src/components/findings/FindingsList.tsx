@@ -1,6 +1,6 @@
 import {useState, useMemo} from 'react'
 import {Virtuoso} from 'react-virtuoso'
-import {ChevronRight, EyeOff} from 'lucide-react'
+import {ChevronRight, EyeOff, CheckSquare, Square, X} from 'lucide-react'
 import clsx from 'clsx'
 import type {Finding, Severity} from '@/types'
 import type {BlockLookup} from '@/lib/tree'
@@ -61,6 +61,10 @@ const sevColor: Record<Severity, string> = {
 export default function FindingsList({findings, blockLookup, onFixWithAI, sortMode = 'severity'}: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const suppressMany = useAnalysisStore(s => s.suppressMany)
+  const selectedFindingIds = useAnalysisStore(s => s.selectedFindingIds)
+  const toggleFindingSelection = useAnalysisStore(s => s.toggleFindingSelection)
+  const selectAllFindings = useAnalysisStore(s => s.selectAllFindings)
+  const clearFindingSelection = useAnalysisStore(s => s.clearFindingSelection)
 
   const groups = useMemo(() => {
     const g = groupByRule(findings)
@@ -101,7 +105,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
   }
 
   return (
-    <div className="flex-1 min-h-0">
+    <div className="flex-1 min-h-0 relative">
       <Virtuoso
         style={{height: '100%'}}
         data={rows}
@@ -136,6 +140,16 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                     </div>
                   </button>
                   <button
+                    onClick={() => selectAllFindings(group.findings.map(f => f.id))}
+                    aria-label="Select all findings in this group"
+                    title="Select all in group"
+                    className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
+                  >
+                    {group.findings.every(f => selectedFindingIds.has(f.id)) && group.findings.length > 0
+                      ? <CheckSquare size={12} />
+                      : <Square size={12} />}
+                  </button>
+                  <button
                     onClick={() => suppressMany(group.findings, `Suppressed all "${group.title}" findings`)}
                     aria-label={`Suppress all ${group.findings.length} findings of this rule`}
                     title="Suppress all findings in this group"
@@ -148,13 +162,50 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
               </div>
             )
           }
+          const isSelected = selectedFindingIds.has(row.finding.id)
           return (
-            <div className={frame}>
+            <div className={clsx(frame, 'relative', isSelected && 'bg-brand-500/5')}>
+              <button
+                onClick={() => toggleFindingSelection(row.finding.id)}
+                className="absolute left-2 top-2.5 z-10 text-text-disabled hover:text-text-secondary transition-colors"
+                aria-label={isSelected ? 'Deselect finding' : 'Select finding'}
+              >
+                {isSelected
+                  ? <CheckSquare size={12} className="text-brand-400" />
+                  : <Square size={12} className="opacity-0 group-hover:opacity-100" />}
+              </button>
               <FindingCard finding={row.finding} blockLookup={blockLookup} onFixWithAI={onFixWithAI} />
             </div>
           )
         }}
       />
+      {selectedFindingIds.size > 0 && (
+        <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
+          <span className="text-2xs text-text-secondary font-medium">
+            {selectedFindingIds.size} selected
+          </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                const allFindings = findings.filter(f => selectedFindingIds.has(f.id))
+                suppressMany(allFindings, 'Bulk suppressed via selection')
+                clearFindingSelection()
+              }}
+              className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors"
+            >
+              <EyeOff size={11} />
+              Suppress
+            </button>
+            <button
+              onClick={clearFindingSelection}
+              className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-surface-3 transition-colors"
+              aria-label="Clear selection"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

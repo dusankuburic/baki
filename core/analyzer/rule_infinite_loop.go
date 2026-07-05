@@ -47,6 +47,11 @@ func hasExitCondition(loop *models.Block) bool {
 			found = true
 			return
 		}
+		rt := strings.ToLower(b.RawType)
+		if strings.Contains(rt, "exit") || strings.Contains(rt, "break") {
+			found = true
+			return
+		}
 		for _, v := range b.Properties {
 			if strings.Contains(v, "Exit") || strings.Contains(v, "Break") {
 				found = true

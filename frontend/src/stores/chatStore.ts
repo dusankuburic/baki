@@ -41,6 +41,7 @@ interface ChatState {
   // streams maps threadId → its in-flight response; absent = not streaming.
   streams: Record<string, StreamSlot>
   selectedProvider: ProviderID
+  providerEpoch: number
   pendingMessage: {text: string; contextBlockId?: string} | null
 
   getMessages: (threadId: string) => ChatMessage[]
@@ -70,6 +71,7 @@ interface ChatState {
   clearFlowThreads: (flowId: string) => void
 
   setProvider: (p: ProviderID) => void
+  bumpProviderEpoch: () => void
   setPendingMessage: (p: {text: string; contextBlockId?: string} | null) => void
 }
 
@@ -81,6 +83,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: new Map(),
   streams: {},
   selectedProvider: 'claude',
+  providerEpoch: 0,
   pendingMessage: null,
 
   getMessages: (threadId) => {
@@ -228,11 +231,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }),
 
   setProvider: (p) => set({selectedProvider: p}),
+
+  bumpProviderEpoch: () => set(s => ({providerEpoch: s.providerEpoch + 1})),
   setPendingMessage: (p) => set({pendingMessage: p}),
 }))
 
 // Reset on logout (see storeRegistry).
 registerStoreReset(() => useChatStore.setState({
   threads: [], activeThreadId: null, conversations: new Map(), streams: {},
-  pendingMessage: null, selectedProvider: 'claude',
+  pendingMessage: null, selectedProvider: 'claude', providerEpoch: 0,
 }))

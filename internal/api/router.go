@@ -411,6 +411,7 @@ var publicRoutes = map[string]bool{
 	"/api/auth/sso/callback": true,
 	"/api/auth/sso/exchange": true,
 	"/api/local-config":      true,
+	"/api/shared":            true, // unauthenticated share-link viewer (?token=...)
 	"/healthz":               true,
 	"/readyz":                true,
 	"/api/health":            true,

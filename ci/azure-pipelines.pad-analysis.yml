@@ -1,0 +1,115 @@
+# Azure DevOps Pipeline template for PAD Flow Analysis.
+#
+# Usage in your azure-pipelines.yml:
+#
+#   trigger: ['main']
+#   pool:
+#     vmImage: 'ubuntu-latest'
+#   steps:
+#     - template: azure-pipelines.pad-analysis.yml@self
+#       parameters:
+#         flowPath: '$(Build.SourcesDirectory)/flows'
+#         failOn: 'error'
+#         # baseline: 'baseline.json'  # ratchet: fail only on NEW findings
+#         # policy: 'policy.json'      # authoritative gate (overrides failOn)
+#
+# This template builds bakicli from source, runs analysis with SARIF output,
+# publishes the SARIF report as a build artifact, and fails the build if any
+# finding meets the severity threshold.
+
+parameters:
+  - name: flowPath
+    type: string
+    default: '$(Build.SourcesDirectory)'
+    displayName: 'Path to PAD flow file or folder'
+  - name: failOn
+    type: string
+    default: 'error'
+    values: ['error', 'warning', 'info', 'none']
+    displayName: 'Fail the build at this severity or higher'
+  - name: baseline
+    type: string
+    default: ''
+    displayName: 'Baseline JSON file (ratchet — fail only on new findings)'
+  - name: policy
+    type: string
+    default: ''
+    displayName: 'Policy JSON file (authoritative gate, overrides failOn)'
+  - name: sarifFile
+    type: string
+    default: '$(Build.ArtifactStagingDirectory)/pad-analysis.sarif'
+    displayName: 'SARIF output path'
+
+steps:
+  - task: GoTool@0
+    displayName: 'Set up Go'
+    inputs:
+      version: '1.23'
+
+  - script: |
+      set -euo pipefail
+      cd "$(Build.SourcesDirectory)"
+      go build -o "$(Agent.TempDirectory)/bakicli" ./cmd/bakicli
+    displayName: 'Build bakicli'
+
+  - script: |
+      set -euo pipefail
+      BAKICLI="$(Agent.TempDirectory)/bakicli"
+      args=()
+      if [ -n "${{ parameters.policy }}" ]; then
+        args+=(-policy "${{ parameters.policy }}")
+      else
+        gate="${{ parameters.failOn }}"
+        [ "$gate" = "none" ] && gate="info"
+        args+=(-fail-on "$gate")
+      fi
+      if [ -n "${{ parameters.baseline }}" ]; then
+        args+=(-baseline "${{ parameters.baseline }}")
+      fi
+      # SARIF is emitted before the gate exits non-zero, so the report is complete.
+      set +e
+      "$BAKICLI" -format sarif "${args[@]}" "${{ parameters.flowPath }}" > "${{ parameters.sarifFile }}"
+      code=$?
+      set -e
+      echo "##vso[task.setvariable variable=gateExitCode]$code"
+      if [ "$code" != "0" ] && [ "${{ parameters.failOn }}" != "none" ]; then
+        echo "##vso[task.logissue type=error]PAD analysis gate failed (fail-on=${{ parameters.failOn }})."
+      fi
+    displayName: 'Analyze flows (SARIF + gate)'
+
+  - script: |
+      BAKICLI="$(Agent.TempDirectory)/bakicli"
+      "$BAKICLI" -format json -quiet "${{ parameters.flowPath }}" > "$(Agent.TempDirectory)/pad-report.json" || true
+      report="$(Agent.TempDirectory)/pad-report.json"
+      echo "## PAD Flow Analysis"
+      echo ""
+      if [ -s "$report" ]; then
+        errors=$(jq '.stats.errors' "$report")
+        warnings=$(jq '.stats.warnings' "$report")
+        info=$(jq '.stats.info' "$report")
+        health=$(jq '.metrics.healthScore // "n/a"' "$report")
+        echo "Errors: **$errors** · Warnings: **$warnings** · Info: **$info**"
+        echo "Health score: **$health/100**"
+      else
+        echo "_No report produced._"
+      fi
+    condition: always()
+    displayName: 'Analysis summary'
+    bash:
+      targetType: 'inline'
+
+  - task: PublishBuildArtifact@1
+    condition: always()
+    displayName: 'Publish SARIF report'
+    inputs:
+      pathToPublish: '${{ parameters.sarifFile }}'
+      artifactName: 'pad-analysis-sarif'
+      publishLocation: 'Container'
+
+  - script: |
+      code="$(gateExitCode)"
+      if [ "$code" != "0" ]; then
+        exit "$code"
+      fi
+    condition: and(always(), ne('${{ parameters.failOn }}', 'none'))
+    displayName: 'Enforce gate'

@@ -2,21 +2,32 @@
 
 export type Severity = 'error' | 'warning' | 'info';
 
+// Rule certainty about a finding: 'high' (deterministic, e.g. a regex secret
+// match), 'medium' (default), 'low' (heuristic/noisy, e.g. an entropy guess).
+// Drives severity×confidence triage ordering.
+export type Confidence = 'high' | 'medium' | 'low';
+
 export interface Finding {
   id: string;
-  // Stable, content-derived identity (ruleId:blockId) from the backend. Unlike
-  // `id` (a per-run index like "F-001" that shifts as findings come and go),
-  // `fingerprint` survives re-analysis — use it to key triage state, suppressions,
-  // and baselines. Optional for backward compatibility with older payloads.
+  // Stable, content-derived identity from the backend (rule + subflow/name/line/
+  // subject). Unlike `id` (a per-run index like "F-001" that shifts as findings
+  // come and go), `fingerprint` survives re-analysis AND re-imports/re-parses —
+  // use it to key triage state, suppressions, and baselines. Optional for
+  // backward compatibility with older payloads.
   fingerprint?: string;
   ruleId: string;
   severity: Severity;
+  confidence?: Confidence;
   title: string;
   description: string;
   blockId: string;
   subflowId: string;
   suggestion?: string;
   autoFixHint?: string;
+  // Names a deterministic one-click fix the user can apply from the findings UI
+  // (desktop: edits the source file, re-parses, re-analyzes). Empty = no auto
+  // fix (only the autoFixHint prose or "Fix with AI"). Values: 'wrap-error-handler', 'suppress'.
+  autoFix?: string;
   category?: string;
   metadata?: Record<string, unknown>;
 }
@@ -48,6 +59,28 @@ export interface FlowBaseline {
   flowId: string;
   keys: string[];
   createdBy?: string;
+  createdAt: string;
+}
+
+// Drift report: findings introduced since the accepted baseline. When
+// hasBaseline is false, every finding is "new" by construction.
+export interface BaselineDrift {
+  flowId: string;
+  hasBaseline: boolean;
+  new: Finding[];
+  newErrors: number;
+  newWarnings: number;
+  newInfo: number;
+}
+
+// A team-shared review comment on a finding, keyed by the finding's stable key.
+export interface FindingComment {
+  id: string;
+  flowId: string;
+  findingKey: string;
+  authorId: string;
+  authorName?: string;
+  body: string;
   createdAt: string;
 }
 

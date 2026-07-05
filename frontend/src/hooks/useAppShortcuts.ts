@@ -142,7 +142,7 @@ export function useAppShortcuts(deps: {
             'analysis.export.csv': () => {
                 const d = useFlowStore.getState().document
                 const r = d ? useAnalysisStore.getState().reports.get(d.id) : undefined
-                if (d && r) exportFindingsCSV(r, d.id)
+                if (d && r) exportFindingsCSV(r.findings, d.id)
             },
             'analysis.export.html': async () => {
                 const d = useFlowStore.getState().document

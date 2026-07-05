@@ -108,7 +108,7 @@ export function useCommandList(deps: {
             }},
             {id: 'analysis.export.csv', label: 'Export Findings as CSV', section: 'Analysis', shortcut: ['mod', 'alt', 'e'], onSelect: () => {
                 const r = document ? useAnalysisStore.getState().reports.get(document.id) : undefined
-                if (document && r) exportFindingsCSV(r, document.id)
+                if (document && r) exportFindingsCSV(r.findings, document.id)
             }},
             {id: 'analysis.export.html', label: 'Export Findings as HTML', section: 'Analysis', shortcut: ['mod', 'shift', 'h'], onSelect: async () => {
                 if (!document) return

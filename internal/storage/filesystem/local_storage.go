@@ -17,17 +17,19 @@ import (
 
 // LocalStorageBackend implements StorageBackend for local file system storage
 type LocalStorageBackend struct {
-	dataDir     string
-	mu          sync.RWMutex // guards users, orgs, and sharing maps
-	flowMu      sync.Mutex   // guards SaveFlow version-bump + write (OCC)
-	triageMu    sync.Mutex   // guards finding-status read-modify-write
-	apiTokenMu  sync.Mutex   // guards api-token directory read-modify-write
-	userTokenMu sync.Mutex   // guards one-shot user tokens
-	users       map[string]*interfaces.User
-	orgs        map[string]*interfaces.Organisation
-	sharing     map[string][]*interfaces.Collaborator
-	apiTokens   map[string]*interfaces.APIToken  // guarded by apiTokenMu
-	userTokens  map[string]*interfaces.UserToken // keyed by token hash; guarded by userTokenMu
+	dataDir      string
+	mu           sync.RWMutex // guards users, orgs, and sharing maps
+	flowMu       sync.Mutex   // guards SaveFlow version-bump + write (OCC)
+	triageMu     sync.Mutex   // guards finding-status read-modify-write
+	apiTokenMu   sync.Mutex   // guards api-token directory read-modify-write
+	userTokenMu  sync.Mutex   // guards one-shot user tokens
+	commentsMu   sync.Mutex   // guards finding-comment read-modify-write
+	shareTokenMu sync.Mutex   // guards share-token read-modify-write
+	users        map[string]*interfaces.User
+	orgs         map[string]*interfaces.Organisation
+	sharing      map[string][]*interfaces.Collaborator
+	apiTokens    map[string]*interfaces.APIToken  // guarded by apiTokenMu
+	userTokens   map[string]*interfaces.UserToken // keyed by token hash; guarded by userTokenMu
 }
 
 // atomicWrite writes data to path durably: it writes to a sibling temp file

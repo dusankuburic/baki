@@ -17,6 +17,7 @@ export interface ProviderOption {
 export function useProviderSetup() {
   const provider = useChatStore(s => s.selectedProvider)
   const setProvider = useChatStore(s => s.setProvider)
+  const providerEpoch = useChatStore(s => s.providerEpoch)
   const updateAI = useSettingsStore(s => s.updateAI)
   const aiSettings = useSettingsStore(s => s.settings.ai)
 
@@ -66,7 +67,7 @@ export function useProviderSetup() {
       }
     }).catch((err) => { logger.warn('Failed to check provider status', err) })
     return () => { cancelled = true }
-  }, [setProvider, updateAI])
+  }, [setProvider, updateAI, providerEpoch])
 
   useEffect(() => {
     const config = aiSettingsProvidersRef.current[provider as keyof typeof aiSettings.providers]

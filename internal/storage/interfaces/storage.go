@@ -236,6 +236,17 @@ type StorageBackend interface {
 	// ClearFlowBaseline removes the flow's baseline. Idempotent.
 	ClearFlowBaseline(ctx context.Context, flowID string) error
 
+	// Finding comments (team-shared review threads on individual findings)
+	AddFindingComment(ctx context.Context, c *FindingComment) error
+	ListFindingComments(ctx context.Context, flowID, findingKey string) ([]*FindingComment, error)
+	DeleteFindingComment(ctx context.Context, flowID, commentID string) error
+
+	// Share tokens (read-only public report links)
+	CreateShareToken(ctx context.Context, t *ShareToken) error
+	GetShareTokenByHash(ctx context.Context, tokenHash string) (*ShareToken, error)
+	ListShareTokens(ctx context.Context, flowID string) ([]*ShareToken, error)
+	RevokeShareToken(ctx context.Context, flowID, tokenID string) error
+
 	// API tokens (machine credentials)
 	CreateAPIToken(ctx context.Context, t *APIToken) error
 	// GetAPITokenByHash resolves a token by its hash for authentication, or
@@ -731,4 +742,30 @@ type FlowBaseline struct {
 	Keys      []string  `json:"keys"`
 	CreatedBy string    `json:"createdBy,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// FindingComment is a team-shared review comment on a single finding, keyed by
+// the finding's stable key (same key used for triage). Comments persist across
+// re-analysis and are visible to all flow collaborators.
+type FindingComment struct {
+	ID         string    `json:"id"`
+	FlowID     string    `json:"flowId"`
+	FindingKey string    `json:"findingKey"`
+	AuthorID   string    `json:"authorId"`
+	AuthorName string    `json:"authorName,omitempty"`
+	Body       string    `json:"body"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+// ShareToken is a revocable, read-only public link to a flow's findings report.
+// Only the token's SHA-256 hash is persisted; the raw value is shown once at
+// creation. An unauthenticated viewer redeems the hash for a snapshot of the
+// flow's current analysis report.
+type ShareToken struct {
+	ID        string     `json:"id"`
+	FlowID    string     `json:"flowId"`
+	TokenHash string     `json:"-"` // sha256 hex; never serialized to clients
+	CreatedBy string     `json:"createdBy,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"` // nil ⇒ no expiry
 }
