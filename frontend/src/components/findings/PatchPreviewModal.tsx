@@ -1,19 +1,41 @@
-import {useState, useMemo} from 'react'
+import {useState, useMemo, useEffect} from 'react'
 import clsx from 'clsx'
 import {Modal, Button} from '@/components/shared'
 
 interface DiffLine {
   type: 'added' | 'removed' | 'context'
   text: string
-  oldLine?: number
-  newLine?: number
 }
 
 // computeDiff produces a simple line-by-line diff between two texts. Uses a
 // basic LCS algorithm — adequate for small patches (typically <20 lines changed).
+// To avoid O(n*m) blowup on large files, both inputs are pre-trimmed to a
+// window around the first/last changed line before the LCS runs.
 export function computeDiff(original: string, patched: string): DiffLine[] {
-  const a = original.split('\n')
-  const b = patched.split('\n')
+  const aFull = original.split('\n')
+  const bFull = patched.split('\n')
+
+  // Quick path: identical
+  if (original === patched) return []
+
+  // Find the window of changed lines to avoid running LCS on the full file.
+  // Most patches change <20 lines; trimming to ±3 context lines around the
+  // change bounds the DP table to a manageable size even for 10000-line flows.
+  const maxLen = Math.max(aFull.length, bFull.length)
+  let firstDiff = 0
+  while (firstDiff < maxLen && aFull[firstDiff] === bFull[firstDiff]) firstDiff++
+  let lastDiffA = aFull.length - 1, lastDiffB = bFull.length - 1
+  while (lastDiffA >= firstDiff && lastDiffB >= firstDiff && aFull[lastDiffA] === bFull[lastDiffB]) {
+    lastDiffA--; lastDiffB--
+  }
+  const windowBefore = 3
+  const windowAfter = 3
+  const trimStart = Math.max(0, firstDiff - windowBefore)
+  const trimEndA = Math.min(aFull.length, lastDiffA + 1 + windowAfter)
+  const trimEndB = Math.min(bFull.length, lastDiffB + 1 + windowAfter)
+
+  const a = aFull.slice(trimStart, trimEndA)
+  const b = bFull.slice(trimStart, trimEndB)
   const m = a.length, n = b.length
 
   // LCS DP table
@@ -24,37 +46,31 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
     }
   }
 
-  // Backtrack to produce diff, then trim to changed region ±3 context lines
+  // Backtrack to produce diff. The inputs are already pre-trimmed to the
+  // changed window, so no further trimming is needed — just add ellipsis
+  // markers if the source was truncated.
   const rawDiff: DiffLine[] = []
   let i = 0, j = 0
   while (i < m && j < n) {
     if (a[i] === b[j]) {
-      rawDiff.push({type: 'context', text: a[i], oldLine: i + 1, newLine: j + 1})
+      rawDiff.push({type: 'context', text: a[i]})
       i++; j++
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      rawDiff.push({type: 'removed', text: a[i], oldLine: i + 1})
+      rawDiff.push({type: 'removed', text: a[i]})
       i++
     } else {
-      rawDiff.push({type: 'added', text: b[j], newLine: j + 1})
+      rawDiff.push({type: 'added', text: b[j]})
       j++
     }
   }
-  while (i < m) { rawDiff.push({type: 'removed', text: a[i], oldLine: i + 1}); i++ }
-  while (j < n) { rawDiff.push({type: 'added', text: b[j], newLine: j + 1}); j++ }
+  while (i < m) { rawDiff.push({type: 'removed', text: a[i]}); i++ }
+  while (j < n) { rawDiff.push({type: 'added', text: b[j]}); j++ }
 
-  // Trim leading/trailing context to ±3 lines around changes
-  const firstChange = rawDiff.findIndex(d => d.type !== 'context')
-  if (firstChange === -1) return []
-  let lastChange = firstChange
-  for (let k = rawDiff.length - 1; k > firstChange; k--) {
-    if (rawDiff[k].type !== 'context') { lastChange = k; break }
-  }
-  const start = Math.max(0, firstChange - 3)
-  const end = Math.min(rawDiff.length, lastChange + 4)
-  const trimmed = rawDiff.slice(start, end)
-  if (start > 0) trimmed.unshift({type: 'context', text: '⋯'})
-  if (end < rawDiff.length) trimmed.push({type: 'context', text: '⋯'})
-  return trimmed
+  const result: DiffLine[] = []
+  if (trimStart > 0) result.push({type: 'context', text: '⋯'})
+  result.push(...rawDiff)
+  if (trimEndA < aFull.length || trimEndB < bFull.length) result.push({type: 'context', text: '⋯'})
+  return result
 }
 
 interface Props {
@@ -68,6 +84,11 @@ interface Props {
 
 export default function PatchPreviewModal({open, original, patched, fixType, onApply, onCancel}: Props) {
   const [applying, setApplying] = useState(false)
+
+  // Reset applying state whenever the modal closes so re-opening doesn't
+  // leave the buttons permanently disabled.
+  useEffect(() => { if (!open) setApplying(false) }, [open])
+
   const diff = useMemo(() => computeDiff(original, patched), [original, patched])
 
   const handleApply = () => {

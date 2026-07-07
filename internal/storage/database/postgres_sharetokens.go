@@ -46,7 +46,9 @@ func (b *PostgresStorageBackend) GetShareTokenByHash(ctx context.Context, tokenH
 func (b *PostgresStorageBackend) ListShareTokens(ctx context.Context, flowID string) ([]*storageif.ShareToken, error) {
 	rows, err := b.query(ctx).QueryContext(ctx,
 		`SELECT id, flow_id, token_hash, created_by, created_at, expires_at
-		 FROM share_tokens WHERE flow_id = $1 ORDER BY created_at DESC`, flowID)
+		 FROM share_tokens
+		 WHERE flow_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
+		 ORDER BY created_at DESC`, flowID)
 	if err != nil {
 		return nil, err
 	}

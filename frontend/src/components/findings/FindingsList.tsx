@@ -1,10 +1,11 @@
-import {useState, useMemo} from 'react'
-import {Virtuoso} from 'react-virtuoso'
+import {useState, useMemo, useRef, useEffect} from 'react'
+import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
 import {ChevronRight, EyeOff, CheckSquare, Square, X} from 'lucide-react'
 import clsx from 'clsx'
 import type {Finding, Severity} from '@/types'
 import type {BlockLookup} from '@/lib/tree'
-import {useAnalysisStore} from '@/stores/analysisStore'
+import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
+import {useFlowStore} from '@/stores/flowStore'
 import FindingCard from './FindingCard'
 
 interface Props {
@@ -104,9 +105,35 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     })
   }
 
+  // Chat "finding:" deep-links set focusedFindingKey. Reveal that finding:
+  // expand its group if collapsed (which re-runs this effect once rows update),
+  // scroll it to center, then clear the focus after the highlight has shown.
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
+  const focusedFindingKey = useAnalysisStore(s => s.focusedFindingKey)
+  const setFocusedFinding = useAnalysisStore(s => s.setFocusedFinding)
+  useEffect(() => {
+    if (!focusedFindingKey) return
+    const idx = rows.findIndex(r => r.kind === 'card' && findingKey(r.finding) === focusedFindingKey)
+    if (idx >= 0) {
+      virtuosoRef.current?.scrollToIndex({index: idx, align: 'center'})
+      const t = setTimeout(() => setFocusedFinding(null), 2500)
+      return () => clearTimeout(t)
+    }
+    // Not currently rendered — expand its (collapsed) group so it does, then
+    // let the effect re-run against the updated rows.
+    const g = groups.find(group => group.findings.some(f => findingKey(f) === focusedFindingKey))
+    if (g && collapsed.has(g.ruleId)) {
+      setCollapsed(prev => { const n = new Set(prev); n.delete(g.ruleId); return n })
+      return
+    }
+    // Filtered out of this view entirely — nothing to reveal; drop the request.
+    setFocusedFinding(null)
+  }, [focusedFindingKey, rows, groups, collapsed, setFocusedFinding])
+
   return (
     <div className="flex-1 min-h-0 relative">
       <Virtuoso
+        ref={virtuosoRef}
         style={{height: '100%'}}
         data={rows}
         computeItemKey={(_index, row) => row.kind === 'header' ? `h:${row.group.ruleId}` : row.finding.id}
@@ -163,8 +190,13 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
             )
           }
           const isSelected = selectedFindingIds.has(row.finding.id)
+          const isFocused = !!focusedFindingKey && findingKey(row.finding) === focusedFindingKey
           return (
-            <div className={clsx(frame, 'relative', isSelected && 'bg-brand-500/5')}>
+            <div className={clsx(
+              frame, 'relative group transition-colors',
+              isSelected && 'bg-brand-500/5',
+              isFocused && 'ring-1 ring-inset ring-brand-400 bg-brand-500/10',
+            )}>
               <button
                 onClick={() => toggleFindingSelection(row.finding.id)}
                 className="absolute left-2 top-2.5 z-10 text-text-disabled hover:text-text-secondary transition-colors"
@@ -187,8 +219,14 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
           <div className="flex items-center gap-3">
             <button
               onClick={() => {
-                const allFindings = findings.filter(f => selectedFindingIds.has(f.id))
-                suppressMany(allFindings, 'Bulk suppressed via selection')
+                // Suppress ALL selected findings from the full report, not
+                // just the filtered view — selected items hidden by a filter
+                // change must not be silently skipped.
+                const docId = useFlowStore.getState().document?.id
+                const report = docId ? useAnalysisStore.getState().reports.get(docId) : undefined
+                const allFindings = report?.findings ?? []
+                const toSuppress = allFindings.filter(f => selectedFindingIds.has(f.id))
+                suppressMany(toSuppress, 'Bulk suppressed via selection')
                 clearFindingSelection()
               }}
               className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors"

@@ -185,13 +185,20 @@ func portOf(cfg config.EmailConfig) int {
 	return cfg.SMTPPort
 }
 
+// sanitizeHeader strips CR/LF so a value can never smuggle extra headers into
+// the message. Callers validate their inputs today; this is the last line of
+// defense at the layer that actually writes header syntax.
+func sanitizeHeader(v string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(v)
+}
+
 // buildMIME assembles an RFC 5322 message. When htmlBody is set it produces a
 // multipart/alternative body; otherwise a plain-text message.
 func buildMIME(from, to, subject, textBody, htmlBody string) []byte {
 	var b strings.Builder
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + to + "\r\n")
-	b.WriteString("Subject: " + subject + "\r\n")
+	b.WriteString("From: " + sanitizeHeader(from) + "\r\n")
+	b.WriteString("To: " + sanitizeHeader(to) + "\r\n")
+	b.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	if htmlBody == "" {
 		b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")

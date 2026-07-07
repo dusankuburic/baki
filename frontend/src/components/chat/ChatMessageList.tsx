@@ -75,6 +75,10 @@ function ChatMessageList({children, isStreaming}: Props) {
           isStreaming && 'is-streaming'
         )}
         onScroll={handleScroll}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label="Conversation"
       >
         {children}
       </div>

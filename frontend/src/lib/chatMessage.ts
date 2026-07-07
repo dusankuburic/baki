@@ -38,7 +38,6 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
     // parsed message never carries an undefined-valued key the store would have
     // to defend against.
     if (typeof m.contextBlockId === 'string' && m.contextBlockId) out.contextBlockId = m.contextBlockId
-    if (typeof m.contextSubflowId === 'string' && m.contextSubflowId) out.contextSubflowId = m.contextSubflowId
     if (typeof m.tokensIn === 'number') out.tokensIn = m.tokensIn
     if (typeof m.tokensOut === 'number') out.tokensOut = m.tokensOut
     if (typeof m.provider === 'string' && m.provider) out.provider = m.provider as ChatMessage['provider']

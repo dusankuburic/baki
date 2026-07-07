@@ -74,7 +74,7 @@ func (lsb *LocalStorageBackend) writeStatuses(flowID string, m map[string]*inter
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, data, 0644)
+	return atomicWrite(path, data, 0o600)
 }
 
 func (lsb *LocalStorageBackend) SetFindingStatus(ctx context.Context, st *interfaces.FindingStatus) error {
@@ -170,7 +170,7 @@ func (lsb *LocalStorageBackend) SetFlowBaseline(ctx context.Context, bl *interfa
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, data, 0644)
+	return atomicWrite(path, data, 0o600)
 }
 
 func (lsb *LocalStorageBackend) ClearFlowBaseline(ctx context.Context, flowID string) error {

@@ -7,6 +7,7 @@ import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {utf8ByteLength} from '@/lib/utf8'
+import {conversationToMarkdown, downloadTextFile, safeFilename} from '@/lib/chatExport'
 import {useChatConversations} from './useChatConversations'
 import {useChatThreads} from './useChatThreads'
 import type {ChatMessage, ContextPreview, ChatRequest} from '@/types'
@@ -38,13 +39,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const getMessages = useChatStore(s => s.getMessages)
   const appendMessage = useChatStore(s => s.appendMessage)
   const removeMessage = useChatStore(s => s.removeMessage)
+  const clearThreadMessages = useChatStore(s => s.clearThreadMessages)
   const updateThread = useChatStore(s => s.updateThread)
   const startStream = useChatStore(s => s.startStream)
   const endStream = useChatStore(s => s.endStream)
   const setStreamMeta = useChatStore(s => s.setStreamMeta)
   const updateStream = useChatStore(s => s.updateStream)
-  const globalPendingMessage = useChatStore(s => s.pendingMessage)
-  const setGlobalPendingMessage = useChatStore(s => s.setPendingMessage)
 
   const threads = useChatStore(s => s.threads)
   const activeThreadId = useChatStore(s => s.activeThreadId)
@@ -168,36 +168,50 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     streamAccRef.current.delete(streamId)
   }, [])
 
-  const onDone = useCallback((tokensOut: number, tokensIn: number, streamId: string) => {
-    const acc = takeAcc(streamId)
-    if (!acc) return
+  // commitAssistantMessage appends the streamed text as a permanent assistant
+  // message and persists the thread. Shared by the natural-completion path
+  // (onDone) and the user-stop path (handleCancelStream) so an interrupted
+  // answer is kept, not discarded. Persisted messages are filtered of the
+  // transient error bubbles so reloaded history isn't littered with them.
+  const commitAssistantMessage = useCallback((
+    threadId: string,
+    messageId: string | undefined,
+    content: string,
+    opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
+  ) => {
     const curDoc = docRef.current
-    const slot = useChatStore.getState().streams[acc.threadId]
-
     const msg: ChatMessage = {
-      id: slot?.messageId || crypto.randomUUID(),
+      id: messageId || crypto.randomUUID(),
       role: 'assistant',
-      content: acc.text,
+      content,
       timestamp: new Date().toISOString(),
       provider: providerRef.current,
       model: selectedModelRef.current,
-      tokensIn,
-      tokensOut,
-      finishReason: 'stop',
+      tokensIn: opts.tokensIn,
+      tokensOut: opts.tokensOut,
+      finishReason: opts.finishReason,
     }
-    if (curDoc) {
-      appendMessage(acc.threadId, msg)
-      const thread = useChatStore.getState().threads.find(t => t.id === acc.threadId)
-      if (thread) {
-        chatApi.saveConversation(curDoc.id, thread.contextBlockId || 'flow', getMessages(acc.threadId) as ChatMessage[]).catch((err) => { logger.warn('Failed to save conversation', err) })
-        updateThread(acc.threadId, {
-          tokensIn: (thread.tokensIn ?? 0) + tokensIn,
-          tokensOut: (thread.tokensOut ?? 0) + tokensOut,
-        })
-      }
+    if (!curDoc) return
+    appendMessage(threadId, msg)
+    const thread = useChatStore.getState().threads.find(t => t.id === threadId)
+    if (!thread) return
+    const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
+    chatApi.saveConversation(curDoc.id, thread.contextBlockId || 'flow', persistable).catch((err) => { logger.warn('Failed to save conversation', err) })
+    if (opts.tokensIn != null || opts.tokensOut != null) {
+      updateThread(threadId, {
+        tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),
+        tokensOut: (thread.tokensOut ?? 0) + (opts.tokensOut ?? 0),
+      })
     }
+  }, [appendMessage, getMessages, updateThread])
+
+  const onDone = useCallback((tokensOut: number, tokensIn: number, streamId: string) => {
+    const acc = takeAcc(streamId)
+    if (!acc) return
+    const slot = useChatStore.getState().streams[acc.threadId]
+    commitAssistantMessage(acc.threadId, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
     endStream(acc.threadId)
-  }, [appendMessage, getMessages, endStream, updateThread, takeAcc])
+  }, [commitAssistantMessage, endStream, takeAcc])
 
   const onError = useCallback((error: string, streamId: string) => {
     const acc = takeAcc(streamId)
@@ -413,22 +427,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     executeSend(text, files.length > 0 ? files : undefined, excludeContext)
   }, [executeSend, activeThreadId, updateThread])
 
-  const executeSendRef = useRef(executeSend)
-  useEffect(() => { executeSendRef.current = executeSend })
-  const updateThreadRef = useRef(updateThread)
-  useEffect(() => { updateThreadRef.current = updateThread })
-
-  useEffect(() => {
-    if (globalPendingMessage && doc && activeThreadId) {
-      const {text, contextBlockId} = globalPendingMessage
-      if (contextBlockId) {
-        updateThreadRef.current(activeThreadId, {contextBlockId})
-      }
-      executeSendRef.current(text)
-      setGlobalPendingMessage(null)
-    }
-  }, [globalPendingMessage, doc, activeThreadId, setGlobalPendingMessage])
-
   const handlePreviewContext = useCallback(async (text: string, files: string[], excludeContext?: boolean) => {
     if (files.length > 0 && activeThreadId) {
        updateThread(activeThreadId, {selectedSourceFiles: files})
@@ -464,10 +462,22 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (lastUserContent) executeSend(lastUserContent, undefined, false, true)
   }, [doc, activeThread, isCurrentThreadStreaming, getMessages, removeMessage, executeSend])
 
-  const handleExport = useCallback(async () => {
-    if (!doc || !activeThread) return
-    await chatApi.exportConversation(doc.id, activeThread.id)
-  }, [doc, activeThread])
+  const handleExport = useCallback(() => {
+    if (!activeThread) return
+    const messages = getMessages(activeThread.id) as ChatMessage[]
+    if (messages.length === 0) return
+    const title = activeThread.title || 'Chat conversation'
+    downloadTextFile(safeFilename(title), conversationToMarkdown(title, messages))
+  }, [activeThread, getMessages])
+
+  // handleClearThread empties the active thread locally and on the backend,
+  // using the same (flowId, scope) key the save/get path uses. Backing the
+  // /clear slash command; a no-op if a stream is in flight.
+  const handleClearThread = useCallback(() => {
+    if (!doc || !activeThread || isCurrentThreadStreaming) return
+    clearThreadMessages(activeThread.id)
+    chatApi.clearConversation(doc.id, activeThread.contextBlockId || 'flow').catch((err) => { logger.warn('Failed to clear conversation', err) })
+  }, [doc, activeThread, isCurrentThreadStreaming, clearThreadMessages])
 
   const handleCancelStream = useCallback(() => {
     const tid = useChatStore.getState().activeThreadId
@@ -486,11 +496,15 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       if (acc) {
         if (acc.raf !== null) cancelAnimationFrame(acc.raf)
         streamAccRef.current.delete(sid)
+        // Keep whatever was generated before the stop instead of discarding it.
+        if (acc.text) {
+          commitAssistantMessage(tid, slot.messageId, acc.text, {finishReason: 'interrupted'})
+        }
       }
       cancelRef.current(sid)
     }
     endStream(tid)
-  }, [bumpGen, endStream])
+  }, [bumpGen, endStream, commitAssistantMessage])
 
   return {
     doc,
@@ -511,6 +525,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     handlePreviewContext,
     handleResend,
     handleExport,
+    handleClearThread,
     handleCancelStream,
     clearContextPreview: () => { setContextPreview(null); setPendingMessage(null) },
     confirmContextPreview: () => {

@@ -38,6 +38,8 @@ export default function BlockCaseSeparator({block, collapsed}: BlockCaseSeparato
                     e.stopPropagation()
                     toggleBlockExpand(block.id)
                 }}
+                aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
+                aria-expanded={!collapsed}
             >
                 <Chevron size={12} style={{color}} />
             </button>

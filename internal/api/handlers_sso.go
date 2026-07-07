@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
@@ -202,7 +203,8 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.tokenStore != nil {
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt); err != nil {
+		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt, ua, ip); err != nil {
 			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}

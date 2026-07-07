@@ -82,7 +82,7 @@ func Error(w http.ResponseWriter, err error, code int) {
 		switch {
 		case errors.Is(err, service.ErrNotFound) || errors.Is(err, storageif.ErrNotFound):
 			code = http.StatusNotFound
-		case errors.Is(err, service.ErrPermissionDenied):
+		case errors.Is(err, service.ErrPermissionDenied) || errors.Is(err, storageif.ErrNotCommentAuthor):
 			code = http.StatusForbidden
 		case errors.Is(err, service.ErrInvalidInput) || errors.Is(err, service.ErrUninitialized):
 			code = http.StatusBadRequest

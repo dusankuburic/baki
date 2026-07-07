@@ -3,9 +3,9 @@ import {AlertTriangle, AlertCircle, Info, Sparkles} from 'lucide-react'
 import clsx from 'clsx'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
 import {categoryBadgeClass} from '@/lib/findingsColors'
+import {stageFindingFix} from '@/lib/fixWithAI'
 import type {Finding, Severity} from '@/types'
 
 const severityIcon: Record<Severity, typeof AlertTriangle> = {
@@ -33,10 +33,6 @@ function BlockFindings() {
     )
     const setInspectorTab = useUIStore(s => s.setInspectorTab)
     const setInspectorCollapsed = useUIStore(s => s.setInspectorCollapsed)
-    const appendMessage = useChatStore(s => s.appendMessage)
-    const createThread = useChatStore(s => s.createThread)
-    const updateThread = useChatStore(s => s.updateThread)
-    const switchThread = useChatStore(s => s.switchThread)
 
     const blockFindings = useMemo(() => {
         if (indexedFindings.length === 0) return EMPTY
@@ -50,29 +46,7 @@ function BlockFindings() {
 
     const handleFixWithAI = (finding: Finding) => {
         if (!docId) return
-        const threadId = createThread(docId)
-        updateThread(threadId, {
-            title: `Fix: ${finding.title}`,
-            contextBlockId: finding.blockId,
-            useTools: true,
-        })
-        const parts = [
-            `Help me fix this issue: **${finding.title}**`,
-            finding.description,
-            finding.suggestion ? `Suggestion: ${finding.suggestion}` : '',
-            finding.autoFixHint ? `Analyzer fix hint:\n\`\`\`\n${finding.autoFixHint}\n\`\`\`` : '',
-            `Rule: \`${finding.ruleId}\` · Severity: ${finding.severity} · Block: \`${finding.blockId}\``,
-        ].filter(Boolean)
-        appendMessage(threadId, {
-            id: crypto.randomUUID(),
-            role: 'user',
-            content: parts.join('\n\n'),
-            timestamp: new Date().toISOString(),
-            contextBlockId: finding.blockId,
-        })
-        switchThread(threadId)
-        setInspectorTab('ai')
-        setInspectorCollapsed(false)
+        stageFindingFix(finding, docId)
     }
 
     return (

@@ -33,6 +33,8 @@ export default function BlockElseSeparator({blockId, collapsed}: BlockElseSepara
                     e.stopPropagation()
                     toggleBlockExpand(blockId)
                 }}
+                aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
+                aria-expanded={!collapsed}
             >
                 <Chevron size={12} style={{color}} />
             </button>

@@ -26,7 +26,7 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
       <div className="bg-surface-1 border border-border-default rounded-xl w-[560px] max-w-[calc(100vw-2rem)] max-h-[80vh] flex flex-col shadow-xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-default">
           <h3 className="text-sm font-semibold text-text-primary">Context Preview</h3>
-          <button onClick={onClose} className="text-text-tertiary hover:text-text-secondary">
+          <button onClick={onClose} className="text-text-tertiary hover:text-text-secondary" aria-label="Close">
             <X size={16} />
           </button>
         </div>

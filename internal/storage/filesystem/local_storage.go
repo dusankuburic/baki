@@ -74,11 +74,26 @@ func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	}, nil
 }
 
+// flowPath builds the on-disk path for a flow document. Flow IDs can
+// originate from uploaded flow files, so they get the same traversal guard
+// as every other flowID-keyed path in this backend.
+func (lsb *LocalStorageBackend) flowPath(id string) (string, error) {
+	if !safePathSegment(id) {
+		return "", fmt.Errorf("invalid flow id %q", id)
+	}
+	return filepath.Join(lsb.dataDir, "flows", id+".json"), nil
+}
+
 // SaveFlow saves a flow document to the local file system.
 // In local mode OCC is enforced via flowMu + a version comparison.
 func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
 	lsb.flowMu.Lock()
 	defer lsb.flowMu.Unlock()
+
+	flowPath, err := lsb.flowPath(flow.ID)
+	if err != nil {
+		return err
+	}
 
 	// Check for existing version to enforce OCC
 	if existing, err := lsb.LoadFlow(ctx, flow.ID); err == nil && existing != nil {
@@ -87,8 +102,6 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		}
 		flow.Version = existing.Version + 1
 	}
-
-	flowPath := filepath.Join(lsb.dataDir, "flows", flow.ID+".json")
 
 	// Create flows directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(flowPath), 0750); err != nil {
@@ -100,7 +113,7 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		return fmt.Errorf("failed to marshal flow: %w", err)
 	}
 
-	if err := atomicWrite(flowPath, data, 0644); err != nil {
+	if err := atomicWrite(flowPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write flow file: %w", err)
 	}
 
@@ -113,9 +126,12 @@ func (lsb *LocalStorageBackend) TransferFlowOwner(_ context.Context, _, _, _ str
 
 // LoadFlow loads a flow document from the local file system
 func (lsb *LocalStorageBackend) LoadFlow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
-	flowPath := filepath.Join(lsb.dataDir, "flows", id+".json")
+	flowPath, err := lsb.flowPath(id)
+	if err != nil {
+		return nil, err
+	}
 
-	data, err := os.ReadFile(flowPath) // #nosec G304 -- flowPath = dataDir/flows/<id>.json, not raw user input
+	data, err := os.ReadFile(flowPath) // #nosec G304 -- flowPath = dataDir/flows/<id>.json with id validated by flowPath
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, interfaces.ErrNotFound
@@ -274,7 +290,10 @@ func (lsb *LocalStorageBackend) matchesFilter(flow *interfaces.FlowDocument, f i
 
 // DeleteFlow deletes a flow document from the local file system
 func (lsb *LocalStorageBackend) DeleteFlow(ctx context.Context, id string) error {
-	flowPath := filepath.Join(lsb.dataDir, "flows", id+".json")
+	flowPath, err := lsb.flowPath(id)
+	if err != nil {
+		return err
+	}
 
 	if err := os.Remove(flowPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete flow file: %w", err)
@@ -292,7 +311,7 @@ func (lsb *LocalStorageBackend) SaveSettings(ctx context.Context, settings *inte
 		return fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
-	if err := atomicWrite(settingsPath, data, 0644); err != nil {
+	if err := atomicWrite(settingsPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write settings file: %w", err)
 	}
 
@@ -357,7 +376,7 @@ func (lsb *LocalStorageBackend) SaveConversation(ctx context.Context, flowID, sc
 		return fmt.Errorf("failed to marshal conversation: %w", err)
 	}
 
-	if err := atomicWrite(conversationPath, data, 0644); err != nil {
+	if err := atomicWrite(conversationPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write conversation file: %w", err)
 	}
 

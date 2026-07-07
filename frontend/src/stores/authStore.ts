@@ -77,6 +77,18 @@ function writeRefresh(value: string, persistent: boolean): void {
   }
 }
 
+// getCurrentSessionId decodes the `jti` claim from the currently-held refresh
+// token, so the UI can mark which entry in the active-sessions list is "this
+// device" without any backend change (the session id IS the refresh token's
+// jti). Returns null if there is no refresh token or it isn't a decodable JWT.
+export function getCurrentSessionId(): string | null {
+  const token = readRefresh()
+  if (!token) return null
+  const payload = decodeJwtPayload(token)
+  const jti = payload?.jti
+  return typeof jti === 'string' ? jti : null
+}
+
 function clearTokens(): void {
   try {
     sessionStorage.removeItem(REFRESH_TOKEN_KEY)

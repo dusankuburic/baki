@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -27,6 +28,10 @@ func (h *AnalysisHandler) handleListComments(w http.ResponseWriter, r *http.Requ
 	}
 	if err := decodeOptional(r.Body, &req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	if req.FlowID == "" || req.FindingKey == "" {
+		render.Error(w, fmt.Errorf("flowId and findingKey are required"), http.StatusBadRequest)
 		return
 	}
 	userID := h.security.CallerID(r)
@@ -59,8 +64,8 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	if req.Body == "" {
-		render.Error(w, fmt.Errorf("body is required"), http.StatusBadRequest)
+	if req.Body == "" || req.FlowID == "" || req.FindingKey == "" {
+		render.Error(w, fmt.Errorf("flowId, findingKey, and body are required"), http.StatusBadRequest)
 		return
 	}
 	userID := h.security.CallerID(r)
@@ -99,8 +104,18 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, 0)
 		return
 	}
-	if err := h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID); err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+	// Editors may delete only their own comments; flow admins (owner,
+	// org admin, admin-tier collaborator) may moderate any comment. Try the
+	// author-scoped delete first — the common case — and only pay for the
+	// second flow-authz resolve when moderating someone else's comment.
+	err := h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, userID)
+	if errors.Is(err, storageif.ErrNotCommentAuthor) {
+		if _, adminErr := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "admin"); adminErr == nil {
+			err = h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, "")
+		}
+	}
+	if err != nil {
+		render.Error(w, err, 0)
 		return
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
@@ -141,15 +156,20 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 		TokenHash: tokenHash,
 		CreatedBy: userID,
 	}
+	// Default 30-day expiry so stale links don't grant permanent access.
+	expiry := time.Now().AddDate(0, 0, 30)
+	t.ExpiresAt = &expiry
 	if err := h.backend.CreateShareToken(r.Context(), t); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 	metrics.RecordFlowOp("share_create")
-	// Return the raw token (shown once, never again)
-	render.JSON(w, map[string]string{
-		"id":    t.ID,
-		"token": rawToken,
+	// Return the raw token (shown once, never again) along with the expiry so
+	// the UI can tell the user when the link stops working.
+	render.JSON(w, map[string]any{
+		"id":        t.ID,
+		"token":     rawToken,
+		"expiresAt": t.ExpiresAt,
 	})
 }
 

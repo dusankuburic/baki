@@ -61,6 +61,16 @@ func TestBuildMIME(t *testing.T) {
 	}
 }
 
+func TestBuildMIME_StripsHeaderCRLF(t *testing.T) {
+	msg := string(buildMIME("a@x.com", "b@y.com\r\nBcc: evil@x.com", "Hi\r\nX-Evil: 1", "hello", ""))
+	if strings.Contains(msg, "\r\nBcc:") || strings.Contains(msg, "\r\nX-Evil:") {
+		t.Errorf("CRLF in header values must not smuggle extra header lines:\n%s", msg)
+	}
+	if !strings.Contains(msg, "To: b@y.comBcc: evil@x.com\r\n") {
+		t.Errorf("expected CR/LF stripped from To header:\n%s", msg)
+	}
+}
+
 // captureMailer records the last message instead of sending it.
 type captureMailer struct {
 	to, subject, text, html string
@@ -90,6 +100,22 @@ func TestServiceLinkAndSend(t *testing.T) {
 	wantLink := "https://app.example.com/#resetPassword=TOKEN123"
 	if !strings.Contains(cap.text, wantLink) || !strings.Contains(cap.html, wantLink) {
 		t.Errorf("reset link %q missing from bodies:\ntext=%s\nhtml=%s", wantLink, cap.text, cap.html)
+	}
+}
+
+func TestSendOrgInvite_EscapesOrgName(t *testing.T) {
+	cap := &captureMailer{}
+	svc := &Service{mailer: cap, baseURL: "https://app.example.com"}
+
+	evil := `<img src=x onerror=alert(1)>"Corp"`
+	if err := svc.SendOrgInvite(context.Background(), "u@x.com", evil, "TOK"); err != nil {
+		t.Fatalf("SendOrgInvite: %v", err)
+	}
+	if strings.Contains(cap.html, "<img") {
+		t.Errorf("org name must be HTML-escaped in the invite body:\n%s", cap.html)
+	}
+	if !strings.Contains(cap.html, "&lt;img") {
+		t.Errorf("expected escaped org name in HTML body:\n%s", cap.html)
 	}
 }
 

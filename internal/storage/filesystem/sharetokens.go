@@ -44,7 +44,7 @@ func (lsb *LocalStorageBackend) writeShareTokens(m map[string]*interfaces.ShareT
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, data, 0o644)
+	return atomicWrite(path, data, 0o600)
 }
 
 func (lsb *LocalStorageBackend) CreateShareToken(ctx context.Context, t *interfaces.ShareToken) error {
@@ -93,10 +93,15 @@ func (lsb *LocalStorageBackend) ListShareTokens(ctx context.Context, flowID stri
 		return nil, err
 	}
 	var out []*interfaces.ShareToken
+	now := time.Now()
 	for _, t := range m {
-		if t.FlowID == flowID {
-			out = append(out, t)
+		if t.FlowID != flowID {
+			continue
 		}
+		if t.ExpiresAt != nil && t.ExpiresAt.Before(now) {
+			continue
+		}
+		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil

@@ -14,6 +14,7 @@ beforeEach(() => {
         conversations: new Map(),
         streams: {},
         selectedProvider: 'claude',
+        drafts: {},
     })
 })
 
@@ -326,5 +327,35 @@ describe('getFlowThreads / clearFlowThreads', () => {
         useChatStore.getState().switchThread(id1)
         useChatStore.getState().clearFlowThreads('flow1')
         expect(useChatStore.getState().activeThreadId).toBeNull()
+    })
+})
+
+// ---- drafts ----
+
+describe('setDraft', () => {
+    it('stores and updates a per-thread draft', () => {
+        useChatStore.getState().setDraft('t1', 'hello')
+        expect(useChatStore.getState().drafts['t1']).toBe('hello')
+        useChatStore.getState().setDraft('t1', 'hello world')
+        expect(useChatStore.getState().drafts['t1']).toBe('hello world')
+    })
+
+    it('keeps drafts isolated per thread', () => {
+        useChatStore.getState().setDraft('t1', 'a')
+        useChatStore.getState().setDraft('t2', 'b')
+        expect(useChatStore.getState().drafts).toEqual({t1: 'a', t2: 'b'})
+    })
+
+    it('prunes the key when the draft is emptied', () => {
+        useChatStore.getState().setDraft('t1', 'a')
+        useChatStore.getState().setDraft('t1', '')
+        expect('t1' in useChatStore.getState().drafts).toBe(false)
+    })
+
+    it('closeThread drops the thread draft', () => {
+        const id = useChatStore.getState().createThread('flow1')
+        useChatStore.getState().setDraft(id, 'unsent')
+        useChatStore.getState().closeThread(id)
+        expect(id in useChatStore.getState().drafts).toBe(false)
     })
 })

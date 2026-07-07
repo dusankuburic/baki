@@ -211,11 +211,29 @@ func TestPostgres_RefreshTokenRotation(t *testing.T) {
 	jti := "rt-jti-" + time.Now().Format("150405.000000000")
 
 	// A freshly stored token is valid.
-	if err := b.StoreRefreshToken(ctx, jti, user, time.Now().Add(time.Hour)); err != nil {
+	if err := b.StoreRefreshToken(ctx, jti, user, time.Now().Add(time.Hour), "test-agent/1.0", "203.0.113.1"); err != nil {
 		t.Fatalf("StoreRefreshToken: %v", err)
 	}
 	if ok, err := b.IsRefreshTokenValid(ctx, jti); err != nil || !ok {
 		t.Fatalf("expected valid token, got ok=%v err=%v", ok, err)
+	}
+
+	// The device info is persisted and comes back through ListUserRefreshTokens.
+	sessions, err := b.ListUserRefreshTokens(ctx, user)
+	if err != nil {
+		t.Fatalf("ListUserRefreshTokens: %v", err)
+	}
+	found := false
+	for _, s := range sessions {
+		if s.ID == jti {
+			found = true
+			if s.UserAgent != "test-agent/1.0" || s.IP != "203.0.113.1" {
+				t.Errorf("expected device info to round-trip, got userAgent=%q ip=%q", s.UserAgent, s.IP)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected session %s in ListUserRefreshTokens", jti)
 	}
 
 	// Revoking (rotation) invalidates it.
@@ -233,7 +251,7 @@ func TestPostgres_RefreshTokenRotation(t *testing.T) {
 
 	// Expired token is invalid.
 	expJTI := jti + "-expired"
-	if err := b.StoreRefreshToken(ctx, expJTI, user, time.Now().Add(-time.Minute)); err != nil {
+	if err := b.StoreRefreshToken(ctx, expJTI, user, time.Now().Add(-time.Minute), "", ""); err != nil {
 		t.Fatalf("StoreRefreshToken(expired): %v", err)
 	}
 	if ok, _ := b.IsRefreshTokenValid(ctx, expJTI); ok {
@@ -242,8 +260,8 @@ func TestPostgres_RefreshTokenRotation(t *testing.T) {
 
 	// RevokeUserRefreshTokens revokes every active token for the user.
 	a, c := jti+"-a", jti+"-b"
-	_ = b.StoreRefreshToken(ctx, a, user, time.Now().Add(time.Hour))
-	_ = b.StoreRefreshToken(ctx, c, user, time.Now().Add(time.Hour))
+	_ = b.StoreRefreshToken(ctx, a, user, time.Now().Add(time.Hour), "", "")
+	_ = b.StoreRefreshToken(ctx, c, user, time.Now().Add(time.Hour), "", "")
 	if err := b.RevokeUserRefreshTokens(ctx, user); err != nil {
 		t.Fatalf("RevokeUserRefreshTokens: %v", err)
 	}

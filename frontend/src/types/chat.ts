@@ -8,7 +8,6 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   contextBlockId?: string;
-  contextSubflowId?: string;
   tokensIn?: number;
   tokensOut?: number;
   provider?: ProviderID;
@@ -46,16 +45,6 @@ export interface TokenUsage {
   promptTokens: number
   completionTokens: number
   totalTokens: number
-}
-
-export interface ConversationSummary {
-  id: string
-  flowId: string
-  provider: ProviderID
-  model: string
-  messageCount: number
-  createdAt: string
-  lastMessageAt: string
 }
 
 export interface ContextPreview {

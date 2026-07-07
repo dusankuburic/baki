@@ -157,6 +157,47 @@ export function useFileOpen() {
         }
     }, [])
 
+    // handleRevealFile opens the OS file manager with the file selected.
+    // Requires a live local filesystem, so (like the other path-based actions
+    // in this hook) it's desktop-only.
+    const handleRevealFile = useCallback(async (path: string) => {
+        if (!isTauri()) {
+            toast.error('This action requires the desktop app')
+            return
+        }
+        try {
+            await flowApi.revealInFileManager(path)
+        } catch (err) {
+            logger.warn('Failed to reveal file:', err)
+            toast.error('Failed to reveal file', {description: err instanceof Error ? err.message : String(err)})
+        }
+    }, [toast])
+
+    // handleReloadFile force-reloads a subflow file from disk, bypassing the
+    // "already open, just switch tabs" shortcut in handleSelectFolderFile —
+    // for picking up edits made outside the app.
+    const handleReloadFile = useCallback(async (path: string) => {
+        if (!isTauri()) {
+            toast.error('This action requires the desktop app')
+            return
+        }
+        const gen = beginDocLoad()
+        setIsLoadingState()
+        try {
+            const doc = await flowApi.loadFlowFromPath(path)
+            if (doc && isDocLoadCurrent(gen)) {
+                setDocument(doc)
+                checkView()
+                toast.success('Reloaded from disk')
+            }
+        } catch (err) {
+            logger.warn('Failed to reload file:', err)
+            if (isDocLoadCurrent(gen)) toast.error('Failed to reload file', {description: err instanceof Error ? err.message : String(err)})
+        } finally {
+            if (isDocLoadCurrent(gen)) endLoad()
+        }
+    }, [setDocument, checkView, toast, setIsLoadingState, endLoad])
+
     return {
         recentFiles,
         isLoading,
@@ -166,5 +207,7 @@ export function useFileOpen() {
         handleLoadRecent,
         handleRemoveRecent,
         handleClearRecent,
+        handleRevealFile,
+        handleReloadFile,
     }
 }

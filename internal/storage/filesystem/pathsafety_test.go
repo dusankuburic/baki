@@ -48,6 +48,28 @@ func TestConversationPaths_RejectTraversal(t *testing.T) {
 	}
 }
 
+// TestFlowPaths_RejectTraversal covers the flow document path builder. Flow
+// IDs can originate from uploaded flow files, so SaveFlow/LoadFlow/DeleteFlow
+// must reject traversal-bearing IDs like the other flowID-keyed paths.
+func TestFlowPaths_RejectTraversal(t *testing.T) {
+	b, err := NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	evil := "../../../etc/passwd"
+
+	if err := b.SaveFlow(ctx, &interfaces.FlowDocument{ID: evil}); err == nil || !strings.Contains(err.Error(), "invalid flow id") {
+		t.Errorf("SaveFlow should reject a traversal flow ID, got %v", err)
+	}
+	if _, err := b.LoadFlow(ctx, evil); err == nil {
+		t.Error("LoadFlow should reject a traversal flow ID")
+	}
+	if err := b.DeleteFlow(ctx, evil); err == nil {
+		t.Error("DeleteFlow should reject a traversal flow ID")
+	}
+}
+
 // TestTriageBaselinePaths_RejectTraversal covers the triage/baseline builders.
 func TestTriageBaselinePaths_RejectTraversal(t *testing.T) {
 	b, err := NewLocalStorageBackend(t.TempDir())

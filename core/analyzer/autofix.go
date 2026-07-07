@@ -20,11 +20,12 @@ func SuppressFindingPatch(block *models.Block, ruleID string) models.Patch {
 	if ruleID != "" {
 		directive = "# pad-ignore[" + ruleID + "]"
 	}
+	indent := strings.Repeat("    ", block.Indent)
 	return models.Patch{
 		Ops: []models.PatchOp{{
 			Kind:       "insert",
 			BeforeLine: block.LineNumber,
-			Lines:      []string{directive},
+			Lines:      []string{indent + directive},
 		}},
 	}
 }
@@ -131,14 +132,16 @@ func applyWrap(lines []string, op models.PatchOp) []string {
 }
 
 // applyReplace does an in-place text substitution within a single line:
-// the first occurrence of Old in line StartLine (1-based) is replaced with New.
-// Used to swap a hardcoded credential literal for a %Variable% reference.
+// replaces ALL occurrences of Old with New (not just the first). Used to swap
+// a hardcoded credential literal for a %Variable% reference — if the same
+// secret value appears in multiple properties on the same line, all should be
+// replaced.
 func applyReplace(lines []string, op models.PatchOp) []string {
 	idx := op.StartLine - 1
 	if idx < 0 || idx >= len(lines) || op.Old == "" {
 		return lines
 	}
-	lines[idx] = strings.Replace(lines[idx], op.Old, op.New, 1)
+	lines[idx] = strings.ReplaceAll(lines[idx], op.Old, op.New)
 	return lines
 }
 
@@ -227,15 +230,15 @@ func InsertClosePatch(block *models.Block) models.Patch {
 const defaultTimeoutSeconds = "30"
 
 // SetTimeoutPatch builds a Patch that appends a ` Timeout: <n>` property to the
-// block's source line, resolving missing-timeout. The original line content is
-// preserved (the property is appended), so parameter order, quoting, and
-// comments survive. The appended key contains "timeout" so the missing-timeout
-// rule detects it as configured on re-analysis.
+// block's last source line (blockEndLine, not LineNumber) so the property
+// appears AFTER any multi-line triple-quoted value closes — appending to the
+// first line would inject the text inside the string literal. The appended key
+// contains "timeout" so the missing-timeout rule detects it as configured.
 func SetTimeoutPatch(block *models.Block) models.Patch {
 	return models.Patch{Ops: []models.PatchOp{{
-		Kind:     "append",
-		StartLine: block.LineNumber,
-		Lines:    []string{" Timeout: " + defaultTimeoutSeconds},
+		Kind:      "append",
+		StartLine: blockEndLine(block),
+		Lines:     []string{" Timeout: " + defaultTimeoutSeconds},
 	}}}
 }
 
@@ -352,15 +355,18 @@ func WrapInRetryPatch(block *models.Block) models.Patch {
 }
 
 // InsertExitConditionPatch builds a Patch that inserts an exit condition inside
-// a loop, resolving infinite-loop-risk. Inserts a counter SET before the loop
-// body and an IF + EXIT_LOOP inside the loop (before the first child). After
-// re-parse hasExitCondition detects the "Exit" in EXIT_LOOP → true.
+// a loop, resolving infinite-loop-risk. The counter initialization goes
+// OUTSIDE the loop (before the LOOP line) so it persists across iterations;
+// the increment + IF + EXIT go inside the loop body (before the first child).
+// After re-parse hasExitCondition detects the "Exit" in EXIT LOOP → true.
 //
-// Structure produced (inserted before the loop's first child):
-//   SET __LoopGuard TO 0
-//   SET __LoopGuard TO %__LoopGuard% + 1
-//   IF %__LoopGuard% > 10000
-//       EXIT_LOOP
+// Structure produced:
+//   SET __LoopGuard TO 0      ← outside loop (before LOOP line)
+//   LOOP ...
+//       SET __LoopGuard TO %__LoopGuard% + 1
+//       IF %__LoopGuard% > 10000
+//           EXIT LOOP
+//       END
 //   END
 func InsertExitConditionPatch(block *models.Block) models.Patch {
 	if len(block.Children) == 0 {
@@ -370,18 +376,23 @@ func InsertExitConditionPatch(block *models.Block) models.Patch {
 	if firstChildLine == 0 {
 		firstChildLine = block.LineNumber + 1
 	}
+	outsideIndent := strings.Repeat("    ", block.Indent)
 	indent := strings.Repeat("    ", block.Indent+1)
 	inner := strings.Repeat("    ", block.Indent+2)
-	lines := []string{
-		indent + "SET __LoopGuard TO 0",
+	insideLines := []string{
 		indent + "SET __LoopGuard TO %__LoopGuard% + 1",
 		indent + "IF %__LoopGuard% > 10000",
 		inner + "EXIT LOOP",
 		indent + "END",
 	}
 	return models.Patch{Ops: []models.PatchOp{{
+		// Counter init OUTSIDE the loop so it doesn't reset each iteration
+		Kind:       "insert",
+		BeforeLine: block.LineNumber,
+		Lines:      []string{outsideIndent + "SET __LoopGuard TO 0"},
+	}, {
 		Kind:       "insert",
 		BeforeLine: firstChildLine,
-		Lines:      lines,
+		Lines:      insideLines,
 	}}}
 }

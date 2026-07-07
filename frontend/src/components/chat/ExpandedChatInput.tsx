@@ -46,9 +46,10 @@ export default function ExpandedChatInput({
             <h3 className="text-lg font-semibold text-text-primary">Compose Prompt</h3>
             <p className="text-xs text-text-tertiary">Write a detailed prompt. Press Enter to send, Shift+Enter for new line.</p>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-full hover:bg-surface-3 text-text-tertiary hover:text-text-primary transition-colors"
+            aria-label="Close"
           >
             <X size={20} />
           </button>

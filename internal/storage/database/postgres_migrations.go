@@ -38,7 +38,17 @@ type migration struct {
 var migrations = []migration{
 	{version: 1, name: "baseline", sql: schemaBaseline},
 	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL},
+	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL},
 }
+
+// refreshSessionDdlSQL records the User-Agent and client IP a refresh
+// token was issued to, so the "active sessions" UI can show a friendly device
+// label ("Firefox on Windows") and a rough location hint instead of just a
+// timestamp. Additive columns with defaults — safe on existing rows.
+const refreshSessionDdlSQL = `
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT '';
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS ip TEXT NOT NULL DEFAULT '';
+`
 
 const commentsAndSharesSQL = `
 CREATE TABLE IF NOT EXISTS finding_comments (
@@ -74,6 +84,11 @@ CREATE POLICY finding_comments_modify ON finding_comments
         )
     );
 
+-- share_tokens deliberately has NO row-level security: the public share
+-- viewer (/api/shared) must look up tokens with no authenticated user in the
+-- RLS session var. Every authenticated query against this table therefore
+-- relies entirely on handler-level authz (flow "editor" via GetAuthorized)
+-- — do not add share_tokens queries without such a gate.
 CREATE TABLE IF NOT EXISTS share_tokens (
     id TEXT PRIMARY KEY,
     flow_id TEXT NOT NULL REFERENCES flows(id) ON DELETE CASCADE,

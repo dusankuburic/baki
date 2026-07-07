@@ -8,19 +8,26 @@ export interface SlashCommand {
   label: string
   description: string
   icon: React.ReactNode
+  // 'insert' commands drop their text into the composer for the user to
+  // extend and send; 'action' commands run a local handler (never sent to the
+  // model) — the action key routes to the matching callback in ChatInput.
+  kind: 'insert' | 'action'
+  action?: 'clear' | 'help'
 }
 
 const COMMANDS: SlashCommand[] = [
-  {id: '/explain', label: 'Explain', description: 'Explain how this code works in detail', icon: <Info size={14} />},
-  {id: '/fix', label: 'Fix', description: 'Find and fix bugs in this code', icon: <Zap size={14} />},
-  {id: '/test', label: 'Test', description: 'Generate unit tests for this code', icon: <Terminal size={14} />},
-  {id: '/clear', label: 'Clear', description: 'Clear the current conversation thread', icon: <Trash2 size={14} />},
-  {id: '/help', label: 'Help', description: 'Show available commands and shortcuts', icon: <HelpCircle size={14} />},
+  {id: '/explain', label: 'Explain', description: 'Explain how this code works in detail', icon: <Info size={14} />, kind: 'insert'},
+  {id: '/fix', label: 'Fix', description: 'Find and fix bugs in this code', icon: <Zap size={14} />, kind: 'insert'},
+  {id: '/test', label: 'Test', description: 'Generate unit tests for this code', icon: <Terminal size={14} />, kind: 'insert'},
+  {id: '/clear', label: 'Clear', description: 'Clear the current conversation thread', icon: <Trash2 size={14} />, kind: 'action', action: 'clear'},
+  {id: '/help', label: 'Help', description: 'Show available commands and shortcuts', icon: <HelpCircle size={14} />, kind: 'action', action: 'help'},
 ]
+
+export const SLASH_COMMANDS = COMMANDS
 
 interface Props {
   query: string
-  onSelect: (commandId: string) => void
+  onSelect: (command: SlashCommand) => void
   onClose: () => void
 }
 
@@ -32,7 +39,7 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose}: Pro
 
   const {activeIndex: selectedIndex, setActiveIndex, handleKeyDown} = useListNavigation({
     count: filtered.length,
-    onSelect: (i) => { if (filtered[i]) onSelect(filtered[i].id) },
+    onSelect: (i) => { if (filtered[i]) onSelect(filtered[i]) },
     onClose,
     mode: 'wrap',
     extraSelectKeys: ['Tab'],
@@ -62,7 +69,7 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose}: Pro
               'w-full flex items-center gap-3 px-3 py-2 text-sm rounded-md transition-colors text-left',
               i === selectedIndex ? 'bg-brand-500/10 text-brand-400' : 'text-text-secondary hover:bg-surface-3'
             )}
-            onClick={() => onSelect(cmd.id)}
+            onClick={() => onSelect(cmd)}
           >
             <div className={clsx(
               'p-1.5 rounded-md',

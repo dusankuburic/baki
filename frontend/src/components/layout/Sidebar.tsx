@@ -57,6 +57,7 @@ export default function Sidebar() {
         recentFiles, isLoading,
         handleOpenFile, handleOpenFolder, handleSelectFolderFile,
         handleLoadRecent, handleRemoveRecent, handleClearRecent,
+        handleRevealFile, handleReloadFile,
     } = useFileOpen()
 
     const {
@@ -189,6 +190,8 @@ export default function Sidebar() {
                     selectedFilePath={selectedFilePath}
                     folderName={folderName}
                     onSelectFile={handleSelectFolderFile}
+                    onRevealFile={handleRevealFile}
+                    onReloadFile={handleReloadFile}
                 />
             )}
 

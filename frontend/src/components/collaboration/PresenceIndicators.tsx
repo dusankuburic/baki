@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { usePresenceStore, type PresenceUser } from '@/stores/presenceStore'
 import Tooltip from '@/components/shared/Tooltip'
-import { userInitials, userColor } from '@/components/sharing/avatarUtils'
+import Avatar from '@/components/shared/Avatar'
 
 interface PresenceIndicatorsProps {
   className?: string
@@ -48,26 +48,15 @@ export default function PresenceIndicators({
 }
 
 function UserAvatar({ user }: { user: PresenceUser }) {
-  const initials = userInitials(user.displayName ?? user.userId)
-
   return (
     <Tooltip content={user.displayName ?? user.userId}>
-      <div className="w-7 h-7 rounded-full border-2 border-surface-2 overflow-hidden z-0 hover:z-10 transition-transform duration-fast hover:scale-110 cursor-default">
-        {user.avatarUrl ? (
-          <img
-            src={user.avatarUrl}
-            alt={user.displayName}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div
-            className="w-full h-full flex items-center justify-center text-2xs font-semibold text-white"
-            style={{ background: userColor(user.userId) }}
-          >
-            {initials}
-          </div>
-        )}
-      </div>
+      <Avatar
+        name={user.displayName ?? user.userId}
+        colorSeed={user.userId}
+        avatarUrl={user.avatarUrl}
+        size="sm"
+        className="border-2 border-surface-2 z-0 hover:z-10 transition-transform duration-fast hover:scale-110 cursor-default"
+      />
     </Tooltip>
   )
 }

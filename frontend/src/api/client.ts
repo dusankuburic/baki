@@ -237,11 +237,20 @@ export type EventCallback = (event: { name: string; data: unknown }) => void
 const listeners = new Set<EventCallback>()
 const connectionListeners = new Set<(state: EventConnectionState) => void>()
 
+// The backend writes an SSE comment-frame heartbeat every 20s
+// (sseHeartbeatInterval in internal/api/events.go). If NOTHING arrives for
+// ~2.25× that — not even a ping — the socket is presumed half-dead (laptop
+// suspend/resume, sidecar restart) and the connection is torn down so the
+// backoff reconnect + delta-resume path can recover. Slack over 2× means one
+// lost ping doesn't trigger a spurious reconnect.
+const SSE_INACTIVITY_TIMEOUT_MS = 45_000
+
 let connectionState: EventConnectionState = 'idle'
 let eventAbortController: AbortController | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempt = 0
 let streamActive = false // true while at least one subscriber wants the stream
+let teardownTimer: ReturnType<typeof setTimeout> | null = null // pending last-unsubscriber teardown
 
 function setConnectionState(s: EventConnectionState): void {
     if (connectionState === s) return
@@ -286,6 +295,31 @@ async function connectEvents(): Promise<void> {
     const controller = new AbortController()
     eventAbortController = controller
 
+    // Read-inactivity watchdog: any bytes (real events or the backend's
+    // ": ping" heartbeat frames) count as liveness. On timeout, abort the
+    // fetch with `stalled` set so the catch below reconnects instead of
+    // treating it as an intentional teardown.
+    let stalled = false
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null
+    const armInactivity = () => {
+        if (inactivityTimer) clearTimeout(inactivityTimer)
+        inactivityTimer = setTimeout(() => {
+            stalled = true
+            controller.abort()
+        }, SSE_INACTIVITY_TIMEOUT_MS)
+    }
+    const disarmInactivity = () => {
+        if (inactivityTimer) {
+            clearTimeout(inactivityTimer)
+            inactivityTimer = null
+        }
+    }
+
+    // Armed BEFORE the dial: a fetch black-holed during the connect phase
+    // (suspend/resume mid-dial, proxy accepting but never responding) must
+    // trip the watchdog too, not just a stall after headers arrived.
+    armInactivity()
+
     try {
         const response = await fetch(`${cfg.apiUrl}/api/events`, {
             method: 'GET',
@@ -309,6 +343,7 @@ async function connectEvents(): Promise<void> {
         // Connected successfully — reset backoff.
         reconnectAttempt = 0
         setConnectionState('open')
+        armInactivity()
 
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
@@ -316,6 +351,7 @@ async function connectEvents(): Promise<void> {
         while (true) {
             const { done, value } = await reader.read()
             if (done) break
+            armInactivity()
             buffer += decoder.decode(value, { stream: true })
             const lines = buffer.split('\n')
             buffer = lines.pop() || ''
@@ -331,17 +367,37 @@ async function connectEvents(): Promise<void> {
             }
         }
         // Stream ended (server closed the connection) — reconnect if still wanted.
+        disarmInactivity()
         if (eventAbortController === controller) eventAbortController = null
         scheduleReconnect()
     } catch (err: unknown) {
+        disarmInactivity()
         if (eventAbortController === controller) eventAbortController = null
-        if (err instanceof DOMException && err.name === 'AbortError') return // intentional close, no reconnect
+        if (err instanceof DOMException && err.name === 'AbortError') {
+            // A watchdog abort is a dead connection, not an intentional close —
+            // fall through to reconnect. Only teardown aborts stop for good.
+            if (!stalled) return
+            logger.warn(`SSE inactive for ${SSE_INACTIVITY_TIMEOUT_MS / 1000}s, reconnecting`)
+        }
         scheduleReconnect()
     }
 }
 
+// How long the connection survives with zero subscribers before being torn
+// down. An effect remount (StrictMode double-invoke, hot reload, dep change)
+// unsubscribes and resubscribes almost immediately; re-dialing the socket for
+// that would re-open the connect window on every remount.
+const TEARDOWN_GRACE_MS = 5_000
+
 export async function subscribeToEvents(callback: EventCallback) {
     listeners.add(callback)
+
+    // A subscriber arriving during the teardown grace period keeps the
+    // existing connection instead of re-dialing.
+    if (teardownTimer) {
+        clearTimeout(teardownTimer)
+        teardownTimer = null
+    }
 
     if (!streamActive) {
         streamActive = true
@@ -351,18 +407,23 @@ export async function subscribeToEvents(callback: EventCallback) {
 
     return () => {
         listeners.delete(callback)
-        if (listeners.size === 0) {
-            // Last subscriber left — tear the connection down for good.
-            streamActive = false
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer)
-                reconnectTimer = null
-            }
-            if (eventAbortController) {
-                eventAbortController.abort()
-                eventAbortController = null
-            }
-            setConnectionState('idle')
+        if (listeners.size === 0 && !teardownTimer) {
+            // Last subscriber left — tear the connection down after the grace
+            // period, unless someone resubscribes first.
+            teardownTimer = setTimeout(() => {
+                teardownTimer = null
+                if (listeners.size > 0) return
+                streamActive = false
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer)
+                    reconnectTimer = null
+                }
+                if (eventAbortController) {
+                    eventAbortController.abort()
+                    eventAbortController = null
+                }
+                setConnectionState('idle')
+            }, TEARDOWN_GRACE_MS)
         }
     }
 }

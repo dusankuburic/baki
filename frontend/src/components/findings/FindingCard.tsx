@@ -1,4 +1,4 @@
-import React, {useState, useCallback} from 'react'
+import React, {useState, useCallback, useRef, useEffect} from 'react'
 import clsx from 'clsx'
 import type {Finding, AnalysisReport, TriageStatus, FindingComment} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
@@ -39,6 +39,20 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
     open: false, original: '', patched: '', fixType: '',
   })
   const [showComments, setShowComments] = useState(false)
+  const triageRef = useRef<HTMLDivElement>(null)
+
+  // Close triage dropdown on click-outside so multiple cards can't have
+  // dropdowns open simultaneously.
+  useEffect(() => {
+    if (!showTriage) return
+    const handler = (e: MouseEvent) => {
+      if (triageRef.current && !triageRef.current.contains(e.target as Node)) {
+        setShowTriage(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showTriage])
   const [comments, setComments] = useState<FindingComment[] | null>(null)
   const [commentBody, setCommentBody] = useState('')
   const [commentLoading, setCommentLoading] = useState(false)
@@ -221,7 +235,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           </span>
         )}
 
-        <div className="relative">
+        <div className="relative" ref={triageRef}>
           <button
             onClick={() => setShowTriage(s => !s)}
             className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
@@ -286,6 +300,8 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
               : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3'
           )}
           title="Comments on this finding"
+          aria-label="Comments on this finding"
+          aria-pressed={showComments}
         >
           <MessageSquare size={10} />
           {comments && comments.length > 0 && comments.length}

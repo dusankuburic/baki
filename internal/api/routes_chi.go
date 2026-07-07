@@ -18,10 +18,15 @@ func registerRoutes(rt *Router, r chi.Router) {
 	h := rt.handlers
 
 	// --- Swagger UI ---
-	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
-	})
-	r.Get("/swagger/*", swaggerHandler())
+	// Local/desktop mode only: /swagger sits outside /api/ so jwtAuth never
+	// applies, and the full API schema must not be browsable unauthenticated
+	// on cloud deployments.
+	if !rt.security.JWTEnabled {
+		r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
+		})
+		r.Get("/swagger/*", swaggerHandler())
+	}
 
 	// --- WebSocket ---
 	r.Get("/ws", rt.handleWebSocket)

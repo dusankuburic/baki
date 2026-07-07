@@ -187,7 +187,7 @@ func newMockTokenStore() *mockTokenStore {
 	return &mockTokenStore{validTokens: make(map[string]bool)}
 }
 
-func (m *mockTokenStore) StoreRefreshToken(_ context.Context, jti, userID string, expiresAt time.Time) error {
+func (m *mockTokenStore) StoreRefreshToken(_ context.Context, jti, userID string, expiresAt time.Time, _, _ string) error {
 	m.mu.Lock()
 	m.validTokens[jti] = true
 	m.mu.Unlock()

@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	mailer "pad-analyzer/internal/mail"
@@ -241,7 +242,8 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.tokenStore != nil {
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt); err != nil {
+		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt, ua, ip); err != nil {
 			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -326,7 +328,8 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.tokenStore != nil {
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, pair.RefreshExpiresAt); err != nil {
+		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, claims.UserID, pair.RefreshExpiresAt, ua, ip); err != nil {
 			logger.Error("failed to store new refresh token", "error", err, "userID", claims.UserID)
 			render.Error(w, fmt.Errorf("failed to store token"), http.StatusInternalServerError)
 			return
@@ -360,6 +363,7 @@ func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		if user, err := h.backend.LoadUserByID(r.Context(), claims.UserID); err == nil {
 			resp["displayName"] = user.DisplayName
 			resp["avatarUrl"] = user.AvatarURL
+			resp["createdAt"] = user.CreatedAt.UTC().Format(time.RFC3339)
 		}
 	}
 	render.JSON(w, resp)

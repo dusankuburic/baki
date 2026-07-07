@@ -19,6 +19,8 @@ When analyzing a flow:
 - If you spot multiple issues, list the most important first.
 - Format code, variable names, and PAD action names with backticks.
 - Keep responses focused. The user is debugging, not learning theory.
+- When you reference a specific block whose "Block ID" is given in the context, link it as a markdown link with a "block:" URL — e.g. [Run SQL statement](block:abc123) — so the user can click through to it. Only do this for IDs actually present in the context.
+- Likewise, when you reference one of the listed Known Issues, link it as a markdown link with a "finding:" URL using its given finding id — e.g. [hardcoded password](finding:hardcoded-credential:abc123) — so the user can jump to it in the findings list. Only use finding ids present in the context.
 
 IMPORTANT: You are READ-ONLY. You cannot execute or modify flows. Your job is to explain, analyze, and recommend. Never suggest you can change files or take actions on behalf of the user.`
 
@@ -81,7 +83,7 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 		if len(blockFindings) > 0 {
 			b.WriteString("\n## Known Issues with This Block\n\n")
 			for _, f := range blockFindings {
-				fmt.Fprintf(&b, "- [%s] **%s**: %s\n", f.Severity, f.Title, f.Description)
+				fmt.Fprintf(&b, "- [%s] **%s** (finding id: %s): %s\n", f.Severity, f.Title, findingKey(&f), f.Description)
 				if f.Suggestion != "" {
 					fmt.Fprintf(&b, "  **Suggested fix:** %s\n", f.Suggestion)
 				}
@@ -149,9 +151,23 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 	return
 }
 
+// findingKey is the stable identity the chat UI uses to locate a finding (see
+// the frontend analysisStore.findingKey): the content-derived Fingerprint when
+// present, else "ruleID:blockID". Kept in sync so "finding:" deep-links from the
+// model resolve to the right row.
+func findingKey(f *models.Finding) string {
+	if f.Fingerprint != "" {
+		return f.Fingerprint
+	}
+	return f.RuleID + ":" + f.BlockID
+}
+
 func writeBlockDetail(b *strings.Builder, block *models.Block) {
 	fmt.Fprintf(b, "**Type:** %s (%s)\n", block.Type, block.RawType)
 	fmt.Fprintf(b, "**Name:** %s\n", block.Name)
+	if block.ID != "" {
+		fmt.Fprintf(b, "**Block ID:** %s\n", block.ID)
+	}
 	if block.LineNumber > 0 {
 		fmt.Fprintf(b, "**Line:** %d\n", block.LineNumber)
 	}
@@ -174,7 +190,11 @@ func writeBlockDetail(b *strings.Builder, block *models.Block) {
 		}
 		fmt.Fprintf(b, "\n**Nested blocks (%d):**\n", len(block.Children))
 		for _, child := range block.Children[:limit] {
-			fmt.Fprintf(b, "  - [L%d] %s: %s\n", child.LineNumber, child.Type, child.Name)
+			if child.ID != "" {
+				fmt.Fprintf(b, "  - [L%d] %s: %s (id: %s)\n", child.LineNumber, child.Type, child.Name, child.ID)
+			} else {
+				fmt.Fprintf(b, "  - [L%d] %s: %s\n", child.LineNumber, child.Type, child.Name)
+			}
 		}
 		if len(block.Children) > 8 {
 			fmt.Fprintf(b, "  ... and %d more\n", len(block.Children)-8)

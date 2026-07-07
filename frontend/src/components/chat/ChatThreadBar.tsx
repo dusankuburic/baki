@@ -31,10 +31,21 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
     return null
   }
 
+  // Left/Right arrow keys move between tabs (roving focus), matching the
+  // WAI-ARIA tabs pattern. Only the active tab is in the tab order (tabIndex 0);
+  // the rest are -1 and reached via arrows.
+  const handleTabKeyDown = (e: React.KeyboardEvent, index: number) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+    e.preventDefault()
+    const delta = e.key === 'ArrowRight' ? 1 : -1
+    const nextIndex = (index + delta + threads.length) % threads.length
+    onSelect(threads[nextIndex].id)
+  }
+
   return (
     <div className="flex items-center gap-0 border-b border-border-subtle">
-      <div ref={scrollRef} className="flex-1 flex items-center overflow-x-auto no-scrollbar">
-        {threads.map(thread => (
+      <div ref={scrollRef} className="flex-1 flex items-center overflow-x-auto no-scrollbar" role="tablist" aria-label="Chat threads">
+        {threads.map((thread, i) => (
           <ThreadTab
             key={thread.id}
             thread={thread}
@@ -43,6 +54,7 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
             onSelect={onSelect}
             onClose={onClose}
             onRename={onRename}
+            onKeyDown={e => handleTabKeyDown(e, i)}
           />
         ))}
       </div>
@@ -50,6 +62,7 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
         className="flex items-center justify-center w-6 h-6 shrink-0 mr-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors"
         onClick={onCreate}
         title="New chat thread"
+        aria-label="New chat thread"
       >
         <Plus size={13} />
       </button>
@@ -57,13 +70,14 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
   )
 }
 
-function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename}: {
+function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename, onKeyDown}: {
   thread: ChatThread
   isActive: boolean
   isStreaming: boolean
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onRename: (id: string, title: string) => void
+  onKeyDown: (e: React.KeyboardEvent) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(thread.title)
@@ -98,14 +112,18 @@ function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename}:
 
   return (
     <div
+      role="tab"
+      aria-selected={isActive}
+      tabIndex={isActive ? 0 : -1}
       className={clsx(
-        'group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px]',
+        'group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px] outline-none focus-visible:ring-1 focus-visible:ring-brand-500',
         isActive
           ? 'border-brand-500 bg-brand-500/5'
           : 'border-transparent hover:bg-surface-2'
       )}
       onClick={() => !editing && onSelect(thread.id)}
       onDoubleClick={handleDoubleClick}
+      onKeyDown={e => { if (!editing) onKeyDown(e) }}
     >
       <MessageSquare size={11} className={clsx('shrink-0', isActive ? 'text-brand-400' : 'text-text-tertiary')} />
       {isStreaming && (
@@ -142,6 +160,7 @@ function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename}:
         )}
         onClick={e => { e.stopPropagation(); onClose(thread.id) }}
         title="Close thread"
+        aria-label={`Close ${label}`}
       >
         <X size={10} />
       </button>

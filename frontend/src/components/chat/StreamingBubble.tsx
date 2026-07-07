@@ -13,15 +13,20 @@ const StreamingBubble = memo(() => {
 
   if (!slot || !slot.text) return null
   return (
-    <MessageBubble
-      message={{
-        id: slot.messageId || 'streaming',
-        role: 'assistant',
-        content: slot.text,
-        timestamp,
-      }}
-      isStreaming
-    />
+    // aria-hidden: the live bubble mutates every frame; announcing each token
+    // would spam a screen reader. The committed message is announced once by
+    // the enclosing role="log" region when the stream finishes.
+    <div aria-hidden="true">
+      <MessageBubble
+        message={{
+          id: slot.messageId || 'streaming',
+          role: 'assistant',
+          content: slot.text,
+          timestamp,
+        }}
+        isStreaming
+      />
+    </div>
   )
 })
 StreamingBubble.displayName = 'StreamingBubble'

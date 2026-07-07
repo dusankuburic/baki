@@ -141,6 +141,7 @@ function PromptList({title, description, items, onChange}: {title: string, descr
             type="submit"
             disabled={!newItemText.trim()}
             className="p-1.5 text-brand-500 hover:bg-brand-500/10 rounded disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+            aria-label="Add prompt"
           >
             <Plus className="w-5 h-5" />
           </button>

@@ -18,6 +18,7 @@ export interface AuthUser {
   role: 'admin' | 'member' | 'viewer' | 'guest'
   displayName?: string
   avatarUrl?: string
+  createdAt?: string
 }
 
 export interface RefreshResponse {
@@ -36,6 +37,8 @@ export interface SessionInfo {
   id: string
   createdAt: string
   expiresAt: string
+  userAgent?: string
+  ip?: string
 }
 
 export interface SSOInfo {

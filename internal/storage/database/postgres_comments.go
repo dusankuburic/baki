@@ -45,8 +45,29 @@ func (b *PostgresStorageBackend) ListFindingComments(ctx context.Context, flowID
 	return out, nil
 }
 
-func (b *PostgresStorageBackend) DeleteFindingComment(ctx context.Context, flowID, commentID string) error {
-	_, err := b.query(ctx).ExecContext(ctx,
-		`DELETE FROM finding_comments WHERE flow_id = $1 AND id = $2`, flowID, commentID)
-	return err
+func (b *PostgresStorageBackend) DeleteFindingComment(ctx context.Context, flowID, commentID, authorID string) error {
+	res, err := b.query(ctx).ExecContext(ctx,
+		`DELETE FROM finding_comments
+		 WHERE flow_id = $1 AND id = $2 AND ($3 = '' OR author_id = $3)`,
+		flowID, commentID, authorID)
+	if err != nil {
+		return err
+	}
+	if authorID == "" {
+		return nil
+	}
+	// Nothing deleted: distinguish an absent comment (idempotent no-op) from
+	// one authored by someone else (denied).
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		var exists bool
+		if err := b.query(ctx).QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM finding_comments WHERE flow_id = $1 AND id = $2)`,
+			flowID, commentID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return storageif.ErrNotCommentAuthor
+		}
+	}
+	return nil
 }

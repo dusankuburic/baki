@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import {Sparkles, User, Shield, Settings, LayoutDashboard, BarChart3, Cloud, Loader2} from 'lucide-react'
 import Button from '@/components/shared/Button'
+import Avatar from '@/components/shared/Avatar'
 import {useAuthStore} from '@/stores/authStore'
 import {useUIStore} from '@/stores/uiStore'
 
@@ -50,6 +51,7 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
                     onClick={() => setMainPaneView('home')}
                     className={navClass('home')}
                     title="Home Dashboard"
+                    aria-label="Home Dashboard"
                 >
                     <LayoutDashboard size={16} />
                 </button>
@@ -58,6 +60,7 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
                     onClick={() => setMainPaneView('dashboard')}
                     className={navClass('dashboard')}
                     title="Analytics Dashboard"
+                    aria-label="Analytics Dashboard"
                 >
                     <BarChart3 size={16} />
                 </button>
@@ -66,16 +69,25 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
                     onClick={() => setMainPaneView('library')}
                     className={navClass('library')}
                     title="Cloud Library"
+                    aria-label="Cloud Library"
                 >
                     <Cloud size={16} />
                 </button>
 
                 <button
                     onClick={() => setMainPaneView('profile')}
-                    className={navClass('profile')}
+                    className={clsx(
+                        'rounded-full transition-colors ring-2',
+                        mainPaneView === 'profile' ? 'ring-brand-400' : 'ring-transparent hover:ring-border-default',
+                    )}
                     title="User Profile"
+                    aria-label="User Profile"
                 >
-                    <User size={16} />
+                    {user ? (
+                        <Avatar name={user.displayName || user.email} colorSeed={user.id} avatarUrl={user.avatarUrl} size="sm" />
+                    ) : (
+                        <span className={navClass('profile')}><User size={16} /></span>
+                    )}
                 </button>
 
                 {user?.role === 'admin' && (
@@ -83,6 +95,7 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
                         onClick={() => setMainPaneView('admin')}
                         className={navClass('admin')}
                         title="Admin Dashboard"
+                        aria-label="Admin Dashboard"
                     >
                         <Shield size={16} />
                     </button>
@@ -92,6 +105,7 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
                     onClick={toggleSettings}
                     className="p-1.5 text-text-tertiary hover:text-text-primary hover:bg-surface-3 rounded transition-colors"
                     title="Settings"
+                    aria-label="Settings"
                 >
                     <Settings size={16} />
                 </button>

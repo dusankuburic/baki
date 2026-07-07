@@ -55,7 +55,7 @@ func (lsb *LocalStorageBackend) writeComments(flowID string, m map[string]*inter
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, data, 0o644)
+	return atomicWrite(path, data, 0o600)
 }
 
 func (lsb *LocalStorageBackend) AddFindingComment(ctx context.Context, c *interfaces.FindingComment) error {
@@ -92,12 +92,19 @@ func (lsb *LocalStorageBackend) ListFindingComments(ctx context.Context, flowID,
 	return out, nil
 }
 
-func (lsb *LocalStorageBackend) DeleteFindingComment(ctx context.Context, flowID, commentID string) error {
+func (lsb *LocalStorageBackend) DeleteFindingComment(ctx context.Context, flowID, commentID, authorID string) error {
 	lsb.commentsMu.Lock()
 	defer lsb.commentsMu.Unlock()
 	m, err := lsb.readComments(flowID)
 	if err != nil {
 		return err
+	}
+	c, ok := m[commentID]
+	if !ok {
+		return nil
+	}
+	if authorID != "" && c.AuthorID != authorID {
+		return interfaces.ErrNotCommentAuthor
 	}
 	delete(m, commentID)
 	return lsb.writeComments(flowID, m)

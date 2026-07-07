@@ -489,7 +489,7 @@ func (m *FakeBackend) AddFindingComment(_ context.Context, c *interfaces.Finding
 func (m *FakeBackend) ListFindingComments(_ context.Context, _, _ string) ([]*interfaces.FindingComment, error) {
 	return []*interfaces.FindingComment{}, nil
 }
-func (m *FakeBackend) DeleteFindingComment(_ context.Context, _, _ string) error {
+func (m *FakeBackend) DeleteFindingComment(_ context.Context, _, _, _ string) error {
 	return nil
 }
 

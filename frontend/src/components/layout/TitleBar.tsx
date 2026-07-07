@@ -45,6 +45,7 @@ export default function TitleBar() {
                     onClick={toggleSettings}
                     className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
                     title="Settings (Ctrl+,)"
+                    aria-label="Settings"
                 >
                     <Settings size={12} />
                 </button>

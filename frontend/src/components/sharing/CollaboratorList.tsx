@@ -2,7 +2,7 @@ import { Trash2 } from 'lucide-react'
 import type { Collaborator, Permission } from '@/api/sharing'
 import PermissionSelect from './PermissionSelect'
 import IconButton from '@/components/shared/IconButton'
-import { userInitials, userColor } from './avatarUtils'
+import Avatar from '@/components/shared/Avatar'
 
 interface CollaboratorListProps {
   collaborators: Collaborator[]
@@ -33,15 +33,7 @@ export default function CollaboratorList({
         const isMe = c.userId === currentUserId
         return (
           <li key={c.userId} className="flex items-center gap-3 py-1.5">
-            <div
-              className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold text-white overflow-hidden"
-              style={{ background: userColor(c.userId) }}
-            >
-              {c.avatarUrl
-                ? <img src={c.avatarUrl} alt="" className="w-full h-full object-cover" />
-                : userInitials(c.displayName ?? c.email)
-              }
-            </div>
+            <Avatar name={c.displayName ?? c.email} colorSeed={c.userId} avatarUrl={c.avatarUrl} size="md" />
 
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-text-primary truncate">

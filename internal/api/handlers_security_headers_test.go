@@ -53,6 +53,29 @@ func TestServeHTTP_SecurityHeadersOnEveryResponse(t *testing.T) {
 // TestServeHTTP_StripsDefaultServerHeader verifies that the default Go
 // `Server: Go-http-server/...` header is removed. Fingerprinting the
 // runtime + version is a minor info-disclosure we don't need.
+// TestSwagger_GatedInCloudMode: /swagger sits outside /api/ so jwtAuth never
+// runs on it; the routes must simply not exist when JWT auth is enabled so the
+// API schema is not browsable on cloud deployments.
+func TestSwagger_GatedInCloudMode(t *testing.T) {
+	cloud := newJWTTestRouter(t)
+	for _, path := range []string{"/swagger", "/swagger/index.html"} {
+		rr := doRequestWithAuth(t, cloud, http.MethodGet, path, "", nil)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("cloud mode %s: got %d, want 404", path, rr.Code)
+		}
+	}
+
+	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := newTestRouter(fs, false)
+	rr := doRequestWithAuth(t, local, http.MethodGet, "/swagger", "", nil)
+	if rr.Code != http.StatusMovedPermanently {
+		t.Errorf("local mode /swagger: got %d, want 301", rr.Code)
+	}
+}
+
 func TestServeHTTP_StripsDefaultServerHeader(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/healthz", "", nil)

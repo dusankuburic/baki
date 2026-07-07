@@ -3,6 +3,7 @@ package mail
 import (
 	"context"
 	"fmt"
+	"html"
 	"strings"
 
 	"pad-analyzer/internal/config"
@@ -66,8 +67,10 @@ func (s *Service) SendOrgInvite(ctx context.Context, to, orgName, rawToken strin
 	url := s.link("invite", rawToken)
 	text := fmt.Sprintf(
 		"You've been invited to join the %q organization on PAD Analyzer.\n\nAccept the invitation:\n%s", orgName, url)
-	html := fmt.Sprintf(
+	// orgName is user-controlled; escape it so a crafted org name cannot
+	// inject markup into the invite email.
+	htmlBody := fmt.Sprintf(
 		"<p>You've been invited to join the <strong>%s</strong> organization on PAD Analyzer.</p>"+
-			"<p><a href=\"%s\">Accept the invitation</a>.</p>", orgName, url)
-	return s.mailer.Send(ctx, to, "You've been invited to PAD Analyzer", text, html)
+			"<p><a href=\"%s\">Accept the invitation</a>.</p>", html.EscapeString(orgName), url)
+	return s.mailer.Send(ctx, to, "You've been invited to PAD Analyzer", text, htmlBody)
 }

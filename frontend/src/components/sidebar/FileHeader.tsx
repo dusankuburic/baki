@@ -1,4 +1,4 @@
-import {useState, useCallback} from 'react'
+import {useState, useCallback, useRef} from 'react'
 import {FolderOpen, ChevronDown, Loader2} from 'lucide-react'
 import clsx from 'clsx'
 import Tooltip from '@/components/shared/Tooltip'
@@ -27,6 +27,9 @@ export default function FileHeader({
     onClearRecent,
 }: FileHeaderProps) {
     const [menuOpen, setMenuOpen] = useState(false)
+    // The recents menu is anchored to the whole header row (matching its
+    // previous left-0/right-0 width), not just the chevron that opens it.
+    const headerRef = useRef<HTMLDivElement>(null)
 
     const handleRecentSelect = useCallback((path: string) => {
         setMenuOpen(false)
@@ -61,7 +64,7 @@ export default function FileHeader({
     }
 
     return (
-        <div className="relative flex items-center h-12 px-3 border-b border-border-subtle gap-2">
+        <div ref={headerRef} className="flex items-center h-12 px-3 border-b border-border-subtle gap-2">
             <Tooltip content={document.filePath}>
                 <span className="text-sm font-medium text-text-primary truncate flex-1 select-none">
                     {document.name}
@@ -71,6 +74,7 @@ export default function FileHeader({
                 onClick={onOpenFolder}
                 className="w-6 h-6 flex items-center justify-center rounded-sm text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast"
                 title="Open folder"
+                aria-label="Open folder"
             >
                 <FolderOpen size={14} />
             </button>
@@ -86,6 +90,7 @@ export default function FileHeader({
             {menuOpen && (
                 <RecentFilesMenu
                     files={recentFiles}
+                    anchorRef={headerRef}
                     onSelect={handleRecentSelect}
                     onRemove={onRemoveRecent}
                     onClear={onClearRecent}

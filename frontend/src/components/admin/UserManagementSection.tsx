@@ -2,15 +2,7 @@ import React from 'react'
 import {Users} from 'lucide-react'
 import clsx from 'clsx'
 import {type AuthUser} from '@/api/auth'
-
-function roleBadgeClass(role: string) {
-  switch (role) {
-    case 'admin':   return 'bg-block-subflow/10 text-block-subflow'
-    case 'member':  return 'bg-block-action/10 text-block-action'
-    case 'viewer':  return 'bg-block-condition/10 text-block-condition'
-    default:        return 'bg-surface-4 text-text-tertiary'
-  }
-}
+import {roleBadgeClass} from '@/lib/roleBadge'
 
 export const UserManagementSection: React.FC<{
   users: AuthUser[]

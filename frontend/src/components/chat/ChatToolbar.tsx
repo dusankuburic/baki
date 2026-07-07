@@ -112,6 +112,7 @@ export default function ChatToolbar({messageCount, onNewChat, onClearContext, on
                 : 'text-text-tertiary/50 hover:text-text-tertiary hover:bg-surface-3'
             )}
             title="Search messages"
+            aria-label="Search messages"
             aria-pressed={!!searchActive}
           >
             <Search size={11} />

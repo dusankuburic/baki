@@ -1,10 +1,13 @@
 import clsx from 'clsx'
-import {Copy, Check, RefreshCw, RotateCcw, Bot, User} from 'lucide-react'
+import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash} from 'lucide-react'
 import {useState, useCallback, memo} from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, {defaultUrlTransform} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types'
 import {useCopy} from '@/hooks/useCopy'
+import {useFlowStore} from '@/stores/flowStore'
+import {useUIStore} from '@/stores/uiStore'
+import {useAnalysisStore} from '@/stores/analysisStore'
 import CodeBlock from './CodeBlock'
 
 interface Props {
@@ -28,10 +31,60 @@ function formatTime(ts: string): string {
 const MentionPill = ({ path }: { path: string }) => {
   const parts = path.split(/[/\\]/)
   const filename = parts[parts.length - 1]
+  // Clicking a mention jumps the graph to the matching subflow (imperative
+  // store access so this module-level markdown component stays hook-free).
+  const handleClick = () => {
+    const ok = useFlowStore.getState().navigateToSourceFile(path)
+    if (ok) useUIStore.getState().setMainPaneView('graph')
+  }
   return (
-    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20 font-medium text-[0.9em] mx-0.5 select-none">
+    <button
+      type="button"
+      onClick={handleClick}
+      title={`Go to ${filename}`}
+      aria-label={`Go to ${filename}`}
+      className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20 hover:bg-brand-500/20 font-medium text-[0.9em] mx-0.5 transition-colors"
+    >
       @{filename}
-    </span>
+    </button>
+  )
+}
+
+// BlockLink intercepts markdown links using the `block:<id>` scheme the model
+// is prompted to emit, turning a reference into a jump to that block in the
+// graph instead of a page navigation.
+const BlockLink = ({href, children}: {href?: string; children?: React.ReactNode}) => {
+  if (href && href.startsWith('block:')) {
+    const blockId = href.slice('block:'.length)
+    const handleClick = (e: React.MouseEvent) => {
+      e.preventDefault()
+      useFlowStore.getState().navigateToBlock(blockId)
+      useUIStore.getState().setMainPaneView('graph')
+      useUIStore.getState().setInspectorTab('details')
+    }
+    return (
+      <button type="button" onClick={handleClick} className="text-brand-400 hover:text-brand-300 underline underline-offset-2">
+        {children}
+      </button>
+    )
+  }
+  if (href && href.startsWith('finding:')) {
+    const key = href.slice('finding:'.length)
+    const handleClick = (e: React.MouseEvent) => {
+      e.preventDefault()
+      useUIStore.getState().setInspectorTab('findings')
+      useAnalysisStore.getState().setFocusedFinding(key)
+    }
+    return (
+      <button type="button" onClick={handleClick} className="text-brand-400 hover:text-brand-300 underline underline-offset-2">
+        {children}
+      </button>
+    )
+  }
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:text-brand-300 underline underline-offset-2">
+      {children}
+    </a>
   )
 }
 
@@ -53,6 +106,13 @@ interface MarkdownTextProps {
 const MENTION_REGEX = /@([a-zA-Z0-9_./\\-]+)/g
 
 const markdownPlugins = [remarkGfm]
+
+// react-markdown strips URLs with unknown schemes by default; allow our
+// internal "block:" / "finding:" deep-link schemes through so BlockLink can
+// intercept them. Everything else still goes through the default (XSS-safe)
+// transform.
+const urlTransform = (url: string) =>
+  url.startsWith('block:') || url.startsWith('finding:') ? url : defaultUrlTransform(url)
 
 const markdownComponents = {
   pre({ children }: MarkdownPreProps) {
@@ -76,6 +136,9 @@ const markdownComponents = {
         {children}
       </code>
     )
+  },
+  a({href, children}: {href?: string; children?: React.ReactNode}) {
+    return <BlockLink href={href}>{children}</BlockLink>
   },
   text({ children }: MarkdownTextProps) {
     const text = String(children)
@@ -103,7 +166,7 @@ const markdownComponents = {
 // tail on each animation-frame flush instead of the whole message.
 const StableMarkdown = memo(function StableMarkdown({content}: {content: string}) {
   return (
-    <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>
+    <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} urlTransform={urlTransform}>
       {content}
     </ReactMarkdown>
   )
@@ -146,7 +209,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
     return (
       <div className="prose-chat break-words is-streaming">
         {head !== '' && <StableMarkdown content={head} />}
-        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>
+        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} urlTransform={urlTransform}>
           {tail}
         </ReactMarkdown>
         <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
@@ -159,6 +222,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
       <ReactMarkdown
         remarkPlugins={markdownPlugins}
         components={markdownComponents}
+        urlTransform={urlTransform}
       >
         {content}
       </ReactMarkdown>
@@ -169,6 +233,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
 function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onRegenerate, onRetry}: Props) {
   const isUser = message.role === 'user'
   const isError = message.finishReason === 'error'
+  const isInterrupted = message.finishReason === 'interrupted'
   const {copied, copy} = useCopy()
   const [showActions, setShowActions] = useState(false)
 
@@ -180,14 +245,14 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
 
   if (isThinking) {
     return (
-      <div className="flex flex-col items-start gap-1 animate-fade-in">
+      <div className="flex flex-col items-start gap-1 animate-fade-in" role="status">
         <div className="flex items-center gap-1.5 px-1">
           <Bot size={11} className="text-text-tertiary" />
           <span className="text-2xs font-medium text-text-tertiary">AI</span>
         </div>
         <div className="px-4 py-3 bg-surface-2 border border-border-subtle rounded-2xl rounded-tl-md">
           <div className="flex items-center gap-2">
-            <div className="flex gap-1">
+            <div className="flex gap-1" aria-hidden="true">
               <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '0ms'}} />
               <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '150ms'}} />
               <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '300ms'}} />
@@ -236,6 +301,13 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
         {renderContent(message.content, isUser, isStreaming)}
       </div>
 
+      {isInterrupted && (
+        <div className="flex items-center gap-1 px-1 text-2xs text-text-tertiary">
+          <CircleSlash size={10} />
+          <span>Stopped</span>
+        </div>
+      )}
+
       {!isStreaming && (
         <div className={clsx(
           'flex items-center gap-1 px-1 transition-opacity duration-150',
@@ -277,6 +349,7 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
   return (
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
+    prevProps.message.finishReason === nextProps.message.finishReason &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.isThinking === nextProps.isThinking &&
     prevProps.isLastAssistant === nextProps.isLastAssistant &&

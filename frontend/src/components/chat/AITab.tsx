@@ -20,6 +20,7 @@ import ConnectionStatus from './ConnectionStatus'
 import EmptyChatState from './EmptyChatState'
 import ChatErrorBoundary from './ChatErrorBoundary'
 import ChatSearchBar from './ChatSearchBar'
+import ChatHelpPopover from './ChatHelpPopover'
 
 const WELCOME_MESSAGES: Record<string, string> = {
   copilot: 'GitHub Copilot is ready — ask about your PAD flow, request code, or analyze findings.',
@@ -59,7 +60,7 @@ export default function AITab() {
     switchThread,
     handleSend, handlePreviewContext, handleResend, handleExport,
     handleCreateThread, handleCloseThread, handleRenameThread,
-    handleClearContext, handleCompact,
+    handleClearContext, handleCompact, handleClearThread,
     setThreadContextBlock, setThreadSourceFiles, setThreadUseTools,
     handleCancelStream,
     clearContextPreview, confirmContextPreview,
@@ -68,6 +69,7 @@ export default function AITab() {
   const [suggestedPrompts, setSuggestedPrompts] = useState<string[]>([])
   const [msgSearch, setMsgSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const toggleSearch = useCallback(() => setSearchOpen(v => !v), [])
   const closeSearch = useCallback(() => { setSearchOpen(false); setMsgSearch('') }, [])
 
@@ -251,7 +253,7 @@ export default function AITab() {
       {doc && activeThread && (
         <div className="flex-shrink-0">
           {isCurrentThreadStreaming && toolStatus && (
-            <div className="flex items-center gap-2 px-3 py-1.5 text-2xs text-brand-400">
+            <div className="flex items-center gap-2 px-3 py-1.5 text-2xs text-brand-400" role="status">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />
               <span className="truncate">{toolStatus}…</span>
             </div>
@@ -272,9 +274,13 @@ export default function AITab() {
             onPreview={(text, files, excludeContext) => handlePreviewContext(text, files, excludeContext)}
             onCancel={handleCancelStream}
             onFilesChange={setThreadSourceFiles}
+            onClearThread={handleClearThread}
+            onShowHelp={() => setHelpOpen(true)}
           />
         </div>
       )}
+
+      {helpOpen && <ChatHelpPopover onClose={() => setHelpOpen(false)} />}
 
       {contextPreview && pendingMessage && (
         <ContextPreviewModal

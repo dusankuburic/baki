@@ -2,15 +2,7 @@ import React from 'react'
 import {Building2} from 'lucide-react'
 import clsx from 'clsx'
 import {type Organisation} from '@/stores/orgStore'
-
-function roleBadgeClass(role: string) {
-  switch (role) {
-    case 'admin':   return 'bg-block-subflow/10 text-block-subflow'
-    case 'member':  return 'bg-block-action/10 text-block-action'
-    case 'viewer':  return 'bg-block-condition/10 text-block-condition'
-    default:        return 'bg-surface-4 text-text-tertiary'
-  }
-}
+import {roleBadgeClass} from '@/lib/roleBadge'
 
 export const OrganisationsCard: React.FC<{
   organisations: Organisation[]

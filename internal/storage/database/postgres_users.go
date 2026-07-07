@@ -84,6 +84,11 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
 		return fmt.Errorf("count users: %w", err)
 	}
+	// Bootstrap: the very first user in an empty deployment becomes admin.
+	// Note this also applies to SSO JIT provisioning (handlers_sso.go calls
+	// CreateUser), so on a fresh deployment whoever authenticates first —
+	// including via the IdP — claims the admin role. Deploy ordering matters:
+	// register the intended admin before opening SSO to users.
 	role := user.Role
 	if count == 0 {
 		role = auth.RoleAdmin
@@ -279,11 +284,11 @@ func (b *PostgresStorageBackend) UpdateUserProfile(ctx context.Context, id strin
 
 // StoreRefreshToken records an issued refresh token by its jti. It also makes a
 // best-effort purge of already-expired rows to keep the table small.
-func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time) error {
+func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time, userAgent, ip string) error {
 	if _, err := b.db.ExecContext(ctx,
-		`INSERT INTO refresh_tokens (jti, user_id, expires_at) VALUES ($1, $2, $3)
+		`INSERT INTO refresh_tokens (jti, user_id, expires_at, user_agent, ip) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (jti) DO NOTHING`,
-		jti, userID, expiresAt.UTC(),
+		jti, userID, expiresAt.UTC(), userAgent, ip,
 	); err != nil {
 		return fmt.Errorf("store refresh token: %w", err)
 	}
@@ -368,7 +373,7 @@ func (b *PostgresStorageBackend) RevokeUserRefreshTokens(ctx context.Context, us
 // refresh token for a user, surfaced to the user as "active sessions".
 func (b *PostgresStorageBackend) ListUserRefreshTokens(ctx context.Context, userID string) ([]interfaces.RefreshTokenInfo, error) {
 	rows, err := b.db.QueryContext(ctx,
-		`SELECT jti, created_at, expires_at FROM refresh_tokens
+		`SELECT jti, created_at, expires_at, user_agent, ip FROM refresh_tokens
 		 WHERE user_id = $1 AND NOT revoked AND expires_at > NOW()
 		 ORDER BY created_at DESC`,
 		userID,
@@ -381,7 +386,7 @@ func (b *PostgresStorageBackend) ListUserRefreshTokens(ctx context.Context, user
 	var sessions []interfaces.RefreshTokenInfo
 	for rows.Next() {
 		var s interfaces.RefreshTokenInfo
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.ExpiresAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.ExpiresAt, &s.UserAgent, &s.IP); err != nil {
 			return nil, fmt.Errorf("scan refresh token: %w", err)
 		}
 		sessions = append(sessions, s)

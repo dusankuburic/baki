@@ -59,6 +59,9 @@ interface FlowState {
   navigateToSubflowByName: (name: string) => void
   navigateToBlock: (blockId: string) => void
   navigateToLabelByName: (labelName: string) => void
+  // navigateToSourceFile resolves a source-file mention (e.g. "@Login.txt")
+  // to its subflow and selects it. Returns true if a match was found.
+  navigateToSourceFile: (fileName: string) => boolean
 
   reset: () => void
 
@@ -234,6 +237,20 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     get().selectBlock(blockId)
   },
 
+  navigateToSourceFile: (fileName) => {
+    const doc = get().document
+    if (!doc) return false
+    // Match on the basename so "@dir/Login.txt" and "@Login.txt" both resolve.
+    const base = fileName.split(/[/\\]/).pop()?.toLowerCase() ?? ''
+    const sf = doc.subflows.find(s => {
+      const sfBase = (s.sourceFile ?? '').split(/[/\\]/).pop()?.toLowerCase() ?? ''
+      return sfBase === base || s.name.toLowerCase() === base.replace(/\.txt$/, '')
+    })
+    if (!sf) return false
+    get().selectSubflow(sf.id)
+    return true
+  },
+
   navigateToLabelByName: (labelName) => {
     const doc = get().document
     if (!doc) return
@@ -294,6 +311,7 @@ function clearAnalysisState(flowId: string | null) {
   useAnalysisStore.getState().setVariableLineage(null)
   useAnalysisStore.getState().setFindingSearch('')
   useAnalysisStore.getState().setProtectedFlowId(flowId)
+  useAnalysisStore.getState().clearFindingSelection()
 }
 
 // resetDerivedStateForFlow clears all per-flow UI state in the stores that

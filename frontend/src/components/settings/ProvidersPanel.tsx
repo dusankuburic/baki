@@ -22,7 +22,9 @@ export default function ProvidersPanel() {
   const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
 
-  const refresh = useCallback(() => {
+  // refreshLocal reloads the provider list + user info without bumping the
+  // provider epoch. Used for the initial mount load (no config changed yet).
+  const refreshLocal = useCallback(() => {
     providersApi.listProviders().then((ps: {id?: string; name?: string; configured?: boolean; authType?: string}[] | null) => {
       setProviders((ps || []).map((p: {id?: string; name?: string; configured?: boolean; authType?: string}) => ({
         id: p.id || '',
@@ -33,10 +35,14 @@ export default function ProvidersPanel() {
     }).catch((err) => { logger.warn('Failed to load providers', err) })
     providersApi.getGitHubUser().then((u: {login?: string} | null) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
     providersApi.getCopilotUser().then((u: {login?: string} | null) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
-    // Bump the epoch so AITab's useProviderSetup re-runs listProviders and
-    // discovers the new/removed configuration.
+  }, [])
+
+  // refresh is refreshLocal + epoch bump. Used when a configuration actually
+  // changes (API key saved, OAuth completed, auth revoked) so AITab re-checks.
+  const refresh = useCallback(() => {
+    refreshLocal()
     bumpProviderEpoch()
-  }, [bumpProviderEpoch])
+  }, [refreshLocal, bumpProviderEpoch])
 
   // handleCopilotAuthComplete / handleGithubAuthComplete: called by the device-
   // flow login buttons when OAuth succeeds. Refreshes state + switches the
@@ -53,7 +59,7 @@ export default function ProvidersPanel() {
     updateAI({activeProvider: 'github-models'})
   }, [refresh, setProvider, updateAI])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { refreshLocal() }, [refreshLocal])
 
   return (
     <div>

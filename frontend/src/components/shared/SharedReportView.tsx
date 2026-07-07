@@ -31,6 +31,7 @@ export default function SharedReportView() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let cancelled = false
     const params = new URLSearchParams(window.location.search)
     const token = params.get('token')
     if (!token) {
@@ -43,8 +44,9 @@ export default function SharedReportView() {
         if (!res.ok) throw new Error(res.status === 404 ? 'Invalid or expired link.' : 'Failed to load report.')
         return res.json() as Promise<SharedData>
       })
-      .then(d => { setData(d); setLoading(false) })
-      .catch(e => { setError(e.message); setLoading(false) })
+      .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
+      .catch(e => { if (!cancelled) { setError(e.message); setLoading(false) } })
+    return () => { cancelled = true }
   }, [])
 
   if (loading) {

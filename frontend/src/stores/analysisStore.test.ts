@@ -123,6 +123,15 @@ describe('findingsForBlock', () => {
     })
 })
 
+describe('setFocusedFinding', () => {
+    it('sets and clears the focused finding key', () => {
+        useAnalysisStore.getState().setFocusedFinding('rule-x:blk-1')
+        expect(useAnalysisStore.getState().focusedFindingKey).toBe('rule-x:blk-1')
+        useAnalysisStore.getState().setFocusedFinding(null)
+        expect(useAnalysisStore.getState().focusedFindingKey).toBeNull()
+    })
+})
+
 describe('setReport eviction', () => {
     function makeReport(flowId: string): AnalysisReport {
         return {flowId, findings: []} as unknown as AnalysisReport

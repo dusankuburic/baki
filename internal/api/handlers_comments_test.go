@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -64,6 +65,61 @@ func TestComments_AddListDelete(t *testing.T) {
 	}
 	if comments2[0].Body != "Second comment" {
 		t.Errorf("wrong comment survived: %+v", comments2[0])
+	}
+}
+
+// TestComments_DeleteAuthorScoped: an editor-tier collaborator may delete only
+// their own comments; the flow owner (admin rank) may moderate any comment.
+func TestComments_DeleteAuthorScoped(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	seedAnalyzableFlow(t, rt, "flow1", "alice")
+	aliceBearer := jwtBearer(t, rt, "alice", "alice@example.com")
+	bobBearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	// Grant bob editor access to alice's flow.
+	if err := rt.security.Backend.AddCollaborator(context.Background(), "flow1",
+		&storageif.Collaborator{UserID: "bob", Email: "bob@example.com", Permission: "editor"}); err != nil {
+		t.Fatalf("add collaborator: %v", err)
+	}
+
+	addComment := func(bearer, body string) storageif.FindingComment {
+		resp := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/add", bearer, map[string]any{
+			"flowId": "flow1", "findingKey": "rule-x:block1", "body": body,
+		})
+		checkStatus(t, resp, http.StatusOK)
+		var c storageif.FindingComment
+		decodeJSON(t, resp, &c)
+		return c
+	}
+	aliceComment := addComment(aliceBearer, "by alice")
+	bobComment := addComment(bobBearer, "by bob")
+
+	// Bob (editor, not admin) cannot delete alice's comment.
+	del := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/delete", bobBearer, map[string]any{
+		"flowId": "flow1", "commentId": aliceComment.ID,
+	})
+	checkStatus(t, del, http.StatusForbidden)
+
+	// Bob can delete his own comment.
+	del = doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/delete", bobBearer, map[string]any{
+		"flowId": "flow1", "commentId": bobComment.ID,
+	})
+	checkStatus(t, del, http.StatusOK)
+
+	// Alice (owner → admin rank) can delete any remaining comment.
+	del = doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/delete", aliceBearer, map[string]any{
+		"flowId": "flow1", "commentId": aliceComment.ID,
+	})
+	checkStatus(t, del, http.StatusOK)
+
+	list := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/comments/list", aliceBearer, map[string]any{
+		"flowId": "flow1", "findingKey": "rule-x:block1",
+	})
+	checkStatus(t, list, http.StatusOK)
+	var remaining []*storageif.FindingComment
+	decodeJSON(t, list, &remaining)
+	if len(remaining) != 0 {
+		t.Errorf("expected no comments left, got %d", len(remaining))
 	}
 }
 

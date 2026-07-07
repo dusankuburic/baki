@@ -42,7 +42,14 @@ interface ChatState {
   streams: Record<string, StreamSlot>
   selectedProvider: ProviderID
   providerEpoch: number
-  pendingMessage: {text: string; contextBlockId?: string} | null
+  // stagedPrompt carries a grounded prompt (from "Explain/Fix with AI") into a
+  // thread's composer for review before the user sends it — nothing auto-sends.
+  // Consumed by ChatInput once its threadId is the active thread, then cleared.
+  stagedPrompt: {threadId: string; text: string} | null
+  // drafts holds each thread's unsent composer text, keyed by threadId, so a
+  // half-typed message survives switching threads or closing/reopening the AI
+  // tab. Session-only (never persisted to the backend conversation payload).
+  drafts: Record<string, string>
 
   getMessages: (threadId: string) => ChatMessage[]
   appendMessage: (threadId: string, message: ChatMessage) => void
@@ -72,7 +79,8 @@ interface ChatState {
 
   setProvider: (p: ProviderID) => void
   bumpProviderEpoch: () => void
-  setPendingMessage: (p: {text: string; contextBlockId?: string} | null) => void
+  setStagedPrompt: (p: {threadId: string; text: string} | null) => void
+  setDraft: (threadId: string, text: string) => void
 }
 
 const EMPTY_ARRAY: ChatMessage[] = []
@@ -84,7 +92,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streams: {},
   selectedProvider: 'claude',
   providerEpoch: 0,
-  pendingMessage: null,
+  stagedPrompt: null,
+  drafts: {},
 
   getMessages: (threadId) => {
     return get().conversations.get(threadId) ?? EMPTY_ARRAY
@@ -200,10 +209,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streams = {...streams}
       delete streams[threadId]
     }
+    const drafts = threadId in state.drafts ? {...state.drafts} : state.drafts
+    if (threadId in drafts) delete drafts[threadId]
     const activeThreadId = state.activeThreadId === threadId
       ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
       : state.activeThreadId
-    return {threads: remaining, conversations: next, activeThreadId, streams}
+    return {threads: remaining, conversations: next, activeThreadId, streams, drafts}
   }),
 
   updateThread: (threadId, patch) => set(state => ({
@@ -233,11 +244,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setProvider: (p) => set({selectedProvider: p}),
 
   bumpProviderEpoch: () => set(s => ({providerEpoch: s.providerEpoch + 1})),
-  setPendingMessage: (p) => set({pendingMessage: p}),
+  setStagedPrompt: (p) => set({stagedPrompt: p}),
+
+  setDraft: (threadId, text) => set(state => {
+    // Prune empty drafts so the map doesn't accumulate blank keys.
+    if (!text) {
+      if (!(threadId in state.drafts)) return state
+      const drafts = {...state.drafts}
+      delete drafts[threadId]
+      return {drafts}
+    }
+    if (state.drafts[threadId] === text) return state
+    return {drafts: {...state.drafts, [threadId]: text}}
+  }),
 }))
 
 // Reset on logout (see storeRegistry).
 registerStoreReset(() => useChatStore.setState({
   threads: [], activeThreadId: null, conversations: new Map(), streams: {},
-  pendingMessage: null, selectedProvider: 'claude', providerEpoch: 0,
+  stagedPrompt: null, selectedProvider: 'claude', providerEpoch: 0, drafts: {},
 }))

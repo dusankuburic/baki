@@ -129,7 +129,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                     {isSearching && (
                         <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mr-2 flex-shrink-0" />
                     )}
-                    <button onClick={onClose} className="p-1 hover:bg-surface-3 rounded-md transition-colors text-text-tertiary flex-shrink-0">
+                    <button onClick={onClose} className="p-1 hover:bg-surface-3 rounded-md transition-colors text-text-tertiary flex-shrink-0" aria-label="Close search">
                         <X size={18} />
                     </button>
                 </div>

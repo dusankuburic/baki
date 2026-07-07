@@ -70,8 +70,13 @@ interface AnalysisState {
   baselineNewCount: number | null
   savedViews: SavedFilterView[]
   selectedFindingIds: Set<string>
+  // focusedFindingKey is a stable findingKey the findings list should scroll to
+  // and briefly highlight — set by a chat "finding:" deep-link, cleared once
+  // the list has revealed it.
+  focusedFindingKey: string | null
 
   setReport: (flowId: string, report: AnalysisReport) => void
+  setFocusedFinding: (key: string | null) => void
   setAnalyzing: (b: boolean) => void
   beginAnalyzing: () => number
   setProgress: (p: {current: number; total: number; ruleName: string}) => void
@@ -125,6 +130,9 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   baselineNewCount: null,
   savedViews: loadSavedViews(),
   selectedFindingIds: new Set(),
+  focusedFindingKey: null,
+
+  setFocusedFinding: (key) => set({focusedFindingKey: key}),
 
   setReport: (flowId, report) => set(state => {
     const next = new Map(state.reports)

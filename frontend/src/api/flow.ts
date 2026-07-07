@@ -103,7 +103,7 @@ export const flowApi = {
     request('/api/flow/reimport', {flowId}),
 
   // Share links (read-only public report; cloud mode only)
-  createShare: (flowId: string): Promise<{id: string; token: string}> =>
+  createShare: (flowId: string): Promise<{id: string; token: string; expiresAt?: string}> =>
     request('/api/flow/share/create', {flowId}),
 
   listShares: (flowId: string): Promise<unknown[]> =>

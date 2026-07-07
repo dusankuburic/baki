@@ -16,6 +16,11 @@ var ErrNotFound = errors.New("not found")
 // already exists. The caller should map this to HTTP 409.
 var ErrEmailExists = errors.New("email already in use")
 
+// ErrNotCommentAuthor is returned by DeleteFindingComment when an author
+// filter is set and the comment belongs to someone else. The caller should
+// map this to HTTP 403.
+var ErrNotCommentAuthor = errors.New("cannot delete another user's comment")
+
 // ErrOrgInviteExists is returned when creating an org invite for an
 // org+email pair that already has an active (unaccepted) invite. The caller
 // should map this to HTTP 409.
@@ -63,6 +68,12 @@ type RefreshTokenInfo struct {
 	UserID    string    `json:"userId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
+	// UserAgent and IP identify the device/location the session was issued
+	// to (captured fresh on each login/refresh), so the client can show a
+	// friendly device label and let a user recognize/revoke unfamiliar
+	// sessions. Both may be empty for tokens issued before this was tracked.
+	UserAgent string `json:"userAgent,omitempty"`
+	IP        string `json:"ip,omitempty"`
 }
 
 // UserDataExport is the data-subject access / portability bundle returned by
@@ -239,7 +250,11 @@ type StorageBackend interface {
 	// Finding comments (team-shared review threads on individual findings)
 	AddFindingComment(ctx context.Context, c *FindingComment) error
 	ListFindingComments(ctx context.Context, flowID, findingKey string) ([]*FindingComment, error)
-	DeleteFindingComment(ctx context.Context, flowID, commentID string) error
+	// DeleteFindingComment removes a comment. When authorID is non-empty the
+	// delete only applies if the comment was written by that user; a mismatch
+	// returns ErrNotCommentAuthor. Empty authorID deletes unconditionally
+	// (flow-admin moderation). Deleting an absent comment is a no-op.
+	DeleteFindingComment(ctx context.Context, flowID, commentID, authorID string) error
 
 	// Share tokens (read-only public report links)
 	CreateShareToken(ctx context.Context, t *ShareToken) error

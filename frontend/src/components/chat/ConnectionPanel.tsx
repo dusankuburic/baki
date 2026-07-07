@@ -199,6 +199,7 @@ export default function ConnectionPanel({
             className="p-1.5 rounded-lg hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
             onClick={onExport}
             title="Export conversation"
+            aria-label="Export conversation"
           >
             <Zap size={14} />
           </button>

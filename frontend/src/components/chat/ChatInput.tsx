@@ -4,7 +4,7 @@ import {useRef, useEffect, useCallback, useState, useMemo} from 'react'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import FileAutocomplete from './FileAutocomplete'
-import SlashCommandAutocomplete from './SlashCommandAutocomplete'
+import SlashCommandAutocomplete, {type SlashCommand} from './SlashCommandAutocomplete'
 import ExpandedChatInput from './ExpandedChatInput'
 
 interface Props {
@@ -12,11 +12,13 @@ interface Props {
   onPreview?: (text: string, files: string[], excludeContext?: boolean) => void
   onCancel?: () => void
   onFilesChange?: (files: string[]) => void
+  onClearThread?: () => void
+  onShowHelp?: () => void
   disabled?: boolean
   placeholder?: string
 }
 
-export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, disabled, placeholder}: Props) {
+export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, onClearThread, onShowHelp, disabled, placeholder}: Props) {
   const [value, setValue] = useState('')
   const [autocompleteQuery, setAutocompleteQuery] = useState<string | null>(null)
   const [slashQuery, setSlashQuery] = useState<string | null>(null)
@@ -26,8 +28,38 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
   const [taggedFiles, setTaggedFiles] = useState<string[]>([])
   
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  
+  const valueRef = useRef(value)
+  valueRef.current = value
+
   const activeThreadId = useChatStore(s => s.activeThreadId)
+  const setDraft = useChatStore(s => s.setDraft)
+  const stagedPrompt = useChatStore(s => s.stagedPrompt)
+  const setStagedPrompt = useChatStore(s => s.setStagedPrompt)
+
+  // Draft persistence: seed the composer from the thread's saved draft when the
+  // active thread changes, and flush the current text back to the thread it
+  // belonged to on switch/unmount. Reading via getState() avoids subscribing to
+  // the whole drafts map (which would re-seed mid-typing). Cleared on send.
+  useEffect(() => {
+    if (!activeThreadId) return
+    setValue(useChatStore.getState().drafts[activeThreadId] ?? '')
+    const threadId = activeThreadId
+    return () => { setDraft(threadId, valueRef.current) }
+  }, [activeThreadId, setDraft])
+
+  // Staged prompts ("Explain/Fix with AI") land in the composer for review.
+  // Declared after the draft-seed effect so that when both fire on the same
+  // thread switch (staging into a new thread), this wins and the staged text
+  // is what the user sees. Cleared once consumed.
+  useEffect(() => {
+    if (!stagedPrompt || stagedPrompt.threadId !== activeThreadId) return
+    setValue(stagedPrompt.text)
+    setStagedPrompt(null)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) }
+    })
+  }, [stagedPrompt, activeThreadId, setStagedPrompt])
   // Per-thread streaming: the Send/Stop toggle reflects ONLY the active thread
   // so the user can keep composing in other idle threads while one generates.
   const streaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
@@ -67,6 +99,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
     if (isDisabled) return
     onSend(trimmed, taggedFiles, excludeContext)
     setValue('')
+    if (activeThreadId) setDraft(activeThreadId, '')
     setHistoryIndex(-1)
     setTaggedFiles([])
     setAutocompleteQuery(null)
@@ -76,7 +109,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
         textareaRef.current.style.height = 'auto'
       }
     })
-  }, [value, taggedFiles, isDisabled, onSend, excludeContext])
+  }, [value, taggedFiles, isDisabled, onSend, excludeContext, activeThreadId, setDraft])
 
   const handlePreview = useCallback(() => {
     const trimmed = value.trim()
@@ -162,11 +195,23 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
     setTaggedFiles(taggedFiles.filter(f => f !== filename))
   }
 
-  const handleSelectCommand = (cmd: string) => {
+  const handleSelectCommand = (cmd: SlashCommand) => {
     const pos = textareaRef.current?.selectionStart ?? value.length
     const textBefore = value.slice(0, pos)
     const lastSlash = textBefore.lastIndexOf('/')
-    const newValue = value.slice(0, lastSlash) + cmd + ' ' + value.slice(pos)
+
+    // Action commands run a local handler and must never be sent to the model.
+    // Strip the "/cmd" token from the composer and dispatch.
+    if (cmd.kind === 'action') {
+      setValue(value.slice(0, lastSlash) + value.slice(pos))
+      setSlashQuery(null)
+      if (cmd.action === 'clear') onClearThread?.()
+      else if (cmd.action === 'help') onShowHelp?.()
+      textareaRef.current?.focus()
+      return
+    }
+
+    const newValue = value.slice(0, lastSlash) + cmd.id + ' ' + value.slice(pos)
     setValue(newValue)
     setSlashQuery(null)
     textareaRef.current?.focus()
@@ -229,15 +274,17 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
                 onClick={handlePreview}
                 className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-all"
                 title="Preview context"
+                aria-label="Preview context"
               >
                 <Eye size={16} />
               </button>
             )}
-            
+
             <button
               onClick={() => setIsExpanded(true)}
               className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-all"
               title="Expand editor"
+              aria-label="Expand editor"
             >
               <Maximize2 size={16} />
             </button>
@@ -247,6 +294,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
                 onClick={onCancel}
                 className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all border border-red-500/20"
                 title="Stop generation"
+                aria-label="Stop generation"
               >
                 <Square size={16} fill="currentColor" />
               </button>
@@ -255,6 +303,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, d
                 onClick={handleSend}
                 disabled={!hasContent || isDisabled || atCap}
                 title={capTooltip}
+                aria-label="Send message"
                 className={clsx(
                   'p-1.5 rounded-lg transition-all',
                   hasContent && !atCap

@@ -1,39 +1,38 @@
 import React, {useState, useCallback} from 'react'
-import {CheckCircle2, XCircle, User as UserIcon} from 'lucide-react'
-import clsx from 'clsx'
+import {User as UserIcon} from 'lucide-react'
 import {useAuthStore} from '@/stores/authStore'
 import {authApi} from '@/api/auth'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
+import Avatar from '@/components/shared/Avatar'
+import {useToast} from '@/components/shared'
 
 export const ProfileCard: React.FC = () => {
   const {user, updateUser} = useAuthStore()
+  const toast = useToast()
 
   const [isEditing, setIsEditing] = useState(false)
   const [displayNameInput, setDisplayNameInput] = useState(user?.displayName ?? '')
-  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [avatarUrlInput, setAvatarUrlInput] = useState(user?.avatarUrl ?? '')
   const [isSaving, setIsSaving] = useState(false)
-
-  const avatarUrl = user?.avatarUrl ?? ''
 
   const handleSave = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
     setIsSaving(true)
-    setStatus(null)
     try {
       const updated = await authApi.updateProfile({
         displayName: displayNameInput.trim(),
-        avatarUrl,
+        avatarUrl: avatarUrlInput.trim(),
       })
       updateUser({ displayName: updated.displayName, avatarUrl: updated.avatarUrl })
-      setStatus({ type: 'success', message: 'Profile updated' })
+      toast.success('Profile updated')
       setIsEditing(false)
     } catch (err) {
-      setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Failed to update profile' })
+      toast.error('Failed to update profile', {description: err instanceof Error ? err.message : String(err)})
     } finally {
       setIsSaving(false)
     }
-  }, [displayNameInput, avatarUrl, updateUser])
+  }, [displayNameInput, avatarUrlInput, updateUser, toast])
 
   const displayName = user?.displayName?.trim()
 
@@ -48,7 +47,7 @@ export const ProfileCard: React.FC = () => {
           <button
             type="button"
             className="text-xs font-medium text-brand-400 hover:text-brand-300"
-            onClick={() => { setDisplayNameInput(user?.displayName ?? ''); setStatus(null); setIsEditing(true) }}
+            onClick={() => { setDisplayNameInput(user?.displayName ?? ''); setAvatarUrlInput(user?.avatarUrl ?? ''); setIsEditing(true) }}
           >
             Edit
           </button>
@@ -58,20 +57,17 @@ export const ProfileCard: React.FC = () => {
       <div className="p-5 space-y-3">
         {isEditing ? (
           <form onSubmit={handleSave} className="space-y-3">
+            <div className="flex items-center gap-3">
+              <Avatar name={displayNameInput || user?.email || ''} colorSeed={user?.id} avatarUrl={avatarUrlInput} size="lg" />
+              <div className="flex-1">
+                <label className="text-xs font-medium text-text-secondary block mb-1.5">Avatar URL</label>
+                <Input type="url" value={avatarUrlInput} onChange={e => setAvatarUrlInput(e.target.value)} placeholder="https://…" maxLength={2048} />
+              </div>
+            </div>
             <div>
               <label className="text-xs font-medium text-text-secondary block mb-1.5">Display Name</label>
               <Input type="text" value={displayNameInput} onChange={e => setDisplayNameInput(e.target.value)} placeholder="Enter a display name" maxLength={100} />
             </div>
-
-            {status && (
-              <div className={clsx(
-                'flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm border',
-                status.type === 'success' ? 'bg-semantic-success/10 border-semantic-success/30 text-semantic-success' : 'bg-semantic-error/10 border-semantic-error/30 text-semantic-error'
-              )}>
-                {status.type === 'success' ? <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" /> : <XCircle size={14} className="mt-0.5 flex-shrink-0" />}
-                <span>{status.message}</span>
-              </div>
-            )}
 
             <div className="flex gap-2">
               <Button type="submit" variant="primary" size="md" loading={isSaving}>Save</Button>
@@ -79,15 +75,12 @@ export const ProfileCard: React.FC = () => {
             </div>
           </form>
         ) : (
-          <div>
-            <label className="text-xs font-medium text-text-secondary block mb-1">Display Name</label>
-            <p className="text-sm text-text-primary">{displayName || <span className="text-text-tertiary">Not set</span>}</p>
-            {status && status.type === 'success' && (
-              <div className="flex items-start gap-2 rounded-lg px-3 py-2.5 mt-3 text-sm border bg-semantic-success/10 border-semantic-success/30 text-semantic-success">
-                <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
-                <span>{status.message}</span>
-              </div>
-            )}
+          <div className="flex items-center gap-3">
+            <Avatar name={displayName || user?.email || ''} colorSeed={user?.id} avatarUrl={user?.avatarUrl} size="lg" />
+            <div>
+              <label className="text-xs font-medium text-text-secondary block mb-1">Display Name</label>
+              <p className="text-sm text-text-primary">{displayName || <span className="text-text-tertiary">Not set</span>}</p>
+            </div>
           </div>
         )}
       </div>

@@ -20,6 +20,14 @@ type Event struct {
 	TargetUser string `json:"-"` // empty = broadcast to all; non-empty = only this user
 }
 
+// sseHeartbeatInterval is how often HandleEvents writes an SSE comment frame
+// on an otherwise-quiet connection. Without it, a half-dead socket (laptop
+// suspend/resume, sidecar restart) is indistinguishable from a healthy idle
+// one on both ends: the client's read blocks forever and the server never
+// touches the socket. The client's read-inactivity watchdog is ~2× this
+// interval, so keep the two in sync.
+const sseHeartbeatInterval = 20 * time.Second
+
 // EventManager manages Server-Sent Events (SSE) clients and implements
 // service.Notifier to allow internal services to emit events to the frontend.
 type EventManager struct {
@@ -30,6 +38,17 @@ type EventManager struct {
 	allowOrigin  func(string) bool          // injected by Router; nil = deny all cross-origin
 	clientKey    func(*http.Request) string // injected by Router; nil = fall back to remote IP
 	isRevoked    func(string) bool          // injected by Router; nil = skip blacklist re-check
+
+	heartbeatInterval time.Duration // test override; 0 ⇒ sseHeartbeatInterval
+}
+
+// heartbeatTick returns the SSE heartbeat interval, honouring the test
+// override so heartbeat tests don't sleep for real 20s ticks.
+func (m *EventManager) heartbeatTick() time.Duration {
+	if m.heartbeatInterval > 0 {
+		return m.heartbeatInterval
+	}
+	return sseHeartbeatInterval
 }
 
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
@@ -170,6 +189,10 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// No-op for the Tauri localhost sidecar, but nginx-style reverse proxies
+	// buffer responses by default, which would deliver the whole stream at
+	// once instead of incrementally in web deployments.
+	w.Header().Set("X-Accel-Buffering", "no")
 	// Respect the configured CORS allowlist instead of wildcarding.
 	if origin := r.Header.Get("Origin"); origin != "" && m.allowOrigin != nil && m.allowOrigin(origin) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -196,6 +219,13 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// Heartbeat: keep an otherwise-quiet connection observably alive so the
+	// client's read-inactivity watchdog can tell "no events" from "dead
+	// socket", and so a write failure here ends the handler instead of the
+	// connection lingering until the next real event.
+	heartbeat := time.NewTicker(m.heartbeatTick())
+	defer heartbeat.Stop()
 
 	// Drop the stream once the access token is blacklisted (logout / explicit
 	// revoke). Checked on a slow ticker because it hits the shared blacklist store.
@@ -232,6 +262,13 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-expiryC:
 			logger.Info("SSE: disconnecting client after token expired", "jti", jti)
 			return
+		case <-heartbeat.C:
+			// SSE comment frame: the client parser ignores non-"data: " lines,
+			// but any bytes reset its inactivity watchdog.
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 		case ev := <-ch:
 			data, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "data: %s\n\n", data)

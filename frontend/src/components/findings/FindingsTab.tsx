@@ -3,9 +3,8 @@ import {Search} from 'lucide-react'
 import {analysisApi, flowApi} from '@/api'
 import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
-import {useChatStore} from '@/stores/chatStore'
-import {useUIStore} from '@/stores/uiStore'
 import {EmptyState, useToast} from '@/components/shared'
+import {stageFindingFix} from '@/lib/fixWithAI'
 import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
 import FindingsToolbar from './FindingsToolbar'
@@ -24,15 +23,10 @@ export default function FindingsTab() {
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
   const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
   const setProgress = useAnalysisStore(s => s.setProgress)
-  const appendMessage = useChatStore(s => s.appendMessage)
-  const createThread = useChatStore(s => s.createThread)
-  const updateThread = useChatStore(s => s.updateThread)
-  const switchThread = useChatStore(s => s.switchThread)
   const findingSearch = useAnalysisStore(s => s.findingSearch)
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
   const severityFilter = useAnalysisStore(s => s.severityFilter)
   const categoryFilter = useAnalysisStore(s => s.categoryFilter)
-  const setInspectorTab = useUIStore(s => s.setInspectorTab)
   const suppressedKeys = useAnalysisStore(s => s.suppressedKeys)
   const loadSuppressions = useAnalysisStore(s => s.loadSuppressions)
   const loadBaseline = useAnalysisStore(s => s.loadBaseline)
@@ -111,33 +105,8 @@ export default function FindingsTab() {
 
   const handleFixWithAI = useCallback((finding: Finding) => {
     if (!doc) return
-    const threadId = createThread(doc.id)
-    updateThread(threadId, {
-      title: `Fix: ${finding.title}`,
-      contextBlockId: finding.blockId,
-      // Fix-with-AI benefits most from grounding, so enable the read-only tool
-      // loop for this thread (no-op on providers that don't support tools).
-      useTools: true,
-    })
-    // Ground the AI with everything the analyzer knows about this finding,
-    // including its machine-generated fix hint when one exists.
-    const parts = [
-      `Help me fix this issue: **${finding.title}**`,
-      finding.description,
-      finding.suggestion ? `Suggestion: ${finding.suggestion}` : '',
-      finding.autoFixHint ? `Analyzer fix hint:\n\`\`\`\n${finding.autoFixHint}\n\`\`\`` : '',
-      `Rule: \`${finding.ruleId}\` · Severity: ${finding.severity} · Block: \`${finding.blockId}\``,
-    ].filter(Boolean)
-    appendMessage(threadId, {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: parts.join('\n\n'),
-      timestamp: new Date().toISOString(),
-      contextBlockId: finding.blockId,
-    })
-    switchThread(threadId)
-    setInspectorTab('ai')
-  }, [appendMessage, createThread, updateThread, switchThread, setInspectorTab, doc])
+    stageFindingFix(finding, doc.id)
+  }, [doc])
 
   const handleShowDiff = useCallback(async () => {
     setDiffLoading(true)
@@ -203,7 +172,10 @@ export default function FindingsTab() {
       const result = await flowApi.createShare(doc.id)
       const url = `${window.location.origin}/shared?token=${result.token}`
       await navigator.clipboard.writeText(url)
-      toast.success('Share link copied to clipboard', {description: url})
+      const expires = result.expiresAt
+        ? ` · expires ${new Date(result.expiresAt).toLocaleDateString()}`
+        : ''
+      toast.success('Share link copied to clipboard', {description: `${url}${expires}`})
     } catch (err) {
       toast.error('Failed to create share link', {description: String(err)})
     }

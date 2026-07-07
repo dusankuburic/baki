@@ -104,6 +104,7 @@ export default function ResizableChatPanel({
             className="p-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors"
             onClick={togglePopOut}
             title="Dock to panel"
+            aria-label="Dock to panel"
           >
             <Minimize2 size={14} />
           </button>
@@ -130,6 +131,7 @@ export default function ResizableChatPanel({
         className="absolute top-2 right-2 z-10 p-1.5 rounded-lg bg-surface-2/80 backdrop-blur border border-border-subtle hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-all duration-fast opacity-0 group-hover:opacity-100"
         onClick={togglePopOut}
         title="Pop out to floating panel"
+        aria-label="Pop out to floating panel"
       >
         <Maximize2 size={12} />
       </button>

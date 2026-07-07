@@ -206,3 +206,40 @@ describe('selectBlock ancestor expansion', () => {
         expect(state.expandedBlockIds.has('loop2')).toBe(true)
     })
 })
+
+// ---- chat→app navigation (mention deep-links) ----
+
+describe('navigateToSourceFile', () => {
+    function docWithSourceFiles(): FlowDocument {
+        const main = {...makeSubflow('sf-main'), name: 'Main', sourceFile: 'Main.txt'}
+        const login = {...makeSubflow('sf-login'), name: 'Login', sourceFile: 'sub/Login.txt'}
+        return makeDoc(main, login)
+    }
+
+    it('selects the subflow whose source file matches the mention (basename)', () => {
+        useFlowStore.getState().setDocument(docWithSourceFiles())
+        const ok = useFlowStore.getState().navigateToSourceFile('sub/Login.txt')
+        expect(ok).toBe(true)
+        expect(useFlowStore.getState().selectedSubflowId).toBe('sf-login')
+    })
+
+    it('matches a bare basename against a nested source file', () => {
+        useFlowStore.getState().setDocument(docWithSourceFiles())
+        const ok = useFlowStore.getState().navigateToSourceFile('Login.txt')
+        expect(ok).toBe(true)
+        expect(useFlowStore.getState().selectedSubflowId).toBe('sf-login')
+    })
+
+    it('falls back to matching the subflow name without .txt', () => {
+        useFlowStore.getState().setDocument(docWithSourceFiles())
+        const ok = useFlowStore.getState().navigateToSourceFile('Main.txt')
+        expect(ok).toBe(true)
+        expect(useFlowStore.getState().selectedSubflowId).toBe('sf-main')
+    })
+
+    it('returns false and selects nothing when no file matches', () => {
+        useFlowStore.getState().setDocument(docWithSourceFiles())
+        const ok = useFlowStore.getState().navigateToSourceFile('Nope.txt')
+        expect(ok).toBe(false)
+    })
+})

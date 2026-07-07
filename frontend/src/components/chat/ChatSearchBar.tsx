@@ -38,6 +38,7 @@ export default function ChatSearchBar({query, onChange, matchCount, onClose}: Pr
         onClick={onClose}
         className="p-0.5 text-text-tertiary hover:text-text-secondary transition-colors"
         title="Close search (Escape)"
+        aria-label="Close search"
       >
         <X size={14} />
       </button>

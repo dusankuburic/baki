@@ -8,8 +8,8 @@ import {isContainerType} from './BlockEnd'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
-import {useChatStore} from '@/stores/chatStore'
 import {useSearchStore} from '@/stores/searchStore'
+import {stageBlockPrompt} from '@/lib/fixWithAI'
 import type {Block, VariableHistory} from '@/types'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import {useToast} from '@/components/shared'
@@ -72,14 +72,11 @@ export default React.memo(function BlockCard({
 
     const [menuPos, setMenuPos] = useState<{x: number; y: number} | null>(null)
 
-    const setPendingMessage = useChatStore(s => s.setPendingMessage)
-    const setInspectorTab = useUIStore(s => s.setInspectorTab)
-    const setInspectorCollapsed = useUIStore(s => s.setInspectorCollapsed)
-
     const triggerAI = (text: string) => {
-        setPendingMessage({text, contextBlockId: block.id})
-        setInspectorTab('ai')
-        setInspectorCollapsed(false)
+        const flowId = useFlowStore.getState().document?.id
+        if (!flowId) return
+        // Stage the prompt in the composer for review rather than auto-sending.
+        stageBlockPrompt(text, block.id, flowId)
     }
 
     const handleClick = useCallback((e: React.MouseEvent) => {
@@ -248,6 +245,8 @@ export default React.memo(function BlockCard({
                                 e.stopPropagation()
                                 toggleBlockExpand(block.id)
                             }}
+                            aria-label={collapsed ? 'Expand block' : 'Collapse block'}
+                            aria-expanded={!collapsed}
                         >
                             <Chevron size={14} style={{color}} />
                         </button>
