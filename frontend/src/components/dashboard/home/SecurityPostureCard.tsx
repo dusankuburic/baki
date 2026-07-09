@@ -1,9 +1,9 @@
-import {ShieldAlert, AlertTriangle, Key} from 'lucide-react'
+import {ShieldAlert, AlertTriangle, Key, Lock} from 'lucide-react'
 import {CardShell} from './CardShell'
 import type {DashboardSecurity} from '@/types'
 
 export function SecurityPostureCard({data, className}: {data: DashboardSecurity; className?: string}) {
-  const hasIssues = data.failedLogins24h > 0 || data.credentialFindings > 0
+  const hasIssues = data.failedLogins24h > 0 || data.credentialFindings > 0 || data.lockedAccounts > 0
 
   const items = [
     {
@@ -11,6 +11,12 @@ export function SecurityPostureCard({data, className}: {data: DashboardSecurity;
       label: 'Failed logins (24h)',
       value: data.failedLogins24h,
       tone: data.failedLogins24h > 5 ? 'text-red-400' : data.failedLogins24h > 0 ? 'text-amber-400' : 'text-emerald-400',
+    },
+    {
+      icon: Lock,
+      label: 'Locked accounts',
+      value: data.lockedAccounts,
+      tone: data.lockedAccounts > 0 ? 'text-red-400' : 'text-emerald-400',
     },
     {
       icon: Key,

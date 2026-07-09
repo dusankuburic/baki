@@ -2,8 +2,10 @@ package analyzer
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +19,10 @@ type CachedReport struct {
 	Report    *models.AnalysisReport `json:"report"`
 	CreatedAt time.Time              `json:"createdAt"`
 	Seq       int64                  `json:"-"`
+	// Path is the cleaned on-disk path of the analyzed doc ("" for path-less
+	// docs). Kept so Put can evict overlapping identities: a folder-combined
+	// doc and its constituent files must never both count in the dashboards.
+	Path string `json:"-"`
 }
 
 type AnalysisCache struct {
@@ -81,8 +87,30 @@ func (c *AnalysisCache) Get(flowID, hash string) *models.AnalysisReport {
 }
 
 func (c *AnalysisCache) Put(flowID, hash string, report *models.AnalysisReport) {
+	c.PutWithPath(flowID, "", hash, report)
+}
+
+// PutWithPath stores a report under flowID and remembers the doc's on-disk
+// path so overlapping identities are evicted: a folder-combined doc replaces
+// the per-file entries beneath it, and a per-file entry replaces any folder
+// aggregate covering it — otherwise the dashboards would count the same
+// findings twice (once in the aggregate, once per file).
+func (c *AnalysisCache) PutWithPath(flowID, path, hash string, report *models.AnalysisReport) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if path != "" {
+		path = filepath.Clean(path)
+	}
+
+	// One entry per flow identity: drop prior hashes (older content or settings)
+	// so the dashboards, which aggregate AllReports, count each flow exactly once.
+	prefix := flowID + ":"
+	for k, v := range c.entries {
+		if strings.HasPrefix(k, prefix) || pathsOverlap(path, v.Path) {
+			delete(c.entries, k)
+		}
+	}
 
 	if len(c.entries) >= c.maxSize {
 		oldest := ""
@@ -103,8 +131,19 @@ func (c *AnalysisCache) Put(flowID, hash string, report *models.AnalysisReport) 
 		Report:    report,
 		CreatedAt: time.Now(),
 		Seq:       c.seq,
+		Path:      path,
 	}
 	c.seq++
+}
+
+// pathsOverlap reports whether one path contains the other (folder vs file
+// within it). Equal paths are handled by the flowID prefix delete, not here.
+func pathsOverlap(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(b, a+sep) || strings.HasPrefix(a, b+sep)
 }
 
 func (c *AnalysisCache) Invalidate(flowID string) {
@@ -146,6 +185,32 @@ func cacheKey(flowID, hash string) string {
 
 var DefaultCache = NewAnalysisCache(50)
 
+// StableFlowID returns an identity for doc that survives re-parsing. The parser
+// mints a fresh doc UUID on every load, so keying analytics by doc.ID would
+// count the same file once per open. Path-backed docs (desktop file/folder
+// loads, batch analysis) hash their FilePath; path-less parsed inputs carry a
+// parser-assigned StableID (uploads key on their file-name set); everything
+// else (cloud library flows) keeps its persistent ID. Must stay in sync with
+// the service-layer history key (AnalysisService history/diff), which
+// delegates here.
+func StableFlowID(doc *models.FlowDocument) string {
+	if doc.FilePath != "" {
+		return StableFlowIDForPath(doc.FilePath)
+	}
+	if doc.StableID != "" {
+		return doc.StableID
+	}
+	return doc.ID
+}
+
+// StableFlowIDForPath is the path-derived form of StableFlowID, for callers
+// that only have a path. The path is cleaned first so "/x/y" and "/x/y/"
+// (e.g. a folder picked twice through different adapters) share one identity.
+func StableFlowIDForPath(path string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(path)))
+	return "path-" + hex.EncodeToString(sum[:8])
+}
+
 // analyzerVersion participates in the analysis cache key (not FlowHash, which
 // history.go uses for pure content identity). Bump when rule logic or parser
 // output changes so stale cached reports are not served after an upgrade.
@@ -185,13 +250,14 @@ func settingsDigest(settings *models.AppSettings) string {
 
 func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
 	hash := analyzerVersion + ":" + FlowHash(doc) + ":" + settingsDigest(settings)
-	if cached := DefaultCache.Get(doc.ID, hash); cached != nil {
+	id := StableFlowID(doc)
+	if cached := DefaultCache.Get(id, hash); cached != nil {
 		return cached
 	}
 
 	// Skip per-rule timing on the cached hot path; RuleProfiles durations are a
 	// dev diagnostic and not worth two time.Now() calls per (block, rule) here.
 	report := runAnalysisCore(doc, rules, settings, onProgress, false)
-	DefaultCache.Put(doc.ID, hash, report)
+	DefaultCache.PutWithPath(id, doc.FilePath, hash, report)
 	return report
 }

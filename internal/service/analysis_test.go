@@ -111,54 +111,17 @@ func TestAnalysisService_GetRules_returns_all(t *testing.T) {
 	}
 }
 
-func TestDedupByFlowID_KeepsNewestPerFlowID(t *testing.T) {
-	t1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	t2 := t1.Add(time.Hour)
-	reports := []*models.AnalysisReport{
-		{FlowID: "f1", GeneratedAt: t1, FlowName: "old"},
-		{FlowID: "f1", GeneratedAt: t2, FlowName: "new"},
-		{FlowID: "f2", GeneratedAt: t1, FlowName: "only"},
-	}
-	deduped := dedupByFlowID(reports)
-	if len(deduped) != 2 {
-		t.Fatalf("expected 2 reports after dedup, got %d", len(deduped))
-	}
-	byID := make(map[string]string, len(deduped))
-	for _, r := range deduped {
-		byID[r.FlowID] = r.FlowName
-	}
-	if byID["f1"] != "new" {
-		t.Errorf("expected newest report for f1, got %q", byID["f1"])
-	}
-	if byID["f2"] != "only" {
-		t.Errorf("expected only report for f2, got %q", byID["f2"])
-	}
-}
-
-func TestDedupByFlowID_TieBreakAndOrdering(t *testing.T) {
+func TestSortedReports_OrdersByFlowIDAndHandlesNil(t *testing.T) {
 	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	reports := []*models.AnalysisReport{
-		{FlowID: "f1", GeneratedAt: ts, FlowName: "alpha"},
-		{FlowID: "f1", GeneratedAt: ts, FlowName: "beta"},
 		{FlowID: "f2", GeneratedAt: ts, FlowName: "gamma"},
+		{FlowID: "f1", GeneratedAt: ts, FlowName: "alpha"},
 	}
-	deduped := dedupByFlowID(reports)
-	if len(deduped) != 2 {
-		t.Fatalf("expected 2 reports after dedup, got %d", len(deduped))
+	sorted := sortedReports(reports)
+	if len(sorted) != 2 || sorted[0].FlowID != "f1" || sorted[1].FlowID != "f2" {
+		t.Errorf("expected [f1 f2] ordering, got %+v", sorted)
 	}
-	// Tie-break: FlowName "beta" > "alpha", so "beta" should win
-	if deduped[0].FlowID != "f1" || deduped[0].FlowName != "beta" {
-		t.Errorf("expected f1/beta first, got %s/%s", deduped[0].FlowID, deduped[0].FlowName)
-	}
-	// Output sorted by FlowID
-	if deduped[1].FlowID != "f2" {
-		t.Errorf("expected f2 second, got %s", deduped[1].FlowID)
-	}
-}
-
-func TestDedupByFlowID_Empty(t *testing.T) {
-	deduped := dedupByFlowID(nil)
-	if len(deduped) != 0 {
-		t.Fatalf("expected empty result for nil input, got %d", len(deduped))
+	if got := sortedReports(nil); len(got) != 0 {
+		t.Fatalf("expected empty result for nil input, got %d", len(got))
 	}
 }

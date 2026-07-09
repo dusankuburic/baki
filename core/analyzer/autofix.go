@@ -334,11 +334,12 @@ func ReplaceWithVariablePatch(block *models.Block, propKey string) models.Patch 
 // increment + END) via the wrap op's newline-splitting support.
 //
 // Structure produced:
-//   SET RetryCount TO 0
-//   LOOP WHILE %RetryCount% < 3
-//       <action re-indented>
-//       SET RetryCount TO %RetryCount% + 1
-//   END
+//
+//	SET RetryCount TO 0
+//	LOOP WHILE %RetryCount% < 3
+//	    <action re-indented>
+//	    SET RetryCount TO %RetryCount% + 1
+//	END
 func WrapInRetryPatch(block *models.Block) models.Patch {
 	indent := strings.Repeat("    ", block.Indent)
 	inner := strings.Repeat("    ", block.Indent+1)
@@ -361,13 +362,14 @@ func WrapInRetryPatch(block *models.Block) models.Patch {
 // After re-parse hasExitCondition detects the "Exit" in EXIT LOOP → true.
 //
 // Structure produced:
-//   SET __LoopGuard TO 0      ← outside loop (before LOOP line)
-//   LOOP ...
-//       SET __LoopGuard TO %__LoopGuard% + 1
-//       IF %__LoopGuard% > 10000
-//           EXIT LOOP
-//       END
-//   END
+//
+//	SET __LoopGuard TO 0      ← outside loop (before LOOP line)
+//	LOOP ...
+//	    SET __LoopGuard TO %__LoopGuard% + 1
+//	    IF %__LoopGuard% > 10000
+//	        EXIT LOOP
+//	    END
+//	END
 func InsertExitConditionPatch(block *models.Block) models.Patch {
 	if len(block.Children) == 0 {
 		return models.Patch{}

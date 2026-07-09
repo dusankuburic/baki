@@ -138,6 +138,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/related", h.Analysis.handleRelatedFindings)
 		r.Post("/compare", h.Analysis.handleCompareFlows)
 		r.Get("/rules", h.Analysis.handleGetRules)
+		r.Get("/rules/summary", h.Analysis.handleGetRulesSummary)
 		r.Post("/rule/enabled", h.Analysis.handleSetRuleEnabled)
 		r.Post("/rule/config", h.Analysis.handleUpdateRuleConfig)
 		// Finding triage & baselines (persistent, team-shared; cloud mode only)

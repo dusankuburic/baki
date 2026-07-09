@@ -267,6 +267,10 @@ export interface Rule {
   defaultSeverity: Severity
   category: string
   enabled: boolean
+  /** Built-in default certainty for this rule's findings. */
+  confidence?: Confidence
+  /** Deterministic fixType a user can apply in one click (e.g. "set-timeout"), or empty if none. */
+  autoFix?: string
 }
 
 export interface RuleConfig {

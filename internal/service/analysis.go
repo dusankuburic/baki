@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"sync"
@@ -36,14 +34,11 @@ type reportPair struct {
 // analysisHistoryKey returns a stable identity for trend/diff tracking. The
 // parser mints a fresh doc UUID on every load, so keying by doc.ID would
 // fragment history each time the user reopens (or edits + reloads) a file —
-// the exact workflow diffing exists for. Path-less docs (cloud library docs,
-// uploads) keep their persistent IDs.
+// the exact workflow diffing exists for. Delegates to the analyzer's
+// StableFlowID so history/diff and the session analytics cache agree on
+// identity (byte-identical keys).
 func analysisHistoryKey(doc *models.FlowDocument) string {
-	if doc.FilePath != "" {
-		sum := sha256.Sum256([]byte(doc.FilePath))
-		return "path-" + hex.EncodeToString(sum[:8])
-	}
-	return doc.ID
+	return analyzer.StableFlowID(doc)
 }
 
 type AnalysisService struct {
@@ -241,42 +236,26 @@ func (s *AnalysisService) GetDependencyAnalysis() *models.DependencyAnalysis {
 }
 
 func (s *AnalysisService) ComputeDashboard() *models.DashboardStats {
-	reports := dedupByFlowID(analyzer.DefaultCache.AllReports())
-	return analyzer.ComputeDashboard(reports)
+	return analyzer.ComputeDashboard(sortedReports(analyzer.DefaultCache.AllReports()))
 }
 
 // DashboardData returns aggregated stats and per-flow reports from a single
-// cache snapshot, deduplicated by flow ID. The single-snapshot guarantee is
-// important for the local-mode dashboard so all sections (overview, findings,
-// complexity scatter) see a consistent view — two separate reads of the cache
-// can diverge if an analysis completes between them.
+// cache snapshot. The single-snapshot guarantee is important for the
+// local-mode dashboard so all sections (overview, findings, complexity
+// scatter) see a consistent view — two separate reads of the cache can
+// diverge if an analysis completes between them. The cache holds one entry
+// per stable flow identity (Put replaces prior hashes and evicts overlapping
+// folder/file paths), so no dedup is needed here.
 func (s *AnalysisService) DashboardData() (*models.DashboardStats, []*models.AnalysisReport) {
-	reports := dedupByFlowID(analyzer.DefaultCache.AllReports())
+	reports := sortedReports(analyzer.DefaultCache.AllReports())
 	return analyzer.ComputeDashboard(reports), reports
 }
 
-// dedupByFlowID keeps only the newest report per FlowID (most recent
-// GeneratedAt). The cache is keyed by flowID:contentHash, so editing and
-// re-analyzing a flow inserts a new entry without removing the old one.
-// Without dedup the dashboard would double-count flows.
-func dedupByFlowID(reports []*models.AnalysisReport) []*models.AnalysisReport {
-	if len(reports) == 0 {
-		return reports
-	}
-	newest := make(map[string]*models.AnalysisReport, len(reports))
-	for _, r := range reports {
-		existing, ok := newest[r.FlowID]
-		if !ok || r.GeneratedAt.After(existing.GeneratedAt) ||
-			(r.GeneratedAt.Equal(existing.GeneratedAt) && r.FlowName > existing.FlowName) {
-			newest[r.FlowID] = r
-		}
-	}
-	out := make([]*models.AnalysisReport, 0, len(newest))
-	for _, r := range newest {
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].FlowID < out[j].FlowID })
-	return out
+// sortedReports orders a cache snapshot by FlowID so dashboard sections render
+// deterministically (AllReports iterates a map).
+func sortedReports(reports []*models.AnalysisReport) []*models.AnalysisReport {
+	sort.Slice(reports, func(i, j int) bool { return reports[i].FlowID < reports[j].FlowID })
+	return reports
 }
 
 func (s *AnalysisService) ComputeSubflowHashes(doc *models.FlowDocument) []models.SubflowHash {
@@ -313,6 +292,8 @@ func (s *AnalysisService) GetRules() (result []models.Rule) {
 			DefaultSeverity: r.DefaultSeverity(),
 			Category:        r.Category(),
 			Enabled:         true,
+			Confidence:      analyzer.RuleConfidence(r.ID()),
+			AutoFix:         analyzer.RuleAutoFix(r.ID()),
 		}
 		if settings != nil {
 			if rc, ok := settings.Analysis.Rules[r.ID()]; ok {
@@ -327,6 +308,34 @@ func (s *AnalysisService) GetRules() (result []models.Rule) {
 		}
 	}
 	return result
+}
+
+// GetRulesSummary folds the rule catalog (after applying user overrides) into
+// the counts the dashboard needs: total rules, how many are auto-fixable, and
+// the distribution across categories and confidence tiers. Reuses GetRules so
+// the summary honours the same enabled/severity overrides as the catalog.
+func (s *AnalysisService) GetRulesSummary() models.RuleSummary {
+	defer logger.GuardRecover("App.GetRulesSummary")
+
+	summary := models.RuleSummary{
+		ByCategory:   map[string]int{},
+		ByConfidence: map[string]int{},
+	}
+	for _, r := range s.GetRules() {
+		summary.TotalRules++
+		if r.AutoFix != "" {
+			summary.AutoFixableRules++
+		}
+		if r.Category != "" {
+			summary.ByCategory[r.Category]++
+		}
+		c := string(r.Confidence)
+		if c == "" {
+			c = string(models.ConfidenceMedium)
+		}
+		summary.ByConfidence[c]++
+	}
+	return summary
 }
 
 func (s *AnalysisService) SetRuleEnabled(ruleID string, enabled bool) (err error) {

@@ -590,3 +590,36 @@ func BenchmarkParser10kLines(b *testing.B) {
 		}
 	}
 }
+
+// ParseFiles must assign a StableID derived from the file-name set (not
+// content): session analytics key on it so re-uploading an edited file updates
+// one dashboard entry instead of adding a phantom flow per parse.
+func TestParseFiles_StableIDSurvivesReparse(t *testing.T) {
+	files := map[string]string{"Main.txt": "SET x TO 1\n"}
+	doc1, err := ParseFiles(files, "upload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := map[string]string{"Main.txt": "SET x TO 2\nSET y TO 3\n"}
+	doc2, err := ParseFiles(edited, "upload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc1.StableID == "" {
+		t.Fatal("ParseFiles must set StableID")
+	}
+	if doc1.StableID != doc2.StableID {
+		t.Errorf("same file names must give the same StableID across parses: %s vs %s", doc1.StableID, doc2.StableID)
+	}
+	if doc1.ID == doc2.ID {
+		t.Error("doc.ID should still be fresh per parse")
+	}
+
+	other, err := ParseFiles(map[string]string{"Other.txt": "SET x TO 1\n"}, "upload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.StableID == doc1.StableID {
+		t.Error("different file names must give different StableIDs")
+	}
+}

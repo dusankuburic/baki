@@ -628,9 +628,9 @@ func TestApplyPatch_MixedOps(t *testing.T) {
 func TestApplyPatch_AppendOutOfRange(t *testing.T) {
 	source := "only line"
 	patch := models.Patch{Ops: []models.PatchOp{{
-		Kind:     "append",
+		Kind:      "append",
 		StartLine: 99,
-		Lines:    []string{" appended"},
+		Lines:     []string{" appended"},
 	}}}
 	got := ApplyPatch(source, patch)
 	if got != source {
@@ -714,9 +714,9 @@ func TestSetTimeoutPatch_MultiLineValue(t *testing.T) {
 // TestInsertClosePatch_NilProperties returns empty patch when Properties is nil.
 func TestInsertClosePatch_NilProperties(t *testing.T) {
 	block := &models.Block{
-		Type:     models.BlockTypeAction,
-		RawType:  "Excel.LaunchExcel",
-		Indent:   0,
+		Type:    models.BlockTypeAction,
+		RawType: "Excel.LaunchExcel",
+		Indent:  0,
 	}
 	patch := InsertClosePatch(block)
 	if len(patch.Ops) != 0 {

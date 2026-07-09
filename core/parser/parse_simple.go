@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -230,8 +232,22 @@ func ParseFiles(files map[string]string, rootName string) (*models.FlowDocument,
 		totalLines += doc.Metadata.RawLineCount
 	}
 
+	// Session analytics need an identity that survives re-parsing (each parse
+	// mints a fresh UUID). Path-backed docs use FilePath; these path-less docs
+	// (uploads, raw analysis input) key on the sorted file-name set instead, so
+	// re-uploading an edited file updates its one entry rather than adding a
+	// phantom flow. Name-based on purpose: content must NOT participate, or the
+	// identity would rotate on every edit — the exact bug this prevents.
+	nameHash := sha256.New()
+	for _, name := range filenames {
+		nameHash.Write([]byte(name))
+		nameHash.Write([]byte{0})
+	}
+	stableID := "files-" + hex.EncodeToString(nameHash.Sum(nil))[:16]
+
 	doc := &models.FlowDocument{
 		ID:          uuid.NewString(),
+		StableID:    stableID,
 		Name:        rootName,
 		Subflows:    allSubflows,
 		ParseErrors: allErrors,

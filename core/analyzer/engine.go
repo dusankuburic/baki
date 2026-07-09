@@ -28,14 +28,14 @@ var subjectMetaKeys = []string{"variable", "property", "resource"}
 // ordering and the UI's "maybe" affordance.
 var ruleConfidence = map[string]models.Confidence{
 	// High — deterministic, low false-positive rate.
-	"hardcoded-credential":  models.ConfidenceHigh,
-	"sensitive-exposure":    models.ConfidenceHigh,
-	"sql-injection-risk":    models.ConfidenceHigh,
-	"resource-leak":         models.ConfidenceHigh,
-	"infinite-loop-risk":    models.ConfidenceHigh,
-	"empty-handler":         models.ConfidenceHigh,
-	"empty-branch":          models.ConfidenceHigh,
-	"redundant-action":      models.ConfidenceHigh,
+	"hardcoded-credential": models.ConfidenceHigh,
+	"sensitive-exposure":   models.ConfidenceHigh,
+	"sql-injection-risk":   models.ConfidenceHigh,
+	"resource-leak":        models.ConfidenceHigh,
+	"infinite-loop-risk":   models.ConfidenceHigh,
+	"empty-handler":        models.ConfidenceHigh,
+	"empty-branch":         models.ConfidenceHigh,
+	"redundant-action":     models.ConfidenceHigh,
 	// Low — heuristic / style, frequent false positives.
 	"uninitialized-variable": models.ConfidenceLow,
 	"unused-variable":        models.ConfidenceLow,
@@ -51,17 +51,37 @@ var ruleConfidence = map[string]models.Confidence{
 // analyzes). Findings for rules not listed carry no AutoFix (only prose/AI).
 // Keep the fixType values in sync with FlowService.ApplyFix.
 var ruleAutoFix = map[string]string{
-	"unhandled-error":            "wrap-error-handler",
-	"file-op-no-error-handler":   "wrap-error-handler",
-	"resource-leak":              "insert-close",
-	"missing-timeout":            "set-timeout",
-	"missing-delay":              "insert-delay",
-	"empty-handler":              "insert-handler-log",
-	"uninitialized-variable":     "init-variable",
-	"error-swallow":              "insert-error-log",
-	"hardcoded-credential":       "replace-with-variable",
-	"missing-retry":              "wrap-in-retry",
-	"infinite-loop-risk":         "insert-exit-condition",
+	"unhandled-error":          "wrap-error-handler",
+	"file-op-no-error-handler": "wrap-error-handler",
+	"resource-leak":            "insert-close",
+	"missing-timeout":          "set-timeout",
+	"missing-delay":            "insert-delay",
+	"empty-handler":            "insert-handler-log",
+	"uninitialized-variable":   "init-variable",
+	"error-swallow":            "insert-error-log",
+	"hardcoded-credential":     "replace-with-variable",
+	"missing-retry":            "wrap-in-retry",
+	"infinite-loop-risk":       "insert-exit-condition",
+}
+
+// RuleConfidence returns the built-in default certainty for a rule's findings
+// (High/Medium/Low), defaulting to Medium for rules not explicitly listed in
+// ruleConfidence. Exposed so the rule catalog and dashboards can surface rule
+// certainty without running an analysis.
+func RuleConfidence(id string) models.Confidence {
+	if c, ok := ruleConfidence[id]; ok {
+		return c
+	}
+	return models.ConfidenceMedium
+}
+
+// RuleAutoFix returns the deterministic fixType a user can apply in one click
+// for the given rule (e.g. "set-timeout"), or "" when the rule has no auto-
+// fixer. Exposed so the catalog can show fix-availability and dashboards can
+// compute "auto-fixable rule" counts. Keep the returned values in sync with
+// FlowService.ApplyFix.
+func RuleAutoFix(id string) string {
+	return ruleAutoFix[id]
 }
 
 // findingContentKey derives a stable identity for a finding from the block's

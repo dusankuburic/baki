@@ -2,7 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import clsx from 'clsx'
 import {
   BarChart3, RefreshCw, FolderSearch, Download, AlertTriangle,
-  ShieldAlert, Activity, FileWarning, ArrowLeft,
+  ShieldAlert, Activity, FileWarning, ArrowLeft, Workflow,
 } from 'lucide-react'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
@@ -63,8 +63,9 @@ export default function AnalyticsDashboard() {
   const sessionAnalyticsEnabled = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
   const isLoaded = useSystemStore(s => s.isLoaded)
 
-  // Loading a new flow/folder clears the server-side session cache, so re-fetch
-  // when the open document changes to reflect only the current working context.
+  // Session analytics accumulate across single-file loads (only opening a base
+  // folder clears the server-side cache); re-fetch when the open document
+  // changes so the view reflects the latest state either way.
   const docId = useFlowStore(s => s.document?.id ?? null)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -195,6 +196,14 @@ export default function AnalyticsDashboard() {
           className="text-text-tertiary hover:text-text-secondary p-1.5 rounded hover:bg-surface-3 transition-colors disabled:opacity-50"
         >
           <RefreshCw size={14} />
+        </button>
+        <button
+          onClick={() => setMainPaneView('deps')}
+          title="Rule dependency graph"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary hover:bg-surface-3 text-sm transition-colors"
+        >
+          <Workflow size={13} />
+          Rule Graph
         </button>
         <button
           onClick={handleBatch}

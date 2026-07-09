@@ -191,10 +191,10 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// Loading new data starts a fresh working context, so reset the desktop
-	// session analytics — the dashboards aggregate this cache and should reflect
-	// only the flow/folder the user is now working with, not prior sessions.
-	analyzer.DefaultCache.Clear()
+	// No analytics reset here: session analytics key on the file's path
+	// (analyzer.StableFlowID), so re-analyzing this file replaces its own entry
+	// and other flows' analytics survive. Only opening a base FOLDER resets the
+	// session (see handleLoadFlowFolder).
 	render.JSON(w, doc)
 }
 
@@ -216,8 +216,10 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// New folder = fresh working context: reset the desktop session analytics so
-	// the dashboards reflect only this folder, not previously-loaded data.
+	// Opening a base folder is a deliberate workspace switch — the ONLY action
+	// that resets the desktop session analytics. Single-file loads and batch
+	// analyses accumulate into the session instead (stable per-path identity
+	// prevents double-counting).
 	analyzer.DefaultCache.Clear()
 	render.JSON(w, doc)
 }
@@ -323,9 +325,9 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	// A re-import starts a fresh working context — reset the desktop analytics
-	// cache so dashboards reflect only the re-imported flow.
-	analyzer.DefaultCache.Clear()
+	// Drop only the re-imported flow's stale analytics entry (the source may
+	// have changed on disk); the rest of the session's analytics survive.
+	analyzer.DefaultCache.Invalidate(analyzer.StableFlowID(fresh))
 	render.JSON(w, fresh)
 }
 

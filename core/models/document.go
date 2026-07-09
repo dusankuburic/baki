@@ -12,8 +12,14 @@ const (
 )
 
 type FlowDocument struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// StableID is a load-survival identity for docs with no on-disk path
+	// (uploads, raw analysis input): the parser mints a fresh ID per parse, so
+	// session analytics would otherwise count each re-parse of the same input
+	// as a new flow. Set by parser.ParseFiles from the sorted file names;
+	// in-process only (never serialized or persisted).
+	StableID       string         `json:"-"`
 	FilePath       string         `json:"filePath"`
 	OwnerID        string         `json:"ownerId,omitempty"`
 	OrganizationID string         `json:"orgId,omitempty"`

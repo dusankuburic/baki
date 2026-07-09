@@ -180,6 +180,10 @@ func (h *AnalysisHandler) handleGetRules(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, rules)
 }
 
+func (h *AnalysisHandler) handleGetRulesSummary(w http.ResponseWriter, r *http.Request) {
+	render.JSON(w, h.analysisSvc.GetRulesSummary())
+}
+
 func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
@@ -310,6 +314,10 @@ func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+
+	// No aggregate-vs-per-file invalidation needed here: the analytics cache
+	// evicts overlapping path identities on Put (a per-file entry replaces any
+	// folder aggregate covering it, and vice versa) — see PutWithPath.
 
 	// A folder where every file failed still yields a useful batch result
 	// (all error rows) rather than an HTTP error.

@@ -9,6 +9,7 @@ import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
 import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
 import clsx from 'clsx'
 import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics, DataFlowAnalysis, TaintPath} from '@/types'
+import {ComplexityScatter, ImpactEffortMatrix} from './ComplexityCharts'
 
 function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const rows = [
@@ -168,6 +169,14 @@ export default function MetricsTab() {
 
         <DataFlowInsights />
 
+        {report?.findings && report.findings.length > 0 && (
+          <ImpactEffortMatrix findings={report.findings} />
+        )}
+
+        {metrics.subflows.length > 0 && (
+          <ComplexityScatter subflows={metrics.subflows} />
+        )}
+
         {ruleProfiles && ruleProfiles.length > 0 && (
           <div>
             <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Rule Performance</h3>
@@ -321,33 +330,96 @@ function DataFlowInsights() {
       </h3>
       <div className="space-y-2">
         {dataFlow.taintPaths && dataFlow.taintPaths.length > 0 && (
-          <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
-            <div className="text-xs font-bold text-amber-400 mb-1">Taint Paths ({dataFlow.taintPaths.length})</div>
-            <p className="text-xs text-text-secondary mb-2">
-              User input flows to sensitive sinks without validation.
-            </p>
-            {dataFlow.taintPaths.slice(0, 5).map((tp: TaintPath, i: number) => (
-              <button
-                key={i}
-                onClick={() => navigateToBlock(tp.sinkBlock)}
-                className="block w-full text-left p-1.5 rounded border border-border-subtle bg-surface-0 hover:border-brand-500/30 mb-1 last:mb-0 transition-colors"
-              >
-                <span className="text-xs text-text-primary font-mono">%{tp.sourceVar}%</span>
-                <span className="text-xs text-text-tertiary mx-1">→</span>
-                <span className="text-xs text-amber-400">{tp.sinkType}</span>
-              </button>
-            ))}
-          </div>
+          <TaintPathsPanel paths={dataFlow.taintPaths} onNavigate={navigateToBlock} />
         )}
         {dataFlow.deadData && dataFlow.deadData.length > 0 && (
-          <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
-            <div className="text-xs font-bold text-text-tertiary mb-1">Dead Data Paths ({dataFlow.deadData.length})</div>
-            <p className="text-xs text-text-secondary">
-              Variables set but only consumed by unreachable blocks.
-            </p>
-          </div>
+          <DeadDataPanel paths={dataFlow.deadData} onNavigate={navigateToBlock} />
         )}
       </div>
+    </div>
+  )
+}
+
+// TaintPathsPanel renders the full set of source→sink taint flows (previously
+// capped at 5 chips). Each row shows the source variable, the sink type, and a
+// path-length badge; clicking jumps to the sink block for review.
+function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (id: string) => void}) {
+  const [showAll, setShowAll] = React.useState(false)
+  const INITIAL = 5
+  const visible = showAll ? paths : paths.slice(0, INITIAL)
+  const hidden = paths.length - visible.length
+
+  return (
+    <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-bold text-amber-400">Taint Paths ({paths.length})</span>
+        <span className="text-2xs text-text-tertiary">untrusted input → sensitive sink</span>
+      </div>
+      {visible.map((tp, i) => (
+        <button
+          key={i}
+          onClick={() => onNavigate(tp.sinkBlock)}
+          title={tp.path && tp.path.length > 0 ? `via ${tp.path.length} step(s)` : undefined}
+          className="block w-full text-left p-1.5 rounded border border-border-subtle bg-surface-0 hover:border-brand-500/30 mb-1 last:mb-0 transition-colors"
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-xs text-text-primary font-mono truncate">%{tp.sourceVar}%</span>
+            <span className="text-xs text-text-tertiary shrink-0">→</span>
+            <span className="text-xs text-amber-400 truncate">{tp.sinkType}</span>
+            {tp.path && tp.path.length > 2 && (
+              <span className="ml-auto text-2xs text-text-tertiary shrink-0 font-mono">{tp.path.length} hops</span>
+            )}
+          </div>
+        </button>
+      ))}
+      {hidden > 0 && (
+        <button
+          onClick={() => setShowAll(v => !v)}
+          className="text-2xs text-brand-400 hover:text-brand-300 transition-colors mt-1"
+        >
+          {showAll ? 'Show fewer' : `Show ${hidden} more`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// DeadDataPanel lists each dead-data variable (previously a count-only header).
+// Each row shows the variable, why it's dead, and jumps to the block that sets
+// it so the developer can decide whether to remove the write.
+function DeadDataPanel({paths, onNavigate}: {paths: NonNullable<DataFlowAnalysis['deadData']>; onNavigate: (id: string) => void}) {
+  const [showAll, setShowAll] = React.useState(false)
+  const INITIAL = 5
+  const visible = showAll ? paths : paths.slice(0, INITIAL)
+  const hidden = paths.length - visible.length
+
+  return (
+    <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-bold text-text-tertiary">Dead Data ({paths.length})</span>
+        <span className="text-2xs text-text-tertiary">set, only read by unreachable code</span>
+      </div>
+      <p className="text-2xs text-text-tertiary mb-2">Variables written but only consumed where execution can't reach.</p>
+      {visible.map((dp, i) => (
+        <button
+          key={i}
+          onClick={() => onNavigate(dp.setBlock)}
+          className="block w-full text-left p-1.5 rounded border border-border-subtle bg-surface-2 hover:border-brand-500/30 mb-1 last:mb-0 transition-colors"
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-xs text-text-primary font-mono truncate">%{dp.variable}%</span>
+            <span className="text-2xs text-text-tertiary ml-auto shrink-0 truncate">{dp.reason || 'unreachable reader'}</span>
+          </div>
+        </button>
+      ))}
+      {hidden > 0 && (
+        <button
+          onClick={() => setShowAll(v => !v)}
+          className="text-2xs text-brand-400 hover:text-brand-300 transition-colors mt-1"
+        >
+          {showAll ? 'Show fewer' : `Show ${hidden} more`}
+        </button>
+      )}
     </div>
   )
 }

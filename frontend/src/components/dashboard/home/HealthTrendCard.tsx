@@ -47,7 +47,7 @@ export function HealthTrendCard({data, className}: {data: DailyHealthPoint[]; cl
                 dataKey="avgHealth"
                 stroke={colors.brand500}
                 strokeWidth={2}
-                dot={false}
+                dot={data.length === 1}
                 isAnimationActive={false}
                 connectNulls
               />

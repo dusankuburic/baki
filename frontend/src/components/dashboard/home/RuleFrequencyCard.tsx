@@ -3,24 +3,6 @@ import {CardShell, CardPlaceholder} from './CardShell'
 import {useChartColors} from './useChartColors'
 import type {RuleFrequency} from '@/types'
 
-// Rule ID → severity mapping for color coding
-const RULE_SEVERITY: Record<string, string> = {
-  'hardcoded-credential': 'error',
-  'sensitive-exposure': 'error',
-  'sql-injection-risk': 'error',
-  'infinite-loop-risk': 'error',
-  'unhandled-error': 'warning',
-  'missing-timeout': 'warning',
-  'empty-handler': 'warning',
-  'error-swallow': 'warning',
-  'slow-pattern': 'warning',
-  'resource-leak': 'warning',
-  'uninitialized-variable': 'warning',
-  'file-op-no-error-handler': 'warning',
-  'goto-antipattern': 'warning',
-  'subflow-mismatch': 'warning',
-}
-
 export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; className?: string}) {
   const colors = useChartColors()
   const hasData = data.length > 0
@@ -28,7 +10,9 @@ export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; cla
   const chartData = data.slice(0, 10).map(d => ({
     rule: d.rule,
     count: d.count,
-    sev: RULE_SEVERITY[d.rule] ?? 'info',
+    // Both modes resolve topSeverity from the live rule catalog (including
+    // user overrides); info is the neutral tint for rules missing from it.
+    sev: d.topSeverity ?? 'info',
   }))
 
   const barColor = (sev: string) => {
@@ -42,7 +26,7 @@ export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; cla
       {!hasData ? (
         <CardPlaceholder message="No rule frequency data yet. Analyze flows to populate this." />
       ) : (
-        <div className="h-56">
+        <div className="h-56" role="img" aria-label="Bar chart of the ten most frequent finding rules, tinted by severity">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} layout="vertical" margin={{top: 0, right: 10, left: 0, bottom: 0}}>
               <CartesianGrid strokeDasharray="3 3" stroke={colors.borderStrong} strokeOpacity={0.3} horizontal={false} />

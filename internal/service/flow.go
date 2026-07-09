@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -220,6 +221,11 @@ func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) 
 			loadErrors[e.Name()] = "parse failed: " + err.Error()
 			continue
 		}
+		// Give the doc its on-disk identity: session analytics key on FilePath
+		// (analyzer.StableFlowID), so batch-analyzing the same file twice — or
+		// batching a file already analyzed via a single load — updates one entry
+		// instead of double-counting under two fresh UUIDs.
+		doc.FilePath = filePath
 
 		// The parser wraps loose content in an implicit subflow, so emptiness
 		// shows up as zero blocks rather than zero subflows.
@@ -241,11 +247,13 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 
 	// Generate a combined hash of all files to use as a cache key
 	h := sha256.New()
-	// Sort keys for deterministic hash
+	// Sort keys for a deterministic hash — Go's map iteration order is random,
+	// so without this the same upload hashes differently and never cache-hits.
 	fileNames := make([]string, 0, len(files))
 	for k := range files {
 		fileNames = append(fileNames, k)
 	}
+	sort.Strings(fileNames)
 	for _, name := range fileNames {
 		h.Write([]byte(name))
 		h.Write([]byte(files[name]))

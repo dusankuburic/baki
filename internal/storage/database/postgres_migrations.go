@@ -39,7 +39,33 @@ var migrations = []migration{
 	{version: 1, name: "baseline", sql: schemaBaseline},
 	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL},
 	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL},
+	{version: 4, name: "flow_analysis_v2", sql: flowAnalysisV2SQL},
+	{version: 5, name: "finding_status_created_at", sql: findingStatusCreatedAtSQL},
 }
+
+// findingStatusCreatedAtSQL adds a created_at column to finding_status so the
+// dashboard can compute mean-time-to-resolve (MTTR) and stale-finding counts.
+// Additive with a default — existing rows backfill to NOW() (migration time),
+// which the MTTR query excludes via `updated_at >= created_at`, so only findings
+// triaged through a full lifecycle post-migration contribute to the average.
+const findingStatusCreatedAtSQL = `
+ALTER TABLE finding_status ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+`
+
+// flowAnalysisV2SQL adds the dashboard-rollup columns to flow_analysis (and
+// its append-only history mirror) so the welcome dashboard can compute
+// org-wide "confidence distribution" and "fix availability" KPIs without
+// re-analyzing every flow. Additive columns with defaults — safe on existing
+// rows, which backfill to {} / 0 and are refreshed on each flow's next analyze.
+const flowAnalysisV2SQL = `
+ALTER TABLE flow_analysis ADD COLUMN IF NOT EXISTS by_confidence JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE flow_analysis ADD COLUMN IF NOT EXISTS auto_fixable_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE flow_analysis ADD COLUMN IF NOT EXISTS total_findings INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE flow_analysis_history ADD COLUMN IF NOT EXISTS by_confidence JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE flow_analysis_history ADD COLUMN IF NOT EXISTS auto_fixable_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE flow_analysis_history ADD COLUMN IF NOT EXISTS total_findings INTEGER NOT NULL DEFAULT 0;
+`
 
 // refreshSessionDdlSQL records the User-Agent and client IP a refresh
 // token was issued to, so the "active sessions" UI can show a friendly device

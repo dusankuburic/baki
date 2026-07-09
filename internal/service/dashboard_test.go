@@ -239,14 +239,13 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 	}
 }
 
-// buildLocal must deduplicate flows that were analyzed under multiple content
-// hashes (e.g. after editing). Without dedup the same flow would be counted
-// multiple times in overview, findings, and complexity.
+// buildLocal must count a flow once even when it was analyzed under multiple
+// content hashes (e.g. after editing): the cache's Put replaces the flow's
+// prior entry, so the newest report wins.
 func TestDashboardService_BuildLocal_DeduplicatesFlows(t *testing.T) {
-	// Clear any pre-existing entries from the global cache (shared across tests).
-	for _, r := range analyzer.DefaultCache.AllReports() {
-		analyzer.DefaultCache.Invalidate(r.FlowID)
-	}
+	// Start from an empty session cache: entries put via CachedAnalysis key on
+	// the path-derived StableFlowID, which Invalidate(report.FlowID) misses.
+	analyzer.DefaultCache.Clear()
 
 	t1 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Hour)
@@ -280,5 +279,213 @@ func TestDashboardService_BuildLocal_DeduplicatesFlows(t *testing.T) {
 	}
 	if home.Complexity[0].FlowName != "New" {
 		t.Errorf("expected newest report to win, got %q", home.Complexity[0].FlowName)
+	}
+}
+
+// TestDashboardService_BuildHome_CloudV3Analytics verifies the v3 dashboard
+// sections map from the backend aggregates: severity trend, confidence
+// distribution, health histogram, fixability, and the previously-dropped
+// TopSeverity (per rule) and LockedAccounts (security posture) fields.
+func TestDashboardService_BuildHome_CloudV3Analytics(t *testing.T) {
+	backend := &stubDashBackend{
+		FakeBackend: testutil.NewFakeBackend(),
+		data: &storageif.DashboardData{
+			ByCategory:    map[string]int{},
+			Confidence:    map[string]int{"high": 4, "medium": 6, "low": 2},
+			TotalFindings: 12,
+			AutoFixable:   5,
+			HealthBuckets: []storageif.HealthBucket{
+				{Label: "0-20", Lo: 0, Hi: 20, Count: 1},
+				{Label: "80-100", Lo: 80, Hi: 100, Count: 3},
+			},
+		},
+		adv: &storageif.DashboardAdvancedData{
+			Security: storageif.DashboardSecurity{LockedAccounts: 2},
+			SeverityTrend: []storageif.DailySeverityPoint{
+				{Date: "2026-06-01", Errors: 1, Warnings: 3, Info: 2},
+			},
+			RuleFreq: []storageif.RuleFrequency{
+				{Rule: "missing-timeout", Count: 4},
+			},
+		},
+	}
+	analysisSvc := &AnalysisService{}
+	svc := NewDashboardService(backend, analysisSvc, nil)
+
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	// Severity trend maps 1:1.
+	if len(home.SeverityTrend) != 1 || home.SeverityTrend[0].Errors != 1 || home.SeverityTrend[0].Warnings != 3 {
+		t.Errorf("SeverityTrend mapping: got %+v", home.SeverityTrend)
+	}
+	// Confidence distribution maps through.
+	if home.ConfidenceDist["high"] != 4 || home.ConfidenceDist["low"] != 2 {
+		t.Errorf("ConfidenceDist mapping: got %+v", home.ConfidenceDist)
+	}
+	// Health histogram maps through.
+	if len(home.HealthBuckets) != 2 || home.HealthBuckets[1].Count != 3 {
+		t.Errorf("HealthBuckets mapping: got %+v", home.HealthBuckets)
+	}
+	// TopSeverity is resolved from the rule catalog (missing-timeout defaults
+	// to warning), not from the backend rollup.
+	if home.RuleFreq[0].TopSeverity != "warning" {
+		t.Errorf("RuleFreq TopSeverity dropped: got %+v", home.RuleFreq[0])
+	}
+	if home.Security.LockedAccounts != 2 {
+		t.Errorf("Security LockedAccounts dropped: got %+v", home.Security)
+	}
+	// Fixability: finding-side from DB, rule-side from the static catalog.
+	if home.Fixability.Available != 5 || home.Fixability.Total != 12 {
+		t.Errorf("Fixability finding counts: got %+v", home.Fixability)
+	}
+	if home.Fixability.TotalRules == 0 || home.Fixability.AutoFixableRules == 0 {
+		t.Errorf("Fixability catalog counts must be non-zero: got %+v", home.Fixability)
+	}
+	if home.Fixability.AutoFixableRules >= home.Fixability.TotalRules {
+		t.Errorf("more auto-fixable rules than total rules: %+v", home.Fixability)
+	}
+}
+
+// TestDashboardService_BuildHome_CloudWorkflow verifies the cloud-only triage
+// workflow section maps from the backend: the status funnel, MTTR, resolved
+// count, and stale count. Available flips true once any finding has a status.
+func TestDashboardService_BuildHome_CloudWorkflow(t *testing.T) {
+	backend := &stubDashBackend{
+		FakeBackend: testutil.NewFakeBackend(),
+		data:        &storageif.DashboardData{ByCategory: map[string]int{}},
+		adv: &storageif.DashboardAdvancedData{
+			Workflow: storageif.WorkflowData{
+				Funnel: map[string]int{
+					"open": 10, "acknowledged": 3, "in_progress": 2,
+					"resolved": 8, "suppressed": 1,
+				},
+				MttrHours:     16.5,
+				ResolvedCount: 8,
+				StaleCount:    4,
+			},
+		},
+	}
+	svc := NewDashboardService(backend, &AnalysisService{}, nil)
+
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	if !home.Workflow.Available {
+		t.Error("Workflow.Available should be true when the funnel has entries")
+	}
+	if home.Workflow.Funnel["open"] != 10 || home.Workflow.Funnel["resolved"] != 8 {
+		t.Errorf("Workflow funnel mapping: got %+v", home.Workflow.Funnel)
+	}
+	if home.Workflow.MttrHours != 16.5 {
+		t.Errorf("Workflow MTTR: got %v, want 16.5", home.Workflow.MttrHours)
+	}
+	if home.Workflow.ResolvedCount != 8 || home.Workflow.StaleCount != 4 {
+		t.Errorf("Workflow resolved/stale counts: got %+v", home.Workflow)
+	}
+}
+
+// TestDashboardService_BuildHome_CloudWorkflowEmpty verifies the workflow
+// section is unavailable (placeholder) when no finding has been triaged yet.
+func TestDashboardService_BuildHome_CloudWorkflowEmpty(t *testing.T) {
+	backend := &stubDashBackend{
+		FakeBackend: testutil.NewFakeBackend(),
+		data:        &storageif.DashboardData{ByCategory: map[string]int{}},
+		adv:         &storageif.DashboardAdvancedData{},
+	}
+	svc := NewDashboardService(backend, &AnalysisService{}, nil)
+
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	if home.Workflow.Available {
+		t.Error("Workflow.Available should be false when the funnel is empty")
+	}
+	if home.Workflow.Funnel == nil {
+		t.Error("Workflow.Funnel must be non-nil even when empty (JSON {} not null)")
+	}
+}
+
+// TestDashboardService_BuildLocal_V3Analytics verifies local/desktop mode
+// derives the v3 sections from the in-process cache: confidence distribution
+// and fix availability from findings, and the health histogram from metrics.
+// SeverityTrend stays empty (no per-day time series locally).
+func TestDashboardService_BuildLocal_V3Analytics(t *testing.T) {
+	// Start from an empty session cache: entries put via CachedAnalysis key on
+	// the path-derived StableFlowID, which Invalidate(report.FlowID) misses.
+	analyzer.DefaultCache.Clear()
+	analyzer.DefaultCache.Put("local-1", "h1", &models.AnalysisReport{
+		FlowID:   "local-1",
+		FlowName: "Local One",
+		Metrics:  &models.FlowMetrics{HealthScore: 90, TotalBlocks: 10},
+		Findings: []models.Finding{
+			{RuleID: "missing-timeout", Severity: models.SeverityWarning, Confidence: models.ConfidenceMedium, AutoFix: "set-timeout"},
+			{RuleID: "hardcoded-url", Severity: models.SeverityInfo, Confidence: models.ConfidenceLow},
+		},
+	})
+	analyzer.DefaultCache.Put("local-2", "h2", &models.AnalysisReport{
+		FlowID:   "local-2",
+		FlowName: "Local Two",
+		Metrics:  &models.FlowMetrics{HealthScore: 30, TotalBlocks: 5},
+		Findings: []models.Finding{
+			{RuleID: "resource-leak", Severity: models.SeverityWarning, Confidence: models.ConfidenceHigh, AutoFix: "insert-close"},
+		},
+	})
+	t.Cleanup(func() {
+		analyzer.DefaultCache.Invalidate("local-1")
+		analyzer.DefaultCache.Invalidate("local-2")
+	})
+
+	svc := NewDashboardService(nil, &AnalysisService{}, nil)
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	// Confidence: 1 high + 1 medium + 1 low.
+	if home.ConfidenceDist["high"] != 1 || home.ConfidenceDist["medium"] != 1 || home.ConfidenceDist["low"] != 1 {
+		t.Errorf("ConfidenceDist from cache: got %+v", home.ConfidenceDist)
+	}
+	// Fix availability: 2 of 3 findings carry an auto-fix.
+	if home.Fixability.Available != 2 || home.Fixability.Total != 3 {
+		t.Errorf("Fixability from cache: got %+v", home.Fixability)
+	}
+	// Histogram: scores 90 and 30 land in the top and second buckets.
+	if home.HealthBuckets[1].Count != 1 || home.HealthBuckets[4].Count != 1 {
+		t.Errorf("HealthBuckets from cache: got %+v", home.HealthBuckets)
+	}
+	// No per-day series locally.
+	if len(home.SeverityTrend) != 0 {
+		t.Errorf("local SeverityTrend should be empty, got %+v", home.SeverityTrend)
+	}
+	// TopSeverity resolves from the rule catalog in local mode too.
+	sevByRule := map[string]string{}
+	for _, rf := range home.RuleFreq {
+		sevByRule[rf.Rule] = rf.TopSeverity
+	}
+	if sevByRule["missing-timeout"] != "warning" || sevByRule["resource-leak"] != "warning" {
+		t.Errorf("local RuleFreq TopSeverity from catalog: got %+v", sevByRule)
+	}
+}
+
+// TestDashboardService_BuildLocal_ReloadedFileCountsOnce is the regression test
+// for the session-analytics identity fix: re-opening and re-analyzing the same
+// file (parser mints a fresh doc UUID each load) must update the flow's single
+// dashboard entry, not add a second one.
+func TestDashboardService_BuildLocal_ReloadedFileCountsOnce(t *testing.T) {
+	analyzer.DefaultCache.Clear()
+	block := models.Block{ID: "b1", SubflowID: "sf1", Name: "Set X", Type: models.BlockTypeAction, RawType: "SetVariable.Set"}
+	mkDoc := func(uuid string) *models.FlowDocument {
+		return &models.FlowDocument{
+			ID: uuid, FilePath: "/flows/reload-me.txt", Name: "Reload Me",
+			Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{block}}},
+		}
+	}
+	analyzer.CachedAnalysis(mkDoc("reload-uuid-1"), analyzer.AllRules(), nil, nil)
+	analyzer.CachedAnalysis(mkDoc("reload-uuid-2"), analyzer.AllRules(), nil, nil)
+	t.Cleanup(analyzer.DefaultCache.Clear)
+
+	svc := NewDashboardService(nil, &AnalysisService{}, nil)
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	if home.Overview.TotalFlows != 1 {
+		t.Errorf("re-loaded file must count once: TotalFlows = %d, want 1", home.Overview.TotalFlows)
+	}
+	if len(home.Complexity) != 1 {
+		t.Errorf("complexity scatter must have one point, got %d", len(home.Complexity))
 	}
 }

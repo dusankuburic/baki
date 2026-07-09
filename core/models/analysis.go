@@ -31,27 +31,27 @@ type Finding struct {
 	// ("F-001") that shifts when other findings come or go — Fingerprint
 	// survives re-analysis AND re-imports/re-parses, so triage state,
 	// suppressions, baselines, and SARIF can be pinned to it.
-	Fingerprint string                 `json:"fingerprint,omitempty"`
-	RuleID      string                 `json:"ruleId"`
-	Severity    Severity               `json:"severity"`
+	Fingerprint string   `json:"fingerprint,omitempty"`
+	RuleID      string   `json:"ruleId"`
+	Severity    Severity `json:"severity"`
 	// Confidence is the rule's certainty about this finding (high/medium/low).
 	// Stamped by the engine (per-rule default, overridable by the rule). Drives
 	// severity×confidence triage ordering.
-	Confidence  Confidence             `json:"confidence,omitempty"`
-	Title       string                 `json:"title"`
-	Description string                 `json:"description"`
-	BlockID     string                 `json:"blockId"`
-	SubflowID   string                 `json:"subflowId"`
-	Suggestion  string                 `json:"suggestion,omitempty"`
-	AutoFixHint string                 `json:"autoFixHint,omitempty"`
+	Confidence  Confidence `json:"confidence,omitempty"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	BlockID     string     `json:"blockId"`
+	SubflowID   string     `json:"subflowId"`
+	Suggestion  string     `json:"suggestion,omitempty"`
+	AutoFixHint string     `json:"autoFixHint,omitempty"`
 	// AutoFix names a deterministic fix the user can apply in one click from the
 	// findings UI (desktop: edits the source file, re-parses, re-analyzes).
 	// Empty means no automatic fix is available (only the AutoFixHint prose or
 	// "Fix with AI"). Current values: "wrap-error-handler" (resolves
 	// unhandled-error / file-op-no-error-handler), "suppress" (pad-ignore).
-	AutoFix     string                 `json:"autoFix,omitempty"`
-	Category    string                 `json:"category,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	AutoFix  string                 `json:"autoFix,omitempty"`
+	Category string                 `json:"category,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Key returns the in-run identity of a finding: the rule that raised it plus the
@@ -72,10 +72,10 @@ func (f Finding) Key() string {
 }
 
 type AnalysisReport struct {
-	FlowID       string        `json:"flowId"`
-	FlowName     string        `json:"flowName,omitempty"`
-	GeneratedAt  time.Time     `json:"generatedAt"`
-	Findings     []Finding     `json:"findings"`
+	FlowID      string    `json:"flowId"`
+	FlowName    string    `json:"flowName,omitempty"`
+	GeneratedAt time.Time `json:"generatedAt"`
+	Findings    []Finding `json:"findings"`
 	// Groups are the per-block finding clusters produced by DeduplicateFindings
 	// (run in the default analysis path). Each group's Primary is the
 	// representative finding; DuplicateCount is how many same-block, same-subject
@@ -140,6 +140,24 @@ type Rule struct {
 	DefaultSeverity Severity `json:"defaultSeverity"`
 	Category        string   `json:"category"`
 	Enabled         bool     `json:"enabled"`
+	// Confidence is the rule's built-in default certainty (high/medium/low),
+	// surfaced at the catalog level so the UI can show which results to trust
+	// without running an analysis. A rule may still raise/lower it per finding.
+	Confidence Confidence `json:"confidence"`
+	// AutoFix is the deterministic fixType (e.g. "set-timeout") a user can
+	// apply in one click, or "" when the rule has no auto-fixer. Lets the
+	// dashboard compute "auto-fixable rule" counts.
+	AutoFix string `json:"autoFix,omitempty"`
+}
+
+// RuleSummary is the catalog-level rollup the dashboard consumes for its
+// "auto-fixable rules" and "confidence distribution" KPIs. It folds the full
+// rule catalog into counts so the client doesn't have to iterate every rule.
+type RuleSummary struct {
+	TotalRules       int            `json:"totalRules"`
+	AutoFixableRules int            `json:"autoFixableRules"`
+	ByCategory       map[string]int `json:"byCategory"`
+	ByConfidence     map[string]int `json:"byConfidence"`
 }
 
 type VariableEvent struct {

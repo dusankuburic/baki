@@ -19,6 +19,11 @@ import {RecentFlowsCard} from './home/RecentFlowsCard'
 import {ActivityFeedCard} from './home/ActivityFeedCard'
 import {FlowComplexityCard} from './home/FlowComplexityCard'
 import {SecurityPostureCard} from './home/SecurityPostureCard'
+import {SeverityTrendCard} from './home/SeverityTrendCard'
+import {ConfidenceDonutCard} from './home/ConfidenceDonutCard'
+import {HealthDistributionCard} from './home/HealthDistributionCard'
+import {FixabilityCard} from './home/FixabilityCard'
+import {WorkflowFunnelCard} from './home/WorkflowFunnelCard'
 import {SkeletonDashboard} from './home/SkeletonDashboard'
 
 export default function HomeDashboard() {
@@ -30,8 +35,9 @@ export default function HomeDashboard() {
   const setDocument = useFlowStore(s => s.setDocument)
   const activeOrg = useOrgStore(s => s.organisations.find(o => o.id === s.activeOrgId))
   const activeOrgId = useOrgStore(s => s.activeOrgId)
-  // Loading a new flow/folder resets the desktop session analytics server-side,
-  // so re-fetch when the open document changes to show the fresh (scoped) data.
+  // Session analytics accumulate across single-file loads (only opening a base
+  // FOLDER resets them server-side); re-fetch when the open document changes so
+  // the dashboard reflects the latest state either way.
   const docId = useFlowStore(s => s.document?.id ?? null)
   const toast = useToast()
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
@@ -127,7 +133,7 @@ export default function HomeDashboard() {
     )
   }
 
-  const {greeting, overview, tokenUsage, recentFlows, findings, isCloud, healthTrend, costByProvider, ruleFrequency, activity, complexity, security} = data
+  const {greeting, overview, tokenUsage, recentFlows, findings, isCloud, healthTrend, costByProvider, ruleFrequency, activity, complexity, security, severityTrend, confidenceDist, healthBuckets, fixability, workflow} = data
   const orgName = greeting.activeOrgName || activeOrg?.name
 
   return (
@@ -148,6 +154,7 @@ export default function HomeDashboard() {
           </div>
           <p className="text-sm text-text-tertiary mt-0.5">
             {orgName ? `${orgName} · ` : ''}Here's your workspace at a glance.
+            {!isCloud && ' Aggregates every flow analyzed this session — newest analysis per file.'}
           </p>
         </div>
 
@@ -177,13 +184,24 @@ export default function HomeDashboard() {
               className="col-span-12 lg:col-span-4"
             />
 
-            {/* Row 5: Recent Flows + Activity Feed */}
+            {/* Row 5: Severity Trend + Confidence Donut (developer analytics) */}
+            <SeverityTrendCard data={severityTrend} className="col-span-12 lg:col-span-8" />
+            <ConfidenceDonutCard confidence={confidenceDist} className="col-span-12 lg:col-span-4" />
+
+            {/* Row 6: Recent Flows + Activity Feed */}
             <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
             <ActivityFeedCard data={activity} className="col-span-12 lg:col-span-5" />
 
-            {/* Row 6: Flow Complexity + Security Posture */}
+            {/* Row 7: Flow Complexity + Security Posture */}
             <FlowComplexityCard data={complexity} className="col-span-12 lg:col-span-7" />
             <SecurityPostureCard data={security} className="col-span-12 lg:col-span-5" />
+
+            {/* Row 8: Health Distribution + Fix Availability (developer analytics) */}
+            <HealthDistributionCard data={healthBuckets} className="col-span-12 lg:col-span-6" />
+            <FixabilityCard data={fixability} className="col-span-12 lg:col-span-6" />
+
+            {/* Row 9: Triage Workflow (cloud-only team health) */}
+            <WorkflowFunnelCard data={workflow} className="col-span-12 lg:col-span-12" />
           </>
         ) : (
           <>
@@ -191,7 +209,12 @@ export default function HomeDashboard() {
             <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
             <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
 
-            {/* Row 3: Recent Flows + Findings Radar */}
+            {/* Row 3: Confidence + Health Distribution + Fix Availability (developer analytics) */}
+            <ConfidenceDonutCard confidence={confidenceDist} className="col-span-12 lg:col-span-4" />
+            <HealthDistributionCard data={healthBuckets} className="col-span-12 lg:col-span-4" />
+            <FixabilityCard data={fixability} className="col-span-12 lg:col-span-4" />
+
+            {/* Row 4: Recent Flows + Findings Radar */}
             <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
             <FindingsChartCard
               findings={findings}
@@ -199,7 +222,7 @@ export default function HomeDashboard() {
               className="col-span-12 lg:col-span-5"
             />
 
-            {/* Row 4: Flow Complexity */}
+            {/* Row 5: Flow Complexity */}
             <FlowComplexityCard data={complexity} className="col-span-12" />
           </>
         )}

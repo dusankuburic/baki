@@ -30,19 +30,30 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 	if err != nil {
 		return fmt.Errorf("marshal by_rule: %w", err)
 	}
+	conf := fa.ByConfidence
+	if conf == nil {
+		conf = map[string]int{}
+	}
+	confJSON, err := json.Marshal(conf)
+	if err != nil {
+		return fmt.Errorf("marshal by_confidence: %w", err)
+	}
 	analyzedAt := fa.AnalyzedAt
 	_, err = b.query(ctx).ExecContext(ctx, `
-		INSERT INTO flow_analysis (flow_id, health_score, errors, warnings, info, by_category, by_rule, analyzed_at)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, COALESCE($8, NOW()))
+		INSERT INTO flow_analysis (flow_id, health_score, errors, warnings, info, by_category, by_rule, by_confidence, auto_fixable_count, total_findings, analyzed_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, COALESCE($11, NOW()))
 		ON CONFLICT (flow_id) DO UPDATE SET
-			health_score = EXCLUDED.health_score,
-			errors       = EXCLUDED.errors,
-			warnings     = EXCLUDED.warnings,
-			info         = EXCLUDED.info,
-			by_category  = EXCLUDED.by_category,
-			by_rule      = EXCLUDED.by_rule,
-			analyzed_at  = EXCLUDED.analyzed_at`,
-		fa.FlowID, fa.HealthScore, fa.Errors, fa.Warnings, fa.Info, string(catJSON), string(ruleJSON), nullableTime(analyzedAt),
+			health_score       = EXCLUDED.health_score,
+			errors             = EXCLUDED.errors,
+			warnings           = EXCLUDED.warnings,
+			info               = EXCLUDED.info,
+			by_category        = EXCLUDED.by_category,
+			by_rule            = EXCLUDED.by_rule,
+			by_confidence      = EXCLUDED.by_confidence,
+			auto_fixable_count = EXCLUDED.auto_fixable_count,
+			total_findings     = EXCLUDED.total_findings,
+			analyzed_at        = EXCLUDED.analyzed_at`,
+		fa.FlowID, fa.HealthScore, fa.Errors, fa.Warnings, fa.Info, string(catJSON), string(ruleJSON), string(confJSON), fa.AutoFixableCount, fa.TotalFindings, nullableTime(analyzedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert flow_analysis: %w", err)
@@ -51,9 +62,9 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 	// Append to the history table for trend charts (best-effort; a failure
 	// here doesn't affect the upsert above).
 	_, _ = b.query(ctx).ExecContext(ctx, `
-		INSERT INTO flow_analysis_history (flow_id, health_score, errors, warnings, info, by_rule, analyzed_at)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, COALESCE($7, NOW()))`,
-		fa.FlowID, fa.HealthScore, fa.Errors, fa.Warnings, fa.Info, string(ruleJSON), nullableTime(analyzedAt),
+		INSERT INTO flow_analysis_history (flow_id, health_score, errors, warnings, info, by_rule, by_confidence, auto_fixable_count, total_findings, analyzed_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, COALESCE($10, NOW()))`,
+		fa.FlowID, fa.HealthScore, fa.Errors, fa.Warnings, fa.Info, string(ruleJSON), string(confJSON), fa.AutoFixableCount, fa.TotalFindings, nullableTime(analyzedAt),
 	)
 
 	return nil
@@ -100,13 +111,14 @@ func (b *PostgresStorageBackend) LoadFlowHealth(ctx context.Context, flowID stri
 }
 
 // FlowDashboardData assembles the owner-scoped welcome-dashboard payload. The
-// five reads are independent and indexed; running them sequentially keeps the
-// code simple and is well within budget for a landing screen.
+// reads (six as of the v3 analytics) are independent and indexed; running them
+// sequentially keeps the code simple and is well within budget for a landing
+// screen.
 func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID string, days int) (*interfaces.DashboardData, error) {
 	if days <= 0 {
 		days = 14
 	}
-	out := &interfaces.DashboardData{ByCategory: map[string]int{}}
+	out := &interfaces.DashboardData{ByCategory: map[string]int{}, Confidence: map[string]int{}}
 
 	// A. Overview counts over all of the owner's flows. SubflowCount lives in the
 	// metadata jsonb under its Go field name (FlowMetadata has no json tags).
@@ -118,17 +130,37 @@ func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID 
 	}
 
 	// B. Health/findings scalar aggregate over the owner's analyzed flows.
+	// total_findings + auto_fixable_count back the fix-availability KPI, and the
+	// five FILTER counts are the health-score histogram (5 fixed-width buckets
+	// exposing the distribution the single AvgHealth number hides) — computed
+	// here rather than in a separate query since the scan is identical.
+	var b0, b20, b40, b60, b80 int
 	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COUNT(*),
 		       COALESCE(ROUND(AVG(fa.health_score))::int, 0),
 		       COALESCE(SUM(fa.errors), 0),
 		       COALESCE(SUM(fa.warnings), 0),
-		       COALESCE(SUM(fa.info), 0)
+		       COALESCE(SUM(fa.info), 0),
+		       COALESCE(SUM(fa.total_findings), 0),
+		       COALESCE(SUM(fa.auto_fixable_count), 0),
+		       COUNT(*) FILTER (WHERE fa.health_score < 20),
+		       COUNT(*) FILTER (WHERE fa.health_score >= 20 AND fa.health_score < 40),
+		       COUNT(*) FILTER (WHERE fa.health_score >= 40 AND fa.health_score < 60),
+		       COUNT(*) FILTER (WHERE fa.health_score >= 60 AND fa.health_score < 80),
+		       COUNT(*) FILTER (WHERE fa.health_score >= 80)
 		FROM flow_analysis fa
 		JOIN flows f ON f.id = fa.flow_id
 		WHERE f.owner_id = $1`, ownerID,
-	).Scan(&out.HealthCount, &out.AvgHealth, &out.Errors, &out.Warnings, &out.Info); err != nil {
+	).Scan(&out.HealthCount, &out.AvgHealth, &out.Errors, &out.Warnings, &out.Info, &out.TotalFindings, &out.AutoFixable,
+		&b0, &b20, &b40, &b60, &b80); err != nil {
 		return nil, fmt.Errorf("dashboard health aggregate: %w", err)
+	}
+	out.HealthBuckets = []interfaces.HealthBucket{
+		{Label: "0-20", Lo: 0, Hi: 20, Count: b0},
+		{Label: "20-40", Lo: 20, Hi: 40, Count: b20},
+		{Label: "40-60", Lo: 40, Hi: 60, Count: b40},
+		{Label: "60-80", Lo: 60, Hi: 80, Count: b60},
+		{Label: "80-100", Lo: 80, Hi: 100, Count: b80},
 	}
 
 	// C. Findings by category (jsonb fan-out).
@@ -153,6 +185,31 @@ func (b *PostgresStorageBackend) FlowDashboardData(ctx context.Context, ownerID 
 	}
 	if err := catRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate categories: %w", err)
+	}
+
+	// C2. Confidence fan-out (mirrors the category fan-out): rolls each flow's
+	// by_confidence jsonb up into an org-wide high/medium/low tally.
+	confRows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT kv.key, SUM(kv.value::int)::int
+		FROM flow_analysis fa
+		JOIN flows f ON f.id = fa.flow_id,
+		     LATERAL jsonb_each_text(fa.by_confidence) AS kv(key, value)
+		WHERE f.owner_id = $1
+		GROUP BY kv.key`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard confidence aggregate: %w", err)
+	}
+	defer confRows.Close()
+	for confRows.Next() {
+		var tier string
+		var n int
+		if err := confRows.Scan(&tier, &n); err != nil {
+			return nil, fmt.Errorf("scan confidence: %w", err)
+		}
+		out.Confidence[tier] = n
+	}
+	if err := confRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate confidence: %w", err)
 	}
 
 	// D. Recent flows with their latest health score (LEFT JOIN ⇒ nil when never analyzed).
@@ -258,6 +315,46 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 	}
 	if err := trendRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate health trend: %w", err)
+	}
+
+	// A2. Org-wide severity trend: daily error/warning/info sums from
+	// flow_analysis_history, gap-filled so days with no analysis render as 0
+	// rather than vanishing from the stacked-area chart. The lateral takes only
+	// the latest history row per flow per day — history is append-only, so a
+	// flow re-analyzed N times in a day would otherwise count N×.
+	sevRows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT TO_CHAR(d.day, 'YYYY-MM-DD'),
+		       COALESCE(SUM(h.errors), 0)::int,
+		       COALESCE(SUM(h.warnings), 0)::int,
+		       COALESCE(SUM(h.info), 0)::int
+		FROM generate_series(
+		         date_trunc('day', NOW()) - (($2::int - 1) * INTERVAL '1 day'),
+		         date_trunc('day', NOW()),
+		         INTERVAL '1 day'
+		     ) AS d(day)
+		LEFT JOIN LATERAL (
+		    SELECT DISTINCT ON (h.flow_id) h.errors, h.warnings, h.info
+		    FROM flow_analysis_history h
+		    JOIN flows f ON f.id = h.flow_id AND f.owner_id = $1
+		    WHERE h.analyzed_at >= d.day
+		      AND h.analyzed_at <  d.day + INTERVAL '1 day'
+		    ORDER BY h.flow_id, h.analyzed_at DESC
+		) h ON TRUE
+		GROUP BY d.day
+		ORDER BY d.day ASC`, ownerID, days)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard severity trend: %w", err)
+	}
+	defer sevRows.Close()
+	for sevRows.Next() {
+		var p interfaces.DailySeverityPoint
+		if err := sevRows.Scan(&p.Date, &p.Errors, &p.Warnings, &p.Info); err != nil {
+			return nil, fmt.Errorf("scan severity trend: %w", err)
+		}
+		out.SeverityTrend = append(out.SeverityTrend, p)
+	}
+	if err := sevRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate severity trend: %w", err)
 	}
 
 	// B. Cost breakdown by provider.
@@ -378,6 +475,50 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		WHERE f.owner_id = $1
 		  AND (rv.key LIKE '%credential%' OR rv.key LIKE '%sensitive%' OR rv.key LIKE '%injection%')`, ownerID,
 	).Scan(&out.Security.CredentialFindings)
+
+	// Currently locked accounts. Instance-wide: the users table has no org/owner
+	// scoping, and lockouts are a fleet-security signal rather than a per-owner one.
+	_ = b.query(ctx).QueryRowContext(ctx, `
+		SELECT COUNT(*)::int FROM users
+		WHERE locked_until IS NOT NULL AND locked_until > NOW()`,
+	).Scan(&out.Security.LockedAccounts)
+
+	// G. Team-triage workflow: status funnel, MTTR, and stale-finding count.
+	// Best-effort (a failure leaves the section empty rather than failing the
+	// whole dashboard); sourced from finding_status, owner-scoped via the flow
+	// join. MTTR excludes rows where updated_at < created_at (pre-migration
+	// backfill artifacts) so the average reflects genuine lifecycles only.
+	out.Workflow.Funnel = map[string]int{}
+	funRows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT fs.status, COUNT(*)::int
+		FROM finding_status fs
+		JOIN flows f ON f.id = fs.flow_id
+		WHERE f.owner_id = $1
+		GROUP BY fs.status`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard workflow funnel: %w", err)
+	}
+	defer funRows.Close()
+	for funRows.Next() {
+		var status string
+		var n int
+		if err := funRows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("scan workflow funnel: %w", err)
+		}
+		out.Workflow.Funnel[status] = n
+	}
+	if err := funRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workflow funnel: %w", err)
+	}
+	_ = b.query(ctx).QueryRowContext(ctx, `
+		SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (fs.updated_at - fs.created_at)) / 3600)
+		           FILTER (WHERE fs.status = 'resolved' AND fs.updated_at >= fs.created_at), 0)::float,
+		       COUNT(*) FILTER (WHERE fs.status = 'resolved' AND fs.updated_at >= fs.created_at)::int,
+		       COUNT(*) FILTER (WHERE fs.status IN ('open', 'acknowledged') AND fs.updated_at < NOW() - INTERVAL '14 days')::int
+		FROM finding_status fs
+		JOIN flows f ON f.id = fs.flow_id
+		WHERE f.owner_id = $1`, ownerID,
+	).Scan(&out.Workflow.MttrHours, &out.Workflow.ResolvedCount, &out.Workflow.StaleCount)
 
 	return out, nil
 }

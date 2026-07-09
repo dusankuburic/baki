@@ -432,6 +432,17 @@ type FlowAnalysis struct {
 	ByCategory  map[string]int `json:"byCategory"`
 	ByRule      map[string]int `json:"byRule"`
 	AnalyzedAt  time.Time      `json:"analyzedAt"`
+	// ByConfidence distributes this flow's findings across confidence tiers
+	// (high/medium/low). Persisted so the dashboard can roll up a "how much to
+	// trust these results" donut across the org without re-analyzing.
+	ByConfidence map[string]int `json:"byConfidence,omitempty"`
+	// AutoFixableCount is how many of this flow's findings carry a one-click
+	// deterministic fix (Finding.AutoFix != ""). Rolled up into the dashboard's
+	// "fix availability" KPI.
+	AutoFixableCount int `json:"autoFixableCount,omitempty"`
+	// TotalFindings is the sum of Errors+Warnings+Info, denormalized so org-wide
+	// SUMs avoid repeating the per-row arithmetic in SQL.
+	TotalFindings int `json:"totalFindings,omitempty"`
 }
 
 // RecentFlowHealth is one row of the dashboard's "recent flows" list: a flow
@@ -466,6 +477,33 @@ type DashboardData struct {
 	ByCategory    map[string]int
 	Recent        []RecentFlowHealth
 	TokenUsage    []DailyTokens
+	// TotalFindings is the org-wide sum of all findings; AutoFixable is how
+	// many carry a one-click deterministic fix. Confidence distributes those
+	// findings across certainty tiers. Backs the dashboard's fix-availability
+	// and confidence-distribution KPIs.
+	TotalFindings int
+	AutoFixable   int
+	Confidence    map[string]int
+	// HealthBuckets is the org-wide health-score histogram (5 buckets of 20),
+	// exposing the distribution the single AvgHealth number hides.
+	HealthBuckets []HealthBucket
+}
+
+// DailySeverityPoint is one day of the org-wide severity trend (error/warning/info
+// summed across every flow analyzed that day). Backs the stacked-area trend chart.
+type DailySeverityPoint struct {
+	Date     string
+	Errors   int
+	Warnings int
+	Info     int
+}
+
+// HealthBucket is one 20-point-wide slice of the health-score histogram.
+type HealthBucket struct {
+	Label string // "0-20", "20-40", ...
+	Lo    int
+	Hi    int
+	Count int
 }
 
 // DashboardAdvancedData extends DashboardData with trend, cost, rule, activity,
@@ -477,6 +515,23 @@ type DashboardAdvancedData struct {
 	Activity    []ActivityEntry
 	Complexity  []FlowComplexityPoint
 	Security    DashboardSecurity
+	// SeverityTrend is the org-wide daily error/warning/info series for the
+	// stacked-area "is my fleet getting healthier?" chart.
+	SeverityTrend []DailySeverityPoint
+	// Workflow is the team-triage funnel + resolution stats (MTTR, stale). Cloud-
+	// only: local mode has no persistent triage, so the service leaves Available
+	// false and the UI shows a placeholder.
+	Workflow WorkflowData
+}
+
+// WorkflowData holds the cloud-mode team-triage analytics: how findings are
+// distributed across triage states, the mean time to resolve, and how many
+// findings have been sitting open long enough to count as stale.
+type WorkflowData struct {
+	Funnel        map[string]int // status ("open"/"acknowledged"/"in_progress"/"resolved"/"suppressed") → count
+	MttrHours     float64        // mean updated_at−created_at for resolved findings; 0 if none resolved
+	StaleCount    int            // open/acknowledged untouched for > 14 days
+	ResolvedCount int            // resolved findings contributing to MttrHours
 }
 
 // DailyHealthPoint is one day of the health-score trend chart.
@@ -495,10 +550,10 @@ type ProviderCost struct {
 }
 
 // RuleFrequency is one rule's finding count across all of the owner's flows.
+// Severity tinting is a catalog concern, resolved in the service layer.
 type RuleFrequency struct {
-	Rule        string
-	Count       int
-	TopSeverity string // "error", "warning", or "info"
+	Rule  string
+	Count int
 }
 
 // ActivityEntry is one row of the dashboard activity feed.

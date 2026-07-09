@@ -48,3 +48,32 @@ func TestHandleGetRules_UninitializedAppReturnsJSON(t *testing.T) {
 	rr := doRequest(t, rt, http.MethodGet, "/api/analysis/rules", nil)
 	checkStatus(t, rr, http.StatusOK)
 }
+
+// GET /api/analysis/rules/summary: the catalog rollup the dashboard consumes
+// for its "auto-fixable rules" and "confidence distribution" KPIs. Must return
+// non-zero totals even with an uninitialized app (no settings), since the
+// catalog is static.
+func TestHandleGetRulesSummary_ReturnsRollup(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodGet, "/api/analysis/rules/summary", nil)
+	checkStatus(t, rr, http.StatusOK)
+	var got struct {
+		TotalRules       int            `json:"totalRules"`
+		AutoFixableRules int            `json:"autoFixableRules"`
+		ByCategory       map[string]int `json:"byCategory"`
+		ByConfidence     map[string]int `json:"byConfidence"`
+	}
+	decodeJSON(t, rr, &got)
+	if got.TotalRules == 0 {
+		t.Error("expected non-zero TotalRules")
+	}
+	if got.AutoFixableRules == 0 {
+		t.Error("expected non-zero AutoFixableRules")
+	}
+	if len(got.ByCategory) == 0 {
+		t.Error("expected non-empty ByCategory")
+	}
+	if len(got.ByConfidence) == 0 {
+		t.Error("expected non-empty ByConfidence")
+	}
+}

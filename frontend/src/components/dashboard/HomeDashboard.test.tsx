@@ -44,7 +44,10 @@ const emptyData = {
   findings: {available: false, bySeverity: {}, byCategory: []},
   isCloud: false,
   healthTrend: [], costByProvider: [], ruleFrequency: [], activity: [],
-  complexity: [], security: {failedLogins24h: 0, credentialFindings: 0},
+  complexity: [], security: {failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
+  severityTrend: [], confidenceDist: {}, healthBuckets: [],
+  fixability: {available: 0, total: 0, autoFixableRules: 0, totalRules: 0},
+  workflow: {available: false, funnel: {}, mttrHours: 0, resolvedCount: 0, staleCount: 0},
 }
 
 function renderHome() {
@@ -92,7 +95,7 @@ describe('HomeDashboard', () => {
       healthTrend: [{date: '2023-01-01', avgHealth: 80, flowCount: 1}],
       costByProvider: [{provider: 'openai', cost: 1.0, tokensIn: 100, tokensOut: 100}],
       activity: [{action: 'auth.login', createdAt: new Date().toISOString()}],
-      security: {failedLogins24h: 0, credentialFindings: 0},
+      security: {failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
     })
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
