@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 
@@ -15,6 +16,13 @@ import (
 	"pad-core/logger"
 	"pad-core/models"
 )
+
+// maxAnalysisReports bounds the in-memory report cache so it can't grow
+// unbounded over the process lifetime. Each entry holds two full
+// AnalysisReports (prev + current) with their complete findings slices, so
+// capping prevents OOM on long-running cloud instances. 50 matches the
+// analyzer's own DefaultCache size.
+const maxAnalysisReports = 50
 
 // AnalysisService owns analysis report state and all analysis-related operations.
 //
@@ -47,15 +55,19 @@ type AnalysisService struct {
 	history  *analyzer.HistoryStore
 
 	mu      sync.Mutex
-	reports map[string]*reportPair
+	reports *lru.Cache[string, *reportPair]
 }
 
 func NewAnalysisService(notifier Notifier, settings SettingsProvider, history *analyzer.HistoryStore) *AnalysisService {
+	cache, err := lru.New[string, *reportPair](maxAnalysisReports)
+	if err != nil {
+		panic(fmt.Sprintf("analysis reports LRU: %v", err))
+	}
 	return &AnalysisService{
 		notifier: notifier,
 		settings: settings,
 		history:  history,
-		reports:  make(map[string]*reportPair),
+		reports:  cache,
 	}
 }
 
@@ -103,10 +115,10 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 	// *AnalysisReport, so repeated analyzes of unchanged content are no-ops.
 	key := analysisHistoryKey(doc)
 	s.mu.Lock()
-	pair := s.reports[key]
-	if pair == nil {
+	pair, ok := s.reports.Get(key)
+	if !ok {
 		pair = &reportPair{}
-		s.reports[key] = pair
+		s.reports.Add(key, pair)
 	}
 	fresh := pair.current != result
 	if fresh {
@@ -140,7 +152,7 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pair := s.reports[analysisHistoryKey(doc)]
+	pair, _ := s.reports.Get(analysisHistoryKey(doc))
 	if pair == nil || pair.prev == nil {
 		return nil, false
 	}
@@ -152,7 +164,7 @@ func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.Anal
 func (s *AnalysisService) CurrentReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pair := s.reports[analysisHistoryKey(doc)]
+	pair, _ := s.reports.Get(analysisHistoryKey(doc))
 	if pair == nil || pair.current == nil {
 		return nil, false
 	}

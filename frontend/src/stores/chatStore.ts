@@ -1,5 +1,6 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
+import {chatApi} from '@/api'
 import type {ChatMessage, ProviderID} from '@/types'
 
 // Mirrors the backend per-caller concurrency cap in internal/service/chat.go
@@ -7,6 +8,13 @@ import type {ChatMessage, ProviderID} from '@/types'
 // lets the client give immediate feedback (disable Send + tooltip) instead of
 // waiting for a rejected POST. Keep the two in sync.
 export const MAX_CONCURRENT_STREAMS = 3
+
+// MAX_THREADS bounds the in-memory conversation history. Each thread holds a
+// full ChatMessage[] array in the conversations Map; without a cap, a long
+// session with many threads grows unbounded. When exceeded, the oldest
+// inactive, non-streaming thread is evicted (its messages can be re-loaded
+// from the backend on demand).
+export const MAX_THREADS = 50
 
 export interface ChatThread {
   id: string
@@ -100,8 +108,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   appendMessage: (threadId, message) => set(state => {
+    const existing = state.conversations.get(threadId) ?? []
+    // Dedup by message ID — prevents duplicate entries when a conversation
+    // is loaded twice (e.g. rapid flow switching, StrictMode double-invoke).
+    if (existing.some(m => m.id === message.id)) return state
     const next = new Map(state.conversations)
-    next.set(threadId, [...(next.get(threadId) ?? []), message])
+    next.set(threadId, [...existing, message])
 
     if (message.role === 'user' && !state.threads.find(t => t.id === threadId)?.title) {
       const title = message.content.slice(0, 40).replace(/\n/g, ' ')
@@ -188,6 +200,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // the previous thread's conversation from disk (same 'flow' scope).
       const nextConversations = new Map(state.conversations)
       nextConversations.set(id, [])
+      let threads = [...state.threads, thread]
+      // Evict the oldest inactive, non-streaming thread when the cap is
+      // exceeded, so long sessions don't accumulate unbounded chat history.
+      if (threads.length > MAX_THREADS) {
+        const victim = threads.find(t =>
+          t.id !== id && t.id !== state.activeThreadId && !(t.id in state.streams),
+        )
+        if (victim) {
+          threads = threads.filter(t => t.id !== victim.id)
+          nextConversations.delete(victim.id)
+          const drafts = victim.id in state.drafts ? {...state.drafts} : state.drafts
+          if (victim.id in drafts) delete drafts[victim.id]
+          return {threads, activeThreadId: id, conversations: nextConversations, drafts}
+        }
+      }
       return {threads: [...state.threads, thread], activeThreadId: id, conversations: nextConversations}
     })
     return id
@@ -198,24 +225,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (thread) set({activeThreadId: threadId})
   },
 
-  closeThread: (threadId) => set(state => {
-    const remaining = state.threads.filter(t => t.id !== threadId)
-    const next = new Map(state.conversations)
-    next.delete(threadId)
-    // Drop any in-flight stream slot with the thread; late events for its
-    // streamId find no slot and are ignored.
-    let streams = state.streams
-    if (threadId in streams) {
-      streams = {...streams}
-      delete streams[threadId]
+  closeThread: (threadId) => {
+    // Cancel any in-flight backend stream before clearing the local slot.
+    // Without this, the provider keeps generating tokens for a stream whose
+    // client-side listener was deleted — wasting spend and orphaning the
+    // assistant's response (the done event finds no slot and is silently
+    // dropped instead of being committed to history).
+    const slot = get().streams[threadId]
+    if (slot?.streamId) {
+      chatApi.cancelStream(slot.streamId).catch(() => {})
     }
-    const drafts = threadId in state.drafts ? {...state.drafts} : state.drafts
-    if (threadId in drafts) delete drafts[threadId]
-    const activeThreadId = state.activeThreadId === threadId
-      ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
-      : state.activeThreadId
-    return {threads: remaining, conversations: next, activeThreadId, streams, drafts}
-  }),
+    set(state => {
+      const remaining = state.threads.filter(t => t.id !== threadId)
+      const next = new Map(state.conversations)
+      next.delete(threadId)
+      let streams = state.streams
+      if (threadId in streams) {
+        streams = {...streams}
+        delete streams[threadId]
+      }
+      const drafts = threadId in state.drafts ? {...state.drafts} : state.drafts
+      if (threadId in drafts) delete drafts[threadId]
+      const activeThreadId = state.activeThreadId === threadId
+        ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
+        : state.activeThreadId
+      return {threads: remaining, conversations: next, activeThreadId, streams, drafts}
+    })
+  },
 
   updateThread: (threadId, patch) => set(state => ({
     threads: state.threads.map(t => t.id === threadId ? {...t, ...patch} : t),

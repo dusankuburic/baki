@@ -46,6 +46,16 @@ func (r *PostCommitRegistry) Run() {
 	}
 }
 
+// hasPostCommit reports whether ctx carries a post-commit registry, i.e.
+// whether RegisterPostCommit would defer fn rather than run it inline. Callers
+// registering work that is only safe AFTER a commit (e.g. deleting a blob the
+// current row version still references) must skip registration when this is
+// false and they are inside an uncommitted transaction.
+func hasPostCommit(ctx context.Context) bool {
+	reg, ok := ctx.Value(postCommitKey).(*PostCommitRegistry)
+	return ok && reg != nil
+}
+
 // RegisterPostCommit schedules fn to run after the request's RLS transaction
 // commits. When there is no registry on the context (no RLS tx — the caller is
 // in autocommit, so the surrounding write is already durable) fn runs inline.

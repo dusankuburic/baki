@@ -125,7 +125,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
 		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
 		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
-		Admin:     NewAdminHandler(backend, security),
+		Admin:     NewAdminHandler(backend, security, NewMigrationRunner(nil), nil),
 		Provider:  NewProviderHandler(providerSvc, security),
 		Org:       NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
 		Sharing:   NewSharingHandler(backend, flowSvc, security),

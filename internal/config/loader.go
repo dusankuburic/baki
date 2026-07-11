@@ -157,18 +157,19 @@ func applyEnvVars(cfg *Config) error {
 		}
 	}
 
-	// Power Platform connector (Phase 4 — desktop-flow ingestion). All four
-	// core fields (tenant, clientID, environment, scope) must be set to enable;
-	// IngestInterval gates the periodic pull. Defaults the scope to the Power
-	// Platform API.
+	// Power Platform connector (desktop-flow ingestion; EXPERIMENTAL — see
+	// config.PowerPlatformConfig). The core auth/client fields plus
+	// DataverseURL and IngestInterval must be set to enable the periodic pull.
 	cfg.PowerPlatform.TenantID = os.Getenv("PAD_PP_TENANT_ID")
 	cfg.PowerPlatform.ClientID = os.Getenv("PAD_PP_CLIENT_ID")
-	cfg.PowerPlatform.EnvironmentID = os.Getenv("PAD_PP_ENVIRONMENT_ID")
+	cfg.PowerPlatform.DataverseURL = os.Getenv("PAD_PP_DATAVERSE_URL")
 	cfg.PowerPlatform.Scope = os.Getenv("PAD_PP_SCOPE")
 	if cfg.PowerPlatform.Scope == "" {
 		cfg.PowerPlatform.Scope = "https://api.powerplatform.com/.default"
 	}
 	cfg.PowerPlatform.IngestInterval = os.Getenv("PAD_PP_INGEST_INTERVAL")
+	cfg.PowerPlatform.OwnerUserID = os.Getenv("PAD_PP_OWNER_USER")
+	cfg.PowerPlatform.OwnerOrgID = os.Getenv("PAD_PP_OWNER_ORG")
 	if v := os.Getenv("PAD_SMTP_HOST"); v != "" {
 		cfg.Email.SMTPHost = v
 	}

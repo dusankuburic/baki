@@ -26,12 +26,17 @@ package migration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
+	"pad-core/models"
 )
 
 // errSkipped is returned by migrateOneFlow when the item is already present in dst.
@@ -39,12 +44,14 @@ var errSkipped = errors.New("already migrated")
 
 // Result summarises the outcome of a migration run.
 type Result struct {
-	FlowsMigrated int
-	FlowsSkipped  int
-	FlowsFailed   int
-	SettingsMoved bool
-	Errors        []MigrationError
-	Duration      time.Duration
+	FlowsMigrated         int
+	FlowsSkipped          int
+	FlowsFailed           int
+	ConversationsMigrated int
+	ConversationsFailed   int
+	SettingsMoved         bool
+	Errors                []MigrationError
+	Duration              time.Duration
 }
 
 // MigrationError captures a per-item failure without stopping the run.
@@ -59,16 +66,27 @@ type Migrator struct {
 	src       interfaces.StorageBackend
 	dst       interfaces.StorageBackend
 	batchSize int
+	// perFlowTimeout bounds a single flow's load+save so one pathological flow
+	// (huge content, slow dst write) can't stall the whole run or the app's
+	// shutdown. Mirrors the scanner's perFlowScanTimeout.
+	perFlowTimeout time.Duration
+	// convDir is the local-mode conversations directory (configDir/conversations).
+	// When non-empty, conversations are migrated alongside flows; empty disables.
+	convDir   string
 	validator *Validator
 }
+
+// defaultPerFlowMigrationTimeout bounds each individual flow copy.
+const defaultPerFlowMigrationTimeout = 60 * time.Second
 
 // New creates a Migrator with the given source and destination.
 func New(src, dst interfaces.StorageBackend) *Migrator {
 	return &Migrator{
-		src:       src,
-		dst:       dst,
-		batchSize: 50,
-		validator: NewValidator(),
+		src:            src,
+		dst:            dst,
+		batchSize:      50,
+		perFlowTimeout: defaultPerFlowMigrationTimeout,
+		validator:      NewValidator(),
 	}
 }
 
@@ -77,6 +95,21 @@ func (m *Migrator) WithBatchSize(n int) *Migrator {
 	if n > 0 {
 		m.batchSize = n
 	}
+	return m
+}
+
+// WithPerFlowTimeout overrides the per-flow timeout (default 60s).
+func (m *Migrator) WithPerFlowTimeout(d time.Duration) *Migrator {
+	if d > 0 {
+		m.perFlowTimeout = d
+	}
+	return m
+}
+
+// WithConversationsDir enables conversation migration from the given local-mode
+// conversations directory (configDir/conversations). An empty dir disables it.
+func (m *Migrator) WithConversationsDir(dir string) *Migrator {
+	m.convDir = dir
 	return m
 }
 
@@ -103,6 +136,11 @@ func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 		logger.Warn("migration: settings warning", "error", err)
 	} else {
 		res.SettingsMoved = true
+	}
+
+	// Migrate conversations (best-effort; non-fatal)
+	if err := m.migrateConversations(ctx, &res); err != nil {
+		logger.Warn("migration: conversations warning", "error", err)
 	}
 
 	res.Duration = time.Since(start)
@@ -153,8 +191,12 @@ func (m *Migrator) migrateFlows(ctx context.Context, res *Result) error {
 }
 
 func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocument) error {
+	// Bound a single flow's load+save so one bad flow can't stall the run.
+	flowCtx, cancel := context.WithTimeout(ctx, m.perFlowTimeout)
+	defer cancel()
+
 	// Reload from source to get the full content (ListFlows may omit body)
-	full, err := m.src.LoadFlow(ctx, flow.ID)
+	full, err := m.src.LoadFlow(flowCtx, flow.ID)
 	if err != nil {
 		return fmt.Errorf("load from source: %w", err)
 	}
@@ -164,11 +206,11 @@ func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocu
 	}
 
 	// Check if already present in destination to support idempotent reruns
-	if _, err := m.dst.LoadFlow(ctx, full.ID); err == nil {
+	if _, err := m.dst.LoadFlow(flowCtx, full.ID); err == nil {
 		return errSkipped
 	}
 
-	return m.dst.SaveFlow(ctx, full)
+	return m.dst.SaveFlow(flowCtx, full)
 }
 
 func (m *Migrator) migrateSettings(ctx context.Context) error {
@@ -180,4 +222,97 @@ func (m *Migrator) migrateSettings(ctx context.Context) error {
 		return errors.New("no settings in source")
 	}
 	return m.dst.SaveSettings(ctx, settings)
+}
+
+// migrateConversations walks the local-mode conversations directory and copies
+// each conversation file to the destination backend. Conversations are stored
+// per-provider per-flow as JSON files (see ChatService.convFilePath); the
+// migrator reads them directly from disk because they are not accessible via
+// the StorageBackend interface (there is no ListConversations). Best-effort:
+// per-file failures are recorded and never abort the run.
+func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error {
+	if m.convDir == "" {
+		return nil
+	}
+	info, err := os.Stat(m.convDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // no conversations directory — nothing to migrate
+		}
+		return fmt.Errorf("stat conversations dir: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("conversations path is not a directory: %s", m.convDir)
+	}
+
+	walkErr := filepath.WalkDir(m.convDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if migrateErr := m.migrateOneConversation(ctx, path); migrateErr != nil {
+			res.ConversationsFailed++
+			res.Errors = append(res.Errors, MigrationError{
+				FlowID:  filepath.Base(path),
+				Message: "conversation: " + migrateErr.Error(),
+			})
+			logger.Warn("migration: conversation failed", "path", path, "error", migrateErr)
+			return nil // continue walking
+		}
+		res.ConversationsMigrated++
+		return nil
+	})
+	if walkErr != nil && !errors.Is(walkErr, ctx.Err()) {
+		return fmt.Errorf("walk conversations dir: %w", walkErr)
+	}
+	return nil
+}
+
+// migrateOneConversation reads, converts, and saves a single conversation file.
+func (m *Migrator) migrateOneConversation(ctx context.Context, path string) error {
+	data, err := os.ReadFile(path) // #nosec G304 -- path from WalkDir over convDir, not user input
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	var conv models.ConversationFile
+	if err := json.Unmarshal(data, &conv); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+
+	msgs := make([]interfaces.ChatMessage, len(conv.Messages))
+	for i, msg := range conv.Messages {
+		ts := ""
+		if !msg.Timestamp.IsZero() {
+			ts = msg.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		msgs[i] = interfaces.ChatMessage{
+			ID:               msg.ID,
+			Role:             msg.Role,
+			Content:          msg.Content,
+			Timestamp:        ts,
+			ContextBlockID:   msg.ContextBlockID,
+			ContextSubflowID: msg.ContextSubflowID,
+			TokensIn:         msg.TokensIn,
+			TokensOut:        msg.TokensOut,
+			Provider:         msg.Provider,
+			Model:            msg.Model,
+			FinishReason:     msg.FinishReason,
+		}
+	}
+
+	flowID := conv.FlowKey
+	if flowID == "" {
+		flowID = strings.TrimSuffix(filepath.Base(path), ".json")
+	}
+	scope := conv.Scope
+	if scope == "" {
+		scope = filepath.Base(filepath.Dir(path))
+	}
+
+	return m.dst.SaveConversation(ctx, flowID, scope, msgs)
 }

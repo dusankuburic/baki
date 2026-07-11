@@ -10,7 +10,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useSearchStore} from '@/stores/searchStore'
 import {stageBlockPrompt} from '@/lib/fixWithAI'
-import type {Block, VariableHistory} from '@/types'
+import type {Block} from '@/types'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import {useToast} from '@/components/shared'
 import {analysisApi} from '@/api'
@@ -162,7 +162,7 @@ export default React.memo(function BlockCard({
             onClick: async () => {
                 try {
                     const h = await analysisApi.getVariableLineage(block.properties._output)
-                    useAnalysisStore.getState().setVariableLineage(h as unknown as VariableHistory)
+                    useAnalysisStore.getState().setVariableLineage(h)
                     useUIStore.getState().setInspectorTab('details')
                     if (useUIStore.getState().inspectorCollapsed) {
                         useUIStore.getState().toggleInspector()

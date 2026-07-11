@@ -35,6 +35,14 @@ var validProviders = map[string]bool{
 // own readiness independently).
 const readinessFailureThreshold = 3
 
+// blobCheckCacheTTL is how long a readiness probe reuses the last SUCCESSFUL
+// blob reachability result. Each fresh check is a network call to Azure;
+// probes fire every few seconds per replica, and blob health doesn't change at
+// that granularity. Failures are never cached: the failure-streak threshold
+// exists to tolerate one transient blip, and replaying a single cached failure
+// across probes would count it readinessFailureThreshold times.
+const blobCheckCacheTTL = 15 * time.Second
+
 type SystemHandler struct {
 	sysSvc   *service.SystemService
 	security *SecurityConfig
@@ -42,6 +50,9 @@ type SystemHandler struct {
 
 	readyMu       sync.Mutex
 	readyFailures int
+
+	blobCheckMu   sync.Mutex
+	blobCheckedAt time.Time // zero when the last check failed (never cache failures)
 }
 
 func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend) *SystemHandler {
@@ -221,7 +232,7 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 		// flows. Gate readiness on blob reachability too (no-op when unconfigured).
 		if checkErr == nil {
 			if bc, ok := h.backend.(blobHealthChecker); ok {
-				checkErr = bc.CheckBlob(ctx)
+				checkErr = h.checkBlobCached(ctx, bc)
 			}
 		}
 
@@ -250,4 +261,22 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 // blob storage simply don't implement it and the readiness check is skipped.
 type blobHealthChecker interface {
 	CheckBlob(ctx context.Context) error
+}
+
+// checkBlobCached returns the blob reachability status, reusing a successful
+// result for blobCheckCacheTTL. Failures are returned but not cached (see
+// blobCheckCacheTTL). The mutex also collapses concurrent probes into a
+// single Azure call.
+func (h *SystemHandler) checkBlobCached(ctx context.Context, bc blobHealthChecker) error {
+	h.blobCheckMu.Lock()
+	defer h.blobCheckMu.Unlock()
+	if !h.blobCheckedAt.IsZero() && time.Since(h.blobCheckedAt) < blobCheckCacheTTL {
+		return nil
+	}
+	if err := bc.CheckBlob(ctx); err != nil {
+		h.blobCheckedAt = time.Time{}
+		return err
+	}
+	h.blobCheckedAt = time.Now()
+	return nil
 }

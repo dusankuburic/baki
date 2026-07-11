@@ -41,6 +41,7 @@ var migrations = []migration{
 	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL},
 	{version: 4, name: "flow_analysis_v2", sql: flowAnalysisV2SQL},
 	{version: 5, name: "finding_status_created_at", sql: findingStatusCreatedAtSQL},
+	{version: 6, name: "perf_indexes", sql: perfIndexesSQL},
 }
 
 // findingStatusCreatedAtSQL adds a created_at column to finding_status so the
@@ -50,6 +51,44 @@ var migrations = []migration{
 // triaged through a full lifecycle post-migration contribute to the average.
 const findingStatusCreatedAtSQL = `
 ALTER TABLE finding_status ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+`
+
+// perfIndexesSQL adds composite indexes that eliminate full-table scans on hot
+// paths, and drops redundant indexes whose maintenance is pure write/storage
+// overhead on the hottest tables. All statements are idempotent (IF EXISTS).
+//
+// Added:
+//   - audit_events(user_id, created_at DESC) — ListAuditEvents and the dashboard
+//     activity feed filter by user_id and ORDER BY created_at DESC. Without this
+//     composite, Postgres range-scans the single-column user_id index then does
+//     an in-memory sort.
+//   - refresh_tokens(expires_at) — the login/refresh hot path runs
+//     DELETE FROM refresh_tokens WHERE expires_at < NOW() on every issuance.
+//     Without an index this is a full table scan.
+//   - token_blacklist(expires_at) — a per-process cleanup goroutine runs
+//     DELETE FROM token_blacklist WHERE expires_at < NOW() every 5 minutes.
+//     Without an index this is a full table scan.
+//
+// Dropped (each is covered by a composite or UNIQUE constraint's leftmost prefix):
+//   - audit_events_user_id_idx  — covered by the new composite above
+//   - flows_owner_id_idx        — covered by flows_owner_updated_idx(owner_id, updated_at DESC)
+//   - flows_org_id_idx          — covered by flows_org_updated_idx(org_id, updated_at DESC)
+//   - usage_metrics_user_id_idx — covered by usage_metrics_user_created_idx(user_id, created_at)
+//   - flow_versions_flow_id_idx — covered by UNIQUE(flow_id, version)
+//   - idx_share_tokens_hash     — covered by UNIQUE(token_hash)
+const perfIndexesSQL = `
+-- Add composite indexes for hot-path queries.
+CREATE INDEX IF NOT EXISTS audit_events_user_created_idx ON audit_events (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS refresh_tokens_expires_at_idx ON refresh_tokens (expires_at);
+CREATE INDEX IF NOT EXISTS token_blacklist_expires_at_idx ON token_blacklist (expires_at);
+
+-- Drop redundant indexes (write/storage overhead on the hottest tables).
+DROP INDEX IF EXISTS audit_events_user_id_idx;
+DROP INDEX IF EXISTS flows_owner_id_idx;
+DROP INDEX IF EXISTS flows_org_id_idx;
+DROP INDEX IF EXISTS usage_metrics_user_id_idx;
+DROP INDEX IF EXISTS flow_versions_flow_id_idx;
+DROP INDEX IF EXISTS idx_share_tokens_hash;
 `
 
 // flowAnalysisV2SQL adds the dashboard-rollup columns to flow_analysis (and

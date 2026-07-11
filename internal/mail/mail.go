@@ -96,6 +96,11 @@ func (m *smtpMailer) Send(ctx context.Context, to, subject, textBody, htmlBody s
 	return m.sendSTARTTLS(ctx, addr, auth, to, msg)
 }
 
+// smtpOpTimeout bounds the entire SMTP exchange (AUTH + MAIL + RCPT + DATA +
+// Quit) after the connection is established. Without this a stalled relay can
+// hang the calling request goroutine until the OS TCP timeout (minutes).
+const smtpOpTimeout = 30 * time.Second
+
 // deliver runs the AUTH + MAIL FROM + RCPT TO + DATA sequence on an already
 // connected, TLS-wrapped smtp.Client. Shared by the implicit-TLS (port 465)
 // and STARTTLS (port 587) paths.
@@ -141,6 +146,8 @@ func (m *smtpMailer) sendImplicitTLS(ctx context.Context, addr string, auth smtp
 		return fmt.Errorf("mail: smtp client: %w", err)
 	}
 	defer func() { _ = c.Close() }()
+	// Bound the SMTP exchange so a stalled relay can't hang the caller.
+	_ = conn.SetDeadline(time.Now().Add(smtpOpTimeout))
 	return m.deliver(c, auth, to, msg)
 }
 
@@ -174,6 +181,8 @@ func (m *smtpMailer) sendSTARTTLS(ctx context.Context, addr string, auth smtp.Au
 	}); err != nil {
 		return fmt.Errorf("mail: starttls: %w", err)
 	}
+	// Bound the SMTP exchange so a stalled relay can't hang the caller.
+	_ = conn.SetDeadline(time.Now().Add(smtpOpTimeout))
 	return m.deliver(c, auth, to, msg)
 }
 

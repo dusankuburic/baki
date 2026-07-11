@@ -164,17 +164,14 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     const navigateFinding = useCallback((delta: 1 | -1) => {
         if (!flattened.length || !report) return
         const blockIds = flattened.map(f => f.block.id)
-        const findingBlockIds = blockIds.filter(id => {
-            const count = report.findings.filter(f => f.blockId === id).length
-            return count > 0
-        })
+        const findingBlockIds = blockIds.filter(id => (findingCounts.get(id) ?? 0) > 0)
         if (findingBlockIds.length === 0) return
         const curIdx = selectedBlockId ? findingBlockIds.indexOf(selectedBlockId) : -1
         const next = curIdx === -1
             ? (delta > 0 ? 0 : findingBlockIds.length - 1)
             : (curIdx + delta + findingBlockIds.length) % findingBlockIds.length
         useFlowStore.getState().selectBlock(findingBlockIds[next])
-    }, [flattened, selectedBlockId, report])
+    }, [flattened, selectedBlockId, findingCounts])
 
     useKeyboard({
         scope: 'main',

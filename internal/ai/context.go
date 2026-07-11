@@ -231,15 +231,19 @@ func findParentChain(doc *models.FlowDocument, target *models.Block) []*models.B
 		return chain
 	}
 
+	// Build bottom-up (target → root) then reverse in place — O(depth) total,
+	// vs the previous prepend-on-each-iteration which was O(depth²).
 	currentID := target.ParentID
 	for currentID != "" {
 		parent, ok := doc.BlocksByID[currentID]
 		if !ok {
 			break
 		}
-		// Prepend to chain so it's top-down
-		chain = append([]*models.Block{parent}, chain...)
+		chain = append(chain, parent)
 		currentID = parent.ParentID
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return chain
 }

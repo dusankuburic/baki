@@ -263,6 +263,10 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 	if s.astCache != nil {
 		if cached, ok := s.astCache.Get(ctx, key); ok {
 			if doc, ok := cached.(*models.FlowDocument); ok {
+				// Shallow-copy so concurrent callers loading identical content
+				// don't share the same mutable pointer (matches loadAndParse).
+				docCopy := *doc
+				doc = &docCopy
 				s.docProvider.SetCurrentDoc(doc)
 				// NOTE: Emit (broadcast) is safe here — LoadFlowFiles is a desktop-only
 				// code path that reads from the local filesystem. Cloud mode loads flows

@@ -1,15 +1,15 @@
-import {useState, useCallback, useRef, useEffect, useMemo} from 'react'
+import {useState, useCallback, useMemo} from 'react'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi} from '@/api'
-import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
-import {utf8ByteLength} from '@/lib/utf8'
 import {conversationToMarkdown, downloadTextFile, safeFilename} from '@/lib/chatExport'
 import {useChatConversations} from './useChatConversations'
 import {useChatThreads} from './useChatThreads'
+import {useChatRequestBuilder} from './useChatRequestBuilder'
+import {useChatStreamEngine} from './useChatStreamEngine'
 import type {ChatMessage, ContextPreview, ChatRequest} from '@/types'
 
 interface UseAIChatOptions {
@@ -17,17 +17,6 @@ interface UseAIChatOptions {
 }
 
 const EMPTY_ARRAY: ChatMessage[] = []
-
-// StreamAcc is one in-flight stream's local accumulation state: the growing
-// text plus the RAF batching bookkeeping. Keyed by streamId in a ref so
-// multiple threads can stream concurrently; the map entry doubles as the
-// stale-event guard — a late event whose streamId has no entry is ignored.
-interface StreamAcc {
-  threadId: string
-  text: string
-  raf: number | null
-  first: boolean
-}
 
 export function useAIChat({selectedModel}: UseAIChatOptions) {
   const doc = useFlowStore(s => s.document)
@@ -43,8 +32,6 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const updateThread = useChatStore(s => s.updateThread)
   const startStream = useChatStore(s => s.startStream)
   const endStream = useChatStore(s => s.endStream)
-  const setStreamMeta = useChatStore(s => s.setStreamMeta)
-  const updateStream = useChatStore(s => s.updateStream)
 
   const threads = useChatStore(s => s.threads)
   const activeThreadId = useChatStore(s => s.activeThreadId)
@@ -75,231 +62,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const showThinking = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]?.isThinking))
   const toolStatus = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.toolStatus ?? null) : null))
 
-  const providerRef = useRef(provider)
-  useEffect(() => { providerRef.current = provider })
-  const docRef = useRef(doc)
-  useEffect(() => { docRef.current = doc })
-  const selectedModelRef = useRef(selectedModel)
-  useEffect(() => { selectedModelRef.current = selectedModel })
-
   const toast = useToast()
 
-  const streamAccRef = useRef(new Map<string, StreamAcc>())
-  const teardownRef = useRef<(streamId: string) => void>(() => {})
-  const cancelRef = useRef<(streamId: string) => void>(() => {})
-
-  // threadGenRef is a per-thread generation token (replaces the old single
-  // global sendGenRef). Each executeSend for a thread bumps its token; a
-  // stale send (user cancelled, closed the thread, or sent again in the same
-  // thread) detects it's no longer current after an await and self-cancels.
-  // Per-thread is required now that several threads can stream concurrently.
-  const threadGenRef = useRef(new Map<string, number>())
-  const bumpGen = useCallback((threadId: string) => {
-    const next = (threadGenRef.current.get(threadId) ?? 0) + 1
-    threadGenRef.current.set(threadId, next)
-    return next
-  }, [])
-  const isCurrentGen = useCallback((threadId: string, gen: number) =>
-    threadGenRef.current.get(threadId) === gen, [])
-
-  const flushAcc = useCallback((streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    acc.raf = null
-    // One atomic store update (text + tokens) instead of two set() calls —
-    // halves per-frame subscriber notifications during streaming.
-    updateStream(acc.threadId, {text: acc.text, tokens: Math.ceil(acc.text.length / 4)})
-  }, [updateStream])
-
-  const onChunk = useCallback((text: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    acc.text += text
-    if (!acc.first) {
-      // First chunk: flush synchronously so the slot text appears in the same
-      // React render that clears the thinking indicator — no empty-frame gap.
-      acc.first = true
-      updateStream(acc.threadId, {text: acc.text, isThinking: false, tokens: 1})
-    } else if (acc.raf === null) {
-      acc.raf = requestAnimationFrame(() => flushAcc(streamId))
-    }
-  }, [flushAcc, updateStream])
-
-  const onReplace = useCallback((text: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    acc.text = text
-    acc.first = true
-    updateStream(acc.threadId, {text, isThinking: false, tokens: Math.ceil(text.length / 4)})
-  }, [updateStream])
-
-  const onToolStatus = useCallback((label: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    setStreamMeta(acc.threadId, {isThinking: false, toolStatus: label})
-  }, [setStreamMeta])
-
-  // takeAcc removes and returns a finished stream's accumulation state,
-  // cancelling any pending flush. The store slot must still match the
-  // streamId — a thread closed mid-stream drops its slot, and its result is
-  // then discarded rather than committed to a dead thread.
-  const takeAcc = useCallback((streamId: string): StreamAcc | null => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return null
-    streamAccRef.current.delete(streamId)
-    if (acc.raf !== null) {
-      cancelAnimationFrame(acc.raf)
-      acc.raf = null
-    }
-    teardownRef.current(streamId)
-    const slot = useChatStore.getState().streams[acc.threadId]
-    if (!slot || slot.streamId !== streamId) return null
-    return acc
-  }, [])
-
-  // dropAcc clears an acc entry on a send that never completed (stale-gen
-  // return, create-POST failure). It cancels any pending RAF so a straggler
-  // flush can't fire after the slot is gone. Unlike takeAcc it does NOT touch
-  // the store slot or tear down SSE (the caller does cancelRef/endStream).
-  const dropAcc = useCallback((streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    if (acc.raf !== null) cancelAnimationFrame(acc.raf)
-    streamAccRef.current.delete(streamId)
-  }, [])
-
-  // commitAssistantMessage appends the streamed text as a permanent assistant
-  // message and persists the thread. Shared by the natural-completion path
-  // (onDone) and the user-stop path (handleCancelStream) so an interrupted
-  // answer is kept, not discarded. Persisted messages are filtered of the
-  // transient error bubbles so reloaded history isn't littered with them.
-  const commitAssistantMessage = useCallback((
-    threadId: string,
-    messageId: string | undefined,
-    content: string,
-    opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
-  ) => {
-    const curDoc = docRef.current
-    const msg: ChatMessage = {
-      id: messageId || crypto.randomUUID(),
-      role: 'assistant',
-      content,
-      timestamp: new Date().toISOString(),
-      provider: providerRef.current,
-      model: selectedModelRef.current,
-      tokensIn: opts.tokensIn,
-      tokensOut: opts.tokensOut,
-      finishReason: opts.finishReason,
-    }
-    if (!curDoc) return
-    appendMessage(threadId, msg)
-    const thread = useChatStore.getState().threads.find(t => t.id === threadId)
-    if (!thread) return
-    const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
-    chatApi.saveConversation(curDoc.id, thread.contextBlockId || 'flow', persistable).catch((err) => { logger.warn('Failed to save conversation', err) })
-    if (opts.tokensIn != null || opts.tokensOut != null) {
-      updateThread(threadId, {
-        tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),
-        tokensOut: (thread.tokensOut ?? 0) + (opts.tokensOut ?? 0),
-      })
-    }
-  }, [appendMessage, getMessages, updateThread])
-
-  const onDone = useCallback((tokensOut: number, tokensIn: number, streamId: string) => {
-    const acc = takeAcc(streamId)
-    if (!acc) return
-    const slot = useChatStore.getState().streams[acc.threadId]
-    commitAssistantMessage(acc.threadId, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
-    endStream(acc.threadId)
-  }, [commitAssistantMessage, endStream, takeAcc])
-
-  const onError = useCallback((error: string, streamId: string) => {
-    const acc = takeAcc(streamId)
-    if (!acc) return
-    const curDoc = docRef.current
-    const slot = useChatStore.getState().streams[acc.threadId]
-    const displayContent = acc.text
-      ? acc.text + '\n\n---\n*Error: ' + error + '*'
-      : '*Error: ' + error + '*'
-    const msg: ChatMessage = {
-      id: slot?.messageId || crypto.randomUUID(),
-      role: 'assistant',
-      content: displayContent,
-      timestamp: new Date().toISOString(),
-      provider: providerRef.current,
-      model: selectedModelRef.current,
-      finishReason: 'error',
-    }
-    if (curDoc) appendMessage(acc.threadId, msg)
-    endStream(acc.threadId)
-  }, [appendMessage, endStream, takeAcc])
-
-  // onAppend adds a delta-resume tail to the stream's accumulated text and
-  // flushes it synchronously to the slot (no RAF — a resume delivers a known
-  // tail after a reconnect, not a stream of live chunks). Used by
-  // useStreamingMessage.resumeInto in 'delta' mode.
-  const onAppend = useCallback((delta: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc || !delta) return
-    acc.text += delta
-    acc.first = true
-    if (acc.raf !== null) { cancelAnimationFrame(acc.raf); acc.raf = null }
-    updateStream(acc.threadId, {text: acc.text, isThinking: false, tokens: Math.ceil(acc.text.length / 4)})
-  }, [updateStream])
-
-  // getAccLength reports how many UTF-8 BYTES the client already holds for a
-  // stream, so a delta-resume can request only the tail from the backend. The
-  // backend slices its Go string buffer by BYTE offset, so the client must send
-  // a byte length — NOT JS string .length (UTF-16 code units), which mismatches
-  // on any non-ASCII content (emoji/CJK/accented) and corrupts the resumed tail.
-  const getAccLength = useCallback((streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    return acc ? utf8ByteLength(acc.text) : 0
-  }, [])
-
-  const handler = useMemo(() => ({
-    onChunk, onReplace, onDone, onError, onToolStatus, onAppend, getAccLength,
-  }), [onChunk, onReplace, onDone, onError, onToolStatus, onAppend, getAccLength])
-
-  const {registerStream, cancel, teardownStream} = useStreamingMessage(handler)
-  useEffect(() => { teardownRef.current = teardownStream }, [teardownStream])
-  useEffect(() => { cancelRef.current = cancel }, [cancel])
-
-  // buildRequest assembles the chat request. By default it OMITS `messages`
-  // (history): the backend reconstructs it from its conversation store, so the
-  // client no longer re-sends the full history each turn (~30KB saved/request).
-  // Set includeHistory=true when the client has locally truncated history
-  // (resend/edit) — the backend then uses the provided slice as-is instead of
-  // its stored copy.
-  const buildRequest = useCallback((text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
-    if (!doc || !activeThread) return null
-    const providerConfig = aiSettings.providers[provider as keyof typeof aiSettings.providers]
-    const currentThread = useChatStore.getState().threads.find(t => t.id === activeThread.id)
-    let filesToUse = currentThread?.selectedSourceFiles || []
-    if (overrideFiles !== undefined && overrideFiles.length > 0) {
-      filesToUse = overrideFiles
-    }
-    return {
-      flowId: doc.id,
-      provider,
-      model: selectedModel || providerConfig?.defaultModel || '',
-      // Omit `messages` unless the caller needs to override server-side history.
-      ...(includeHistory ? {
-        messages: getMessages(activeThread.id).map((m: ChatMessage) => ({id: m.id, role: m.role, content: m.content, timestamp: m.timestamp})),
-      } : {}),
-      userMessage: text,
-      // ALWAYS send contextBlockId: it is the server-side conversation-history
-      // key (so a free-form / excludeContext turn on a block-scoped thread
-      // still reconstructs the right history). excludeContext below gates only
-      // flow/block CONTEXT INJECTION, not which conversation is loaded.
-      contextBlockId: activeThread.contextBlockId || '',
-      selectedSourceFiles: excludeContext ? undefined : (filesToUse.length > 0 ? filesToUse : undefined),
-      temperature: providerConfig?.temperature ?? 0.3,
-      maxTokens: providerConfig?.maxTokens ?? 4096,
-      excludeContext: excludeContext ?? false,
-      useTools: currentThread?.useTools ?? false,
-    }
-  }, [doc, activeThread, provider, selectedModel, aiSettings, getMessages])
+  const {buildRequest} = useChatRequestBuilder({doc, activeThread, provider, selectedModel, aiSettings, getMessages})
+  const {
+    registerStream, cancelStream, beginAcc, dropAcc, stopAndCommit, bumpGen, isCurrentGen,
+  } = useChatStreamEngine({doc, provider, selectedModel, getMessages})
 
   const executeSend = useCallback(async (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
     if (!doc || !activeThread) return
@@ -347,7 +115,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     // for this thread is blocked from the start.
     const sid = crypto.randomUUID()
     startStream(threadId, sid, msgId)
-    streamAccRef.current.set(sid, {threadId, text: '', raf: null, first: false})
+    beginAcc(sid, threadId)
 
     try {
       // Subscribe the listener + wait for the SSE connection to be 'open'
@@ -355,7 +123,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       await registerStream(sid, /*begin*/ false)
       if (!isCurrentGen(threadId, myGen)) {
         dropAcc(sid)
-        cancelRef.current(sid)
+        cancelStream(sid)
         endStream(threadId)
         return
       }
@@ -368,13 +136,13 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         // Cancelled while the create POST was in flight; tear down the stream
         // the backend just recorded and clear the slot.
         dropAcc(sid)
-        cancelRef.current(sid)
+        cancelStream(sid)
         endStream(threadId)
         return
       }
       if (!returnedId) {
         dropAcc(sid)
-        cancelRef.current(sid)
+        cancelStream(sid)
         endStream(threadId)
         appendMessage(threadId, {
           id: crypto.randomUUID(),
@@ -388,7 +156,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         return
       }
       // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
-      // are dispatched by the handlers registered above.
+      // are dispatched by the handlers registered in useChatStreamEngine.
     } catch (e: unknown) {
       if (!isCurrentGen(threadId, myGen)) return
       const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
@@ -415,10 +183,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       // without cancelStream the backend goroutine holds a live provider
       // connection until the stream-cap timeout.)
       dropAcc(sid)
-      cancelRef.current(sid)
+      cancelStream(sid)
       endStream(threadId)
     }
-  }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel, toast, bumpGen, isCurrentGen, updateThread, dropAcc])
+  }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel, toast, bumpGen, isCurrentGen, updateThread, dropAcc, beginAcc, cancelStream])
 
   const handleSend = useCallback((text: string, files: string[], excludeContext?: boolean) => {
     if (files.length > 0 && activeThreadId) {
@@ -490,21 +258,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     // self-cancels once the real sid arrives.
     bumpGen(tid)
     if (sid && sid !== 'pending') {
-      // Drop the acc (cancel any pending RAF flush) and tear down the SSE sub;
-      // cancelRef does backend cancel + teardownStream in one call.
-      const acc = streamAccRef.current.get(sid)
-      if (acc) {
-        if (acc.raf !== null) cancelAnimationFrame(acc.raf)
-        streamAccRef.current.delete(sid)
-        // Keep whatever was generated before the stop instead of discarding it.
-        if (acc.text) {
-          commitAssistantMessage(tid, slot.messageId, acc.text, {finishReason: 'interrupted'})
-        }
-      }
-      cancelRef.current(sid)
+      // stopAndCommit cancels the SSE sub + backend stream, keeping whatever
+      // text had streamed before the stop instead of discarding it.
+      stopAndCommit(sid, tid, slot.messageId)
     }
     endStream(tid)
-  }, [bumpGen, endStream, commitAssistantMessage])
+  }, [bumpGen, endStream, stopAndCommit])
 
   return {
     doc,

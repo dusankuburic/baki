@@ -31,15 +31,15 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 			continue
 		}
 
-		// OAuth device-flow tokens are global (not yet per-user); manual API keys
-		// and the copilot PAT are resolved under the caller's scope.
+		// OAuth device-flow tokens and manual API keys are both resolved under
+		// the caller's scope (per-user in cloud mode).
 		configured := false
 		switch meta.ID {
 		case "github-models":
-			ok, _ := s.secrets.Has("", "github-models-token")
+			ok, _ := s.secrets.Has(scope, "github-models-token")
 			configured = ok
 		case "copilot":
-			oauthOk, _ := s.secrets.Has("", "copilot-oauth-token")
+			oauthOk, _ := s.secrets.Has(scope, "copilot-oauth-token")
 			patOk, _ := s.secrets.Has(scope, "copilot")
 			configured = oauthOk || patOk
 		default:
@@ -236,8 +236,8 @@ func (s *ProviderService) preWarmCopilot(scope string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		// OAuth device-flow token (global scope) first, then manual PAT.
-		token, err := s.secrets.Get("", "copilot-oauth-token")
+		// OAuth device-flow token (per-user) first, then manual PAT.
+		token, err := s.secrets.Get(scope, "copilot-oauth-token")
 		if err != nil || token == "" {
 			token, err = s.secrets.Get(scope, "copilot")
 			if err != nil || token == "" {

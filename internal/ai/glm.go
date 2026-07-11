@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -16,10 +15,11 @@ type GLMProvider struct {
 func NewGLMProvider(apiKey string) *GLMProvider {
 	return &GLMProvider{
 		openaiBase: openaiBase{
-			apiKey:        apiKey,
-			client:        sharedHTTPClient,
-			baseURL:       &glmBaseURL,
-			providerLabel: "glm",
+			apiKey:         apiKey,
+			client:         sharedHTTPClient,
+			baseURL:        &glmBaseURL,
+			providerLabel:  "glm",
+			embeddingModel: "embedding-3",
 			handle429: func(_ *http.Response, apiErr openAIErrorResp) error {
 				if isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code) {
 					return ErrInsufficientBalance
@@ -43,7 +43,7 @@ func (g *GLMProvider) PricePerMillionTokens() Pricing {
 }
 
 func (g *GLMProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
-	return nil, fmt.Errorf("embeddings not supported by GLM provider")
+	return g.embed(ctx, text)
 }
 
 func (g *GLMProvider) EstimateTokens(text string) int {

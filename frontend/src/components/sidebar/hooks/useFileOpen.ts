@@ -4,7 +4,7 @@ import {useEditorStore} from '@/stores/editorStore'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {flowApi} from '@/api'
 import {logger} from '@/lib/logger'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
 import {useToast} from '@/components/shared'
 import type {RecentFile} from '@/types'
 
@@ -31,7 +31,7 @@ export function useFileOpen() {
     const endLoad = useCallback(() => setIsLoading(false), [])
 
     useEffect(() => {
-        if (!isTauri()) return
+        if (!getPlatformCapabilities().fileSystem) return
         flowApi.recentFiles()
             .then((files: RecentFile[]) => { if (files) setRecentFiles(files) })
             .catch((err) => { logger.warn('Failed to load recent files', err) })
@@ -90,7 +90,7 @@ export function useFileOpen() {
             }
         }
         
-        if (!isTauri()) {
+        if (!getPlatformCapabilities().fileSystem) {
             toast.error('This action requires the desktop app')
             return
         }
@@ -112,7 +112,7 @@ export function useFileOpen() {
     }, [setDocument, setSelectedFilePath, openInGroup, checkView, toast, setIsLoadingState, endLoad])
 
     const handleLoadRecent = useCallback(async (path: string) => {
-        if (!isTauri()) return
+        if (!getPlatformCapabilities().fileSystem) return
         const gen = beginDocLoad()
         setIsLoadingState()
         try {
@@ -161,7 +161,7 @@ export function useFileOpen() {
     // Requires a live local filesystem, so (like the other path-based actions
     // in this hook) it's desktop-only.
     const handleRevealFile = useCallback(async (path: string) => {
-        if (!isTauri()) {
+        if (!getPlatformCapabilities().fileSystem) {
             toast.error('This action requires the desktop app')
             return
         }
@@ -177,7 +177,7 @@ export function useFileOpen() {
     // "already open, just switch tabs" shortcut in handleSelectFolderFile —
     // for picking up edits made outside the app.
     const handleReloadFile = useCallback(async (path: string) => {
-        if (!isTauri()) {
+        if (!getPlatformCapabilities().fileSystem) {
             toast.error('This action requires the desktop app')
             return
         }

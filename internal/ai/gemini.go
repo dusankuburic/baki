@@ -35,8 +35,87 @@ func (g *GeminiProvider) PricePerMillionTokens() Pricing {
 	return Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}
 }
 
-func (g *GeminiProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
-	return nil, fmt.Errorf("embeddings not supported by Gemini provider")
+// geminiEmbedBatchSize caps how many texts ride in one batchEmbedContents
+// request. Gemini rejects oversized batches (documented ~100/call), and callers
+// embed up to maxKnowledgeChunks (500) documents at once, so Embed splits the
+// input into sub-batches and concatenates the results in order.
+const geminiEmbedBatchSize = 100
+
+func (g *GeminiProvider) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	res := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += geminiEmbedBatchSize {
+		end := min(start+geminiEmbedBatchSize, len(texts))
+		batch, err := g.embedBatch(ctx, texts[start:end])
+		if err != nil {
+			return nil, err
+		}
+		res = append(res, batch...)
+	}
+	return res, nil
+}
+
+// embedBatch embeds a single sub-batch (≤ geminiEmbedBatchSize texts).
+func (g *GeminiProvider) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	// Gemini's embeddings API differs from OpenAI's shape: a single
+	// batchEmbedContents POST carries an array of requests, each wrapping the
+	// text in a content.parts[].text object. taskType RETRIEVAL_DOCUMENT is the
+	// recommended setting for documents that will be stored and searched.
+	const embedModel = "gemini-embedding-001"
+	fullModel := "models/" + embedModel
+
+	type embedRequest struct {
+		Model    string        `json:"model"`
+		Content  geminiContent `json:"content"`
+		TaskType string        `json:"taskType"`
+	}
+	reqs := make([]embedRequest, len(texts))
+	for i, t := range texts {
+		reqs[i] = embedRequest{
+			Model:    fullModel,
+			Content:  geminiContent{Parts: []geminiPart{{Text: t}}},
+			TaskType: "RETRIEVAL_DOCUMENT",
+		}
+	}
+
+	body, err := json.Marshal(map[string]any{"requests": reqs})
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/v1beta/models/%s:batchEmbedContents", geminiBaseHost, embedModel)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", g.apiKey)
+
+	resp, err := g.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini embeddings error (status %d)", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Embeddings []struct {
+			Values []float32 `json:"values"`
+		} `json:"embeddings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	res := make([][]float32, len(parsed.Embeddings))
+	for i, e := range parsed.Embeddings {
+		res[i] = e.Values
+	}
+	return res, nil
 }
 
 func (g *GeminiProvider) EstimateTokens(text string) int {

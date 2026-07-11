@@ -1,6 +1,6 @@
 import React, {useMemo} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
-import type {BlockToken, VariableHistory, Block, FlowDocument, VariableDecl} from '@/types'
+import type {BlockToken, Block, FlowDocument, VariableDecl} from '@/types'
 import clsx from 'clsx'
 
 import {analysisApi} from '@/api'
@@ -135,7 +135,7 @@ function VariableToken({token}: {token: BlockToken}) {
         try {
             const history = await analysisApi.getVariableLineage(token.target)
             if (history) {
-                setVariableLineage(history as unknown as VariableHistory)
+                setVariableLineage(history)
                 setVariablePanelOpen(true)
             }
         } catch (err) {

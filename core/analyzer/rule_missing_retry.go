@@ -68,37 +68,5 @@ func isTransientOperation(rawType string) bool {
 }
 
 func isInsideRetryLoop(block *models.Block, ctx *RuleContext) bool {
-	cur := block.ID
-	visited := make(map[string]bool)
-	for {
-		pid, ok := ctx.ParentMap[cur]
-		if !ok {
-			return false
-		}
-		if visited[pid] {
-			return false
-		}
-		visited[pid] = true
-		parent := ctx.AllBlocks[pid]
-		if parent == nil {
-			return false
-		}
-		if parent.Type == models.BlockTypeLoop {
-			nameLower := strings.ToLower(parent.Name)
-			hasRetry := strings.Contains(nameLower, "retry") ||
-				strings.Contains(nameLower, "attempt")
-			// range over a nil map is safe; no guard needed.
-			for k, v := range parent.Properties {
-				kl := strings.ToLower(k)
-				if (strings.Contains(kl, "retry") || strings.Contains(kl, "attempt")) && v != "" {
-					hasRetry = true
-				}
-			}
-			if hasRetry {
-				return true
-			}
-			// Not a retry loop — keep walking up to check outer loops/ancestors.
-		}
-		cur = pid
-	}
+	return ctx.InsideRetryLoop[block.ID]
 }

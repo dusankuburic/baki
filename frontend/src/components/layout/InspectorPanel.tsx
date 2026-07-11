@@ -1,5 +1,5 @@
 import {lazy, Suspense, useState, useEffect} from 'react'
-import {InspectorTabs, DetailsTab, MetricsTab} from '@/components/inspector'
+import {InspectorTabs, DetailsTab} from '@/components/inspector'
 import {FindingsTab} from '@/components/findings'
 import {SharingTab} from '@/components/inspector/SharingTab'
 import {HistoryTab} from '@/components/inspector/HistoryTab'
@@ -10,6 +10,10 @@ import ResizableChatPanel from '@/components/chat/ResizableChatPanel'
 // AITab transitively pulls react-markdown + react-syntax-highlighter; lazy
 // loading keeps that chat-only weight out of the entry chunk.
 const AITab = lazy(() => import('@/components/chat/AITab'))
+
+// MetricsTab transitively pulls recharts (~100KB); lazy loading keeps the
+// charting library out of the entry chunk until the user opens the Metrics tab.
+const MetricsTab = lazy(() => import('@/components/inspector/MetricsTab'))
 
 export default function InspectorPanel() {
     const tab = useUIStore(s => s.inspectorTab)
@@ -37,7 +41,11 @@ export default function InspectorPanel() {
                     </div>
                 )}
                 {tab === 'findings' && <FindingsTab />}
-                {tab === 'metrics' && <MetricsTab />}
+                {tab === 'metrics' && (
+                    <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Spinner /></div>}>
+                        <MetricsTab />
+                    </Suspense>
+                )}
                 {tab === 'sharing' && <SharingTab />}
                 {tab === 'history' && <HistoryTab />}
             </div>

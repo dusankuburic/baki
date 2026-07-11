@@ -1,59 +1,46 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useRef } from 'react'
 import { Users, UserPlus, Trash2, Shield, Eye, Edit3 } from 'lucide-react'
 import { sharingApi, type Collaborator, type Permission } from '@/api/sharing'
 import { useFlowStore } from '@/stores/flowStore'
 import { useAuthStore } from '@/stores/authStore'
 import { EmptyState, Spinner, useToast } from '@/components/shared'
 import {logger} from '@/lib/logger'
+import { useAsync } from '@/hooks/useAsync'
 
 export const SharingTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
   const currentUser = useAuthStore(s => s.user)
-  const [collaborators, setCollaborators] = useState<Collaborator[]>([])
-  const [isLoading, setIsLoading] = useState(false)
   const [newEmail, setNewEmail] = useState('')
   const [newPermission, setNewPermission] = useState<Permission>('viewer')
   const [isAdding, setIsAdding] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
   const removeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const {error: toastError} = useToast()
 
+  const {data, isLoading, error: fetchError, refetch: fetchCollaborators} = useAsync<Collaborator[]>(
+    () => {
+      if (!document) return Promise.resolve([])
+      return sharingApi.listCollaborators(document.id).catch(err => {
+        logger.warn('Failed to fetch collaborators', err)
+        throw err
+      })
+    },
+    [document?.id],
+  )
+  // Stale collaborators intentionally remain visible on a fetch error (matches
+  // the previous behavior — only the form's error banner reflects the failure).
+  const collaborators = data ?? []
+  const error = formError ?? (fetchError ? 'Failed to load collaborators' : null)
+
   const canManage = collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
-
-  const fetchCollaborators = useCallback(async () => {
-    if (!document) return
-    setIsLoading(true)
-    setError(null)
-    try {
-      const list = await sharingApi.listCollaborators(document.id)
-      setCollaborators(list)
-    } catch (err) {
-      logger.warn('Failed to fetch collaborators', err)
-      setError('Failed to load collaborators')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [document?.id])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!document) return
-    setIsLoading(true)
-    setError(null)
-    sharingApi.listCollaborators(document.id)
-      .then(list => { if (!cancelled) setCollaborators(list) })
-      .catch((err) => { if (!cancelled) { logger.warn('Failed to fetch collaborators', err); setError('Failed to load collaborators') } })
-      .finally(() => { if (!cancelled) setIsLoading(false) })
-    return () => { cancelled = true }
-  }, [document?.id])
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!document || !newEmail) return
-    
+
     setIsAdding(true)
-    setError(null)
+    setFormError(null)
     try {
       await sharingApi.addCollaborator({
         flowId: document.id,
@@ -63,7 +50,7 @@ export const SharingTab: React.FC = () => {
       setNewEmail('')
       fetchCollaborators()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add collaborator')
+      setFormError(err instanceof Error ? err.message : 'Failed to add collaborator')
     } finally {
       setIsAdding(false)
     }

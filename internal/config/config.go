@@ -34,22 +34,29 @@ type Config struct {
 
 // PowerPlatformConfig configures the optional connector that ingests desktop
 // flows from a Power Platform environment (the "monitor my live automation
-// fleet" value prop). All fields must be set for the connector to enable; with
-// any absent the connector is a no-op. Cloud mode only — ingestion stores flows
-// into the library, which needs the DB backend. The format bridge (PAD's cloud
-// JSON action schema → the parser's format) is the de-risking core; see
-// internal/connector/padcloud.
+// fleet" value prop). The connector is EXPERIMENTAL: the cloud JSON format
+// bridge (Converter) and the Dataverse endpoints are built defensively against
+// the documented schema and are NOT yet validated against a real tenant. Enable
+// only for evaluation. Cloud mode only — ingestion stores flows into the
+// library, which needs the DB backend. See internal/connector/padcloud.
 type PowerPlatformConfig struct {
 	// TenantID is the Azure AD tenant ("common" for multi-tenant device flow).
 	TenantID string
 	// ClientID is the registered Azure app's client ID (device-flow, public client).
 	ClientID string
-	// EnvironmentID is the Power Platform environment to enumerate desktop flows from.
-	EnvironmentID string
+	// DataverseURL is the full Dataverse Web API base for the environment, e.g.
+	// "https://{env}.crm.dynamics.com/api/data/v9.2". Required: the environment
+	// is encoded in the org-specific host.
+	DataverseURL string
 	// Scope is the OAuth scope (default the Power Platform API).
 	Scope string
 	// IngestInterval is how often to pull (duration string; empty disables).
 	IngestInterval string
+	// OwnerUserID is the user id that owns ingested flows (authz scope). Defaults
+	// to empty (flows are unowned — visible to admins via AllFlows/portfolio).
+	OwnerUserID string
+	// OwnerOrgID scopes ingested flows to an organisation (authz).
+	OwnerOrgID string
 }
 
 // RedisConfig configures the optional shared backplane. When URL is empty (the

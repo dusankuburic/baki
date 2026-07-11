@@ -1,6 +1,6 @@
-import {useEffect, useState} from 'react'
 import clsx from 'clsx'
 import type {AnalysisReport, Severity} from '@/types'
+import {useAsync} from '@/hooks/useAsync'
 
 // SharedReportView is an UNAUTHENTICATED standalone page that renders a
 // read-only findings report via a share token. It bypasses the normal app
@@ -26,28 +26,18 @@ const sevLabel: Record<Severity, string> = {
 }
 
 export default function SharedReportView() {
-  const [data, setData] = useState<SharedData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-    const params = new URLSearchParams(window.location.search)
-    const token = params.get('token')
-    if (!token) {
-      setError('No share token provided.')
-      setLoading(false)
-      return
-    }
-    fetch(`/api/shared?token=${encodeURIComponent(token)}`)
-      .then(async res => {
+  const {data, isLoading: loading, error} = useAsync<SharedData>(
+    () => {
+      const params = new URLSearchParams(window.location.search)
+      const token = params.get('token')
+      if (!token) return Promise.reject(new Error('No share token provided.'))
+      return fetch(`/api/shared?token=${encodeURIComponent(token)}`).then(async res => {
         if (!res.ok) throw new Error(res.status === 404 ? 'Invalid or expired link.' : 'Failed to load report.')
         return res.json() as Promise<SharedData>
       })
-      .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
-      .catch(e => { if (!cancelled) { setError(e.message); setLoading(false) } })
-    return () => { cancelled = true }
-  }, [])
+    },
+    [],
+  )
 
   if (loading) {
     return (

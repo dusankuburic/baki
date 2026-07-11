@@ -1,7 +1,7 @@
 import {useCallback, useState, useEffect} from 'react'
 import {useToast} from '@/components/shared'
 import {flowApi} from '@/api'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
 import {logger} from '@/lib/logger'
 import {useSettingsStore} from '@/stores/settingsStore'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
@@ -18,7 +18,7 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
     // subscribes to only in Tauri; the HTML5 handlers still cover the web
     // build, where no such native API exists.
     useEffect(() => {
-        if (!isTauri()) return
+        if (!getPlatformCapabilities().fileSystem) return
         let unlisten: (() => void) | undefined
         let cancelled = false
         import('@tauri-apps/api/webview').then(({getCurrentWebview}) =>
@@ -71,7 +71,7 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
             const file = files[0]
             if (!file) return
             try {
-                if (isTauri()) {
+                if (getPlatformCapabilities().fileSystem) {
                     const path = (file as File & {path?: string}).path
                     if (path) {
                         const doc = await flowApi.loadFlowFromPath(path)
@@ -83,9 +83,10 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
                       toast.error('File too large', {description: `${(file.size / 1024 / 1024).toFixed(1)}MB exceeds the ${useSettingsStore.getState().settings.parser.maxFileSizeMB}MB limit`})
                       return
                     }
-                    const content = await new Promise<string>((resolve) => {
+                    const content = await new Promise<string>((resolve, reject) => {
                         const reader = new FileReader()
                         reader.onload = (e) => resolve(e.target?.result as string)
+                        reader.onerror = () => reject(new Error('Failed to read file'))
                         reader.readAsText(file)
                     })
                     const doc = await flowApi.uploadFlow(file.name, {[file.name]: content})

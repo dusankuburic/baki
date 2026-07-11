@@ -1,4 +1,4 @@
-import {useState, useEffect, useMemo, useCallback} from 'react'
+import {useState, useMemo} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useSettingsStore} from '@/stores/settingsStore'
@@ -8,6 +8,7 @@ import Button from '@/components/shared/Button'
 import {useConfirm, useToast, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
+import {useAsync} from '@/hooks/useAsync'
 
 interface KnowledgeDoc {
   id: string
@@ -28,9 +29,6 @@ export default function KnowledgeBasePanel() {
     return membership?.role === 'admin' || membership?.role === 'member'
   }, [activeOrg, currentUser])
   
-  const [docs, setDocs] = useState<KnowledgeDoc[]>([])
-  const [loading, setLoading] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -38,22 +36,17 @@ export default function KnowledgeBasePanel() {
   const {confirm} = useConfirm()
   const {success: toastSuccess, error: toastError} = useToast()
 
-  const loadDocs = useCallback(async () => {
-    if (!activeOrgId) return
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const res = await request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
-      setDocs(res || [])
-    } catch (e) {
-      logger.warn(e)
-      setLoadError('Failed to load documents')
-    } finally {
-      setLoading(false)
-    }
-  }, [activeOrgId])
-
-  useEffect(() => { loadDocs() }, [loadDocs])
+  const {data, isLoading: loading, error: fetchError, refetch: loadDocs} = useAsync<KnowledgeDoc[]>(
+    () => {
+      if (!activeOrgId) return Promise.resolve([])
+      return request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
+        .then(res => res || [])
+        .catch(e => { logger.warn(e); throw e })
+    },
+    [activeOrgId],
+  )
+  const docs = data ?? []
+  const loadError = fetchError ? 'Failed to load documents' : null
 
   const handleUpload = async () => {
     if (!activeOrgId || !selectedFile) return

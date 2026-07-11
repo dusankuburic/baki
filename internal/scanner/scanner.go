@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,24 +123,67 @@ func (s *Scanner) Stop() {
 	})
 }
 
-// ScanOnce scans every stored flow once. Errors are logged, never returned, so a
+// ScanOnce scans every stored flow once, paginating to cover the entire
+// library (not just the first page). Errors are logged, never returned, so a
 // single bad flow doesn't abort the sweep.
 func (s *Scanner) ScanOnce(ctx context.Context) {
 	if s.backend == nil || s.analyze == nil {
 		return
 	}
-	flows, err := s.backend.ListFlows(ctx, storageif.FlowFilter{AllFlows: true})
-	if err != nil {
-		logger.Warn("scanner: list flows failed", "err", err)
-		return
-	}
-	for _, f := range flows {
+	const pageSize = 100
+	offset := 0
+	seen := make(map[string]struct{})
+	for {
 		if ctx.Err() != nil {
 			return
 		}
-		fctx, cancel := context.WithTimeout(ctx, perFlowScanTimeout)
-		s.scanFlow(fctx, f)
-		cancel()
+		flows, err := s.backend.ListFlows(ctx, storageif.FlowFilter{
+			AllFlows: true,
+			Limit:    pageSize,
+			Offset:   offset,
+		})
+		if err != nil {
+			logger.Warn("scanner: list flows failed", "offset", offset, "err", err)
+			return
+		}
+		if len(flows) == 0 {
+			break
+		}
+		for _, f := range flows {
+			if ctx.Err() != nil {
+				return
+			}
+			seen[f.ID] = struct{}{}
+			fctx, cancel := context.WithTimeout(ctx, perFlowScanTimeout)
+			s.scanFlow(fctx, f)
+			cancel()
+		}
+		offset += len(flows)
+		if len(flows) < pageSize {
+			break // last page
+		}
+	}
+	// Only reached via a complete, uninterrupted sweep, so seen holds every
+	// currently-stored flow ID — safe to prune dedup entries for flows deleted
+	// since the last sweep (a partial/cancelled sweep must not prune, since
+	// seen would then be missing flows that still exist).
+	s.pruneLastSig(seen)
+}
+
+// pruneLastSig drops lastSig entries for flows no longer present, so a
+// deleted flow's dedup keys don't accumulate in memory for the life of the
+// process.
+func (s *Scanner) pruneLastSig(seen map[string]struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.lastSig {
+		flowID, _, ok := strings.Cut(key, "|")
+		if !ok {
+			continue
+		}
+		if _, present := seen[flowID]; !present {
+			delete(s.lastSig, key)
+		}
 	}
 }
 

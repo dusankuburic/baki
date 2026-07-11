@@ -40,6 +40,13 @@ const maxChatStreamDuration = 10 * time.Minute
 // the same thread. A small per-scope bound covers a few concurrent threads.
 const maxChatContextCache = 32
 
+// maxChatCtxGen bounds the per-flow generation-counter cache (see chatCtxGen).
+// Larger than maxChatContextCache: counters are a few bytes each (vs. a whole
+// scrubbed document+context), so keeping more of them further reduces the
+// already-negligible chance that a generation number gets reused while a
+// stale chatCtxCache entry keyed with that same number is still resident.
+const maxChatCtxGen = 256
+
 // ragGuidelinesDeadline caps how long the streaming chat path waits for RAG
 // knowledge-base guidelines before first token. RAG issues a synchronous
 // embedding API call + vector query; on a slow embedding provider this would
@@ -424,7 +431,8 @@ type ChatService struct {
 	// streamIdleTimeout in tests; 0 ⇒ defaults.
 	watchdogInterval time.Duration
 	idleTimeout      time.Duration
-	activeStreams    sync.Map // map[streamID]*streamCtl — in-flight streams
+	activeStreams    sync.Map   // map[streamID]*streamCtl — in-flight streams
+	streamCapMu      sync.Mutex // serializes the per-caller concurrency check + store
 	// finishedStreams holds recently-completed streams for a short grace period
 	// (resumeRetention) so a client that reconnects after a stream ended can
 	// still fetch its final buffer via ResumeStream.
@@ -440,8 +448,16 @@ type ChatService struct {
 	// scrubber.ScrubDocument, so it carries no secrets. Keys are per-scope and
 	// embed a per-flow generation counter (chatCtxGen) so an in-place flow edit
 	// (InvalidateChatContext) cheaply invalidates without enumerating keys.
-	chatCtxCache cache.Cache
-	chatCtxGen   sync.Map // flowID → uint64 generation
+	// chatCtxGen is a bounded LRU (not a plain map) so a long-lived process that
+	// edits many distinct flows over its uptime — including deleted flows,
+	// which also invalidate through this path — can't grow it without limit.
+	// It self-initializes on first use (see chatCtxGenCache) so a ChatService
+	// built as a bare struct literal (common in tests) still gets a working
+	// cache instead of a nil interface, mirroring sync.Map's old zero-value-
+	// ready behavior without reintroducing unbounded growth.
+	chatCtxCache   cache.Cache
+	chatCtxGen     cache.Cache
+	chatCtxGenOnce sync.Once
 }
 
 func NewChatService(
@@ -467,6 +483,7 @@ func NewChatService(
 		mode:          mode,
 		resume:        noopResumeStore{},
 		chatCtxCache:  newChatContextCache(),
+		chatCtxGen:    newChatCtxGenCache(),
 	}
 }
 
@@ -477,6 +494,25 @@ func newChatContextCache() cache.Cache {
 	return c
 }
 
+// newChatCtxGenCache builds the bounded LRU for the per-flow generation
+// counters. size > 0 ⇒ the constructor error is impossible, so it is swallowed.
+func newChatCtxGenCache() cache.Cache {
+	c, _ := cache.NewLRUCache(maxChatCtxGen)
+	return c
+}
+
+// chatCtxGenCache lazily initializes chatCtxGen on first use, so a ChatService
+// built as a bare struct literal (common in tests) still gets a working bounded
+// cache instead of a nil interface.
+func (s *ChatService) chatCtxGenCache() cache.Cache {
+	s.chatCtxGenOnce.Do(func() {
+		if s.chatCtxGen == nil {
+			s.chatCtxGen = newChatCtxGenCache()
+		}
+	})
+	return s.chatCtxGen
+}
+
 // InvalidateChatContext drops any cached scrubbed context for a flow. Call on
 // in-place content updates (mirrors FlowService.InvalidateSearchIndex). It
 // bumps a per-flow generation counter rather than enumerating keys; stale
@@ -485,8 +521,13 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 	if s.chatCtxCache == nil {
 		return
 	}
-	v, _ := s.chatCtxGen.LoadOrStore(flowID, uint64(0))
-	s.chatCtxGen.Store(flowID, v.(uint64)+1)
+	genCache := s.chatCtxGenCache()
+	ctx := context.Background()
+	gen := uint64(0)
+	if v, ok := genCache.Get(ctx, flowID); ok {
+		gen = v.(uint64)
+	}
+	genCache.Set(ctx, flowID, gen+1, 0)
 }
 
 // chatContextKey builds the cache key for a turn's scrubbed context. It mixes
@@ -495,7 +536,10 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 // system-prompt suffix, the provider+model (token math differs), and a cheap
 // fingerprint of the analysis report (regenerated → GeneratedAt moves).
 func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatRequest, providerID, model string, report *models.AnalysisReport) string {
-	gen, _ := s.chatCtxGen.LoadOrStore(flowID, uint64(0))
+	gen := uint64(0)
+	if v, ok := s.chatCtxGenCache().Get(context.Background(), flowID); ok {
+		gen = v.(uint64)
+	}
 	reportFP := ""
 	if report != nil {
 		reportFP = fmt.Sprintf("%d-%d", report.GeneratedAt.UnixNano(), len(report.Findings))
@@ -510,7 +554,7 @@ func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatReques
 	// that a later context-bearing turn (same key) would reuse.
 	exclude := fmt.Sprintf("%t", req.ExcludeContext)
 	return strings.Join([]string{
-		scope, flowID, fmt.Sprintf("%d", gen.(uint64)),
+		scope, flowID, fmt.Sprintf("%d", gen),
 		req.ContextBlockID, req.SystemPrompt, providerID, model, reportFP, sourceFP, exclude,
 	}, "|")
 }
@@ -702,11 +746,13 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) er
 	return nil
 }
 
-func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (streamID string, err error) {
-	defer logger.Guard("App.StreamChatMessage", &err)
-
-	// Per-caller concurrency cap: reject synchronously so the POST surfaces
-	// the error instead of a stream being created and immediately failed.
+// tryStartStream atomically checks the per-caller concurrency cap and stores
+// the stream control. Returns false (without storing) when the cap is exceeded.
+// The mutex closes the TOCTOU window between counting active streams and
+// storing a new one that existed in the original implementation.
+func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) bool {
+	s.streamCapMu.Lock()
+	defer s.streamCapMu.Unlock()
 	active := 0
 	s.activeStreams.Range(func(_, v interface{}) bool {
 		if v.(*streamCtl).ownerID == scope {
@@ -715,8 +761,14 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		return active < maxConcurrentStreamsPerScope
 	})
 	if active >= maxConcurrentStreamsPerScope {
-		return "", fmt.Errorf("too many chat responses running at once (max %d) — wait for one to finish or stop it", maxConcurrentStreamsPerScope)
+		return false
 	}
+	s.activeStreams.Store(streamID, ctl)
+	return true
+}
+
+func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (streamID string, err error) {
+	defer logger.Guard("App.StreamChatMessage", &err)
 
 	// Stream ID: prefer a client-generated UUID (C-1) so the client can subscribe
 	// its SSE listener BEFORE creating the stream, letting the backend emit
@@ -747,7 +799,12 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxChatStreamDuration)
 	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), ownerID: scope}
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
-	s.activeStreams.Store(streamID, ctl)
+	// Per-caller concurrency cap: check-and-reserve atomically so two
+	// concurrent requests can't both observe active < cap and both proceed.
+	if !s.tryStartStream(streamID, scope, ctl) {
+		cancel()
+		return "", fmt.Errorf("too many chat responses running at once (max %d) — wait for one to finish or stop it", maxConcurrentStreamsPerScope)
+	}
 
 	// C-1: when the client supplied the stream ID it has already registered its
 	// SSE listener, so unblock emission immediately (idempotent via startOnce —

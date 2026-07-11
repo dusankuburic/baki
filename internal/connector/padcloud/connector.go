@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"pad-core/logger"
@@ -60,11 +61,27 @@ type IngestResult struct {
 // auth/client/converter/store implementations (all injected), which makes the
 // orchestration — the part that most often has subtle bugs (partial failure,
 // one bad flow aborting the batch) — directly unit-testable with mocks.
+//
+// Start/Stop add an optional periodic loop over Ingest (mirroring the governance
+// scanner's lifecycle), so the connector can be wired into the app lifecycle and
+// left disabled (no-op) when not configured.
 type Ingester struct {
 	client    Client
 	converter Converter
 	store     Store
+
+	// Scheduler state (only touched by Start/Stop/loop). startOnce/stopOnce
+	// make Start/Stop idempotent.
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+	stop       chan struct{}
+	startOnce  sync.Once
+	stopOnce   sync.Once
 }
+
+// sweepTimeout bounds one ingest pass so a stalled environment (slow/queued API)
+// can't block the next tick or the app's shutdown.
+const sweepTimeout = 10 * time.Minute
 
 // NewIngester wires the collaborator implementations.
 func NewIngester(client Client, converter Converter, store Store) *Ingester {
@@ -113,4 +130,77 @@ func (i *Ingester) Ingest(ctx context.Context) (IngestResult, error) {
 	logger.Info("padcloud ingest complete",
 		"listed", len(flows), "ingested", res.Ingested, "failed", res.Failed, "skipped", res.Skipped)
 	return res, nil
+}
+
+// Start launches the periodic ingest loop: an immediate sweep, then one per
+// interval. A zero/negative interval leaves the ingester disabled (no-op), so
+// the wiring can always be present and config gates it. Start is idempotent.
+func (i *Ingester) Start(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	i.startOnce.Do(func() {
+		i.rootCtx, i.rootCancel = context.WithCancel(context.Background())
+		i.stop = make(chan struct{})
+		go i.loop(interval)
+	})
+}
+
+// Stop cancels any in-flight sweep and ends the loop. Idempotent and safe to
+// call on an ingester that was never started.
+func (i *Ingester) Stop() {
+	i.stopOnce.Do(func() {
+		if i.rootCancel != nil {
+			i.rootCancel()
+		}
+		if i.stop != nil {
+			close(i.stop)
+		}
+	})
+}
+
+func (i *Ingester) loop(interval time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("padcloud ingest loop panicked", "err", r)
+		}
+	}()
+	// Immediate sweep so a freshly-started instance imports right away.
+	// Derive from rootCtx (like the ticker sweeps below) so Stop() during the
+	// immediate sweep cancels it at the next flow boundary instead of letting
+	// it run to completion against a shutting-down app.
+	i.runSweep(i.rootCtx)
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-i.stop:
+			return
+		case <-t.C:
+			// Derive from rootCtx so Stop cancels a sweep in flight at the next
+			// flow boundary (the sweep itself respects ctx.Err()).
+			i.runSweep(i.rootCtx)
+		}
+	}
+}
+
+// runSweep runs one bounded Ingest pass and logs the outcome (the periodic loop
+// ignores the error — a single failed sweep shouldn't stop the connector).
+func (i *Ingester) runSweep(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("padcloud ingest sweep panicked", "err", r)
+		}
+	}()
+	sweepCtx, cancel := context.WithTimeout(ctx, sweepTimeout)
+	defer cancel()
+	res, err := i.Ingest(sweepCtx)
+	if err != nil {
+		logger.Warn("padcloud ingest sweep failed", "error", err, "ingested", res.Ingested, "failed", res.Failed)
+		return
+	}
+	for _, e := range res.Errors {
+		logger.Warn("padcloud ingest flow error", "error", e)
+	}
 }

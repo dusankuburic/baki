@@ -36,6 +36,10 @@ export interface PlatformCapabilities {
   clipboard: boolean;
   notifications: boolean;
   systemTray: boolean;
+  // nativeWindow: native menu bar / title bar / window controls (minimize,
+  // maximize, close, fullscreen) — only available in the Tauri shell, which
+  // owns the OS window; the web build renders in a normal browser tab.
+  nativeWindow: boolean;
 }
 
 export function getPlatformCapabilities(): PlatformCapabilities {
@@ -46,6 +50,7 @@ export function getPlatformCapabilities(): PlatformCapabilities {
       clipboard: true,
       notifications: true,
       systemTray: true,
+      nativeWindow: true,
     };
   }
 
@@ -55,5 +60,6 @@ export function getPlatformCapabilities(): PlatformCapabilities {
     clipboard: true, // Clipboard API available in browsers
     notifications: true, // Notifications API available in browsers
     systemTray: false,
+    nativeWindow: false,
   };
 }

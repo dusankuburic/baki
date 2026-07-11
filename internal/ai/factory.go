@@ -11,9 +11,9 @@ import (
 // This keeps the ai package free of storage dependencies.
 //
 // getKey takes a scope (owner namespace; "" = legacy/local) and a provider key
-// name. Manual per-user API keys are resolved under the caller's scope; OAuth
-// device-flow tokens (github-models, copilot OAuth) are resolved under the
-// global scope ("") — they are not yet per-user.
+// name. All keys — manual API keys and OAuth device-flow tokens (github-models,
+// copilot OAuth) alike — are resolved under the caller's scope, so each user's
+// connected providers are isolated.
 type ProviderFactory struct {
 	getKey      func(scope, provider string) (string, error)
 	copilotAuth *CopilotAuth
@@ -93,11 +93,7 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerID)
 	}
-	keyScope := scope
-	if providerID == "github-models" {
-		keyScope = ""
-	}
-	key, err := f.getKey(keyScope, storageKey(providerID))
+	key, err := f.getKey(scope, storageKey(providerID))
 	if err != nil {
 		return nil, fmt.Errorf("get %s key: %w", providerID, err)
 	}
@@ -125,11 +121,11 @@ func GetMetadataProvider(providerID string) MetadataProvider {
 }
 
 // forCopilot implements dual-auth: try OAuth token first, fall back to manual PAT.
-// The OAuth token comes from the device flow and is not yet per-user (global
-// scope ""); the manual PAT is a per-user key resolved under the caller's scope.
+// Both the OAuth token (from the device flow) and the manual PAT are per-user
+// keys resolved under the caller's scope.
 func (f *ProviderFactory) forCopilot(scope string) (Provider, error) {
-	// Try OAuth token first (stored by the device flow; global scope).
-	oauthToken, oauthErr := f.getKey("", "copilot-oauth-token")
+	// Try OAuth token first (per-user, stored by the device flow).
+	oauthToken, oauthErr := f.getKey(scope, "copilot-oauth-token")
 	if oauthErr == nil && oauthToken != "" && f.copilotAuth != nil {
 		return NewCopilotProviderWithAuth(f.copilotAuth, oauthToken), nil
 	}

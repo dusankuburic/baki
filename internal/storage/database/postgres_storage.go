@@ -44,6 +44,11 @@ type PostgresStorageBackend struct {
 
 	blobClient *azblob.Client
 	container  string
+	// cleaner runs deferred blob-cleanup work on a bounded worker pool. Non-nil
+	// only when blob storage is configured (created in New). Backends built
+	// directly (some tests) leave it nil; scheduleBlobCleanup falls back to a
+	// detached goroutine in that case.
+	cleaner *blobCleaner
 }
 
 // Config holds the connection settings for the PostgreSQL backend.
@@ -135,6 +140,7 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		}
 		b.blobClient = client
 		b.container = cfg.AzureStorageContainer
+		b.cleaner = newBlobCleaner()
 		// Probe the container so misconfiguration surfaces in logs immediately,
 		// but do NOT fail startup: a transient blob outage during a pod restart
 		// must not block boot (the DB may be perfectly healthy). The readiness
@@ -211,6 +217,11 @@ func (b *PostgresStorageBackend) CheckBlob(ctx context.Context) error {
 }
 
 func (b *PostgresStorageBackend) Close() error {
+	// Drain in-flight blob cleanups before dropping the pool so a graceful
+	// shutdown doesn't abandon the last window of superseded blobs.
+	if b.cleaner != nil {
+		b.cleaner.Stop()
+	}
 	return b.db.Close()
 }
 

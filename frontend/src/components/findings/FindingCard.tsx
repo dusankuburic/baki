@@ -57,9 +57,10 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const [commentBody, setCommentBody] = useState('')
   const [commentLoading, setCommentLoading] = useState(false)
 
-  const triageMap = useAnalysisStore(s => s.triageMap)
   const setFindingTriage = useAnalysisStore(s => s.setFindingTriage)
-  const triageStatus: TriageStatus = triageMap.get(findingKey(finding))?.status ?? 'open'
+  // Select only the single triage entry this card needs — selecting the whole
+  // triageMap would re-render every FindingCard on any triage change (O(N)).
+  const triageStatus: TriageStatus = useAnalysisStore(s => s.triageMap.get(findingKey(finding))?.status ?? 'open')
 
   const handleSetTriage = (status: TriageStatus) => {
     setShowTriage(false)
@@ -114,11 +115,16 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
       const property = fixType === 'replace-with-variable' ? (finding.metadata?.property as string | undefined) : undefined
       const updated = await flowApi.applyFix(doc.id, finding.blockId, fixType, finding.ruleId, variable, property)
       setDocument(updated)
-      const r = await analysisApi.analyzeFlow()
-      if (r) setReport(updated.id, r as AnalysisReport)
-      toast.success('Fix applied', {
-        description: 'Flow file updated and re-analyzed.',
-      })
+      // Fix was applied successfully. Re-analysis is best-effort — if it
+      // fails the editor already shows the fixed source; the stale report
+      // refreshes on the next manual analysis.
+      try {
+        const r = await analysisApi.analyzeFlow()
+        if (r) setReport(updated.id, r as AnalysisReport)
+        toast.success('Fix applied', { description: 'Flow file updated and re-analyzed.' })
+      } catch {
+        toast.success('Fix applied', { description: 'Flow file updated. Click Analyze to refresh findings.' })
+      }
     } catch (err) {
       toast.error('Could not apply fix', {description: String(err)})
     } finally {

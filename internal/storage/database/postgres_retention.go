@@ -1,9 +1,12 @@
 package database
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"pad-core/logger"
@@ -95,25 +98,15 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 	// request teardown or leak.
 	if b.blobClient != nil {
 		for _, fid := range ownedFlowIDs {
-			go b.deleteFlowBlobsDetached(fid)
+			flowID := fid
+			b.scheduleBlobCleanup(time.Now(), "delete-user-flow:"+flowID, func(ctx context.Context) {
+				if err := b.deleteBlobs(ctx, fmt.Sprintf("flows/%s/", flowID)); err != nil {
+					logger.Warn("DeleteUser: failed to delete flow blobs", "flow_id", flowID, "error", err)
+				}
+			})
 		}
 	}
 	return nil
-}
-
-// deleteFlowBlobsDetached removes a flow's blob prefix with a bounded context
-// and panic recovery (project convention for background goroutines).
-func (b *PostgresStorageBackend) deleteFlowBlobsDetached(flowID string) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Warn("DeleteUser blob cleanup goroutine panicked", "flow_id", flowID, "err", r)
-		}
-	}()
-	cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := b.deleteBlobs(cctx, fmt.Sprintf("flows/%s/", flowID)); err != nil {
-		logger.Warn("DeleteUser: failed to delete flow blobs", "flow_id", flowID, "error", err)
-	}
 }
 
 // ExportUserData assembles the user's personal data for a data-subject access /
@@ -125,9 +118,30 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 	if err != nil {
 		return nil, err
 	}
-	flows, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: userID, Limit: 0})
-	if err != nil {
-		return nil, fmt.Errorf("export: list flows: %w", err)
+	// Page through ALL of the user's flows: ListFlows clamps Limit<=0 to a
+	// default page size, so a single call would silently truncate the export
+	// for users with more flows than one page — unacceptable for a
+	// data-subject access request, which must be complete.
+	const exportPageSize = 500 // ListFlows' maximum page size
+	var flows []*interfaces.FlowDocument
+	for offset := 0; ; offset += exportPageSize {
+		page, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: userID, Limit: exportPageSize, Offset: offset})
+		if err != nil {
+			return nil, fmt.Errorf("export: list flows: %w", err)
+		}
+		flows = append(flows, page...)
+		if len(page) < exportPageSize {
+			break
+		}
+	}
+	// A data-subject export must be complete or fail. Transient blob failures
+	// already fail ListFlows; this catches the remaining case — a flow whose
+	// content blob is permanently missing (ListFlows returns it with nil
+	// content) — instead of silently shipping an export without its content.
+	for _, f := range flows {
+		if len(f.Content) == 0 && metadataRecordsContent(f.Metadata) {
+			return nil, fmt.Errorf("export: content for flow %s is unavailable; refusing to produce an incomplete export", f.ID)
+		}
 	}
 	settings, _ := b.LoadUserSettings(ctx, userID)
 	tokens, err := b.ListAPITokens(ctx, userID)
@@ -146,6 +160,105 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 		APITokens:   tokens,
 		ExportedAt:  time.Now().UTC(),
 	}, nil
+}
+
+// exportFlowPageSize bounds how many flows (with content) ExportUserDataTo
+// holds in memory at once. Smaller than ListFlows' max so the streaming export
+// keeps peak memory to one modest page rather than every flow's content.
+const exportFlowPageSize = 100
+
+// ExportUserDataTo streams the same JSON bundle as ExportUserData to w, but
+// fetches flows one page at a time and releases each page before the next, so
+// peak memory is bounded to a single page's content instead of every flow's
+// content at once. Callers MUST treat w as tainted if a non-nil error is
+// returned (partial JSON may have been written) — the HTTP handler streams to a
+// temp file and only forwards it to the client on success, preserving the
+// "complete or fail" guarantee a data-subject export requires.
+func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID string, w io.Writer) error {
+	user, err := b.LoadUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	settings, _ := b.LoadUserSettings(ctx, userID)
+	tokens, err := b.ListAPITokens(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("export: list tokens: %w", err)
+	}
+	audit, err := b.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: userID, Limit: 1000})
+	if err != nil {
+		return fmt.Errorf("export: list audit: %w", err)
+	}
+
+	bw := bufio.NewWriter(w)
+	writeField := func(prefix string, v any) error {
+		if _, err := bw.WriteString(prefix); err != nil {
+			return err
+		}
+		data, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		_, err = bw.Write(data)
+		return err
+	}
+
+	// Object field order mirrors interfaces.UserDataExport's json tags so the
+	// streamed bytes are byte-shape-compatible with the buffered encoder.
+	if err := writeField(`{"user":`, user); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString(`,"flows":[`); err != nil {
+		return err
+	}
+	first := true
+	for offset := 0; ; offset += exportFlowPageSize {
+		page, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: userID, Limit: exportFlowPageSize, Offset: offset})
+		if err != nil {
+			return fmt.Errorf("export: list flows: %w", err)
+		}
+		for _, f := range page {
+			// Same completeness guard as ExportUserData: a permanently missing
+			// content blob must fail the export, not ship an empty flow.
+			if len(f.Content) == 0 && metadataRecordsContent(f.Metadata) {
+				return fmt.Errorf("export: content for flow %s is unavailable; refusing to produce an incomplete export", f.ID)
+			}
+			if !first {
+				if _, err := bw.WriteString(","); err != nil {
+					return err
+				}
+			}
+			first = false
+			data, err := json.Marshal(f)
+			if err != nil {
+				return fmt.Errorf("export: marshal flow %s: %w", f.ID, err)
+			}
+			if _, err := bw.Write(data); err != nil {
+				return err
+			}
+		}
+		if len(page) < exportFlowPageSize {
+			break
+		}
+	}
+	if _, err := bw.WriteString(`]`); err != nil {
+		return err
+	}
+	if err := writeField(`,"settings":`, settings); err != nil {
+		return err
+	}
+	if err := writeField(`,"auditEvents":`, audit); err != nil {
+		return err
+	}
+	if err := writeField(`,"apiTokens":`, tokens); err != nil {
+		return err
+	}
+	if err := writeField(`,"exportedAt":`, time.Now().UTC()); err != nil {
+		return err
+	}
+	if _, err := bw.WriteString("}"); err != nil {
+		return err
+	}
+	return bw.Flush()
 }
 
 // PurgeExpiredData removes stale rows whose retention has elapsed. It is

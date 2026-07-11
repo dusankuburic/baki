@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/mail"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -481,6 +483,21 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 		render.Error(w, fmt.Errorf("storage backend not available"), http.StatusServiceUnavailable)
 		return
 	}
+	filename := fmt.Sprintf("baki-account-export-%s.json", claims.UserID)
+
+	// When the backend can stream the export (the Postgres backend, which
+	// offloads flow content to blob storage), build it into a temp file so peak
+	// memory is one page of flows rather than every flow's content at once. The
+	// temp file also preserves the "complete or fail" guarantee: nothing reaches
+	// the client until the whole export succeeded, so a mid-stream error still
+	// becomes a clean 4xx/5xx.
+	if streamer, ok := h.backend.(userDataStreamer); ok {
+		if h.exportAccountStreamed(w, r, streamer, claims.UserID, filename) {
+			logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionDataExport, "user", claims.UserID, nil)
+		}
+		return
+	}
+
 	export, err := h.backend.ExportUserData(r.Context(), claims.UserID)
 	if err != nil {
 		if errors.Is(err, storageif.ErrNotFound) {
@@ -492,9 +509,51 @@ func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Req
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionDataExport, "user", claims.UserID, nil)
 
-	filename := fmt.Sprintf("baki-account-export-%s.json", claims.UserID)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	render.JSON(w, export)
+}
+
+// userDataStreamer is implemented by backends that can stream a data-subject
+// export incrementally (currently the Postgres backend). Optional: backends
+// without it fall back to the buffered ExportUserData path.
+type userDataStreamer interface {
+	ExportUserDataTo(ctx context.Context, userID string, w io.Writer) error
+}
+
+// exportAccountStreamed builds the export into a temp file, then forwards it to
+// the client only on success. Returns true when the response was written
+// successfully (so the caller should log the audit event).
+func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Request, streamer userDataStreamer, userID, filename string) bool {
+	tmp, err := os.CreateTemp("", "baki-export-*.json")
+	if err != nil {
+		render.Error(w, fmt.Errorf("export: create temp file: %w", err), http.StatusInternalServerError)
+		return false
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	defer func() { _ = tmp.Close() }()
+
+	if err := streamer.ExportUserDataTo(r.Context(), userID, tmp); err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			render.Error(w, err, http.StatusNotFound)
+			return false
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return false
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		render.Error(w, fmt.Errorf("export: rewind temp file: %w", err), http.StatusInternalServerError)
+		return false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	if _, err := io.Copy(w, tmp); err != nil {
+		// Headers/body may be partly written; the connection is the only signal
+		// left. Log and stop — can't turn this into a clean HTTP error.
+		logger.Warn("export: failed streaming temp file to client", "user_id", userID, "error", err)
+		return false
+	}
+	return true
 }
 
 // handleAuthSessions lists the caller's active sessions (non-revoked,

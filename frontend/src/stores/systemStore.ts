@@ -2,6 +2,7 @@ import {create} from 'zustand'
 import {systemApi} from '@/api'
 import type {AppInfo} from '@/types'
 import {logger} from '@/lib/logger'
+import {registerStoreReset} from './storeRegistry'
 
 interface SystemState {
   info: AppInfo | null
@@ -23,3 +24,5 @@ export const useSystemStore = create<SystemState>((set) => ({
     }
   },
 }))
+
+registerStoreReset(() => useSystemStore.setState({info: null, isLoaded: false}))

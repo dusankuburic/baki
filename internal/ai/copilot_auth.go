@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,14 +29,14 @@ type CopilotSessionToken struct {
 // 1. GitHub OAuth device flow (with Copilot's VS Code client ID)
 // 2. Copilot session token exchange and caching
 type CopilotAuth struct {
-	client       *http.Client
-	mu           sync.Mutex
-	sessionToken *CopilotSessionToken
-	flight       singleflight.Group
+	client        *http.Client
+	mu            sync.Mutex
+	sessionTokens map[string]*CopilotSessionToken
+	flight        singleflight.Group
 }
 
 func NewCopilotAuth() *CopilotAuth {
-	return &CopilotAuth{client: authHTTPClient}
+	return &CopilotAuth{client: authHTTPClient, sessionTokens: make(map[string]*CopilotSessionToken)}
 }
 
 // StartDeviceFlow initiates the GitHub OAuth device flow using the Copilot client ID.
@@ -152,11 +154,23 @@ func (a *CopilotAuth) ExchangeToken(ctx context.Context, githubToken string) (*C
 // GetSessionToken returns a valid Copilot session token, refreshing if expired or within 5 min of expiry.
 // Uses singleflight so concurrent callers with the same GitHub token share a single HTTP exchange,
 // while different tokens proceed independently. The mutex is never held during network I/O.
+// The cache is keyed by a hash of the GitHub token so multiple users in cloud mode don't thrash
+// each other's cached session token.
 func (a *CopilotAuth) GetSessionToken(ctx context.Context, githubToken string) (string, error) {
+	cacheKey := tokenHash(githubToken)
 	a.mu.Lock()
+	if a.sessionTokens == nil {
+		a.sessionTokens = make(map[string]*CopilotSessionToken)
+	}
 	now := time.Now().Unix()
-	if a.sessionToken != nil && a.sessionToken.ExpiresAt > now+300 {
-		token := a.sessionToken.Token
+	// Sweep expired entries so users who never return don't accumulate forever.
+	for k, v := range a.sessionTokens {
+		if v.ExpiresAt <= now {
+			delete(a.sessionTokens, k)
+		}
+	}
+	if st := a.sessionTokens[cacheKey]; st != nil && st.ExpiresAt > now+300 {
+		token := st.Token
 		a.mu.Unlock()
 		return token, nil
 	}
@@ -171,7 +185,14 @@ func (a *CopilotAuth) GetSessionToken(ctx context.Context, githubToken string) (
 	token := v.(*CopilotSessionToken)
 
 	a.mu.Lock()
-	a.sessionToken = token
+	a.sessionTokens[cacheKey] = token
 	a.mu.Unlock()
 	return token.Token, nil
+}
+
+// tokenHash returns a deterministic, non-reversible key for the session-token cache.
+// The GitHub token is a long-lived OAuth secret — never store or log it as a bare map key.
+func tokenHash(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:16])
 }

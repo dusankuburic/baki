@@ -40,7 +40,7 @@ export default function Breadcrumbs() {
         <div className="flex items-center gap-1.5 px-3 h-8 text-[11px] text-text-tertiary bg-surface-1 border-b border-border-subtle overflow-hidden">
             <button 
                 className="flex items-center gap-1 hover:text-text-primary transition-colors flex-shrink-0"
-                onClick={() => selectSubflow(document.subflows[0].id)}
+                onClick={() => document.subflows[0] && selectSubflow(document.subflows[0].id)}
             >
                 <Home size={12} />
                 <span className="truncate max-w-[100px]">{document.name}</span>

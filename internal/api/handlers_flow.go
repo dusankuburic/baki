@@ -226,7 +226,7 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 
 func (h *FlowHandler) handleRecentFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		render.JSON(w, []string{})
+		render.Error(w, fmt.Errorf("recent files are not available in cloud mode"), http.StatusForbidden)
 		return
 	}
 	files, err := h.flowSvc.RecentFiles()
@@ -239,7 +239,7 @@ func (h *FlowHandler) handleRecentFiles(w http.ResponseWriter, r *http.Request) 
 
 func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		render.JSON(w, map[string]string{"status": "ok"})
+		render.Error(w, fmt.Errorf("recent files are not available in cloud mode"), http.StatusForbidden)
 		return
 	}
 	var req struct {
@@ -258,7 +258,7 @@ func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Requ
 
 func (h *FlowHandler) handleClearRecentFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		render.JSON(w, map[string]string{"status": "ok"})
+		render.Error(w, fmt.Errorf("recent files are not available in cloud mode"), http.StatusForbidden)
 		return
 	}
 	if err := h.flowSvc.ClearRecentFiles(); err != nil {
@@ -466,7 +466,7 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 
 func (h *FlowHandler) handleGetSourceFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		render.JSON(w, []string{})
+		render.Error(w, fmt.Errorf("source files are not available in cloud mode"), http.StatusForbidden)
 		return
 	}
 	doc := h.docProvider.CurrentDoc()

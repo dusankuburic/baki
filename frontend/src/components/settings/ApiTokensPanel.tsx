@@ -1,7 +1,8 @@
-import {useEffect, useState, useCallback} from 'react'
+import {useState} from 'react'
 import {KeyRound, Plus, Trash2, Copy, Check, AlertCircle, AlertTriangle} from 'lucide-react'
 import {authApi, type ApiToken, type CreatedApiToken} from '@/api/auth'
 import {Button, Input, Spinner, useToast, useConfirm} from '@/components/shared'
+import {useAsync} from '@/hooks/useAsync'
 
 /**
  * Cloud-only Settings panel for machine API tokens (personal access tokens):
@@ -10,10 +11,6 @@ import {Button, Input, Spinner, useToast, useConfirm} from '@/components/shared'
  * SettingsModal.
  */
 export default function ApiTokensPanel() {
-  const [tokens, setTokens] = useState<ApiToken[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-
   const [name, setName] = useState('')
   const [expiresDays, setExpiresDays] = useState('')
   const [creating, setCreating] = useState(false)
@@ -23,15 +20,11 @@ export default function ApiTokensPanel() {
   const toast = useToast()
   const {confirm} = useConfirm()
 
-  const load = useCallback(() => {
-    setLoading(true)
-    authApi.listApiTokens()
-      .then(t => { setTokens(t ?? []); setLoadError(null) })
-      .catch(e => setLoadError(e instanceof Error ? e.message : 'Failed to load tokens'))
-      .finally(() => setLoading(false))
-  }, [])
-
-  useEffect(() => { load() }, [load])
+  const {data, isLoading: loading, error: loadError, refetch: load} = useAsync<ApiToken[]>(
+    () => authApi.listApiTokens().then(t => t ?? []),
+    [],
+  )
+  const tokens = data ?? []
 
   const handleCreate = async () => {
     const n = name.trim()

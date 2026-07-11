@@ -9,6 +9,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/connector/padcloud"
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
@@ -127,6 +128,14 @@ var APIModule = fx.Options(
 				return is
 			}
 			return nil
+		},
+		// Power Platform auth: nil unless the connector is configured (cloud
+		// mode + tenant/client/dataverse). Admin endpoints treat nil as 503.
+		func(auth *padcloud.Authenticator) api.PadCloudAuth {
+			if auth == nil {
+				return nil
+			}
+			return auth
 		},
 		api.NewRouter,
 	),

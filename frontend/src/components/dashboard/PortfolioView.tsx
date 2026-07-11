@@ -1,8 +1,8 @@
-import {useEffect, useState} from 'react'
 import {LayoutGrid, AlertCircle} from 'lucide-react'
 import {libraryApi, type Portfolio} from '@/api/library'
 import {Spinner, EmptyState} from '@/components/shared'
 import {logger} from '@/lib/logger'
+import {useAsync} from '@/hooks/useAsync'
 
 // healthColor maps a 0–100 health score to a semantic text color.
 function healthColor(score: number): string {
@@ -26,23 +26,10 @@ function Stat({label, value, accent}: {label: string; value: string | number; ac
  * (cloud mode). Read-only for now.
  */
 export default function PortfolioView() {
-  const [data, setData] = useState<Portfolio | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    libraryApi.portfolio()
-      .then(p => { if (!cancelled) { setData(p); setError(null) } })
-      .catch(e => {
-        if (cancelled) return
-        logger.warn('Failed to load portfolio', e)
-        setError(e instanceof Error ? e.message : 'Failed to load portfolio')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [])
+  const {data, isLoading: loading, error} = useAsync<Portfolio>(
+    () => libraryApi.portfolio().catch(e => { logger.warn('Failed to load portfolio', e); throw e }),
+    [],
+  )
 
   if (loading) {
     return <div className="h-full flex items-center justify-center"><Spinner /></div>

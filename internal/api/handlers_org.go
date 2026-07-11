@@ -141,7 +141,11 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 
 func (h *OrgHandler) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
-	orgs, _ := h.orgSvc.ListForUser(r.Context(), userID)
+	orgs, err := h.orgSvc.ListForUser(r.Context(), userID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
 	render.JSON(w, orgs)
 }
 

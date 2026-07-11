@@ -257,13 +257,17 @@ func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID stri
 	// Cap the number of chunks loaded from DB to avoid OOM on large
 	// knowledge bases. The cosine similarity sort and final truncation
 	// still happens in Go for portability (no pgvector dependency).
+	// ORDER BY doc_id, id makes the 500-chunk sample deterministic (same
+	// chunks on repeated calls) — without it, Postgres returns an arbitrary
+	// set of rows depending on physical layout / vacuum state.
 	// TODO: migrate to pgvector for server-side similarity search.
 	const maxChunks = 500
 	rows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT c.id, c.doc_id, c.content, c.embedding 
+		SELECT c.id, c.doc_id, c.content, c.embedding
 		FROM knowledge_chunks c
 		JOIN knowledge_documents d ON c.doc_id = d.id
 		WHERE d.org_id = $1
+		ORDER BY c.doc_id, c.id
 		LIMIT $2`, orgID, maxChunks)
 	if err != nil {
 		return nil, err
@@ -286,15 +290,42 @@ func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID stri
 		return nil, fmt.Errorf("iterate knowledge chunks: %w", err)
 	}
 
+	return rankKnowledgeChunks(orgID, chunks, queryEmbedding, limit)
+}
+
+// rankKnowledgeChunks scores chunks against queryEmbedding by cosine similarity
+// and returns the top `limit`, highest first.
+//
+// Chunks whose embedding width differs from the query's cannot be compared
+// (cosine similarity is only defined for equal-length vectors) — this happens
+// when the knowledge base was indexed with a different embedding provider/model
+// than the one answering the query. Such chunks are skipped rather than scored
+// 0 (which would rank them as arbitrary noise); if nothing is comparable, it
+// fails loudly so the caller re-indexes instead of receiving silently-irrelevant
+// results.
+func rankKnowledgeChunks(orgID string, chunks []interfaces.KnowledgeChunk, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	// Score each chunk once, then sort by score. Computing similarity inside the
 	// comparator would recompute each chunk's score O(n log n) times.
+	qDim := len(queryEmbedding)
 	type scored struct {
 		chunk interfaces.KnowledgeChunk
 		sim   float32
 	}
-	scoredChunks := make([]scored, len(chunks))
-	for i, c := range chunks {
-		scoredChunks[i] = scored{chunk: c, sim: cosineSimilarity(c.Embedding, queryEmbedding)}
+	scoredChunks := make([]scored, 0, len(chunks))
+	mismatched := 0
+	for _, c := range chunks {
+		if len(c.Embedding) != qDim {
+			mismatched++
+			continue
+		}
+		scoredChunks = append(scoredChunks, scored{chunk: c, sim: cosineSimilarity(c.Embedding, queryEmbedding)})
+	}
+	if len(scoredChunks) == 0 && mismatched > 0 {
+		return nil, fmt.Errorf("knowledge search embedding dimension mismatch: query has %d dims but all %d stored chunks differ — re-index the knowledge base after changing the embedding provider", qDim, mismatched)
+	}
+	if mismatched > 0 {
+		logger.Warn("knowledge search skipped chunks with mismatched embedding dimension",
+			"org_id", orgID, "query_dim", qDim, "skipped", mismatched, "scored", len(scoredChunks))
 	}
 	sort.Slice(scoredChunks, func(i, j int) bool {
 		return scoredChunks[i].sim > scoredChunks[j].sim

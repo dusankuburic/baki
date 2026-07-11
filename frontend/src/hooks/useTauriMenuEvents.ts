@@ -1,7 +1,7 @@
 import {useEffect} from 'react'
 import {flowApi, exportApi} from '@/api'
 import {logger} from '@/lib/logger'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
 import {useUIStore} from '@/stores/uiStore'
 import {useEditorStore} from '@/stores/editorStore'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
@@ -23,7 +23,7 @@ interface Options {
 export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}: Options): void {
   // Native menu bar events.
   useEffect(() => {
-    if (!isTauri()) return
+    if (!getPlatformCapabilities().nativeWindow) return
     // Sync cancel flag so cleanup is immediate — React does not await async cleanup
     // functions, meaning the Promise.then pattern leaks the listener across re-runs.
     let unsub: (() => void) | null = null
@@ -86,7 +86,7 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
 
   // OS "open with" / file-association events.
   useEffect(() => {
-    if (!isTauri()) return
+    if (!getPlatformCapabilities().nativeWindow) return
     let unsub: (() => void) | null = null
     let cancelled = false
     import('@tauri-apps/api/event').then(({listen}) =>

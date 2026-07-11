@@ -13,7 +13,7 @@ import {EmptyState} from '@/components/shared'
 
 cytoscape.use(dagre)
 
-const GRAPH_NODE_LIMIT = 2000
+const GRAPH_NODE_LIMIT = 800
 
 export default function GraphView({subflowId: subflowIdProp}: {subflowId?: string} = {}) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -187,12 +187,11 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     })
   }, [selectedVariable, subflow?.id])
 
-  const reports = useAnalysisStore(s => s.reports)
+  const report = useAnalysisStore(s => flowDoc ? s.reports.get(flowDoc.id) : undefined)
   useEffect(() => {
     if (!cyRef.current || !flowDoc) return
     const cy = cyRef.current
 
-    const report = reports.get(flowDoc.id)
     cy.batch(() => {
       // Reset classes and restore the pristine label (stashed in scratch so
       // repeated runs of this effect stay idempotent).
@@ -220,7 +219,7 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
         node.data('fullLabel', `${node.scratch('_baseLabel')}\n⚠ ${count} issue${count !== 1 ? 's' : ''}`)
       }
     })
-  }, [flowDoc, reports, subflow?.id])
+  }, [flowDoc, report, subflow?.id])
 
   if (!flowDoc) {
     return (

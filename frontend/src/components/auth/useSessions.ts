@@ -1,11 +1,10 @@
-import {useState, useEffect, useCallback} from 'react'
+import {useState, useCallback, useMemo} from 'react'
 import {authApi, type SessionInfo} from '@/api/auth'
 import {getCurrentSessionId} from '@/stores/authStore'
+import {useAsync} from '@/hooks/useAsync'
 
 export function useSessions() {
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [revokingOthers, setRevokingOthers] = useState(false)
   // The session list is keyed by refresh-token jti, which is also the claim
@@ -13,27 +12,25 @@ export function useSessions() {
   // no extra request and no backend change to know "which row is me".
   const currentSessionId = getCurrentSessionId()
 
-  useEffect(() => {
-    let cancelled = false
-    authApi.listSessions()
-      .then(list => { if (!cancelled) setSessions(list ?? []) })
-      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load sessions') })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [])
+  const {data, isLoading: loading, error: fetchError, setData: setSessions} = useAsync<SessionInfo[]>(
+    () => authApi.listSessions().then(list => list ?? []),
+    [],
+  )
+  const sessions = useMemo(() => data ?? [], [data])
+  const error = actionError ?? fetchError
 
   const revoke = useCallback(async (id: string) => {
     setRevokingId(id)
-    setError(null)
+    setActionError(null)
     try {
       await authApi.revokeSession(id)
-      setSessions(prev => prev.filter(s => s.id !== id))
+      setSessions(sessions.filter(s => s.id !== id))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revoke session')
+      setActionError(err instanceof Error ? err.message : 'Failed to revoke session')
     } finally {
       setRevokingId(null)
     }
-  }, [])
+  }, [sessions, setSessions])
 
   // revokeOthers signs out every session except the current one. There's no
   // dedicated "revoke all others" endpoint — each other session is already
@@ -46,15 +43,15 @@ export function useSessions() {
     const others = sessions.filter(s => s.id !== currentSessionId)
     if (others.length === 0) return
     setRevokingOthers(true)
-    setError(null)
+    setActionError(null)
     const results = await Promise.allSettled(others.map(s => authApi.revokeSession(s.id)))
     const revokedIds = new Set(others.filter((_, i) => results[i].status === 'fulfilled').map(s => s.id))
-    setSessions(prev => prev.filter(s => !revokedIds.has(s.id)))
+    setSessions(sessions.filter(s => !revokedIds.has(s.id)))
     if (revokedIds.size < others.length) {
-      setError('Some sessions could not be signed out — try again.')
+      setActionError('Some sessions could not be signed out — try again.')
     }
     setRevokingOthers(false)
-  }, [sessions, currentSessionId])
+  }, [sessions, currentSessionId, setSessions])
 
   return {sessions, loading, error, revokingId, revoke, currentSessionId, revokingOthers, revokeOthers}
 }

@@ -109,3 +109,79 @@ func TestProviderFactory_For_Copilot_NotConfigured(t *testing.T) {
 		t.Errorf("expected 'not configured' error, got: %v", err)
 	}
 }
+
+// TestProviderFactory_For_GithubModels_PerUserScope proves the github-models
+// OAuth token is resolved under the caller's scope (not the global scope), so
+// each user's connected provider is isolated.
+func TestProviderFactory_For_GithubModels_PerUserScope(t *testing.T) {
+	// Keys keyed by (scope, provider) — only user "u1" has the token.
+	keys := map[string]string{
+		"u1|github-models-token": "gho_u1_token",
+	}
+	getKey := func(scope, provider string) (string, error) {
+		return keys[scope+"|"+provider], nil
+	}
+	f := NewProviderFactory(getKey, nil, nil, nil)
+
+	// u1 is configured.
+	if _, err := f.For("u1", "github-models"); err != nil {
+		t.Errorf("For(u1): expected configured provider, got error: %v", err)
+	}
+	// u2 has no token and must report not-configured — NOT find u1's token.
+	_, err := f.For("u2", "github-models")
+	if err == nil {
+		t.Fatal("For(u2): expected not-configured error, got nil (u1's token leaked across users)")
+	}
+	if !errors.Is(err, ErrKeyNotConfigured) {
+		t.Errorf("For(u2): expected ErrKeyNotConfigured, got: %v", err)
+	}
+	// Global scope "" must not see u1's per-user token either.
+	if _, err := f.For("", "github-models"); err == nil {
+		t.Fatal("For(''): expected not-configured, got nil (per-user token leaked to global scope)")
+	}
+}
+
+// TestProviderFactory_For_Copilot_PerUserScope proves the copilot OAuth token is
+// resolved under the caller's scope (not the global scope), so one user's OAuth
+// connection does not leak to others.
+func TestProviderFactory_For_Copilot_PerUserScope(t *testing.T) {
+	keys := map[string]string{
+		"u1|copilot-oauth-token": "gho_u1_copilot",
+	}
+	getKey := func(scope, provider string) (string, error) {
+		return keys[scope+"|"+provider], nil
+	}
+	f := NewProviderFactory(getKey, NewCopilotAuth(), nil, nil)
+
+	// u1's OAuth token resolves.
+	if _, err := f.For("u1", "copilot"); err != nil {
+		t.Errorf("For(u1): expected configured provider, got error: %v", err)
+	}
+	// u2 must not find u1's token.
+	if _, err := f.For("u2", "copilot"); err == nil {
+		t.Fatal("For(u2): expected not-configured, got nil (u1's OAuth token leaked across users)")
+	}
+	// Global scope "" must not see u1's per-user token.
+	if _, err := f.For("", "copilot"); err == nil {
+		t.Fatal("For(''): expected not-configured, got nil (per-user OAuth token leaked to global scope)")
+	}
+}
+
+// TestProviderFactory_For_Copilot_PAT_PerUserScope confirms the manual PAT path
+// still works per-user after the OAuth scope change (dual-auth fallback).
+func TestProviderFactory_For_Copilot_PAT_PerUserScope(t *testing.T) {
+	keys := map[string]string{
+		"u1|copilot": "ghp_u1_pat",
+	}
+	getKey := func(scope, provider string) (string, error) {
+		return keys[scope+"|"+provider], nil
+	}
+	f := NewProviderFactory(getKey, NewCopilotAuth(), nil, nil)
+
+	if _, err := f.For("u1", "copilot"); err != nil {
+		t.Errorf("For(u1): expected PAT provider, got error: %v", err)
+	}
+	if _, err := f.For("u2", "copilot"); err == nil {
+		t.Fatal("For(u2): expected not-configured, got nil (u1's PAT leaked across users)")
+	}
+}

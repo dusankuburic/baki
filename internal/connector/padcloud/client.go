@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -30,12 +31,19 @@ type HTTPClient struct {
 	flowDefPathFmt string // flowID → definition path; defaults to a documented candidate
 }
 
+// maxDefinitionBytes bounds a flow-definition response body. Definitions are
+// JSON action trees — even huge flows stay well under this; an unbounded read
+// would let one malformed/hostile response balloon memory mid-sweep.
+const maxDefinitionBytes = 32 << 20 // 32 MiB
+
 // NewHTTPClient builds the client for a Dataverse environment.
 func NewHTTPClient(auth *Authenticator, dataverseBase string) *HTTPClient {
 	return &HTTPClient{
-		auth:           auth,
-		http:           &http.Client{Timeout: 60 * time.Second},
-		dataverse:      dataverseBase,
+		auth: auth,
+		http: &http.Client{Timeout: 60 * time.Second},
+		// Trim a trailing slash so path joins below ("base"+"/"+path) can't
+		// produce a double slash (some gateways 404 on those).
+		dataverse:      strings.TrimRight(dataverseBase, "/"),
 		listFlowsPath:  "workflows?$filter=category eq 6&$select=name,workflowid,modifiedon,_solutionid_value", // category 6 = desktop flow (validate)
 		flowDefPathFmt: "workflows(%s)/exportworkflowdefinition",                                               // candidate endpoint for the action-tree JSON (validate)
 	}
@@ -109,5 +117,15 @@ func (c *HTTPClient) GetFlowDefinition(ctx context.Context, flowID string) (json
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("get definition: status %d: %s", resp.StatusCode, body)
 	}
-	return io.ReadAll(resp.Body)
+	// Bounded read: reject a definition that exceeds the cap instead of
+	// silently truncating it (truncated JSON would fail in the converter with
+	// a misleading parse error).
+	def, err := io.ReadAll(io.LimitReader(resp.Body, maxDefinitionBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("get definition: read body: %w", err)
+	}
+	if len(def) > maxDefinitionBytes {
+		return nil, fmt.Errorf("get definition: response exceeds %d bytes", maxDefinitionBytes)
+	}
+	return def, nil
 }

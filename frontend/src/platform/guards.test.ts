@@ -73,6 +73,10 @@ describe('Platform guards', () => {
     it('has clipboard support', () => {
       expect(getPlatformCapabilities().clipboard).toBe(true)
     })
+
+    it('has no native window chrome', () => {
+      expect(getPlatformCapabilities().nativeWindow).toBe(false)
+    })
   })
 
   describe('getPlatformCapabilities — tauri', () => {
@@ -90,6 +94,10 @@ describe('Platform guards', () => {
 
     it('has system tray', () => {
       expect(getPlatformCapabilities().systemTray).toBe(true)
+    })
+
+    it('has native window chrome', () => {
+      expect(getPlatformCapabilities().nativeWindow).toBe(true)
     })
   })
 })

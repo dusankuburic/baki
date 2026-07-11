@@ -1,6 +1,6 @@
 import {Minus, Square, X, Settings} from 'lucide-react'
 import {createAdapter} from '@/platform/adapters'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import OrgSwitcher from './OrgSwitcher'
@@ -49,7 +49,7 @@ export default function TitleBar() {
                 >
                     <Settings size={12} />
                 </button>
-                {isTauri() && (
+                {getPlatformCapabilities().nativeWindow && (
                     <>
                         <button
                             onClick={() => platform.minimizeWindow()}

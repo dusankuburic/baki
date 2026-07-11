@@ -110,22 +110,3 @@ export interface NotificationOptions {
   body: string;
   icon?: string;
 }
-
-/**
- * Platform detection result
- */
-export interface PlatformInfo {
-  type: 'tauri' | 'web';
-  capabilities: PlatformCapabilities;
-}
-
-/**
- * Platform capabilities
- */
-export interface PlatformCapabilities {
-  fileSystem: boolean;
-  nativeDialogs: boolean;
-  clipboard: boolean;
-  notifications: boolean;
-  systemTray: boolean;
-}

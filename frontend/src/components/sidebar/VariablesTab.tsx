@@ -3,7 +3,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
-import type {VariableHistory, Block} from '@/types'
+import type {Block} from '@/types'
 import clsx from 'clsx'
 import {Variable} from 'lucide-react'
 import {logger} from '@/lib/logger'
@@ -40,7 +40,7 @@ export default function VariablesTab() {
     setSelectedVariable(v)
     try {
       const h = await analysisApi.getVariableLineage(v)
-      setVariableLineage(h as unknown as VariableHistory)
+      setVariableLineage(h)
       useUIStore.getState().setVariablePanelOpen(true)
     } catch (err) {
       logger.warn(err)

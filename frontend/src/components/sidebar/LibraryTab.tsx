@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Library, Search, Trash2, FolderOpen, Save, RefreshCw } from 'lucide-react'
 import { libraryApi, type LibraryFlow } from '@/api/library'
 import { VersionConflictError } from '@/api/client'
@@ -9,11 +9,11 @@ import { Spinner, useToast, useConfirm } from '@/components/shared'
 import type { FlowDocument } from '@/types'
 import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
+import {useAsync} from '@/hooks/useAsync'
 
 export default function LibraryTab() {
-  const [flows, setFlows] = useState<LibraryFlow[]>([])
-  const [isLoading, setIsLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const setDocument = useFlowStore(s => s.setDocument)
   const currentDoc = useFlowStore(s => s.document)
@@ -23,31 +23,21 @@ export default function LibraryTab() {
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const toast = useToast()
   const {confirm, prompt} = useConfirm()
-  const abortRef = useRef<AbortController | null>(null)
 
-  const fetchLibrary = useCallback(async () => {
-    abortRef.current?.abort()
-    const ac = new AbortController()
-    abortRef.current = ac
-    setIsLoading(true)
-    try {
-      const page = await libraryApi.list({ query: search, orgId: activeOrgId ?? undefined })
-      if (ac.signal.aborted) return
-      setFlows(page.items)
-    } catch (err) {
-      if (ac.signal.aborted) return
-      logger.warn('Failed to fetch library', err)
-    } finally {
-      if (!ac.signal.aborted) {
-        setIsLoading(false)
-      }
-    }
-  }, [search, activeOrgId])
-
+  // Debounce search input to avoid firing an API call per keystroke (mirrors
+  // LibraryWorkspace's 250ms pattern).
   useEffect(() => {
-    fetchLibrary()
-    return () => { abortRef.current?.abort() }
-  }, [fetchLibrary])
+    const t = setTimeout(() => setDebouncedSearch(search), 250)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const {data, isLoading, setData: setFlows, refetch: fetchLibrary} = useAsync<LibraryFlow[]>(
+    () => libraryApi.list({ query: debouncedSearch, orgId: activeOrgId ?? undefined })
+      .then(page => page.items)
+      .catch(err => { logger.warn('Failed to fetch library', err); throw err }),
+    [debouncedSearch, activeOrgId],
+  )
+  const flows = data ?? []
 
   const handleOpen = async (id: string) => {
     try {
@@ -80,7 +70,7 @@ export default function LibraryTab() {
     if (!ok) return
     try {
       await libraryApi.delete(id)
-      setFlows(prev => prev.filter(f => f.id !== id))
+      setFlows(flows.filter(f => f.id !== id))
     } catch (err) {
       toast.error('Failed to delete', {
         description: err instanceof Error ? err.message : 'Unknown error',

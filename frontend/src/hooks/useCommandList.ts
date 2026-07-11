@@ -5,7 +5,7 @@ import {useEditorStore} from '@/stores/editorStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {flowApi, analysisApi, exportApi} from '@/api'
-import {isTauri} from '@/platform/guards'
+import {isTauri, getPlatformCapabilities} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {logger} from '@/lib/logger'
 import {THEME_REGISTRY} from '@/lib/themeRegistry'
@@ -149,7 +149,7 @@ export function useCommandList(deps: {
             cmds.push({id: 'view.portfolio', label: 'Flow Portfolio', section: 'Analysis', onSelect: () => setMainPaneView('portfolio')})
         }
 
-        if (isTauri()) {
+        if (getPlatformCapabilities().fileSystem) {
             for (const f of recentFiles.slice(0, 5)) {
                 cmds.push({
                     id: `recent:${f.path}`,

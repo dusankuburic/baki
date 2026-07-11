@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -17,10 +16,11 @@ type GitHubModelsProvider struct {
 func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	return &GitHubModelsProvider{
 		openaiBase: openaiBase{
-			apiKey:        token,
-			client:        sharedHTTPClient,
-			baseURL:       &githubModelsBaseURL,
-			providerLabel: "github models",
+			apiKey:         token,
+			client:         sharedHTTPClient,
+			baseURL:        &githubModelsBaseURL,
+			providerLabel:  "github models",
+			embeddingModel: "text-embedding-3-small",
 			extraHeaders: func(req *http.Request, model string) {
 				req.Header.Set("x-ms-model-mesh-model-id", model)
 			},
@@ -41,7 +41,7 @@ func (g *GitHubModelsProvider) PricePerMillionTokens() Pricing {
 }
 
 func (g *GitHubModelsProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
-	return nil, fmt.Errorf("embeddings not supported by GitHub Models provider")
+	return g.embed(ctx, text)
 }
 
 func (g *GitHubModelsProvider) EstimateTokens(text string) int {

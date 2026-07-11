@@ -1,12 +1,8 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
 )
 
 var openAIBaseURL = providerURL("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
@@ -18,10 +14,11 @@ type OpenAIProvider struct {
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{
 		openaiBase: openaiBase{
-			apiKey:        apiKey,
-			client:        sharedHTTPClient,
-			baseURL:       &openAIBaseURL,
-			providerLabel: "openai",
+			apiKey:         apiKey,
+			client:         sharedHTTPClient,
+			baseURL:        &openAIBaseURL,
+			providerLabel:  "openai",
+			embeddingModel: "text-embedding-3-small",
 		},
 	}
 }
@@ -55,48 +52,7 @@ func (o *OpenAIProvider) Stream(ctx context.Context, req Request, onChunk func(C
 }
 
 func (o *OpenAIProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
-	reqBody := map[string]interface{}{
-		"model": "text-embedding-3-small",
-		"input": text,
-	}
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	url := strings.Replace(openAIBaseURL, "/chat/completions", "/embeddings", 1)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := o.client.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai embeddings error (status %d)", resp.StatusCode)
-	}
-
-	var parsed struct {
-		Data []struct {
-			Embedding []float32 `json:"embedding"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
-	}
-
-	res := make([][]float32, len(parsed.Data))
-	for i, d := range parsed.Data {
-		res[i] = d.Embedding
-	}
-	return res, nil
+	return o.embed(ctx, text)
 }
 
 type openAIRequest struct {

@@ -1,15 +1,16 @@
-import React from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {analysisApi} from '@/api'
-import {logger} from '@/lib/logger'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import {formatCount} from '@/lib/format'
 import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
-import {BarChart3, RefreshCw, ArrowDownToLine, ArrowUpFromLine, ShieldAlert, Download, TrendingUp} from 'lucide-react'
+import {BarChart3, RefreshCw, Download} from 'lucide-react'
 import clsx from 'clsx'
-import type {AnalysisSnapshot, FlowMetrics, SubflowMetrics, DataFlowAnalysis, TaintPath} from '@/types'
+import type {FlowMetrics} from '@/types'
 import {ComplexityScatter, ImpactEffortMatrix} from './ComplexityCharts'
+import StatCard from './StatCard'
+import SubflowMetricsRow from './SubflowMetricsRow'
+import HealthTrend from './HealthTrend'
+import DataFlowInsights from './DataFlowInsights'
 
 function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const rows = [
@@ -28,62 +29,6 @@ function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const csv = rows.map(r => r.join(',')).join('\n')
   downloadBlob(csv, 'text/csv;charset=utf-8;', `metrics-${flowId}-${new Date().toISOString().slice(0, 10)}.csv`)
 }
-
-function MiniBar({value, max, color}: {value: number; max: number; color: string}) {
-  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
-  return (
-    <div className="h-1.5 w-full bg-surface-3 rounded-full overflow-hidden">
-      <div className={clsx('h-full rounded-full transition-all duration-fast', color)} style={{width: `${pct}%`}} />
-    </div>
-  )
-}
-
-const SubflowMetricsRow = React.memo(function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => void}) {
-  const cycloColor = m.cyclomaticComplexity > 20 ? 'bg-red-500' : m.cyclomaticComplexity > 10 ? 'bg-amber-500' : 'bg-green-500'
-  const cogColor = m.cognitiveComplexity > 30 ? 'bg-red-500' : m.cognitiveComplexity > 15 ? 'bg-amber-500' : 'bg-green-500'
-
-  return (
-    <button
-      onClick={onSelect}
-      className="w-full text-left p-3 rounded-lg border border-border-subtle bg-surface-0 hover:border-brand-500/30 hover:bg-surface-2 transition-all duration-fast"
-    >
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-text-primary truncate">{m.subflowName}</span>
-        <span className="text-xs text-text-tertiary tabular-nums">{m.blockCount} blocks</span>
-      </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-        <div>
-          <div className="flex items-center justify-between mb-0.5">
-            <span className="text-xs text-text-tertiary uppercase tracking-wider">Cyclomatic</span>
-            <span className="text-xs font-mono text-text-secondary tabular-nums">{m.cyclomaticComplexity}</span>
-          </div>
-          <MiniBar value={m.cyclomaticComplexity} max={30} color={cycloColor} />
-        </div>
-        <div>
-          <div className="flex items-center justify-between mb-0.5">
-            <span className="text-xs text-text-tertiary uppercase tracking-wider">Cognitive</span>
-            <span className="text-xs font-mono text-text-secondary tabular-nums">{m.cognitiveComplexity}</span>
-          </div>
-          <MiniBar value={m.cognitiveComplexity} max={40} color={cogColor} />
-        </div>
-      </div>
-      <div className="flex items-center gap-3 mt-2 pt-2 border-t border-border-subtle">
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          <ArrowDownToLine size={12} /> Fan-in: {m.fanIn}
-        </span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          <ArrowUpFromLine size={12} /> Fan-out: {m.fanOut}
-        </span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          Depth: {m.maxNestingDepth}
-        </span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          Vars: {m.variableCount}
-        </span>
-      </div>
-    </button>
-  )
-})
 
 export default function MetricsTab() {
   const doc = useFlowStore(s => s.document)
@@ -110,8 +55,6 @@ export default function MetricsTab() {
       </div>
     )
   }
-
-  const hasCircular = metrics.circularDependencies && metrics.circularDependencies.length > 0
 
   return (
     <div className="flex flex-col h-full overflow-y-auto custom-scrollbar">
@@ -155,14 +98,14 @@ export default function MetricsTab() {
           <StatCard label="Max Cognitive" value={metrics.maxCognitive} warn={metrics.maxCognitive > 30} />
         </div>
 
-        {hasCircular && (
+        {metrics.circularDependencies && metrics.circularDependencies.length > 0 && (
           <div className="p-3 rounded-lg border border-red-500/20 bg-red-500/5">
             <div className="flex items-center gap-2 mb-1">
               <RefreshCw size={12} className="text-red-400" />
               <span className="text-xs font-bold text-red-400">Circular Dependencies</span>
             </div>
             <p className="text-xs text-text-secondary">
-              Subflow call cycle detected: {metrics.circularDependencies!.join(' → ')}
+              Subflow call cycle detected: {metrics.circularDependencies.join(' → ')}
             </p>
           </div>
         )}
@@ -211,215 +154,6 @@ export default function MetricsTab() {
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-function StatCard({label, value, warn}: {label: string; value: string | number; warn?: boolean}) {
-  return (
-    <div className="p-2.5 rounded-lg border border-border-subtle bg-surface-0">
-      <div className="text-xs text-text-tertiary uppercase tracking-wider mb-0.5">{label}</div>
-      <div className={clsx('text-sm font-bold font-mono tabular-nums', warn ? 'text-amber-400' : 'text-text-primary')}>
-        {value}
-      </div>
-    </div>
-  )
-}
-
-// HealthTrend renders the persisted analysis snapshots as a health-score
-// sparkline with per-run severity counts on hover. Hidden until there are at
-// least two distinct runs to connect.
-function HealthTrend() {
-  const doc = useFlowStore(s => s.document)
-  const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
-  const [snapshots, setSnapshots] = React.useState<AnalysisSnapshot[]>([])
-  const [hover, setHover] = React.useState<number | null>(null)
-
-  React.useEffect(() => {
-    if (!doc) return
-    let cancelled = false
-    analysisApi.getHistory()
-      .then(s => { if (!cancelled) setSnapshots((s ?? []).slice(-20)) })
-      .catch((err) => { if (!cancelled) logger.warn('Failed to load history', err) })
-    return () => { cancelled = true }
-  }, [doc, generatedAt])
-
-  if (snapshots.length < 2) return null
-
-  const W = 280
-  const H = 56
-  const PAD = 6
-  const step = (W - PAD * 2) / (snapshots.length - 1)
-  const y = (score: number) => PAD + (H - PAD * 2) * (1 - Math.max(0, Math.min(100, score)) / 100)
-  const points = snapshots.map((s, i) => `${PAD + i * step},${y(s.healthScore)}`).join(' ')
-  const active = hover != null ? snapshots[hover] : snapshots[snapshots.length - 1]
-
-  return (
-    <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
-          <TrendingUp size={12} />
-          Health Trend
-        </span>
-        <span className="text-xs text-text-tertiary tabular-nums">
-          {new Date(active.timestamp).toLocaleString()} · score {active.healthScore} ·{' '}
-          <span className="text-red-400">{active.errors}E</span>{' '}
-          <span className="text-amber-400">{active.warnings}W</span>{' '}
-          <span className="text-blue-400">{active.info}I</span>
-        </span>
-      </div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
-        role="img"
-        aria-label={`Health score trend over ${snapshots.length} analysis runs`}
-        onMouseLeave={() => setHover(null)}
-      >
-        <polyline points={points} fill="none" stroke="var(--brand-500)" strokeWidth="1.5" strokeLinejoin="round" />
-        {snapshots.map((s, i) => (
-          <g key={s.timestamp + i}>
-            {/* invisible wide hit area per point */}
-            <rect
-              x={PAD + i * step - step / 2}
-              y={0}
-              width={step}
-              height={H}
-              fill="transparent"
-              onMouseEnter={() => setHover(i)}
-            />
-            <circle
-              cx={PAD + i * step}
-              cy={y(s.healthScore)}
-              r={hover === i ? 3.5 : 2}
-              fill={s.errors > 0 ? 'var(--error)' : s.warnings > 0 ? 'var(--warning)' : 'var(--success)'}
-              className="transition-all duration-fast"
-            />
-          </g>
-        ))}
-      </svg>
-    </div>
-  )
-}
-
-function DataFlowInsights() {
-  const doc = useFlowStore(s => s.document)
-  const navigateToBlock = useFlowStore(s => s.navigateToBlock)
-  const [dataFlow, setDataFlow] = React.useState<DataFlowAnalysis | null>(null)
-  // Re-fetch when a new analysis lands, not just when the document changes —
-  // otherwise these insights show the previous run's data after re-analyze.
-  const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
-
-  React.useEffect(() => {
-    if (!doc) return
-    let cancelled = false
-    analysisApi.getDataFlow()
-      .then(r => { if (!cancelled) setDataFlow(r as DataFlowAnalysis) })
-      .catch((err) => { if (!cancelled) logger.warn('Failed to load dataflow analysis', err) })
-    return () => { cancelled = true }
-  }, [doc, generatedAt])
-
-  if (!dataFlow || ((!dataFlow.taintPaths || dataFlow.taintPaths.length === 0) && (!dataFlow.deadData || dataFlow.deadData.length === 0))) {
-    return null
-  }
-
-  return (
-    <div>
-      <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
-        <ShieldAlert size={12} />
-        Data Flow Insights
-      </h3>
-      <div className="space-y-2">
-        {dataFlow.taintPaths && dataFlow.taintPaths.length > 0 && (
-          <TaintPathsPanel paths={dataFlow.taintPaths} onNavigate={navigateToBlock} />
-        )}
-        {dataFlow.deadData && dataFlow.deadData.length > 0 && (
-          <DeadDataPanel paths={dataFlow.deadData} onNavigate={navigateToBlock} />
-        )}
-      </div>
-    </div>
-  )
-}
-
-// TaintPathsPanel renders the full set of source→sink taint flows (previously
-// capped at 5 chips). Each row shows the source variable, the sink type, and a
-// path-length badge; clicking jumps to the sink block for review.
-function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (id: string) => void}) {
-  const [showAll, setShowAll] = React.useState(false)
-  const INITIAL = 5
-  const visible = showAll ? paths : paths.slice(0, INITIAL)
-  const hidden = paths.length - visible.length
-
-  return (
-    <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-bold text-amber-400">Taint Paths ({paths.length})</span>
-        <span className="text-2xs text-text-tertiary">untrusted input → sensitive sink</span>
-      </div>
-      {visible.map((tp, i) => (
-        <button
-          key={i}
-          onClick={() => onNavigate(tp.sinkBlock)}
-          title={tp.path && tp.path.length > 0 ? `via ${tp.path.length} step(s)` : undefined}
-          className="block w-full text-left p-1.5 rounded border border-border-subtle bg-surface-0 hover:border-brand-500/30 mb-1 last:mb-0 transition-colors"
-        >
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-xs text-text-primary font-mono truncate">%{tp.sourceVar}%</span>
-            <span className="text-xs text-text-tertiary shrink-0">→</span>
-            <span className="text-xs text-amber-400 truncate">{tp.sinkType}</span>
-            {tp.path && tp.path.length > 2 && (
-              <span className="ml-auto text-2xs text-text-tertiary shrink-0 font-mono">{tp.path.length} hops</span>
-            )}
-          </div>
-        </button>
-      ))}
-      {hidden > 0 && (
-        <button
-          onClick={() => setShowAll(v => !v)}
-          className="text-2xs text-brand-400 hover:text-brand-300 transition-colors mt-1"
-        >
-          {showAll ? 'Show fewer' : `Show ${hidden} more`}
-        </button>
-      )}
-    </div>
-  )
-}
-
-// DeadDataPanel lists each dead-data variable (previously a count-only header).
-// Each row shows the variable, why it's dead, and jumps to the block that sets
-// it so the developer can decide whether to remove the write.
-function DeadDataPanel({paths, onNavigate}: {paths: NonNullable<DataFlowAnalysis['deadData']>; onNavigate: (id: string) => void}) {
-  const [showAll, setShowAll] = React.useState(false)
-  const INITIAL = 5
-  const visible = showAll ? paths : paths.slice(0, INITIAL)
-  const hidden = paths.length - visible.length
-
-  return (
-    <div className="p-3 rounded-lg border border-border-subtle bg-surface-0">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-bold text-text-tertiary">Dead Data ({paths.length})</span>
-        <span className="text-2xs text-text-tertiary">set, only read by unreachable code</span>
-      </div>
-      <p className="text-2xs text-text-tertiary mb-2">Variables written but only consumed where execution can't reach.</p>
-      {visible.map((dp, i) => (
-        <button
-          key={i}
-          onClick={() => onNavigate(dp.setBlock)}
-          className="block w-full text-left p-1.5 rounded border border-border-subtle bg-surface-2 hover:border-brand-500/30 mb-1 last:mb-0 transition-colors"
-        >
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-xs text-text-primary font-mono truncate">%{dp.variable}%</span>
-            <span className="text-2xs text-text-tertiary ml-auto shrink-0 truncate">{dp.reason || 'unreachable reader'}</span>
-          </div>
-        </button>
-      ))}
-      {hidden > 0 && (
-        <button
-          onClick={() => setShowAll(v => !v)}
-          className="text-2xs text-brand-400 hover:text-brand-300 transition-colors mt-1"
-        >
-          {showAll ? 'Show fewer' : `Show ${hidden} more`}
-        </button>
-      )}
     </div>
   )
 }

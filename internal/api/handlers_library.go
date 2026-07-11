@@ -377,20 +377,11 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	existing, err := h.backend.ListFlowVersions(r.Context(), id, 1)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	nextVersion := 1
-	if len(existing) > 0 {
-		nextVersion = existing[0].Version + 1
-	}
-
+	// The backend assigns v.Version atomically (Postgres: FOR UPDATE + MAX+1),
+	// so it is not pre-computed here — a read-then-write would just race.
 	v := &storageif.FlowVersion{
 		ID:        uuid.NewString(),
 		FlowID:    id,
-		Version:   nextVersion,
 		Comment:   req.Comment,
 		Content:   doc.Content,
 		Metadata:  doc.Metadata,
@@ -401,7 +392,7 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(nextVersion)})
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(v.Version)})
 	w.WriteHeader(http.StatusCreated)
 	render.JSON(w, v)
 }

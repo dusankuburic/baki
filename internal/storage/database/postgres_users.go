@@ -205,13 +205,10 @@ func (b *PostgresStorageBackend) CountUsers(ctx context.Context) (int, error) {
 }
 
 func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset int) ([]*interfaces.User, error) {
-	var rows *sql.Rows
-	var err error
-	if limit > 0 {
-		rows, err = b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
-	} else {
-		rows, err = b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC`)
+	if limit <= 0 || limit > 500 {
+		limit = 100
 	}
+	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -430,6 +427,40 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 	)
 	if err != nil {
 		return fmt.Errorf("save audit event: %w", err)
+	}
+	return nil
+}
+
+// SaveAuditEvents inserts a batch of audit events in a single round-trip. The
+// async audit worker uses this to multiply throughput under load (the
+// per-event SaveAuditEvent path otherwise becomes the bottleneck that drops
+// events when the 256-buffer fills). A single bad row failing the whole batch
+// is handled by the caller falling back to per-event writes. The 9 placeholder
+// args per row stay well under Postgres' 65535-parameter cap for any realistic
+// batch size.
+func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*interfaces.AuditEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(events)*9)
+	sb.WriteString(`INSERT INTO audit_events (id, user_id, email, action, resource_type, resource_id, ip, meta, created_at) VALUES `)
+	for i, e := range events {
+		meta, err := json.Marshal(e.Meta)
+		if err != nil {
+			meta = []byte("{}")
+		}
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		base := i*9 + 1
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
+		args = append(args, e.ID, e.UserID, e.Email, e.Action,
+			e.ResourceType, e.ResourceID, e.IP, meta, e.CreatedAt)
+	}
+	if _, err := b.db.ExecContext(ctx, sb.String(), args...); err != nil {
+		return fmt.Errorf("save audit events (%d): %w", len(events), err)
 	}
 	return nil
 }

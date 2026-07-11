@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type openaiBase struct {
@@ -15,8 +16,12 @@ type openaiBase struct {
 	client        *http.Client
 	baseURL       *string
 	providerLabel string
-	extraHeaders  func(req *http.Request, model string)
-	handle429     func(resp *http.Response, apiErr openAIErrorResp) error
+	// embeddingModel is the model name sent to the OpenAI-compatible /embeddings
+	// endpoint. Empty means this provider does not expose embeddings and embed()
+	// returns a "not supported" error (no /embeddings call is attempted).
+	embeddingModel string
+	extraHeaders   func(req *http.Request, model string)
+	handle429      func(resp *http.Response, apiErr openAIErrorResp) error
 }
 
 func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
@@ -159,4 +164,60 @@ func (b *openaiBase) handleStreamError(resp *http.Response, respBody []byte) err
 		return fmt.Errorf("%w (status %d)", ErrProviderDown, resp.StatusCode)
 	}
 	return fmt.Errorf("%s stream error (status %d)", b.providerLabel, resp.StatusCode)
+}
+
+// embed calls the OpenAI-compatible /embeddings endpoint. It is shared by every
+// provider whose API mirrors OpenAI's shape (OpenAI, GLM, GitHub Models, …).
+// The embeddings URL is derived from the provider's chat base URL by replacing
+// the trailing "/chat/completions" with "/embeddings". Returns a "not supported"
+// error when embeddingModel is empty (the provider has no embeddings model), so
+// no network call is attempted for providers known to lack the endpoint.
+func (b *openaiBase) embed(ctx context.Context, text []string) ([][]float32, error) {
+	if b.embeddingModel == "" {
+		return nil, fmt.Errorf("embeddings not supported by %s provider", b.providerLabel)
+	}
+
+	reqBody, err := json.Marshal(map[string]any{
+		"model": b.embeddingModel,
+		"input": text,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	embedURL := strings.Replace(*b.baseURL, "/chat/completions", "/embeddings", 1)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", embedURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+b.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	if b.extraHeaders != nil {
+		b.extraHeaders(httpReq, b.embeddingModel)
+	}
+
+	resp, err := b.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s embeddings error (status %d)", b.providerLabel, resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	res := make([][]float32, len(parsed.Data))
+	for i, d := range parsed.Data {
+		res[i] = d.Embedding
+	}
+	return res, nil
 }

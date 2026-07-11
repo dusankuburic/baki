@@ -1,7 +1,7 @@
 import {request} from './client'
 import type {FlowDiff} from '@/types'
 import {createAdapter} from '@/platform/adapters'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
 
 // Rendering + base64-encoding a large flow's PDF/Markdown report can take
 // longer than the default request timeout.
@@ -10,7 +10,7 @@ const EXPORT_TIMEOUT_MS = 90_000
 export const exportApi = {
   exportPDF: async (): Promise<string> => {
     let path = ''
-    if (isTauri()) {
+    if (getPlatformCapabilities().nativeDialogs) {
       const p = await createAdapter().fileSave({
         filters: [{name: 'PDF', extensions: ['pdf']}]
       })
@@ -19,8 +19,8 @@ export const exportApi = {
     }
 
     const res: {data: string} = await request('/api/export/pdf', {path}, 'POST', EXPORT_TIMEOUT_MS)
-    
-    if (!isTauri() && res.data) {
+
+    if (!getPlatformCapabilities().nativeDialogs && res.data) {
       const link = document.createElement('a')
       link.href = `data:application/pdf;base64,${res.data}`
       link.download = 'export.pdf'
@@ -33,7 +33,7 @@ export const exportApi = {
 
   exportMarkdown: async (): Promise<string> => {
     let path = ''
-    if (isTauri()) {
+    if (getPlatformCapabilities().nativeDialogs) {
       const p = await createAdapter().fileSave({
         filters: [{name: 'Markdown', extensions: ['md']}]
       })
@@ -42,8 +42,8 @@ export const exportApi = {
     }
 
     const res: {data: string} = await request('/api/export/markdown', {path}, 'POST', EXPORT_TIMEOUT_MS)
-    
-    if (!isTauri() && res.data) {
+
+    if (!getPlatformCapabilities().nativeDialogs && res.data) {
       const link = document.createElement('a')
       link.href = `data:text/markdown;base64,${res.data}`
       link.download = 'export.md'

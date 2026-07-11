@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
 )
 
 var (
@@ -128,6 +129,12 @@ var (
 		},
 		[]string{"op"},
 	)
+	blobContentMissing = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pad_blob_content_missing_total",
+			Help: "Flows whose content blob was absent though metadata recorded content — data loss, surfaced so ops can alert rather than only find a log line.",
+		},
+	)
 	auditDroppedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_audit_dropped_total",
@@ -188,6 +195,7 @@ var registry = func() *prometheus.Registry {
 		authOps,
 		blobOps,
 		blobOpDuration,
+		blobContentMissing,
 		auditDroppedTotal,
 		panicRecoveredTotal,
 		errorsReportedTotal,
@@ -301,12 +309,34 @@ func RecordBlobOp(op, status string, dur time.Duration) {
 	blobOpDuration.WithLabelValues(op).Observe(dur.Seconds())
 }
 
+// RecordBlobContentMissing bumps the counter for a flow whose content blob was
+// absent though its metadata recorded content — a data-loss signal ops can
+// alert on. See pad_blob_content_missing_total.
+func RecordBlobContentMissing() {
+	blobContentMissing.Inc()
+}
+
 // RecordAuditDropped bumps the audit_dropped_total counter for an event that
-// could not be enqueued to the DB pool (reason "full" or "closed"). Such events
-// are diverted to the structured-log fallback sink so the data isn't lost, and
-// this counter lets ops alert when the DB sink can't keep up.
+// could not be persisted to the DB sink — reason "full"/"closed" when the
+// enqueue buffer can't accept it, or "write_failed" when a (retried) DB write
+// fails. Such events are diverted to the structured-log fallback sink so the
+// data isn't silently lost, and this counter lets ops alert when the DB sink
+// can't keep up.
 func RecordAuditDropped(reason string) {
 	auditDroppedTotal.WithLabelValues(reason).Inc()
+}
+
+// AuditDroppedCount returns the current audit_dropped_total value for a reason.
+// Exposed for tests; safe for production use.
+func AuditDroppedCount(reason string) float64 {
+	m := &dto.Metric{}
+	if err := auditDroppedTotal.WithLabelValues(reason).Write(m); err != nil {
+		return 0
+	}
+	if m.Counter == nil {
+		return 0
+	}
+	return m.Counter.GetValue()
 }
 
 // RecordPanic bumps the panics_total counter for a recovered panic at the given

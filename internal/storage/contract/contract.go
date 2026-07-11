@@ -412,6 +412,38 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 	})
 
+	t.Run("SaveFlow_stale_version_returns_ErrVersionConflict", func(t *testing.T) {
+		// OCC is strict on both backends: an update whose Version does not match
+		// the current stored version fails — there is no "0 skips the check"
+		// escape hatch. Callers that update must load the current version first.
+		owner := "contract-occ-owner-" + runID
+		flow := &interfaces.FlowDocument{
+			ID:      "contract-flow-occ-" + runID,
+			Name:    "OCC Flow",
+			Content: json.RawMessage(`{"k":1}`),
+			OwnerID: owner,
+		}
+		if err := b.SaveFlow(ctx, flow); err != nil {
+			t.Fatalf("SaveFlow create: %v", err)
+		}
+		// Save again with the backend-assigned version: must succeed and bump.
+		flow.Content = json.RawMessage(`{"k":2}`)
+		if err := b.SaveFlow(ctx, flow); err != nil {
+			t.Fatalf("SaveFlow update (current version): %v", err)
+		}
+
+		stale := &interfaces.FlowDocument{
+			ID:      flow.ID,
+			Name:    "OCC Flow stale",
+			Content: json.RawMessage(`{"k":3}`),
+			OwnerID: owner,
+			Version: flow.Version - 1,
+		}
+		if err := b.SaveFlow(ctx, stale); !errors.Is(err, interfaces.ErrVersionConflict) {
+			t.Errorf("stale version: expected ErrVersionConflict, got %v", err)
+		}
+	})
+
 	t.Run("ListFindingStatuses_empty_returns_non_nil_slice", func(t *testing.T) {
 		got, err := b.ListFindingStatuses(ctx, "no-such-flow-"+runID)
 		if err != nil {

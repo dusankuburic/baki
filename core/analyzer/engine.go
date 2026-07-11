@@ -163,6 +163,16 @@ type RuleContext struct {
 	// times. Safe as a plain map: the analysis walk is single-threaded.
 	sigCache    map[string]string
 	totalBlocks int
+	// HasErrorHandler marks every block that has (or whose ancestor chain
+	// contains) an error-handler block among its siblings. Precomputed once
+	// in buildContext so 3 rules (file-op-no-error-handler, missing-retry,
+	// unhandled-error) do an O(1) lookup instead of each re-walking the chain
+	// and allocating a visited map per call.
+	HasErrorHandler map[string]bool
+	// InsideRetryLoop marks every block enclosed by a LOOP whose name or
+	// properties include "retry"/"attempt". Precomputed once so the
+	// missing-retry rule does an O(1) lookup instead of re-walking + allocating.
+	InsideRetryLoop map[string]bool
 }
 
 // blockSig returns the memoized content signature for b, computing it once.
@@ -245,6 +255,15 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 		if _, ok := ctx.SubflowByName[sf.Name]; !ok {
 			ctx.SubflowByName[sf.Name] = sf
 		}
+	}
+
+	// Precompute ancestor-derived flags so rules do O(1) lookups instead of
+	// re-walking parent chains + allocating visited maps on every block.
+	ctx.HasErrorHandler = make(map[string]bool, len(ctx.AllBlocks))
+	ctx.InsideRetryLoop = make(map[string]bool, len(ctx.AllBlocks))
+	for id := range ctx.AllBlocks {
+		ctx.computeHasErrorHandler(id)
+		ctx.computeInsideRetryLoop(id)
 	}
 
 	return ctx
@@ -568,36 +587,70 @@ func GetParent(ctx *RuleContext, block *models.Block) *models.Block {
 	return ctx.AllBlocks[pid]
 }
 
-func HasErrorHandlerAncestor(ctx *RuleContext, block *models.Block) bool {
-	cur := block
-	// visited guards against a cycle in ParentMap (a malformed/rehydrated index
-	// could produce one), which would otherwise loop forever.
-	visited := make(map[string]bool)
-	for {
-		if cur == nil || visited[cur.ID] {
-			return false
-		}
-		visited[cur.ID] = true
-		pid, ok := ctx.ParentMap[cur.ID]
-		if !ok {
-			return false
-		}
-		parent := ctx.AllBlocks[pid]
-		if parent == nil {
-			// ParentMap references a block absent from AllBlocks (inconsistent
-			// index) — stop rather than nil-panic.
-			return false
-		}
-		if parent.Type == models.BlockTypeErrorHandler {
-			return true
-		}
+// computeHasErrorHandler memoizes into ctx.HasErrorHandler. A block "has an
+// error-handler ancestor" if any ancestor is itself an error handler or has
+// an error-handler sibling.
+func (ctx *RuleContext) computeHasErrorHandler(blockID string) bool {
+	if v, ok := ctx.HasErrorHandler[blockID]; ok {
+		return v
+	}
+	ctx.HasErrorHandler[blockID] = false // guard against cycles
+	pid, ok := ctx.ParentMap[blockID]
+	if !ok {
+		return false
+	}
+	parent := ctx.AllBlocks[pid]
+	if parent == nil {
+		return false
+	}
+	direct := parent.Type == models.BlockTypeErrorHandler
+	if !direct {
 		for _, s := range ctx.SiblingMap[pid] {
 			if s.Type == models.BlockTypeErrorHandler {
-				return true
+				direct = true
+				break
 			}
 		}
-		cur = parent
 	}
+	result := direct || ctx.computeHasErrorHandler(pid)
+	ctx.HasErrorHandler[blockID] = result
+	return result
+}
+
+// computeInsideRetryLoop memoizes into ctx.InsideRetryLoop. A block is "inside
+// a retry loop" if any ancestor is a LOOP whose name or properties include
+// "retry" or "attempt".
+func (ctx *RuleContext) computeInsideRetryLoop(blockID string) bool {
+	if v, ok := ctx.InsideRetryLoop[blockID]; ok {
+		return v
+	}
+	ctx.InsideRetryLoop[blockID] = false // guard against cycles
+	pid, ok := ctx.ParentMap[blockID]
+	if !ok {
+		return false
+	}
+	parent := ctx.AllBlocks[pid]
+	if parent == nil {
+		return false
+	}
+	isRetry := false
+	if parent.Type == models.BlockTypeLoop {
+		nameLower := strings.ToLower(parent.Name)
+		isRetry = strings.Contains(nameLower, "retry") || strings.Contains(nameLower, "attempt")
+		for k, v := range parent.Properties {
+			kl := strings.ToLower(k)
+			if (strings.Contains(kl, "retry") || strings.Contains(kl, "attempt")) && v != "" {
+				isRetry = true
+			}
+		}
+	}
+	result := isRetry || ctx.computeInsideRetryLoop(pid)
+	ctx.InsideRetryLoop[blockID] = result
+	return result
+}
+
+func HasErrorHandlerAncestor(ctx *RuleContext, block *models.Block) bool {
+	return ctx.HasErrorHandler[block.ID]
 }
 
 func BuildVariableLineage(doc *models.FlowDocument, varName string) *models.VariableHistory {

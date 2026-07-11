@@ -783,6 +783,47 @@ func TestCachedContextCore_CachesAcrossTurns(t *testing.T) {
 	}
 }
 
+// TestInvalidateChatContext_BareStructLiteral verifies a ChatService built as
+// a bare struct literal (chatCtxGen left as its zero value, as many tests and
+// any not-yet-updated call site would do) still invalidates correctly instead
+// of silently no-op'ing on a nil cache.
+func TestInvalidateChatContext_BareStructLiteral(t *testing.T) {
+	svc := &ChatService{chatCtxCache: newChatContextCache()}
+	doc := toolLoopDoc()
+	provider := ctxCacheStubProvider{}
+	req := models.ChatRequest{Model: "m1", UserMessage: "turn 1"}
+
+	cv1 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
+	svc.InvalidateChatContext(doc.ID)
+	cv2 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
+	if cv2.scrubbedDoc == cv1.scrubbedDoc {
+		t.Fatal("expected InvalidateChatContext to force a fresh scrubbed doc even without an explicit chatCtxGen")
+	}
+}
+
+// TestChatCtxGen_BoundedAcrossManyFlows verifies the per-flow generation
+// counter cache doesn't grow without bound: invalidating far more distinct
+// flows than maxChatCtxGen evicts the oldest entries (LRU), so a long-lived
+// process that edits many distinct flows over its uptime can't leak memory
+// here the way an unbounded map would.
+func TestChatCtxGen_BoundedAcrossManyFlows(t *testing.T) {
+	svc := &ChatService{chatCtxCache: newChatContextCache()}
+	genCache := svc.chatCtxGenCache()
+
+	total := maxChatCtxGen * 4
+	for i := range total {
+		svc.InvalidateChatContext(fmt.Sprintf("flow-%d", i))
+	}
+
+	if _, ok := genCache.Get(context.Background(), "flow-0"); ok {
+		t.Error("expected the earliest flow's generation entry to have been LRU-evicted")
+	}
+	last := fmt.Sprintf("flow-%d", total-1)
+	if _, ok := genCache.Get(context.Background(), last); !ok {
+		t.Errorf("expected the most recently invalidated flow (%s) to still be cached", last)
+	}
+}
+
 // emitRecorder captures emitted (type, content) pairs for the coalescer tests.
 type emitRecorder struct {
 	mu    sync.Mutex

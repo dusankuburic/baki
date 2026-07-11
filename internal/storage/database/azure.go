@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/sync/singleflight"
 )
 
 const azurePostgresScope = "https://ossrdbms-aad.database.windows.net/.default"
@@ -43,14 +44,6 @@ func (p *azureTokenProvider) GetAccessToken(ctx context.Context) (azcore.AccessT
 	return token, nil
 }
 
-func (p *azureTokenProvider) GetToken(ctx context.Context) (string, error) {
-	at, err := p.GetAccessToken(ctx)
-	if err != nil {
-		return "", err
-	}
-	return at.Token, nil
-}
-
 // azureMIConnector is a database/sql driver.Connector that injects a freshly
 // fetched (and cached) Entra ID token as the connection password on every new
 // pooled connection. This replaces mutating a shared pgx.ConnConfig.Password
@@ -64,6 +57,11 @@ type azureMIConnector struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// sf collapses concurrent refreshes into one token fetch. Without it, the
+	// mutex was held across the (potentially slow) Entra/IMDS call, so every
+	// new pooled connection stalled behind a single refresh — precisely when
+	// the pool is churning at a token boundary or right after invalidation.
+	sf singleflight.Group
 }
 
 func newAzureMIConnector(provider *azureTokenProvider, template *pgx.ConnConfig) *azureMIConnector {
@@ -71,20 +69,52 @@ func newAzureMIConnector(provider *azureTokenProvider, template *pgx.ConnConfig)
 }
 
 // currentToken returns a valid token, refreshing when within 5 minutes of
-// expiry (Entra tokens last ~24h).
+// expiry (Entra tokens last ~24h). The cache read and write are guarded by mu,
+// but the network fetch happens outside the lock (via singleflight), so a
+// refresh doesn't serialize every other connecting goroutine.
 func (c *azureMIConnector) currentToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token == "" || time.Until(c.expires) < 5*time.Minute {
+	tok, exp := c.token, c.expires
+	c.mu.Unlock()
+	if tok != "" && time.Until(exp) >= 5*time.Minute {
+		return tok, nil
+	}
+
+	v, err, _ := c.sf.Do("token", func() (any, error) {
 		at, err := c.provider.GetAccessToken(ctx)
 		if err != nil {
 			return "", err
 		}
+		c.mu.Lock()
 		c.token = at.Token
 		c.expires = at.ExpiresOn
+		c.mu.Unlock()
 		slog.Info("azure: refreshed managed-identity token for postgres", "expires", at.ExpiresOn)
+		return at.Token, nil
+	})
+	if err != nil {
+		return "", err
 	}
-	return c.token, nil
+	return v.(string), nil
+}
+
+// invalidate drops the cached token if it is still the one that just failed,
+// so the next currentToken call fetches a fresh one. The comparison guards
+// against clearing a newer token another goroutine already refreshed.
+func (c *azureMIConnector) invalidate(failed string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.token == failed {
+		c.token = ""
+		c.expires = time.Time{}
+	}
+}
+
+// isPgAuthError reports whether err is a PostgreSQL authentication failure
+// (SQLSTATE class 28): the server rejected the credential itself, as opposed
+// to a network or protocol error.
+func isPgAuthError(err error) bool {
+	return isPgErrCode(err, "28000") || isPgErrCode(err, "28P01")
 }
 
 func (c *azureMIConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -92,32 +122,30 @@ func (c *azureMIConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	conn, err := c.connectWith(ctx, tok)
+	if err == nil || !isPgAuthError(err) {
+		return conn, err
+	}
+
+	// The server rejected the token even though it hasn't expired — it was
+	// invalidated out-of-band (identity reassigned, RBAC change, credential
+	// rotation). Without this, every new connection keeps replaying the dead
+	// cached token until its natural expiry (~24h). Drop it and retry once
+	// with a freshly fetched token; if the upstream credential cache hands
+	// back the same token, surface the original auth error rather than loop.
+	c.invalidate(tok)
+	fresh, ferr := c.currentToken(ctx)
+	if ferr != nil || fresh == tok {
+		return nil, err
+	}
+	slog.Warn("azure: postgres rejected cached managed-identity token; retrying with a fresh token", "error", err)
+	return c.connectWith(ctx, fresh)
+}
+
+func (c *azureMIConnector) connectWith(ctx context.Context, token string) (driver.Conn, error) {
 	cfg := c.template.Copy()
-	cfg.Password = tok
+	cfg.Password = token
 	return stdlib.GetConnector(*cfg).Connect(ctx)
 }
 
 func (c *azureMIConnector) Driver() driver.Driver { return stdlib.GetDefaultDriver() }
-
-// AzureConfigHook returns a function that can be used with stdlib.RegisterConnConfig
-// to inject Entra ID tokens as passwords for Managed Identity connections.
-func AzureConfigHook(ctx context.Context, cfg *pgx.ConnConfig) error {
-	if cfg.Password != "managed-identity" {
-		return nil
-	}
-
-	provider, err := newAzureTokenProvider()
-	if err != nil {
-		return err
-	}
-
-	slog.Info("azure: enabling Managed Identity for PostgreSQL connection", "host", cfg.Host, "user", cfg.User)
-
-	// Since tokens expire, we fetch a new one for this connection.
-	token, err := provider.GetToken(ctx)
-	if err != nil {
-		return err
-	}
-	cfg.Password = token
-	return nil
-}

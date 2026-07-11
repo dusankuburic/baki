@@ -1,10 +1,10 @@
-import {useCallback, useEffect, useRef, useState} from 'react'
 import {Activity, Calendar, FileCode, GitBranch, Trash2, User, Users, X} from 'lucide-react'
 import {libraryApi, type LibraryFlow, type LibraryFlowVersion} from '@/api/library'
 import {Button, Spinner, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {useOrgStore} from '@/stores/orgStore'
+import {useAsync} from '@/hooks/useAsync'
 
 interface Props {
   flowId: string | null
@@ -13,39 +13,28 @@ interface Props {
   onClose: () => void
 }
 
+interface DetailData {
+  flow: LibraryFlow
+  versions: LibraryFlowVersion[]
+}
+
 export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: Props) {
-  const [flow, setFlow] = useState<LibraryFlow | null>(null)
-  const [versions, setVersions] = useState<LibraryFlowVersion[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const orgs = useOrgStore(s => s.organisations)
-  const reqRef = useRef(0)
 
-  const load = useCallback(() => {
-    if (!flowId) {
-      setFlow(null)
-      setVersions([])
-      setError(null)
-      return
-    }
-    const my = ++reqRef.current
-    setLoading(true)
-    setError(null)
-    Promise.all([libraryApi.get(flowId), libraryApi.versions(flowId, 10).catch(() => [])])
-      .then(([f, v]) => {
-        if (my !== reqRef.current) return
-        setFlow(f)
-        setVersions(v)
-      })
-      .catch(e => {
-        if (my !== reqRef.current) return
-        logger.warn('Library: detail load failed', e)
-        setError(e instanceof Error ? e.message : String(e))
-      })
-      .finally(() => { if (my === reqRef.current) setLoading(false) })
-  }, [flowId])
-
-  useEffect(() => { load() }, [load])
+  const {data, isLoading: loading, error, refetch: load} = useAsync<DetailData | null>(
+    () => {
+      if (!flowId) return Promise.resolve(null)
+      return Promise.all([libraryApi.get(flowId), libraryApi.versions(flowId, 10).catch(() => [])])
+        .then(([flow, versions]) => ({flow, versions}))
+        .catch(e => {
+          logger.warn('Library: detail load failed', e)
+          throw e
+        })
+    },
+    [flowId],
+  )
+  const flow = data?.flow ?? null
+  const versions = data?.versions ?? []
 
   if (!flowId) {
     return (

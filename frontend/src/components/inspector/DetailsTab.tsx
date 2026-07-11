@@ -1,3 +1,4 @@
+import {useMemo} from 'react'
 import {Box} from 'lucide-react'
 import {CollapsibleSection} from './CollapsibleSection'
 import DetailsHeader from './DetailsHeader'
@@ -12,11 +13,19 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
 import {findBlockInDoc} from '@/lib/tree'
 import {logger} from '@/lib/logger'
-import type {VariableHistory} from '@/types'
 
 export default function DetailsTab() {
     const document = useFlowStore(s => s.document)
     const selectedBlockId = useFlowStore(s => s.selectedBlockId)
+
+    // useMemo must run unconditionally on every render (Rules of Hooks) even
+    // though its result is only needed once the two early returns below are
+    // passed — the null checks live inside the memo callback instead of
+    // gating the hook call itself.
+    const result = useMemo(
+        () => (document && selectedBlockId ? findBlockInDoc(document, selectedBlockId) : null),
+        [document, selectedBlockId]
+    )
 
     if (!document || !selectedBlockId) {
         return (
@@ -32,7 +41,6 @@ export default function DetailsTab() {
         )
     }
 
-    const result = findBlockInDoc(document, selectedBlockId)
     if (!result) return null
     const {block, subflowName} = result
 
@@ -40,7 +48,7 @@ export default function DetailsTab() {
         if (!document) return
         try {
             const h = await analysisApi.getVariableLineage(name)
-            useAnalysisStore.getState().setVariableLineage(h as unknown as VariableHistory)
+            useAnalysisStore.getState().setVariableLineage(h)
         } catch (err) {
             logger.warn('Failed to get lineage:', err)
         }

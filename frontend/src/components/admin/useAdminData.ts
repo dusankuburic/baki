@@ -14,9 +14,12 @@ export function useAdminData(isAdmin: boolean) {
   const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const statusRef = useRef<MigrationStatus | null>(null)
   const fetchStatus = useCallback(async () => {
     try {
-      setMigrationStatus(await adminApi.getMigrationStatus())
+      const data = await adminApi.getMigrationStatus()
+      statusRef.current = data
+      setMigrationStatus(data)
     } catch (err) {
       logger.warn('Failed to fetch migration status', err)
     }
@@ -55,7 +58,11 @@ export function useAdminData(isAdmin: boolean) {
       if (!cancelled) setIsLoading(false)
     }
     run()
-    const interval = setInterval(() => { if (!cancelled) fetchStatus() }, 5000)
+    // Only poll while a migration is actively running — avoids unnecessary
+    // network traffic for the admin panel's lifetime when idle.
+    const interval = setInterval(() => {
+      if (!cancelled && statusRef.current?.status === 'running') fetchStatus()
+    }, 5000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [isAdmin, fetchStatus, fetchUsers, fetchAudit])
 

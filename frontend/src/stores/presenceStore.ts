@@ -15,6 +15,7 @@ export interface PresenceUser {
   displayName: string
   avatarUrl?: string
   selectedBlockId?: string
+  lastSeen?: number
 }
 
 interface PresenceState {
@@ -104,6 +105,7 @@ function handleEnvelope(env: Envelope): void {
           displayName: p.displayName ?? p.userId,
           avatarUrl: p.avatarUrl,
           selectedBlockId: p.selectedBlockId,
+          lastSeen: Date.now(),
         },
       },
     }))
@@ -123,7 +125,7 @@ function handleEnvelope(env: Envelope): void {
       return {
         users: {
           ...s.users,
-          [env.userId!]: { ...existing, ...p },
+          [env.userId!]: { ...existing, ...p, lastSeen: Date.now() },
         },
       }
     })
@@ -142,3 +144,21 @@ registerStoreReset(() => {
   usePresenceStore.getState().disconnect()
   syncManager.reset()
 })
+
+// Periodic sweep of stale presence entries. A lost presence.leave event
+// (server-side drop, brief restart) would otherwise leave a "ghost" user in
+// the list for the entire session. Entries unseen for 2 minutes are removed.
+const PRESENCE_STALE_MS = 120_000
+setInterval(() => {
+  const now = Date.now()
+  const state = usePresenceStore.getState()
+  let changed = false
+  const users = { ...state.users }
+  for (const [id, user] of Object.entries(users)) {
+    if (now - (user.lastSeen ?? 0) > PRESENCE_STALE_MS) {
+      delete users[id]
+      changed = true
+    }
+  }
+  if (changed) usePresenceStore.setState({ users })
+}, 60_000)

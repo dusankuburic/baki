@@ -224,7 +224,9 @@ type StorageBackend interface {
 	SaveAuditEvent(ctx context.Context, event *AuditEvent) error
 	ListAuditEvents(ctx context.Context, filter AuditFilter) ([]*AuditEvent, error)
 
-	// Flow versioning
+	// Flow versioning. SaveFlowVersion assigns v.Version atomically (any
+	// caller-set value is overwritten), so callers must read it back from v
+	// after a successful save.
 	SaveFlowVersion(ctx context.Context, v *FlowVersion) error
 	ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*FlowVersion, error)
 	LoadFlowVersion(ctx context.Context, flowID string, version int) (*FlowVersion, error)

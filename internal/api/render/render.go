@@ -88,8 +88,6 @@ func Error(w http.ResponseWriter, err error, code int) {
 			code = http.StatusBadRequest
 		case errors.Is(err, service.ErrConflict) || errors.Is(err, storageif.ErrEmailExists) || errors.Is(err, storageif.ErrOrgInviteExists) || errors.Is(err, storageif.ErrVersionConflict):
 			code = http.StatusConflict
-		case errors.Is(err, service.ErrNotImplemented):
-			code = http.StatusNotImplemented
 		}
 	}
 

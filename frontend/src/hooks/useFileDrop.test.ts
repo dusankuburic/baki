@@ -2,7 +2,12 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {renderHook, waitFor} from '@testing-library/react'
 import {useFileDrop} from './useFileDrop'
 import {flowApi} from '@/api'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
+import type {PlatformCapabilities} from '@/platform/guards'
+
+function caps(fileSystem: boolean): PlatformCapabilities {
+  return {fileSystem, nativeDialogs: fileSystem, clipboard: true, notifications: true, systemTray: fileSystem, nativeWindow: fileSystem}
+}
 
 type DragDropEvent = {payload: {type: 'enter' | 'over' | 'leave' | 'drop'; paths?: string[]}}
 type DragDropHandler = (event: DragDropEvent) => void
@@ -20,7 +25,7 @@ vi.mock('@tauri-apps/api/webview', () => ({
 }))
 
 vi.mock('@/platform/guards', () => ({
-  isTauri: vi.fn(),
+  getPlatformCapabilities: vi.fn(),
 }))
 
 vi.mock('@/api', () => ({
@@ -41,13 +46,13 @@ beforeEach(() => {
 
 describe('useFileDrop — Tauri native drag-drop', () => {
   it('subscribes to the native webview drag-drop stream only in Tauri', async () => {
-    vi.mocked(isTauri).mockReturnValue(false)
+    vi.mocked(getPlatformCapabilities).mockReturnValue(caps(false))
     renderHook(() => useFileDrop(vi.fn()))
     await waitFor(() => expect(capturedHandler).toBeNull())
   })
 
   it('opens the dropped file via the native event and clears dragOver', async () => {
-    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(getPlatformCapabilities).mockReturnValue(caps(true))
     const doc = {id: 'doc1'} as never
     vi.mocked(flowApi.loadFlowFromPath).mockResolvedValue(doc)
     const openDocument = vi.fn()
@@ -65,7 +70,7 @@ describe('useFileDrop — Tauri native drag-drop', () => {
   })
 
   it('clears dragOver on leave without opening anything', async () => {
-    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(getPlatformCapabilities).mockReturnValue(caps(true))
     const openDocument = vi.fn()
     const {result} = renderHook(() => useFileDrop(openDocument))
     await waitFor(() => expect(capturedHandler).not.toBeNull())
@@ -78,7 +83,7 @@ describe('useFileDrop — Tauri native drag-drop', () => {
   })
 
   it('unsubscribes on unmount', async () => {
-    vi.mocked(isTauri).mockReturnValue(true)
+    vi.mocked(getPlatformCapabilities).mockReturnValue(caps(true))
     const {unmount} = renderHook(() => useFileDrop(vi.fn()))
     await waitFor(() => expect(capturedHandler).not.toBeNull())
     unmount()

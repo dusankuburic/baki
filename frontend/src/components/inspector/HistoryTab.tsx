@@ -1,56 +1,37 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState } from 'react'
 import { History, Plus, Tag } from 'lucide-react'
 import { versionsApi, type FlowVersion } from '@/api/admin'
 import { useFlowStore } from '@/stores/flowStore'
 import { EmptyState, ErrorState, Spinner } from '@/components/shared'
 import { relativeTime, absoluteTime } from '@/lib/time'
+import { useAsync } from '@/hooks/useAsync'
 
 export const HistoryTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
-  const [versions, setVersions] = useState<FlowVersion[]>([])
-  const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [comment, setComment] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  const fetchVersions = useCallback(async () => {
-    if (!document?.id) return
-    setIsLoading(true)
-    setError(null)
-    try {
-      const list = await versionsApi.list(document.id, 50)
-      setVersions(list)
-    } catch {
-      setError('Failed to load versions')
-      setVersions([])
-    } finally {
-      setIsLoading(false)
-    }
-  }, [document])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!document?.id) return
-    setIsLoading(true)
-    setError(null)
-    versionsApi.list(document.id, 50)
-      .then(list => { if (!cancelled) setVersions(list) })
-      .catch(() => { if (!cancelled) { setError('Failed to load versions'); setVersions([]) } })
-      .finally(() => { if (!cancelled) setIsLoading(false) })
-    return () => { cancelled = true }
-  }, [document?.id])
+  const {data, isLoading, error: fetchError, refetch: fetchVersions} = useAsync<FlowVersion[]>(
+    () => document?.id ? versionsApi.list(document.id, 50) : Promise.resolve([]),
+    [document?.id],
+  )
+  // Clear stale results on a fetch error (matches the previous behavior of
+  // resetting to [] on catch) rather than showing a stale list under an error.
+  const versions = fetchError ? [] : (data ?? [])
+  const error = saveError ?? (fetchError ? 'Failed to load versions' : null)
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!document?.id) return
     setIsSaving(true)
-    setError(null)
+    setSaveError(null)
     try {
       await versionsApi.save(document.id, comment)
       setComment('')
       fetchVersions()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save version')
+      setSaveError(err instanceof Error ? err.message : 'Failed to save version')
     } finally {
       setIsSaving(false)
     }

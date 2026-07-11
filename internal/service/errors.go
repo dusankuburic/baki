@@ -20,7 +20,4 @@ var (
 	// ErrUninitialized is returned when an operation requires a loaded flow
 	// but none is present (local mode).
 	ErrUninitialized = errors.New("no flow loaded")
-
-	// ErrNotImplemented is a placeholder for planned but unfinished features.
-	ErrNotImplemented = errors.New("not implemented")
 )

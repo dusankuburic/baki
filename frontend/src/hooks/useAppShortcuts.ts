@@ -5,7 +5,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSearchStore} from '@/stores/searchStore'
 import {flowApi, analysisApi, exportApi} from '@/api'
-import {isTauri} from '@/platform/guards'
+import {getPlatformCapabilities} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {logger} from '@/lib/logger'
 import type {FlowDocument as DomainFlowDocument, AnalysisReport} from '@/types'
@@ -108,7 +108,7 @@ export function useAppShortcuts(deps: {
             'view.local-map': () => useUIStore.getState().setMainPaneView('local-map'),
             'nav.up.subflow': () => useFlowStore.getState().drillUp(),
             'view.fullscreen': async () => {
-                if (!isTauri()) return
+                if (!getPlatformCapabilities().nativeWindow) return
                 const { getCurrentWindow } = await import('@tauri-apps/api/window')
                 const win = getCurrentWindow()
                 const isFs = await win.isFullscreen()
@@ -151,7 +151,7 @@ export function useAppShortcuts(deps: {
             },
             'window.reload': () => { window.location.reload() },
             'window.quit': () => {
-                if (!isTauri()) return
+                if (!getPlatformCapabilities().nativeWindow) return
                 import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().close())
             },
         },

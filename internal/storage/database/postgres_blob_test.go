@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/google/uuid"
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // azuriteDefaultConnStr is Azurite's well-known development connection string.
@@ -63,6 +64,23 @@ func TestUploadBlobSizeCap(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("expected size-cap error, got: %v", err)
+	}
+}
+
+func TestValidFlowID(t *testing.T) {
+	// SaveFlow / SaveFlowVersion reject these before touching the DB or blob
+	// store, so a nil-field backend is enough to exercise the guard.
+	b := &PostgresStorageBackend{}
+	for _, id := range []string{"", "a/b", "victim-id/versions/3"} {
+		if err := b.SaveFlow(context.Background(), &interfaces.FlowDocument{ID: id, Name: "x"}); err == nil {
+			t.Errorf("SaveFlow(%q): expected invalid-id error, got nil", id)
+		}
+		if err := b.SaveFlowVersion(context.Background(), &interfaces.FlowVersion{ID: "v", FlowID: id}); err == nil {
+			t.Errorf("SaveFlowVersion(flow %q): expected invalid-id error, got nil", id)
+		}
+	}
+	if err := validFlowID("2cc1cdd8-0000-0000-0000-000000000000"); err != nil {
+		t.Errorf("valid uuid rejected: %v", err)
 	}
 }
 

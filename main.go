@@ -21,15 +21,18 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/connector/padcloud"
 	"pad-analyzer/internal/di"
 	"pad-analyzer/internal/errreport"
 	padmetrics "pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/notify"
 	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/scanner"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
+	"pad-analyzer/internal/storage/filesystem"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/telemetry"
 	"pad-core/logger"
@@ -58,6 +61,9 @@ func main() {
 			provideOrgService,
 			provideNotifier,
 			provideScanner,
+			provideMigrationRunner,
+			provideIngester,
+			providePadCloudAuth,
 		),
 		di.ServiceModule,
 		di.APIModule,
@@ -68,6 +74,7 @@ func main() {
 			initStorageSecrets,
 			initAuditPool,
 			initScanner,
+			initIngester,
 			initRetentionPurge,
 			startServer,
 		),
@@ -164,6 +171,90 @@ func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error { s.Start(); return nil },
 		OnStop:  func(context.Context) error { s.Stop(); return nil },
+	})
+}
+
+// provideMigrationRunner wires the optional local→cloud data migration runner.
+// The migrator needs BOTH a source filesystem backend (PAD_STORAGE_DATA_DIR
+// pointing at the old local data) and the active cloud (Postgres) destination.
+// With either absent the runner is disabled — nil — and the admin endpoint
+// reports 503. Cloud mode only: local mode has no destination backend.
+func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend) *api.MigrationRunner {
+	if dst == nil || cfg.Mode != config.ModeCloud || cfg.Storage.DataDir == "" {
+		return api.NewMigrationRunner(nil)
+	}
+	src, err := filesystem.NewLocalStorageBackend(cfg.Storage.DataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: migration source unavailable (%s): %v; migration disabled\n", cfg.Storage.DataDir, err)
+		return api.NewMigrationRunner(nil)
+	}
+	m := migration.New(src, dst).
+		WithConversationsDir(filepath.Join(cfg.Storage.DataDir, "conversations"))
+	runner := api.NewMigrationRunner(m)
+	// Cross-replica single-run guard: the Postgres backend exposes an advisory
+	// lock; without it two pods could both pass the in-process guard and run
+	// the same migration concurrently.
+	if locker, ok := dst.(api.GlobalLocker); ok {
+		runner = runner.WithLocker(locker)
+	}
+	return runner
+}
+
+// providePadCloudAuth builds the optional Power Platform device-flow
+// authenticator. Returns nil when the connector isn't configured (cloud mode
+// required + all of tenant/clientID/dataverseURL/ingestInterval). The same
+// authenticator is shared between the ingester (for sweeps) and the admin
+// endpoints (for the one-time device-flow bootstrap).
+func providePadCloudAuth(cfg *config.Config, backend storageif.StorageBackend) *padcloud.Authenticator {
+	pc := cfg.PowerPlatform
+	if backend == nil || cfg.Mode != config.ModeCloud {
+		return nil
+	}
+	if pc.TenantID == "" || pc.ClientID == "" || pc.DataverseURL == "" || pc.IngestInterval == "" {
+		return nil
+	}
+	return padcloud.NewAuthenticator(pc.TenantID, pc.ClientID, pc.Scope, nil)
+}
+
+// provideIngester wires the optional Power Platform (PAD-cloud) connector.
+// EXPERIMENTAL: the cloud→FlowDocument converter and Dataverse endpoints are
+// built defensively and are NOT yet validated against a real tenant — enable
+// only for evaluation. It requires cloud mode, a DB backend, and the
+// authenticator (providePadCloudAuth) to be configured; otherwise it returns
+// nil (disabled) and the lifecycle hook is a no-op.
+func provideIngester(auth *padcloud.Authenticator, cfg *config.Config, backend storageif.StorageBackend) *padcloud.Ingester {
+	if auth == nil || backend == nil || cfg.Mode != config.ModeCloud {
+		return nil
+	}
+	client := padcloud.NewHTTPClient(auth, cfg.PowerPlatform.DataverseURL)
+	// An empty owner makes every ingested flow "unowned" — visible through the
+	// admin/portfolio surfaces rather than scoped to a service account. Fine
+	// for evaluation, but loud enough that nobody ships a tenant that way
+	// without noticing.
+	if cfg.PowerPlatform.OwnerUserID == "" {
+		logger.Warn("padcloud: PAD_PP_OWNER_USER is not set — ingested flows will be unowned (broadly visible); point it at a service account before real-tenant use")
+	}
+	store := padcloud.NewLibraryStore(backend, cfg.PowerPlatform.OwnerUserID, cfg.PowerPlatform.OwnerOrgID)
+	return padcloud.NewIngester(client, padcloud.NewCloudConverter(), store)
+}
+
+// initIngester starts/stops the periodic PAD-cloud ingest loop. No-op when the
+// connector isn't configured (nil ingester) or the interval is invalid.
+func initIngester(lc fx.Lifecycle, ing *padcloud.Ingester, cfg *config.Config) {
+	if ing == nil {
+		return
+	}
+	interval := parseGovernanceDuration("PAD_PP_INGEST_INTERVAL", cfg.PowerPlatform.IngestInterval)
+	if interval <= 0 {
+		return
+	}
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			logger.Info("starting Power Platform connector (experimental)", "interval", interval)
+			ing.Start(interval)
+			return nil
+		},
+		OnStop: func(context.Context) error { ing.Stop(); return nil },
 	})
 }
 
@@ -662,16 +753,30 @@ func writeSessionSecret(secret string) (string, error) {
 	}
 	path := filepath.Join(configDir, "session.key")
 	// Write via a temp file + rename so a crash mid-write can't leave a partial
-	// secret that the shell would fail to parse. O_WRONLY|O_CREATE|O_TRUNC and
-	// 0600 keep the file readable only by the owning user.
-	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+	// secret that the shell would fail to parse.
+	tmp, err := os.CreateTemp(configDir, ".session-key-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temp session key: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return "", fmt.Errorf("chmod temp session key: %w", err)
+	}
+	if _, err := tmp.Write([]byte(secret)); err != nil {
+		_ = tmp.Close()
+		cleanup()
 		return "", fmt.Errorf("write session key: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		// Chmod is belt-and-suspenders: WriteFile already applies the mask, but
-		// an existing file's mode is only updated on rewrite if the umask
-		// allows it — force it explicitly so a pre-existing 0644 file is fixed.
-		return "", fmt.Errorf("chmod session key: %w", err)
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return "", fmt.Errorf("close temp session key: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return "", fmt.Errorf("rename session key: %w", err)
 	}
 	return path, nil
 }

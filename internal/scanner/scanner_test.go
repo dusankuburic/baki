@@ -191,3 +191,41 @@ func TestScanOnce_DedupsRepeatAlerts(t *testing.T) {
 		t.Errorf("expected 1 alert across two identical scans (deduped), got %d", len(got))
 	}
 }
+
+// TestScanOnce_PrunesDedupEntriesForDeletedFlows verifies lastSig doesn't
+// accumulate forever: once a flow that triggered an alert is deleted, a
+// subsequent complete sweep drops its dedup entry so re-creating a flow with
+// the same ID doesn't inherit stale dedup state, and the map doesn't grow
+// unbounded over the scanner's lifetime.
+func TestScanOnce_PrunesDedupEntriesForDeletedFlows(t *testing.T) {
+	b := newBackend()
+	seedFlow(t, b, "f1")
+	if err := b.SetFlowBaseline(context.Background(), &storageif.FlowBaseline{FlowID: "f1", Keys: []string{}}); err != nil {
+		t.Fatalf("set baseline: %v", err)
+	}
+	reports := map[string]*models.AnalysisReport{
+		"f1": {FlowID: "f1", Findings: []models.Finding{{RuleID: "r2", BlockID: "b2", Severity: models.SeverityError}}},
+	}
+
+	cap := newCapture(t)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+
+	s.ScanOnce(context.Background())
+	s.mu.Lock()
+	n := len(s.lastSig)
+	s.mu.Unlock()
+	if n == 0 {
+		t.Fatal("expected lastSig to have an entry for f1 after its alert")
+	}
+
+	if err := b.DeleteFlow(context.Background(), "f1"); err != nil {
+		t.Fatalf("delete flow: %v", err)
+	}
+	s.ScanOnce(context.Background()) // full sweep over an empty flow list
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.lastSig) != 0 {
+		t.Errorf("lastSig = %v, want empty after the deleted flow's entry is pruned", s.lastSig)
+	}
+}

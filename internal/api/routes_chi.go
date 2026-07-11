@@ -262,6 +262,9 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/migration/start", h.Admin.handleMigrationStart)
 		r.Get("/migration/status", h.Admin.handleMigrationStatus)
 		r.Get("/audit", h.Admin.handleAdminAuditList)
+		r.Post("/powerplatform/start", h.Admin.handlePPStartAuth)
+		r.Post("/powerplatform/poll", h.Admin.handlePPPollAuth)
+		r.Get("/powerplatform/status", h.Admin.handlePPStatus)
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

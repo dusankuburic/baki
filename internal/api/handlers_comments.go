@@ -265,8 +265,3 @@ func (h *AnalysisHandler) handleViewShared(w http.ResponseWriter, r *http.Reques
 		"flowName": doc.Name,
 	})
 }
-
-// decodeOptional decodes a possibly-empty body into dst. An empty body is a
-// no-op (dst keeps its zero values), matching the pattern used by handlers that
-// accept optional filter params.
-var _ = time.Now // keep import if temporarily unused

@@ -48,15 +48,21 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   const clearError = useAuthStore(s => s.clearError)
 
   useEffect(() => {
-    authApi.ssoInfo().then(setSso).catch(() => setSso(null))
+    // Cancellation guard: these promises can resolve after unmount (route
+    // change, test teardown) — a setState then hits a dead component.
+    let cancelled = false
+    authApi.ssoInfo()
+      .then(info => { if (!cancelled) setSso(info) })
+      .catch(() => { if (!cancelled) setSso(null) })
 
     const { ticket, error: hashError } = readSSOHash()
     if (hashError) setSsoError(hashError)
     if (ticket) {
-      loginWithSSOTicket(ticket).then(() => onSuccess?.()).catch(() => {
+      loginWithSSOTicket(ticket).then(() => { if (!cancelled) onSuccess?.() }).catch(() => {
         // error message lands in the store's `error` field
       })
     }
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

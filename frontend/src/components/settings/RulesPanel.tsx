@@ -1,4 +1,3 @@
-import {useEffect, useState} from 'react'
 import {analysisApi} from '@/api'
 import type {Rule, RuleConfig, Severity} from '@/types'
 import {Switch} from '@/components/shared'
@@ -6,37 +5,27 @@ import {Shield, AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useToast} from '@/components/shared/Toast'
+import {useAsync} from '@/hooks/useAsync'
 import clsx from 'clsx'
 
 export default function RulesPanel() {
-  const [rules, setRules] = useState<Rule[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const settings = useSettingsStore(s => s.settings)
   const updateSettings = useSettingsStore(s => s.updateSettings)
   const autoAnalyzeOnOpen = settings.analysis.autoAnalyzeOnOpen
   const toast = useToast()
 
-  useEffect(() => {
-    let cancelled = false
-    analysisApi.getRules().then(res => {
-      if (cancelled) return
-      setRules(res || [])
-      setLoading(false)
-    }).catch(err => {
-      if (cancelled) return
-      setLoadError(err instanceof Error ? err.message : 'Failed to load rules')
-      setLoading(false)
-    })
-    return () => { cancelled = true }
-  }, [])
+  const {data, isLoading: loading, error: loadError, setData: setRules} = useAsync<Rule[]>(
+    () => analysisApi.getRules().then(res => res || []),
+    [],
+  )
+  const rules = data ?? []
 
   const handleToggle = async (ruleId: string, enabled: boolean) => {
     try {
       // Dedicated toggle endpoint: preserves the configured severity override
       // and option thresholds, unlike a full-config replace.
       await analysisApi.setRuleEnabled(ruleId, enabled)
-      setRules(prev => prev.map(r => r.id === ruleId ? {...r, enabled} : r))
+      setRules(rules.map(r => r.id === ruleId ? {...r, enabled} : r))
     } catch (err) {
       toast.error('Failed to update rule: ' + (err as Error).message)
     }
@@ -52,7 +41,7 @@ export default function RulesPanel() {
         severity: severity
       }
       await analysisApi.updateRuleConfig(ruleId, config)
-      setRules(prev => prev.map(r => r.id === ruleId ? {...r, defaultSeverity: severity} : r))
+      setRules(rules.map(r => r.id === ruleId ? {...r, defaultSeverity: severity} : r))
     } catch (err) {
       toast.error('Failed to update rule severity: ' + (err as Error).message)
     }
