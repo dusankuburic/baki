@@ -311,6 +311,7 @@ CREATE TABLE IF NOT EXISTS flows (
 	name        TEXT        NOT NULL,
 	description TEXT        NOT NULL DEFAULT '',
 	content     JSONB       NOT NULL DEFAULT '{}',
+	source      TEXT        NOT NULL DEFAULT '',
 	metadata    JSONB       NOT NULL DEFAULT '{}',
 	owner_id    TEXT        NOT NULL DEFAULT '',
 	org_id      TEXT        NOT NULL DEFAULT '',
@@ -320,6 +321,9 @@ CREATE TABLE IF NOT EXISTS flows (
 );
 -- OCC version column (added post-1.0; ALTER for existing deployments).
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
+-- Raw PAD source text (added for cloud-mode apply-fix/preview-fix, which patch
+-- line-based source rather than the parsed content). Empty for legacy rows.
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS flows_owner_id_idx ON flows (owner_id);
 CREATE INDEX IF NOT EXISTS flows_org_id_idx   ON flows (org_id);
 -- Supports ORDER BY updated_at DESC on every list query (avoids full-scan sort).

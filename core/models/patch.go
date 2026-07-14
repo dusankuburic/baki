@@ -41,6 +41,13 @@ type Patch struct {
 // Kind "replace": within line StartLine (1-based), replace the first occurrence
 // of Old with New. Used to swap a hardcoded credential literal for a
 // %Variable% reference in-place.
+//
+// Kind "remove": delete the inclusive 1-based range [StartLine..EndLine]. Used
+// to delete a block (and its descendants, when EndLine = the block's last
+// descendant line) — resolves dead-code, unused-variable, redundant-action,
+// duplicate-action, and disabled-block by removing the offending block
+// outright. Reuses StartLine/EndLine (same range semantics as "wrap", just
+// without inserting a header/footer).
 type PatchOp struct {
 	Kind       string   `json:"kind"`
 	BeforeLine int      `json:"beforeLine,omitempty"`

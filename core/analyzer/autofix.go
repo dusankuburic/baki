@@ -51,6 +51,21 @@ func ApplyPatch(source string, p models.Patch) string {
 	}
 	lines := strings.Split(raw, "\n")
 
+	// Removes first (they delete a range, shifting lines below). Applied
+	// bottom-up so an earlier remove doesn't shift a later remove's line
+	// targets. Apply-fix patches carry a single op, but sorting keeps a mix
+	// sensible. Then wraps (range replace), replaces, appends, inserts.
+	removes := make([]models.PatchOp, 0, len(p.Ops))
+	for _, op := range p.Ops {
+		if op.Kind == "remove" {
+			removes = append(removes, op)
+		}
+	}
+	sort.Slice(removes, func(i, j int) bool { return removes[i].StartLine > removes[j].StartLine })
+	for _, op := range removes {
+		lines = applyRemove(lines, op)
+	}
+
 	// Wraps first (they replace a range), then replaces, then appends, then
 	// inserts bottom-up. Apply-fix patches carry a single op, so multi-op
 	// interaction is minimal; this ordering keeps a mix sensible.
@@ -145,9 +160,34 @@ func applyWrap(lines []string, op models.PatchOp) []string {
 	return out
 }
 
+// applyRemove deletes the inclusive 1-based range [StartLine..EndLine],
+// returning the shortened slice. Bounds are clamped the same way applyWrap
+// clamps its wrap range. Used by RemoveBlockPatch to delete a block (and its
+// descendants when EndLine spans them).
+func applyRemove(lines []string, op models.PatchOp) []string {
+	start := op.StartLine - 1
+	end := op.EndLine
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines) {
+		start = len(lines)
+	}
+	if end < start {
+		end = start
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	out := make([]string, 0, len(lines)-(end-start))
+	out = append(out, lines[:start]...)
+	out = append(out, lines[end:]...)
+	return out
+}
+
 // applyReplace does an in-place text substitution within a single line:
-// replaces ALL occurrences of Old with New (not just the first). Used to swap
-// a hardcoded credential literal for a %Variable% reference — if the same
+// replaces ALL occurrences of Old with New (not just the first). Used to swap a
+// hardcoded credential literal for a %Variable% reference — if the same
 // secret value appears in multiple properties on the same line, all should be
 // replaced.
 func applyReplace(lines []string, op models.PatchOp) []string {
@@ -411,4 +451,69 @@ func InsertExitConditionPatch(block *models.Block) models.Patch {
 		BeforeLine: firstChildLine,
 		Lines:      insideLines,
 	}}}
+}
+
+// RemoveBlockPatch builds a Patch that deletes the block's source lines
+// outright (the block itself plus any descendants, via blockEndLine). After
+// apply + re-parse the block is gone, so rules that flag a block as redundant /
+// dead / unused / disabled / duplicate no longer have a target to fire on.
+//
+// Used by: duplicate-action, redundant-action, dead-code, unused-variable,
+// disabled-block. Each of those rules attaches its finding to the very block
+// that should be removed, so deleting the finding's block resolves it.
+//
+// For duplicate-action the finding is on the first of a run of ≥3 identical
+// actions; removing one leaves N-1 below the minRepeats threshold, so the
+// finding is resolved (and since the actions are identical, which one is
+// removed is immaterial).
+func RemoveBlockPatch(block *models.Block) models.Patch {
+	return models.Patch{Ops: []models.PatchOp{{
+		Kind:      "remove",
+		StartLine: block.LineNumber,
+		EndLine:   blockEndLine(block),
+	}}}
+}
+
+// ParameterizeSqlPatch builds a Patch that rewrites a SQL property value to use
+// parameter placeholders instead of interpolated %variables%, resolving
+// sql-injection-risk. Each %VarName% in the property value becomes @VarName
+// (PAD's parameter syntax); after apply the sql-injection rule's %var% regex
+// no longer matches, so the finding is resolved.
+//
+// Emits one "replace" op per distinct variable reference found (all targeting
+// the block's source line). The replace pass applies them in sequence on the
+// same line, so multiple vars on one line are all parameterized. Scoped to
+// single-line SQL (the property value lives on the block's source line);
+// multi-line triple-quoted SQL spanning lines is a known limitation.
+func ParameterizeSqlPatch(block *models.Block, propKey string) models.Patch {
+	if block.Properties == nil || propKey == "" {
+		return models.Patch{}
+	}
+	sqlText := block.Properties[propKey]
+	if sqlText == "" {
+		return models.Patch{}
+	}
+	// Find every %VarName% in the SQL value and emit a replace op turning it
+	// into @VarName. De-duplicate so a var used twice yields one op (ReplaceAll
+	// handles both occurrences on the line). sqlVarRef has no capture group
+	// (it's a match-only regex shared with the rule), so derive the name by
+	// trimming the surrounding %.
+	seen := make(map[string]bool)
+	var ops []models.PatchOp
+	for _, m := range sqlVarRef.FindAllString(sqlText, -1) {
+		if seen[m] {
+			continue
+		}
+		seen[m] = true
+		ops = append(ops, models.PatchOp{
+			Kind:      "replace",
+			StartLine: block.LineNumber,
+			Old:       m,
+			New:       "@" + strings.Trim(m, "%"),
+		})
+	}
+	if len(ops) == 0 {
+		return models.Patch{}
+	}
+	return models.Patch{Ops: ops}
 }

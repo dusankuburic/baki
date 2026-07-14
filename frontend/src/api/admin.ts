@@ -77,4 +77,12 @@ export const versionsApi = {
     request(`/api/library/${flowId}/versions`, {comment: comment ?? ''}),
   get: (flowId: string, version: number): Promise<FlowVersion & {content: unknown}> =>
     request(`/api/library/${flowId}/versions/${version}`, undefined, 'GET'),
+  // restore reverts the current flow content to a historical version's content
+  // (written as a new current version, so it's itself recoverable from history).
+  restore: (flowId: string, version: number): Promise<unknown> =>
+    request(`/api/library/${flowId}/versions/${version}/restore`, {}),
+  // diff returns the structural diff (FlowDiff) between a historical version and
+  // the current flow content — + = added since the snapshot, - = removed.
+  diff: (flowId: string, version: number): Promise<unknown> =>
+    request(`/api/library/${flowId}/versions/${version}/diff`, undefined, 'GET'),
 }

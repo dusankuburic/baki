@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"pad-analyzer/internal/api/render"
@@ -123,6 +124,15 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+	// Stash the raw source for single-file flows so cloud-mode apply-fix/
+	// preview-fix (which patch line-based source) have the original text. For
+	// multi-file/folder flows the patch targets a subflow file and cloud fix is
+	// deferred; leave Source empty there.
+	if len(req.Files) == 1 {
+		for _, text := range req.Files {
+			doc.Source = text
+		}
 	}
 
 	if h.security.JWTEnabled {
@@ -334,10 +344,6 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 // document. Desktop/local only. The finding carries the available fixType in
 // its AutoFix field; the frontend shows "Apply fix" only when that is set.
 func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
-	if h.security.JWTEnabled {
-		render.Error(w, fmt.Errorf("source-file patching is not available in cloud mode"), http.StatusForbidden)
-		return
-	}
 	var req struct {
 		FlowID   string `json:"flowId"`
 		BlockID  string `json:"blockId"`
@@ -358,8 +364,12 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.RecordFlowOp("patch_fix")
-	updated, err := h.flowSvc.ApplyFix(doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property)
+	updated, err := h.flowSvc.ApplyFix(r.Context(), doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property)
 	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -367,13 +377,10 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePreviewFix returns the before/after source text for a fix WITHOUT
-// writing to disk. The frontend renders a diff so the user can review the
-// change before committing. Desktop/local only (same as apply-fix).
+// writing. The frontend renders a diff so the user can review the change
+// before committing. Works in both desktop (local source file) and cloud
+// (stored raw source) modes for single-file flows.
 func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
-	if h.security.JWTEnabled {
-		render.Error(w, fmt.Errorf("source-file patching is not available in cloud mode"), http.StatusForbidden)
-		return
-	}
 	var req struct {
 		FlowID   string `json:"flowId"`
 		BlockID  string `json:"blockId"`
@@ -399,6 +406,96 @@ func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render.JSON(w, result)
+}
+
+// handleApplyFixBatch applies multiple auto-fixes in one pass (iterative loop,
+// persisted once). The frontend's bulk-action bar derives the rule set from the
+// selected findings; the server fixes every auto-fixable finding whose rule is
+// in that set (re-parsing between fixes so line shifts don't corrupt targets).
+func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string   `json:"flowId"`
+		Rules  []string `json:"rules"`
+		Limit  int      `json:"limit"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.FlowID == "" {
+		render.Error(w, fmt.Errorf("flowId is required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("patch_fix_batch")
+	var ruleFilter map[string]bool
+	if len(req.Rules) > 0 {
+		ruleFilter = make(map[string]bool, len(req.Rules))
+		for _, id := range req.Rules {
+			if id = strings.TrimSpace(id); id != "" {
+				ruleFilter[id] = true
+			}
+		}
+	}
+	updated, applied, err := h.flowSvc.ApplyFixBatch(r.Context(), doc, ruleFilter, req.Limit)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, map[string]any{"document": updated, "applied": applied})
+}
+
+// handleGetSource returns the raw PAD source text for the flow. Desktop: reads
+// the file. Cloud: returns the stored source. Viewer access.
+func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
+	flowID := r.URL.Query().Get("flowId")
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, "viewer")
+	if !ok {
+		return
+	}
+	source, err := h.flowSvc.GetSource(doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, map[string]string{"source": source})
+}
+
+// handleSaveSource replaces the flow's raw source text (from the in-app source
+// editor), re-parses, and returns the updated document. Editor access.
+func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+		Source string `json:"source"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.FlowID == "" {
+		render.Error(w, fmt.Errorf("flowId is required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("save_source")
+	updated, err := h.flowSvc.SaveSource(r.Context(), doc, req.Source)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, updated)
 }
 
 func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {

@@ -664,16 +664,20 @@ type KnowledgeChunk struct {
 
 // FlowDocument represents a flow document
 type FlowDocument struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Content        json.RawMessage `json:"content"`
-	Metadata       FlowMetadata    `json:"metadata"`
-	OwnerID        string          `json:"ownerId"`
-	OrganizationID string          `json:"organizationId"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	UpdatedAt      time.Time       `json:"updatedAt"`
-	Version        int             `json:"version"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Content     json.RawMessage `json:"content"`
+	// Source is the raw PAD source text (single-file flows). Cloud-mode
+	// apply-fix/preview-fix patch this line-based text and re-parse, rather than
+	// the parsed Content. Empty for legacy rows and multi-file flows (deferred).
+	Source         string       `json:"source,omitempty"`
+	Metadata       FlowMetadata `json:"metadata"`
+	OwnerID        string       `json:"ownerId"`
+	OrganizationID string       `json:"organizationId"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
+	Version        int          `json:"version"`
 }
 
 // FlowMetadata contains metadata about a flow

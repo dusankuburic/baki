@@ -1,6 +1,7 @@
 import {Fragment, lazy, Suspense, memo, useState, useMemo, useEffect} from 'react'
-import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle} from 'lucide-react'
+import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle, Code2} from 'lucide-react'
 import {BlockView, MainPaneToolbar} from '@/components/flow'
+import SourceEditor from '@/components/flow/SourceEditor'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
 import {Spinner, ErrorBoundary, useToast} from '@/components/shared'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
@@ -43,6 +44,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
   const editor = useEditorGroups()
   const [loadingSample, setLoadingSample] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [showSource, setShowSource] = useState(false)
 
   // Keep the flow store's selected subflow in sync with the focused group's
   // active tab, whatever changed it — tab click, closing a tab (a neighbor
@@ -142,9 +144,44 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
 
   const {groups, focusedGroupIndex, widths} = editor
 
+  if (showSource && document) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="relative">
+          <MainPaneToolbar />
+          <div className="absolute top-1 right-3 z-20">
+            <button
+              onClick={() => setShowSource(false)}
+              className="flex items-center gap-1 text-2xs px-2 py-1 rounded bg-brand-500/15 text-brand-400 hover:bg-brand-500/25 transition-colors"
+              title="Switch to block view"
+            >
+              <Code2 size={12} />
+              Block view
+            </button>
+          </div>
+        </div>
+        <SourceEditor onClose={() => setShowSource(false)} />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full">
-      <MainPaneToolbar />
+      <div className="relative">
+        <MainPaneToolbar />
+        {document && (
+          <div className="absolute top-1 right-3 z-20">
+            <button
+              onClick={() => setShowSource(true)}
+              className="flex items-center gap-1 text-2xs px-2 py-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors"
+              title="Edit raw source"
+            >
+              <Code2 size={12} />
+              Source
+            </button>
+          </div>
+        )}
+      </div>
       <ParseErrorsBanner />
       <div ref={editor.containerRef} className="flex-1 flex overflow-hidden">
         {groups.map((group, gi) => (

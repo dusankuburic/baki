@@ -531,14 +531,106 @@ func (b *LocalStorageBackend) ListAuditEvents(ctx context.Context, filter interf
 }
 
 // Flow versioning — not supported in local desktop mode.
-func (b *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
+// versionDir is the per-flow directory holding one JSON file per snapshot:
+// {dataDir}/versions/{flowID}/{version}.json. Flow IDs originate from uploads,
+// so they get the same traversal guard (safePathSegment) as every other
+// flowID-keyed path in this backend.
+func (lsb *LocalStorageBackend) versionDir(flowID string) (string, error) {
+	if !safePathSegment(flowID) {
+		return "", fmt.Errorf("invalid flow id %q", flowID)
+	}
+	return filepath.Join(lsb.dataDir, "versions", flowID), nil
+}
+
+// SaveFlowVersion assigns the next version number atomically (max existing + 1
+// under flowMu) and persists the snapshot. Desktop/local equivalent of the
+// Postgres FOR UPDATE + MAX+1 path — versioning now works in desktop mode too.
+func (lsb *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
+	dir, err := lsb.versionDir(v.FlowID)
+	if err != nil {
+		return err
+	}
+	lsb.flowMu.Lock()
+	defer lsb.flowMu.Unlock()
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create versions dir: %w", err)
+	}
+	// Assign the next version (max existing + 1). The caller's v.Version is
+	// ignored — same as the Postgres backend, which computes it atomically.
+	existing, _ := os.ReadDir(dir)
+	max := 0
+	for _, e := range existing {
+		var n int
+		if _, err := fmt.Sscanf(e.Name(), "%d.json", &n); err == nil && n > max {
+			max = n
+		}
+	}
+	v.Version = max + 1
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal version: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", v.Version)), data, 0o600); err != nil {
+		return fmt.Errorf("write version: %w", err)
+	}
 	return nil
 }
-func (b *LocalStorageBackend) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*interfaces.FlowVersion, error) {
-	return []*interfaces.FlowVersion{}, nil
+
+// ListFlowVersions returns snapshots newest-first, optionally capped by limit
+// (0 = a sensible default to avoid unbounded reads on huge histories).
+func (lsb *LocalStorageBackend) ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*interfaces.FlowVersion, error) {
+	dir, err := lsb.versionDir(flowID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*interfaces.FlowVersion{}, nil
+		}
+		return nil, fmt.Errorf("list versions: %w", err)
+	}
+	var versions []*interfaces.FlowVersion
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- dir is derived from validated flowID
+		if err != nil {
+			continue
+		}
+		var v interfaces.FlowVersion
+		if err := json.Unmarshal(data, &v); err != nil {
+			continue
+		}
+		versions = append(versions, &v)
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i].Version > versions[j].Version })
+	if limit > 0 && len(versions) > limit {
+		versions = versions[:limit]
+	}
+	return versions, nil
 }
-func (b *LocalStorageBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) {
-	return nil, interfaces.ErrNotFound
+
+// LoadFlowVersion reads a specific snapshot. Returns ErrNotFound when the
+// version or flow has no history.
+func (lsb *LocalStorageBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) {
+	dir, err := lsb.versionDir(flowID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%d.json", version))) // #nosec G304 -- dir is derived from validated flowID
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, interfaces.ErrNotFound
+		}
+		return nil, fmt.Errorf("load version: %w", err)
+	}
+	var v interfaces.FlowVersion
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, fmt.Errorf("unmarshal version: %w", err)
+	}
+	return &v, nil
 }
 
 func (b *LocalStorageBackend) Ping(ctx context.Context) error {

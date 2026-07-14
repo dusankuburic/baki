@@ -50,7 +50,7 @@ function Toast({id, variant = 'info', title, description, action, duration = 400
         variantColors[variant],
         exiting ? 'animate-toast-out' : 'animate-toast-in',
       )}
-      role="alert"
+      role="status"
     >
       <span className="text-base flex-shrink-0">{variantIcons[variant]}</span>
       <div className="flex-1 min-w-0">
@@ -90,7 +90,12 @@ function ToastList() {
   if (!actions) return null
   const removeToast = actions.removeToast
   return (
-    <div className="fixed bottom-4 right-4 z-toast flex flex-col-reverse gap-2">
+    <div
+      className="fixed bottom-4 right-4 z-toast flex flex-col-reverse gap-2"
+      role="region"
+      aria-label="Notifications"
+      aria-live="polite"
+    >
       {toasts.map(toast => (
         <Toast key={toast.id} {...toast} onClose={removeToast} />
       ))}

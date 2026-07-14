@@ -196,6 +196,8 @@ export default function HomeDashboard() {
           findings={findings}
           costByProvider={isCloud ? costByProvider : []}
           className="col-span-12"
+          onViewFindings={() => setMainPaneView('portfolio')}
+          onViewFlows={() => setMainPaneView('library')}
         />
 
         {isCloud ? (

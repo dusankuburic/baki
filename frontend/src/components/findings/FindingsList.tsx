@@ -1,11 +1,13 @@
 import {useState, useMemo, useRef, useEffect} from 'react'
 import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
-import {ChevronRight, EyeOff, CheckSquare, Square, X} from 'lucide-react'
+import {ChevronRight, EyeOff, CheckSquare, Square, X, Wrench} from 'lucide-react'
 import clsx from 'clsx'
 import type {Finding, Severity} from '@/types'
 import type {BlockLookup} from '@/lib/tree'
+import {flowApi, analysisApi} from '@/api'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {useToast} from '@/components/shared'
 import FindingCard from './FindingCard'
 
 interface Props {
@@ -61,11 +63,46 @@ const sevColor: Record<Severity, string> = {
 
 export default function FindingsList({findings, blockLookup, onFixWithAI, sortMode = 'severity'}: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [batchFixing, setBatchFixing] = useState(false)
   const suppressMany = useAnalysisStore(s => s.suppressMany)
   const selectedFindingIds = useAnalysisStore(s => s.selectedFindingIds)
   const toggleFindingSelection = useAnalysisStore(s => s.toggleFindingSelection)
   const selectAllFindings = useAnalysisStore(s => s.selectAllFindings)
   const clearFindingSelection = useAnalysisStore(s => s.clearFindingSelection)
+  const setReport = useAnalysisStore(s => s.setReport)
+  const setDocument = useFlowStore(s => s.setDocument)
+  const toast = useToast()
+
+  // handleBulkFix applies every auto-fixable finding among the selection in one
+  // server-side pass. The selection determines WHICH rules to fix (distinct
+  // ruleIds of selected findings that carry an autoFix); the server then fixes
+  // all fixable findings of those rules, re-parsing between fixes.
+  const handleBulkFix = async () => {
+    const docId = useFlowStore.getState().document?.id
+    if (!docId) return
+    const report = useAnalysisStore.getState().reports.get(docId)
+    const allFindings = report?.findings ?? []
+    const selected = allFindings.filter(f => selectedFindingIds.has(f.id) && f.autoFix)
+    if (selected.length === 0) return
+    const rules = Array.from(new Set(selected.map(f => f.ruleId)))
+    setBatchFixing(true)
+    try {
+      const {document: updated, applied} = await flowApi.applyFixBatch(docId, rules)
+      setDocument(updated)
+      try {
+        const r = await analysisApi.analyzeFlow()
+        if (r) setReport(updated.id, r as never)
+      } catch {
+        /* re-analysis is best-effort; the fixed source is already shown */
+      }
+      toast.success('Applied fixes', {description: `${applied} fix(es) across ${rules.length} rule(s).`})
+      clearFindingSelection()
+    } catch (err) {
+      toast.error('Bulk fix failed', {description: String(err)})
+    } finally {
+      setBatchFixing(false)
+    }
+  }
 
   const groups = useMemo(() => {
     const g = groupByRule(findings)
@@ -232,6 +269,23 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
         <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
           <span className="text-2xs text-text-secondary font-medium">{selectedFindingIds.size} selected</span>
           <div className="flex items-center gap-3">
+            {/* Bulk apply-fix: shown only when at least one selected finding has an autoFix. */}
+            {(() => {
+              const docId = useFlowStore.getState().document?.id
+              const report = docId ? useAnalysisStore.getState().reports.get(docId) : undefined
+              const hasFixable = (report?.findings ?? []).some(f => selectedFindingIds.has(f.id) && f.autoFix)
+              if (!hasFixable) return null
+              return (
+                <button
+                  onClick={handleBulkFix}
+                  disabled={batchFixing}
+                  className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 transition-colors disabled:opacity-50"
+                >
+                  <Wrench size={11} />
+                  {batchFixing ? 'Fixing…' : 'Fix all'}
+                </button>
+              )
+            })()}
             <button
               onClick={() => {
                 // Suppress ALL selected findings from the full report, not

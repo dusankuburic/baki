@@ -70,8 +70,13 @@ func (p *CloudDocumentProvider) ResolveDoc(ctx context.Context, id string) (*mod
 	if err := json.Unmarshal(libDoc.Content, &doc); err != nil {
 		return nil, fmt.Errorf("invalid flow content: %w", err)
 	}
+	// The storage flow ID is authoritative — override the parser-minted UUID
+	// inside Content, so cloud-mode operations (apply-fix/preview-fix/save) key
+	// on the same ID the storage layer uses.
+	doc.ID = id
 	doc.OwnerID = libDoc.OwnerID
 	doc.OrganizationID = libDoc.OrganizationID
+	doc.Source = libDoc.Source // raw PAD text for cloud-mode apply-fix/preview-fix
 	doc.RebuildIndexes()
 	return &doc, nil
 }

@@ -14,6 +14,8 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
+	"pad-core/parser"
 )
 
 // FlowNotifier broadcasts a flow-changed notification to connected WebSocket
@@ -421,4 +423,115 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 		return
 	}
 	render.JSON(w, v)
+}
+
+// handleRestoreFlowVersion reverts the current flow's content to a historical
+// version's content. The historical content is written as a new current
+// version (SaveFlow bumps the version atomically), so the restore is itself
+// recoverable via the version history. Requires editor access.
+func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
+
+	doc, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	if err := h.libSvc.CanWrite(r.Context(), doc, userID); err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	vn, ok := parseIntParam(w, chi.URLParam(r, "vn"), "version", 0)
+	if !ok {
+		return
+	}
+	if vn <= 0 {
+		render.Error(w, fmt.Errorf("invalid version: must be a positive integer"), http.StatusBadRequest)
+		return
+	}
+	historical, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	if len(historical.Content) == 0 {
+		render.Error(w, fmt.Errorf("version %d has no content to restore", vn), http.StatusBadRequest)
+		return
+	}
+
+	// Overwrite the current content with the historical content. SaveFlow's OCC
+	// guards against a concurrent edit; UpdateLibraryFlow re-checks editor
+	// access and invalidates the cached search index.
+	doc.Content = historical.Content
+	if err := h.libSvc.UpdateLibraryFlow(r.Context(), doc, userID); err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowRestore, "flow", id, map[string]string{"restored_from": strconv.Itoa(vn), "version": strconv.Itoa(doc.Version)})
+	render.JSON(w, h.toLibraryFlow(r.Context(), doc, userID, h.libSvc.ResolveOwnerName(r.Context(), doc.OwnerID)))
+}
+
+// handleDiffFlowVersion returns the structural diff between a historical
+// version and the current flow content. Read-only (viewer access). Uses
+// parser.DiffFlows on the two unmarshaled FlowDocuments.
+func (h *LibraryHandler) handleDiffFlowVersion(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	userID := h.security.CallerID(r)
+
+	current, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	vn, ok := parseIntParam(w, chi.URLParam(r, "vn"), "version", 0)
+	if !ok {
+		return
+	}
+	if vn <= 0 {
+		render.Error(w, fmt.Errorf("invalid version: must be a positive integer"), http.StatusBadRequest)
+		return
+	}
+	historical, err := h.backend.LoadFlowVersion(r.Context(), id, vn)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	oldDoc, err := unmarshalFlowContent(historical.Content)
+	if err != nil {
+		render.Error(w, fmt.Errorf("parse historical version: %w", err), http.StatusInternalServerError)
+		return
+	}
+	newDoc, err := unmarshalFlowContent(current.Content)
+	if err != nil {
+		render.Error(w, fmt.Errorf("parse current flow: %w", err), http.StatusInternalServerError)
+		return
+	}
+	// DiffFlows(old, new): old = historical, new = current, so + = added since
+	// the snapshot, - = removed since the snapshot.
+	render.JSON(w, parser.DiffFlows(oldDoc, newDoc))
+}
+
+// unmarshalFlowContent deserializes a stored flow Content (a serialized
+// models.FlowDocument) into the parser's FlowDocument for diffing.
+func unmarshalFlowContent(content json.RawMessage) (*models.FlowDocument, error) {
+	if len(content) == 0 {
+		return &models.FlowDocument{}, nil
+	}
+	var doc models.FlowDocument
+	if err := json.Unmarshal(content, &doc); err != nil {
+		return nil, err
+	}
+	return &doc, nil
 }

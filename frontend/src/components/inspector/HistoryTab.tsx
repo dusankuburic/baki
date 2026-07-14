@@ -1,16 +1,29 @@
 import React, {useState} from 'react'
-import {History, Plus, Tag} from 'lucide-react'
+import {History, Plus, Tag, RotateCcw, GitCompare} from 'lucide-react'
 import {versionsApi, type FlowVersion} from '@/api/admin'
+import {libraryApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
+import {useUIStore} from '@/stores/uiStore'
+import {useToast} from '@/components/shared'
 import {EmptyState, ErrorState, Spinner} from '@/components/shared'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
+import type {FlowDiff} from '@/types'
 
 export const HistoryTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
+  const setDocument = useFlowStore(s => s.setDocument)
+  const setActiveDiff = useUIStore(s => s.setActiveDiff)
+  const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const toast = useToast()
+
   const [isSaving, setIsSaving] = useState(false)
   const [comment, setComment] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
+  // busyVersion tracks which row is running a compare/restore so its buttons
+  // disable and show a pending state (and prevent concurrent actions on the
+  // same version).
+  const [busyVersion, setBusyVersion] = useState<number | null>(null)
 
   const {
     data,
@@ -39,6 +52,49 @@ export const HistoryTab: React.FC = () => {
       setSaveError(err instanceof Error ? err.message : 'Failed to save version')
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  // handleCompare fetches the structural diff between a historical version and
+  // the current flow, then switches the main pane to the diff view. + = added
+  // since the snapshot, - = removed since the snapshot.
+  const handleCompare = async (v: FlowVersion) => {
+    if (!document?.id || busyVersion !== null) return
+    setBusyVersion(v.version)
+    try {
+      const diff = (await versionsApi.diff(document.id, v.version)) as FlowDiff | null
+      if (diff) {
+        setActiveDiff(diff)
+        setMainPaneView('diff')
+      }
+    } catch (err) {
+      toast.error('Comparison failed', {description: err instanceof Error ? err.message : undefined})
+    } finally {
+      setBusyVersion(null)
+    }
+  }
+
+  // handleRestore reverts the current flow content to the historical version.
+  // The backend writes it as a NEW current version (version-bumped), so the
+  // restore is itself recoverable from history. We confirm first because it
+  // overwrites the current content.
+  const handleRestore = async (v: FlowVersion) => {
+    if (!document?.id || busyVersion !== null) return
+    if (!window.confirm(`Restore flow to v${v.version}? This overwrites the current content (recoverable from history).`)) {
+      return
+    }
+    setBusyVersion(v.version)
+    try {
+      await versionsApi.restore(document.id, v.version)
+      // Reload the restored content into the editor.
+      const refreshed = await libraryApi.getContent(document.id)
+      setDocument(refreshed)
+      fetchVersions()
+      toast.success('Flow restored', {description: `Reverted to v${v.version}.`})
+    } catch (err) {
+      toast.error('Restore failed', {description: err instanceof Error ? err.message : undefined})
+    } finally {
+      setBusyVersion(null)
     }
   }
 
@@ -91,28 +147,51 @@ export const HistoryTab: React.FC = () => {
           )
         ) : (
           <div className="space-y-2">
-            {versions.map(v => (
-              <div
-                key={v.id}
-                className="flex items-start gap-3 p-2.5 rounded-lg bg-surface-2 border border-border-subtle/50"
-              >
-                <div className="flex flex-col items-center gap-1 shrink-0">
-                  <Tag size={13} className="text-text-tertiary" />
-                  <span className="text-2xs text-text-tertiary font-mono">v{v.version}</span>
+            {versions.map(v => {
+              const busy = busyVersion === v.version
+              return (
+                <div
+                  key={v.id}
+                  className="flex items-start gap-3 p-2.5 rounded-lg bg-surface-2 border border-border-subtle/50"
+                >
+                  <div className="flex flex-col items-center gap-1 shrink-0">
+                    <Tag size={13} className="text-text-tertiary" />
+                    <span className="text-2xs text-text-tertiary font-mono">v{v.version}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-text-primary truncate">
+                      {v.comment || <span className="text-text-tertiary italic">No comment</span>}
+                    </p>
+                    <p className="text-2xs text-text-tertiary mt-0.5">
+                      <span title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
+                      {v.metadata?.blockCount != null && (
+                        <span className="ml-2 text-text-muted">{v.metadata.blockCount} blocks</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-1 shrink-0">
+                    <button
+                      type="button"
+                      title={`Compare v${v.version} with current`}
+                      disabled={busy}
+                      onClick={() => handleCompare(v)}
+                      className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-0 disabled:opacity-40 transition-colors"
+                    >
+                      {busy ? <Spinner size={13} /> : <GitCompare size={13} />}
+                    </button>
+                    <button
+                      type="button"
+                      title={`Restore flow to v${v.version}`}
+                      disabled={busy}
+                      onClick={() => handleRestore(v)}
+                      className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-0 disabled:opacity-40 transition-colors"
+                    >
+                      <RotateCcw size={13} />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-text-primary truncate">
-                    {v.comment || <span className="text-text-tertiary italic">No comment</span>}
-                  </p>
-                  <p className="text-2xs text-text-tertiary mt-0.5">
-                    <span title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
-                    {v.metadata?.blockCount != null && (
-                      <span className="ml-2 text-text-muted">{v.metadata.blockCount} blocks</span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

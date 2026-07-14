@@ -43,6 +43,7 @@ const (
 	AuditActionFlowShare       = "flow.share"
 	AuditActionFlowSave        = "flow.save"
 	AuditActionFlowVersion     = "flow.version_save"
+	AuditActionFlowRestore     = "flow.version_restore"
 	AuditActionFindingTriage   = "finding.triage"
 	AuditActionBaselineSet     = "flow.baseline_set"
 	AuditActionBaselineClear   = "flow.baseline_clear"

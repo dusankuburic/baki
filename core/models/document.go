@@ -19,8 +19,12 @@ type FlowDocument struct {
 	// session analytics would otherwise count each re-parse of the same input
 	// as a new flow. Set by parser.ParseFiles from the sorted file names;
 	// in-process only (never serialized or persisted).
-	StableID       string         `json:"-"`
-	FilePath       string         `json:"filePath"`
+	StableID string `json:"-"`
+	FilePath string `json:"filePath"`
+	// Source is the raw PAD source text for cloud-mode apply-fix/preview-fix
+	// (which patch line-based source). Desktop uses FilePath; cloud uses Source.
+	// Populated by GetAuthorized from the stored flow; empty when not applicable.
+	Source         string         `json:"source,omitempty"`
 	OwnerID        string         `json:"ownerId,omitempty"`
 	OrganizationID string         `json:"orgId,omitempty"`
 	Subflows       []Subflow      `json:"subflows"`

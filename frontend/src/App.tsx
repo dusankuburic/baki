@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState, lazy, Suspense} from 'react'
 import {ErrorBoundary, ToastProvider, ConfirmProvider, useToast} from './components/shared'
+import OfflineIndicator from './components/shared/OfflineIndicator'
 import CommandPalette from './components/search/CommandPalette'
 import GlobalSearchOverlay from './components/search/GlobalSearchOverlay'
 import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
@@ -23,12 +24,15 @@ import {useFileDrop} from './hooks/useFileDrop'
 import {useGlobalErrorHandler} from './hooks/useGlobalErrorHandler'
 import {useSettingsPersistence} from './hooks/useSettingsPersistence'
 import {useFlowChangeSync} from './hooks/useFlowChangeSync'
+import {useSettingsStore} from './stores/settingsStore'
+import {useIsDesktop} from './hooks/useMediaQuery'
 import TitleBar from './components/layout/TitleBar'
 import Sidebar from './components/layout/Sidebar'
 import MainPane from './components/layout/MainPane'
 import InspectorPanel from './components/layout/InspectorPanel'
 import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
+import WelcomeModal from './components/onboarding/WelcomeModal'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import type {FlowDocument as DomainFlowDocument, RecentFile} from './types'
@@ -53,6 +57,18 @@ function AppInner() {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const requestSearchFocus = useSearchStore(s => s.requestFocus)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
+
+  // Responsive: below md (768px) the 3-pane shell collapses — sidebar and
+  // inspector become overlay drawers; main pane takes full width.
+  const isDesktop = useIsDesktop()
+
+  // Onboarding: show the welcome tour only on first run (firstRunCompleted
+  // is false in the default settings) — and only once settings have loaded
+  // from the backend so we don't flash it to returning users.
+  const firstRunCompleted = useSettingsStore(s => s.settings.general.firstRunCompleted)
+  const settingsLoaded = useSettingsStore(s => s.isLoaded)
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false)
+  const showWelcome = settingsLoaded && !firstRunCompleted && !welcomeDismissed
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
 
   const openDocument = useCallback(
@@ -125,6 +141,14 @@ function AppInner() {
 
   return (
     <>
+      {/* Skip-to-content link: first focusable element, lets keyboard / SR users
+        jump straight to the flow view past the sidebar/inspector chrome. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-1.5 focus:rounded focus:bg-brand-600 focus:text-brand-foreground focus:text-sm focus:shadow-lg"
+      >
+        Skip to content
+      </a>
       <div
         className={`flex flex-col h-screen w-screen overflow-hidden bg-surface-0 text-text-primary ${dragOver ? 'ring-2 ring-brand-500 ring-inset' : ''}`}
         onDragOver={handleDragOver}
@@ -133,11 +157,14 @@ function AppInner() {
       >
         <TitleBar />
         <div className="flex flex-1 overflow-hidden print:overflow-visible">
-          {!sidebarCollapsed && (
+          {/* Desktop sidebar (inline pane) */}
+          {isDesktop && !sidebarCollapsed && (
             <>
               <div
                 className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden"
                 style={{width: pane.sidebarWidth}}
+                role="navigation"
+                aria-label="Flow library and navigation"
               >
                 <ErrorBoundary fallbackMessage="Sidebar error">
                   <Sidebar />
@@ -150,12 +177,18 @@ function AppInner() {
               />
             </>
           )}
-          <div className="flex-1 overflow-hidden print:overflow-visible">
+          <div
+            id="main-content"
+            className="flex-1 overflow-hidden print:overflow-visible focus:outline-none"
+            role="main"
+            tabIndex={-1}
+          >
             <ErrorBoundary fallbackMessage="Main pane error">
               <MainPane />
             </ErrorBoundary>
           </div>
-          {!inspectorCollapsed && (
+          {/* Desktop inspector (inline pane) */}
+          {isDesktop && !inspectorCollapsed && (
             <>
               <PaneDivider
                 onDrag={pane.handleInspectorDrag}
@@ -165,6 +198,8 @@ function AppInner() {
               <div
                 className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden"
                 style={{width: pane.inspectorWidth}}
+                role="complementary"
+                aria-label="Inspector"
               >
                 <ErrorBoundary fallbackMessage="Inspector error">
                   <InspectorPanel />
@@ -173,7 +208,30 @@ function AppInner() {
             </>
           )}
         </div>
+        {/* Mobile sidebar drawer (overlay) */}
+        {!isDesktop && !sidebarCollapsed && (
+          <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-label="Sidebar">
+            <button className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-sm" onClick={toggleSidebar} aria-label="Close sidebar" />
+            <div className="relative w-72 max-w-[80vw] bg-surface-1 border-r border-border-subtle overflow-hidden" role="navigation">
+              <ErrorBoundary fallbackMessage="Sidebar error">
+                <Sidebar />
+              </ErrorBoundary>
+            </div>
+          </div>
+        )}
+        {/* Mobile inspector drawer (overlay, right-aligned) */}
+        {!isDesktop && !inspectorCollapsed && (
+          <div className="fixed inset-0 z-50 flex justify-end md:hidden" role="dialog" aria-label="Inspector">
+            <button className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-sm" onClick={toggleInspector} aria-label="Close inspector" />
+            <div className="relative w-80 max-w-[80vw] bg-surface-1 border-l border-border-subtle overflow-hidden" role="complementary">
+              <ErrorBoundary fallbackMessage="Inspector error">
+                <InspectorPanel />
+              </ErrorBoundary>
+            </div>
+          </div>
+        )}
         <StatusBar />
+        <OfflineIndicator />
         {dragOver && (
           <div className="fixed inset-0 z-modal bg-surface-overlay flex items-center justify-center pointer-events-none">
             <div className="text-lg font-medium text-text-primary animate-fade-in">Drop flow file to open</div>
@@ -193,6 +251,9 @@ function AppInner() {
       </ErrorBoundary>
       <ErrorBoundary>
         <ShortcutsHelpDialog isOpen={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <WelcomeModal isOpen={showWelcome} onClose={() => setWelcomeDismissed(true)} />
       </ErrorBoundary>
     </>
   )

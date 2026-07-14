@@ -105,6 +105,21 @@ export const flowApi = {
   ): Promise<{original: string; patched: string}> =>
     request('/api/flow/preview-fix', {flowId, blockId, fixType, ruleId, variable, property}),
 
+  // applyFixBatch applies every auto-fixable finding whose rule is in `rules`
+  // (empty = all auto-fixable) in one server-side pass, returning the updated
+  // document + how many fixes landed. Used by the bulk-action bar. Works in
+  // desktop and cloud (single-file) modes.
+  applyFixBatch: (flowId: string, rules: string[], limit?: number): Promise<{document: FlowDocument; applied: number}> =>
+    request('/api/flow/apply-fix-batch', {flowId, rules, limit}),
+
+  // getSource returns the raw PAD source text (desktop: file; cloud: stored).
+  getSource: (flowId: string): Promise<{source: string}> =>
+    request(`/api/flow/source${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, undefined, 'GET'),
+
+  // saveSource replaces the raw source, re-parses, and returns the updated doc.
+  saveSource: (flowId: string, source: string): Promise<FlowDocument> =>
+    request('/api/flow/save-source', {flowId, source}),
+
   // reimport re-reads the currently-loaded flow's source file (desktop), re-
   // parses it, and returns the fresh document — so a user who edited the flow
   // in PAD can refresh in one click. Callers should setDocument(result) + re-

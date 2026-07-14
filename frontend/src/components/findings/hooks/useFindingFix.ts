@@ -33,7 +33,9 @@ export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
     try {
       const variable = fixType === 'init-variable' ? (finding.metadata?.variable as string | undefined) : undefined
       const property =
-        fixType === 'replace-with-variable' ? (finding.metadata?.property as string | undefined) : undefined
+        fixType === 'replace-with-variable' || fixType === 'parameterize-sql'
+          ? (finding.metadata?.property as string | undefined)
+          : undefined
       const result = await flowApi.previewFix(doc.id, finding.blockId, fixType, finding.ruleId, variable, property)
       setPreview({open: true, original: result.original, patched: result.patched, fixType})
     } catch (err) {
@@ -51,7 +53,9 @@ export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
     try {
       const variable = fixType === 'init-variable' ? (finding.metadata?.variable as string | undefined) : undefined
       const property =
-        fixType === 'replace-with-variable' ? (finding.metadata?.property as string | undefined) : undefined
+        fixType === 'replace-with-variable' || fixType === 'parameterize-sql'
+          ? (finding.metadata?.property as string | undefined)
+          : undefined
       const updated = await flowApi.applyFix(doc.id, finding.blockId, fixType, finding.ruleId, variable, property)
       setDocument(updated)
       // Fix was applied successfully. Re-analysis is best-effort — if it

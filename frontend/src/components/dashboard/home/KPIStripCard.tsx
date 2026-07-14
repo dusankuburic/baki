@@ -8,6 +8,7 @@ interface KPI {
   value: string | number
   sub?: string
   accent?: string
+  onClick?: () => void
 }
 
 export function KPIStripCard({
@@ -15,11 +16,15 @@ export function KPIStripCard({
   findings,
   costByProvider,
   className,
+  onViewFindings,
+  onViewFlows,
 }: {
   overview: DashboardOverview
   findings: DashboardFindingsAgg
   costByProvider: {provider: string; cost: number}[]
   className?: string
+  onViewFindings?: () => void
+  onViewFlows?: () => void
 }) {
   const colors = useChartColors()
   const totalFindings =
@@ -39,11 +44,13 @@ export function KPIStripCard({
       label: 'Findings',
       value: formatCount(totalFindings),
       sub: `${findings.bySeverity.error ?? 0}E · ${findings.bySeverity.warning ?? 0}W · ${findings.bySeverity.info ?? 0}I`,
+      onClick: onViewFindings,
     },
     {
       label: 'Flows',
       value: formatCount(overview.totalFlows),
       sub: `${formatCount(overview.totalSubflows)} subflows`,
+      onClick: onViewFlows,
     },
   ]
 
@@ -63,18 +70,28 @@ export function KPIStripCard({
         costByProvider.length > 0 ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3',
       )}
     >
-      {kpis.map(kpi => (
-        <div key={kpi.label} className="bg-surface-2 border border-border-subtle rounded-xl p-3 flex flex-col gap-0.5">
-          <span className="text-2xs uppercase tracking-wider text-text-tertiary">{kpi.label}</span>
-          <span
-            className="text-2xl font-black font-mono tabular-nums"
-            style={kpi.accent ? {color: kpi.accent} : undefined}
+      {kpis.map(kpi => {
+        const Tag = kpi.onClick ? 'button' : 'div'
+        return (
+          <Tag
+            key={kpi.label}
+            onClick={kpi.onClick}
+            className={clsx(
+              'bg-surface-2 border border-border-subtle rounded-xl p-3 flex flex-col gap-0.5 text-left',
+              kpi.onClick && 'hover:border-border-strong hover:bg-surface-3 cursor-pointer transition-colors',
+            )}
           >
-            {kpi.value}
-          </span>
-          {kpi.sub && <span className="text-2xs text-text-tertiary tabular-nums">{kpi.sub}</span>}
-        </div>
-      ))}
+            <span className="text-2xs uppercase tracking-wider text-text-tertiary">{kpi.label}</span>
+            <span
+              className="text-2xl font-black font-mono tabular-nums"
+              style={kpi.accent ? {color: kpi.accent} : undefined}
+            >
+              {kpi.value}
+            </span>
+            {kpi.sub && <span className="text-2xs text-text-tertiary tabular-nums">{kpi.sub}</span>}
+          </Tag>
+        )
+      })}
     </div>
   )
 }

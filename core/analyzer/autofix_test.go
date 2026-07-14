@@ -755,3 +755,163 @@ func TestReplaceWithVariablePatch_ReplacesAllOccurrences(t *testing.T) {
 		t.Errorf("expected 2 replacements, got %d in: %s", strings.Count(got, "%input_key%"), got)
 	}
 }
+
+// TestApplyRemove_DeletesRange verifies the remove op mechanics directly: the
+// inclusive [StartLine..EndLine] range is deleted and surrounding lines join.
+func TestApplyRemove_DeletesRange(t *testing.T) {
+	source := "a\nb\nc\nd\ne"
+	p := models.Patch{Ops: []models.PatchOp{{
+		Kind: "remove", StartLine: 2, EndLine: 4,
+	}}}
+	got := ApplyPatch(source, p)
+	want := "a\ne"
+	if got != want {
+		t.Errorf("remove = %q, want %q", got, want)
+	}
+}
+
+// TestRemoveBlockPatch_RoundTripResolvesFinding is the round-trip gate for the
+// remove-block fixer across the 5 rules that use it. For each: parse → analyze
+// → find the rule's finding → apply RemoveBlockPatch to the raw source →
+// re-parse (faithful) → re-analyze → assert the finding is gone (effective).
+func TestRemoveBlockPatch_RoundTripResolvesFinding(t *testing.T) {
+	cases := []struct {
+		name   string
+		ruleID string
+		source string
+	}{
+		{
+			name:   "redundant-action self-assignment",
+			ruleID: "redundant-action",
+			source: "#Region \"Main\"\nSET X TO %X%\n#EndRegion\n",
+		},
+		{
+			name:   "unused-variable orphan SET",
+			ruleID: "unused-variable",
+			source: "#Region \"Main\"\nSET UnusedVar TO 'hello'\n#EndRegion\n",
+		},
+		{
+			name:   "dead-code after exit",
+			ruleID: "dead-code",
+			source: "#Region \"Main\"\nExitSubflow.Exit Code: 0\nSET DeadVar TO 'x'\n#EndRegion\n",
+		},
+		{
+			name:   "duplicate-action run of 3",
+			ruleID: "duplicate-action",
+			source: "#Region \"Main\"\nText.AppendLine Text: 'x'\nText.AppendLine Text: 'x'\nText.AppendLine Text: 'x'\n#EndRegion\n",
+		},
+		{
+			name:   "disabled-block disabled call",
+			ruleID: "disabled-block",
+			source: "#Region \"Main\"\nDISABLE CALL DoThing\n#EndRegion\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := parser.ParseText(tc.source, "Main.txt", int64(len(tc.source)))
+			if err != nil {
+				t.Fatalf("initial parse: %v", err)
+			}
+			report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
+			var finding *models.Finding
+			for i := range report.Findings {
+				if report.Findings[i].RuleID == tc.ruleID {
+					finding = &report.Findings[i]
+					break
+				}
+			}
+			if finding == nil {
+				t.Fatalf("expected a %s finding, got: %v", tc.ruleID, ruleIDs(report.Findings))
+			}
+			block := doc.BlocksByID[finding.BlockID]
+			if block == nil {
+				t.Fatalf("finding block %s not in doc", finding.BlockID)
+			}
+
+			patched := ApplyPatch(tc.source, RemoveBlockPatch(block))
+
+			doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
+			if err != nil {
+				t.Fatalf("re-parse after remove-block failed (not faithful): %v\npatched:\n%s", err, patched)
+			}
+			report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
+			for _, f := range report2.Findings {
+				if f.RuleID == tc.ruleID {
+					t.Errorf("%s still present after remove-block; finding: %+v\npatched:\n%s", tc.ruleID, f, patched)
+				}
+			}
+		})
+	}
+}
+
+// TestParameterizeSqlPatch_RoundTripResolvesFinding is the round-trip gate for
+// the parameterize-sql fixer: a SQL action interpolating %UserID% must, after
+// the patch, re-parse cleanly and no longer be flagged by sql-injection-risk
+// (the %var% reference is replaced with @UserID).
+func TestParameterizeSqlPatch_RoundTripResolvesFinding(t *testing.T) {
+	const source = "#Region \"Main\"\nDatabase.ExecuteSql Sql: 'SELECT * FROM users WHERE id = %UserID%'\n#EndRegion\n"
+	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
+	if err != nil {
+		t.Fatalf("initial parse: %v", err)
+	}
+	report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
+	var sqlFinding *models.Finding
+	for i := range report.Findings {
+		if report.Findings[i].RuleID == "sql-injection-risk" {
+			sqlFinding = &report.Findings[i]
+			break
+		}
+	}
+	if sqlFinding == nil {
+		t.Fatalf("expected a sql-injection-risk finding, got: %v", ruleIDs(report.Findings))
+	}
+	block := doc.BlocksByID[sqlFinding.BlockID]
+	if block == nil {
+		t.Fatalf("finding block %s not in doc", sqlFinding.BlockID)
+	}
+	propKey, _ := sqlFinding.Metadata["property"].(string)
+	if propKey == "" {
+		t.Fatalf("finding metadata has no property key: %+v", sqlFinding.Metadata)
+	}
+
+	patched := ApplyPatch(source, ParameterizeSqlPatch(block, propKey))
+	if !strings.Contains(patched, "@UserID") {
+		t.Fatalf("expected @UserID in patched source, got:\n%s", patched)
+	}
+	if strings.Contains(patched, "%UserID%") {
+		t.Fatalf("expected %%UserID%% gone from patched source, got:\n%s", patched)
+	}
+
+	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
+	if err != nil {
+		t.Fatalf("re-parse after parameterize-sql failed (not faithful): %v\npatched:\n%s", err, patched)
+	}
+	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
+	for _, f := range report2.Findings {
+		if f.RuleID == "sql-injection-risk" {
+			t.Errorf("sql-injection-risk still present after parameterize-sql; finding: %+v\npatched:\n%s", f, patched)
+		}
+	}
+}
+
+// TestParameterizeSqlPatch_MultipleVars emits one replace op per distinct
+// variable and parameterizes all of them on the line.
+func TestParameterizeSqlPatch_MultipleVars(t *testing.T) {
+	block := &models.Block{
+		LineNumber: 1,
+		Properties: map[string]string{
+			"Sql": "SELECT * FROM t WHERE a = %A% AND b = %B% AND a = %A%",
+		},
+	}
+	patch := ParameterizeSqlPatch(block, "Sql")
+	if len(patch.Ops) != 2 { // %A% and %B% (A de-duplicated)
+		t.Fatalf("expected 2 replace ops (A, B), got %d: %+v", len(patch.Ops), patch.Ops)
+	}
+	got := ApplyPatch("Database.ExecuteSql Sql: 'SELECT * FROM t WHERE a = %A% AND b = %B% AND a = %A%'", patch)
+	if strings.Contains(got, "%A%") || strings.Contains(got, "%B%") {
+		t.Errorf("expected all vars parameterized, still found %%var%% in: %s", got)
+	}
+	if strings.Count(got, "@A") != 2 || strings.Count(got, "@B") != 1 {
+		t.Errorf("expected 2 @A and 1 @B, got: %s", got)
+	}
+}

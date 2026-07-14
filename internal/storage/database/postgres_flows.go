@@ -158,18 +158,19 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 	expectedVer := flow.Version
 	var newVersion int
 	err = b.query(ctx).QueryRowContext(ctx, `
-		INSERT INTO flows (id, name, description, content, metadata, owner_id, org_id, created_at, updated_at, version)
-		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, 0)
+		INSERT INTO flows (id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10, 0)
 		ON CONFLICT (id) DO UPDATE SET
 			name        = EXCLUDED.name,
 			description = EXCLUDED.description,
 			content     = EXCLUDED.content,
+			source      = EXCLUDED.source,
 			metadata    = EXCLUDED.metadata,
 			updated_at  = EXCLUDED.updated_at,
 			version     = flows.version + 1
-		WHERE flows.version = $10
+		WHERE flows.version = $11
 		RETURNING version`,
-		flow.ID, flow.Name, flow.Description, string(dbContent), string(meta),
+		flow.ID, flow.Name, flow.Description, string(dbContent), flow.Source, string(meta),
 		flow.OwnerID, flow.OrganizationID, now, now, expectedVer,
 	).Scan(&newVersion)
 	if err != nil {
@@ -228,14 +229,14 @@ func (b *PostgresStorageBackend) TransferFlowOwner(ctx context.Context, flowID, 
 // value — a "{}" placeholder when blob storage is configured.
 func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	row := b.query(ctx).QueryRowContext(ctx,
-		`SELECT id, name, description, content, metadata, owner_id, org_id, created_at, updated_at, version
+		`SELECT id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version
 		 FROM flows WHERE id = $1`, id)
 
 	var flow interfaces.FlowDocument
 	var contentRaw, metaRaw []byte
 	if err := row.Scan(
 		&flow.ID, &flow.Name, &flow.Description,
-		&contentRaw, &metaRaw,
+		&contentRaw, &flow.Source, &metaRaw,
 		&flow.OwnerID, &flow.OrganizationID,
 		&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
 	); err != nil {
@@ -453,21 +454,24 @@ func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter inter
 	}
 	args = append(args, limit, filter.Offset)
 
-	// Avoid shipping the (potentially large) content JSONB when the caller only
-	// needs listing metadata — selecting a literal keeps the row shape identical.
+	// Avoid shipping the (potentially large) content JSONB + source text when
+	// the caller only needs listing metadata — selecting literals keeps the row
+	// shape identical to the full select.
 	contentExpr := "content"
+	sourceExpr := "source"
 	if filter.MetadataOnly {
 		contentExpr = "'{}'::jsonb AS content"
+		sourceExpr = "'' AS source"
 	}
 
 	orderClause := flowOrderBy(filter.SortBy)
 	q := fmt.Sprintf(`
-		SELECT id, name, description, %s, metadata, owner_id, org_id, created_at, updated_at, version
+		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version
 		FROM flows
 		WHERE %s
 		%s
 		LIMIT $%d OFFSET $%d`,
-		contentExpr, whereClause, orderClause, n, n+1)
+		contentExpr, sourceExpr, whereClause, orderClause, n, n+1)
 
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
@@ -481,7 +485,7 @@ func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter inter
 		var contentRaw, metaRaw []byte
 		if err := rows.Scan(
 			&flow.ID, &flow.Name, &flow.Description,
-			&contentRaw, &metaRaw,
+			&contentRaw, &flow.Source, &metaRaw,
 			&flow.OwnerID, &flow.OrganizationID,
 			&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
 		); err != nil {

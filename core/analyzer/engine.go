@@ -62,6 +62,13 @@ var ruleAutoFix = map[string]string{
 	"hardcoded-credential":     "replace-with-variable",
 	"missing-retry":            "wrap-in-retry",
 	"infinite-loop-risk":       "insert-exit-condition",
+	// remove-block: delete the offending block outright.
+	"duplicate-action":   "remove-block",
+	"redundant-action":   "remove-block",
+	"dead-code":          "remove-block",
+	"unused-variable":    "remove-block",
+	"disabled-block":     "remove-block",
+	"sql-injection-risk": "parameterize-sql",
 }
 
 // RuleConfidence returns the built-in default certainty for a rule's findings

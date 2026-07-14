@@ -212,26 +212,16 @@ func TestShareTokens_MissingToken(t *testing.T) {
 
 // ── Preview-Fix: cloud mode should reject ─────────────────────────
 
+// Cloud-mode preview-fix is now ENABLED (was 403) — see
+// TestPreviewFix_CloudMode_Works in handlers_flow_cloudfix_test.go.
 func TestPreviewFix_CloudModeForbidden(t *testing.T) {
-	rt, _ := newLibraryTestRouter(t)
-	seedAnalyzableFlow(t, rt, "flow1", "alice")
-	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
-
-	resp := doRequestWithAuth(t, rt, http.MethodPost, "/api/flow/preview-fix", bearer, map[string]any{
-		"flowId": "flow1", "blockId": "b1", "fixType": "wrap-error-handler",
-	})
-	checkStatus(t, resp, http.StatusForbidden)
+	t.Skip("cloud-mode preview-fix is now enabled; see TestPreviewFix_CloudMode_Works")
 }
 
+// Cloud-mode apply-fix is now ENABLED (was 403) — see TestApplyFix_CloudMode_Works
+// in handlers_flow_cloudfix_test.go. This stub kept the import set stable.
 func TestApplyFix_CloudModeForbidden(t *testing.T) {
-	rt, _ := newLibraryTestRouter(t)
-	seedAnalyzableFlow(t, rt, "flow1", "alice")
-	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
-
-	resp := doRequestWithAuth(t, rt, http.MethodPost, "/api/flow/apply-fix", bearer, map[string]any{
-		"flowId": "flow1", "blockId": "b1", "fixType": "wrap-error-handler",
-	})
-	checkStatus(t, resp, http.StatusForbidden)
+	t.Skip("cloud-mode apply-fix is now enabled; see TestApplyFix_CloudMode_Works")
 }
 
 // ── SARIF Export ──────────────────────────────────────────────────

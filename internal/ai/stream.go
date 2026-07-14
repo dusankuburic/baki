@@ -401,21 +401,21 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 				if part.Text != "" {
 					onChunk(Chunk{Text: part.Text})
 				}
-			if part.FunctionCall != nil {
-				// A nil Args map marshals to the literal `null`, which is not a
-				// valid tool-arguments object; send `{}` like the OpenAI
-				// provider and the non-streaming Gemini path (gemini.go).
-				args := []byte("{}")
-				if part.FunctionCall.Args != nil {
-					args, _ = json.Marshal(part.FunctionCall.Args)
+				if part.FunctionCall != nil {
+					// A nil Args map marshals to the literal `null`, which is not a
+					// valid tool-arguments object; send `{}` like the OpenAI
+					// provider and the non-streaming Gemini path (gemini.go).
+					args := []byte("{}")
+					if part.FunctionCall.Args != nil {
+						args, _ = json.Marshal(part.FunctionCall.Args)
+					}
+					toolCalls = append(toolCalls, ToolCall{
+						ID:    fmt.Sprintf("call_%d", toolCallsIdx),
+						Name:  part.FunctionCall.Name,
+						Input: json.RawMessage(args),
+					})
+					toolCallsIdx++
 				}
-				toolCalls = append(toolCalls, ToolCall{
-					ID:    fmt.Sprintf("call_%d", toolCallsIdx),
-					Name:  part.FunctionCall.Name,
-					Input: json.RawMessage(args),
-				})
-				toolCallsIdx++
-			}
 			}
 			if cand.FinishReason != "" {
 				if !doneSent {
