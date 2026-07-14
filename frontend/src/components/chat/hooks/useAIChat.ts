@@ -36,23 +36,23 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const threads = useChatStore(s => s.threads)
   const activeThreadId = useChatStore(s => s.activeThreadId)
   const activeThreadMessages = useChatStore(s =>
-    s.activeThreadId ? (s.conversations.get(s.activeThreadId) ?? EMPTY_ARRAY) : EMPTY_ARRAY
+    s.activeThreadId ? (s.conversations.get(s.activeThreadId) ?? EMPTY_ARRAY) : EMPTY_ARRAY,
   )
 
-  const flowThreads = useMemo(
-    () => doc ? threads.filter(t => t.flowId === doc.id) : [],
-    [doc, threads],
-  )
-  const activeThread = useMemo(
-    () => threads.find(t => t.id === activeThreadId) ?? null,
-    [threads, activeThreadId],
-  )
+  const flowThreads = useMemo(() => (doc ? threads.filter(t => t.flowId === doc.id) : []), [doc, threads])
+  const activeThread = useMemo(() => threads.find(t => t.id === activeThreadId) ?? null, [threads, activeThreadId])
 
   const {sourceFiles} = useChatConversations({doc, flowThreads, activeThreadId})
   const threadActions = useChatThreads({doc, activeThreadId, sourceFiles})
 
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
+  // M10: excludeContext chosen during the preview must be forwarded to the
+  // actual send when the user confirms. Without this, confirmContextPreview
+  // called executeSend(msg) with no excludeContext, so the real AI request
+  // silently included the flow context the user had just excluded in the
+  // preview — the preview and the real send disagreed.
+  const [pendingExcludeContext, setPendingExcludeContext] = useState<boolean | undefined>(undefined)
 
   // Streaming state is per-thread (chatStore.streams); the hook surfaces the
   // ACTIVE thread's slot under the pre-existing names. Narrow selectors keep
@@ -65,150 +65,181 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const toast = useToast()
 
   const {buildRequest} = useChatRequestBuilder({doc, activeThread, provider, selectedModel, aiSettings, getMessages})
-  const {
-    registerStream, cancelStream, beginAcc, dropAcc, stopAndCommit, bumpGen, isCurrentGen,
-  } = useChatStreamEngine({doc, provider, selectedModel, getMessages})
+  const {registerStream, cancelStream, beginAcc, dropAcc, stopAndCommit, bumpGen, isCurrentGen} = useChatStreamEngine({
+    doc,
+    provider,
+    selectedModel,
+    getMessages,
+  })
 
-  const executeSend = useCallback(async (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
-    if (!doc || !activeThread) return
-    // Per-thread guard: one stream per thread (enforced structurally by the
-    // store's streams map, but checked here to no-op a double-send race).
-    if (useChatStore.getState().streams[activeThread.id]) return
-    // Global cap (mirrors backend maxConcurrentStreamsPerScope): reject early
-    // with a toast so the user gets immediate feedback rather than a rejected
-    // POST after a round-trip.
-    if (!useChatStore.getState().canStartStream()) {
-      toast.warning('Chats are busy', {
-        description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
-      })
-      return
-    }
-    const req = buildRequest(text, overrideFiles, excludeContext, includeHistory) as ChatRequest | null
-    if (!req) return
-
-    const isFirstMessage = getMessages(activeThread.id).length === 0
-
-    const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: text,
-      timestamp: new Date().toISOString(),
-      contextBlockId: activeThread.contextBlockId ?? undefined,
-    }
-    appendMessage(activeThread.id, userMsg)
-    if (isFirstMessage && !activeThread.title && text.trim()) {
-      updateThread(activeThread.id, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
-    }
-    // Note: no save-on-send — the backend reconstructs history from its store
-    // (which holds the prior turn's state), and save-on-done persists the full
-    // user+assistant pair after completion. This drops one full-history POST
-    // per turn without changing on-success persistence.
-
-    const msgId = crypto.randomUUID()
-    const threadId = activeThread.id
-    const myGen = bumpGen(threadId)
-    // C-1: client-generated stream ID. The SSE listener is subscribed BEFORE
-    // the create POST, so the backend can emit immediately (clientStreamId
-    // handshake) with no /chat/begin round-trip. The acc is primed up front so
-    // the first chunk finds its key, and the slot is reserved with the real sid
-    // (no 'pending' phase) so the thinking indicator shows and a second send
-    // for this thread is blocked from the start.
-    const sid = crypto.randomUUID()
-    startStream(threadId, sid, msgId)
-    beginAcc(sid, threadId)
-
-    try {
-      // Subscribe the listener + wait for the SSE connection to be 'open'
-      // BEFORE creating the stream, so no chunk is lost when the backend emits.
-      await registerStream(sid, /*begin*/ false)
-      if (!isCurrentGen(threadId, myGen)) {
-        dropAcc(sid)
-        cancelStream(sid)
-        endStream(threadId)
-        return
-      }
-      // Create the stream with the client-generated ID. The backend stores it
-      // and — because clientStreamId is set — closes ctl.started immediately,
-      // so the worker emits over SSE to the already-subscribed listener.
-      req.clientStreamId = sid
-      const returnedId = await chatApi.streamChatMessage(req)
-      if (!isCurrentGen(threadId, myGen)) {
-        // Cancelled while the create POST was in flight; tear down the stream
-        // the backend just recorded and clear the slot.
-        dropAcc(sid)
-        cancelStream(sid)
-        endStream(threadId)
-        return
-      }
-      if (!returnedId) {
-        dropAcc(sid)
-        cancelStream(sid)
-        endStream(threadId)
-        appendMessage(threadId, {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: '*Error: No response stream was created. Please check your connection and try again.*',
-          timestamp: new Date().toISOString(),
-          provider,
-          model: selectedModel,
-          finishReason: 'error',
-        } as ChatMessage)
-        return
-      }
-      // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
-      // are dispatched by the handlers registered in useChatStreamEngine.
-    } catch (e: unknown) {
-      if (!isCurrentGen(threadId, myGen)) return
-      const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
-      // The concurrency cap (or any pre-stream-create failure) surfaces here as
-      // a thrown error. Treat it as a transient condition: toast + clean up, do
-      // NOT persist an *Error* bubble into the history for the cap class.
-      if (errMsg.includes('too many chat responses')) {
+  const executeSend = useCallback(
+    async (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
+      if (!doc || !activeThread) return
+      // Per-thread guard: one stream per thread (enforced structurally by the
+      // store's streams map, but checked here to no-op a double-send race).
+      if (useChatStore.getState().streams[activeThread.id]) return
+      // Global cap (mirrors backend maxConcurrentStreamsPerScope): reject early
+      // with a toast so the user gets immediate feedback rather than a rejected
+      // POST after a round-trip.
+      if (!useChatStore.getState().canStartStream()) {
         toast.warning('Chats are busy', {
           description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
         })
-      } else {
-        appendMessage(threadId, {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: '*Error: ' + errMsg + '*',
-          timestamp: new Date().toISOString(),
-          provider,
-          model: selectedModel,
-          finishReason: 'error',
-        } as ChatMessage)
+        return
       }
-      // Tear down the SSE subscription we opened and cancel any backend stream
-      // that the create POST may have recorded before throwing. (B8 leak fix —
-      // without cancelStream the backend goroutine holds a live provider
-      // connection until the stream-cap timeout.)
-      dropAcc(sid)
-      cancelStream(sid)
-      endStream(threadId)
-    }
-  }, [doc, activeThread, buildRequest, appendMessage, getMessages, startStream, endStream, registerStream, provider, selectedModel, toast, bumpGen, isCurrentGen, updateThread, dropAcc, beginAcc, cancelStream])
+      const req = buildRequest(text, overrideFiles, excludeContext, includeHistory) as ChatRequest | null
+      if (!req) return
 
-  const handleSend = useCallback((text: string, files: string[], excludeContext?: boolean) => {
-    if (files.length > 0 && activeThreadId) {
-       updateThread(activeThreadId, {selectedSourceFiles: files})
-    }
-    executeSend(text, files.length > 0 ? files : undefined, excludeContext)
-  }, [executeSend, activeThreadId, updateThread])
+      const isFirstMessage = getMessages(activeThread.id).length === 0
 
-  const handlePreviewContext = useCallback(async (text: string, files: string[], excludeContext?: boolean) => {
-    if (files.length > 0 && activeThreadId) {
-       updateThread(activeThreadId, {selectedSourceFiles: files})
-    }
-    const req = buildRequest(text, files.length > 0 ? files : undefined, excludeContext)
-    if (!req) return
-    try {
-      const preview = await chatApi.previewContext(req as ChatRequest) as ContextPreview
-      setContextPreview(preview)
-      setPendingMessage(text)
-    } catch {
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        timestamp: new Date().toISOString(),
+        contextBlockId: activeThread.contextBlockId ?? undefined,
+      }
+      appendMessage(activeThread.id, userMsg)
+      if (isFirstMessage && !activeThread.title && text.trim()) {
+        updateThread(activeThread.id, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
+      }
+      // Note: no save-on-send — the backend reconstructs history from its store
+      // (which holds the prior turn's state), and save-on-done persists the full
+      // user+assistant pair after completion. This drops one full-history POST
+      // per turn without changing on-success persistence.
+
+      const msgId = crypto.randomUUID()
+      const threadId = activeThread.id
+      const myGen = bumpGen(threadId)
+      // C-1: client-generated stream ID. The SSE listener is subscribed BEFORE
+      // the create POST, so the backend can emit immediately (clientStreamId
+      // handshake) with no /chat/begin round-trip. The acc is primed up front so
+      // the first chunk finds its key, and the slot is reserved with the real sid
+      // (no 'pending' phase) so the thinking indicator shows and a second send
+      // for this thread is blocked from the start.
+      const sid = crypto.randomUUID()
+      startStream(threadId, sid, msgId)
+      beginAcc(sid, threadId)
+
+      try {
+        // Subscribe the listener + wait for the SSE connection to be 'open'
+        // BEFORE creating the stream, so no chunk is lost when the backend emits.
+        await registerStream(sid, /*begin*/ false)
+        if (!isCurrentGen(threadId, myGen)) {
+          dropAcc(sid)
+          cancelStream(sid)
+          endStream(threadId)
+          return
+        }
+        // Create the stream with the client-generated ID. The backend stores it
+        // and — because clientStreamId is set — closes ctl.started immediately,
+        // so the worker emits over SSE to the already-subscribed listener.
+        req.clientStreamId = sid
+        const returnedId = await chatApi.streamChatMessage(req)
+        if (!isCurrentGen(threadId, myGen)) {
+          // Cancelled while the create POST was in flight; tear down the stream
+          // the backend just recorded and clear the slot.
+          dropAcc(sid)
+          cancelStream(sid)
+          endStream(threadId)
+          return
+        }
+        if (!returnedId) {
+          dropAcc(sid)
+          cancelStream(sid)
+          endStream(threadId)
+          appendMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: '*Error: No response stream was created. Please check your connection and try again.*',
+            timestamp: new Date().toISOString(),
+            provider,
+            model: selectedModel,
+            finishReason: 'error',
+          } as ChatMessage)
+          return
+        }
+        // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
+        // are dispatched by the handlers registered in useChatStreamEngine.
+      } catch (e: unknown) {
+        if (!isCurrentGen(threadId, myGen)) return
+        const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
+        // The concurrency cap (or any pre-stream-create failure) surfaces here as
+        // a thrown error. Treat it as a transient condition: toast + clean up, do
+        // NOT persist an *Error* bubble into the history for the cap class.
+        if (errMsg.includes('too many chat responses')) {
+          toast.warning('Chats are busy', {
+            description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
+          })
+        } else {
+          appendMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: '*Error: ' + errMsg + '*',
+            timestamp: new Date().toISOString(),
+            provider,
+            model: selectedModel,
+            finishReason: 'error',
+          } as ChatMessage)
+        }
+        // Tear down the SSE subscription we opened and cancel any backend stream
+        // that the create POST may have recorded before throwing. (B8 leak fix —
+        // without cancelStream the backend goroutine holds a live provider
+        // connection until the stream-cap timeout.)
+        dropAcc(sid)
+        cancelStream(sid)
+        endStream(threadId)
+      }
+    },
+    [
+      doc,
+      activeThread,
+      buildRequest,
+      appendMessage,
+      getMessages,
+      startStream,
+      endStream,
+      registerStream,
+      provider,
+      selectedModel,
+      toast,
+      bumpGen,
+      isCurrentGen,
+      updateThread,
+      dropAcc,
+      beginAcc,
+      cancelStream,
+    ],
+  )
+
+  const handleSend = useCallback(
+    (text: string, files: string[], excludeContext?: boolean) => {
+      if (files.length > 0 && activeThreadId) {
+        updateThread(activeThreadId, {selectedSourceFiles: files})
+      }
       executeSend(text, files.length > 0 ? files : undefined, excludeContext)
-    }
-  }, [buildRequest, executeSend, activeThreadId, updateThread])
+    },
+    [executeSend, activeThreadId, updateThread],
+  )
+
+  const handlePreviewContext = useCallback(
+    async (text: string, files: string[], excludeContext?: boolean) => {
+      if (files.length > 0 && activeThreadId) {
+        updateThread(activeThreadId, {selectedSourceFiles: files})
+      }
+      const req = buildRequest(text, files.length > 0 ? files : undefined, excludeContext)
+      if (!req) return
+      try {
+        const preview = (await chatApi.previewContext(req as ChatRequest)) as ContextPreview
+        setContextPreview(preview)
+        setPendingMessage(text)
+        setPendingExcludeContext(excludeContext)
+      } catch {
+        executeSend(text, files.length > 0 ? files : undefined, excludeContext)
+      }
+    },
+    [buildRequest, executeSend, activeThreadId, updateThread],
+  )
 
   const handleResend = useCallback(() => {
     if (!doc || !activeThread || isCurrentThreadStreaming) return
@@ -244,7 +275,9 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const handleClearThread = useCallback(() => {
     if (!doc || !activeThread || isCurrentThreadStreaming) return
     clearThreadMessages(activeThread.id)
-    chatApi.clearConversation(doc.id, activeThread.contextBlockId || 'flow').catch((err) => { logger.warn('Failed to clear conversation', err) })
+    chatApi.clearConversation(doc.id, activeThread.contextBlockId || 'flow').catch(err => {
+      logger.warn('Failed to clear conversation', err)
+    })
   }, [doc, activeThread, isCurrentThreadStreaming, clearThreadMessages])
 
   const handleCancelStream = useCallback(() => {
@@ -265,6 +298,24 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     endStream(tid)
   }, [bumpGen, endStream, stopAndCommit])
 
+  // M11: wrap the store's closeThread so the SSE listener and stall-probe
+  // timer are torn down immediately. closeThread only cancels the backend
+  // stream and clears the store slot — without this, the per-stream SSE
+  // unsubscriber (in useStreamingMessage) and the STALL_PROBE_MS timer stay
+  // live for up to ~90s, issuing failed resumeStream calls against the
+  // cancelled stream until enough probe misses trigger cleanup.
+  const handleCloseThread = useCallback(
+    (threadId: string) => {
+      const slot = useChatStore.getState().streams[threadId]
+      if (slot?.streamId && slot.streamId !== 'pending') {
+        dropAcc(slot.streamId)
+        cancelStream(slot.streamId)
+      }
+      threadActions.handleCloseThread(threadId)
+    },
+    [threadActions, dropAcc, cancelStream],
+  )
+
   return {
     doc,
     selectedBlockId,
@@ -280,18 +331,25 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     pendingMessage,
     toolStatus,
     ...threadActions,
+    handleCloseThread,
     handleSend,
     handlePreviewContext,
     handleResend,
     handleExport,
     handleClearThread,
     handleCancelStream,
-    clearContextPreview: () => { setContextPreview(null); setPendingMessage(null) },
-    confirmContextPreview: () => {
-      const msg = pendingMessage
+    clearContextPreview: () => {
       setContextPreview(null)
       setPendingMessage(null)
-      if (msg) executeSend(msg)
+      setPendingExcludeContext(undefined)
+    },
+    confirmContextPreview: () => {
+      const msg = pendingMessage
+      const exclude = pendingExcludeContext
+      setContextPreview(null)
+      setPendingMessage(null)
+      setPendingExcludeContext(undefined)
+      if (msg) executeSend(msg, undefined, exclude)
     },
   }
 }

@@ -1,11 +1,11 @@
-import React, { useState, useRef } from 'react'
-import { Users, UserPlus, Trash2, Shield, Eye, Edit3 } from 'lucide-react'
-import { sharingApi, type Collaborator, type Permission } from '@/api/sharing'
-import { useFlowStore } from '@/stores/flowStore'
-import { useAuthStore } from '@/stores/authStore'
-import { EmptyState, Spinner, useToast } from '@/components/shared'
+import React, {useState, useRef} from 'react'
+import {Users, UserPlus, Trash2, Shield, Eye, Edit3} from 'lucide-react'
+import {sharingApi, type Collaborator, type Permission} from '@/api/sharing'
+import {useFlowStore} from '@/stores/flowStore'
+import {useAuthStore} from '@/stores/authStore'
+import {EmptyState, Spinner, useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
-import { useAsync } from '@/hooks/useAsync'
+import {useAsync} from '@/hooks/useAsync'
 
 export const SharingTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -18,16 +18,18 @@ export const SharingTab: React.FC = () => {
   const removeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const {error: toastError} = useToast()
 
-  const {data, isLoading, error: fetchError, refetch: fetchCollaborators} = useAsync<Collaborator[]>(
-    () => {
-      if (!document) return Promise.resolve([])
-      return sharingApi.listCollaborators(document.id).catch(err => {
-        logger.warn('Failed to fetch collaborators', err)
-        throw err
-      })
-    },
-    [document?.id],
-  )
+  const {
+    data,
+    isLoading,
+    error: fetchError,
+    refetch: fetchCollaborators,
+  } = useAsync<Collaborator[]>(() => {
+    if (!document) return Promise.resolve([])
+    return sharingApi.listCollaborators(document.id).catch(err => {
+      logger.warn('Failed to fetch collaborators', err)
+      throw err
+    })
+  }, [document?.id])
   // Stale collaborators intentionally remain visible on a fetch error (matches
   // the previous behavior — only the form's error banner reflects the failure).
   const collaborators = data ?? []
@@ -45,7 +47,7 @@ export const SharingTab: React.FC = () => {
       await sharingApi.addCollaborator({
         flowId: document.id,
         email: newEmail,
-        permission: newPermission
+        permission: newPermission,
       })
       setNewEmail('')
       fetchCollaborators()
@@ -85,7 +87,7 @@ export const SharingTab: React.FC = () => {
       await sharingApi.updatePermission({
         flowId: document.id,
         userId,
-        permission: perm
+        permission: perm,
       })
       fetchCollaborators()
     } catch (err) {
@@ -143,20 +145,28 @@ export const SharingTab: React.FC = () => {
       )}
 
       <div className="flex-1 p-4">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">
-          Current Collaborators
-        </h3>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">Current Collaborators</h3>
         {isLoading ? (
-          <div className="flex justify-center p-8"><Spinner size={20} /></div>
+          <div className="flex justify-center p-8">
+            <Spinner size={20} />
+          </div>
         ) : collaborators.length > 0 ? (
           <div className="space-y-3">
             {collaborators.map(c => (
-              <div key={c.userId} className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border-subtle/50 group">
+              <div
+                key={c.userId}
+                className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border-subtle/50 group"
+              >
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-medium text-text-primary truncate">{c.email}</span>
                   <span className="text-2xs text-text-tertiary flex items-center gap-1">
-                    {c.permission === 'admin' ? <Shield size={10} /> : 
-                     c.permission === 'editor' ? <Edit3 size={10} /> : <Eye size={10} />}
+                    {c.permission === 'admin' ? (
+                      <Shield size={10} />
+                    ) : c.permission === 'editor' ? (
+                      <Edit3 size={10} />
+                    ) : (
+                      <Eye size={10} />
+                    )}
                     <span className="capitalize">{c.permission}</span>
                   </span>
                 </div>
@@ -181,7 +191,7 @@ export const SharingTab: React.FC = () => {
                       <>
                         <select
                           value={c.permission}
-                          onChange={(e) => handleUpdatePermission(c.userId, e.target.value as Permission)}
+                          onChange={e => handleUpdatePermission(c.userId, e.target.value as Permission)}
                           className="bg-transparent border-none text-2xs text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
                         >
                           <option value="viewer">Viewer</option>
@@ -205,7 +215,9 @@ export const SharingTab: React.FC = () => {
         ) : (
           <EmptyState
             title="No collaborators"
-            description={canManage ? "Share this flow to invite team members." : "This flow has no additional collaborators."}
+            description={
+              canManage ? 'Share this flow to invite team members.' : 'This flow has no additional collaborators.'
+            }
           />
         )}
       </div>

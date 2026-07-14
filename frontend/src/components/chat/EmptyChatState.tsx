@@ -18,12 +18,8 @@ export default function EmptyChatState({hasDoc, hasThread, onCreateThread}: Prop
               <FileText size={24} className="text-text-tertiary" />
             </div>
             <div>
-              <h3 className="text-sm font-medium text-text-secondary mb-1">
-                No flow loaded
-              </h3>
-              <p className="text-xs text-text-tertiary">
-                Open or drag-drop a .pad file to begin
-              </p>
+              <h3 className="text-sm font-medium text-text-secondary mb-1">No flow loaded</h3>
+              <p className="text-xs text-text-tertiary">Open or drag-drop a .pad file to begin</p>
             </div>
           </>
         ) : (
@@ -32,12 +28,8 @@ export default function EmptyChatState({hasDoc, hasThread, onCreateThread}: Prop
               <MessageSquare size={24} className="text-text-tertiary" />
             </div>
             <div>
-              <h3 className="text-sm font-medium text-text-secondary mb-1">
-                No active conversation
-              </h3>
-              <p className="text-xs text-text-tertiary mb-3">
-                Start a conversation to analyze your flow with AI
-              </p>
+              <h3 className="text-sm font-medium text-text-secondary mb-1">No active conversation</h3>
+              <p className="text-xs text-text-tertiary mb-3">Start a conversation to analyze your flow with AI</p>
               {onCreateThread && (
                 <button
                   onClick={onCreateThread}

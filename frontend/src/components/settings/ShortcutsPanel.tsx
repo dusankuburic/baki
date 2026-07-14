@@ -8,7 +8,11 @@ export default function ShortcutsPanel() {
   const grouped = useMemo(() => {
     const map = new Map<string, typeof shortcuts>()
     for (const s of shortcuts) {
-      if (search && !s.description.toLowerCase().includes(search.toLowerCase()) && !s.id.toLowerCase().includes(search.toLowerCase())) {
+      if (
+        search &&
+        !s.description.toLowerCase().includes(search.toLowerCase()) &&
+        !s.id.toLowerCase().includes(search.toLowerCase())
+      ) {
         continue
       }
       const list = map.get(s.category) || []
@@ -21,13 +25,11 @@ export default function ShortcutsPanel() {
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">Keyboard Shortcuts</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-4">
-        Reference of all available keyboard shortcuts.
-      </p>
+      <p className="text-sm text-text-secondary mt-1 mb-4">Reference of all available keyboard shortcuts.</p>
 
       <Input
         value={search}
-        onChange={(e) => setSearch((e.target as HTMLInputElement).value)}
+        onChange={e => setSearch((e.target as HTMLInputElement).value)}
         placeholder="Search shortcuts..."
         className="mb-4"
       />

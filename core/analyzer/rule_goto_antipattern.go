@@ -63,6 +63,21 @@ func extractGotoTarget(block *models.Block) string {
 	if after, ok := strings.CutPrefix(name, "Go to "); ok {
 		return strings.TrimSpace(after)
 	}
+	// Parser-produced GOTO blocks expose the label as a "label" token (the
+	// tokenizer strips the "GOTO " verb, leaving the label in Name/Tokens).
+	for _, t := range block.Tokens {
+		if t.Type == "label" {
+			if t.Target != "" {
+				return t.Target
+			}
+			if t.Value != "" {
+				return t.Value
+			}
+		}
+	}
+	if name := strings.TrimSpace(block.Name); name != "" {
+		return name
+	}
 	return ""
 }
 
@@ -145,3 +160,7 @@ func isScopeContainer(b *models.Block) bool {
 	}
 	return false
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&GotoAntipatternRule{}) }

@@ -119,16 +119,29 @@ func TestRedisStore_RefillsOverTime(t *testing.T) {
 	}
 }
 
-// TestRedisStore_FailsOpenOnRedisError asserts the store admits the request
-// (rather than 429-ing the whole API) when Redis is unreachable — a backplane
-// blip must not take the service down.
-func TestRedisStore_FailsOpenOnRedisError(t *testing.T) {
+// TestRedisStore_FallbackOnRedisError asserts the store degrades to a
+// per-replica in-memory bucket when Redis is unreachable, rather than fully
+// uncapping (the previous behaviour let an attacker who DoS'd Redis disable all
+// rate limiting). The first `capacity` requests are admitted; the next is
+// rejected — the limit is enforced, just locally instead of across replicas.
+func TestRedisStore_FallbackOnRedisError(t *testing.T) {
 	client, _ := newMiniRedis(t)
 	s := newRedisStore(client)
 	// Close the underlying server so the next command errors.
 	client.Close()
 
-	if !s.Allow(context.Background(), "ratelimit:general:x", 1, 1) {
-		t.Fatal("expected fail-open (admit) when Redis is unreachable")
+	ctx := context.Background()
+	// capacity 3 with rate 0 (no refill) — exactly 3 admitted, the 4th rejected.
+	if !s.Allow(ctx, "ratelimit:general:x", 0, 3) {
+		t.Fatal("expected first fallback request to be admitted")
+	}
+	if !s.Allow(ctx, "ratelimit:general:x", 0, 3) {
+		t.Fatal("expected second fallback request to be admitted")
+	}
+	if !s.Allow(ctx, "ratelimit:general:x", 0, 3) {
+		t.Fatal("expected third fallback request to be admitted")
+	}
+	if s.Allow(ctx, "ratelimit:general:x", 0, 3) {
+		t.Fatal("expected 4th request to be rejected by the fallback bucket, not fully uncapped")
 	}
 }

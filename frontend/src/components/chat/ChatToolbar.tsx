@@ -13,7 +13,16 @@ interface Props {
   searchActive?: boolean
 }
 
-export default function ChatToolbar({messageCount, onNewChat, onClearContext, onCompact, useTools, onToggleTools, onToggleSearch, searchActive}: Props) {
+export default function ChatToolbar({
+  messageCount,
+  onNewChat,
+  onClearContext,
+  onCompact,
+  useTools,
+  onToggleTools,
+  onToggleSearch,
+  searchActive,
+}: Props) {
   const [pendingAction, setPendingAction] = useState<'clear' | 'compact' | null>(null)
 
   useEffect(() => {
@@ -39,7 +48,7 @@ export default function ChatToolbar({messageCount, onNewChat, onClearContext, on
             'flex items-center gap-1.5 px-2 py-1 rounded-md text-2xs transition-colors',
             useTools
               ? 'text-brand-400 bg-brand-500/10'
-              : 'text-text-tertiary hover:text-brand-400 hover:bg-brand-500/8'
+              : 'text-text-tertiary hover:text-brand-400 hover:bg-brand-500/8',
           )}
           onClick={onToggleTools}
           aria-pressed={!!useTools}
@@ -91,9 +100,7 @@ export default function ChatToolbar({messageCount, onNewChat, onClearContext, on
             }}
             className={clsx(
               'text-2xs px-1.5 py-0.5 rounded font-medium transition-colors',
-              pendingAction === 'clear'
-                ? 'text-red-400 hover:bg-red-500/10'
-                : 'text-amber-400 hover:bg-amber-500/10'
+              pendingAction === 'clear' ? 'text-red-400 hover:bg-red-500/10' : 'text-amber-400 hover:bg-amber-500/10',
             )}
           >
             Confirm
@@ -109,7 +116,7 @@ export default function ChatToolbar({messageCount, onNewChat, onClearContext, on
               'p-1 rounded transition-colors',
               searchActive
                 ? 'text-brand-400 bg-brand-500/10'
-                : 'text-text-tertiary/50 hover:text-text-tertiary hover:bg-surface-3'
+                : 'text-text-tertiary/50 hover:text-text-tertiary hover:bg-surface-3',
             )}
             title="Search messages"
             aria-label="Search messages"

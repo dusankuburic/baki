@@ -12,7 +12,9 @@ export function buildFindingFixPrompt(finding: Finding): string {
     finding.suggestion ? `Suggestion: ${finding.suggestion}` : '',
     finding.autoFixHint ? `Analyzer fix hint:\n\`\`\`\n${finding.autoFixHint}\n\`\`\`` : '',
     `Rule: \`${finding.ruleId}\` · Severity: ${finding.severity} · Block: \`${finding.blockId}\``,
-  ].filter(Boolean).join('\n\n')
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 // revealChat opens (and un-collapses) the AI tab in the inspector.

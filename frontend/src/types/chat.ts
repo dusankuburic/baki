@@ -1,38 +1,38 @@
 // AI chat session, message, and request/response shapes.
 
-import type {ProviderID} from './providers';
+import type {ProviderID} from './providers'
 
 export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: string;
-  contextBlockId?: string;
-  tokensIn?: number;
-  tokensOut?: number;
-  provider?: ProviderID;
-  model?: string;
-  finishReason?: 'stop' | 'interrupted' | 'error';
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+  contextBlockId?: string
+  tokensIn?: number
+  tokensOut?: number
+  provider?: ProviderID
+  model?: string
+  finishReason?: 'stop' | 'interrupted' | 'error'
 }
 
 export interface ChatRequest {
-  flowId: string;
-  provider: string;
-  model?: string;
-  messages: ChatMessage[];
-  userMessage: string;
-  contextBlockId?: string;
-  selectedSourceFiles?: string[];
-  systemPrompt?: string;
-  temperature?: number;
-  maxTokens?: number;
-  demoMode?: boolean;
-  excludeContext?: boolean;
-  useTools?: boolean;
+  flowId: string
+  provider: string
+  model?: string
+  messages: ChatMessage[]
+  userMessage: string
+  contextBlockId?: string
+  selectedSourceFiles?: string[]
+  systemPrompt?: string
+  temperature?: number
+  maxTokens?: number
+  demoMode?: boolean
+  excludeContext?: boolean
+  useTools?: boolean
   // C-1: client-generated stream ID. When set, the client subscribes its SSE
   // listener before POSTing create, so the backend emits immediately with no
   // /chat/begin round-trip. Omitted ⇒ legacy two-POST handshake.
-  clientStreamId?: string;
+  clientStreamId?: string
 }
 
 export interface ChatResponse {
@@ -48,17 +48,17 @@ export interface TokenUsage {
 }
 
 export interface ContextPreview {
-  systemPrompt: string;
-  contextText: string;
-  userMessage: string;
-  estimatedTokens: number;
-  contextLimit: number;
+  systemPrompt: string
+  contextText: string
+  userMessage: string
+  estimatedTokens: number
+  contextLimit: number
 }
 
 export interface ConversationFile {
-  version: number;
-  flowKey: string;
-  scope: string;
-  updatedAt: string;
-  messages: ChatMessage[];
+  version: number
+  flowKey: string
+  scope: string
+  updatedAt: string
+  messages: ChatMessage[]
 }

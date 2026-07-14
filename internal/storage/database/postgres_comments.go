@@ -42,7 +42,7 @@ func (b *PostgresStorageBackend) ListFindingComments(ctx context.Context, flowID
 		}
 		out = append(out, c)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (b *PostgresStorageBackend) DeleteFindingComment(ctx context.Context, flowID, commentID, authorID string) error {

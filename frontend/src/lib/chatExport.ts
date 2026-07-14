@@ -37,6 +37,9 @@ export function downloadTextFile(filename: string, content: string, mime = 'text
 
 // safeFilename sanitizes a thread title into a filesystem-safe basename.
 export function safeFilename(title: string): string {
-  const base = (title || 'conversation').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase()
+  const base = (title || 'conversation')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase()
   return `chat-${base || 'conversation'}.md`
 }

@@ -1,11 +1,11 @@
-import { create } from 'zustand'
-import { registerStoreReset } from './storeRegistry'
-import { persist } from 'zustand/middleware'
-import { request } from '@/api/client'
-import type { AuthUser } from '@/api/auth'
-import { useFlowStore } from './flowStore'
-import { useAnalysisStore } from './analysisStore'
-import { useChatStore } from './chatStore'
+import {create} from 'zustand'
+import {registerStoreReset} from './storeRegistry'
+import {persist} from 'zustand/middleware'
+import {request} from '@/api/client'
+import type {AuthUser} from '@/api/auth'
+import {useFlowStore} from './flowStore'
+import {useAnalysisStore} from './analysisStore'
+import {useChatStore} from './chatStore'
 
 export type OrgRole = 'admin' | 'member' | 'viewer' | 'guest'
 
@@ -43,135 +43,140 @@ interface OrgState {
   clearError: () => void
 }
 
-export const useOrgStore = create<OrgState>()(persist((set, get) => ({
-  organisations: [],
-  activeOrgId: null,
-  isLoading: false,
-  isBusy: false,
-  error: null,
+export const useOrgStore = create<OrgState>()(
+  persist(
+    (set, get) => ({
+      organisations: [],
+      activeOrgId: null,
+      isLoading: false,
+      isBusy: false,
+      error: null,
 
-  loadOrgs: async () => {
-    if (get().isLoading) return
-    set({ isLoading: true, error: null })
-    try {
-      const orgs = await request<Organisation[]>('/api/orgs', undefined, 'GET')
-      set(s => ({
-        organisations: orgs ?? [],
-        isLoading: false,
-        // The persisted active org may have been deleted, or the user removed
-        // from it (or this is a different account) — fall back to Personal.
-        activeOrgId: s.activeOrgId && (orgs ?? []).some(o => o.id === s.activeOrgId)
-          ? s.activeOrgId
-          : null,
-      }))
-    } catch (err) {
-      set({ isLoading: false, error: err instanceof Error ? err.message : 'Failed to load organisations' })
-    }
-  },
+      loadOrgs: async () => {
+        if (get().isLoading) return
+        set({isLoading: true, error: null})
+        try {
+          const orgs = await request<Organisation[]>('/api/orgs', undefined, 'GET')
+          set(s => ({
+            organisations: orgs ?? [],
+            isLoading: false,
+            // The persisted active org may have been deleted, or the user removed
+            // from it (or this is a different account) — fall back to Personal.
+            activeOrgId: s.activeOrgId && (orgs ?? []).some(o => o.id === s.activeOrgId) ? s.activeOrgId : null,
+          }))
+        } catch (err) {
+          set({isLoading: false, error: err instanceof Error ? err.message : 'Failed to load organisations'})
+        }
+      },
 
-  setActiveOrg: (id) => {
-    if (get().activeOrgId === id) return
-    set({ activeOrgId: id })
-    // Deliberately broader than the flow-switch coordinator
-    // (resetDerivedStateForFlow): an org switch is a bigger context boundary —
-    // flow-store's reset() already clears search + doc-derived analysis fields
-    // + editor state, but analysis reports/findings and chat threads aren't
-    // scoped by org in frontend state, so they must be wiped in full here too
-    // (a lighter per-flow reset would leak the previous org's data into the UI).
-    useFlowStore.getState().reset()
-    useAnalysisStore.getState().reset()
-    useChatStore.setState({ threads: [], activeThreadId: null, conversations: new Map(), streams: {}, drafts: {} })
-  },
+      setActiveOrg: id => {
+        if (get().activeOrgId === id) return
+        set({activeOrgId: id})
+        // Deliberately broader than the flow-switch coordinator
+        // (resetDerivedStateForFlow): an org switch is a bigger context boundary —
+        // flow-store's reset() already clears search + doc-derived analysis fields
+        // + editor state, but analysis reports/findings and chat threads aren't
+        // scoped by org in frontend state, so they must be wiped in full here too
+        // (a lighter per-flow reset would leak the previous org's data into the UI).
+        useFlowStore.getState().reset()
+        useAnalysisStore.getState().reset()
+        useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map(), streams: {}, drafts: {}})
+      },
 
-  createOrg: async (name) => {
-    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
-    set({ isBusy: true, error: null })
-    try {
-      const org = await request<Organisation>('/api/orgs', { name })
-      set(s => ({ organisations: [...s.organisations, org], isBusy: false }))
-      return org
-    } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to create organisation' })
-      throw err
-    }
-  },
+      createOrg: async name => {
+        if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+        set({isBusy: true, error: null})
+        try {
+          const org = await request<Organisation>('/api/orgs', {name})
+          set(s => ({organisations: [...s.organisations, org], isBusy: false}))
+          return org
+        } catch (err) {
+          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to create organisation'})
+          throw err
+        }
+      },
 
-  inviteMember: async (orgId, email, role) => {
-    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
-    set({ isBusy: true, error: null })
-    try {
-      // Create a token invite — the backend emails the invitee a link they
-      // accept via acceptInvite (POST /api/invites/{token}/accept). The member
-      // list only changes once they accept, so no loadOrgs() here.
-      await request(`/api/orgs/${orgId}/invites`, { email, role })
-      set({ isBusy: false })
-    } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to send invite' })
-      throw err
-    }
-  },
+      inviteMember: async (orgId, email, role) => {
+        if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+        set({isBusy: true, error: null})
+        try {
+          // Create a token invite — the backend emails the invitee a link they
+          // accept via acceptInvite (POST /api/invites/{token}/accept). The member
+          // list only changes once they accept, so no loadOrgs() here.
+          await request(`/api/orgs/${orgId}/invites`, {email, role})
+          set({isBusy: false})
+        } catch (err) {
+          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to send invite'})
+          throw err
+        }
+      },
 
-  acceptInvite: async (token) => {
-    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
-    set({ isBusy: true, error: null })
-    try {
-      const org = await request<Organisation>(`/api/invites/${token}/accept`, {})
-      await get().loadOrgs()
-      if (org?.id) set({ activeOrgId: org.id })
-      set({ isBusy: false })
-    } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to accept invite' })
-      throw err
-    }
-  },
+      acceptInvite: async token => {
+        if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+        set({isBusy: true, error: null})
+        try {
+          const org = await request<Organisation>(`/api/invites/${token}/accept`, {})
+          await get().loadOrgs()
+          if (org?.id) set({activeOrgId: org.id})
+          set({isBusy: false})
+        } catch (err) {
+          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to accept invite'})
+          throw err
+        }
+      },
 
-  removeMember: async (orgId, userId) => {
-    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
-    set({ isBusy: true, error: null })
-    try {
-      await request(`/api/orgs/${orgId}/members/${userId}`, undefined, 'DELETE')
-      await get().loadOrgs()
-      set({ isBusy: false })
-    } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to remove member' })
-      throw err
-    }
-  },
+      removeMember: async (orgId, userId) => {
+        if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+        set({isBusy: true, error: null})
+        try {
+          await request(`/api/orgs/${orgId}/members/${userId}`, undefined, 'DELETE')
+          await get().loadOrgs()
+          set({isBusy: false})
+        } catch (err) {
+          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to remove member'})
+          throw err
+        }
+      },
 
-  setMemberRole: async (orgId, userId, role) => {
-    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
-    set({ isBusy: true, error: null })
-    try {
-      await request(`/api/orgs/${orgId}/members/${userId}/role`, { role }, 'PUT')
-      await get().loadOrgs()
-      set({ isBusy: false })
-    } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to update member role' })
-      throw err
-    }
-  },
+      setMemberRole: async (orgId, userId, role) => {
+        if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+        set({isBusy: true, error: null})
+        try {
+          await request(`/api/orgs/${orgId}/members/${userId}/role`, {role}, 'PUT')
+          await get().loadOrgs()
+          set({isBusy: false})
+        } catch (err) {
+          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to update member role'})
+          throw err
+        }
+      },
 
-  deleteOrg: async (orgId) => {
-    if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
-    set({ isBusy: true, error: null })
-    try {
-      await request(`/api/orgs/${orgId}`, undefined, 'DELETE')
-      set(s => ({
-        organisations: s.organisations.filter(o => o.id !== orgId),
-        activeOrgId: s.activeOrgId === orgId ? null : s.activeOrgId,
-        isBusy: false,
-      }))
-    } catch (err) {
-      set({ isBusy: false, error: err instanceof Error ? err.message : 'Failed to delete organisation' })
-      throw err
-    }
-  },
+      deleteOrg: async orgId => {
+        if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
+        set({isBusy: true, error: null})
+        try {
+          await request(`/api/orgs/${orgId}`, undefined, 'DELETE')
+          set(s => ({
+            organisations: s.organisations.filter(o => o.id !== orgId),
+            activeOrgId: s.activeOrgId === orgId ? null : s.activeOrgId,
+            isBusy: false,
+          }))
+        } catch (err) {
+          set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to delete organisation'})
+          throw err
+        }
+      },
 
-  clearError: () => set({ error: null }),
-}), {
-  name: 'baki-active-org',
-  partialize: s => ({ activeOrgId: s.activeOrgId }),
-}))
+      clearError: () => set({error: null}),
+    }),
+    {
+      name: 'baki-active-org',
+      partialize: s => ({activeOrgId: s.activeOrgId}),
+    },
+  ),
+)
 
 // Reset on logout (see storeRegistry).
-registerStoreReset(() => useOrgStore.setState({ organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null }))
+registerStoreReset(() =>
+  useOrgStore.setState({organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null}),
+)

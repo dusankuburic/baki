@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import { CheckCircle2, XCircle } from 'lucide-react'
+import {useEffect, useState} from 'react'
+import {CheckCircle2, XCircle} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Spinner from '@/components/shared/Spinner'
-import { authApi } from '@/api/auth'
+import {authApi} from '@/api/auth'
 
 interface VerifyEmailViewProps {
   token: string
@@ -11,20 +11,25 @@ interface VerifyEmailViewProps {
 
 // VerifyEmailView consumes a #verifyEmail=<token> deep link: it redeems the
 // token on mount and shows the result. The effect runs once for the given token.
-export default function VerifyEmailView({ token, onDone }: VerifyEmailViewProps) {
+export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
   const [status, setStatus] = useState<'pending' | 'ok' | 'error'>('pending')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
-    authApi.verifyEmail(token)
-      .then(() => { if (active) setStatus('ok') })
+    authApi
+      .verifyEmail(token)
+      .then(() => {
+        if (active) setStatus('ok')
+      })
       .catch((err: unknown) => {
         if (!active) return
         setError(err instanceof Error ? err.message : 'Verification failed')
         setStatus('error')
       })
-    return () => { active = false }
+    return () => {
+      active = false
+    }
   }, [token])
 
   return (

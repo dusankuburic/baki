@@ -1,11 +1,13 @@
 package filesystem
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -101,6 +103,12 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 			return interfaces.ErrVersionConflict
 		}
 		flow.Version = existing.Version + 1
+	} else {
+		// New flow: force the initial version to match the Postgres backend
+		// (INSERT ... VALUES (..., 0)), so a caller passing a stale non-zero
+		// Version (e.g. a doc reused across saves) can't fabricate a starting
+		// version that would then reject a legitimate Version=0 save.
+		flow.Version = 0
 	}
 
 	// Create flows directory if it doesn't exist
@@ -202,11 +210,13 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 			flow.Content = nil // list view needs metadata only
 		}
 		flows = append(flows, flow)
-
-		if filter.Limit > 0 && len(flows) >= filter.Limit+filter.Offset {
-			break
-		}
 	}
+
+	// Match the Postgres backend's ordering (flowOrderBy) so pagination is
+	// stable and the two backends return flows in the same relative order.
+	// os.ReadDir yields alphabetical-by-filename order, which is unrelated to
+	// updated_at and would make page-by-page iteration skip/duplicate flows.
+	sortFlows(flows, filter.SortBy)
 
 	if filter.Offset > 0 {
 		if filter.Offset >= len(flows) {
@@ -219,6 +229,46 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 	}
 
 	return flows, nil
+}
+
+// sortFlows orders flows in place to mirror the Postgres flowOrderBy clause, so
+// the filesystem backend's pagination is stable and consistent with the
+// database backend. Default (unset/unknown sort) = updated_at DESC.
+func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
+	switch sort {
+	case interfaces.FlowSortUpdatedAsc:
+		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
+			return a.UpdatedAt.Compare(b.UpdatedAt)
+		})
+	case interfaces.FlowSortNameAsc:
+		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
+			if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
+				return c
+			}
+			return b.UpdatedAt.Compare(a.UpdatedAt)
+		})
+	case interfaces.FlowSortNameDesc:
+		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
+			if c := strings.Compare(strings.ToLower(b.Name), strings.ToLower(a.Name)); c != 0 {
+				return c
+			}
+			return b.UpdatedAt.Compare(a.UpdatedAt)
+		})
+	case interfaces.FlowSortBlocksDesc:
+		// Mirror the Postgres ORDER BY COALESCE((metadata->>'BlockCount')::int, 0)
+		// DESC, updated_at DESC. BlockCount lives on FlowMetadata, which is
+		// populated even when MetadataOnly is set, so this works for list views.
+		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
+			if c := cmp.Compare(b.Metadata.BlockCount, a.Metadata.BlockCount); c != 0 {
+				return c
+			}
+			return b.UpdatedAt.Compare(a.UpdatedAt)
+		})
+	default: // FlowSortUpdatedDesc / unset
+		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
+			return b.UpdatedAt.Compare(a.UpdatedAt)
+		})
+	}
 }
 
 // CountFlows returns the total number of flows matching the filter, ignoring
@@ -273,16 +323,36 @@ func (lsb *LocalStorageBackend) matchesFilter(flow *interfaces.FlowDocument, f i
 	// that bypasses owner/org scoping. Otherwise an empty scope matches
 	// nothing, mirroring the Postgres backend's defense-in-depth guard.
 	if !f.AllFlows {
-		if f.UserID == "" && f.OrganizationID == "" {
+		if f.UserID == "" && f.OrganizationID == "" && len(f.OrganizationIDs) == 0 {
 			return false
 		}
 		ownerMatch := flow.OwnerID == "" || flow.OwnerID == f.UserID
 		orgMatch := f.OrganizationID != "" && flow.OrganizationID == f.OrganizationID
+		// OrganizationIDs widens the org scope to multiple orgs the caller
+		// belongs to (Postgres uses an IN list); mirror that here so the FS
+		// backend doesn't return more rows than Postgres would for the same
+		// filter.
+		if !orgMatch && len(f.OrganizationIDs) > 0 {
+			for _, oid := range f.OrganizationIDs {
+				if flow.OrganizationID == oid {
+					orgMatch = true
+					break
+				}
+			}
+		}
 		if !ownerMatch && !orgMatch {
 			return false
 		}
 	}
 	if f.Query != "" && !strings.Contains(strings.ToLower(flow.Name), strings.ToLower(f.Query)) {
+		return false
+	}
+	// CreatedAfter / CreatedBefore mirror Postgres's strict > / < comparisons
+	// so the two backends agree on which flows a filter returns.
+	if f.CreatedAfter != nil && !flow.CreatedAt.After(*f.CreatedAfter) {
+		return false
+	}
+	if f.CreatedBefore != nil && !flow.CreatedAt.Before(*f.CreatedBefore) {
 		return false
 	}
 	return true
@@ -294,6 +364,13 @@ func (lsb *LocalStorageBackend) DeleteFlow(ctx context.Context, id string) error
 	if err != nil {
 		return err
 	}
+
+	// Take flowMu so a concurrent SaveFlow can't read the file, find it still
+	// present, and rewrite it (at a bumped version) after this delete — which
+	// would silently resurrect the flow the user just deleted. SaveFlow holds
+	// the same mutex across its load-version-check-write critical section.
+	lsb.flowMu.Lock()
+	defer lsb.flowMu.Unlock()
 
 	if err := os.Remove(flowPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete flow file: %w", err)

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -92,8 +91,7 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Role string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -228,8 +226,7 @@ func (h *AdminHandler) handlePPPollAuth(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		DeviceCode string `json:"deviceCode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	res, err := h.ppAuth.PollToken(r.Context(), req.DeviceCode)

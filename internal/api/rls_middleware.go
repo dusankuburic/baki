@@ -66,13 +66,13 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		pgBackend, ok := rt.security.Backend.(*storagedb.PostgresStorageBackend)
+		rlsBackend, ok := rt.security.Backend.(storagedb.RLSBeginner)
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		tx, err := pgBackend.BeginRLS(r.Context(), claims.UserID)
+		tx, err := rlsBackend.BeginRLS(r.Context(), claims.UserID)
 		if err != nil {
 			slog.Warn("rls: failed to begin transaction, proceeding without RLS", "err", err)
 			next.ServeHTTP(w, r)

@@ -41,7 +41,9 @@ describe('useSessions', () => {
     const {result} = renderHook(() => useSessions())
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    await act(async () => { await result.current.revokeOthers() })
+    await act(async () => {
+      await result.current.revokeOthers()
+    })
 
     expect(authApi.revokeSession).toHaveBeenCalledTimes(2)
     expect(authApi.revokeSession).toHaveBeenCalledWith('other-1')
@@ -56,24 +58,27 @@ describe('useSessions', () => {
       {id: 'other-2', createdAt: '', expiresAt: ''},
     ])
     vi.mocked(authApi.revokeSession).mockImplementation((id: string) =>
-      id === 'other-1' ? Promise.resolve() : Promise.reject(new Error('network')))
+      id === 'other-1' ? Promise.resolve() : Promise.reject(new Error('network')),
+    )
     const {result} = renderHook(() => useSessions())
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    await act(async () => { await result.current.revokeOthers() })
+    await act(async () => {
+      await result.current.revokeOthers()
+    })
 
     expect(result.current.sessions.map(s => s.id).sort()).toEqual(['current-jti', 'other-2'])
     expect(result.current.error).toMatch(/some sessions/i)
   })
 
   it('is a no-op when there are no other sessions to revoke', async () => {
-    vi.mocked(authApi.listSessions).mockResolvedValue([
-      {id: 'current-jti', createdAt: '', expiresAt: ''},
-    ])
+    vi.mocked(authApi.listSessions).mockResolvedValue([{id: 'current-jti', createdAt: '', expiresAt: ''}])
     const {result} = renderHook(() => useSessions())
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    await act(async () => { await result.current.revokeOthers() })
+    await act(async () => {
+      await result.current.revokeOthers()
+    })
 
     expect(authApi.revokeSession).not.toHaveBeenCalled()
   })

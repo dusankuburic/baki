@@ -35,7 +35,9 @@ describe('useCopy', () => {
     expect(writeClipboardMock).toHaveBeenCalledWith('hello')
     expect(result.current.copied).toBe(true)
 
-    act(() => { vi.advanceTimersByTime(2000) })
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
     expect(result.current.copied).toBe(false)
   })
 
@@ -58,16 +60,22 @@ describe('useCopy', () => {
     await flushMicrotasks()
     expect(result.current.copied).toBe(true)
 
-    act(() => { vi.advanceTimersByTime(600) })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
     act(() => result.current.copy('second'))
     await flushMicrotasks()
     expect(writeClipboardMock).toHaveBeenCalledTimes(2)
 
-    act(() => { vi.advanceTimersByTime(600) })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
     // Original 1000ms timer (started at t=0) would've fired by t=1000 were it not reset at t=600.
     expect(result.current.copied).toBe(true)
 
-    act(() => { vi.advanceTimersByTime(400) })
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
     expect(result.current.copied).toBe(false)
   })
 })

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -60,8 +59,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		FindingKey string `json:"findingKey"`
 		Body       string `json:"body"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Body == "" || req.FlowID == "" || req.FindingKey == "" {
@@ -95,8 +93,7 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 		FlowID    string `json:"flowId"`
 		CommentID string `json:"commentId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	userID := h.security.CallerID(r)
@@ -131,8 +128,7 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		FlowID string `json:"flowId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	userID := h.security.CallerID(r)
@@ -210,8 +206,7 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 		FlowID  string `json:"flowId"`
 		TokenID string `json:"tokenId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	userID := h.security.CallerID(r)

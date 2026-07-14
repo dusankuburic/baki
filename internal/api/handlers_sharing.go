@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -58,8 +57,7 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 		UserID     string `json:"userId"`
 		Permission string `json:"permission"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -80,7 +78,12 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 	}
 
 	if err != nil {
-		render.Error(w, fmt.Errorf("user not found"), http.StatusNotFound)
+		// Anti-enumeration: return the same 200 "ok" response as a successful
+		// add rather than 404 "user not found". A 404 let an admin probe whether
+		// an arbitrary email/userID is registered; an indistinguishable response
+		// (matching the forgot-password flow's design) closes that oracle. The
+		// collaborator is NOT added for an unknown target.
+		render.JSON(w, map[string]string{"status": "ok"})
 		return
 	}
 
@@ -117,8 +120,7 @@ func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http
 	var req struct {
 		Permission string `json:"permission"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

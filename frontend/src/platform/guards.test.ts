@@ -1,11 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { simulateTauri, simulateWeb } from '@/testing/testHelpers'
-import {
-  isTauri,
-  isWeb,
-  getPlatformType,
-  getPlatformCapabilities,
-} from './guards'
+import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {simulateTauri, simulateWeb} from '@/testing/testHelpers'
+import {isTauri, isWeb, getPlatformType, getPlatformCapabilities} from './guards'
 
 describe('Platform guards', () => {
   afterEach(() => simulateWeb())
@@ -81,7 +76,9 @@ describe('Platform guards', () => {
 
   describe('getPlatformCapabilities — tauri', () => {
     let cleanup: () => void
-    beforeEach(() => { cleanup = simulateTauri() })
+    beforeEach(() => {
+      cleanup = simulateTauri()
+    })
     afterEach(() => cleanup())
 
     it('has native file system', () => {

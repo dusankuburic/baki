@@ -241,6 +241,36 @@ func TestSubflowNoErrorHandlerRule_MultipleSubflows_IndependentFindings(t *testi
 	}
 }
 
+// Regression: the finding must carry a BlockID so that DeduplicateFindings
+// (which keys on BlockID+Title) keeps one finding per handler-less subflow
+// instead of collapsing all but the first. Also guards inline suppression
+// and SARIF line numbers, both of which depend on BlockID.
+func TestSubflowNoErrorHandlerRule_SurvivesDedup_MultipleSubflows(t *testing.T) {
+	rule := &SubflowNoErrorHandlerRule{}
+	sf1 := makeSubflow("sf1", "Main", actionBlocksAt(0, 4)...)
+	sf2 := makeSubflow("sf2", "Helper", actionBlocksAt(10, 4)...)
+	flow := makeFlowWithSubflows(sf1, sf2)
+	ctx := buildContext(flow, nil)
+
+	var findings []models.Finding
+	for _, b := range ctx.AllBlocks {
+		findings = append(findings, rule.Check(b, ctx)...)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 raw findings, got %d", len(findings))
+	}
+	for _, f := range findings {
+		if f.BlockID == "" {
+			t.Fatalf("finding for subflow %q has empty BlockID — dedup will collapse it", f.SubflowID)
+		}
+	}
+
+	deduped, _ := DeduplicateFindings(findings)
+	if len(deduped) != 2 {
+		t.Errorf("dedup collapsed findings: expected 2, got %d", len(deduped))
+	}
+}
+
 func TestSubflowNoErrorHandlerRule_CommentOnlySubflow_NoFinding(t *testing.T) {
 	rule := &SubflowNoErrorHandlerRule{}
 	comments := make([]*models.Block, 5)

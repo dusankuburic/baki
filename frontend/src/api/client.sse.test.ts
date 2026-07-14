@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 
 // SSE connection lifecycle tests for connectEvents/subscribeToEvents: the
 // read-inactivity watchdog (a half-dead socket reconnects instead of hanging
@@ -29,7 +29,7 @@ function mockSSEFetch() {
     const encoder = new TextEncoder()
     const body = new ReadableStream<Uint8Array>({
       start(ctl) {
-        conns.push({ push: (frame: string) => ctl.enqueue(encoder.encode(frame)) })
+        conns.push({push: (frame: string) => ctl.enqueue(encoder.encode(frame))})
         init?.signal?.addEventListener('abort', () => {
           try {
             ctl.error(new DOMException('The operation was aborted.', 'AbortError'))
@@ -39,9 +39,9 @@ function mockSSEFetch() {
         })
       },
     })
-    return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    return new Response(body, {status: 200, headers: {'Content-Type': 'text/event-stream'}})
   })
-  return { spy, conns }
+  return {spy, conns}
 }
 
 async function getClient() {
@@ -60,8 +60,8 @@ afterEach(() => {
 
 describe('connectEvents inactivity watchdog', () => {
   it('reconnects when nothing arrives for the inactivity timeout', async () => {
-    const { spy } = mockSSEFetch()
-    const { subscribeToEvents, getEventConnectionState } = await getClient()
+    const {spy} = mockSSEFetch()
+    const {subscribeToEvents, getEventConnectionState} = await getClient()
 
     await subscribeToEvents(() => {})
     await vi.advanceTimersByTimeAsync(0)
@@ -77,8 +77,8 @@ describe('connectEvents inactivity watchdog', () => {
   })
 
   it('heartbeat comment frames keep the connection alive and never reach listeners', async () => {
-    const { spy, conns } = mockSSEFetch()
-    const { subscribeToEvents, getEventConnectionState } = await getClient()
+    const {spy, conns} = mockSSEFetch()
+    const {subscribeToEvents, getEventConnectionState} = await getClient()
 
     const listener = vi.fn()
     await subscribeToEvents(listener)
@@ -98,8 +98,8 @@ describe('connectEvents inactivity watchdog', () => {
   })
 
   it('still dispatches data events and resets the watchdog on them', async () => {
-    const { spy, conns } = mockSSEFetch()
-    const { subscribeToEvents } = await getClient()
+    const {spy, conns} = mockSSEFetch()
+    const {subscribeToEvents} = await getClient()
 
     const listener = vi.fn()
     await subscribeToEvents(listener)
@@ -109,15 +109,15 @@ describe('connectEvents inactivity watchdog', () => {
     conns[0].push('data: {"name":"chat:event","data":{"streamId":"s1"}}\n\n')
     await vi.advanceTimersByTimeAsync(40_000)
 
-    expect(listener).toHaveBeenCalledWith({ name: 'chat:event', data: { streamId: 's1' } })
+    expect(listener).toHaveBeenCalledWith({name: 'chat:event', data: {streamId: 's1'}})
     expect(spy).toHaveBeenCalledTimes(1) // 40s + 40s straddling a read never trips the 45s watchdog
   })
 })
 
 describe('subscribeToEvents teardown grace period', () => {
   it('keeps the connection when a subscriber returns within the grace period', async () => {
-    const { spy } = mockSSEFetch()
-    const { subscribeToEvents, getEventConnectionState } = await getClient()
+    const {spy} = mockSSEFetch()
+    const {subscribeToEvents, getEventConnectionState} = await getClient()
 
     const unsub = await subscribeToEvents(() => {})
     await vi.advanceTimersByTimeAsync(0)
@@ -135,8 +135,8 @@ describe('subscribeToEvents teardown grace period', () => {
   })
 
   it('tears down for good once the grace period elapses with no subscribers', async () => {
-    const { spy } = mockSSEFetch()
-    const { subscribeToEvents, getEventConnectionState } = await getClient()
+    const {spy} = mockSSEFetch()
+    const {subscribeToEvents, getEventConnectionState} = await getClient()
 
     const unsub = await subscribeToEvents(() => {})
     await vi.advanceTimersByTimeAsync(0)
@@ -149,5 +149,65 @@ describe('subscribeToEvents teardown grace period', () => {
     // An intentional teardown abort must not reconnect.
     await vi.advanceTimersByTimeAsync(120_000)
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Server-close and backoff tests: the headline recovery paths that were
+// previously only tested with a mocked connection (never driven through the
+// real client.ts reconnect logic).
+describe('connectEvents server-close and backoff', () => {
+  it('reconnects when the server closes the stream (reader done)', async () => {
+    // Mock a stream that immediately closes (done=true) — simulates a backend
+    // restart mid-connection.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      const encoder = new TextEncoder()
+      const body = new ReadableStream<Uint8Array>({
+        start(ctl) {
+          ctl.enqueue(encoder.encode(': ping\n\n'))
+          ctl.close() // server closed the connection
+        },
+      })
+      return new Response(body, {status: 200, headers: {'Content-Type': 'text/event-stream'}})
+    })
+
+    const {subscribeToEvents, getEventConnectionState} = await getClient()
+    await subscribeToEvents(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Stream closed → scheduleReconnect fires after 1s backoff.
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(getEventConnectionState()).not.toBe('idle')
+    expect(fetch).toHaveBeenCalledTimes(2) // re-dialed
+  })
+
+  it('uses exponential backoff (1s, 2s, 4s) on consecutive non-OK responses', async () => {
+    // Every connection attempt returns 503 → each triggers a reconnect with
+    // increasing backoff: 1s, 2s, 4s.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      return new Response('service unavailable', {status: 503})
+    })
+
+    const {subscribeToEvents} = await getClient()
+    await subscribeToEvents(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    // First backoff: 1s
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    // Second backoff: 2s
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(fetch).toHaveBeenCalledTimes(3)
+
+    // Third backoff: 4s
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(fetch).toHaveBeenCalledTimes(4)
+
+    // The next backoff is 8s — verify it doesn't fire early.
+    await vi.advanceTimersByTimeAsync(7_999)
+    expect(fetch).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetch).toHaveBeenCalledTimes(5)
   })
 })

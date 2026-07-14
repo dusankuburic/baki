@@ -88,10 +88,8 @@ func (s *OrgService) AddMember(ctx context.Context, orgID, userID string, role a
 	}
 
 	return s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
-		for _, m := range org.Members {
-			if m.UserID == userID {
-				return ErrAlreadyMember
-			}
+		if _, m := findMember(org, userID); m != nil {
+			return ErrAlreadyMember
 		}
 		org.Members = append(org.Members, interfaces.OrgMember{
 			UserID:   userID,
@@ -106,18 +104,12 @@ func (s *OrgService) AddMember(ctx context.Context, orgID, userID string, role a
 // RemoveMember removes userID from orgID.
 func (s *OrgService) RemoveMember(ctx context.Context, orgID, userID string) error {
 	return s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
-		idx := -1
-		for i, m := range org.Members {
-			if m.UserID == userID {
-				idx = i
-				break
-			}
-		}
-		if idx == -1 {
+		idx, m := findMember(org, userID)
+		if m == nil {
 			return ErrMemberNotFound
 		}
 
-		if org.Members[idx].Role == auth.RoleAdmin && adminCount(org) == 1 {
+		if m.Role == auth.RoleAdmin && adminCount(org) == 1 {
 			return ErrLastAdmin
 		}
 
@@ -134,17 +126,16 @@ func (s *OrgService) SetRole(ctx context.Context, orgID, userID string, role aut
 	}
 
 	return s.store.MutateOrg(ctx, orgID, func(org *interfaces.Organisation) error {
-		for i, m := range org.Members {
-			if m.UserID == userID {
-				if m.Role == auth.RoleAdmin && role != auth.RoleAdmin && adminCount(org) == 1 {
-					return ErrLastAdmin
-				}
-				org.Members[i].Role = role
-				org.UpdatedAt = time.Now().UTC()
-				return nil
-			}
+		_, m := findMember(org, userID)
+		if m == nil {
+			return ErrMemberNotFound
 		}
-		return ErrMemberNotFound
+		if m.Role == auth.RoleAdmin && role != auth.RoleAdmin && adminCount(org) == 1 {
+			return ErrLastAdmin
+		}
+		m.Role = role
+		org.UpdatedAt = time.Now().UTC()
+		return nil
 	})
 }
 
@@ -154,12 +145,8 @@ func (s *OrgService) IsMember(ctx context.Context, orgID, userID string) bool {
 	if err != nil {
 		return false
 	}
-	for _, m := range org.Members {
-		if m.UserID == userID {
-			return true
-		}
-	}
-	return false
+	_, m := findMember(org, userID)
+	return m != nil
 }
 
 // MemberRole returns the role of userID in orgID.
@@ -168,12 +155,11 @@ func (s *OrgService) MemberRole(ctx context.Context, orgID, userID string) (auth
 	if err != nil {
 		return "", err
 	}
-	for _, m := range org.Members {
-		if m.UserID == userID {
-			return m.Role, nil
-		}
+	_, m := findMember(org, userID)
+	if m == nil {
+		return "", ErrMemberNotFound
 	}
-	return "", ErrMemberNotFound
+	return m.Role, nil
 }
 
 // ListMembers returns all members of the given organisation.
@@ -193,12 +179,11 @@ func (s *OrgService) GetAndCheckAdmin(ctx context.Context, orgID, userID string)
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range org.Members {
-		if m.UserID == userID && m.Role == auth.RoleAdmin {
-			return org, nil
-		}
+	_, m := findMember(org, userID)
+	if m == nil || m.Role != auth.RoleAdmin {
+		return nil, ErrNotOrgAdmin
 	}
-	return nil, ErrNotOrgAdmin
+	return org, nil
 }
 
 // IsAdmin reports whether userID is an administrator of orgID.
@@ -207,12 +192,8 @@ func (s *OrgService) IsAdmin(ctx context.Context, orgID, userID string) bool {
 	if err != nil {
 		return false
 	}
-	for _, m := range org.Members {
-		if m.UserID == userID && m.Role == auth.RoleAdmin {
-			return true
-		}
-	}
-	return false
+	_, m := findMember(org, userID)
+	return m != nil && m.Role == auth.RoleAdmin
 }
 
 // Delete removes an organisation entirely.
@@ -229,6 +210,18 @@ func (s *OrgService) Update(ctx context.Context, orgID, name string) (*interface
 		return nil, err
 	}
 	return s.store.LoadOrg(ctx, orgID)
+}
+
+// findMember returns the index of and a pointer to the member with userID in
+// org.Members, or (-1, nil) when absent. The pointer aliases the slice element
+// so callers may mutate the member in place (e.g. SetRole).
+func findMember(org *interfaces.Organisation, userID string) (int, *interfaces.OrgMember) {
+	for i := range org.Members {
+		if org.Members[i].UserID == userID {
+			return i, &org.Members[i]
+		}
+	}
+	return -1, nil
 }
 
 func adminCount(org *interfaces.Organisation) int {

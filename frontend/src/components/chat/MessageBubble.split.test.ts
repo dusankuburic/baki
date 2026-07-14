@@ -26,13 +26,7 @@ describe('splitStreamingContent', () => {
   })
 
   it('head + tail always reassemble to the original content', () => {
-    const samples = [
-      '',
-      'plain',
-      'a\n\nb\n\nc',
-      '```\nopen fence\n\nmore',
-      'x\n\n```\nclosed\n```\n\ny\n\nz',
-    ]
+    const samples = ['', 'plain', 'a\n\nb\n\nc', '```\nopen fence\n\nmore', 'x\n\n```\nclosed\n```\n\ny\n\nz']
     for (const s of samples) {
       const [head, tail] = splitStreamingContent(s)
       expect(head + tail).toBe(s)

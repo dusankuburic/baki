@@ -41,7 +41,7 @@ func TestAuthenticator_DeviceFlowAgainstMockMSAL(t *testing.T) {
 	defer srv.Close()
 
 	// Point the authenticator at the mock server.
-	a := NewAuthenticator("test-tenant", "client-xyz", "https://api.powerplatform.com/.default", srv.Client())
+	a := NewAuthenticator("test-tenant", "client-xyz", "https://api.powerplatform.com/.default", srv.Client(), nil)
 	a.deviceCodeURL = srv.URL + "/devicecode"
 	a.tokenURL = srv.URL + "/token"
 

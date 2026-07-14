@@ -13,11 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/api"
-	apimw "pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
@@ -56,7 +54,7 @@ func main() {
 			func(cfg *config.Config) config.DeploymentMode { return cfg.Mode },
 			provideStorageBackend,
 			provideShutdownCh,
-			func(m *api.EventManager) service.Notifier { return m },
+			func(m *api.EventManager) service.EventNotifier { return m },
 			provideAuthManager,
 			provideOrgService,
 			provideNotifier,
@@ -64,6 +62,7 @@ func main() {
 			provideMigrationRunner,
 			provideIngester,
 			providePadCloudAuth,
+			provideKeyStore,
 		),
 		di.ServiceModule,
 		di.APIModule,
@@ -71,7 +70,6 @@ func main() {
 		fx.Invoke(
 			initLogger,
 			initTelemetry,
-			initStorageSecrets,
 			initAuditPool,
 			initScanner,
 			initIngester,
@@ -81,22 +79,24 @@ func main() {
 	).Run()
 }
 
-func loadConfig() *config.Config {
+// loadConfig returns an error instead of exiting on a fatal misconfiguration,
+// so fx handles the "can't start" case through its normal provider-error path
+// (clean, testable, no lifecycle hooks left half-run) rather than the process
+// exiting mid-construction.
+func loadConfig() (*config.Config, error) {
 	var cfg *config.Config
 
 	if path := os.Getenv("PAD_CONFIG"); path != "" {
 		// Raw load so Key Vault resolution can happen before validation.
 		c, err := config.LoadRaw(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to load config from %s: %v\n", path, err)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to load config from %s: %w", path, err)
 		}
 		cfg = c
 	} else if os.Getenv("PAD_MODE") != "" || os.Getenv("PAD_PORT") != "" {
 		c, err := config.LoadFromEnvRaw()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid env config: %v\n", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("invalid env config: %w", err)
 		}
 		cfg = c
 	} else {
@@ -114,11 +114,10 @@ func loadConfig() *config.Config {
 	}
 
 	if err := config.Validate(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 func provideShutdownCh() chan struct{} {
@@ -213,7 +212,20 @@ func providePadCloudAuth(cfg *config.Config, backend storageif.StorageBackend) *
 	if pc.TenantID == "" || pc.ClientID == "" || pc.DataverseURL == "" || pc.IngestInterval == "" {
 		return nil
 	}
-	return padcloud.NewAuthenticator(pc.TenantID, pc.ClientID, pc.Scope, nil)
+	// DB-backed token store so the token (access + refresh) survives process
+	// restarts. Without this, every restart loses auth and requires manual
+	// re-approval of the device-code flow. Tokens are encrypted at rest with
+	// the same key selection as the provider keystore (dedicated encryption
+	// key, falling back to the auth secret).
+	var store padcloud.TokenStore
+	if sqlBackend, ok := backend.(storagedb.SQLProvider); ok {
+		encKey := cfg.Auth.EncryptionKey
+		if encKey == "" {
+			encKey = cfg.Auth.Secret
+		}
+		store = padcloud.NewDBTokenStore(sqlBackend.DB(), []byte(encKey))
+	}
+	return padcloud.NewAuthenticator(pc.TenantID, pc.ClientID, pc.Scope, nil, store)
 }
 
 // provideIngester wires the optional Power Platform (PAD-cloud) connector.
@@ -240,7 +252,7 @@ func provideIngester(auth *padcloud.Authenticator, cfg *config.Config, backend s
 
 // initIngester starts/stops the periodic PAD-cloud ingest loop. No-op when the
 // connector isn't configured (nil ingester) or the interval is invalid.
-func initIngester(lc fx.Lifecycle, ing *padcloud.Ingester, cfg *config.Config) {
+func initIngester(lc fx.Lifecycle, ing *padcloud.Ingester, auth *padcloud.Authenticator, cfg *config.Config) {
 	if ing == nil {
 		return
 	}
@@ -249,7 +261,14 @@ func initIngester(lc fx.Lifecycle, ing *padcloud.Ingester, cfg *config.Config) {
 		return
 	}
 	lc.Append(fx.Hook{
-		OnStart: func(context.Context) error {
+		OnStart: func(ctx context.Context) error {
+			// Restore the persisted token so a restart doesn't lose auth and
+			// require manual re-approval of the device-code flow.
+			if auth != nil {
+				if err := auth.LoadCachedToken(ctx); err != nil {
+					logger.Warn("padcloud: failed to load cached token — manual re-auth may be needed", "error", err)
+				}
+			}
 			logger.Info("starting Power Platform connector (experimental)", "interval", interval)
 			ing.Start(interval)
 			return nil
@@ -323,12 +342,11 @@ func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 	})
 }
 
-func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) *auth.Manager {
+func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) (*auth.Manager, error) {
 	token := cfg.Auth.Secret
 	if token == "" {
 		if cfg.Mode == config.ModeCloud && cfg.Auth.Enabled {
-			fmt.Fprintln(os.Stderr, "fatal: PAD_AUTH_SECRET must be set in cloud mode (auto-generation disabled)")
-			os.Exit(1)
+			return nil, fmt.Errorf("fatal: PAD_AUTH_SECRET must be set in cloud mode (auto-generation disabled)")
 		}
 		token = uuid.NewString()
 		cfg.Auth.Secret = token
@@ -336,8 +354,8 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 
 	var blacklist auth.BlacklistStore
 	if cfg.Auth.Enabled {
-		if pgBackend, ok := backend.(*storagedb.PostgresStorageBackend); ok && pgBackend != nil {
-			pgBl := storagedb.NewPostgresBlacklist(pgBackend.DB())
+		if sqlBackend, ok := backend.(storagedb.SQLProvider); ok && sqlBackend != nil {
+			pgBl := storagedb.NewPostgresBlacklist(sqlBackend.DB())
 			blacklist = pgBl
 			lc.Append(fx.Hook{
 				OnStop: func(ctx context.Context) error {
@@ -357,7 +375,7 @@ func provideAuthManager(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 		}
 	}
 
-	return auth.NewManager(token, blacklist)
+	return auth.NewManager(token, blacklist), nil
 }
 
 func provideOrgService(backend storageif.StorageBackend) *collaboration.OrgService {
@@ -418,9 +436,9 @@ type StorageResult struct {
 	Backend storageif.StorageBackend
 }
 
-func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
+func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, error) {
 	if cfg.Storage.Backend != config.StorageDatabase {
-		return StorageResult{Backend: nil}
+		return StorageResult{Backend: nil}, nil
 	}
 
 	// Build pool config, applying operator overrides from PAD_DB_* env vars.
@@ -445,16 +463,14 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 	if cfg.Storage.DBConnMaxLifetime != "" {
 		d, err := time.ParseDuration(cfg.Storage.DBConnMaxLifetime)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid PAD_DB_CONN_MAX_LIFETIME %q: %v\n", cfg.Storage.DBConnMaxLifetime, err)
-			os.Exit(1)
+			return StorageResult{}, fmt.Errorf("invalid PAD_DB_CONN_MAX_LIFETIME %q: %w", cfg.Storage.DBConnMaxLifetime, err)
 		}
 		dbCfg.ConnMaxLifetime = d
 	}
 	if cfg.Storage.DBConnMaxIdleTime != "" {
 		d, err := time.ParseDuration(cfg.Storage.DBConnMaxIdleTime)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid PAD_DB_CONN_MAX_IDLE_TIME %q: %v\n", cfg.Storage.DBConnMaxIdleTime, err)
-			os.Exit(1)
+			return StorageResult{}, fmt.Errorf("invalid PAD_DB_CONN_MAX_IDLE_TIME %q: %w", cfg.Storage.DBConnMaxIdleTime, err)
 		}
 		dbCfg.ConnMaxIdleTime = d
 	}
@@ -471,8 +487,7 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 
 	pgBackend, err := storagedb.New(context.Background(), dbCfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to connect to database: %v\n", err)
-		os.Exit(1)
+		return StorageResult{}, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	poolStop := make(chan struct{})
@@ -498,23 +513,46 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) StorageResult {
 		},
 	})
 
-	return StorageResult{Backend: pgBackend}
+	return StorageResult{Backend: pgBackend}, nil
 }
 
-func initStorageSecrets(cfg *config.Config, backend storageif.StorageBackend) {
+// provideKeyStore builds the provider-API-key secret store: an encrypted,
+// database-backed keystore in cloud+database mode (preferring a dedicated
+// PAD_ENCRYPTION_KEY over PAD_AUTH_SECRET so rotating the JWT secret doesn't
+// brick stored provider keys), falling back to the OS-keychain default
+// everywhere else — including cloud+database mode with no encryption key
+// configured, matching the historical behavior.
+//
+// This is a plain fx provider (not an Invoke that mutates a package-level
+// global) so cloud-mode secret storage no longer depends on fx *invoke*
+// ordering: every consumer gets the same DAG-resolved value regardless of
+// when it's first needed, and a construction failure surfaces as a normal fx
+// provider error instead of an inline os.Exit.
+func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (service.KeyStore, error) {
 	if cfg.Storage.Backend != config.StorageDatabase || backend == nil {
-		return
+		return storage.NewKeyringSecretStore(), nil
 	}
-	pgBackend := backend.(*storagedb.PostgresStorageBackend)
-	if cfg.Auth.Secret != "" {
-		ks, err := pgBackend.NewEncryptedKeyStore([]byte(cfg.Auth.Secret))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to init encrypted keystore: %v\n", err)
-			os.Exit(1)
+	ksBackend, ok := backend.(storagedb.KeyStoreProvider)
+	if !ok {
+		return storage.NewKeyringSecretStore(), nil
+	}
+	encKey := cfg.Auth.EncryptionKey
+	if encKey == "" {
+		if cfg.Auth.Secret != "" {
+			encKey = cfg.Auth.Secret
+			logger.Warn("PAD_ENCRYPTION_KEY unset — falling back to PAD_AUTH_SECRET for keystore. " +
+				"Set a dedicated PAD_ENCRYPTION_KEY so rotating the JWT secret doesn't brick stored provider keys.")
 		}
-		storage.SetSecretStore(ks)
-		logger.Info("encrypted database keystore enabled")
 	}
+	if encKey == "" {
+		return storage.NewKeyringSecretStore(), nil
+	}
+	ks, err := ksBackend.NewEncryptedKeyStore([]byte(encKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to init encrypted keystore: %w", err)
+	}
+	logger.Info("encrypted database keystore enabled")
+	return ks, nil
 }
 
 func initAuditPool(lc fx.Lifecycle, backend storageif.StorageBackend) {
@@ -527,61 +565,12 @@ func initAuditPool(lc fx.Lifecycle, backend storageif.StorageBackend) {
 	})
 }
 
+// startServer builds the full request-handling middleware stack (via
+// api.BuildHandler — see internal/api/middleware_chain.go for the complete,
+// resolved layer order), binds a listener, and registers the fx lifecycle
+// hooks that start/stop the HTTP server.
 func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService, redisClient *redis.Client) {
-	var routerWithLimits http.Handler = router
-	var rateLimiters []*apimw.RateLimiter
-
-	if cfg.Mode == config.ModeCloud {
-		// When the Redis backplane is configured, build the limiters on the
-		// shared store so the effective limit does not scale with replica count
-		// (#1). Otherwise each limiter is in-process (correct for single-replica).
-		newRL := func(rps, burst float64) *apimw.RateLimiter {
-			return apimw.NewRateLimiterRedis(redisClient, rps, burst, cfg.Server.TrustedProxies)
-		}
-		generalRl := newRL(cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst).SetGroup("general")
-		authRl := newRL(cfg.Runtime.RateLimitAuthRPS, cfg.Runtime.RateLimitAuthBurst).SetGroup("auth")
-		analysisRl := newRL(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst).SetGroup("analysis")
-		chatRl := newRL(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst).SetGroup("chat")
-		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup("upload")
-		if redisClient != nil {
-			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL != "")
-		}
-		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl)
-
-		// rateLimitersByGroup maps the rateLimitGroup classifier to its limiter
-		// so the per-request dispatch is a single lookup.
-		rateLimitersByGroup := map[string]*apimw.RateLimiter{
-			"general":  generalRl,
-			"auth":     authRl,
-			"analysis": analysisRl,
-			"chat":     chatRl,
-			"upload":   uploadRl,
-		}
-
-		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rl, ok := rateLimitersByGroup[rateLimitGroup(r.Method, r.URL.Path)]
-			if !ok {
-				rl = generalRl
-			}
-			rl.Limit(router).ServeHTTP(w, r)
-		})
-	}
-
-	timeoutDur := 30 * time.Second
-	if d, err := time.ParseDuration(cfg.Runtime.RequestTimeout); err == nil {
-		timeoutDur = d
-	}
-
-	handler := otelhttp.NewHandler(
-		apimw.Recovery(
-			apimw.RequestTimeout(timeoutDur)(
-				apimw.Compress(
-					apimw.AccessLog(cfg.Server.TrustedProxies)(apimw.Metrics(routerWithLimits)),
-				),
-			),
-		),
-		"http.server",
-	)
+	handler, rateLimiters := api.BuildHandler(router, cfg, redisClient)
 
 	var listener net.Listener
 	var err error
@@ -681,58 +670,6 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			return server.Shutdown(shutdownCtx)
 		},
 	})
-}
-
-// Rate-limit group labels returned by rateLimitGroup. Kept as unexported consts
-// (not string-typed enums) because they double as the limiter's group name in
-// metrics/logs.
-const (
-	rlGroupAuth     = "auth"
-	rlGroupAnalysis = "analysis"
-	rlGroupChat     = "chat"
-	rlGroupUpload   = "upload"
-	rlGroupGeneral  = "general"
-)
-
-// authRateLimitPaths is the set of auth-shaped endpoints that share the tighter
-// auth rate-limit bucket. It deliberately includes the password-recovery
-// endpoints (forgot-password / reset-password): those send email and run bcrypt
-// on the reset path, so leaving them on the looser "general" bucket enabled
-// email-flooding / SMTP cost amplification by attackers rotating source IPs.
-var authRateLimitPaths = map[string]struct{}{
-	"/api/auth/login":           {},
-	"/api/auth/refresh":         {},
-	"/api/auth/register":        {},
-	"/api/auth/change-password": {},
-	"/api/auth/forgot-password": {},
-	"/api/auth/reset-password":  {},
-	// verify-email and sso/exchange are unauthenticated, token-consuming
-	// credential endpoints; keep them on the tighter auth bucket rather than the
-	// looser general one so they can't be flooded by rotating source IPs.
-	"/api/auth/verify-email": {},
-	"/api/auth/sso/exchange": {},
-}
-
-// rateLimitGroup classifies a request into its rate-limit group. It is a pure
-// function (no I/O) so the routing policy can be unit-tested independently of
-// the fx wiring. Order matters only in that the explicit checks take precedence
-// over the general fallback.
-func rateLimitGroup(method, path string) string {
-	if _, ok := authRateLimitPaths[path]; ok {
-		return rlGroupAuth
-	}
-	if method == "POST" {
-		if strings.HasPrefix(path, "/api/analysis/") {
-			return rlGroupAnalysis
-		}
-		if path == "/api/chat/stream" {
-			return rlGroupChat
-		}
-		if path == "/api/flow/upload" {
-			return rlGroupUpload
-		}
-	}
-	return rlGroupGeneral
 }
 
 // writeSessionSecret persists the auto-generated JWT signing secret to a 0600

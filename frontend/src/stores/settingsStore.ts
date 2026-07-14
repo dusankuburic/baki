@@ -1,9 +1,14 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {
-  AppSettings, ProviderID, AIProviderConfig,
-  AppearanceSettings, LayoutSettings, AISettings,
-  GeneralSettings, ParserSettings,
+  AppSettings,
+  ProviderID,
+  AIProviderConfig,
+  AppearanceSettings,
+  LayoutSettings,
+  AISettings,
+  GeneralSettings,
+  ParserSettings,
 } from '@/types'
 
 import {settingsApi} from '@/api'
@@ -112,30 +117,26 @@ export const defaultSettings: AppSettings = {
     dailyBudget: 5.0,
     prompts: {
       block: [
-        "Explain this block",
-        "Find issues here",
-        "Suggest improvements",
-        "What does this block do?",
-        "Could this block cause errors?",
+        'Explain this block',
+        'Find issues here',
+        'Suggest improvements',
+        'What does this block do?',
+        'Could this block cause errors?',
       ],
       flow: [
-        "Analyze the whole flow",
-        "Find performance issues",
-        "Security audit",
-        "Find potential bugs",
-        "Summarize what this flow does",
+        'Analyze the whole flow',
+        'Find performance issues',
+        'Security audit',
+        'Find potential bugs',
+        'Summarize what this flow does',
       ],
-      finding: [
-        "How do I fix this issue?",
-        "Is this a false positive?",
-        "Show me similar patterns in the flow",
-      ],
+      finding: ['How do I fix this issue?', 'Is this a false positive?', 'Show me similar patterns in the flow'],
       blockWithFindings: [
-        "How do I fix the issues on this block?",
-        "Are these findings related?",
-        "Is this a false positive?",
-        "Show me similar patterns in the flow",
-        "Explain what this block does",
+        'How do I fix the issues on this block?',
+        'Are these findings related?',
+        'Is this a false positive?',
+        'Show me similar patterns in the flow',
+        'Explain what this block does',
       ],
     },
   },
@@ -194,13 +195,16 @@ async function persist(settings: AppSettings): Promise<void> {
     persistTimer = setTimeout(() => {
       persistTimer = null
       resolveSuperseded = null
-      inflightPromise = settingsApi.updateSettings(settings)
+      inflightPromise = settingsApi
+        .updateSettings(settings)
         .then(() => resolve())
-        .catch((err) => {
+        .catch(err => {
           logger.warn('Failed to persist settings', err)
           reject(err)
         })
-        .finally(() => { inflightPromise = null })
+        .finally(() => {
+          inflightPromise = null
+        })
     }, 1000)
   })
 }
@@ -218,126 +222,128 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   }
 
   return {
-  settings: defaultSettings,
-  isLoaded: false,
+    settings: defaultSettings,
+    isLoaded: false,
 
-  loadFromBackend: async () => {
-    try {
-      const loaded = await settingsApi.getSettings()
-      if (loaded) {
-        // Deep-merge server response with defaults so Go zero-values (0 for
-        // int fields, "" for strings) don't clobber the frontend defaults that
-        // guarantee a usable experience on first run. Each scalar with a
-        // non-zero default gets an explicit || fallback.
-        const merged: AppSettings = {
-          ...defaultSettings,
-          ...loaded,
-          general: {
-            ...defaultSettings.general,
-            ...loaded.general,
-            checkForUpdates: loaded.general?.checkForUpdates || defaultSettings.general.checkForUpdates,
-          },
-          appearance: {
-            ...defaultSettings.appearance,
-            ...loaded.appearance,
-            theme:    loaded.appearance?.theme    || defaultSettings.appearance.theme,
-            density:  loaded.appearance?.density  || defaultSettings.appearance.density,
-            codeFont: loaded.appearance?.codeFont || defaultSettings.appearance.codeFont,
-            uiFont:   loaded.appearance?.uiFont   || defaultSettings.appearance.uiFont,
-          },
-          parser: {
-            ...defaultSettings.parser,
-            ...loaded.parser,
-            maxFileSizeMB:   loaded.parser?.maxFileSizeMB   || defaultSettings.parser.maxFileSizeMB,
-            spacesPerIndent: loaded.parser?.spacesPerIndent || defaultSettings.parser.spacesPerIndent,
-          },
-          layout: {
-            ...defaultSettings.layout,
-            ...loaded.layout,
-            sidebarWidth:           loaded.layout?.sidebarWidth           || defaultSettings.layout.sidebarWidth,
-            inspectorWidth:         loaded.layout?.inspectorWidth         || defaultSettings.layout.inspectorWidth,
-            lastActiveInspectorTab: loaded.layout?.lastActiveInspectorTab || defaultSettings.layout.lastActiveInspectorTab,
-            lastViewMode:           loaded.layout?.lastViewMode           || defaultSettings.layout.lastViewMode,
-          },
-          ai: {
-            ...defaultSettings.ai,
-            ...loaded.ai,
-            activeProvider:    loaded.ai?.activeProvider    || defaultSettings.ai.activeProvider,
-            embeddingProvider: loaded.ai?.embeddingProvider || defaultSettings.ai.embeddingProvider,
-            dailyBudget:       loaded.ai?.dailyBudget       || defaultSettings.ai.dailyBudget,
-            providers: {
-              ...defaultSettings.ai.providers,
-              ...(loaded.ai?.providers ?? {}),
+    loadFromBackend: async () => {
+      try {
+        const loaded = await settingsApi.getSettings()
+        if (loaded) {
+          // Deep-merge server response with defaults so Go zero-values (0 for
+          // int fields, "" for strings) don't clobber the frontend defaults that
+          // guarantee a usable experience on first run. Each scalar with a
+          // non-zero default gets an explicit || fallback.
+          const merged: AppSettings = {
+            ...defaultSettings,
+            ...loaded,
+            general: {
+              ...defaultSettings.general,
+              ...loaded.general,
+              checkForUpdates: loaded.general?.checkForUpdates || defaultSettings.general.checkForUpdates,
             },
-            demoMode: {
-              ...defaultSettings.ai.demoMode,
-              ...(loaded.ai?.demoMode ?? {}),
-              dailyLimit: loaded.ai?.demoMode?.dailyLimit || defaultSettings.ai.demoMode.dailyLimit,
+            appearance: {
+              ...defaultSettings.appearance,
+              ...loaded.appearance,
+              theme: loaded.appearance?.theme || defaultSettings.appearance.theme,
+              density: loaded.appearance?.density || defaultSettings.appearance.density,
+              codeFont: loaded.appearance?.codeFont || defaultSettings.appearance.codeFont,
+              uiFont: loaded.appearance?.uiFont || defaultSettings.appearance.uiFont,
             },
-            prompts: {
-              block:             loaded.ai?.prompts?.block             ?? defaultSettings.ai.prompts.block,
-              flow:              loaded.ai?.prompts?.flow              ?? defaultSettings.ai.prompts.flow,
-              finding:           loaded.ai?.prompts?.finding           ?? defaultSettings.ai.prompts.finding,
-              blockWithFindings: loaded.ai?.prompts?.blockWithFindings ?? defaultSettings.ai.prompts.blockWithFindings,
+            parser: {
+              ...defaultSettings.parser,
+              ...loaded.parser,
+              maxFileSizeMB: loaded.parser?.maxFileSizeMB || defaultSettings.parser.maxFileSizeMB,
+              spacesPerIndent: loaded.parser?.spacesPerIndent || defaultSettings.parser.spacesPerIndent,
             },
-          },
-          analysis: {
-            ...defaultSettings.analysis,
-            ...loaded.analysis,
-            rules: {
-              ...defaultSettings.analysis.rules,
-              ...(loaded.analysis?.rules ?? {}),
+            layout: {
+              ...defaultSettings.layout,
+              ...loaded.layout,
+              sidebarWidth: loaded.layout?.sidebarWidth || defaultSettings.layout.sidebarWidth,
+              inspectorWidth: loaded.layout?.inspectorWidth || defaultSettings.layout.inspectorWidth,
+              lastActiveInspectorTab:
+                loaded.layout?.lastActiveInspectorTab || defaultSettings.layout.lastActiveInspectorTab,
+              lastViewMode: loaded.layout?.lastViewMode || defaultSettings.layout.lastViewMode,
             },
-          },
+            ai: {
+              ...defaultSettings.ai,
+              ...loaded.ai,
+              activeProvider: loaded.ai?.activeProvider || defaultSettings.ai.activeProvider,
+              embeddingProvider: loaded.ai?.embeddingProvider || defaultSettings.ai.embeddingProvider,
+              dailyBudget: loaded.ai?.dailyBudget || defaultSettings.ai.dailyBudget,
+              providers: {
+                ...defaultSettings.ai.providers,
+                ...(loaded.ai?.providers ?? {}),
+              },
+              demoMode: {
+                ...defaultSettings.ai.demoMode,
+                ...(loaded.ai?.demoMode ?? {}),
+                dailyLimit: loaded.ai?.demoMode?.dailyLimit || defaultSettings.ai.demoMode.dailyLimit,
+              },
+              prompts: {
+                block: loaded.ai?.prompts?.block ?? defaultSettings.ai.prompts.block,
+                flow: loaded.ai?.prompts?.flow ?? defaultSettings.ai.prompts.flow,
+                finding: loaded.ai?.prompts?.finding ?? defaultSettings.ai.prompts.finding,
+                blockWithFindings:
+                  loaded.ai?.prompts?.blockWithFindings ?? defaultSettings.ai.prompts.blockWithFindings,
+              },
+            },
+            analysis: {
+              ...defaultSettings.analysis,
+              ...loaded.analysis,
+              rules: {
+                ...defaultSettings.analysis.rules,
+                ...(loaded.analysis?.rules ?? {}),
+              },
+            },
+          }
+          set({settings: merged, isLoaded: true})
+          listeners.forEach(fn => fn(merged))
         }
-        set({settings: merged, isLoaded: true})
-        listeners.forEach(fn => fn(merged))
+      } catch {
+        set({isLoaded: true})
       }
-    } catch {
-      set({isLoaded: true})
-    }
-  },
+    },
 
-  updateSettings: async (patch) => {
-    const prev = get().settings
-    await applyAndPersist({...prev, ...patch}, prev)
-  },
+    updateSettings: async patch => {
+      const prev = get().settings
+      await applyAndPersist({...prev, ...patch}, prev)
+    },
 
-  updateGeneral: async (general) => {
-    const prev = get().settings
-    await applyAndPersist({...prev, general: {...prev.general, ...general}}, prev)
-  },
+    updateGeneral: async general => {
+      const prev = get().settings
+      await applyAndPersist({...prev, general: {...prev.general, ...general}}, prev)
+    },
 
-  updateAppearance: async (appearance) => {
-    const prev = get().settings
-    await applyAndPersist({...prev, appearance: {...prev.appearance, ...appearance}}, prev)
-  },
+    updateAppearance: async appearance => {
+      const prev = get().settings
+      await applyAndPersist({...prev, appearance: {...prev.appearance, ...appearance}}, prev)
+    },
 
-  updateParser: async (parser) => {
-    const prev = get().settings
-    await applyAndPersist({...prev, parser: {...prev.parser, ...parser}}, prev)
-  },
+    updateParser: async parser => {
+      const prev = get().settings
+      await applyAndPersist({...prev, parser: {...prev.parser, ...parser}}, prev)
+    },
 
-  updateLayout: async (layout) => {
-    const prev = get().settings
-    await applyAndPersist({...prev, layout: {...prev.layout, ...layout}}, prev)
-  },
+    updateLayout: async layout => {
+      const prev = get().settings
+      await applyAndPersist({...prev, layout: {...prev.layout, ...layout}}, prev)
+    },
 
-  updateAI: async (ai) => {
-    const prev = get().settings
-    await applyAndPersist({...prev, ai: {...prev.ai, ...ai}}, prev)
-  },
+    updateAI: async ai => {
+      const prev = get().settings
+      await applyAndPersist({...prev, ai: {...prev.ai, ...ai}}, prev)
+    },
 
-  updateProvider: async (id, config) => {
-    const prev = get().settings
-    const providers = {...prev.ai.providers, [id]: {...prev.ai.providers[id], ...config}}
-    await applyAndPersist({...prev, ai: {...prev.ai, providers}}, prev)
-  },
+    updateProvider: async (id, config) => {
+      const prev = get().settings
+      const providers = {...prev.ai.providers, [id]: {...prev.ai.providers[id], ...config}}
+      await applyAndPersist({...prev, ai: {...prev.ai, providers}}, prev)
+    },
 
-  resetToDefaults: async () => {
-    const prev = get().settings
-    await applyAndPersist(defaultSettings, prev)
-  },
+    resetToDefaults: async () => {
+      const prev = get().settings
+      await applyAndPersist(defaultSettings, prev)
+    },
   }
 })
 

@@ -24,28 +24,28 @@ export default function AIPromptsPanel() {
           title="Flow Context"
           description="Shown when analyzing the entire flow without a specific block selected."
           items={p.flow}
-          onChange={(newItems) => updateAI({prompts: {...p, flow: newItems}})}
+          onChange={newItems => updateAI({prompts: {...p, flow: newItems}})}
         />
 
         <PromptList
           title="Block Context"
           description="Shown when a specific block is selected."
           items={p.block}
-          onChange={(newItems) => updateAI({prompts: {...p, block: newItems}})}
+          onChange={newItems => updateAI({prompts: {...p, block: newItems}})}
         />
 
         <PromptList
           title="Finding Context"
           description="Shown when viewing a specific analysis finding."
           items={p.finding}
-          onChange={(newItems) => updateAI({prompts: {...p, finding: newItems}})}
+          onChange={newItems => updateAI({prompts: {...p, finding: newItems}})}
         />
 
         <PromptList
           title="Block + Findings Context"
           description="Shown when selecting a block that has active analysis findings."
           items={p.blockWithFindings}
-          onChange={(newItems) => updateAI({prompts: {...p, blockWithFindings: newItems}})}
+          onChange={newItems => updateAI({prompts: {...p, blockWithFindings: newItems}})}
         />
       </div>
     </div>
@@ -59,9 +59,24 @@ function reorder(arr: string[], from: number, to: number): string[] {
   return next
 }
 
-function PromptList({title, description, items, onChange}: {title: string, description: string, items: string[] | null | undefined, onChange: (items: string[]) => void}) {
+function PromptList({
+  title,
+  description,
+  items,
+  onChange,
+}: {
+  title: string
+  description: string
+  items: string[] | null | undefined
+  onChange: (items: string[]) => void
+}) {
   const [newItemText, setNewItemText] = useState('')
   const [dropIndex, setDropIndex] = useState<number | null>(null)
+  // Row index whose drag is "armed" by pressing the grip handle. Rows must not
+  // be permanently draggable: a draggable row containing a text input breaks
+  // mouse text-selection inside it (the browser starts an element drag
+  // instead — WebKitGTK, the Tauri Linux webview, does so after ~1px).
+  const [dragArmed, setDragArmed] = useState<number | null>(null)
   // Tolerate a null/undefined list (legacy settings) so add/remove/edit and the
   // render below never spread or map over a non-array.
   const list = items ?? []
@@ -96,9 +111,16 @@ function PromptList({title, description, items, onChange}: {title: string, descr
         {list.map((item, i) => (
           <div
             key={i}
-            draggable
-            onDragStart={e => { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move' }}
-            onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropIndex(i) }}
+            draggable={dragArmed === i}
+            onDragStart={e => {
+              e.dataTransfer.setData('text/plain', String(i))
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onDragOver={e => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              setDropIndex(i)
+            }}
             onDragLeave={() => setDropIndex(null)}
             onDrop={e => {
               e.preventDefault()
@@ -106,18 +128,25 @@ function PromptList({title, description, items, onChange}: {title: string, descr
               if (!isNaN(from) && from !== i) onChange(reorder(list, from, i))
               setDropIndex(null)
             }}
-            onDragEnd={() => setDropIndex(null)}
+            onDragEnd={() => {
+              setDropIndex(null)
+              setDragArmed(null)
+            }}
+            onMouseUp={() => setDragArmed(null)}
             className={clsx(
               'flex items-center gap-2 group p-1 rounded transition-colors',
-              dropIndex === i && 'border-t-2 border-brand-400'
+              dropIndex === i && 'border-t-2 border-brand-400',
             )}
           >
-            <GripVertical className="w-4 h-4 text-text-tertiary cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100" />
+            <GripVertical
+              onMouseDown={() => setDragArmed(i)}
+              className="w-4 h-4 text-text-tertiary cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100"
+            />
             <input
               type="text"
               className="flex-1 bg-transparent border border-transparent hover:border-border-default focus:border-brand-500 focus:bg-surface-1 rounded px-2 py-1 text-sm text-text-primary outline-none transition-colors"
               value={item}
-              onChange={(e) => handleEdit(i, e.target.value)}
+              onChange={e => handleEdit(i, e.target.value)}
             />
             <button
               onClick={() => handleRemove(i)}
@@ -135,7 +164,7 @@ function PromptList({title, description, items, onChange}: {title: string, descr
             className="flex-1 bg-surface-3 border border-border-default rounded px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500 placeholder:text-text-tertiary"
             placeholder="Add a new suggested prompt..."
             value={newItemText}
-            onChange={(e) => setNewItemText(e.target.value)}
+            onChange={e => setNewItemText(e.target.value)}
           />
           <button
             type="submit"

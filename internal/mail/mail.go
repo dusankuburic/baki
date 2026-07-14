@@ -131,14 +131,25 @@ func (m *smtpMailer) deliver(c *smtp.Client, auth smtp.Auth, to string, msg []by
 }
 
 func (m *smtpMailer) sendImplicitTLS(ctx context.Context, addr string, auth smtp.Auth, to string, msg []byte) error {
+	// DialContext (not tls.DialWithDialer, which ignores ctx) so a cancelled
+	// request aborts the dial early instead of riding out the 10s timeout —
+	// mirroring sendSTARTTLS below.
 	d := net.Dialer{Timeout: 10 * time.Second}
-	conn, err := tls.DialWithDialer(&d, "tcp", addr, &tls.Config{
+	rawConn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("mail: dial %s: %w", addr, err)
+	}
+	conn := tls.Client(rawConn, &tls.Config{
 		ServerName: m.cfg.SMTPHost,
 		MinVersion: tls.VersionTLS12, // gosec G402: refuse to negotiate below TLS 1.2
 		NextProtos: []string{"smtp"},
 	})
-	if err != nil {
-		return fmt.Errorf("mail: tls dial %s: %w", addr, err)
+	// The deadline additionally bounds a peer that accepts TCP but stalls the
+	// TLS handshake; HandshakeContext honors ctx cancellation.
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := conn.HandshakeContext(ctx); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("mail: tls handshake %s: %w", addr, err)
 	}
 	c, err := smtp.NewClient(conn, m.cfg.SMTPHost)
 	if err != nil {
@@ -161,6 +172,12 @@ func (m *smtpMailer) sendSTARTTLS(ctx context.Context, addr string, auth smtp.Au
 	if err != nil {
 		return fmt.Errorf("mail: dial %s: %w", addr, err)
 	}
+	// Bound the pre-TLS SMTP exchange (server greeting, EHLO, STARTTLS
+	// handshake). The smtp library doesn't accept a context, so without a
+	// deadline a relay that accepts TCP but then stalls on EHLO/STARTTLS would
+	// hang the caller until the OS TCP timeout (minutes) — under password-reset
+	// / invite traffic that exhausts goroutines. Mirrors sendImplicitTLS.
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	c, err := smtp.NewClient(conn, m.cfg.SMTPHost)
 	if err != nil {
 		_ = conn.Close()
@@ -181,7 +198,7 @@ func (m *smtpMailer) sendSTARTTLS(ctx context.Context, addr string, auth smtp.Au
 	}); err != nil {
 		return fmt.Errorf("mail: starttls: %w", err)
 	}
-	// Bound the SMTP exchange so a stalled relay can't hang the caller.
+	// Reset to the longer operational deadline for the authenticated exchange.
 	_ = conn.SetDeadline(time.Now().Add(smtpOpTimeout))
 	return m.deliver(c, auth, to, msg)
 }

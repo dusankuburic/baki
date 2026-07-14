@@ -5,39 +5,11 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/testutil"
 	"pad-core/models"
 )
 
-// fakeSecretStore is a per-(scope,provider) in-memory SecretStore for testing
-// per-user key isolation.
-type fakeSecretStore struct {
-	keys map[string]string
-}
-
-func newFakeSecretStore() *fakeSecretStore {
-	return &fakeSecretStore{keys: map[string]string{}}
-}
-
-func (s *fakeSecretStore) Save(scope, provider, key string) error {
-	s.keys[scope+"|"+provider] = key
-	return nil
-}
-
-func (s *fakeSecretStore) Get(scope, provider string) (string, error) {
-	return s.keys[scope+"|"+provider], nil
-}
-
-func (s *fakeSecretStore) Has(scope, provider string) (bool, error) {
-	_, ok := s.keys[scope+"|"+provider]
-	return ok, nil
-}
-
-func (s *fakeSecretStore) Delete(scope, provider string) error {
-	delete(s.keys, scope+"|"+provider)
-	return nil
-}
-
-func newProviderServiceWithFakeSecrets(t *testing.T, secrets *fakeSecretStore) *ProviderService {
+func newProviderServiceWithFakeSecrets(t *testing.T, secrets *testutil.FakeSecretStore) *ProviderService {
 	t.Helper()
 	getKey := func(scope, provider string) (string, error) {
 		v, _ := secrets.Get(scope, provider)
@@ -51,7 +23,7 @@ func newProviderServiceWithFakeSecrets(t *testing.T, secrets *fakeSecretStore) *
 // OAuth token stored under a user's scope marks the provider configured for that
 // user only — not for other users or the global scope.
 func TestListProviders_GithubModels_PerUserConfigured(t *testing.T) {
-	secrets := newFakeSecretStore()
+	secrets := testutil.NewFakeSecretStore()
 	if err := secrets.Save("u1", "github-models-token", "gho_u1"); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +49,7 @@ func TestListProviders_GithubModels_PerUserConfigured(t *testing.T) {
 // TestListProviders_Copilot_PerUserConfigured verifies the copilot OAuth token is
 // resolved per-user.
 func TestListProviders_Copilot_PerUserConfigured(t *testing.T) {
-	secrets := newFakeSecretStore()
+	secrets := testutil.NewFakeSecretStore()
 	if err := secrets.Save("u1", "copilot-oauth-token", "gho_u1"); err != nil {
 		t.Fatal(err)
 	}

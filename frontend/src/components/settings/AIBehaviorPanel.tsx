@@ -14,16 +14,14 @@ export default function AIBehaviorPanel() {
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">AI Behavior</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">
-        Configure how AI assistants interact with your flows.
-      </p>
+      <p className="text-sm text-text-secondary mt-1 mb-6">Configure how AI assistants interact with your flows.</p>
 
       <div className="space-y-8">
         <div>
           <label className="text-sm font-medium text-text-primary block mb-3">Active Assistant</label>
           <SegmentedControl
             value={activeProvider}
-            onChange={(v) => updateAI({activeProvider: v as ProviderID})}
+            onChange={v => updateAI({activeProvider: v as ProviderID})}
             options={[
               {value: 'claude', label: 'Claude'},
               {value: 'openai', label: 'OpenAI'},
@@ -40,31 +38,24 @@ export default function AIBehaviorPanel() {
           <label className="text-sm font-medium text-text-primary block mb-3">Embedding Assistant</label>
           <SegmentedControl
             value={ai.embeddingProvider}
-            onChange={(v) => updateAI({embeddingProvider: v as ProviderID})}
+            onChange={v => updateAI({embeddingProvider: v as ProviderID})}
             options={[
               {value: 'openai', label: 'OpenAI'},
               {value: 'gemini', label: 'Gemini'},
             ]}
           />
-          <p className="text-xs text-text-tertiary mt-2">
-            Provider used to index and search your Knowledge Base.
-          </p>
+          <p className="text-xs text-text-tertiary mt-2">Provider used to index and search your Knowledge Base.</p>
         </div>
 
         <div className="space-y-4 pt-2">
           <label className="text-sm font-medium text-text-primary block">History & Costs</label>
-          
+
           <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
             <div>
               <span className="text-sm font-medium text-text-primary">Save Conversation History</span>
-              <p className="text-xs text-text-tertiary mt-0.5">
-                Keep a local record of your AI chats per flow.
-              </p>
+              <p className="text-xs text-text-tertiary mt-0.5">Keep a local record of your AI chats per flow.</p>
             </div>
-            <Switch
-              checked={ai.saveConversationHistory}
-              onChange={(v) => updateAI({saveConversationHistory: v})}
-            />
+            <Switch checked={ai.saveConversationHistory} onChange={v => updateAI({saveConversationHistory: v})} />
           </div>
 
           <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
@@ -74,10 +65,7 @@ export default function AIBehaviorPanel() {
                 Display estimated token usage and costs for each request.
               </p>
             </div>
-            <Switch
-              checked={ai.showCostEstimates}
-              onChange={(v) => updateAI({showCostEstimates: v})}
-            />
+            <Switch checked={ai.showCostEstimates} onChange={v => updateAI({showCostEstimates: v})} />
           </div>
 
           <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
@@ -94,7 +82,7 @@ export default function AIBehaviorPanel() {
                 fallback={0}
                 integer={false}
                 value={ai.dailyBudget}
-                onCommit={(v) => updateAI({dailyBudget: v})}
+                onCommit={v => updateAI({dailyBudget: v})}
               />
             </div>
           </div>
@@ -110,9 +98,9 @@ export default function AIBehaviorPanel() {
 
         <div className="pt-2 space-y-6">
           <h3 className="text-base font-semibold text-text-primary mb-1">Advanced Provider Settings</h3>
-          <ProviderAdvancedSettings 
-            config={ai.providers[activeProvider]} 
-            onUpdate={(patch) => updateProvider(activeProvider, patch)}
+          <ProviderAdvancedSettings
+            config={ai.providers[activeProvider]}
+            onUpdate={patch => updateProvider(activeProvider, patch)}
           />
         </div>
       </div>
@@ -142,7 +130,13 @@ function CustomInstructionsInput() {
   )
 }
 
-function ProviderAdvancedSettings({config, onUpdate}: {config: AIProviderConfig; onUpdate: (patch: Partial<AIProviderConfig>) => void}) {
+function ProviderAdvancedSettings({
+  config,
+  onUpdate,
+}: {
+  config: AIProviderConfig
+  onUpdate: (patch: Partial<AIProviderConfig>) => void
+}) {
   if (!config) return null
 
   return (
@@ -156,7 +150,7 @@ function ProviderAdvancedSettings({config, onUpdate}: {config: AIProviderConfig;
           step="0.1"
           className="w-full accent-brand-500"
           value={config.temperature}
-          onChange={(e) => onUpdate({temperature: parseFloat(e.target.value)})}
+          onChange={e => onUpdate({temperature: parseFloat(e.target.value)})}
         />
         <div className="flex justify-between text-2xs text-text-tertiary">
           <span>Precise</span>
@@ -171,7 +165,7 @@ function ProviderAdvancedSettings({config, onUpdate}: {config: AIProviderConfig;
           max={32000}
           fallback={4096}
           value={config.maxTokens}
-          onCommit={(v) => onUpdate({maxTokens: v})}
+          onCommit={v => onUpdate({maxTokens: v})}
         />
       </div>
 
@@ -182,18 +176,16 @@ function ProviderAdvancedSettings({config, onUpdate}: {config: AIProviderConfig;
           max={128000}
           fallback={4000}
           value={config.contextTokenBudget}
-          onCommit={(v) => onUpdate({contextTokenBudget: v})}
+          onCommit={v => onUpdate({contextTokenBudget: v})}
         />
-        <p className="text-2xs text-text-tertiary mt-1">
-          Max tokens used for flow context.
-        </p>
+        <p className="text-2xs text-text-tertiary mt-1">Max tokens used for flow context.</p>
       </div>
 
       <div>
         <label className="text-xs font-medium text-text-secondary block mb-1.5">Default Model ID</label>
         <Input
           value={config.defaultModel}
-          onChange={(e) => onUpdate({defaultModel: e.target.value})}
+          onChange={e => onUpdate({defaultModel: e.target.value})}
           placeholder="e.g. gpt-4o"
         />
       </div>

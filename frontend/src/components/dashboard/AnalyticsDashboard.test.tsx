@@ -36,9 +36,13 @@ beforeEach(() => {
   useSystemStore.setState({
     isLoaded: true,
     info: {
-      version: '1.0.0', platform: 'win32', arch: 'x64', buildDate: '', gitCommit: '',
-      capabilities: { sessionAnalytics: true }
-    }
+      version: '1.0.0',
+      platform: 'win32',
+      arch: 'x64',
+      buildDate: '',
+      gitCommit: '',
+      capabilities: {sessionAnalytics: true},
+    },
   })
 })
 
@@ -52,9 +56,13 @@ describe('AnalyticsDashboard', () => {
 
   it('shows the empty state when nothing has been analyzed', async () => {
     getDashboard.mockResolvedValue({
-      totalFlowsAnalyzed: 0, totalFindings: 0,
-      findingsBySeverity: {}, findingsByCategory: {}, findingsByRule: {},
-      avgHealthScore: 0, topProblemFlows: [],
+      totalFlowsAnalyzed: 0,
+      totalFindings: 0,
+      findingsBySeverity: {},
+      findingsByCategory: {},
+      findingsByRule: {},
+      avgHealthScore: 0,
+      topProblemFlows: [],
     })
     renderDash()
     expect(await screen.findByText(/No analyses yet/)).toBeInTheDocument()
@@ -62,7 +70,8 @@ describe('AnalyticsDashboard', () => {
 
   it('renders stats, rule bars, and problem flows', async () => {
     getDashboard.mockResolvedValue({
-      totalFlowsAnalyzed: 3, totalFindings: 12,
+      totalFlowsAnalyzed: 3,
+      totalFindings: 12,
       findingsBySeverity: {error: 2, warning: 7, info: 3},
       findingsByCategory: {Reliability: 8, Style: 4},
       findingsByRule: {'missing-timeout': 5, 'unused-variable': 4},
@@ -80,9 +89,13 @@ describe('AnalyticsDashboard', () => {
   it('shows a notice when session analytics are disabled and does not fetch', () => {
     useSystemStore.setState({
       info: {
-        version: '1.0.0', platform: 'win32', arch: 'x64', buildDate: '', gitCommit: '',
-        capabilities: { sessionAnalytics: false }
-      }
+        version: '1.0.0',
+        platform: 'win32',
+        arch: 'x64',
+        buildDate: '',
+        gitCommit: '',
+        capabilities: {sessionAnalytics: false},
+      },
     })
     renderDash()
     expect(screen.getByText(/not available in this mode/)).toBeInTheDocument()
@@ -91,21 +104,31 @@ describe('AnalyticsDashboard', () => {
 
   it('runs batch analysis and renders per-file error rows', async () => {
     getDashboard.mockResolvedValue({
-      totalFlowsAnalyzed: 0, totalFindings: 0,
-      findingsBySeverity: {}, findingsByCategory: {}, findingsByRule: {},
-      avgHealthScore: 0, topProblemFlows: [],
+      totalFlowsAnalyzed: 0,
+      totalFindings: 0,
+      findingsBySeverity: {},
+      findingsByCategory: {},
+      findingsByRule: {},
+      avgHealthScore: 0,
+      topProblemFlows: [],
     })
     fileOpenDirectory.mockResolvedValue('C:/flows')
     batchAnalyze.mockResolvedValue({
       results: [
         {
-          flowId: 'a', flowName: 'good.txt',
+          flowId: 'a',
+          flowName: 'good.txt',
           report: {flowId: 'a', findings: [], stats: {errors: 1, warnings: 2, info: 0}, metrics: {healthScore: 84}},
         },
         {flowId: '', flowName: 'broken.txt', report: null, error: 'no flow content found'},
       ],
-      totalFlows: 2, totalFindings: 3, totalErrors: 1, totalWarnings: 2, totalInfo: 0,
-      avgHealthScore: 84, durationMs: 5,
+      totalFlows: 2,
+      totalFindings: 3,
+      totalErrors: 1,
+      totalWarnings: 2,
+      totalInfo: 0,
+      avgHealthScore: 84,
+      durationMs: 5,
     })
 
     renderDash()
@@ -121,16 +144,24 @@ describe('AnalyticsDashboard', () => {
 
   it('post-batch refresh does not flash loading skeleton', async () => {
     getDashboard.mockResolvedValue({
-      totalFlowsAnalyzed: 3, totalFindings: 5,
+      totalFlowsAnalyzed: 3,
+      totalFindings: 5,
       findingsBySeverity: {error: 1, warning: 2, info: 2},
-      findingsByCategory: {Style: 5}, findingsByRule: {},
-      avgHealthScore: 70, topProblemFlows: [],
+      findingsByCategory: {Style: 5},
+      findingsByRule: {},
+      avgHealthScore: 70,
+      topProblemFlows: [],
     })
     fileOpenDirectory.mockResolvedValue('C:/flows')
     batchAnalyze.mockResolvedValue({
-      results: [], totalFlows: 0, totalFindings: 0,
-      totalErrors: 0, totalWarnings: 0, totalInfo: 0,
-      avgHealthScore: 0, durationMs: 1,
+      results: [],
+      totalFlows: 0,
+      totalFindings: 0,
+      totalErrors: 0,
+      totalWarnings: 0,
+      totalInfo: 0,
+      avgHealthScore: 0,
+      durationMs: 1,
     })
 
     const {container} = renderDash()

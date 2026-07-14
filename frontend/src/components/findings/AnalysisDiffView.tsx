@@ -22,7 +22,15 @@ interface SectionDef {
   defaultOpen: boolean
 }
 
-function DiffSection({def, blockLookup, onFixWithAI}: {def: SectionDef; blockLookup: BlockLookup; onFixWithAI?: (f: Finding) => void}) {
+function DiffSection({
+  def,
+  blockLookup,
+  onFixWithAI,
+}: {
+  def: SectionDef
+  blockLookup: BlockLookup
+  onFixWithAI?: (f: Finding) => void
+}) {
   const [open, setOpen] = useState(def.defaultOpen)
   const Icon = def.icon
 
@@ -42,12 +50,16 @@ function DiffSection({def, blockLookup, onFixWithAI}: {def: SectionDef; blockLoo
         <span className="text-2xs font-bold text-text-tertiary tabular-nums">{def.findings.length}</span>
         <span className="text-2xs text-text-tertiary ml-auto">{def.hint}</span>
       </button>
-      {open && def.findings.length === 0 && (
-        <div className="px-9 pb-2.5 text-2xs text-text-tertiary">None</div>
-      )}
-      {open && def.findings.map(f => (
-        <FindingCard key={`${def.key}-${f.id}`} finding={f} blockLookup={blockLookup} onFixWithAI={def.key !== 'removed' ? onFixWithAI : undefined} />
-      ))}
+      {open && def.findings.length === 0 && <div className="px-9 pb-2.5 text-2xs text-text-tertiary">None</div>}
+      {open &&
+        def.findings.map(f => (
+          <FindingCard
+            key={`${def.key}-${f.id}`}
+            finding={f}
+            blockLookup={blockLookup}
+            onFixWithAI={def.key !== 'removed' ? onFixWithAI : undefined}
+          />
+        ))}
     </div>
   )
 }

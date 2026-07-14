@@ -13,9 +13,14 @@ interface ProviderSummary {
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
-  claude: '#d4a574', openai: '#10a37f', gemini: '#4285f4',
-  xai: '#f43f5e', glm: '#06b6d4', 'github-models': '#8b5cf6',
-  copilot: '#6e40c9', demo: '#64748b',
+  claude: '#d4a574',
+  openai: '#10a37f',
+  gemini: '#4285f4',
+  xai: '#f43f5e',
+  glm: '#06b6d4',
+  'github-models': '#8b5cf6',
+  copilot: '#6e40c9',
+  demo: '#64748b',
 }
 
 interface Props {
@@ -76,10 +81,8 @@ export default function ConnectionPanel({
   // paint) to avoid a flash at the previous position.
   useLayoutEffect(() => {
     if (!providerOpen && !modelsOpen) return
-    const same = (
-      a: {top: number; left: number; width: number},
-      b: {top: number; left: number; width: number},
-    ) => a.top === b.top && a.left === b.left && a.width === b.width
+    const same = (a: {top: number; left: number; width: number}, b: {top: number; left: number; width: number}) =>
+      a.top === b.top && a.left === b.left && a.width === b.width
     const measure = () => {
       if (providerOpen) {
         const p = computePos(provRef.current, provDropdownRef.current)
@@ -104,9 +107,9 @@ export default function ConnectionPanel({
     const handler = (e: MouseEvent) => {
       const target = e.target as Node
       const inProv = provRef.current?.contains(target) || provDropdownRef.current?.contains(target)
-      const inMod  = modRef.current?.contains(target)  || modDropdownRef.current?.contains(target)
+      const inMod = modRef.current?.contains(target) || modDropdownRef.current?.contains(target)
       if (!inProv) setProviderOpen(false)
-      if (!inMod)  setModelsOpen(false)
+      if (!inMod) setModelsOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -126,20 +129,29 @@ export default function ConnectionPanel({
             aria-expanded={providerOpen}
             className={clsx(
               'flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg text-sm transition-colors border',
-              providerOpen
-                ? 'bg-surface-2 border-border-default'
-                : 'hover:bg-surface-2 border-transparent'
+              providerOpen ? 'bg-surface-2 border-border-default' : 'hover:bg-surface-2 border-transparent',
             )}
-            onClick={() => { setProviderOpen(!providerOpen); setModelsOpen(false) }}
+            onClick={() => {
+              setProviderOpen(!providerOpen)
+              setModelsOpen(false)
+            }}
           >
             <span
               className="w-2 h-2 rounded-full shrink-0"
-              style={{backgroundColor: currentProv?.configured ? PROVIDER_COLORS[currentProv.id] ?? 'var(--success)' : 'var(--error)'}}
+              style={{
+                backgroundColor: currentProv?.configured
+                  ? (PROVIDER_COLORS[currentProv.id] ?? 'var(--success)')
+                  : 'var(--error)',
+              }}
             />
-            <span className="truncate text-text-secondary font-medium">
-              {currentProv?.name || 'Select provider'}
-            </span>
-            <ChevronDown size={13} className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast', providerOpen && 'rotate-180')} />
+            <span className="truncate text-text-secondary font-medium">{currentProv?.name || 'Select provider'}</span>
+            <ChevronDown
+              size={13}
+              className={clsx(
+                'shrink-0 text-text-tertiary transition-transform duration-fast',
+                providerOpen && 'rotate-180',
+              )}
+            />
           </button>
           {providerOpen && (
             <Portal>
@@ -154,7 +166,7 @@ export default function ConnectionPanel({
                     className={clsx(
                       'flex items-center gap-2.5 px-3 py-2 text-sm w-full text-left hover:bg-surface-2 transition-colors',
                       p.id === selectedProvider && p.configured && 'text-brand-400',
-                      !p.configured && 'opacity-60'
+                      !p.configured && 'opacity-60',
                     )}
                     onClick={() => {
                       if (p.configured) {
@@ -168,13 +180,11 @@ export default function ConnectionPanel({
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
-                      style={{backgroundColor: p.configured ? PROVIDER_COLORS[p.id] ?? 'var(--success)' : undefined}}
+                      style={{backgroundColor: p.configured ? (PROVIDER_COLORS[p.id] ?? 'var(--success)') : undefined}}
                     />
                     <span className="flex-1 truncate">{p.name}</span>
                     {p.id === selectedProvider && p.configured && <Check size={14} className="text-brand-400" />}
-                    {!p.configured && (
-                      <span className="text-2xs text-text-tertiary">Configure →</span>
-                    )}
+                    {!p.configured && <span className="text-2xs text-text-tertiary">Configure →</span>}
                   </button>
                 ))}
                 <div className="px-3 py-1.5 border-t border-border-subtle mt-1 flex items-center justify-between">
@@ -183,7 +193,10 @@ export default function ConnectionPanel({
                   </span>
                   <button
                     className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors"
-                    onClick={() => { setProviderOpen(false); setSettingsOpen(true) }}
+                    onClick={() => {
+                      setProviderOpen(false)
+                      setSettingsOpen(true)
+                    }}
                   >
                     <Settings size={11} />
                     Manage
@@ -207,26 +220,37 @@ export default function ConnectionPanel({
       </div>
 
       {demoRemaining !== null && (
-        <div className={clsx(
-          'flex items-center gap-2 px-2.5 py-1.5 rounded-lg border',
-          demoRemaining !== undefined && demoRemaining <= 0
-            ? 'bg-red-500/10 border-red-500/20'
-            : demoRemaining !== undefined && demoRemaining <= 5
-              ? 'bg-amber-500/10 border-amber-500/20'
-              : 'bg-brand-500/10 border-brand-500/20'
-        )}>
-          <Zap size={11} className={clsx(
-            'shrink-0',
-            demoRemaining !== undefined && demoRemaining <= 0 ? 'text-red-400'
-              : demoRemaining !== undefined && demoRemaining <= 5 ? 'text-amber-400'
-              : 'text-brand-400'
-          )} />
-          <span className={clsx(
-            'text-2xs',
-            demoRemaining !== undefined && demoRemaining <= 0 ? 'text-red-300'
-              : demoRemaining !== undefined && demoRemaining <= 5 ? 'text-amber-300'
-              : 'text-brand-300'
-          )}>
+        <div
+          className={clsx(
+            'flex items-center gap-2 px-2.5 py-1.5 rounded-lg border',
+            demoRemaining !== undefined && demoRemaining <= 0
+              ? 'bg-red-500/10 border-red-500/20'
+              : demoRemaining !== undefined && demoRemaining <= 5
+                ? 'bg-amber-500/10 border-amber-500/20'
+                : 'bg-brand-500/10 border-brand-500/20',
+          )}
+        >
+          <Zap
+            size={11}
+            className={clsx(
+              'shrink-0',
+              demoRemaining !== undefined && demoRemaining <= 0
+                ? 'text-red-400'
+                : demoRemaining !== undefined && demoRemaining <= 5
+                  ? 'text-amber-400'
+                  : 'text-brand-400',
+            )}
+          />
+          <span
+            className={clsx(
+              'text-2xs',
+              demoRemaining !== undefined && demoRemaining <= 0
+                ? 'text-red-300'
+                : demoRemaining !== undefined && demoRemaining <= 5
+                  ? 'text-amber-300'
+                  : 'text-brand-300',
+            )}
+          >
             {demoRemaining !== undefined && demoRemaining <= 0
               ? 'Demo limit reached'
               : `Demo: ${demoRemaining} remaining today`}
@@ -241,22 +265,25 @@ export default function ConnectionPanel({
             aria-expanded={modelsOpen}
             className={clsx(
               'flex items-center gap-1.5 w-full px-2.5 py-1.5 rounded-lg text-xs transition-colors border',
-              modelsOpen
-                ? 'bg-surface-2 border-border-default'
-                : 'hover:bg-surface-2 border-transparent'
+              modelsOpen ? 'bg-surface-2 border-border-default' : 'hover:bg-surface-2 border-transparent',
             )}
-            onClick={() => { setModelsOpen(!modelsOpen); setProviderOpen(false) }}
+            onClick={() => {
+              setModelsOpen(!modelsOpen)
+              setProviderOpen(false)
+            }}
           >
             <span className="text-text-tertiary">Model:</span>
-            <span className="truncate text-text-secondary font-medium">
-              {currentMod?.displayName || selectedModel}
-            </span>
+            <span className="truncate text-text-secondary font-medium">{currentMod?.displayName || selectedModel}</span>
             {currentMod && (
-              <span className="text-2xs text-text-tertiary shrink-0">
-                {(currentMod.contextLimit / 1000)}k
-              </span>
+              <span className="text-2xs text-text-tertiary shrink-0">{currentMod.contextLimit / 1000}k</span>
             )}
-            <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast ml-auto', modelsOpen && 'rotate-180')} />
+            <ChevronDown
+              size={12}
+              className={clsx(
+                'shrink-0 text-text-tertiary transition-transform duration-fast ml-auto',
+                modelsOpen && 'rotate-180',
+              )}
+            />
           </button>
           {modelsOpen && (
             <Portal>
@@ -270,16 +297,24 @@ export default function ConnectionPanel({
                     key={m.id}
                     className={clsx(
                       'flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-surface-2 transition-colors',
-                      m.id === selectedModel && 'bg-brand-500/5'
+                      m.id === selectedModel && 'bg-brand-500/5',
                     )}
-                    onClick={() => { onSelectModel(m.id); setModelsOpen(false) }}
+                    onClick={() => {
+                      onSelectModel(m.id)
+                      setModelsOpen(false)
+                    }}
                   >
                     <div className="flex-1 min-w-0">
-                      <div className={clsx('text-xs font-medium truncate', m.id === selectedModel ? 'text-brand-400' : 'text-text-secondary')}>
+                      <div
+                        className={clsx(
+                          'text-xs font-medium truncate',
+                          m.id === selectedModel ? 'text-brand-400' : 'text-text-secondary',
+                        )}
+                      >
                         {m.displayName}
                       </div>
                       <div className="text-2xs text-text-tertiary">
-                        {(m.contextLimit / 1000)}k context
+                        {m.contextLimit / 1000}k context
                         {m.inputCostPerM > 0 && ` · $${m.inputCostPerM}/$${m.outputCostPerM} per 1M`}
                       </div>
                     </div>
@@ -296,7 +331,7 @@ export default function ConnectionPanel({
         <div className="flex items-center gap-1.5 px-2.5 text-2xs text-text-tertiary">
           <span>Using</span>
           <span className="text-text-secondary font-medium">{currentMod.displayName}</span>
-          <span>· {(currentMod.contextLimit / 1000)}k ctx</span>
+          <span>· {currentMod.contextLimit / 1000}k ctx</span>
         </div>
       )}
     </div>

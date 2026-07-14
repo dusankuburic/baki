@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -8,6 +9,18 @@ import (
 	"pad-analyzer/internal/service"
 	"pad-core/models"
 )
+
+// decodeBody decodes the request body into dst, writing a 400 error response and
+// returning false on failure. It replaces the decode/400/return boilerplate that
+// every mutating handler otherwise repeats. Callers check the bool and return on
+// false: `if !decodeBody(w, r, &req) { return }`.
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
 
 // resolveFlow loads a flow and verifies the caller has at least minPerm access.
 // In local mode (JWTEnabled=false) it returns the currently loaded document.

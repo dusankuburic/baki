@@ -13,7 +13,11 @@ type FindingGroup = models.FindingGroup
 // (pattern, self-assignment, …). Used to distinguish two findings on the same
 // block+title that are genuinely about different things (so dedup keeps both)
 // and to find related findings that share a subject across blocks.
-var subjectKeys = []string{"variable", "property", "resource"}
+//
+// This is the same key list findingContentKey (engine.go) uses to build a
+// finding's content key — aliased to subjectMetaKeys, the single source of
+// truth, rather than a second literal that could silently drift out of sync.
+var subjectKeys = subjectMetaKeys
 
 // findingSubjects returns the subject identifiers a finding is about. A single
 // rule writes at most one of these, but collecting all keeps the helper robust

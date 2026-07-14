@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
 
 // api/client (imported transitively by authStore) pulls in the platform adapter;
 // stub it so importing the stores doesn't try to invoke Tauri.
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
-    getBackendConfig: vi.fn().mockResolvedValue({ apiUrl: 'http://localhost:9999', token: 't' }),
+    getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 't'}),
   }),
 }))
 
@@ -12,34 +12,43 @@ vi.mock('@/platform/adapters', () => ({
 let _local: Record<string, string> = {}
 vi.stubGlobal('localStorage', {
   getItem: (k: string) => _local[k] ?? null,
-  setItem: (k: string, v: string) => { _local[k] = v },
-  removeItem: (k: string) => { delete _local[k] },
+  setItem: (k: string, v: string) => {
+    _local[k] = v
+  },
+  removeItem: (k: string) => {
+    delete _local[k]
+  },
   // length + key(i) so SyncManager.clearAllStorage's prefix scan works.
-  get length() { return Object.keys(_local).length },
+  get length() {
+    return Object.keys(_local).length
+  },
   key: (i: number) => Object.keys(_local)[i] ?? null,
 })
 
-import { resetAllStores } from './authStore'
-import { useSearchStore } from './searchStore'
-import { useEditorStore } from './editorStore'
-import { useUIStore } from './uiStore'
-import { usePresenceStore } from './presenceStore'
-import { useLibraryBrowseStore } from './libraryBrowseStore'
-import { useAnalysisStore } from './analysisStore'
-import { useSyncStore } from './syncStore'
-import { syncManager } from '@/services/sync/SyncManager'
+import {useFlowStore} from './flowStore'
+import {resetAllStores} from './authStore'
+import {useSearchStore} from './searchStore'
+import {useEditorStore} from './editorStore'
+import {useUIStore} from './uiStore'
+import {usePresenceStore} from './presenceStore'
+import {useLibraryBrowseStore} from './libraryBrowseStore'
+import {useAnalysisStore} from './analysisStore'
+import {useSyncStore} from './syncStore'
+import {syncManager} from '@/services/sync/SyncManager'
 
-beforeEach(() => { _local = {} })
+beforeEach(() => {
+  _local = {}
+})
 
 describe('resetAllStores', () => {
   it('clears content-bearing stores and tears down the live session', async () => {
     // Seed prior-session state across stores that logout previously left intact.
-    useSearchStore.setState({ results: [{ } as never], totalCount: 1, query: 'secret' })
+    useSearchStore.setState({results: [{} as never], totalCount: 1, query: 'secret'})
     useEditorStore.getState().openInGroup('subflow-A')
-    useUIStore.setState({ activeDiff: { foo: 'bar' } as never, mainPaneView: 'library', selectedVariable: 'v1' })
-    useLibraryBrowseStore.setState({ query: 'alice-secret', selectedFlowId: 'flow-1' })
+    useUIStore.setState({activeDiff: {foo: 'bar'} as never, mainPaneView: 'library', selectedVariable: 'v1'})
+    useLibraryBrowseStore.setState({query: 'alice-secret', selectedFlowId: 'flow-1'})
     usePresenceStore.setState({
-      users: { u2: { userId: 'u2', displayName: 'Bob' } },
+      users: {u2: {userId: 'u2', displayName: 'Bob'}},
       flowId: 'flow-1',
       status: 'connected',
     })
@@ -79,7 +88,7 @@ describe('resetAllStores', () => {
   })
 
   it('preserves the resolved theme so the login screen does not flash', async () => {
-    useUIStore.setState({ resolvedTheme: 'nord' })
+    useUIStore.setState({resolvedTheme: 'nord'})
     await resetAllStores()
     expect(useUIStore.getState().resolvedTheme).toBe('nord')
   })
@@ -87,13 +96,13 @@ describe('resetAllStores', () => {
   it('discards the persisted offline sync queue so it cannot leak to the next user', async () => {
     // An orphaned queue from a flow the user visited earlier this session, then
     // navigated away from (start() clears memory but not the old flow's storage).
-    localStorage.setItem('baki-sync-queue-flow-OLD', JSON.stringify({ queue: [{}], counter: 1 }))
+    localStorage.setItem('baki-sync-queue-flow-OLD', JSON.stringify({queue: [{}], counter: 1}))
 
     // Queue an offline op on the currently-open flow; SyncManager persists it to
     // localStorage keyed by flow id (no user component), so without an explicit
     // discard the next user who reopens either flow would inherit the ops.
     syncManager.start('flow-1')
-    syncManager.enqueue({ type: 'presence.update', payload: {} } as never)
+    syncManager.enqueue({type: 'presence.update', payload: {}} as never)
     expect(localStorage.getItem('baki-sync-queue-flow-1')).not.toBeNull()
 
     await resetAllStores()
@@ -102,5 +111,41 @@ describe('resetAllStores', () => {
     expect(localStorage.getItem('baki-sync-queue-flow-1')).toBeNull()
     expect(localStorage.getItem('baki-sync-queue-flow-OLD')).toBeNull()
     expect(useSyncStore.getState().pendingCount).toBe(0)
+  })
+
+  // Regression guard: the following fields were previously NOT cleared on
+  // logout, leaking state to the next user. Each was fixed individually; this
+  // test pins them so the same class of bug can't recur silently.
+  it('clears previously-leaked fields (focusedFindingKey, visibleTypes, UI overlays, triage)', async () => {
+    useAnalysisStore.setState({
+      focusedFindingKey: 'r1:b1',
+      selectedFindingIds: new Set(['r1:b1', 'r2:b2']),
+      triageMap: new Map([['r1:b1', {status: 'resolved'} as never]]),
+      baseline: {flowId: 'flow-1', version: 5} as never,
+      savedViews: [{name: 'My View', filters: {}} as never],
+    })
+    useFlowStore.setState({
+      visibleTypes: new Set(['ACTION'] as never),
+      document: {id: 'leaked', name: 'Leaked'} as never,
+    })
+    useUIStore.setState({
+      commandPaletteOpen: true,
+      globalSearchOpen: true,
+      settingsOpen: true,
+    })
+
+    await resetAllStores()
+
+    expect(useAnalysisStore.getState().focusedFindingKey).toBeNull()
+    expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(0)
+    expect(useAnalysisStore.getState().triageMap.size).toBe(0)
+    expect(useAnalysisStore.getState().baseline).toBeNull()
+    expect(useAnalysisStore.getState().savedViews).toHaveLength(0)
+    expect(useFlowStore.getState().document).toBeNull()
+    // visibleTypes resets to ALL_TYPES (non-empty, full set)
+    expect(useFlowStore.getState().visibleTypes.size).toBeGreaterThan(1)
+    expect(useUIStore.getState().commandPaletteOpen).toBe(false)
+    expect(useUIStore.getState().globalSearchOpen).toBe(false)
+    expect(useUIStore.getState().settingsOpen).toBe(false)
   })
 })

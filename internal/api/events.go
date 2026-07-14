@@ -29,7 +29,7 @@ type Event struct {
 const sseHeartbeatInterval = 20 * time.Second
 
 // EventManager manages Server-Sent Events (SSE) clients and implements
-// service.Notifier to allow internal services to emit events to the frontend.
+// service.EventNotifier to allow internal services to emit events to the frontend.
 type EventManager struct {
 	clients      map[chan Event]string // channel → userID ("" in local mode)
 	clientsMu    sync.Mutex
@@ -84,14 +84,14 @@ func (m *EventManager) SetRevocationChecker(fn func(string) bool) {
 	m.isRevoked = fn
 }
 
-// Emit satisfies the service.Notifier interface. It broadcasts to ALL
+// Emit satisfies the service.EventNotifier interface. It broadcasts to ALL
 // connected SSE clients — use only for events that are truly global or in
 // local mode where only one client exists.
 func (m *EventManager) Emit(name string, data any) {
 	m.deliver(Event{Name: name, Data: data})
 }
 
-// EmitTo satisfies the service.Notifier interface. It delivers the event
+// EmitTo satisfies the service.EventNotifier interface. It delivers the event
 // only to SSE clients associated with userID. In local mode (userID="")
 // this behaves identically to Emit. Use EmitTo for any user-scoped event
 // (chat, analysis, settings, flow load) to prevent cross-tenant data leaks.
@@ -99,7 +99,7 @@ func (m *EventManager) EmitTo(userID, name string, data any) {
 	m.deliver(Event{Name: name, Data: data, TargetUser: userID})
 }
 
-// HasSubscriber satisfies the service.Notifier interface. It reports whether
+// HasSubscriber satisfies the service.EventNotifier interface. It reports whether
 // EmitTo(userID, …) would currently reach at least one connected SSE client;
 // a "" userID matches any client, mirroring deliver's local-mode broadcast
 // semantics. Services use it to detect abandoned work — e.g. a chat stream
@@ -194,9 +194,11 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	// once instead of incrementally in web deployments.
 	w.Header().Set("X-Accel-Buffering", "no")
 	// Respect the configured CORS allowlist instead of wildcarding.
+	// Vary: Origin is set unconditionally so a caching proxy can't serve a
+	// no-ACAO SSE variant to a later allowed-origin request.
+	w.Header().Set("Vary", "Origin")
 	if origin := r.Header.Get("Origin"); origin != "" && m.allowOrigin != nil && m.allowOrigin(origin) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Vary", "Origin")
 	}
 	// Write the status explicitly before flushing. Without this, the first
 	// fmt.Fprintf in the event loop triggers an implicit WriteHeader via the
@@ -271,7 +273,11 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		case ev := <-ch:
 			data, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				// Half-dead socket: stop spinning so the goroutine + 512-slot
+				// channel don't linger until the next heartbeat notices.
+				return
+			}
 			flusher.Flush()
 		}
 	}

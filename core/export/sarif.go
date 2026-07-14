@@ -42,6 +42,20 @@ type sarifDriver struct {
 	Rules          []sarifReportingDescriptor `json:"rules"`
 }
 
+// ToolVersion is the analyzer version surfaced in SARIF tool.driver.version
+// for result reproducibility/triage. Defaults to a constant; main.go can
+// override it at startup (SetToolVersion) to reflect the build version.
+var ToolVersion = "0.1.0"
+
+// SetToolVersion sets the version emitted in SARIF tool.driver.version. Called
+// once at startup from main so SARIF consumers (GitHub Code Scanning, Azure
+// DevOps) can correlate results to a specific analyzer build.
+func SetToolVersion(v string) {
+	if v != "" {
+		ToolVersion = v
+	}
+}
+
 type sarifReportingDescriptor struct {
 	ID                   string              `json:"id"`
 	ShortDescription     *sarifMessage       `json:"shortDescription,omitempty"`
@@ -131,7 +145,7 @@ func ReportToSARIF(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 		Schema:  sarifSchema,
 		Version: sarifVersion,
 		Runs: []sarifRun{{
-			Tool:    sarifToolBlock{Driver: sarifDriver{Name: sarifTool, Rules: rules}},
+			Tool:    sarifToolBlock{Driver: sarifDriver{Name: sarifTool, Version: ToolVersion, Rules: rules}},
 			Results: results,
 		}},
 	}

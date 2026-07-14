@@ -111,8 +111,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		Name  string            `json:"name"`
 		Files map[string]string `json:"files"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if len(req.Files) == 0 {
@@ -128,45 +127,13 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 
 	if h.security.JWTEnabled {
 		userID := h.security.CallerID(r)
-
-		content, err := json.Marshal(doc)
-		if err != nil {
-			render.Error(w, fmt.Errorf("failed to marshal uploaded flow: %w", err), http.StatusInternalServerError)
+		if err := h.flowSvc.SaveUploadedFlow(r.Context(), doc, userID); err != nil {
+			if errors.Is(err, storageif.ErrVersionConflict) {
+				render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+				return
+			}
+			render.Error(w, err, http.StatusInternalServerError)
 			return
-		}
-
-		libDoc := storageif.FlowDocument{
-			ID:      doc.ID,
-			Name:    doc.Name,
-			Content: content,
-			OwnerID: userID,
-			Metadata: storageif.FlowMetadata{
-				BlockCount:   doc.Metadata.BlockCount,
-				SubflowCount: doc.Metadata.SubflowCount,
-			},
-		}
-
-		if h.backend != nil {
-			// Load the existing version so OCC applies. If the flow is new,
-			// version stays 0 (insert path). If it exists, passing the current
-			// version prevents silent clobbering of prior edits. Header only —
-			// we need the version, not the content blob.
-			existing, err := h.backend.LoadFlowHeader(r.Context(), doc.ID)
-			if err == nil && existing != nil {
-				libDoc.Version = existing.Version
-			} else if err != nil && !errors.Is(err, storageif.ErrNotFound) {
-				// Transient DB error — must not silently bypass OCC
-				render.Error(w, fmt.Errorf("failed to check existing flow: %w", err), http.StatusInternalServerError)
-				return
-			}
-			if err := h.backend.SaveFlow(r.Context(), &libDoc); err != nil {
-				if errors.Is(err, storageif.ErrVersionConflict) {
-					render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
-					return
-				}
-				render.Error(w, fmt.Errorf("failed to save uploaded flow: %w", err), http.StatusInternalServerError)
-				return
-			}
 		}
 	}
 
@@ -182,8 +149,7 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	doc, err := h.flowSvc.LoadFlowFromPath(req.Path)
@@ -207,8 +173,7 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	doc, err := h.flowSvc.LoadFlowFolder(req.Path)
@@ -245,8 +210,7 @@ func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if err := h.flowSvc.RemoveRecentFile(req.Path); err != nil {
@@ -276,8 +240,7 @@ func (h *FlowHandler) handleRevealInFileManager(w http.ResponseWriter, r *http.R
 	var req struct {
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if err := h.flowSvc.RevealInFileManager(req.Path); err != nil {
@@ -346,8 +309,7 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 		BlockID string `json:"blockId"`
 		RuleID  string `json:"ruleId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.BlockID == "" {
@@ -384,8 +346,7 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		Variable string `json:"variable"`
 		Property string `json:"property"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.BlockID == "" || req.FixType == "" {
@@ -421,8 +382,7 @@ func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
 		Variable string `json:"variable"`
 		Property string `json:"property"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.BlockID == "" || req.FixType == "" {
@@ -446,8 +406,7 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 		ID    string             `json:"id"`
 		Query models.SearchQuery `json:"query"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -486,8 +445,7 @@ func (h *FlowHandler) handleReadSourceFiles(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		Files []string `json:"files"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	doc := h.docProvider.CurrentDoc()
@@ -507,8 +465,7 @@ func (h *FlowHandler) handleOnFileOpenFromSystem(w http.ResponseWriter, r *http.
 	var req struct {
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	h.flowSvc.OnFileOpenFromSystem(req.Path)

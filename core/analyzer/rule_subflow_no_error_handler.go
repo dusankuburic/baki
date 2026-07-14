@@ -22,17 +22,22 @@ func (r *SubflowNoErrorHandlerRule) Category() string                 { return "
 
 func (r *SubflowNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	// Fire once per subflow by triggering only on the first top-level block
-	// (no parent entry in ParentMap, BlockIndex == 0).
+	// (no parent entry in ParentMap).
 	if _, hasParent := ctx.ParentMap[block.ID]; hasParent {
 		return nil
 	}
-	if ctx.BlockIndex[block.ID] != 0 {
+	if block.Type == models.BlockTypeComment {
 		return nil
 	}
 
 	// Locate the subflow this block belongs to (O(1) via the precomputed index).
 	sf := ctx.SubflowByID[block.SubflowID]
 	if sf == nil {
+		return nil
+	}
+	// Attach to the first non-comment top-level block so the finding's line /
+	// suppression target is an actionable block, not a leading comment.
+	if firstActionableBlockID(sf.Blocks) != block.ID {
 		return nil
 	}
 
@@ -51,6 +56,7 @@ func (r *SubflowNoErrorHandlerRule) Check(block *models.Block, ctx *RuleContext)
 		Severity:    r.DefaultSeverity(),
 		Title:       "Subflow without error handler",
 		Description: fmt.Sprintf("Subflow %q has action blocks but no error handler. Unhandled errors will silently terminate the subflow.", sf.Name),
+		BlockID:     block.ID,
 		SubflowID:   sf.ID,
 		Suggestion:  "Add a Try/Catch or On Block Error handler to protect against unexpected failures.",
 	}}
@@ -91,3 +97,7 @@ func sfHasErrorHandler(blocks []models.Block) bool {
 	}
 	return false
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&SubflowNoErrorHandlerRule{}) }

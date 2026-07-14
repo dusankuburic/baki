@@ -48,7 +48,7 @@ export default function ProviderSelector({providers, selected, onSelect}: Props)
               key={p.id}
               className={clsx(
                 'flex items-center gap-2 px-3 py-2 text-sm w-full text-left hover:bg-surface-2 transition-colors',
-                p.id === selected && 'text-brand-400'
+                p.id === selected && 'text-brand-400',
               )}
               onClick={() => {
                 onSelect(p.id)
@@ -58,9 +58,7 @@ export default function ProviderSelector({providers, selected, onSelect}: Props)
             >
               <span className="flex-1 truncate">{p.name}</span>
               {p.id === selected && <Check size={14} />}
-              {!p.configured && (
-                <span className="text-2xs text-text-tertiary">Not configured</span>
-              )}
+              {!p.configured && <span className="text-2xs text-text-tertiary">Not configured</span>}
             </button>
           ))}
         </div>

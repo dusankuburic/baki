@@ -169,23 +169,34 @@ func extractVariables(raw string) []string {
 		// Extract all root variables from the expression.
 		// We use a simple identifier regex and manually check surroundings
 		// because Go's regexp doesn't support lookarounds.
+		//
+		// Every index below is read from — and applied back onto — masked, never
+		// expression. maskStrings round-trips its input through []rune, so on
+		// malformed UTF-8 (a single invalid byte decodes to the 3-byte U+FFFD
+		// replacement rune) masked's byte length can differ from expression's;
+		// slicing expression with an offset computed against masked then panics
+		// with "slice bounds out of range". reIdentifier only matches ASCII word
+		// characters, which maskStrings never alters outside a literal, so
+		// masked[start:end] holds the identical identifier text expression[start:end]
+		// would have — with no risk of an offset computed against one string
+		// falling outside the other.
 		ids := reIdentifier.FindAllStringSubmatchIndex(masked, -1)
 		for _, idMatch := range ids {
 			start, end := idMatch[0], idMatch[1]
-			vname := expression[start:end]
+			vname := masked[start:end]
 
 			// Check if it's a property (preceded by a dot).
-			if start > 0 && expression[start-1] == '.' {
+			if start > 0 && masked[start-1] == '.' {
 				continue
 			}
 
 			// Check if it's a function call (followed by an open paren).
 			isFunc := false
-			for i := end; i < len(expression); i++ {
-				if expression[i] == ' ' || expression[i] == '\t' {
+			for i := end; i < len(masked); i++ {
+				if masked[i] == ' ' || masked[i] == '\t' {
 					continue
 				}
-				if expression[i] == '(' {
+				if masked[i] == '(' {
 					isFunc = true
 				}
 				break
@@ -219,9 +230,11 @@ func normalizeVariableOutput(blk *models.Block) {
 		"Variables.RemoveItemFromList",
 		"Variables.SortList",
 		"Variables.ShuffleList",
-		"Variables.MergeList",
+		"Variables.MergeLists",
 		"Variables.ReverseList",
-		"Variables.RemoveDuplicatesFromList",
+		"Variables.RemoveDuplicateItemsFromList",
+		"Variables.FindCommonListItems",
+		"Variables.SubtractLists",
 		"Variables.ClearList":
 		// The "Name" parameter holds the variable being modified.
 		// Strip %...% wrapper if PAD emitted it in that form; skip compound expressions.

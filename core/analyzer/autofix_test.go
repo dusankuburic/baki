@@ -17,7 +17,7 @@ func TestSuppressFindingPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `Display.UiFlow
 
 WebAutomation.OpenBrowser Chrome: Chrome URL: '''https://example.com'''
-HTTP.InvokeUrl Method: GET Url: '''https://api.example.com/x''' => Response
+HTTPClient.InvokeUrl Method: GET Url: '''https://api.example.com/x''' => Response
 Display.CloseBrowser
 
 # End Region`
@@ -202,7 +202,7 @@ Display.ShowMessageBox Message: 'done'
 // hasTimeoutConfigured detects the appended property via its "timeout" key.
 func TestSetTimeoutPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
-HTTP.InvokeService Method: 'GET' Url: 'https://example.com/api'
+HTTPClient.InvokeService Method: 'GET' Url: 'https://example.com/api'
 Display.ShowMessageBox Message: 'done'
 #EndRegion
 `
@@ -476,7 +476,7 @@ Database.Connect ConnectionString: 'AKIA1234567890ABCDEF'
 // finding — isInsideRetryLoop detects "retry" in the loop condition.
 func TestWrapInRetryPatch_RoundTripResolvesFinding(t *testing.T) {
 	const source = `#Region "Main"
-Http.InvokeService Method: 'GET' Url: 'https://api.example.com/data'
+HTTPClient.InvokeService Method: 'GET' Url: 'https://api.example.com/data'
 #EndRegion
 `
 	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
@@ -560,7 +560,7 @@ END
 
 // TestApplyPatch_Replace substitutes text within a single line.
 func TestApplyPatch_Replace(t *testing.T) {
-	source := "HTTP.InvokeService Method: 'GET' Key: 'AKIA1234567890ABCDEF'"
+	source := "HTTPClient.InvokeService Method: 'GET' Key: 'AKIA1234567890ABCDEF'"
 	patch := models.Patch{Ops: []models.PatchOp{{
 		Kind:      "replace",
 		StartLine: 1,
@@ -568,7 +568,7 @@ func TestApplyPatch_Replace(t *testing.T) {
 		New:       "%input_key%",
 	}}}
 	got := ApplyPatch(source, patch)
-	if got != "HTTP.InvokeService Method: 'GET' Key: '%input_key%'" {
+	if got != "HTTPClient.InvokeService Method: 'GET' Key: '%input_key%'" {
 		t.Errorf("replace failed: got %q", got)
 	}
 }
@@ -655,7 +655,7 @@ func TestApplyPatch_EmptyPatch(t *testing.T) {
 func TestSuppressFindingPatch_NestedBlock(t *testing.T) {
 	const source = `#Region "Main"
 LOOP WHILE %X% < 10
-    HTTP.InvokeService Method: 'GET' Url: 'https://api.example.com'
+    HTTPClient.InvokeService Method: 'GET' Url: 'https://api.example.com'
 END
 #EndRegion
 `
@@ -728,7 +728,7 @@ func TestInsertClosePatch_NilProperties(t *testing.T) {
 func TestReplaceWithVariablePatch_NilProperties(t *testing.T) {
 	block := &models.Block{
 		Type:    models.BlockTypeAction,
-		RawType: "HTTP.InvokeService",
+		RawType: "HTTPClient.InvokeService",
 	}
 	patch := ReplaceWithVariablePatch(block, "password")
 	if len(patch.Ops) != 0 {

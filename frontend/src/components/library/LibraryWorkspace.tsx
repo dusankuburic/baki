@@ -56,7 +56,9 @@ export default function LibraryWorkspace() {
 
   useEffect(() => {
     // Ensure the org list is hydrated so the filter rail can show membership chips.
-    loadOrgs().catch(() => { /* surfaced by orgStore.error */ })
+    loadOrgs().catch(() => {
+      /* surfaced by orgStore.error */
+    })
   }, [loadOrgs])
 
   // Resolve "all orgs the user belongs to" → request-level orgId filter. When
@@ -74,74 +76,83 @@ export default function LibraryWorkspace() {
     return only ? only : undefined
   }, [selectedOrgIds])
 
-  const fetchPage = useCallback(async (silent: boolean) => {
-    abortRef.current?.abort()
-    const ac = new AbortController()
-    abortRef.current = ac
-    if (!silent) setIsLoading(true)
-    setError(null)
-    try {
-      const res: PagedResponse<LibraryFlow> = await libraryApi.list({
-        scope,
-        sort,
-        orgId: requestOrgId,
-        query: debouncedQuery || undefined,
-        limit: pageSize,
-        offset: page * pageSize,
-      })
-      if (ac.signal.aborted) return
-      // Multi-org chip subset filtering happens client-side over the page —
-      // the server doesn't accept a list of orgIds, only a single one.
-      let pageItems = res.items
-      if (selectedOrgIds && selectedOrgIds.size > 1) {
-        pageItems = pageItems.filter(f => selectedOrgIds.has(f.organizationId ?? ''))
+  const fetchPage = useCallback(
+    async (silent: boolean) => {
+      abortRef.current?.abort()
+      const ac = new AbortController()
+      abortRef.current = ac
+      if (!silent) setIsLoading(true)
+      setError(null)
+      try {
+        const res: PagedResponse<LibraryFlow> = await libraryApi.list({
+          scope,
+          sort,
+          orgId: requestOrgId,
+          query: debouncedQuery || undefined,
+          limit: pageSize,
+          offset: page * pageSize,
+        })
+        if (ac.signal.aborted) return
+        // Multi-org chip subset filtering happens client-side over the page —
+        // the server doesn't accept a list of orgIds, only a single one.
+        let pageItems = res.items
+        if (selectedOrgIds && selectedOrgIds.size > 1) {
+          pageItems = pageItems.filter(f => selectedOrgIds.has(f.organizationId ?? ''))
+        }
+        setItems(pageItems)
+        setTotal(res.total)
+      } catch (e) {
+        if (ac.signal.aborted) return
+        const msg = e instanceof Error ? e.message : String(e)
+        logger.warn('Library: list failed', e)
+        setError(msg)
+      } finally {
+        if (!ac.signal.aborted) setIsLoading(false)
       }
-      setItems(pageItems)
-      setTotal(res.total)
-    } catch (e) {
-      if (ac.signal.aborted) return
-      const msg = e instanceof Error ? e.message : String(e)
-      logger.warn('Library: list failed', e)
-      setError(msg)
-    } finally {
-      if (!ac.signal.aborted) setIsLoading(false)
-    }
-  }, [scope, sort, requestOrgId, debouncedQuery, page, pageSize, selectedOrgIds])
+    },
+    [scope, sort, requestOrgId, debouncedQuery, page, pageSize, selectedOrgIds],
+  )
 
   useEffect(() => {
     fetchPage(false)
     return () => abortRef.current?.abort()
   }, [fetchPage])
 
-  const handleOpen = useCallback(async (flow: LibraryFlow) => {
-    try {
-      const doc = await libraryApi.getContent(flow.id)
-      setDocument(doc as FlowDocument)
-      useFlowStore.setState({libraryFlowId: flow.id, libraryVersion: flow.version})
-      setMainPaneView('block')
-    } catch (e) {
-      toast.error('Failed to load flow', {description: e instanceof Error ? e.message : String(e)})
-    }
-  }, [setDocument, setMainPaneView, toast])
+  const handleOpen = useCallback(
+    async (flow: LibraryFlow) => {
+      try {
+        const doc = await libraryApi.getContent(flow.id)
+        setDocument(doc as FlowDocument)
+        useFlowStore.setState({libraryFlowId: flow.id, libraryVersion: flow.version})
+        setMainPaneView('block')
+      } catch (e) {
+        toast.error('Failed to load flow', {description: e instanceof Error ? e.message : String(e)})
+      }
+    },
+    [setDocument, setMainPaneView, toast],
+  )
 
-  const handleDelete = useCallback(async (flow: LibraryFlow) => {
-    const ok = await confirm({
-      title: 'Delete flow',
-      message: `Delete "${flow.name}" from the cloud library? This cannot be undone.`,
-      danger: true,
-      confirmLabel: 'Delete',
-    })
-    if (!ok) return
-    try {
-      await libraryApi.delete(flow.id)
-      setItems(prev => prev.filter(f => f.id !== flow.id))
-      setTotal(t => Math.max(0, t - 1))
-      if (selectedFlowId === flow.id) setSelectedFlow(null)
-      toast.success('Flow deleted')
-    } catch (e) {
-      toast.error('Failed to delete', {description: e instanceof Error ? e.message : String(e)})
-    }
-  }, [selectedFlowId, setSelectedFlow, toast, confirm])
+  const handleDelete = useCallback(
+    async (flow: LibraryFlow) => {
+      const ok = await confirm({
+        title: 'Delete flow',
+        message: `Delete "${flow.name}" from the cloud library? This cannot be undone.`,
+        danger: true,
+        confirmLabel: 'Delete',
+      })
+      if (!ok) return
+      try {
+        await libraryApi.delete(flow.id)
+        setItems(prev => prev.filter(f => f.id !== flow.id))
+        setTotal(t => Math.max(0, t - 1))
+        if (selectedFlowId === flow.id) setSelectedFlow(null)
+        toast.success('Flow deleted')
+      } catch (e) {
+        toast.error('Failed to delete', {description: e instanceof Error ? e.message : String(e)})
+      }
+    },
+    [selectedFlowId, setSelectedFlow, toast, confirm],
+  )
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const showEmpty = !isLoading && items.length === 0
@@ -151,12 +162,7 @@ export default function LibraryWorkspace() {
     <div className="flex flex-col h-full bg-surface-1">
       <header className="flex items-center justify-between gap-3 px-4 h-12 border-b border-border-subtle flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={ChevronLeft}
-            onClick={() => setMainPaneView('home')}
-          >
+          <Button variant="ghost" size="sm" icon={ChevronLeft} onClick={() => setMainPaneView('home')}>
             Home
           </Button>
           <h1 className="text-sm font-semibold text-text-primary truncate">Cloud Library</h1>
@@ -165,13 +171,7 @@ export default function LibraryWorkspace() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={RefreshCw}
-            onClick={() => fetchPage(true)}
-            disabled={isLoading}
-          >
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => fetchPage(true)} disabled={isLoading}>
             Refresh
           </Button>
         </div>
@@ -204,14 +204,14 @@ export default function LibraryWorkspace() {
               <LibraryGrid
                 items={items}
                 selectedId={selectedFlowId}
-                onSelect={(f) => setSelectedFlow(f.id)}
+                onSelect={f => setSelectedFlow(f.id)}
                 onOpen={handleOpen}
               />
             ) : (
               <LibraryList
                 items={items}
                 selectedId={selectedFlowId}
-                onSelect={(f) => setSelectedFlow(f.id)}
+                onSelect={f => setSelectedFlow(f.id)}
                 onOpen={handleOpen}
               />
             )}
@@ -219,12 +219,7 @@ export default function LibraryWorkspace() {
 
           {total > pageSize && (
             <div className="border-t border-border-subtle px-4 py-2 flex-shrink-0">
-              <LibraryPager
-                page={page}
-                totalPages={totalPages}
-                total={total}
-                onChange={setPage}
-              />
+              <LibraryPager page={page} totalPages={totalPages} total={total} onChange={setPage} />
             </div>
           )}
         </section>

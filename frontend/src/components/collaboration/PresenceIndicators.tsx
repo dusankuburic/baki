@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { usePresenceStore, type PresenceUser } from '@/stores/presenceStore'
+import {usePresenceStore, type PresenceUser} from '@/stores/presenceStore'
 import Tooltip from '@/components/shared/Tooltip'
 import Avatar from '@/components/shared/Avatar'
 
@@ -8,10 +8,7 @@ interface PresenceIndicatorsProps {
   maxVisible?: number
 }
 
-export default function PresenceIndicators({
-  className,
-  maxVisible = 5,
-}: PresenceIndicatorsProps) {
+export default function PresenceIndicators({className, maxVisible = 5}: PresenceIndicatorsProps) {
   const users = usePresenceStore(s => s.users)
   const status = usePresenceStore(s => s.status)
 
@@ -26,12 +23,8 @@ export default function PresenceIndicators({
       {status === 'connecting' && (
         <span className="w-2 h-2 rounded-full bg-semantic-warning animate-pulse" title="Connecting…" />
       )}
-      {status === 'error' && (
-        <span className="w-2 h-2 rounded-full bg-semantic-error" title="Connection error" />
-      )}
-      {status === 'connected' && (
-        <span className="w-2 h-2 rounded-full bg-semantic-success" title="Connected" />
-      )}
+      {status === 'error' && <span className="w-2 h-2 rounded-full bg-semantic-error" title="Connection error" />}
+      {status === 'connected' && <span className="w-2 h-2 rounded-full bg-semantic-success" title="Connected" />}
 
       <div className="flex -space-x-2">
         {visible.map(user => (
@@ -47,7 +40,7 @@ export default function PresenceIndicators({
   )
 }
 
-function UserAvatar({ user }: { user: PresenceUser }) {
+function UserAvatar({user}: {user: PresenceUser}) {
   return (
     <Tooltip content={user.displayName ?? user.userId}>
       <Avatar
@@ -60,4 +53,3 @@ function UserAvatar({ user }: { user: PresenceUser }) {
     </Tooltip>
   )
 }
-

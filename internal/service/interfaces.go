@@ -13,12 +13,12 @@ type SettingsProvider interface {
 	ClearRecentFiles() error
 }
 
-// SecretStore abstracts API-key persistence. The default implementation is the
+// KeyStore abstracts API-key persistence. The default implementation is the
 // OS keychain (desktop mode); cloud deployments use an encrypted, database-backed
 // store. Defining the interface here (where it's consumed) follows the Go
 // "accept interfaces, return structs" principle and removes the service layer's
 // dependency on the storage package's global-state wrappers.
-type SecretStore interface {
+type KeyStore interface {
 	Save(scope, provider, key string) error
 	Get(scope, provider string) (string, error)
 	Has(scope, provider string) (bool, error)

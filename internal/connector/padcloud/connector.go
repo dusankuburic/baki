@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"pad-core/logger"
 	"pad-core/models"
+
+	"pad-analyzer/internal/lifecycle"
 )
 
 // DesktopFlowRef identifies a desktop flow in a Power Platform environment.
@@ -70,13 +71,13 @@ type Ingester struct {
 	converter Converter
 	store     Store
 
-	// Scheduler state (only touched by Start/Stop/loop). startOnce/stopOnce
-	// make Start/Stop idempotent.
-	rootCtx    context.Context
-	rootCancel context.CancelFunc
-	stop       chan struct{}
-	startOnce  sync.Once
-	stopOnce   sync.Once
+	// lastModified tracks the last-seen Modified timestamp per flow ID so
+	// sweeps can skip GetFlowDefinition for unchanged flows (saves Dataverse
+	// API quota). In-memory — resets on restart; the content-equality guard
+	// in UpsertFlow is the persistent safety net.
+	lastModified map[string]time.Time
+
+	loop lifecycle.TickerLoop
 }
 
 // sweepTimeout bounds one ingest pass so a stalled environment (slow/queued API)
@@ -99,10 +100,23 @@ func (i *Ingester) Ingest(ctx context.Context) (IngestResult, error) {
 		return res, fmt.Errorf("list desktop flows: %w", err)
 	}
 
+	if i.lastModified == nil {
+		i.lastModified = make(map[string]time.Time)
+	}
+
 	for _, f := range flows {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
+		// Incremental sync: skip flows whose Modified timestamp hasn't changed
+		// since the last sweep. Saves a GetFlowDefinition API call per
+		// unchanged flow (the bulk of a steady-state sweep). The first sweep
+		// (empty map) fetches all; subsequent sweeps skip unchanged ones.
+		if prev, ok := i.lastModified[f.ID]; ok && !f.Modified.IsZero() && f.Modified.Equal(prev) {
+			res.Skipped++
+			continue
+		}
+
 		def, err := i.client.GetFlowDefinition(ctx, f.ID)
 		if err != nil {
 			res.Failed++
@@ -124,6 +138,7 @@ func (i *Ingester) Ingest(ctx context.Context) (IngestResult, error) {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): store: %v", f.Name, f.ID, err))
 			continue
 		}
+		i.lastModified[f.ID] = f.Modified
 		res.Ingested++
 	}
 
@@ -139,50 +154,21 @@ func (i *Ingester) Start(interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
-	i.startOnce.Do(func() {
-		i.rootCtx, i.rootCancel = context.WithCancel(context.Background())
-		i.stop = make(chan struct{})
-		go i.loop(interval)
+	// Derive from the loop's root ctx (both for the immediate sweep and every
+	// ticked one) so Stop cancels a sweep in flight at the next flow boundary
+	// instead of letting it run to completion against a shutting-down app —
+	// the sweep itself respects ctx.Err() via Ingest's per-flow check.
+	i.loop.Start(interval, true, func(ctx context.Context) {
+		i.runSweep(ctx)
+	}, func(r any) {
+		logger.Error("padcloud ingest loop panicked", "err", r)
 	})
 }
 
 // Stop cancels any in-flight sweep and ends the loop. Idempotent and safe to
 // call on an ingester that was never started.
 func (i *Ingester) Stop() {
-	i.stopOnce.Do(func() {
-		if i.rootCancel != nil {
-			i.rootCancel()
-		}
-		if i.stop != nil {
-			close(i.stop)
-		}
-	})
-}
-
-func (i *Ingester) loop(interval time.Duration) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error("padcloud ingest loop panicked", "err", r)
-		}
-	}()
-	// Immediate sweep so a freshly-started instance imports right away.
-	// Derive from rootCtx (like the ticker sweeps below) so Stop() during the
-	// immediate sweep cancels it at the next flow boundary instead of letting
-	// it run to completion against a shutting-down app.
-	i.runSweep(i.rootCtx)
-
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-i.stop:
-			return
-		case <-t.C:
-			// Derive from rootCtx so Stop cancels a sweep in flight at the next
-			// flow boundary (the sweep itself respects ctx.Err()).
-			i.runSweep(i.rootCtx)
-		}
-	}
+	i.loop.Stop()
 }
 
 // runSweep runs one bounded Ingest pass and logs the outcome (the periodic loop

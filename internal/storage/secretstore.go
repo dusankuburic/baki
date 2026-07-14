@@ -2,7 +2,6 @@ package storage
 
 import (
 	"errors"
-	"sync"
 )
 
 // ErrSecretStorageUnavailable is returned by write operations when the active
@@ -25,8 +24,15 @@ var ErrSecretNotFound = errors.New("secret not found")
 var ErrSecretDecryptFailed = errors.New("secret could not be decrypted (deployment key may have rotated)")
 
 // SecretStore abstracts provider-key persistence. The default implementation is
-// the OS keychain (desktop mode); cloud deployments inject an encrypted,
-// database-backed store via SetSecretStore.
+// the OS keychain (desktop mode, via NewKeyringSecretStore); cloud deployments
+// construct an encrypted, database-backed store instead (see
+// database.KeyStoreProvider) and inject it through fx like any other
+// dependency — there is deliberately no package-level active-store global here.
+// A prior version of this package held one (SetSecretStore/CurrentSecretStore),
+// which made cloud-mode secret storage depend on fx *invoke* ordering (the
+// global had to be set before anything resolved it) instead of the DAG; the
+// caller now gets a SecretStore value directly from whichever provider
+// constructed it.
 //
 // All methods take a scope that namespaces the secret to an owner. An empty
 // scope ("") is the legacy/local (single-user desktop) namespace and MUST map
@@ -39,64 +45,7 @@ type SecretStore interface {
 	Delete(scope, provider string) error
 }
 
-var (
-	storeMu     sync.RWMutex
-	activeStore SecretStore = keyringStore{}
-)
-
-// SetSecretStore replaces the active secret backend. Call once at startup
-// (e.g. to switch to a database-backed encrypted keystore in cloud mode).
-func SetSecretStore(s SecretStore) {
-	storeMu.Lock()
-	defer storeMu.Unlock()
-	activeStore = s
-}
-
-// CurrentSecretStore returns the active secret backend. Used by the DI
-// container to inject the SecretStore into services.
-func CurrentSecretStore() SecretStore {
-	storeMu.RLock()
-	defer storeMu.RUnlock()
-	return activeStore
-}
-
-func currentStore() SecretStore {
-	storeMu.RLock()
-	defer storeMu.RUnlock()
-	return activeStore
-}
-
-// SaveApiKeyScoped persists a provider API key for the given scope (owner).
-// An empty scope uses the legacy/local unscoped namespace.
-func SaveApiKeyScoped(scope, provider, key string) error {
-	return currentStore().Save(scope, provider, key)
-}
-
-// GetApiKeyScoped returns the stored key for a provider within scope, or
-// ErrSecretNotFound if absent (or the backend is unavailable).
-func GetApiKeyScoped(scope, provider string) (string, error) {
-	return currentStore().Get(scope, provider)
-}
-
-// HasApiKeyScoped reports whether a key is configured for the provider in scope.
-func HasApiKeyScoped(scope, provider string) (bool, error) {
-	return currentStore().Has(scope, provider)
-}
-
-// DeleteApiKeyScoped removes a stored provider key within scope.
-func DeleteApiKeyScoped(scope, provider string) error {
-	return currentStore().Delete(scope, provider)
-}
-
-// SaveApiKey persists a provider API key in the legacy/local (unscoped) namespace.
-// Retained for callers without a user identity (e.g. desktop OAuth device flows).
-func SaveApiKey(provider, key string) error { return SaveApiKeyScoped("", provider, key) }
-
-// GetApiKey returns the stored key for a provider in the legacy/local namespace.
-func GetApiKey(provider string) (string, error) { return GetApiKeyScoped("", provider) }
-
-// HasApiKey reports whether a key is configured in the legacy/local namespace.
-func HasApiKey(provider string) (bool, error) { return HasApiKeyScoped("", provider) }
-
-// DeleteApiKey removes a stored provider key in the legacy/local namespace.
-func DeleteApiKey(provider string) error { return DeleteApiKeyScoped("", provider) }
+// NewKeyringSecretStore returns the default, OS-keychain-backed SecretStore
+// (desktop/local mode). It degrades gracefully — never panics — when no
+// keychain is reachable (headless/CI environments); see keyring.go.
+func NewKeyringSecretStore() SecretStore { return keyringStore{} }

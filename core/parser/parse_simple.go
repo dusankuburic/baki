@@ -49,6 +49,14 @@ func (p *Parser) Parse() (*models.FlowDocument, error) {
 	for _, tok := range tokens {
 		state.processToken(tok)
 	}
+	// Flush closable blocks still open at EOF. recordUnclosedBlocks is otherwise
+	// only called at subflow boundaries (handleSubflowStart/handleSubflowEnd),
+	// so a file that ends abruptly — open LOOP/IF/BLOCK with no END and no
+	// trailing #EndRegion in the final subflow — would have those unclosed
+	// blocks silently dropped from ParseErrors.
+	if state.current != nil {
+		state.recordUnclosedBlocks()
+	}
 
 	subflows, totalBlocks, maxDepth := finalizeSubflows(state.built)
 	return buildDocument(p.text, p.fileName, p.fileSize, subflows, state.parseErrors, totalBlocks, maxDepth), nil

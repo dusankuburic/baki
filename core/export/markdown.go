@@ -13,12 +13,23 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 
 	sb.WriteString("# PAD Analyzer — Analysis Report\n\n")
 
-	fmt.Fprintf(&sb, "**Flow:** %s\n", doc.Name)
-	if doc.FilePath != "" {
-		fmt.Fprintf(&sb, "**File:** %s\n", doc.FilePath)
+	if doc != nil {
+		fmt.Fprintf(&sb, "**Flow:** %s\n", doc.Name)
+		if doc.FilePath != "" {
+			fmt.Fprintf(&sb, "**File:** %s\n", doc.FilePath)
+		}
 	}
-	fmt.Fprintf(&sb, "**Generated:** %s\n", report.GeneratedAt.Format(time.RFC1123))
-	fmt.Fprintf(&sb, "**Duration:** %dms\n\n", report.DurationMs)
+	if report == nil {
+		report = &models.AnalysisReport{}
+	}
+	if !report.GeneratedAt.IsZero() {
+		fmt.Fprintf(&sb, "**Generated:** %s\n", report.GeneratedAt.Format(time.RFC1123))
+	}
+	if report.DurationMs > 0 {
+		fmt.Fprintf(&sb, "**Duration:** %dms\n\n", report.DurationMs)
+	} else {
+		sb.WriteString("\n")
+	}
 
 	sb.WriteString("## Summary\n\n")
 	sb.WriteString("| Metric | Count |\n|---|---|\n")

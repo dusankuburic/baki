@@ -12,10 +12,35 @@ beforeEach(() => vi.clearAllMocks())
 describe('PortfolioView', () => {
   it('renders the ranked flows and rollup totals', async () => {
     portfolio.mockResolvedValue({
-      totalFlows: 2, analyzedFlows: 2, avgHealth: 65, errors: 3, warnings: 1, info: 0,
+      totalFlows: 2,
+      analyzedFlows: 2,
+      avgHealth: 65,
+      errors: 3,
+      warnings: 1,
+      info: 0,
       entries: [
-        {flowId: 'f2', flowName: 'Bravo', ownerName: 'u2', analyzed: true, healthScore: 40, errors: 3, warnings: 0, info: 0, analyzedAt: '2026-01-01T00:00:00Z'},
-        {flowId: 'f1', flowName: 'Alpha', ownerName: 'u1', analyzed: true, healthScore: 90, errors: 0, warnings: 1, info: 0, analyzedAt: '2026-01-01T00:00:00Z'},
+        {
+          flowId: 'f2',
+          flowName: 'Bravo',
+          ownerName: 'u2',
+          analyzed: true,
+          healthScore: 40,
+          errors: 3,
+          warnings: 0,
+          info: 0,
+          analyzedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          flowId: 'f1',
+          flowName: 'Alpha',
+          ownerName: 'u1',
+          analyzed: true,
+          healthScore: 90,
+          errors: 0,
+          warnings: 1,
+          info: 0,
+          analyzedAt: '2026-01-01T00:00:00Z',
+        },
       ],
     })
     render(<PortfolioView />)
@@ -25,7 +50,15 @@ describe('PortfolioView', () => {
   })
 
   it('shows an empty state when there are no flows', async () => {
-    portfolio.mockResolvedValue({totalFlows: 0, analyzedFlows: 0, avgHealth: 0, errors: 0, warnings: 0, info: 0, entries: []})
+    portfolio.mockResolvedValue({
+      totalFlows: 0,
+      analyzedFlows: 0,
+      avgHealth: 0,
+      errors: 0,
+      warnings: 0,
+      info: 0,
+      entries: [],
+    })
     render(<PortfolioView />)
     expect(await screen.findByText(/No flows to govern/i)).toBeInTheDocument()
   })

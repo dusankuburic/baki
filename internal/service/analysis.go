@@ -50,7 +50,7 @@ func analysisHistoryKey(doc *models.FlowDocument) string {
 }
 
 type AnalysisService struct {
-	notifier Notifier
+	notifier EventNotifier
 	settings SettingsProvider
 	history  *analyzer.HistoryStore
 
@@ -58,7 +58,7 @@ type AnalysisService struct {
 	reports *lru.Cache[string, *reportPair]
 }
 
-func NewAnalysisService(notifier Notifier, settings SettingsProvider, history *analyzer.HistoryStore) *AnalysisService {
+func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, history *analyzer.HistoryStore) *AnalysisService {
 	cache, err := lru.New[string, *reportPair](maxAnalysisReports)
 	if err != nil {
 		panic(fmt.Sprintf("analysis reports LRU: %v", err))

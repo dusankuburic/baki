@@ -63,7 +63,10 @@ export function useAdminData(isAdmin: boolean) {
     const interval = setInterval(() => {
       if (!cancelled && statusRef.current?.status === 'running') fetchStatus()
     }, 5000)
-    return () => { cancelled = true; clearInterval(interval) }
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
   }, [isAdmin, fetchStatus, fetchUsers, fetchAudit])
 
   const startMigration = useCallback(async () => {
@@ -85,33 +88,47 @@ export function useAdminData(isAdmin: boolean) {
     }
   }, [fetchStatus, confirm])
 
-  const changeRole = useCallback(async (userId: string, newRole: string, currentUserId?: string) => {
-    if (userId === currentUserId && newRole !== 'admin') {
-      const ok = await confirm({
-        title: 'Remove your admin access',
-        message: 'You are about to remove your own administrator privileges. Are you sure?',
-        danger: true,
-        confirmLabel: 'Remove access',
-      })
-      if (!ok) return
-    }
-    try {
-      await adminApi.setUserRole(userId, newRole)
-      await fetchUsers()
-    } catch (err) {
-      setError('Failed to change role: ' + (err instanceof Error ? err.message : 'Unknown error'))
-    }
-  }, [fetchUsers, confirm])
+  const changeRole = useCallback(
+    async (userId: string, newRole: string, currentUserId?: string) => {
+      if (userId === currentUserId && newRole !== 'admin') {
+        const ok = await confirm({
+          title: 'Remove your admin access',
+          message: 'You are about to remove your own administrator privileges. Are you sure?',
+          danger: true,
+          confirmLabel: 'Remove access',
+        })
+        if (!ok) return
+      }
+      try {
+        await adminApi.setUserRole(userId, newRole)
+        await fetchUsers()
+      } catch (err) {
+        setError('Failed to change role: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      }
+    },
+    [fetchUsers, confirm],
+  )
 
-  const filterAudit = useCallback((action: string) => {
-    auditActionRef.current = action
-    setAuditAction(action)
-    fetchAudit(action)
-  }, [fetchAudit])
+  const filterAudit = useCallback(
+    (action: string) => {
+      auditActionRef.current = action
+      setAuditAction(action)
+      fetchAudit(action)
+    },
+    [fetchAudit],
+  )
 
   return {
-    migrationStatus, users, auditEvents, auditAction,
-    isLoading, isStarting, error,
-    fetchAll, startMigration, changeRole, filterAudit,
+    migrationStatus,
+    users,
+    auditEvents,
+    auditAction,
+    isLoading,
+    isStarting,
+    error,
+    fetchAll,
+    startMigration,
+    changeRole,
+    filterAudit,
   }
 }

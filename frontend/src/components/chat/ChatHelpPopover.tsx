@@ -19,7 +19,9 @@ const SHORTCUTS: {keys: string; description: string}[] = [
 // where the composer sits (docked or popped out).
 export default function ChatHelpPopover({onClose}: Props) {
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -66,7 +68,9 @@ export default function ChatHelpPopover({onClose}: Props) {
               {SHORTCUTS.map(s => (
                 <li key={s.keys} className="flex items-baseline justify-between gap-3 text-sm">
                   <span className="text-text-secondary text-xs">{s.description}</span>
-                  <kbd className="text-2xs text-text-tertiary bg-surface-3 border border-border-subtle rounded px-1.5 py-0.5 whitespace-nowrap">{s.keys}</kbd>
+                  <kbd className="text-2xs text-text-tertiary bg-surface-3 border border-border-subtle rounded px-1.5 py-0.5 whitespace-nowrap">
+                    {s.keys}
+                  </kbd>
                 </li>
               ))}
             </ul>

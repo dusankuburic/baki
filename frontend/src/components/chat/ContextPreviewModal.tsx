@@ -34,24 +34,18 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           <div className="flex items-center justify-between text-xs text-text-secondary tabular-nums">
             <span>Estimated: ~{preview.estimatedTokens.toLocaleString()} tokens</span>
-            <span>Context limit: {preview.contextLimit.toLocaleString()} ({usage}% used)</span>
+            <span>
+              Context limit: {preview.contextLimit.toLocaleString()} ({usage}% used)
+            </span>
           </div>
 
-          <CollapsibleSection
-            title="System Prompt"
-            expanded={expandSystem}
-            onToggle={() => setExpandSystem(v => !v)}
-          >
+          <CollapsibleSection title="System Prompt" expanded={expandSystem} onToggle={() => setExpandSystem(v => !v)}>
             <pre className="text-xs text-text-secondary whitespace-pre-wrap font-mono bg-surface-2 rounded-lg p-3 max-h-[200px] overflow-y-auto">
               {preview.systemPrompt}
             </pre>
           </CollapsibleSection>
 
-          <CollapsibleSection
-            title="Flow Context"
-            expanded={expandContext}
-            onToggle={() => setExpandContext(v => !v)}
-          >
+          <CollapsibleSection title="Flow Context" expanded={expandContext} onToggle={() => setExpandContext(v => !v)}>
             <pre className="text-xs text-text-secondary whitespace-pre-wrap font-mono bg-surface-2 rounded-lg p-3 max-h-[300px] overflow-y-auto">
               {preview.contextText || '(no context)'}
             </pre>
@@ -59,9 +53,7 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
 
           <div>
             <span className="text-xs font-medium text-text-secondary">Your Message</span>
-            <div className="mt-1 text-sm text-text-primary bg-surface-2 rounded-lg p-3">
-              {preview.userMessage}
-            </div>
+            <div className="mt-1 text-sm text-text-primary bg-surface-2 rounded-lg p-3">{preview.userMessage}</div>
           </div>
         </div>
 
@@ -84,8 +76,16 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
   )
 }
 
-function CollapsibleSection({title, expanded, onToggle, children}: {
-  title: string; expanded: boolean; onToggle: () => void; children: React.ReactNode
+function CollapsibleSection({
+  title,
+  expanded,
+  onToggle,
+  children,
+}: {
+  title: string
+  expanded: boolean
+  onToggle: () => void
+  children: React.ReactNode
 }) {
   return (
     <div>

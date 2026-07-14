@@ -36,7 +36,9 @@ export default function LibraryToolbar() {
         aria-label="Sort flows"
       >
         {SORT_OPTIONS.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
         ))}
       </select>
       <div className="inline-flex rounded-md border border-border-default overflow-hidden">
@@ -47,7 +49,12 @@ export default function LibraryToolbar() {
   )
 }
 
-function ViewToggle({active, onClick, icon: Icon, label}: {
+function ViewToggle({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+}: {
   active: boolean
   onClick: () => void
   icon: typeof LayoutGrid
@@ -63,7 +70,7 @@ function ViewToggle({active, onClick, icon: Icon, label}: {
         'h-9 w-9 inline-flex items-center justify-center transition-colors',
         active
           ? 'bg-brand-500/15 text-brand-400'
-          : 'bg-surface-2 text-text-tertiary hover:text-text-primary hover:bg-surface-3'
+          : 'bg-surface-2 text-text-tertiary hover:text-text-primary hover:bg-surface-3',
       )}
     >
       <Icon size={14} />

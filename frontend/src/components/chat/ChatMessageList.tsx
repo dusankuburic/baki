@@ -52,7 +52,7 @@ function ChatMessageList({children, isStreaming}: Props) {
       if (!el) return
       const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
       if (distanceToBottom > 2) {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+        el.scrollTo({top: el.scrollHeight, behavior: 'smooth'})
       }
     }, SCROLL_UPDATE_THROTTLE)
     return () => clearInterval(interval)
@@ -62,7 +62,7 @@ function ChatMessageList({children, isStreaming}: Props) {
   useEffect(() => {
     if (!isStreaming && !userScrolledRef.current) {
       const el = containerRef.current
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
+      if (el) el.scrollTo({top: el.scrollHeight, behavior: 'instant'})
     }
   }, [children, isStreaming])
 
@@ -72,7 +72,7 @@ function ChatMessageList({children, isStreaming}: Props) {
         ref={containerRef}
         className={clsx(
           'h-full overflow-y-auto px-3 py-3 flex flex-col gap-3 custom-scrollbar',
-          isStreaming && 'is-streaming'
+          isStreaming && 'is-streaming',
         )}
         onScroll={handleScroll}
         role="log"

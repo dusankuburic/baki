@@ -29,6 +29,19 @@ func JSON(w http.ResponseWriter, data any) {
 	}
 }
 
+// JSONStatus encodes data as JSON and writes it with the given status code.
+// Use this instead of w.WriteHeader(code) followed by JSON(w, ...): that
+// sequence sets Content-Type AFTER the header block is flushed (WriteHeader
+// sends the headers), so the 201 ships without Content-Type and the subsequent
+// Encode triggers a superfluous WriteHeader(200).
+func JSONStatus(w http.ResponseWriter, code int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		logger.Warn("render.JSONStatus: encode response", "error", err)
+	}
+}
+
 // ErrorResponse is the standard error envelope returned by all API endpoints.
 // Code is a stable machine-readable string clients can switch on;
 // Message is human-readable; RequestID links to distributed traces.

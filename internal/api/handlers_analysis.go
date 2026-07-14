@@ -84,8 +84,7 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		Name   string            `json:"name"`
 		Format string            `json:"format,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if len(req.Files) == 0 {
@@ -123,8 +122,7 @@ func (h *AnalysisHandler) handleGetVariableLineage(w http.ResponseWriter, r *htt
 		FlowID   string `json:"flowId"`
 		Variable string `json:"varName"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Variable == "" {
@@ -195,8 +193,7 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 		RuleID  string `json:"ruleId"`
 		Enabled bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.RuleID != "" {
@@ -223,8 +220,7 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 		RuleID string            `json:"ruleId"`
 		Config models.RuleConfig `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.RuleID != "" {
@@ -300,8 +296,7 @@ func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		FolderPath string `json:"folderPath"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.FolderPath == "" {
@@ -530,8 +525,7 @@ func (h *AnalysisHandler) handleRelatedFindings(w http.ResponseWriter, r *http.R
 		FlowID  string `json:"flowId"`
 		BlockID string `json:"blockId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -557,8 +551,7 @@ func (h *AnalysisHandler) handleCompareFlows(w http.ResponseWriter, r *http.Requ
 		FlowAID string `json:"flowAId"`
 		FlowBID string `json:"flowBId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

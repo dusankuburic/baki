@@ -1,0 +1,17 @@
+# Review ownership for security- and infra-sensitive paths.
+# Branch protection should require review from these owners for changes here.
+
+# Authentication, authorization, crypto, and security middleware
+/internal/auth/                @dusankuburic
+/internal/api/middleware/      @dusankuburic
+/internal/storage/database/keystore.go  @dusankuburic
+
+# Deployment infrastructure, secrets, and container hardening
+/infra/                        @dusankuburic
+/Dockerfile                    @dusankuburic
+/docker-compose*.yml           @dusankuburic
+/.github/workflows/            @dusankuburic
+/ci/                           @dusankuburic
+
+# Default: fall back to repo owner for everything else
+*                              @dusankuburic

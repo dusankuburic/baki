@@ -9,6 +9,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
@@ -42,7 +43,7 @@ func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
 	return analyzer.NewHistoryStore(filepath.Join(configDir, "analysis-history"))
 }
 
-func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
+func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
 	// recorder nil there — the audited provider guards a nil recorder and skips
@@ -54,7 +55,7 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 			return backend.SaveUsageMetric(ctx, metric)
 		}
 	}
-	factory := ai.NewProviderFactory(storage.GetApiKeyScoped, copilotAuth, recorder, &cfg.Runtime)
+	factory := ai.NewProviderFactory(keys.Get, copilotAuth, recorder, &cfg.Runtime)
 	auth := ai.NewGitHubAuth()
 	demo := ai.NewDemoLimiter(configDir)
 	return auth, copilotAuth, factory, demo
@@ -73,9 +74,8 @@ var ServiceModule = fx.Options(
 		// so services depend on the interface, not the concrete filesystem
 		// implementation.
 		func(s *storage.SettingsStore) service.SettingsProvider { return s },
-		// Adapter: expose the global secret store as service.SecretStore so
-		// services can inject it instead of calling package-level globals.
-		func() service.SecretStore { return storage.CurrentSecretStore() },
+		// service.KeyStore itself comes from main.go's provideKeyStore (a
+		// plain fx provider, not a global) — no adapter needed here.
 		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings *storage.SettingsStore) *rag.KnowledgeService {
 			// Pass the factory (not a pre-resolved provider) so the embedding
 			// provider is resolved per request in the caller's scope. Resolving
@@ -83,17 +83,30 @@ var ServiceModule = fx.Options(
 			// per-user) and never picks up keys added later.
 			return rag.NewKnowledgeService(backend, factory, settings)
 		},
-		func(settings service.SettingsProvider, secrets service.SecretStore, notifier service.Notifier, backend storageif.StorageBackend, mode config.DeploymentMode) *service.SystemService {
+		func(settings service.SettingsProvider, secrets service.KeyStore, notifier service.EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *service.SystemService {
 			return service.NewSystemService(settings, secrets, notifier, backend, mode)
 		},
 		service.NewAuthzService,
 		service.NewFlowService,
 		service.NewAnalysisService,
-		service.NewDashboardService,
+		// Adapter: fx only provides the full storageif.StorageBackend, but
+		// DashboardService's constructor takes the narrower DashboardStore it
+		// actually uses — Go allows the wider interface value through at this
+		// call site even though fx's reflection-based provider matching needs
+		// the concrete registration to bridge the two static types.
+		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService) *service.DashboardService {
+			return service.NewDashboardService(backend, analysis, flowSvc)
+		},
 		service.NewExportService,
 		service.NewLibraryService,
+		// Adapter: fx only provides the full storageif.StorageBackend, but
+		// AuthService's constructor takes the narrower authStore it actually
+		// uses (same rationale as the DashboardService adapter above).
+		func(backend storageif.StorageBackend, email *mail.Service) *service.AuthService {
+			return service.NewAuthService(backend, email)
+		},
 		func(
-			notifier service.Notifier,
+			notifier service.EventNotifier,
 			configDir string,
 			flowSvc *service.FlowService,
 			analysisSvc *service.AnalysisService,
@@ -118,7 +131,7 @@ var ServiceModule = fx.Options(
 			auth *ai.GitHubAuth,
 			copilot *ai.CopilotAuth,
 			factory *ai.ProviderFactory,
-			secrets service.SecretStore,
+			secrets service.KeyStore,
 		) *service.ProviderService {
 			return service.NewProviderService(auth, copilot, factory, secrets)
 		},

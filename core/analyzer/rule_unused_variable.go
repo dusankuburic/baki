@@ -41,3 +41,7 @@ func (r *UnusedVariableRule) Check(block *models.Block, ctx *RuleContext) []mode
 		Metadata:    map[string]any{"variable": declaredVar},
 	}}
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&UnusedVariableRule{}) }

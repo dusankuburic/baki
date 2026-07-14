@@ -40,3 +40,7 @@ func (r *DeepNestingRule) Check(block *models.Block, ctx *RuleContext) []models.
 		Metadata:    map[string]interface{}{"depth": depth, "maxDepth": maxDepth},
 	}}
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&DeepNestingRule{}) }

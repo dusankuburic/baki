@@ -16,11 +16,37 @@ export interface SlashCommand {
 }
 
 const COMMANDS: SlashCommand[] = [
-  {id: '/explain', label: 'Explain', description: 'Explain how this code works in detail', icon: <Info size={14} />, kind: 'insert'},
+  {
+    id: '/explain',
+    label: 'Explain',
+    description: 'Explain how this code works in detail',
+    icon: <Info size={14} />,
+    kind: 'insert',
+  },
   {id: '/fix', label: 'Fix', description: 'Find and fix bugs in this code', icon: <Zap size={14} />, kind: 'insert'},
-  {id: '/test', label: 'Test', description: 'Generate unit tests for this code', icon: <Terminal size={14} />, kind: 'insert'},
-  {id: '/clear', label: 'Clear', description: 'Clear the current conversation thread', icon: <Trash2 size={14} />, kind: 'action', action: 'clear'},
-  {id: '/help', label: 'Help', description: 'Show available commands and shortcuts', icon: <HelpCircle size={14} />, kind: 'action', action: 'help'},
+  {
+    id: '/test',
+    label: 'Test',
+    description: 'Generate unit tests for this code',
+    icon: <Terminal size={14} />,
+    kind: 'insert',
+  },
+  {
+    id: '/clear',
+    label: 'Clear',
+    description: 'Clear the current conversation thread',
+    icon: <Trash2 size={14} />,
+    kind: 'action',
+    action: 'clear',
+  },
+  {
+    id: '/help',
+    label: 'Help',
+    description: 'Show available commands and shortcuts',
+    icon: <HelpCircle size={14} />,
+    kind: 'action',
+    action: 'help',
+  },
 ]
 
 export const SLASH_COMMANDS = COMMANDS
@@ -32,14 +58,19 @@ interface Props {
 }
 
 export default function SlashCommandAutocomplete({query, onSelect, onClose}: Props) {
-  const filtered = COMMANDS.filter(c =>
-    c.id.toLowerCase().includes(query.toLowerCase()) ||
-    c.label.toLowerCase().includes(query.toLowerCase())
+  const filtered = COMMANDS.filter(
+    c => c.id.toLowerCase().includes(query.toLowerCase()) || c.label.toLowerCase().includes(query.toLowerCase()),
   )
 
-  const {activeIndex: selectedIndex, setActiveIndex, handleKeyDown} = useListNavigation({
+  const {
+    activeIndex: selectedIndex,
+    setActiveIndex,
+    handleKeyDown,
+  } = useListNavigation({
     count: filtered.length,
-    onSelect: (i) => { if (filtered[i]) onSelect(filtered[i]) },
+    onSelect: i => {
+      if (filtered[i]) onSelect(filtered[i])
+    },
     onClose,
     mode: 'wrap',
     extraSelectKeys: ['Tab'],
@@ -67,14 +98,16 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose}: Pro
             key={cmd.id}
             className={clsx(
               'w-full flex items-center gap-3 px-3 py-2 text-sm rounded-md transition-colors text-left',
-              i === selectedIndex ? 'bg-brand-500/10 text-brand-400' : 'text-text-secondary hover:bg-surface-3'
+              i === selectedIndex ? 'bg-brand-500/10 text-brand-400' : 'text-text-secondary hover:bg-surface-3',
             )}
             onClick={() => onSelect(cmd)}
           >
-            <div className={clsx(
-              'p-1.5 rounded-md',
-              i === selectedIndex ? 'bg-brand-500/20 text-brand-400' : 'bg-surface-4 text-text-tertiary'
-            )}>
+            <div
+              className={clsx(
+                'p-1.5 rounded-md',
+                i === selectedIndex ? 'bg-brand-500/20 text-brand-400' : 'bg-surface-4 text-text-tertiary',
+              )}
+            >
               {cmd.icon}
             </div>
             <div className="flex flex-col min-w-0">

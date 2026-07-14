@@ -60,7 +60,9 @@ export function WorkflowFunnelCard({data, className}: {data: Workflow; className
                     style={{width: `${(n / maxCount) * 100}%`, backgroundColor: colors[st.color]}}
                   />
                 </div>
-                <span className="text-2xs font-mono tabular-nums text-text-secondary w-14 text-right shrink-0">{n} ({pct}%)</span>
+                <span className="text-2xs font-mono tabular-nums text-text-secondary w-14 text-right shrink-0">
+                  {n} ({pct}%)
+                </span>
               </div>
             )
           })}
@@ -81,9 +83,14 @@ export function WorkflowFunnelCard({data, className}: {data: Workflow; className
             className="flex items-center gap-2 rounded-lg px-2.5 py-2"
             style={{backgroundColor: data.staleCount > 0 ? 'rgba(239,68,68,0.08)' : 'rgba(63,63,71,0.4)'}}
           >
-            <AlertTriangle size={15} className={data.staleCount > 0 ? 'text-red-400 shrink-0' : 'text-text-tertiary shrink-0'} />
+            <AlertTriangle
+              size={15}
+              className={data.staleCount > 0 ? 'text-red-400 shrink-0' : 'text-text-tertiary shrink-0'}
+            />
             <div className="min-w-0">
-              <div className={`text-sm font-mono tabular-nums leading-tight ${data.staleCount > 0 ? 'text-red-400' : 'text-text-primary'}`}>
+              <div
+                className={`text-sm font-mono tabular-nums leading-tight ${data.staleCount > 0 ? 'text-red-400' : 'text-text-primary'}`}
+              >
                 {data.staleCount}
               </div>
               <div className="text-2xs text-text-tertiary leading-tight">stale (&gt;14d open)</div>

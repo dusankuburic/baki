@@ -71,7 +71,10 @@ interface ChatState {
   // updateStream patches text AND meta in one atomic set, halving the per-frame
   // subscriber notifications during streaming (the high-frequency RAF-coalesced
   // flush otherwise issues two set() calls — text + tokens — at 60fps).
-  updateStream: (threadId: string, patch: Partial<Pick<StreamSlot, 'text' | 'isThinking' | 'tokens' | 'toolStatus'>>) => void
+  updateStream: (
+    threadId: string,
+    patch: Partial<Pick<StreamSlot, 'text' | 'isThinking' | 'tokens' | 'toolStatus'>>,
+  ) => void
   // activeStreamCount is the number of threads currently generating. Used by
   // the client-side cap guard (see MAX_CONCURRENT_STREAMS).
   activeStreamCount: () => number
@@ -103,86 +106,96 @@ export const useChatStore = create<ChatState>((set, get) => ({
   stagedPrompt: null,
   drafts: {},
 
-  getMessages: (threadId) => {
+  getMessages: threadId => {
     return get().conversations.get(threadId) ?? EMPTY_ARRAY
   },
 
-  appendMessage: (threadId, message) => set(state => {
-    const existing = state.conversations.get(threadId) ?? []
-    // Dedup by message ID — prevents duplicate entries when a conversation
-    // is loaded twice (e.g. rapid flow switching, StrictMode double-invoke).
-    if (existing.some(m => m.id === message.id)) return state
-    const next = new Map(state.conversations)
-    next.set(threadId, [...existing, message])
+  appendMessage: (threadId, message) =>
+    set(state => {
+      const existing = state.conversations.get(threadId) ?? []
+      // Dedup by message ID — prevents duplicate entries when a conversation
+      // is loaded twice (e.g. rapid flow switching, StrictMode double-invoke).
+      if (existing.some(m => m.id === message.id)) return state
+      const next = new Map(state.conversations)
+      next.set(threadId, [...existing, message])
 
-    if (message.role === 'user' && !state.threads.find(t => t.id === threadId)?.title) {
-      const title = message.content.slice(0, 40).replace(/\n/g, ' ')
-      const threads = state.threads.map(t =>
-        t.id === threadId ? {...t, title} : t
+      if (message.role === 'user' && !state.threads.find(t => t.id === threadId)?.title) {
+        const title = message.content.slice(0, 40).replace(/\n/g, ' ')
+        const threads = state.threads.map(t => (t.id === threadId ? {...t, title} : t))
+        return {conversations: next, threads}
+      }
+      return {conversations: next}
+    }),
+
+  removeMessage: (threadId, messageId) =>
+    set(state => {
+      const msgs = state.conversations.get(threadId)
+      if (!msgs) return state
+      const next = new Map(state.conversations)
+      next.set(
+        threadId,
+        msgs.filter(m => m.id !== messageId),
       )
-      return {conversations: next, threads}
-    }
-    return {conversations: next}
-  }),
+      return {conversations: next}
+    }),
 
-  removeMessage: (threadId, messageId) => set(state => {
-    const msgs = state.conversations.get(threadId)
-    if (!msgs) return state
-    const next = new Map(state.conversations)
-    next.set(threadId, msgs.filter(m => m.id !== messageId))
-    return {conversations: next}
-  }),
+  clearThreadMessages: threadId =>
+    set(state => {
+      const next = new Map(state.conversations)
+      next.delete(threadId)
+      return {conversations: next}
+    }),
 
-  clearThreadMessages: (threadId) => set(state => {
-    const next = new Map(state.conversations)
-    next.delete(threadId)
-    return {conversations: next}
-  }),
+  compactThread: (threadId, keepPairs) =>
+    set(state => {
+      const msgs = state.conversations.get(threadId)
+      if (!msgs || msgs.length <= keepPairs * 2) return state
+      const next = new Map(state.conversations)
+      next.set(threadId, msgs.slice(-keepPairs * 2))
+      return {conversations: next}
+    }),
 
-  compactThread: (threadId, keepPairs) => set(state => {
-    const msgs = state.conversations.get(threadId)
-    if (!msgs || msgs.length <= keepPairs * 2) return state
-    const next = new Map(state.conversations)
-    next.set(threadId, msgs.slice(-keepPairs * 2))
-    return {conversations: next}
-  }),
+  updateStreamingMessage: (threadId, text) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      return {streams: {...state.streams, [threadId]: {...slot, text}}}
+    }),
 
-  updateStreamingMessage: (threadId, text) => set(state => {
-    const slot = state.streams[threadId]
-    if (!slot) return state
-    return {streams: {...state.streams, [threadId]: {...slot, text}}}
-  }),
+  startStream: (threadId, streamId, messageId) =>
+    set(state => ({
+      streams: {
+        ...state.streams,
+        [threadId]: {streamId, messageId, text: '', isThinking: true, tokens: 0, toolStatus: null},
+      },
+    })),
 
-  startStream: (threadId, streamId, messageId) => set(state => ({
-    streams: {
-      ...state.streams,
-      [threadId]: {streamId, messageId, text: '', isThinking: true, tokens: 0, toolStatus: null},
-    },
-  })),
+  endStream: threadId =>
+    set(state => {
+      if (!(threadId in state.streams)) return state
+      const next = {...state.streams}
+      delete next[threadId]
+      return {streams: next}
+    }),
 
-  endStream: (threadId) => set(state => {
-    if (!(threadId in state.streams)) return state
-    const next = {...state.streams}
-    delete next[threadId]
-    return {streams: next}
-  }),
+  setStreamMeta: (threadId, patch) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      return {streams: {...state.streams, [threadId]: {...slot, ...patch}}}
+    }),
 
-  setStreamMeta: (threadId, patch) => set(state => {
-    const slot = state.streams[threadId]
-    if (!slot) return state
-    return {streams: {...state.streams, [threadId]: {...slot, ...patch}}}
-  }),
-
-  updateStream: (threadId, patch) => set(state => {
-    const slot = state.streams[threadId]
-    if (!slot) return state
-    return {streams: {...state.streams, [threadId]: {...slot, ...patch}}}
-  }),
+  updateStream: (threadId, patch) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      return {streams: {...state.streams, [threadId]: {...slot, ...patch}}}
+    }),
 
   activeStreamCount: () => Object.keys(get().streams).length,
   canStartStream: () => get().activeStreamCount() < MAX_CONCURRENT_STREAMS,
 
-  createThread: (flowId) => {
+  createThread: flowId => {
     const id = crypto.randomUUID()
     const thread: ChatThread = {
       id,
@@ -204,9 +217,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Evict the oldest inactive, non-streaming thread when the cap is
       // exceeded, so long sessions don't accumulate unbounded chat history.
       if (threads.length > MAX_THREADS) {
-        const victim = threads.find(t =>
-          t.id !== id && t.id !== state.activeThreadId && !(t.id in state.streams),
-        )
+        const victim = threads.find(t => t.id !== id && t.id !== state.activeThreadId && !(t.id in state.streams))
         if (victim) {
           threads = threads.filter(t => t.id !== victim.id)
           nextConversations.delete(victim.id)
@@ -220,12 +231,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return id
   },
 
-  switchThread: (threadId) => {
+  switchThread: threadId => {
     const thread = get().threads.find(t => t.id === threadId)
     if (thread) set({activeThreadId: threadId})
   },
 
-  closeThread: (threadId) => {
+  closeThread: threadId => {
     // Cancel any in-flight backend stream before clearing the local slot.
     // Without this, the provider keeps generating tokens for a stream whose
     // client-side listener was deleted — wasting spend and orphaning the
@@ -246,57 +257,73 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       const drafts = threadId in state.drafts ? {...state.drafts} : state.drafts
       if (threadId in drafts) delete drafts[threadId]
-      const activeThreadId = state.activeThreadId === threadId
-        ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
-        : state.activeThreadId
+      const activeThreadId =
+        state.activeThreadId === threadId
+          ? remaining.length > 0
+            ? remaining[remaining.length - 1].id
+            : null
+          : state.activeThreadId
       return {threads: remaining, conversations: next, activeThreadId, streams, drafts}
     })
   },
 
-  updateThread: (threadId, patch) => set(state => ({
-    threads: state.threads.map(t => t.id === threadId ? {...t, ...patch} : t),
-  })),
+  updateThread: (threadId, patch) =>
+    set(state => ({
+      threads: state.threads.map(t => (t.id === threadId ? {...t, ...patch} : t)),
+    })),
 
   getActiveThread: () => {
     const {threads, activeThreadId} = get()
     return threads.find(t => t.id === activeThreadId) ?? null
   },
 
-  getFlowThreads: (flowId) => {
+  getFlowThreads: flowId => {
     return get().threads.filter(t => t.flowId === flowId)
   },
 
-  clearFlowThreads: (flowId) => set(state => {
-    const toRemove = state.threads.filter(t => t.flowId === flowId).map(t => t.id)
-    const remaining = state.threads.filter(t => t.flowId !== flowId)
-    const next = new Map(state.conversations)
-    for (const id of toRemove) next.delete(id)
-    const activeThreadId = toRemove.includes(state.activeThreadId ?? '')
-      ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
-      : state.activeThreadId
-    return {threads: remaining, conversations: next, activeThreadId}
-  }),
+  clearFlowThreads: flowId =>
+    set(state => {
+      const toRemove = state.threads.filter(t => t.flowId === flowId).map(t => t.id)
+      const remaining = state.threads.filter(t => t.flowId !== flowId)
+      const next = new Map(state.conversations)
+      for (const id of toRemove) next.delete(id)
+      const activeThreadId = toRemove.includes(state.activeThreadId ?? '')
+        ? remaining.length > 0
+          ? remaining[remaining.length - 1].id
+          : null
+        : state.activeThreadId
+      return {threads: remaining, conversations: next, activeThreadId}
+    }),
 
-  setProvider: (p) => set({selectedProvider: p}),
+  setProvider: p => set({selectedProvider: p}),
 
   bumpProviderEpoch: () => set(s => ({providerEpoch: s.providerEpoch + 1})),
-  setStagedPrompt: (p) => set({stagedPrompt: p}),
+  setStagedPrompt: p => set({stagedPrompt: p}),
 
-  setDraft: (threadId, text) => set(state => {
-    // Prune empty drafts so the map doesn't accumulate blank keys.
-    if (!text) {
-      if (!(threadId in state.drafts)) return state
-      const drafts = {...state.drafts}
-      delete drafts[threadId]
-      return {drafts}
-    }
-    if (state.drafts[threadId] === text) return state
-    return {drafts: {...state.drafts, [threadId]: text}}
-  }),
+  setDraft: (threadId, text) =>
+    set(state => {
+      // Prune empty drafts so the map doesn't accumulate blank keys.
+      if (!text) {
+        if (!(threadId in state.drafts)) return state
+        const drafts = {...state.drafts}
+        delete drafts[threadId]
+        return {drafts}
+      }
+      if (state.drafts[threadId] === text) return state
+      return {drafts: {...state.drafts, [threadId]: text}}
+    }),
 }))
 
 // Reset on logout (see storeRegistry).
-registerStoreReset(() => useChatStore.setState({
-  threads: [], activeThreadId: null, conversations: new Map(), streams: {},
-  stagedPrompt: null, selectedProvider: 'claude', providerEpoch: 0, drafts: {},
-}))
+registerStoreReset(() =>
+  useChatStore.setState({
+    threads: [],
+    activeThreadId: null,
+    conversations: new Map(),
+    streams: {},
+    stagedPrompt: null,
+    selectedProvider: 'claude',
+    providerEpoch: 0,
+    drafts: {},
+  }),
+)

@@ -13,8 +13,14 @@ vi.mock('@/lib/csv', () => ({
 
 function finding(p: Partial<Finding> = {}): Finding {
   return {
-    id: 'F1', ruleId: 'r', blockId: 'blk-1', subflowId: 'sf-1',
-    title: 'Title', description: 'Desc', severity: 'error', category: 'Security',
+    id: 'F1',
+    ruleId: 'r',
+    blockId: 'blk-1',
+    subflowId: 'sf-1',
+    title: 'Title',
+    description: 'Desc',
+    severity: 'error',
+    category: 'Security',
     ...p,
   } as Finding
 }

@@ -23,7 +23,9 @@ function setConnState(s: string) {
 vi.mock('@/api/client', () => ({
   subscribeToEvents: vi.fn(async (cb: EventCb) => {
     capturedCb = cb
-    return () => { capturedCb = null }
+    return () => {
+      capturedCb = null
+    }
   }),
   subscribeConnectionState: vi.fn((cb: StateCb) => {
     stateListeners.add(cb)
@@ -115,7 +117,13 @@ describe('stall probe', () => {
     expect(handler.onChunk).toHaveBeenCalledTimes(2)
 
     // done was dropped; the probe fetches the authoritative buffer.
-    vi.mocked(chatApi.resumeStream).mockResolvedValue({text: 'hello world', done: true, error: '', tokensOut: 5, tokensIn: 2})
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'hello world',
+      done: true,
+      error: '',
+      tokensOut: 5,
+      tokensIn: 2,
+    })
     await vi.advanceTimersByTimeAsync(30_000)
 
     expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
@@ -128,7 +136,13 @@ describe('stall probe', () => {
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
 
-    vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: 'provider exploded', tokensOut: 0, tokensIn: 0})
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: '',
+      done: false,
+      error: 'provider exploded',
+      tokensOut: 0,
+      tokensIn: 0,
+    })
     await vi.advanceTimersByTimeAsync(30_000)
 
     expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1')
@@ -159,7 +173,13 @@ describe('stall probe', () => {
     await result.current.registerStream('s1', false)
 
     // Text grew past what the client holds: not a stall, misses reset.
-    vi.mocked(chatApi.resumeStream).mockResolvedValue({text: 'partial', done: false, error: '', tokensOut: 0, tokensIn: 0})
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'partial',
+      done: false,
+      error: '',
+      tokensOut: 0,
+      tokensIn: 0,
+    })
     await vi.advanceTimersByTimeAsync(30_000)
 
     expect(handler.onReplace).toHaveBeenCalledWith('partial', 's1')

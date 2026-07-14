@@ -123,7 +123,11 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     // let the effect re-run against the updated rows.
     const g = groups.find(group => group.findings.some(f => findingKey(f) === focusedFindingKey))
     if (g && collapsed.has(g.ruleId)) {
-      setCollapsed(prev => { const n = new Set(prev); n.delete(g.ruleId); return n })
+      setCollapsed(prev => {
+        const n = new Set(prev)
+        n.delete(g.ruleId)
+        return n
+      })
       return
     }
     // Filtered out of this view entirely — nothing to reveal; drop the request.
@@ -136,9 +140,13 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
         ref={virtuosoRef}
         style={{height: '100%'}}
         data={rows}
-        computeItemKey={(_index, row) => row.kind === 'header' ? `h:${row.group.ruleId}` : row.finding.id}
+        computeItemKey={(_index, row) => (row.kind === 'header' ? `h:${row.group.ruleId}` : row.finding.id)}
         itemContent={(_index, row) => {
-          const frame = clsx('border-l-2', sevColor[row.group.severity], row.groupEnd && 'border-b border-border-subtle')
+          const frame = clsx(
+            'border-l-2',
+            sevColor[row.group.severity],
+            row.groupEnd && 'border-b border-border-subtle',
+          )
           if (row.kind === 'header') {
             const {group, collapsed: isCollapsed} = row
             return (
@@ -153,13 +161,15 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                       size={14}
                       className={clsx(
                         'mt-0.5 shrink-0 text-text-tertiary transition-transform duration-fast',
-                        !isCollapsed && 'rotate-90'
+                        !isCollapsed && 'rotate-90',
                       )}
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-text-primary truncate">{group.title}</span>
-                        <span className="text-2xs text-text-tertiary shrink-0 tabular-nums">{group.findings.length}×</span>
+                        <span className="text-2xs text-text-tertiary shrink-0 tabular-nums">
+                          {group.findings.length}×
+                        </span>
                       </div>
                       {!isCollapsed && (
                         <p className="text-2xs text-text-secondary mt-1 leading-relaxed">{group.description}</p>
@@ -172,9 +182,11 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                     title="Select all in group"
                     className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
                   >
-                    {group.findings.every(f => selectedFindingIds.has(f.id)) && group.findings.length > 0
-                      ? <CheckSquare size={12} />
-                      : <Square size={12} />}
+                    {group.findings.every(f => selectedFindingIds.has(f.id)) && group.findings.length > 0 ? (
+                      <CheckSquare size={12} />
+                    ) : (
+                      <Square size={12} />
+                    )}
                   </button>
                   <button
                     onClick={() => suppressMany(group.findings, `Suppressed all "${group.title}" findings`)}
@@ -192,19 +204,24 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
           const isSelected = selectedFindingIds.has(row.finding.id)
           const isFocused = !!focusedFindingKey && findingKey(row.finding) === focusedFindingKey
           return (
-            <div className={clsx(
-              frame, 'relative group transition-colors',
-              isSelected && 'bg-brand-500/5',
-              isFocused && 'ring-1 ring-inset ring-brand-400 bg-brand-500/10',
-            )}>
+            <div
+              className={clsx(
+                frame,
+                'relative group transition-colors',
+                isSelected && 'bg-brand-500/5',
+                isFocused && 'ring-1 ring-inset ring-brand-400 bg-brand-500/10',
+              )}
+            >
               <button
                 onClick={() => toggleFindingSelection(row.finding.id)}
                 className="absolute left-2 top-2.5 z-10 text-text-disabled hover:text-text-secondary transition-colors"
                 aria-label={isSelected ? 'Deselect finding' : 'Select finding'}
               >
-                {isSelected
-                  ? <CheckSquare size={12} className="text-brand-400" />
-                  : <Square size={12} className="opacity-0 group-hover:opacity-100" />}
+                {isSelected ? (
+                  <CheckSquare size={12} className="text-brand-400" />
+                ) : (
+                  <Square size={12} className="opacity-0 group-hover:opacity-100" />
+                )}
               </button>
               <FindingCard finding={row.finding} blockLookup={blockLookup} onFixWithAI={onFixWithAI} />
             </div>
@@ -213,9 +230,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
       />
       {selectedFindingIds.size > 0 && (
         <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
-          <span className="text-2xs text-text-secondary font-medium">
-            {selectedFindingIds.size} selected
-          </span>
+          <span className="text-2xs text-text-secondary font-medium">{selectedFindingIds.size} selected</span>
           <div className="flex items-center gap-3">
             <button
               onClick={() => {

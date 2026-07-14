@@ -1,8 +1,4 @@
-import {
-  collaborationService,
-  type Envelope,
-  type ConnectionStatus,
-} from '@/services/collaboration/CollaborationService'
+import {collaborationService, type Envelope, type ConnectionStatus} from '@/services/collaboration/CollaborationService'
 
 export interface PendingOp {
   id: string
@@ -43,6 +39,11 @@ class SyncManager {
     this.unsubscribeStatus?.()
     this.unsubscribeStatus = null
     this.queue = []
+    // Reset flowId (AFTER saveToStorage, which keys off it) so a subsequent
+    // start() with the SAME flow re-runs loadFromStorage() and resumes the
+    // queue persisted above; without this, start(sameFlowId) skipped the load
+    // and the persisted ops were orphaned.
+    this.flowId = null
     this.notifyChange()
   }
 
@@ -67,7 +68,7 @@ class SyncManager {
     const id = `op-${++this.counter}-${Date.now()}`
     // Always queue first so the op survives a send failure (socket
     // closing between the status check and the actual ws.send).
-    this.queue.push({ id, env, queuedAt: Date.now() })
+    this.queue.push({id, env, queuedAt: Date.now()})
     if (this.queue.length > MAX_QUEUE_SIZE) {
       this.queue = this.queue.slice(-MAX_QUEUE_SIZE)
     }
@@ -127,7 +128,7 @@ class SyncManager {
   private saveToStorage(): void {
     if (!this.flowId) return
     try {
-      const data: PersistedQueue = { queue: this.queue, counter: this.counter }
+      const data: PersistedQueue = {queue: this.queue, counter: this.counter}
       localStorage.setItem(this.storageKey(), JSON.stringify(data))
     } catch {
       // Storage full or unavailable (private mode) — ops stay in memory only

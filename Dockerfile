@@ -20,7 +20,7 @@ RUN swag init -g main.go --parseDependency --parseInternal
 ARG GIT_COMMIT=dev
 ARG VERSION=0.1.0
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w -X main.GitCommit=${GIT_COMMIT} -X main.Version=${VERSION}" \
+    -ldflags="-s -w -X main.GitCommit=${GIT_COMMIT} -X main.Version=${VERSION} -X pad-analyzer/internal/service.Version=${VERSION}" \
     -o baki-backend main.go
 
 # Stage 3: Final lean image

@@ -160,8 +160,15 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	// parks on the send. This bounds the goroutine count to maxConcurrentRecords
 	// under any load — previously each finished AI request spawned a goroutine
 	// that blocked on recordSem, so a slow DB recorder under traffic could grow
-	// the goroutine set without limit (OOM). Usage metrics are best-effort, so
-	// shedding under saturation is the correct backpressure signal.
+	// the goroutine set without limit (OOM).
+	//
+	// In practice the drop NEVER fires: each request gets its own auditedProvider
+	// (the factory builds a fresh chain per request) with a 16-slot semaphore,
+	// and a single request records at most ~7 metrics (one per tool-loop
+	// iteration, maxToolIterations=6 + the initial turn). 16 >> 7, so the
+	// semaphore is never exhausted. The drop is a safety valve against a
+	// pathological stuck recorder, not a routinely-hit path — and the per-request
+	// design means a drop here never affects other tenants' budget tracking.
 	// #nosec G118 -- intentionally detached: usage logging must outlive the request ctx.
 	select {
 	case p.recordSem <- struct{}{}:

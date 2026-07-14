@@ -1,8 +1,10 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +43,10 @@ type Client struct {
 	conn         *websocket.Conn
 	send         chan Envelope
 	disconnected atomic.Bool // set once when Send or Run tears down the connection
+	// authorized is set false by the re-authz goroutine when the user's access
+	// is revoked. readPump checks it per-message so a revoked user can't inject
+	// events in the window between revocation detection and connection close.
+	authorized atomic.Bool
 }
 
 func (c *Client) SetSelectedBlockID(id string) {
@@ -57,7 +63,7 @@ func (c *Client) GetSelectedBlockID() string {
 
 // NewClient wraps an already-upgraded WebSocket connection.
 func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID string) *Client {
-	return &Client{
+	c := &Client{
 		UserID:      userID,
 		DisplayName: displayName,
 		hub:         hub,
@@ -66,6 +72,8 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 		conn:        conn,
 		send:        make(chan Envelope, sendBufferCap),
 	}
+	c.authorized.Store(true)
+	return c
 }
 
 // Run starts the read and write pumps, registers the client in the hub, and
@@ -90,6 +98,74 @@ func (c *Client) Run() {
 
 	go c.writePump()
 	c.readPump()
+}
+
+// runReauthzLoop periodically re-validates this client's access — access-token
+// revocation (blacklist hit) and flow ACL changes — and disconnects it the
+// moment either happens, plus a one-shot timer that disconnects when the
+// underlying access token's own expiry is reached (otherwise a live socket
+// would outlive its credential indefinitely). Runs until ctx is cancelled; the
+// caller (Handler) derives ctx from its own request scope and cancels it via
+// a deferred call so the goroutine can't outlive the connection even if a
+// panic unwinds the handler early. A no-op call (both checker and isRevoked
+// nil) has nothing to check and should not be started by the caller.
+//
+// authorized is set false BEFORE closing the connection so readPump's
+// per-message check (see readPump) stops processing inbound events
+// immediately — this closes the ~2min stale-relay window where a revoked user
+// could otherwise inject live-collab events between revocation detection and
+// connection teardown.
+func (c *Client) runReauthzLoop(ctx context.Context, checker FlowAccessChecker, accessJTI string, accessExp time.Time, isRevoked func(string) bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("websocket re-authz goroutine panicked", "err", r)
+		}
+	}()
+	// Re-check at a 2-minute cadence (matches the SSE channel) so a
+	// revocation is observed promptly rather than up to 5 minutes.
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	var expiryTimer *time.Timer
+	if accessJTI != "" && !accessExp.IsZero() {
+		if d := time.Until(accessExp); d > 0 {
+			expiryTimer = time.AfterFunc(d, func() {
+				slog.Info("websocket: disconnecting client after access token expired",
+					"flowId", c.flowID, "userID", c.UserID)
+				c.authorized.Store(false)
+				_ = c.conn.Close()
+			})
+		}
+	}
+	if expiryTimer != nil {
+		defer expiryTimer.Stop()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Check the ACCESS token's revocation (logout, password change,
+			// admin revoke) — the ticket's own JTI was only blacklisted for
+			// ~30s at consumption, so re-checking it would never fire after
+			// that.
+			if isRevoked != nil && accessJTI != "" && isRevoked(accessJTI) {
+				slog.Info("websocket: disconnecting client after token revoked",
+					"flowId", c.flowID, "userID", c.UserID)
+				c.authorized.Store(false)
+				c.conn.Close()
+				return
+			}
+			if checker != nil {
+				if err := checker.CheckAccess(ctx, c.flowID, c.UserID); err != nil {
+					slog.Info("websocket: disconnecting client after access revoked",
+						"flowId", c.flowID, "userID", c.UserID)
+					c.authorized.Store(false)
+					c.conn.Close()
+					return
+				}
+			}
+		}
+	}
 }
 
 // Send queues an envelope for delivery to this client. If the send buffer
@@ -134,6 +210,16 @@ func (c *Client) readPump() {
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
+			break
+		}
+
+		// Per-message authz: if the re-authz goroutine has flagged this
+		// connection as revoked, stop processing inbound messages immediately
+		// rather than waiting for the connection close to propagate. This
+		// closes the ~2min stale-relay window where a revoked user could
+		// inject live-collab events between revocation detection and the
+		// connection teardown.
+		if !c.authorized.Load() {
 			break
 		}
 

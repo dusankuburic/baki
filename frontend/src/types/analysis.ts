@@ -1,261 +1,256 @@
 // Analyzer outputs — findings, metrics, batch results, diffs, rule definitions.
 
-export type Severity = 'error' | 'warning' | 'info';
+export type Severity = 'error' | 'warning' | 'info'
 
 // Rule certainty about a finding: 'high' (deterministic, e.g. a regex secret
 // match), 'medium' (default), 'low' (heuristic/noisy, e.g. an entropy guess).
 // Drives severity×confidence triage ordering.
-export type Confidence = 'high' | 'medium' | 'low';
+export type Confidence = 'high' | 'medium' | 'low'
 
 export interface Finding {
-  id: string;
+  id: string
   // Stable, content-derived identity from the backend (rule + subflow/name/line/
   // subject). Unlike `id` (a per-run index like "F-001" that shifts as findings
   // come and go), `fingerprint` survives re-analysis AND re-imports/re-parses —
   // use it to key triage state, suppressions, and baselines. Optional for
   // backward compatibility with older payloads.
-  fingerprint?: string;
-  ruleId: string;
-  severity: Severity;
-  confidence?: Confidence;
-  title: string;
-  description: string;
-  blockId: string;
-  subflowId: string;
-  suggestion?: string;
-  autoFixHint?: string;
+  fingerprint?: string
+  ruleId: string
+  severity: Severity
+  confidence?: Confidence
+  title: string
+  description: string
+  blockId: string
+  subflowId: string
+  suggestion?: string
+  autoFixHint?: string
   // Names a deterministic one-click fix the user can apply from the findings UI
   // (desktop: edits the source file, re-parses, re-analyzes). Empty = no auto
   // fix (only the autoFixHint prose or "Fix with AI"). Values: 'wrap-error-handler', 'suppress'.
-  autoFix?: string;
-  category?: string;
-  metadata?: Record<string, unknown>;
+  autoFix?: string
+  category?: string
+  metadata?: Record<string, unknown>
 }
 
 // Triage lifecycle for a finding. Mirrors the backend's validTriageStatuses.
-export type TriageStatus =
-  | 'open'
-  | 'acknowledged'
-  | 'in_progress'
-  | 'resolved'
-  | 'suppressed';
+export type TriageStatus = 'open' | 'acknowledged' | 'in_progress' | 'resolved' | 'suppressed'
 
 // Persisted, team-shared triage state for one finding, keyed by its stable
 // fingerprint (findingKey == Finding.fingerprint == ruleId:blockId).
 export interface FindingStatus {
-  flowId: string;
-  findingKey: string;
-  ruleId?: string;
-  status: TriageStatus;
-  justification?: string;
-  assigneeId?: string;
-  updatedBy?: string;
-  updatedAt: string;
+  flowId: string
+  findingKey: string
+  ruleId?: string
+  status: TriageStatus
+  justification?: string
+  assigneeId?: string
+  updatedBy?: string
+  updatedAt: string
 }
 
 // The accepted set of finding keys for a flow. Findings whose fingerprint is not
 // in `keys` are "new since baseline".
 export interface FlowBaseline {
-  flowId: string;
-  keys: string[];
-  createdBy?: string;
-  createdAt: string;
+  flowId: string
+  keys: string[]
+  createdBy?: string
+  createdAt: string
 }
 
 // Drift report: findings introduced since the accepted baseline. When
 // hasBaseline is false, every finding is "new" by construction.
 export interface BaselineDrift {
-  flowId: string;
-  hasBaseline: boolean;
-  new: Finding[];
-  newErrors: number;
-  newWarnings: number;
-  newInfo: number;
+  flowId: string
+  hasBaseline: boolean
+  new: Finding[]
+  newErrors: number
+  newWarnings: number
+  newInfo: number
 }
 
 // A team-shared review comment on a finding, keyed by the finding's stable key.
 export interface FindingComment {
-  id: string;
-  flowId: string;
-  findingKey: string;
-  authorId: string;
-  authorName?: string;
-  body: string;
-  createdAt: string;
+  id: string
+  flowId: string
+  findingKey: string
+  authorId: string
+  authorName?: string
+  body: string
+  createdAt: string
 }
 
 export interface RuleProfile {
-  ruleId: string;
-  ruleName: string;
-  durationMs: number;
-  findingCount: number;
-  blocksChecked: number;
+  ruleId: string
+  ruleName: string
+  durationMs: number
+  findingCount: number
+  blocksChecked: number
 }
 
 export interface AnalysisSnapshot {
-  timestamp: string;
-  flowId: string;
-  hash: string;
-  errors: number;
-  warnings: number;
-  info: number;
-  healthScore: number;
-  durationMs: number;
+  timestamp: string
+  flowId: string
+  hash: string
+  errors: number
+  warnings: number
+  info: number
+  healthScore: number
+  durationMs: number
 }
 
 export interface AnalysisReport {
-  flowId: string;
-  flowName?: string;
-  generatedAt: string;
-  findings: Finding[];
-  stats: AnalysisStats;
-  durationMs: number;
-  metrics?: FlowMetrics;
-  ruleProfiles?: RuleProfile[];
+  flowId: string
+  flowName?: string
+  generatedAt: string
+  findings: Finding[]
+  stats: AnalysisStats
+  durationMs: number
+  metrics?: FlowMetrics
+  ruleProfiles?: RuleProfile[]
 }
 
 export interface AnalysisStats {
-  errors: number;
-  warnings: number;
-  info: number;
-  blocksAnalyzed: number;
-  rulesRun: number;
+  errors: number
+  warnings: number
+  info: number
+  blocksAnalyzed: number
+  rulesRun: number
 }
 
 export interface SubflowMetrics {
-  subflowId: string;
-  subflowName: string;
-  blockCount: number;
-  cyclomaticComplexity: number;
-  cognitiveComplexity: number;
-  maxNestingDepth: number;
-  variableCount: number;
-  fanIn: number;
-  fanOut: number;
+  subflowId: string
+  subflowName: string
+  blockCount: number
+  cyclomaticComplexity: number
+  cognitiveComplexity: number
+  maxNestingDepth: number
+  variableCount: number
+  fanIn: number
+  fanOut: number
 }
 
 export interface FlowMetrics {
-  subflows: SubflowMetrics[];
-  totalBlocks: number;
-  totalVariables: number;
-  maxCyclomatic: number;
-  avgCyclomatic: number;
-  maxCognitive: number;
-  avgCognitive: number;
-  healthScore: number;
-  variableDensity: number;
-  subflowCount: number;
-  circularDependencies?: string[];
+  subflows: SubflowMetrics[]
+  totalBlocks: number
+  totalVariables: number
+  maxCyclomatic: number
+  avgCyclomatic: number
+  maxCognitive: number
+  avgCognitive: number
+  healthScore: number
+  variableDensity: number
+  subflowCount: number
+  circularDependencies?: string[]
 }
 
 export interface BlockDataFlow {
-  blockId: string;
-  subflowId: string;
-  reads: string[];
-  writes: string[];
-  upstreamBlocks: string[];
-  downstreamBlocks: string[];
+  blockId: string
+  subflowId: string
+  reads: string[]
+  writes: string[]
+  upstreamBlocks: string[]
+  downstreamBlocks: string[]
 }
 
 export interface TaintPath {
-  sourceVar: string;
-  sourceBlock: string;
-  sinkBlock: string;
-  sinkType: string;
-  path: string[];
+  sourceVar: string
+  sourceBlock: string
+  sinkBlock: string
+  sinkType: string
+  path: string[]
 }
 
 export interface DeadDataPath {
-  variable: string;
-  setBlock: string;
-  readBlock: string;
-  reason: string;
+  variable: string
+  setBlock: string
+  readBlock: string
+  reason: string
 }
 
 export interface DataFlowAnalysis {
-  blocks: Record<string, BlockDataFlow>;
-  taintPaths: TaintPath[];
-  deadData: DeadDataPath[];
+  blocks: Record<string, BlockDataFlow>
+  taintPaths: TaintPath[]
+  deadData: DeadDataPath[]
 }
 
 export interface BatchResult {
-  flowId: string;
-  flowName: string;
-  report: AnalysisReport;
-  error?: string;
+  flowId: string
+  flowName: string
+  report: AnalysisReport
+  error?: string
 }
 
 export interface BatchAnalysis {
-  results: BatchResult[];
-  totalFlows: number;
-  totalFindings: number;
-  totalErrors: number;
-  totalWarnings: number;
-  totalInfo: number;
-  avgHealthScore: number;
-  durationMs: number;
+  results: BatchResult[]
+  totalFlows: number
+  totalFindings: number
+  totalErrors: number
+  totalWarnings: number
+  totalInfo: number
+  avgHealthScore: number
+  durationMs: number
 }
 
 export interface AnalysisDiff {
-  flowId: string;
-  added: Finding[];
-  removed: Finding[];
-  persisted: Finding[];
-  addedCount: number;
-  removedCount: number;
-  persistedCount: number;
+  flowId: string
+  added: Finding[]
+  removed: Finding[]
+  persisted: Finding[]
+  addedCount: number
+  removedCount: number
+  persistedCount: number
   /** False when there is no earlier run to compare against. */
-  hasPrevious: boolean;
+  hasPrevious: boolean
 }
 
 export interface RuleDependency {
-  fromRuleId: string;
-  toRuleId: string;
-  reason: string;
+  fromRuleId: string
+  toRuleId: string
+  reason: string
 }
 
 export interface DependencyAnalysis {
-  dependencies: RuleDependency[];
-  cycles: string[][];
-  topoOrder: string[];
+  dependencies: RuleDependency[]
+  cycles: string[][]
+  topoOrder: string[]
 }
 
 export interface SubflowHash {
-  subflowId: string;
-  hash: string;
+  subflowId: string
+  hash: string
 }
 
 // In-session analytics aggregates (powers AnalyticsDashboard.tsx).
 // Distinct from the welcome dashboard's payload, which lives in dashboard.ts.
 export interface DashboardStats {
-  totalFlowsAnalyzed: number;
-  totalFindings: number;
-  findingsBySeverity: Record<string, number>;
-  findingsByCategory: Record<string, number>;
-  findingsByRule: Record<string, number>;
-  avgHealthScore: number;
-  topProblemFlows: ProblemFlow[];
+  totalFlowsAnalyzed: number
+  totalFindings: number
+  findingsBySeverity: Record<string, number>
+  findingsByCategory: Record<string, number>
+  findingsByRule: Record<string, number>
+  avgHealthScore: number
+  topProblemFlows: ProblemFlow[]
 }
 
 export interface ProblemFlow {
-  flowId: string;
-  flowName: string;
-  findingCount: number;
-  healthScore: number;
+  flowId: string
+  flowName: string
+  findingCount: number
+  healthScore: number
 }
 
 export interface FindingGroup {
-  blockId: string;
-  findings: Finding[];
-  primary: Finding;
-  duplicateCount: number;
+  blockId: string
+  findings: Finding[]
+  primary: Finding
+  duplicateCount: number
 }
 
 export interface DeduplicateResult {
-  deduplicated: Finding[];
-  groups: FindingGroup[];
-  originalCount: number;
-  dedupedCount: number;
+  deduplicated: Finding[]
+  groups: FindingGroup[]
+  originalCount: number
+  dedupedCount: number
 }
 
 // Rule definition + per-flow override config. RuleConfig is consumed by
@@ -274,7 +269,7 @@ export interface Rule {
 }
 
 export interface RuleConfig {
-  enabled: boolean;
-  severity: Severity;
-  options?: Record<string, unknown>;
+  enabled: boolean
+  severity: Severity
+  options?: Record<string, unknown>
 }

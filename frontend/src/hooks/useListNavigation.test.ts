@@ -58,7 +58,9 @@ describe('useListNavigation — select/close', () => {
 
   it('honors extraSelectKeys (e.g. Tab) for selection', () => {
     const onSelect = vi.fn()
-    const {result} = renderHook(() => useListNavigation({count: 3, onSelect, onClose: vi.fn(), extraSelectKeys: ['Tab']}))
+    const {result} = renderHook(() =>
+      useListNavigation({count: 3, onSelect, onClose: vi.fn(), extraSelectKeys: ['Tab']}),
+    )
     act(() => result.current.handleKeyDown(key('Tab')))
     expect(onSelect).toHaveBeenCalledWith(0)
   })

@@ -21,7 +21,11 @@ export default function VariableLineageInInspector() {
 
   const toggleFilter = (type: string) => {
     const next = new Set(filters)
-    if (next.has(type)) { next.delete(type) } else { next.add(type) }
+    if (next.has(type)) {
+      next.delete(type)
+    } else {
+      next.add(type)
+    }
     setFilters(next)
   }
 
@@ -49,9 +53,9 @@ export default function VariableLineageInInspector() {
 
       <div className="flex items-center gap-2 mb-4">
         {[
-          {id: 'init',   label: 'Inits',  color: 'text-green-500',  bg: 'bg-green-500/10'},
-          {id: 'mutate', label: 'Writes', color: 'text-amber-500',  bg: 'bg-amber-500/10'},
-          {id: 'read',   label: 'Reads',  color: 'text-blue-500',   bg: 'bg-blue-500/10'},
+          {id: 'init', label: 'Inits', color: 'text-green-500', bg: 'bg-green-500/10'},
+          {id: 'mutate', label: 'Writes', color: 'text-amber-500', bg: 'bg-amber-500/10'},
+          {id: 'read', label: 'Reads', color: 'text-blue-500', bg: 'bg-blue-500/10'},
         ].map(f => (
           <button
             key={f.id}
@@ -60,7 +64,7 @@ export default function VariableLineageInInspector() {
               'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
               filters.has(f.id)
                 ? `${f.bg} ${f.color} border-transparent`
-                : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary'
+                : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary',
             )}
           >
             {f.label}
@@ -73,15 +77,17 @@ export default function VariableLineageInInspector() {
       <div className="space-y-3 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-px before:bg-border-subtle">
         {filteredEvents.map((event, i) => (
           <div key={i} className="relative pl-7 group">
-            <div className={clsx(
-              'absolute left-0 top-1 w-5 h-5 rounded-full flex items-center justify-center border bg-surface-2 z-10',
-              event.type === 'init'   && 'border-green-500 text-green-500',
-              event.type === 'mutate' && 'border-amber-500 text-amber-500',
-              event.type === 'read'   && 'border-blue-500 text-blue-500'
-            )}>
-              {event.type === 'init'   && <Edit3 size={10} />}
+            <div
+              className={clsx(
+                'absolute left-0 top-1 w-5 h-5 rounded-full flex items-center justify-center border bg-surface-2 z-10',
+                event.type === 'init' && 'border-green-500 text-green-500',
+                event.type === 'mutate' && 'border-amber-500 text-amber-500',
+                event.type === 'read' && 'border-blue-500 text-blue-500',
+              )}
+            >
+              {event.type === 'init' && <Edit3 size={10} />}
               {event.type === 'mutate' && <ArrowRight size={10} />}
-              {event.type === 'read'   && <Eye size={10} />}
+              {event.type === 'read' && <Eye size={10} />}
             </div>
 
             <div
@@ -89,12 +95,14 @@ export default function VariableLineageInInspector() {
               onClick={() => navigateToBlock(event.blockId)}
             >
               <div className="flex items-center justify-between mb-1">
-                <span className={clsx(
-                  'text-2xs font-bold uppercase tracking-tighter',
-                  event.type === 'init'   && 'text-green-500',
-                  event.type === 'mutate' && 'text-amber-500',
-                  event.type === 'read'   && 'text-blue-500'
-                )}>
+                <span
+                  className={clsx(
+                    'text-2xs font-bold uppercase tracking-tighter',
+                    event.type === 'init' && 'text-green-500',
+                    event.type === 'mutate' && 'text-amber-500',
+                    event.type === 'read' && 'text-blue-500',
+                  )}
+                >
                   {event.type}
                 </span>
                 <span className="text-2xs font-mono text-text-tertiary">L{event.line}</span>

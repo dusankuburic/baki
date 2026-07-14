@@ -74,5 +74,14 @@ func truncate(s string, max int) string {
 	if len(r) <= max {
 		return s
 	}
+	// max <= 3 can't fit the "..." ellipsis without a negative slice index
+	// (max-3 < 0 panics); hard-truncate instead.
+	if max <= 3 {
+		return string(r[:max])
+	}
 	return string(r[:max-3]) + "..."
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&HardcodedFilePathRule{}) }

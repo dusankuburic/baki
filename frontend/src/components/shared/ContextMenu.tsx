@@ -34,7 +34,7 @@ export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
   const top = Math.min(y, window.innerHeight - (items.length * 32 + 20))
 
   return (
-    <div 
+    <div
       ref={ref}
       className="fixed z-tooltip min-w-[180px] bg-surface-1 border border-border-default rounded-lg shadow-xl py-1.5 animate-fade-in"
       style={{left, top}}
@@ -43,12 +43,12 @@ export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
         <button
           key={i}
           className={clsx(
-            "w-full flex items-center gap-2.5 px-3 py-1.5 text-xs font-medium transition-colors text-left",
-            item.variant === 'danger' 
-              ? "text-semantic-error hover:bg-semantic-error/10" 
-              : "text-text-secondary hover:bg-surface-3 hover:text-text-primary"
+            'w-full flex items-center gap-2.5 px-3 py-1.5 text-xs font-medium transition-colors text-left',
+            item.variant === 'danger'
+              ? 'text-semantic-error hover:bg-semantic-error/10'
+              : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary',
           )}
-          onClick={(e) => {
+          onClick={e => {
             e.stopPropagation()
             item.onClick()
             onClose()

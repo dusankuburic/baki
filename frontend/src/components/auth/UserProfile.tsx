@@ -37,14 +37,14 @@ function LocalModeCard() {
         <div>
           <p className="text-sm font-medium text-text-primary">Local Mode</p>
           <p className="text-sm text-text-tertiary mt-1">
-            You're running the desktop app in local mode — flows, findings, and analysis stay on
-            this machine. There's no cloud account to manage here.
+            You're running the desktop app in local mode — flows, findings, and analysis stay on this machine. There's
+            no cloud account to manage here.
           </p>
         </div>
-        <p className="text-xs text-text-tertiary">
-          AI provider keys and app preferences live in Settings.
-        </p>
-        <Button variant="secondary" size="sm" onClick={toggleSettings}>Open Settings</Button>
+        <p className="text-xs text-text-tertiary">AI provider keys and app preferences live in Settings.</p>
+        <Button variant="secondary" size="sm" onClick={toggleSettings}>
+          Open Settings
+        </Button>
       </div>
     </div>
   )
@@ -54,7 +54,9 @@ export const UserProfile: React.FC = () => {
   const {user, logout} = useAuthStore()
   const {organisations, loadOrgs} = useOrgStore()
 
-  useEffect(() => { if (user) loadOrgs() }, [user, loadOrgs])
+  useEffect(() => {
+    if (user) loadOrgs()
+  }, [user, loadOrgs])
 
   if (!user) return isTauri() ? <LocalModeCard /> : null
 
@@ -71,19 +73,21 @@ export const UserProfile: React.FC = () => {
               <p className="text-sm font-medium text-text-primary">{displayName || user.email}</p>
               {displayName && <p className="text-xs text-text-tertiary">{user.email}</p>}
               <div className="flex items-center gap-2 mt-1">
-                <span className={clsx(
-                  'inline-block px-2 py-0.5 rounded-md text-xs font-semibold uppercase',
-                  roleBadgeClass(user.role)
-                )}>
+                <span
+                  className={clsx(
+                    'inline-block px-2 py-0.5 rounded-md text-xs font-semibold uppercase',
+                    roleBadgeClass(user.role),
+                  )}
+                >
                   {user.role}
                 </span>
-                {memberSince && (
-                  <span className="text-xs text-text-tertiary">Member since {memberSince}</span>
-                )}
+                {memberSince && <span className="text-xs text-text-tertiary">Member since {memberSince}</span>}
               </div>
             </div>
           </div>
-          <Button variant="danger" size="sm" onClick={() => logout()}>Logout</Button>
+          <Button variant="danger" size="sm" onClick={() => logout()}>
+            Logout
+          </Button>
         </div>
       </div>
 

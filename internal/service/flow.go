@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,7 +27,7 @@ import (
 
 // FlowService owns document state, search index, and all file-related operations.
 type FlowService struct {
-	notifier    Notifier
+	notifier    EventNotifier
 	settings    SettingsProvider
 	docProvider DocumentProvider
 	storage     storageif.StorageBackend
@@ -47,6 +49,14 @@ type FlowService struct {
 	// already depends on FlowService).
 	invalidateMu  sync.Mutex
 	invalidateCbs []func(flowID string)
+
+	// patchLocks serializes read-modify-write patches to the same source file so
+	// two concurrent ApplyFix/SuppressFindingInSource calls on the same file
+	// can't silently clobber each other (one overwriting the other's change).
+	// Keyed by absolute target path; each entry is a *sync.Mutex held for the
+	// PatchFlow critical section. Without this, PatchFlow's
+	// ReadFile→ApplyPatch→atomicWrite window is a classic lost-update race.
+	patchLocks sync.Map
 }
 
 // maxSearchIndexCache bounds the number of cached search indexes (one per
@@ -54,7 +64,7 @@ type FlowService struct {
 // caps worst-case memory regardless of how many flows are opened over uptime.
 const maxSearchIndexCache = 64
 
-func NewFlowService(notifier Notifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
+func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvider DocumentProvider, storage storageif.StorageBackend, authz *AuthzService, astCache cache.Cache) *FlowService {
 	idxCache, _ := cache.NewLRUCache(maxSearchIndexCache) // size > 0 ⇒ error impossible
 	return &FlowService{
 		notifier:    notifier,
@@ -65,6 +75,14 @@ func NewFlowService(notifier Notifier, settings SettingsProvider, docProvider Do
 		astCache:    astCache,
 		idxCache:    idxCache,
 	}
+}
+
+// patchMutexFor returns the per-file mutex used to serialize patches to a given
+// source file. LoadOrStore makes the lookup-and-create atomic so two concurrent
+// callers get the same mutex instance.
+func (s *FlowService) patchMutexFor(path string) *sync.Mutex {
+	v, _ := s.patchLocks.LoadOrStore(path, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 // GetAuthorized loads a flow and verifies the user has at least minPerm access.
@@ -110,12 +128,21 @@ func (s *FlowService) OnInvalidateFlow(cb func(flowID string)) {
 	s.invalidateCbs = append(s.invalidateCbs, cb)
 }
 
+// FindBlockByID resolves a block by ID, preferring the fast BlocksByID map and
+// falling back to a tree walk over doc.Subflows when the map doesn't have it
+// (BlocksByID is transient — e.g. rebuilt on reparse — so a caller holding an
+// ID from before a reparse still resolves correctly).
 func (s *FlowService) FindBlockByID(doc *models.FlowDocument, blockID string) *models.Block {
 	if doc == nil || blockID == "" {
 		return nil
 	}
 	if b, ok := doc.BlocksByID[blockID]; ok {
 		return b
+	}
+	for i := range doc.Subflows {
+		if b := searchBlock(doc.Subflows[i].Blocks, blockID); b != nil {
+			return b
+		}
 	}
 	return nil
 }
@@ -292,6 +319,41 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 	s.docProvider.SetCurrentDoc(doc)
 	s.notifier.Emit("flow:loaded", doc)
 	return doc, nil
+}
+
+// SaveUploadedFlow persists a freshly-parsed/uploaded flow document into the
+// library (cloud mode only). It applies optimistic concurrency: if a flow with
+// this ID already exists, its current version is loaded first (header only —
+// content isn't needed) so SaveFlow's OCC check can't silently clobber a
+// concurrent edit; a brand-new flow keeps version 0 (insert path). Returns
+// storageif.ErrVersionConflict unchanged so the caller can map it to its own
+// HTTP status. A nil s.storage (local/desktop mode) is a no-op success.
+func (s *FlowService) SaveUploadedFlow(ctx context.Context, doc *models.FlowDocument, ownerID string) error {
+	if s.storage == nil {
+		return nil
+	}
+	content, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal uploaded flow: %w", err)
+	}
+	libDoc := storageif.FlowDocument{
+		ID:      doc.ID,
+		Name:    doc.Name,
+		Content: content,
+		OwnerID: ownerID,
+		Metadata: storageif.FlowMetadata{
+			BlockCount:   doc.Metadata.BlockCount,
+			SubflowCount: doc.Metadata.SubflowCount,
+		},
+	}
+	existing, err := s.storage.LoadFlowHeader(ctx, doc.ID)
+	if err == nil && existing != nil {
+		libDoc.Version = existing.Version
+	} else if err != nil && !errors.Is(err, storageif.ErrNotFound) {
+		// Transient DB error — must not silently bypass OCC.
+		return fmt.Errorf("failed to check existing flow: %w", err)
+	}
+	return s.storage.SaveFlow(ctx, &libDoc)
 }
 
 func (s *FlowService) RecentFiles() (files []models.RecentFile, err error) {
@@ -577,12 +639,34 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 		targetPath = filepath.Join(doc.FilePath, fileName)
 	}
 
+	// Serialize read-modify-write patches to this file: without a per-file lock,
+	// two concurrent ApplyFix/SuppressFindingInSource calls could each ReadFile
+	// the same contents, apply their patch, and the second atomicWrite would
+	// silently overwrite the first (lost update). Held through the re-parse so
+	// the returned doc reflects exactly what we wrote.
+	mu := s.patchMutexFor(targetPath)
+	mu.Lock()
+	defer mu.Unlock()
+
 	data, readErr := os.ReadFile(targetPath) // #nosec G304 -- target derived from doc.FilePath + a validated bare filename
 	if readErr != nil {
 		return nil, fmt.Errorf("read source file: %w", readErr)
 	}
 
 	patched := analyzer.ApplyPatch(string(data), patch)
+
+	// Validate the patched source before persisting. ApplyPatch is purely
+	// textual, so a malformed patch — or a concurrent edit shifting line
+	// numbers between the ReadFile above and the write below — could introduce
+	// unbalanced block structure. The parser is lenient (it always returns a
+	// doc with errors embedded rather than a Go error), so we compare the
+	// error-severity parse-error counts: writing first would silently replace
+	// valid source with degraded source the user can't undo. Reject only when
+	// the patch makes things worse, so fixes on already-imperfect files still land.
+	if parseErrorCount(patched, filepath.Base(targetPath)) > parseErrorCount(string(data), filepath.Base(targetPath)) {
+		return nil, fmt.Errorf("patch would introduce parse errors (file left unchanged)")
+	}
+
 	dir := filepath.Dir(targetPath)
 	if writeErr := atomicWriteConv(dir, targetPath, []byte(patched)); writeErr != nil {
 		return nil, fmt.Errorf("write source file: %w", writeErr)
@@ -604,16 +688,7 @@ func (s *FlowService) SuppressFindingInSource(doc *models.FlowDocument, blockID,
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
-	block := doc.BlocksByID[blockID]
-	if block == nil {
-		// BlocksByID is transient; fall back to a tree walk.
-		for i := range doc.Subflows {
-			if b := searchBlock(doc.Subflows[i].Blocks, blockID); b != nil {
-				block = b
-				break
-			}
-		}
-	}
+	block := s.FindBlockByID(doc, blockID)
 	if block == nil {
 		return nil, fmt.Errorf("block %q not found", blockID)
 	}
@@ -644,15 +719,7 @@ func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixTyp
 	if doc == nil {
 		return models.Patch{}, fmt.Errorf("no flow loaded")
 	}
-	block := doc.BlocksByID[blockID]
-	if block == nil {
-		for i := range doc.Subflows {
-			if b := searchBlock(doc.Subflows[i].Blocks, blockID); b != nil {
-				block = b
-				break
-			}
-		}
-	}
+	block := s.FindBlockByID(doc, blockID)
 	if block == nil {
 		return models.Patch{}, fmt.Errorf("block %q not found", blockID)
 	}
@@ -740,4 +807,24 @@ func (s *FlowService) PreviewFix(doc *models.FlowDocument, blockID, fixType, rul
 	original := string(data)
 	patched := analyzer.ApplyPatch(original, patch)
 	return &PatchPreviewResult{Original: original, Patched: patched}, nil
+}
+
+// parseErrorCount parses source and returns the number of error-severity (not
+// warning) parse problems. The parser is lenient — it always returns a doc —
+// so this is the only way to detect structurally broken PAD. Used by PatchFlow
+// to guard against persisting a patch that introduces block-structure errors.
+func parseErrorCount(source, fileName string) int {
+	doc, err := parser.ParseText(source, fileName, int64(len(source)))
+	if err != nil || doc == nil {
+		// ParseText never returns a hard error today, but treat a future hard
+		// failure as "maximally broken".
+		return 1 << 30
+	}
+	n := 0
+	for _, e := range doc.ParseErrors {
+		if e.Severity == "error" {
+			n++
+		}
+	}
+	return n
 }

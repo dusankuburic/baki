@@ -48,6 +48,7 @@ type Router struct {
 
 	AllowedOrigins []string
 	trustedProxies []string
+	metricsToken   string
 	staticDir      string
 	hub            *wshub.Hub
 	flowChecker    wshub.FlowAccessChecker
@@ -76,6 +77,7 @@ func NewRouter(
 		handlers:       handlers,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		trustedProxies: cfg.Server.TrustedProxies,
+		metricsToken:   cfg.Server.MetricsToken,
 		staticDir:      cfg.Server.StaticDir,
 		// nil client (PAD_REDIS_URL unset) → in-memory hub; otherwise a Redis
 		// pub/sub + presence backplane so presence/broadcasts span replicas.
@@ -145,6 +147,11 @@ func (rt *Router) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=()")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		// Sensitive JSON (auth/me, sessions, library, admin, account export)
+		// must not be retained by a shared/intermediate cache or the browser disk
+		// cache. Individual endpoints that are intentionally cacheable can
+		// override this header (Set replaces); SSE sets no-cache in events.go.
+		w.Header().Set("Cache-Control", "no-store, private")
 		if rt.security.JWTEnabled {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
@@ -155,9 +162,13 @@ func (rt *Router) securityHeaders(next http.Handler) http.Handler {
 func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+		// Vary: Origin must be set unconditionally: if it's only emitted when the
+		// origin is allowed, a CDN/proxy caching by URL can serve the no-ACAO
+		// variant to a later allowed-origin request (stripping the legitimate
+		// ACAO) or vice-versa.
+		w.Header().Set("Vary", "Origin")
 		if rt.isOriginAllowed(origin) && origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -226,7 +237,12 @@ func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 	if err != nil || user == nil {
 		return nil
 	}
-	return &auth.Claims{UserID: user.ID, Email: user.Email, Role: user.Role}
+	// Populate a stable JTI (derived from the PAT id) and the PAT's expiry so a
+	// WebSocket ticket issued from this PAT-authenticated request embeds a real
+	// SrcJTI/SrcExp. Without this, the WS re-authz loop calls IsRevoked("") (always
+	// false) and never arms the expiry timer — a revoked/expired PAT's live socket
+	// would stay open indefinitely.
+	return auth.ClaimsForPAT(user.ID, user.Email, user.Role, tok.ID, tok.ExpiresAt)
 }
 
 // --- WebSocket handler ---

@@ -356,18 +356,12 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "WebAutomation.CloseWindow"
-    },
-    {
-      "line": 18,
-      "message": "unclosed block: Set Password",
-      "severity": "error",
-      "snippet": "SET"
     }
   ],
   "metadata": {
     "blockCount": 16,
     "subflowCount": 1,
     "maxDepth": 3,
-    "rawLineCount": 20
+    "rawLineCount": 19
   }
 }

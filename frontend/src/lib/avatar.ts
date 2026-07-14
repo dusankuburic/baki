@@ -4,10 +4,7 @@ export function userInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
-const PALETTE = [
-  '#5b61ef', '#8b5cf6', '#ec4899', '#ef4444',
-  '#f97316', '#eab308', '#22c55e', '#06b6d4',
-]
+const PALETTE = ['#5b61ef', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4']
 
 export function userColor(userId: string): string {
   let hash = 0

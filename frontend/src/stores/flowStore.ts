@@ -5,19 +5,37 @@ import {useEditorStore} from './editorStore'
 import {useSearchStore} from './searchStore'
 import {useAnalysisStore} from './analysisStore'
 import {useChatStore} from './chatStore'
-import {
-  findBlockInDoc, findSubflowIdByBlock, findAncestorIds, findLabelBlock,
-} from '@/lib/tree'
+import {findBlockInDoc, findSubflowIdByBlock, findAncestorIds, findLabelBlock} from '@/lib/tree'
 import {toggleSetMember} from '@/lib/collections'
 
-export const ALL_TYPES: BlockType[] = ['ACTION', 'LOOP', 'CONDITION', 'SUBFLOW', 'ERROR_HANDLER', 'COMMENT', 'VARIABLE', 'WAIT', 'BLOCK', 'SWITCH', 'ELSE', 'CASE', 'DEFAULT', 'END', 'UNKNOWN']
+export const ALL_TYPES: BlockType[] = [
+  'ACTION',
+  'LOOP',
+  'CONDITION',
+  'SUBFLOW',
+  'ERROR_HANDLER',
+  'COMMENT',
+  'VARIABLE',
+  'WAIT',
+  'BLOCK',
+  'SWITCH',
+  'ELSE',
+  'CASE',
+  'DEFAULT',
+  'END',
+  'UNKNOWN',
+]
 
 // Global document-load generation counter. All code paths that load a document
 // call beginDocLoad() before their async fetch and isDocLoadCurrent(gen) after,
 // so a stale load from one path can't overwrite a newer load from another.
 let docLoadGen = 0
-export function beginDocLoad(): number { return ++docLoadGen }
-export function isDocLoadCurrent(gen: number): boolean { return gen === docLoadGen }
+export function beginDocLoad(): number {
+  return ++docLoadGen
+}
+export function isDocLoadCurrent(gen: number): boolean {
+  return gen === docLoadGen
+}
 
 interface FlowState {
   document: FlowDocument | null
@@ -37,10 +55,15 @@ interface FlowState {
   libraryFlowId: string | null
   libraryVersion: number
 
-  navigationHistory: {blockId: string | null, subflowId: string | null}[]
+  navigationHistory: {blockId: string | null; subflowId: string | null}[]
   historyIndex: number
 
   setDocument: (doc: FlowDocument | null) => void
+  // Refreshes the document for a SAME-FLOW remote change (collaborator edit)
+  // without resetting per-flow UI state. Unlike setDocument, it preserves the
+  // active chat thread, selection, search, and editor focus — only the document
+  // (and a still-valid selection) is updated.
+  applyRemoteDocumentUpdate: (doc: FlowDocument | null) => void
   setVisibleBlockId: (id: string | null) => void
   selectBlock: (blockId: string | null, skipHistory?: boolean) => void
   selectSubflow: (subflowId: string | null, skipHistory?: boolean) => void
@@ -88,7 +111,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   navigationHistory: [],
   historyIndex: -1,
 
-  setDocument: (doc) => {
+  setDocument: doc => {
     const firstId = doc?.subflows[0]?.id ?? null
     set({
       document: doc,
@@ -110,7 +133,34 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     resetDerivedStateForFlow(doc)
   },
 
-  setVisibleBlockId: (id) => {
+  applyRemoteDocumentUpdate: doc => {
+    const prev = get()
+    // Preserve the user's block selection if it still exists in the refreshed
+    // document; a remote edit may have moved or removed it.
+    const selectedBlockId =
+      prev.selectedBlockId && doc && findSubflowIdByBlock(doc, prev.selectedBlockId)
+        ? prev.selectedBlockId
+        : null
+
+    set({
+      document: doc,
+      selectedBlockId,
+      isParsing: false,
+      parseProgress: 0,
+      parseError: null,
+    })
+
+    // Drop editor tabs pointing at subflows that no longer exist (a remote edit
+    // could rename/remove one), but keep the active tab + focus. Crucially do
+    // NOT call resetDerivedStateForFlow: this is a same-flow refresh, and wiping
+    // the chat thread / search / navigation on every collaborator keystroke
+    // kicks the user out of their own work.
+    if (doc) {
+      useEditorStore.getState().pruneToSubflows(doc.subflows.map(s => s.id))
+    }
+  },
+
+  setVisibleBlockId: id => {
     if (get().visibleBlockId === id) return
     set({visibleBlockId: id})
   },
@@ -154,7 +204,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       selectedSubflowId: subflowId,
       navigationHistory: nextHistory,
       historyIndex: nextIndex,
-      expandedBlockIds: nextExpanded
+      expandedBlockIds: nextExpanded,
     })
 
     useEditorStore.getState().openInGroup(subflowId)
@@ -162,14 +212,17 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   selectSubflow: (subflowId, skipHistory = false) => {
     if (!subflowId) return
-    
+
     if (!skipHistory) {
-        const state = get()
-        const current = state.navigationHistory[state.historyIndex]
-        if (!current || current.subflowId !== subflowId || current.blockId !== null) {
-            const nextHistory = [...state.navigationHistory.slice(0, state.historyIndex + 1), {blockId: null, subflowId}].slice(-50)
-            set({navigationHistory: nextHistory, historyIndex: nextHistory.length - 1})
-        }
+      const state = get()
+      const current = state.navigationHistory[state.historyIndex]
+      if (!current || current.subflowId !== subflowId || current.blockId !== null) {
+        const nextHistory = [
+          ...state.navigationHistory.slice(0, state.historyIndex + 1),
+          {blockId: null, subflowId},
+        ].slice(-50)
+        set({navigationHistory: nextHistory, historyIndex: nextHistory.length - 1})
+      }
     }
 
     set({selectedSubflowId: subflowId})
@@ -182,9 +235,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const entry = navigationHistory[historyIndex - 1]
     set({historyIndex: historyIndex - 1})
     if (entry.blockId) {
-        selectBlock(entry.blockId, true)
+      selectBlock(entry.blockId, true)
     } else {
-        selectSubflow(entry.subflowId, true)
+      selectSubflow(entry.subflowId, true)
     }
   },
 
@@ -194,37 +247,41 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const entry = navigationHistory[historyIndex + 1]
     set({historyIndex: historyIndex + 1})
     if (entry.blockId) {
-        selectBlock(entry.blockId, true)
+      selectBlock(entry.blockId, true)
     } else {
-        selectSubflow(entry.subflowId, true)
+      selectSubflow(entry.subflowId, true)
     }
   },
 
-  drillIntoSubflow: (subflowId) => set(state => ({
-    drilledSubflowPath: [...state.drilledSubflowPath, subflowId],
-    selectedSubflowId: subflowId,
-  })),
+  drillIntoSubflow: subflowId =>
+    set(state => ({
+      drilledSubflowPath: [...state.drilledSubflowPath, subflowId],
+      selectedSubflowId: subflowId,
+    })),
 
-  drillUp: () => set(state => {
-    const path = state.drilledSubflowPath.slice(0, -1)
-    return {drilledSubflowPath: path, selectedSubflowId: path[path.length - 1] ?? null}
-  }),
+  drillUp: () =>
+    set(state => {
+      const path = state.drilledSubflowPath.slice(0, -1)
+      return {drilledSubflowPath: path, selectedSubflowId: path[path.length - 1] ?? null}
+    }),
 
-  toggleSubflowExpand: (id) => set(state => ({
-    expandedSubflowIds: toggleSetMember(state.expandedSubflowIds, id),
-  })),
+  toggleSubflowExpand: id =>
+    set(state => ({
+      expandedSubflowIds: toggleSetMember(state.expandedSubflowIds, id),
+    })),
 
-  toggleBlockExpand: (id) => set(state => ({
-    expandedBlockIds: toggleSetMember(state.expandedBlockIds, id),
-  })),
+  toggleBlockExpand: id =>
+    set(state => ({
+      expandedBlockIds: toggleSetMember(state.expandedBlockIds, id),
+    })),
 
-  setVisibleTypes: (types) => set({visibleTypes: types}),
-  setParsing: (parsing) => set({isParsing: parsing}),
-  setParseError: (error) => set({parseError: error, isParsing: false}),
-  setFolderFiles: (files) => set({folderFiles: files, selectedFilePath: null}),
-  setSelectedFilePath: (path) => set({selectedFilePath: path}),
+  setVisibleTypes: types => set({visibleTypes: types}),
+  setParsing: parsing => set({isParsing: parsing}),
+  setParseError: error => set({parseError: error, isParsing: false}),
+  setFolderFiles: files => set({folderFiles: files, selectedFilePath: null}),
+  setSelectedFilePath: path => set({selectedFilePath: path}),
 
-  navigateToSubflowByName: (name) => {
+  navigateToSubflowByName: name => {
     const doc = get().document
     if (!doc) return
     const sf = doc.subflows.find(s => s.name === name)
@@ -233,11 +290,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
   },
 
-  navigateToBlock: (blockId) => {
+  navigateToBlock: blockId => {
     get().selectBlock(blockId)
   },
 
-  navigateToSourceFile: (fileName) => {
+  navigateToSourceFile: fileName => {
     const doc = get().document
     if (!doc) return false
     // Match on the basename so "@dir/Login.txt" and "@Login.txt" both resolve.
@@ -251,7 +308,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     return true
   },
 
-  navigateToLabelByName: (labelName) => {
+  navigateToLabelByName: labelName => {
     const doc = get().document
     if (!doc) return
     const label = findLabelBlock(doc, labelName)
@@ -262,14 +319,23 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   reset: () => {
     set({
-      document: null, selectedBlockId: null, selectedSubflowId: null,
-      drilledSubflowPath: [], expandedSubflowIds: new Set(),
-      expandedBlockIds: new Set(), parseError: null,
-      folderFiles: null, selectedFilePath: null,
-      libraryFlowId: null, libraryVersion: 0,
-      isParsing: false, parseProgress: 0,
+      document: null,
+      selectedBlockId: null,
+      selectedSubflowId: null,
+      drilledSubflowPath: [],
+      expandedSubflowIds: new Set(),
+      expandedBlockIds: new Set(),
+      parseError: null,
+      folderFiles: null,
+      selectedFilePath: null,
+      libraryFlowId: null,
+      libraryVersion: 0,
+      isParsing: false,
+      parseProgress: 0,
       visibleBlockId: null,
-      navigationHistory: [], historyIndex: -1,
+      visibleTypes: new Set(ALL_TYPES),
+      navigationHistory: [],
+      historyIndex: -1,
     })
     // Logout teardown. This intentionally differs from resetDerivedStateForFlow
     // (the flow-switch path): it also resets editor group widths, and it leaves
@@ -277,7 +343,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     // own registerStoreReset handler in the logout cascade.
     useSearchStore.getState().clear()
     clearAnalysisState(null)
-    useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [100]})
+    useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [1]})
   },
 
   selectedBlock: () => {
@@ -312,6 +378,9 @@ function clearAnalysisState(flowId: string | null) {
   useAnalysisStore.getState().setFindingSearch('')
   useAnalysisStore.getState().setProtectedFlowId(flowId)
   useAnalysisStore.getState().clearFindingSelection()
+  // Clear the finding-focus deep-link so a "finding:" link from flow A doesn't
+  // drive a fruitless scroll/highlight against flow B after a switch.
+  useAnalysisStore.getState().setFocusedFinding(null)
 }
 
 // resetDerivedStateForFlow clears all per-flow UI state in the stores that
@@ -325,6 +394,11 @@ export function resetDerivedStateForFlow(doc: FlowDocument | null) {
   // flow's conversation; useChatConversations auto-creates one on AITab mount.
   useChatStore.setState({activeThreadId: null})
   if (firstId) {
+    // Drop tabs referencing subflows this document doesn't have (flow switch,
+    // or a reparse that changed subflow ids) — otherwise old-flow tabs linger
+    // invisibly in the strip and split panes keep a dead activeTabId whose
+    // pane silently renders fallback content with no tab shown.
+    useEditorStore.getState().pruneToSubflows(doc?.subflows.map(s => s.id) ?? [])
     useEditorStore.getState().openInGroup(firstId, 0)
   } else {
     useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})

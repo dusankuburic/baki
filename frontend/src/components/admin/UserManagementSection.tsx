@@ -18,17 +18,28 @@ export const UserManagementSection: React.FC<{
         <thead className="bg-surface-3">
           <tr>
             {['Email', 'ID', 'Role', 'Change Role'].map(h => (
-              <th key={h} className="px-5 py-2.5 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">{h}</th>
+              <th
+                key={h}
+                className="px-5 py-2.5 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider"
+              >
+                {h}
+              </th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-border-subtle">
           {users.map(u => (
             <tr key={u.id} className="bg-surface-2 hover:bg-surface-3 transition-colors duration-fast">
-              <td className="px-5 py-3 text-sm font-medium text-text-primary max-w-[200px]"><span className="block truncate">{u.email}</span></td>
+              <td className="px-5 py-3 text-sm font-medium text-text-primary max-w-[200px]">
+                <span className="block truncate">{u.email}</span>
+              </td>
               <td className="px-5 py-3 text-xs text-text-tertiary font-mono max-w-[120px] truncate">{u.id}</td>
               <td className="px-5 py-3 whitespace-nowrap">
-                <span className={clsx('px-2 py-0.5 rounded-md text-xs font-semibold uppercase', roleBadgeClass(u.role))}>{u.role}</span>
+                <span
+                  className={clsx('px-2 py-0.5 rounded-md text-xs font-semibold uppercase', roleBadgeClass(u.role))}
+                >
+                  {u.role}
+                </span>
               </td>
               <td className="px-5 py-3 whitespace-nowrap">
                 <select

@@ -26,8 +26,14 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
   return (
     <div>
       <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Complexity Map</h3>
-      <p className="text-2xs text-text-tertiary mb-2">Cyclomatic vs cognitive per subflow · bubble = nesting depth. Top-left = deceptively hard to read.</p>
-      <div className="h-56" role="img" aria-label="Scatter plot of subflows by cyclomatic and cognitive complexity; bubble size shows nesting depth">
+      <p className="text-2xs text-text-tertiary mb-2">
+        Cyclomatic vs cognitive per subflow · bubble = nesting depth. Top-left = deceptively hard to read.
+      </p>
+      <div
+        className="h-56"
+        role="img"
+        aria-label="Scatter plot of subflows by cyclomatic and cognitive complexity; bubble size shows nesting depth"
+      >
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{top: 10, right: 16, left: -16, bottom: 4}}>
             <CartesianGrid strokeDasharray="3 3" stroke={colors.borderStrong} strokeOpacity={0.3} />
@@ -37,7 +43,13 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
               name="Cyclomatic"
               stroke={colors.borderStrong}
               tick={{fill: colors.textTertiary, fontSize: 11}}
-              label={{value: 'Cyclomatic', position: 'insideBottom', offset: -2, fill: colors.textTertiary, fontSize: 10}}
+              label={{
+                value: 'Cyclomatic',
+                position: 'insideBottom',
+                offset: -2,
+                fill: colors.textTertiary,
+                fontSize: 10,
+              }}
             />
             <YAxis
               type="number"
@@ -55,7 +67,8 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
                 borderColor: 'var(--border-subtle)',
                 borderRadius: 8,
                 backdropFilter: 'var(--glass-blur)',
-                fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                fontSize: 12,
+                fontVariantNumeric: 'tabular-nums',
               }}
               formatter={(_v, _name, entry) => {
                 const p = entry?.payload as {name: string; cyclo: number; cog: number; depth: number} | undefined
@@ -95,10 +108,38 @@ export function ImpactEffortMatrix({findings}: {findings: Finding[]}) {
   }
 
   const quadrants = [
-    {icon: Zap, label: 'Quick Wins', desc: 'Auto-fixable errors', count: quickWins, tone: 'text-emerald-400', ring: 'border-emerald-500/30 bg-emerald-500/5'},
-    {icon: Target, label: 'Strategic', desc: 'Manual errors', count: strategic, tone: 'text-red-400', ring: 'border-red-500/30 bg-red-500/5'},
-    {icon: Wrench, label: 'Easy Cleanup', desc: 'Auto-fixable lower sev', count: easyCleanup, tone: 'text-brand-400', ring: 'border-brand-500/30 bg-brand-500/5'},
-    {icon: Clock, label: 'Backlog', desc: 'Manual lower sev', count: backlog, tone: 'text-text-tertiary', ring: 'border-border-subtle bg-surface-0'},
+    {
+      icon: Zap,
+      label: 'Quick Wins',
+      desc: 'Auto-fixable errors',
+      count: quickWins,
+      tone: 'text-emerald-400',
+      ring: 'border-emerald-500/30 bg-emerald-500/5',
+    },
+    {
+      icon: Target,
+      label: 'Strategic',
+      desc: 'Manual errors',
+      count: strategic,
+      tone: 'text-red-400',
+      ring: 'border-red-500/30 bg-red-500/5',
+    },
+    {
+      icon: Wrench,
+      label: 'Easy Cleanup',
+      desc: 'Auto-fixable lower sev',
+      count: easyCleanup,
+      tone: 'text-brand-400',
+      ring: 'border-brand-500/30 bg-brand-500/5',
+    },
+    {
+      icon: Clock,
+      label: 'Backlog',
+      desc: 'Manual lower sev',
+      count: backlog,
+      tone: 'text-text-tertiary',
+      ring: 'border-border-subtle bg-surface-0',
+    },
   ]
 
   return (

@@ -12,8 +12,8 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
 
     const typeLabel = resolveTypeLabel(block.type, block.name, block.rawType)
     const strippedName = stripBlockKeywords(block.type, block.name)
-    
-    // For specific control blocks, if we have a valid stripped name, 
+
+    // For specific control blocks, if we have a valid stripped name,
     // we omit the type header entirely to reduce redundancy as requested.
     const hideHeaderTypes = ['SWITCH', 'CASE', 'CONDITION']
     const shouldHideHeader = strippedName && hideHeaderTypes.includes(block.type)

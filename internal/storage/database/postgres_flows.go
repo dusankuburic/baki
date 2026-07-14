@@ -422,8 +422,29 @@ func (b *PostgresStorageBackend) CountFlows(ctx context.Context, filter interfac
 	return total, nil
 }
 
-// ListFlows returns flows matching the filter.
+// ListFlows returns flows matching the filter: a SQL query/scan phase
+// (queryFlowRows), followed by a concurrent blob-content backfill phase
+// (backfillBlobContent) for any row whose full content wasn't inlined in the
+// DB (only runs when the caller wants full content and blob storage is
+// configured — UI listings use MetadataOnly and never reach it).
 func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
+	result, err := b.queryFlowRows(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	if !filter.MetadataOnly && b.blobClient != nil {
+		if err := b.backfillBlobContent(ctx, result); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+// queryFlowRows builds and runs the SELECT for ListFlows and scans the
+// results. Content is omitted from the query (a cheap literal instead) when
+// filter.MetadataOnly, so listing views never pay for the (potentially large)
+// content JSONB.
+func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
 	whereClause, args, n := flowFilterWhere(filter)
 
 	limit := filter.Limit
@@ -479,75 +500,81 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 		result = append(result, &flow)
 	}
 
-	// Concurrent blob fetching if MetadataOnly is false and blobClient is configured
-	if !filter.MetadataOnly && b.blobClient != nil {
-		g, gctx := errgroup.WithContext(ctx)
-		// Bound concurrent Azure blob downloads: a page can hold up to 500 flows
-		// (see limit above), and firing that many downloads at once risks Azure
-		// throttling (429s) and a memory spike holding every body in flight.
-		// g.Go then blocks until a slot frees, so fetches still parallelize.
-		// 16 matches the house cap in internal/ai (maxConcurrentRecords).
-		g.SetLimit(16)
-		for _, flow := range result {
-			if len(flow.Content) == 0 || string(flow.Content) == "{}" || string(flow.Content) == "null" {
-				f := flow // capture range variable
-				g.Go(func() (err error) {
-					// errgroup does not recover panics raised in its goroutines, so
-					// a panic in the azblob SDK would crash the process. Convert it
-					// to an error so the list fails loudly like any other blob failure.
-					defer func() {
-						if r := recover(); r != nil {
-							err = fmt.Errorf("blob fetch for flow %s panicked: %v", f.ID, r)
-						}
-					}()
-					// A transient blob failure fails the whole list. The only
-					// full-content consumers are the governance scanner and the user
-					// data export, and silently substituting placeholder content
-					// harms both: the scanner would record bogus "healthy/empty"
-					// analysis history (poisoning trends and alerts), and an export
-					// must be complete or fail. UI listings use MetadataOnly and
-					// never reach this path.
-					content, err := b.downloadBlob(gctx, flowContentKey(f.ID, f.Version))
+	return result, rows.Err()
+}
+
+// backfillBlobContent concurrently downloads full content, from blob storage,
+// for every flow in flows whose DB-stored content is empty or a placeholder.
+// Mutates each *FlowDocument's Content in place.
+func (b *PostgresStorageBackend) backfillBlobContent(ctx context.Context, flows []*interfaces.FlowDocument) error {
+	g, gctx := errgroup.WithContext(ctx)
+	// Bound concurrent Azure blob downloads: a page can hold up to 500 flows
+	// (see the limit clamp in queryFlowRows), and firing that many downloads at
+	// once risks Azure throttling (429s) and a memory spike holding every body
+	// in flight. g.Go then blocks until a slot frees, so fetches still
+	// parallelize. 16 matches the house cap in internal/ai (maxConcurrentRecords).
+	g.SetLimit(16)
+	for _, flow := range flows {
+		if len(flow.Content) == 0 || string(flow.Content) == "{}" || string(flow.Content) == "null" {
+			f := flow // capture range variable
+			g.Go(func() (err error) {
+				// errgroup does not recover panics raised in its goroutines, so
+				// a panic in the azblob SDK would crash the process. Convert it
+				// to an error so the list fails loudly like any other blob failure.
+				defer func() {
+					if r := recover(); r != nil {
+						err = fmt.Errorf("blob fetch for flow %s panicked: %v", f.ID, r)
+					}
+				}()
+				// A transient blob failure fails the whole list. The only
+				// full-content consumers are the governance scanner and the user
+				// data export, and silently substituting placeholder content
+				// harms both: the scanner would record bogus "healthy/empty"
+				// analysis history (poisoning trends and alerts), and an export
+				// must be complete or fail. UI listings use MetadataOnly and
+				// never reach this path.
+				content, err := b.downloadBlob(gctx, flowContentKey(f.ID, f.Version))
+				if err != nil {
+					return fmt.Errorf("list flows: download content for flow %s: %w", f.ID, err)
+				}
+				if content == nil {
+					// Fall back to the legacy version-agnostic key.
+					content, err = b.downloadBlob(gctx, legacyFlowContentKey(f.ID))
 					if err != nil {
-						return fmt.Errorf("list flows: download content for flow %s: %w", f.ID, err)
+						return fmt.Errorf("list flows: download legacy content for flow %s: %w", f.ID, err)
 					}
-					if content == nil {
-						// Fall back to the legacy version-agnostic key.
-						content, err = b.downloadBlob(gctx, legacyFlowContentKey(f.ID))
-						if err != nil {
-							return fmt.Errorf("list flows: download legacy content for flow %s: %w", f.ID, err)
-						}
-					}
-					if content != nil {
-						f.Content = content
-						return nil
-					}
-					// Both keys 404. Clear the DB placeholder so callers can
-					// distinguish "content unavailable" (nil) from real content:
-					// the scanner then skips the flow instead of analyzing an
-					// empty document. When metadata says content should exist this
-					// is per-flow data loss — log it, but don't fail every caller
-					// forever on one lost blob (the export layer re-checks and
-					// fails loudly on its own).
-					f.Content = nil
-					if metadataRecordsContent(f.Metadata) {
-						metrics.RecordBlobContentMissing()
-						logger.Error("flow content blob missing though metadata records content", "flow_id", f.ID, "version", f.Version)
-					}
+				}
+				if content != nil {
+					f.Content = content
 					return nil
-				})
-			}
-		}
-		if err := g.Wait(); err != nil {
-			return nil, err
+				}
+				// Both keys 404. Clear the DB placeholder so callers can
+				// distinguish "content unavailable" (nil) from real content:
+				// the scanner then skips the flow instead of analyzing an
+				// empty document. When metadata says content should exist this
+				// is per-flow data loss — log it, but don't fail every caller
+				// forever on one lost blob (the export layer re-checks and
+				// fails loudly on its own).
+				f.Content = nil
+				if metadataRecordsContent(f.Metadata) {
+					metrics.RecordBlobContentMissing()
+					logger.Error("flow content blob missing though metadata records content", "flow_id", f.ID, "version", f.Version)
+				}
+				return nil
+			})
 		}
 	}
-
-	return result, rows.Err()
+	return g.Wait()
 }
 
 // DeleteFlow removes a flow by ID.
 func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) error {
+	// Guard against an ID containing '/' before it is interpolated into the
+	// blob-prefix below (validFlowID's docstring calls out this exact risk).
+	// SaveFlow already validates; this covers delete/load paths that bypass it.
+	if err := validFlowID(id); err != nil {
+		return err
+	}
 	res, err := b.query(ctx).ExecContext(ctx, `DELETE FROM flows WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete flow: %w", err)
@@ -1024,8 +1051,9 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 	// Upload blob before the DB insert so a blob failure doesn't leave a
 	// row pointing at a missing blob. The FOR UPDATE above serializes
 	// concurrent callers, so the blob key is unique per version.
+	var blobKey string
 	if b.blobClient != nil {
-		blobKey := fmt.Sprintf("flows/%s/versions/%d/content.json", v.FlowID, v.Version)
+		blobKey = fmt.Sprintf("flows/%s/versions/%d/content.json", v.FlowID, v.Version)
 		if err := b.uploadBlob(ctx, blobKey, content); err != nil {
 			return err
 		}
@@ -1038,6 +1066,21 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 		v.ID, v.FlowID, v.Version, v.Comment, content, meta, v.CreatedBy, v.CreatedAt,
 	)
 	if err != nil {
+		// The INSERT failed (constraint, transient DB error, …): the row this
+		// blob backs will never exist, so reclaim the just-uploaded blob now.
+		// Without this the blob is orphaned forever — pruneFlowVersions only
+		// schedules cleanup for rows it DELETEs, and this version's row was
+		// never inserted. Best-effort: a delete failure here is logged, not
+		// returned, since the original INSERT error is the actionable one. (A
+		// later commit failure is the same accepted trade-off SaveFlow makes.)
+		if blobKey != "" {
+			// Best-effort reclaim on a bounded context so a hung blob delete
+			// can't block the error return path. deleteSingleBlob logs its
+			// own failures; the original INSERT error is the actionable one.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), blobOpTimeout)
+			b.deleteSingleBlob(cleanupCtx, v.FlowID, blobKey)
+			cancel()
+		}
 		return err
 	}
 	return b.pruneFlowVersions(ctx, q, v.FlowID)
@@ -1083,11 +1126,13 @@ func (b *PostgresStorageBackend) pruneFlowVersions(ctx context.Context, q DBTX, 
 			keys[i] = fmt.Sprintf("flows/%s/versions/%d/content.json", flowID, ver)
 		}
 		RegisterPostCommit(ctx, func() {
-			// Pruned snapshots' rows are already gone, so no reader-grace delay is
-			// needed — schedule immediate cleanup (notBefore = now).
+			// Although the pruned rows are gone after commit, an in-flight reader
+			// may have already SELECTed the row (under its own snapshot) and be
+			// about to download the blob. Use the same reader-grace delay as the
+			// stale-content path so such a reader doesn't hit a 404.
 			for _, key := range keys {
 				k := key
-				b.scheduleBlobCleanup(time.Now(), "prune-version:"+flowID, func(ctx context.Context) {
+				b.scheduleBlobCleanup(time.Now().Add(staleBlobCleanupDelay), "prune-version:"+flowID, func(ctx context.Context) {
 					b.deleteSingleBlob(ctx, flowID, k)
 				})
 			}

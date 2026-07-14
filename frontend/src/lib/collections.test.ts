@@ -28,7 +28,10 @@ describe('mapSet', () => {
   it('sets a key without mutating the original map', () => {
     const original = new Map([['a', 1]])
     const result = mapSet(original, 'b', 2)
-    expect([...result.entries()]).toEqual([['a', 1], ['b', 2]])
+    expect([...result.entries()]).toEqual([
+      ['a', 1],
+      ['b', 2],
+    ])
     expect(original.has('b')).toBe(false)
   })
 
@@ -40,7 +43,10 @@ describe('mapSet', () => {
 
 describe('mapDelete', () => {
   it('removes a key without mutating the original map', () => {
-    const original = new Map([['a', 1], ['b', 2]])
+    const original = new Map([
+      ['a', 1],
+      ['b', 2],
+    ])
     const result = mapDelete(original, 'a')
     expect(result.has('a')).toBe(false)
     expect(original.has('a')).toBe(true)

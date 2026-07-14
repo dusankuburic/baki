@@ -21,13 +21,13 @@ var (
 // SystemService handles settings, info, error logging, and API keys.
 type SystemService struct {
 	settings SettingsProvider
-	secrets  SecretStore
-	notifier Notifier
+	secrets  KeyStore
+	notifier EventNotifier
 	backend  storageif.StorageBackend
 	mode     config.DeploymentMode
 }
 
-func NewSystemService(settings SettingsProvider, secrets SecretStore, notifier Notifier, backend storageif.StorageBackend, mode config.DeploymentMode) *SystemService {
+func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *SystemService {
 	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode}
 }
 

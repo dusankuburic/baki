@@ -12,9 +12,7 @@ export default function AppearancePanel() {
   return (
     <div className="pb-8">
       <h2 className="text-xl font-semibold text-text-primary">Appearance</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-8">
-        Customize the look and feel of PAD Analyzer.
-      </p>
+      <p className="text-sm text-text-secondary mt-1 mb-8">Customize the look and feel of PAD Analyzer.</p>
 
       <div className="space-y-10">
         <div>
@@ -59,34 +57,32 @@ export default function AppearancePanel() {
           <div>
             <label className="text-sm font-medium text-text-primary block mb-3">UI Density</label>
             <div className="flex gap-2">
-              <DensityButton 
-                label="Comfortable" 
-                isActive={density === 'comfortable'} 
-                onClick={() => updateAppearance({density: 'comfortable'})} 
+              <DensityButton
+                label="Comfortable"
+                isActive={density === 'comfortable'}
+                onClick={() => updateAppearance({density: 'comfortable'})}
               />
-              <DensityButton 
-                label="Compact" 
-                isActive={density === 'compact'} 
-                onClick={() => updateAppearance({density: 'compact'})} 
+              <DensityButton
+                label="Compact"
+                isActive={density === 'compact'}
+                onClick={() => updateAppearance({density: 'compact'})}
               />
             </div>
-            <p className="text-xs text-text-tertiary mt-2">
-              Compact shows more content, comfortable adds spacing.
-            </p>
+            <p className="text-xs text-text-tertiary mt-2">Compact shows more content, comfortable adds spacing.</p>
           </div>
 
           <div className="space-y-4">
             <label className="text-sm font-medium text-text-primary block">Accessibility</label>
             <div className="space-y-3">
-              <AccessibilityToggle 
-                label="High Contrast" 
-                isChecked={highContrast} 
-                onChange={v => updateAppearance({highContrast: v})} 
+              <AccessibilityToggle
+                label="High Contrast"
+                isChecked={highContrast}
+                onChange={v => updateAppearance({highContrast: v})}
               />
-              <AccessibilityToggle 
-                label="Reduce Motion" 
-                isChecked={reduceMotion} 
-                onChange={v => updateAppearance({reduceMotion: v})} 
+              <AccessibilityToggle
+                label="Reduce Motion"
+                isChecked={reduceMotion}
+                onChange={v => updateAppearance({reduceMotion: v})}
               />
             </div>
           </div>
@@ -96,34 +92,40 @@ export default function AppearancePanel() {
   )
 }
 
-function ThemeSection({label, count, children}: {label: string, count: number, children: ReactNode}) {
+function ThemeSection({label, count, children}: {label: string; count: number; children: ReactNode}) {
   return (
     <div className="mb-6 last:mb-0">
       <div className="flex items-baseline gap-2 mb-3">
         <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary">{label}</h3>
         <span className="text-2xs text-text-disabled">{count}</span>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {children}
-      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{children}</div>
     </div>
   )
 }
 
-function ThemeCard({theme, isSelected, onClick}: {theme: {id: ThemeMode, label: string, description: string}, isSelected: boolean, onClick: () => void}) {
+function ThemeCard({
+  theme,
+  isSelected,
+  onClick,
+}: {
+  theme: {id: ThemeMode; label: string; description: string}
+  isSelected: boolean
+  onClick: () => void
+}) {
   return (
     <button
       onClick={onClick}
       className={clsx(
         'group relative flex flex-col text-left rounded-xl border-2 transition-all duration-fast overflow-hidden bg-surface-1',
-        isSelected 
-          ? 'border-brand-500 ring-4 ring-brand-500/10' 
-          : 'border-border-default hover:border-border-strong hover:bg-surface-2'
+        isSelected
+          ? 'border-brand-500 ring-4 ring-brand-500/10'
+          : 'border-border-default hover:border-border-strong hover:bg-surface-2',
       )}
     >
       {/* Mock UI Preview */}
-      <div 
-        data-theme={theme.id} 
+      <div
+        data-theme={theme.id}
         className="h-24 w-full border-b border-border-subtle bg-surface-0 relative overflow-hidden"
       >
         {/* Mock Header */}
@@ -163,15 +165,15 @@ function ThemeCard({theme, isSelected, onClick}: {theme: {id: ThemeMode, label: 
   )
 }
 
-function DensityButton({label, isActive, onClick}: {label: string, isActive: boolean, onClick: () => void}) {
+function DensityButton({label, isActive, onClick}: {label: string; isActive: boolean; onClick: () => void}) {
   return (
     <button
       onClick={onClick}
       className={clsx(
         'px-3 py-1.5 text-xs font-medium rounded-md border transition-colors flex-1',
-        isActive 
+        isActive
           ? 'bg-brand-500 border-brand-500 text-brand-foreground shadow-sm'
-          : 'bg-surface-2 border-border-default text-text-secondary hover:bg-surface-3'
+          : 'bg-surface-2 border-border-default text-text-secondary hover:bg-surface-3',
       )}
     >
       {label}
@@ -179,21 +181,28 @@ function DensityButton({label, isActive, onClick}: {label: string, isActive: boo
   )
 }
 
-function AccessibilityToggle({label, isChecked, onChange}: {label: string, isChecked: boolean, onChange: (v: boolean) => void}) {
+function AccessibilityToggle({
+  label,
+  isChecked,
+  onChange,
+}: {
+  label: string
+  isChecked: boolean
+  onChange: (v: boolean) => void
+}) {
   return (
     <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-2 border border-border-subtle">
       <span className="text-xs text-text-secondary">{label}</span>
-      <button 
+      <button
         onClick={() => onChange(!isChecked)}
-        className={clsx(
-          'w-7 h-4 rounded-full relative transition-colors',
-          isChecked ? 'bg-brand-500' : 'bg-surface-4'
-        )}
+        className={clsx('w-7 h-4 rounded-full relative transition-colors', isChecked ? 'bg-brand-500' : 'bg-surface-4')}
       >
-        <div className={clsx(
-          'absolute top-0.5 w-3 h-3 rounded-full transition-all duration-fast shadow-sm',
-          isChecked ? 'right-0.5 bg-brand-foreground' : 'left-0.5 bg-white'
-        )} />
+        <div
+          className={clsx(
+            'absolute top-0.5 w-3 h-3 rounded-full transition-all duration-fast shadow-sm',
+            isChecked ? 'right-0.5 bg-brand-foreground' : 'left-0.5 bg-white',
+          )}
+        />
       </button>
     </div>
   )

@@ -4,19 +4,28 @@ import {render, screen} from '@testing-library/react'
 // Mock useChartColors so ComplexityScatter doesn't touch CSS vars in jsdom.
 vi.mock('../dashboard/home/useChartColors', () => ({
   useChartColors: () => ({
-    success: '#22c55e', warning: '#eab308', error: '#ef4444', info: '#3b82f6',
-    brand400: '#818cf8', brand500: '#5b61ef', brand600: '#4f46e5',
-    surface3: '#26262d', borderStrong: '#3f3f47',
-    textSecondary: '#a1a1aa', textTertiary: '#71717a',
+    success: '#22c55e',
+    warning: '#eab308',
+    error: '#ef4444',
+    info: '#3b82f6',
+    brand400: '#818cf8',
+    brand500: '#5b61ef',
+    brand600: '#4f46e5',
+    surface3: '#26262d',
+    borderStrong: '#3f3f47',
+    textSecondary: '#a1a1aa',
+    textTertiary: '#71717a',
   }),
 }))
 
 // Mock recharts ResponsiveContainer to avoid jsdom sizing issues.
-vi.mock('recharts', async (importOriginal) => {
+vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   return {
     ...actual,
-    ResponsiveContainer: ({children}: {children: React.ReactNode}) => <div style={{width: 400, height: 200}}>{children}</div>,
+    ResponsiveContainer: ({children}: {children: React.ReactNode}) => (
+      <div style={{width: 400, height: 200}}>{children}</div>
+    ),
   }
 })
 
@@ -54,10 +63,20 @@ describe('ComplexityScatter', () => {
   })
 
   it('renders the chart with title and accessible name when populated', () => {
-    render(<ComplexityScatter subflows={[
-      subflow(),
-      subflow({subflowId: 'sf-2', subflowName: 'Hot', cyclomaticComplexity: 12, cognitiveComplexity: 35, maxNestingDepth: 5}),
-    ]} />)
+    render(
+      <ComplexityScatter
+        subflows={[
+          subflow(),
+          subflow({
+            subflowId: 'sf-2',
+            subflowName: 'Hot',
+            cyclomaticComplexity: 12,
+            cognitiveComplexity: 35,
+            maxNestingDepth: 5,
+          }),
+        ]}
+      />,
+    )
     expect(screen.getByText('Complexity Map')).toBeTruthy()
     expect(screen.getByRole('img', {name: /scatter plot of subflows/i})).toBeTruthy()
   })
@@ -71,12 +90,12 @@ describe('ImpactEffortMatrix', () => {
 
   it('sorts findings into the four priority quadrants', () => {
     const findings: Finding[] = [
-      finding({id: '1', severity: 'error', autoFix: 'set-timeout'}),   // Quick Win
-      finding({id: '2', severity: 'error', autoFix: 'set-timeout'}),   // Quick Win
-      finding({id: '3', severity: 'error'}),                           // Strategic (manual error)
-      finding({id: '4', severity: 'warning', autoFix: 'insert-close'}),// Easy Cleanup
-      finding({id: '5', severity: 'info'}),                            // Backlog (manual lower sev)
-      finding({id: '6', severity: 'warning'}),                         // Backlog
+      finding({id: '1', severity: 'error', autoFix: 'set-timeout'}), // Quick Win
+      finding({id: '2', severity: 'error', autoFix: 'set-timeout'}), // Quick Win
+      finding({id: '3', severity: 'error'}), // Strategic (manual error)
+      finding({id: '4', severity: 'warning', autoFix: 'insert-close'}), // Easy Cleanup
+      finding({id: '5', severity: 'info'}), // Backlog (manual lower sev)
+      finding({id: '6', severity: 'warning'}), // Backlog
     ]
     const {container} = render(<ImpactEffortMatrix findings={findings} />)
 

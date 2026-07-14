@@ -43,7 +43,7 @@ describe('RecentFilesMenu', () => {
     const {container} = render(
       <div style={{overflow: 'hidden', height: 10}}>
         <Host />
-      </div>
+      </div>,
     )
     // The menu's listbox should NOT be a descendant of the clipping container.
     const clippingContainer = container.firstChild as HTMLElement
@@ -76,7 +76,7 @@ describe('RecentFilesMenu', () => {
       <div>
         <button>outside</button>
         <Host onClose={onClose} />
-      </div>
+      </div>,
     )
     fireEvent.mouseDown(screen.getByText('outside'))
     expect(onClose).toHaveBeenCalled()

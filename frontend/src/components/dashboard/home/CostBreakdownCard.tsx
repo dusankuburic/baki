@@ -19,10 +19,12 @@ export function CostBreakdownCard({data, className}: {data: ProviderCost[]; clas
   const hasData = data.length > 0 && data.some(d => d.cost > 0)
   const totalCost = data.reduce((s, d) => s + d.cost, 0)
 
-  const chartData = data.filter(d => d.cost > 0).map(d => ({
-    name: d.provider,
-    value: Math.round(d.cost * 100) / 100,
-  }))
+  const chartData = data
+    .filter(d => d.cost > 0)
+    .map(d => ({
+      name: d.provider,
+      value: Math.round(d.cost * 100) / 100,
+    }))
 
   return (
     <CardShell title="AI Cost by Provider" className={className}>
@@ -44,7 +46,7 @@ export function CostBreakdownCard({data, className}: {data: ProviderCost[]; clas
                   paddingAngle={2}
                   isAnimationActive={false}
                 >
-                  {chartData.map((entry) => (
+                  {chartData.map(entry => (
                     <Cell key={entry.name} fill={PROVIDER_COLORS[entry.name.toLowerCase()] ?? colors.brand500} />
                   ))}
                 </Pie>
@@ -54,19 +56,22 @@ export function CostBreakdownCard({data, className}: {data: ProviderCost[]; clas
                     borderColor: 'var(--border-subtle)',
                     borderRadius: 8,
                     backdropFilter: 'var(--glass-blur)',
-                    fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                    fontSize: 12,
+                    fontVariantNumeric: 'tabular-nums',
                   }}
-                  formatter={(v) => [`$${Number(v).toFixed(2)}`, 'Cost']}
+                  formatter={v => [`$${Number(v).toFixed(2)}`, 'Cost']}
                 />
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <span className="text-xl font-black font-mono tabular-nums text-text-primary">${totalCost.toFixed(2)}</span>
+              <span className="text-xl font-black font-mono tabular-nums text-text-primary">
+                ${totalCost.toFixed(2)}
+              </span>
               <span className="text-2xs text-text-tertiary">30d total</span>
             </div>
           </div>
           <div className="flex flex-col gap-1 min-w-0">
-            {chartData.slice(0, 5).map((entry) => (
+            {chartData.slice(0, 5).map(entry => (
               <div key={entry.name} className="flex items-center gap-1.5 text-2xs">
                 <span
                   className="w-2.5 h-2.5 rounded-sm shrink-0"

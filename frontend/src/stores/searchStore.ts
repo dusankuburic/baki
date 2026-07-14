@@ -26,24 +26,27 @@ export const useSearchStore = create<SearchState>((set, _get) => ({
   totalCount: 0,
   focusRequest: 0,
 
-  setQuery: (q) => set({query: q, isSearching: q.length > 0}),
+  setQuery: q => set({query: q, isSearching: q.length > 0}),
 
-  setResults: (results, total) => set({
-    results,
-    totalCount: total,
-    activeResultIndex: results.length > 0 ? 0 : -1,
-    isSearching: false,
-  }),
+  setResults: (results, total) =>
+    set({
+      results,
+      totalCount: total,
+      activeResultIndex: results.length > 0 ? 0 : -1,
+      isSearching: false,
+    }),
 
-  nextResult: () => set(state => {
-    if (state.results.length === 0) return state
-    return {activeResultIndex: (state.activeResultIndex + 1) % state.results.length}
-  }),
+  nextResult: () =>
+    set(state => {
+      if (state.results.length === 0) return state
+      return {activeResultIndex: (state.activeResultIndex + 1) % state.results.length}
+    }),
 
-  prevResult: () => set(state => {
-    if (state.results.length === 0) return state
-    return {activeResultIndex: (state.activeResultIndex - 1 + state.results.length) % state.results.length}
-  }),
+  prevResult: () =>
+    set(state => {
+      if (state.results.length === 0) return state
+      return {activeResultIndex: (state.activeResultIndex - 1 + state.results.length) % state.results.length}
+    }),
 
   clear: () => set({query: '', results: [], activeResultIndex: -1, isSearching: false, totalCount: 0}),
 

@@ -1,21 +1,20 @@
-import {request} from './client'
+import {request, requestValidated} from './client'
+import {AppSettingsSchema} from './schemas'
 import type {AppSettings} from '@/types'
 
 export const settingsApi = {
   getSettings: (): Promise<AppSettings> =>
-    request('/api/system/settings', undefined, 'GET'),
+    requestValidated('/api/system/settings', AppSettingsSchema, undefined, 'GET'),
 
-  updateSettings: (settings: AppSettings): Promise<void> =>
-    request('/api/system/settings', settings),
+  updateSettings: (settings: AppSettings): Promise<void> => request('/api/system/settings', settings),
 
   getUserSettings: (): Promise<AppSettings> =>
-    request('/api/system/settings/user', undefined, 'GET'),
+    requestValidated('/api/system/settings/user', AppSettingsSchema, undefined, 'GET'),
 
-  updateUserSettings: (settings: AppSettings): Promise<void> =>
-    request('/api/system/settings/user', settings),
+  updateUserSettings: (settings: AppSettings): Promise<void> => request('/api/system/settings/user', settings),
 
   getOrgSettings: (orgId: string): Promise<AppSettings> =>
-    request(`/api/system/settings/org/${orgId}`, undefined, 'GET'),
+    requestValidated(`/api/system/settings/org/${orgId}`, AppSettingsSchema, undefined, 'GET'),
 
   updateOrgSettings: (orgId: string, settings: AppSettings): Promise<void> =>
     request(`/api/system/settings/org/${orgId}`, settings),

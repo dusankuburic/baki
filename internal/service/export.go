@@ -11,14 +11,20 @@ import (
 	"pad-core/parser"
 )
 
+func init() {
+	// Surface the build version in SARIF tool.driver.version so consumers
+	// (GitHub Code Scanning, Azure DevOps) can correlate results to a build.
+	export.SetToolVersion(Version)
+}
+
 // ExportService handles flow diff, markdown, and PDF export operations.
 type ExportService struct {
-	notifier Notifier
+	notifier EventNotifier
 	flow     *FlowService
 	analysis *AnalysisService
 }
 
-func NewExportService(notifier Notifier, flow *FlowService, analysis *AnalysisService) *ExportService {
+func NewExportService(notifier EventNotifier, flow *FlowService, analysis *AnalysisService) *ExportService {
 	return &ExportService{notifier: notifier, flow: flow, analysis: analysis}
 }
 

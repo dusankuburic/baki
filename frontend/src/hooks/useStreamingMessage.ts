@@ -67,6 +67,12 @@ export function useStreamingMessage(handler: StreamHandler) {
   const subsRef = useRef(new Map<string, StreamSub>())
   const unregisterConnRef = useRef<(() => void) | null>(null)
   const isCanceledRef = useRef(false)
+  // openWaitTimersRef tracks active OPEN_WAIT timeout timers so the cleanup
+  // effect can clear them on unmount. Without this, a timer scheduled while the
+  // SSE connection was still dialing keeps its closure (unsubConn, settle)
+  // alive for up to OPEN_WAIT_TIMEOUT_MS after unmount; it self-resolves (the
+  // tick checks isCanceledRef) but this avoids the dangling retention.
+  const openWaitTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>())
 
   // armStall schedules the next stall probe via a ref because armStall and
   // probeStall reference each other (the probe re-arms on no-progress).
@@ -88,35 +94,65 @@ export function useStreamingMessage(handler: StreamHandler) {
   //     every reconnect (which happens at each access-token TTL expiry).
   //   - 'full' (mismatch): possible mid-stream gaps, so fetch the authoritative
   //     full buffer and onReplace.
-  const resumeInto = useCallback((streamId: string, opts?: {finish?: {tokensOut: number; tokensIn: number}; mode?: 'delta' | 'full'}) => {
-    const finish = opts?.finish
-    const mode = opts?.mode ?? 'full'
-    const useDelta = mode === 'delta' && handlerRef.current.onAppend && handlerRef.current.getAccLength
-    const from = useDelta ? (handlerRef.current.getAccLength?.(streamId) ?? 0) : 0
-    chatApi.resumeStream(streamId, from).then(res => {
-      if (!subsRef.current.has(streamId)) return
-      if (res.text) {
-        if (useDelta) {
-          handlerRef.current.onAppend!(res.text, streamId)
-        } else {
-          handlerRef.current.onReplace(res.text, streamId)
-        }
-      }
-      if (res.error) {
-        handlerRef.current.onError(res.error, streamId)
-      } else if (res.done || finish) {
-        handlerRef.current.onDone(res.tokensOut || finish?.tokensOut || 0, res.tokensIn || finish?.tokensIn || 0, streamId)
-      } else {
-        // Still generating after a reconnect-resume — keep watching for stalls.
-        armStall(streamId)
-      }
-    }).catch(() => {
-      // Stream no longer available. When this was a done-verification pass we
-      // still have to finish with what accumulated; reconnect probes just drop.
-      if (!subsRef.current.has(streamId)) return
-      if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId)
-    })
-  }, [armStall])
+  const resumeInto = useCallback(
+    (streamId: string, opts?: {finish?: {tokensOut: number; tokensIn: number}; mode?: 'delta' | 'full'}) => {
+      const finish = opts?.finish
+      const mode = opts?.mode ?? 'full'
+      const useDelta = mode === 'delta' && handlerRef.current.onAppend && handlerRef.current.getAccLength
+      const from = useDelta ? (handlerRef.current.getAccLength?.(streamId) ?? 0) : 0
+      chatApi
+        .resumeStream(streamId, from)
+        .then(res => {
+          if (!subsRef.current.has(streamId)) return
+          if (res.text) {
+            if (useDelta) {
+              // M12: if live SSE chunks arrived between capturing `from` and the
+              // response, the acc has grown past `from` — the response tail
+              // (buffered [from, current)) now overlaps those live chunks, so
+              // onAppend would duplicate them. Fall back to a full replace:
+              // fetch the whole buffer and onReplace, which is idempotent and
+              // converges (the done event's countsInvalid full-resume also
+              // corrects the final text). finish is never combined with delta,
+              // so terminal handling is left to the flowing SSE events / stall
+              // probe.
+              const now = handlerRef.current.getAccLength?.(streamId) ?? 0
+              if (now > from) {
+                chatApi
+                  .resumeStream(streamId, 0)
+                  .then(fullRes => {
+                    if (!subsRef.current.has(streamId)) return
+                    if (fullRes.text) handlerRef.current.onReplace(fullRes.text, streamId)
+                  })
+                  .catch(() => {})
+                return
+              }
+              handlerRef.current.onAppend!(res.text, streamId)
+            } else {
+              handlerRef.current.onReplace(res.text, streamId)
+            }
+          }
+          if (res.error) {
+            handlerRef.current.onError(res.error, streamId)
+          } else if (res.done || finish) {
+            handlerRef.current.onDone(
+              res.tokensOut || finish?.tokensOut || 0,
+              res.tokensIn || finish?.tokensIn || 0,
+              streamId,
+            )
+          } else {
+            // Still generating after a reconnect-resume — keep watching for stalls.
+            armStall(streamId)
+          }
+        })
+        .catch(() => {
+          // Stream no longer available. When this was a done-verification pass we
+          // still have to finish with what accumulated; reconnect probes just drop.
+          if (!subsRef.current.has(streamId)) return
+          if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId)
+        })
+    },
+    [armStall],
+  )
 
   // teardownStream clears one stream's listener after it completes naturally
   // (onDone/onError). Unlike cancel, it does NOT cancel on the backend.
@@ -133,64 +169,80 @@ export function useStreamingMessage(handler: StreamHandler) {
     }
   }, [])
 
-  const cancel = useCallback((streamId: string) => {
-    chatApi.cancelStream(streamId).catch((err) => { logger.warn('Failed to cancel stream', err) })
-    teardownStream(streamId)
-  }, [teardownStream])
+  const cancel = useCallback(
+    (streamId: string) => {
+      chatApi.cancelStream(streamId).catch(err => {
+        logger.warn('Failed to cancel stream', err)
+      })
+      teardownStream(streamId)
+    },
+    [teardownStream],
+  )
 
   // probeStall fires when a registered stream saw no event for STALL_PROBE_MS.
   // The backend's terminal event may have been dropped (saturated SSE buffer)
   // or never emitted (worker died) — resume returns the authoritative buffered
   // state, so finish/error from that instead of spinning forever.
-  const probeStall = useCallback((streamId: string) => {
-    const sub = subsRef.current.get(streamId)
-    if (!sub) return
-    sub.stallTimer = null
-    if (getEventConnectionState() !== 'open') {
-      // Disconnected: the reconnect listener owns recovery (delta-resume once
-      // the connection reopens); keep watching until it does.
-      armStall(streamId)
-      return
-    }
-    // Live chunks may have been dropped, so fetch the authoritative full
-    // buffer (same reasoning as the chunk-count mismatch path).
-    sub.countsInvalid = true
-    const before = handlerRef.current.getAccLength?.(streamId) ?? 0
-    const miss = () => {
-      if (++sub.probeMisses >= STALL_PROBE_LIMIT) {
-        handlerRef.current.onError('The response stalled — the connection to the backend may have been lost.', streamId)
-      } else {
+  const probeStall = useCallback(
+    (streamId: string) => {
+      const sub = subsRef.current.get(streamId)
+      if (!sub) return
+      sub.stallTimer = null
+      if (getEventConnectionState() !== 'open') {
+        // Disconnected: the reconnect listener owns recovery (delta-resume once
+        // the connection reopens); keep watching until it does.
         armStall(streamId)
-      }
-    }
-    chatApi.resumeStream(streamId, 0).then(res => {
-      if (!subsRef.current.has(streamId)) return
-      if (res.error) {
-        handlerRef.current.onError(res.error, streamId)
         return
       }
-      if (res.text) handlerRef.current.onReplace(res.text, streamId)
-      if (res.done) {
-        handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
-        return
+      // Live chunks may have been dropped, so fetch the authoritative full
+      // buffer (same reasoning as the chunk-count mismatch path).
+      sub.countsInvalid = true
+      const before = handlerRef.current.getAccLength?.(streamId) ?? 0
+      const miss = () => {
+        if (++sub.probeMisses >= STALL_PROBE_LIMIT) {
+          handlerRef.current.onError(
+            'The response stalled — the connection to the backend may have been lost.',
+            streamId,
+          )
+        } else {
+          armStall(streamId)
+        }
       }
-      if (res.text && utf8ByteLength(res.text) > before) {
-        // Still generating, just slowly (or the live chunks were dropped).
-        sub.probeMisses = 0
-        armStall(streamId)
-      } else {
-        miss()
-      }
-    }).catch(() => {
-      // Stream unknown (never created / retention expired) or the probe
-      // request itself failed. Count it as a miss so a transient failure
-      // doesn't kill a live stream, but a truly lost one errors out.
-      if (!subsRef.current.has(streamId)) return
-      miss()
-    })
-  }, [armStall])
+      chatApi
+        .resumeStream(streamId, 0)
+        .then(res => {
+          if (!subsRef.current.has(streamId)) return
+          if (res.error) {
+            handlerRef.current.onError(res.error, streamId)
+            return
+          }
+          if (res.text) handlerRef.current.onReplace(res.text, streamId)
+          if (res.done) {
+            handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
+            return
+          }
+          if (res.text && utf8ByteLength(res.text) > before) {
+            // Still generating, just slowly (or the live chunks were dropped).
+            sub.probeMisses = 0
+            armStall(streamId)
+          } else {
+            miss()
+          }
+        })
+        .catch(() => {
+          // Stream unknown (never created / retention expired) or the probe
+          // request itself failed. Count it as a miss so a transient failure
+          // doesn't kill a live stream, but a truly lost one errors out.
+          if (!subsRef.current.has(streamId)) return
+          miss()
+        })
+    },
+    [armStall],
+  )
 
-  useEffect(() => { probeStallRef.current = probeStall }, [probeStall])
+  useEffect(() => {
+    probeStallRef.current = probeStall
+  }, [probeStall])
 
   // registerStream subscribes the per-stream SSE listener (and the shared
   // connection-state recovery hook) and waits for the SSE connection to be
@@ -200,151 +252,172 @@ export function useStreamingMessage(handler: StreamHandler) {
   // false (C-1: caller supplied a clientStreamId and will POST create after
   // this returns) the begin call is skipped — the backend emits immediately on
   // stream creation because the listener is already in place.
-  const registerStream = useCallback(async (streamId: string, begin = true) => {
-    // One shared connection-state listener for all registered streams: after
-    // the SSE connection recovers, fetch each stream's full buffered state.
-    // The backend retains finished streams briefly, so even one that completed
-    // while we were disconnected recovers its final text and done/error signal
-    // (otherwise the UI would hang in the streaming state).
-    if (!unregisterConnRef.current) {
-      let wasReconnecting = false
-      unregisterConnRef.current = subscribeConnectionState((state: EventConnectionState) => {
-        if (state === 'reconnecting' || state === 'connecting') {
-          wasReconnecting = true
-        } else if (state === 'open' && wasReconnecting) {
-          wasReconnecting = false
-          for (const [sid, s] of subsRef.current) {
-            s.countsInvalid = true // chunks were missed while disconnected
-            // Delta-resume: the client's accumulated text is a clean prefix, so
-            // fetch only the tail instead of re-parsing the whole buffer.
-            resumeInto(sid, {mode: 'delta'})
+  const registerStream = useCallback(
+    async (streamId: string, begin = true) => {
+      // One shared connection-state listener for all registered streams: after
+      // the SSE connection recovers, fetch each stream's full buffered state.
+      // The backend retains finished streams briefly, so even one that completed
+      // while we were disconnected recovers its final text and done/error signal
+      // (otherwise the UI would hang in the streaming state).
+      if (!unregisterConnRef.current) {
+        let wasReconnecting = false
+        unregisterConnRef.current = subscribeConnectionState((state: EventConnectionState) => {
+          // M12: only treat 'reconnecting' (recovery from a dropped connection)
+          // as a reconnect — NOT 'connecting', which is the initial dial. The
+          // previous `|| 'connecting'` condition fired a spurious delta-resume
+          // on the very first connect (e.g. a message sent while the SSE was
+          // still dialing), an unnecessary network call that also widened the
+          // delta-resume race window below.
+          if (state === 'reconnecting') {
+            wasReconnecting = true
+          } else if (state === 'open' && wasReconnecting) {
+            wasReconnecting = false
+            for (const [sid, s] of subsRef.current) {
+              s.countsInvalid = true // chunks were missed while disconnected
+              // Delta-resume: the client's accumulated text is a clean prefix, so
+              // fetch only the tail instead of re-parsing the whole buffer.
+              resumeInto(sid, {mode: 'delta'})
+            }
           }
+        })
+      }
+
+      const sub: StreamSub = {unsub: () => {}, received: 0, countsInvalid: false, stallTimer: null, probeMisses: 0}
+
+      const unsub = await subscribeToEvents((event: {name: string; data: unknown}) => {
+        if (event.name !== 'chat:event') return
+        const payload = event.data as Record<string, unknown> | null
+        if (!payload || payload.streamId !== streamId) return
+
+        const type = payload.type as string
+        const data = (payload.data as Record<string, unknown>) || {}
+
+        switch (type) {
+          case 'chunk':
+            sub.received++
+            sub.probeMisses = 0
+            armStall(streamId)
+            handlerRef.current.onChunk((data.content as string) || '', streamId)
+            break
+          case 'done': {
+            if (sub.stallTimer) {
+              clearTimeout(sub.stallTimer)
+              sub.stallTimer = null
+            }
+            const tokensOut = (data.tokensOut as number) || 0
+            const tokensIn = (data.tokensIn as number) || 0
+            const expected = data.chunks
+            if (sub.countsInvalid || (typeof expected === 'number' && expected !== sub.received)) {
+              // Some live chunks never reached us — replace the accumulated text
+              // with the server's buffer so the committed message is complete.
+              resumeInto(streamId, {finish: {tokensOut, tokensIn}, mode: 'full'})
+            } else {
+              handlerRef.current.onDone(tokensOut, tokensIn, streamId)
+            }
+            break
+          }
+          case 'error':
+            if (sub.stallTimer) {
+              clearTimeout(sub.stallTimer)
+              sub.stallTimer = null
+            }
+            handlerRef.current.onError((data.message as string) || 'Unknown error', streamId)
+            break
+          case 'tool':
+            sub.probeMisses = 0
+            armStall(streamId)
+            handlerRef.current.onToolStatus?.((data.label as string) || (data.name as string) || 'Using tool', streamId)
+            break
         }
       })
-    }
+      sub.unsub = unsub
 
-    const sub: StreamSub = {unsub: () => {}, received: 0, countsInvalid: false, stallTimer: null, probeMisses: 0}
+      // If the hook unmounted while the async subscription was in flight,
+      // immediately unsubscribe to prevent a leak.
+      if (isCanceledRef.current) {
+        unsub()
+        return
+      }
+      subsRef.current.set(streamId, sub)
+      // Watch from registration: a backend that never emits anything (worker
+      // panic, stream never created) is caught by the first stall probe.
+      armStall(streamId)
 
-    const unsub = await subscribeToEvents((event: { name: string; data: unknown }) => {
-      if (event.name !== 'chat:event') return
-      const payload = event.data as Record<string, unknown> | null
-      if (!payload || payload.streamId !== streamId) return
-
-      const type = payload.type as string
-      const data = (payload.data as Record<string, unknown>) || {}
-
-      switch (type) {
-        case 'chunk':
-          sub.received++
-          sub.probeMisses = 0
-          armStall(streamId)
-          handlerRef.current.onChunk((data.content as string) || '', streamId)
-          break
-        case 'done': {
-          if (sub.stallTimer) { clearTimeout(sub.stallTimer); sub.stallTimer = null }
-          const tokensOut = (data.tokensOut as number) || 0
-          const tokensIn = (data.tokensIn as number) || 0
-          const expected = data.chunks
-          if (sub.countsInvalid || (typeof expected === 'number' && expected !== sub.received)) {
-            // Some live chunks never reached us — replace the accumulated text
-            // with the server's buffer so the committed message is complete.
-            resumeInto(streamId, {finish: {tokensOut, tokensIn}, mode: 'full'})
-          } else {
-            handlerRef.current.onDone(tokensOut, tokensIn, streamId)
+      // Wait for the SSE connection to be fully 'open' before signaling the backend
+      // to begin emitting chunks. If beginStream is called while the connection is
+      // still establishing (connecting/reconnecting), the backend's EventManager
+      // has no client for this user yet and the initial chunks will be dropped.
+      // Bounded: past OPEN_WAIT_TIMEOUT_MS the backend is unreachable, so reject
+      // and let the caller surface an error instead of pinning the thinking
+      // indicator forever (connectEvents itself retries with backoff forever).
+      if (getEventConnectionState() !== 'open') {
+        await new Promise<void>((resolve, reject) => {
+          let unsubConn: (() => void) | null = null
+          let settled = false
+          const settle = (err?: Error) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            openWaitTimersRef.current.delete(timer)
+            unsubConn?.()
+            if (err) reject(err)
+            else resolve()
           }
-          break
-        }
-        case 'error':
-          if (sub.stallTimer) { clearTimeout(sub.stallTimer); sub.stallTimer = null }
-          handlerRef.current.onError((data.message as string) || 'Unknown error', streamId)
-          break
-        case 'tool':
-          sub.probeMisses = 0
-          armStall(streamId)
-          handlerRef.current.onToolStatus?.((data.label as string) || (data.name as string) || 'Using tool', streamId)
-          break
-      }
-    })
-    sub.unsub = unsub
-
-    // If the hook unmounted while the async subscription was in flight,
-    // immediately unsubscribe to prevent a leak.
-    if (isCanceledRef.current) {
-      unsub()
-      return
-    }
-    subsRef.current.set(streamId, sub)
-    // Watch from registration: a backend that never emits anything (worker
-    // panic, stream never created) is caught by the first stall probe.
-    armStall(streamId)
-
-    // Wait for the SSE connection to be fully 'open' before signaling the backend
-    // to begin emitting chunks. If beginStream is called while the connection is
-    // still establishing (connecting/reconnecting), the backend's EventManager
-    // has no client for this user yet and the initial chunks will be dropped.
-    // Bounded: past OPEN_WAIT_TIMEOUT_MS the backend is unreachable, so reject
-    // and let the caller surface an error instead of pinning the thinking
-    // indicator forever (connectEvents itself retries with backoff forever).
-    if (getEventConnectionState() !== 'open') {
-      await new Promise<void>((resolve, reject) => {
-        let unsubConn: (() => void) | null = null
-        let settled = false
-        const settle = (err?: Error) => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
-          unsubConn?.()
-          if (err) reject(err); else resolve()
-        }
-        const timer = setTimeout(() => {
-          if (isCanceledRef.current) {
-            settle()
-            return
+          const timer = setTimeout(() => {
+            if (isCanceledRef.current) {
+              settle()
+              return
+            }
+            // Drop this stream's registration before failing, so the reconnect
+            // listener doesn't keep resuming a dead entry.
+            teardownStream(streamId)
+            settle(
+              new Error('Could not connect to the event stream — the backend may still be starting. Please try again.'),
+            )
+          }, OPEN_WAIT_TIMEOUT_MS)
+          openWaitTimersRef.current.add(timer)
+          const check = (state: EventConnectionState) => {
+            if (state === 'open' || isCanceledRef.current) settle()
           }
-          // Drop this stream's registration before failing, so the reconnect
-          // listener doesn't keep resuming a dead entry.
-          teardownStream(streamId)
-          settle(new Error('Could not connect to the event stream — the backend may still be starting. Please try again.'))
-        }, OPEN_WAIT_TIMEOUT_MS)
-        const check = (state: EventConnectionState) => {
-          if (state === 'open' || isCanceledRef.current) settle()
+          unsubConn = subscribeConnectionState(check)
+          // subscribeConnectionState invokes check synchronously; if that
+          // settled us, the returned unsubscriber wasn't in scope yet.
+          if (settled) unsubConn()
+        })
+      }
+
+      if (isCanceledRef.current) return
+
+      if (!begin) return
+
+      // If beginStream fails the backend goroutine blocks on awaitStart() until
+      // its stream-cap timeout fires — with no event emitted afterward. Propagate
+      // the error so the caller (executeSend) can clean up the streaming state.
+      const res = await chatApi.beginStream(streamId)
+
+      // The stream may have already finished before we began: a fail-fast
+      // pre-stream error (bad provider, budget) emitted its terminal event
+      // before our SSE subscription existed, so no event will ever arrive.
+      // /begin returns that buffered state — deliver it directly.
+      if (res?.status === 'finished') {
+        if (isCanceledRef.current || !subsRef.current.has(streamId)) return
+        if (res.text) {
+          handlerRef.current.onReplace(res.text, streamId)
         }
-        unsubConn = subscribeConnectionState(check)
-        // subscribeConnectionState invokes check synchronously; if that
-        // settled us, the returned unsubscriber wasn't in scope yet.
-        if (settled) unsubConn()
-      })
-    }
-
-    if (isCanceledRef.current) return
-
-    if (!begin) return
-
-    // If beginStream fails the backend goroutine blocks on awaitStart() until
-    // its stream-cap timeout fires — with no event emitted afterward. Propagate
-    // the error so the caller (executeSend) can clean up the streaming state.
-    const res = await chatApi.beginStream(streamId)
-
-    // The stream may have already finished before we began: a fail-fast
-    // pre-stream error (bad provider, budget) emitted its terminal event
-    // before our SSE subscription existed, so no event will ever arrive.
-    // /begin returns that buffered state — deliver it directly.
-    if (res?.status === 'finished') {
-      if (isCanceledRef.current || !subsRef.current.has(streamId)) return
-      if (res.text) {
-        handlerRef.current.onReplace(res.text, streamId)
+        if (res.error) {
+          handlerRef.current.onError(res.error, streamId)
+        } else if (res.done) {
+          handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
+        }
       }
-      if (res.error) {
-        handlerRef.current.onError(res.error, streamId)
-      } else if (res.done) {
-        handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
-      }
-    }
-  }, [resumeInto, armStall, teardownStream])
+    },
+    [resumeInto, armStall, teardownStream],
+  )
 
   useEffect(() => {
     isCanceledRef.current = false
     const subs = subsRef.current
+    const openWaitTimers = openWaitTimersRef.current
     return () => {
       isCanceledRef.current = true
       for (const [sid, s] of subs) {
@@ -353,6 +426,9 @@ export function useStreamingMessage(handler: StreamHandler) {
         chatApi.cancelStream(sid).catch(() => {})
       }
       subs.clear()
+      // Clear any OPEN_WAIT timers still waiting for the SSE connection to open.
+      for (const t of openWaitTimers) clearTimeout(t)
+      openWaitTimers.clear()
       if (unregisterConnRef.current) {
         unregisterConnRef.current()
         unregisterConnRef.current = null

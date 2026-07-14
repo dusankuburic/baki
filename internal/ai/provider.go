@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -125,6 +126,23 @@ var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
 	ErrCircuitOpen         = errors.New("provider circuit open: too many recent failures")
 )
+
+// detectContextLimitError checks whether a provider 400 response is a
+// context-length-exceeded error and returns ErrContextLimit if so. Providers
+// use different message wording, so we match on common substrings (case-
+// insensitive). Returns nil when the response is not a context-limit error.
+func detectContextLimitError(statusCode int, message string) error {
+	if statusCode != 400 || message == "" {
+		return nil
+	}
+	lower := strings.ToLower(message)
+	for _, hint := range []string{"context length", "context window", "too long", "maximum context", "token limit", "prompt is too long"} {
+		if strings.Contains(lower, hint) {
+			return ErrContextLimit
+		}
+	}
+	return nil
+}
 
 // RateLimitError is a rate-limit (HTTP 429) error that carries the server's
 // Retry-After hint. It unwraps to ErrRateLimited so existing errors.Is checks

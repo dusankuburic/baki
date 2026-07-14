@@ -168,667 +168,73 @@
                     }
                   ],
                   "children": []
-                },
-                {
-                  "name": "Execute X Path And Get First Value Only",
-                  "type": "ACTION",
-                  "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
-                  "indent": 8,
-                  "lineNumber": 10,
-                  "properties": {
-                    "XPathQuery": "$'''/Artikal/Id''' XPathResult",
-                    "XmlDocument": "CurrentNode",
-                    "_output": "XPathIdResult"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Execute X Path And Get First Value Only"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Get Element Value As Numeric",
-                  "type": "ACTION",
-                  "rawType": "XML.GetXmlElementValue.GetElementValueAsNumeric",
-                  "indent": 8,
-                  "lineNumber": 11,
-                  "properties": {
-                    "Document": "XPathIdResult NumericValue",
-                    "_output": "elId"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Get Element Value As Numeric"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Set CurrArtikal['Id']",
-                  "type": "VARIABLE",
-                  "rawType": "SET",
-                  "indent": 8,
-                  "lineNumber": 12,
-                  "properties": {
-                    "_output": "CurrArtikal['Id']",
-                    "_value": "elId",
-                    "_var": "CurrArtikal['Id']"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "variable",
-                      "value": "%CurrArtikal['Id']%",
-                      "target": "CurrArtikal"
-                    },
-                    {
-                      "type": "text",
-                      "value": " = "
-                    },
-                    {
-                      "type": "text",
-                      "value": "elId"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 13,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
                 }
               ]
             },
             {
-              "name": "Extract Name",
-              "type": "ERROR_HANDLER",
-              "rawType": "OnBlockError",
-              "indent": 4,
-              "lineNumber": 14,
-              "properties": {},
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Extract Name"
-                }
-              ],
-              "children": [
-                {
-                  "name": "On Block Error",
-                  "type": "ACTION",
-                  "rawType": "OnBlockError",
-                  "indent": 0,
-                  "lineNumber": 15,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 0,
-                  "lineNumber": 17,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Execute X Path And Get First Value Only",
-                  "type": "ACTION",
-                  "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
-                  "indent": 8,
-                  "lineNumber": 18,
-                  "properties": {
-                    "XPathQuery": "$'''/Artikal/Naziv''' XPathResult",
-                    "XmlDocument": "CurrentNode",
-                    "_output": "XPathNazivResult"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Execute X Path And Get First Value Only"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Get Element Value",
-                  "type": "ACTION",
-                  "rawType": "XML.GetXmlElementValue.GetElementValue",
-                  "indent": 8,
-                  "lineNumber": 19,
-                  "properties": {
-                    "Document": "XPathNazivResult TextValue",
-                    "_output": "elName"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Get Element Value"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Set CurrArtikal['Name']",
-                  "type": "VARIABLE",
-                  "rawType": "SET",
-                  "indent": 8,
-                  "lineNumber": 20,
-                  "properties": {
-                    "_output": "CurrArtikal['Name']",
-                    "_value": "elName",
-                    "_var": "CurrArtikal['Name']"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "variable",
-                      "value": "%CurrArtikal['Name']%",
-                      "target": "CurrArtikal"
-                    },
-                    {
-                      "type": "text",
-                      "value": " = "
-                    },
-                    {
-                      "type": "text",
-                      "value": "elName"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 21,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                }
-              ]
-            },
-            {
-              "name": "Extract Cena",
-              "type": "ERROR_HANDLER",
-              "rawType": "OnBlockError",
-              "indent": 4,
-              "lineNumber": 22,
-              "properties": {},
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Extract Cena"
-                }
-              ],
-              "children": [
-                {
-                  "name": "On Block Error",
-                  "type": "ACTION",
-                  "rawType": "OnBlockError",
-                  "indent": 0,
-                  "lineNumber": 23,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 0,
-                  "lineNumber": 25,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Execute X Path And Get First Value Only",
-                  "type": "ACTION",
-                  "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
-                  "indent": 8,
-                  "lineNumber": 26,
-                  "properties": {
-                    "XPathQuery": "$'''/Artikal/Cena''' XPathResult",
-                    "XmlDocument": "CurrentNode",
-                    "_output": "XPathCenaResult"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Execute X Path And Get First Value Only"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Get Element Value As Numeric",
-                  "type": "ACTION",
-                  "rawType": "XML.GetXmlElementValue.GetElementValueAsNumeric",
-                  "indent": 8,
-                  "lineNumber": 27,
-                  "properties": {
-                    "Document": "XPathCenaResult NumericValue",
-                    "_output": "elCena"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Get Element Value As Numeric"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Set CurrArtikal['Cena']",
-                  "type": "VARIABLE",
-                  "rawType": "SET",
-                  "indent": 8,
-                  "lineNumber": 28,
-                  "properties": {
-                    "_output": "CurrArtikal['Cena']",
-                    "_value": "elCena",
-                    "_var": "CurrArtikal['Cena']"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "variable",
-                      "value": "%CurrArtikal['Cena']%",
-                      "target": "CurrArtikal"
-                    },
-                    {
-                      "type": "text",
-                      "value": " = "
-                    },
-                    {
-                      "type": "text",
-                      "value": "elCena"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 29,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                }
-              ]
-            },
-            {
-              "name": "Extract Kolicina",
-              "type": "ERROR_HANDLER",
-              "rawType": "OnBlockError",
-              "indent": 4,
-              "lineNumber": 30,
-              "properties": {},
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Extract Kolicina"
-                }
-              ],
-              "children": [
-                {
-                  "name": "On Block Error",
-                  "type": "ACTION",
-                  "rawType": "OnBlockError",
-                  "indent": 0,
-                  "lineNumber": 31,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 0,
-                  "lineNumber": 33,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Execute X Path And Get First Value Only",
-                  "type": "ACTION",
-                  "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
-                  "indent": 8,
-                  "lineNumber": 34,
-                  "properties": {
-                    "XPathQuery": "$'''/Artikal/Kolicina''' XPathResult",
-                    "XmlDocument": "CurrentNode",
-                    "_output": "XPathKolicinaResult"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Execute X Path And Get First Value Only"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Get Element Value As Numeric",
-                  "type": "ACTION",
-                  "rawType": "XML.GetXmlElementValue.GetElementValueAsNumeric",
-                  "indent": 8,
-                  "lineNumber": 35,
-                  "properties": {
-                    "Document": "XPathKolicinaResult NumericValue",
-                    "_output": "elKolicina"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Get Element Value As Numeric"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Set CurrArtikal['Kolicina']",
-                  "type": "VARIABLE",
-                  "rawType": "SET",
-                  "indent": 8,
-                  "lineNumber": 36,
-                  "properties": {
-                    "_output": "CurrArtikal['Kolicina']",
-                    "_value": "elKolicina",
-                    "_var": "CurrArtikal['Kolicina']"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "variable",
-                      "value": "%CurrArtikal['Kolicina']%",
-                      "target": "CurrArtikal"
-                    },
-                    {
-                      "type": "text",
-                      "value": " = "
-                    },
-                    {
-                      "type": "text",
-                      "value": "elKolicina"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 37,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                }
-              ]
-            },
-            {
-              "name": "Extract Opis",
-              "type": "ERROR_HANDLER",
-              "rawType": "OnBlockError",
-              "indent": 4,
-              "lineNumber": 38,
-              "properties": {},
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Extract Opis"
-                }
-              ],
-              "children": [
-                {
-                  "name": "On Block Error",
-                  "type": "ACTION",
-                  "rawType": "OnBlockError",
-                  "indent": 0,
-                  "lineNumber": 39,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 0,
-                  "lineNumber": 41,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Execute X Path And Get First Value Only",
-                  "type": "ACTION",
-                  "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
-                  "indent": 8,
-                  "lineNumber": 42,
-                  "properties": {
-                    "XPathQuery": "$'''/Artikal/Opis''' XPathResult",
-                    "XmlDocument": "CurrentNode",
-                    "_output": "XPathOpisResult"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Execute X Path And Get First Value Only"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Get Element Value",
-                  "type": "ACTION",
-                  "rawType": "XML.GetXmlElementValue.GetElementValue",
-                  "indent": 8,
-                  "lineNumber": 43,
-                  "properties": {
-                    "Document": "XPathOpisResult TextValue",
-                    "_output": "elOpis"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Get Element Value"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "Set CurrArtikal['Opis']",
-                  "type": "VARIABLE",
-                  "rawType": "SET",
-                  "indent": 8,
-                  "lineNumber": 44,
-                  "properties": {
-                    "_output": "CurrArtikal['Opis']",
-                    "_value": "elOpis",
-                    "_var": "CurrArtikal['Opis']"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "variable",
-                      "value": "%CurrArtikal['Opis']%",
-                      "target": "CurrArtikal"
-                    },
-                    {
-                      "type": "text",
-                      "value": " = "
-                    },
-                    {
-                      "type": "text",
-                      "value": "elOpis"
-                    }
-                  ],
-                  "children": []
-                },
-                {
-                  "name": "End On Block Error",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 45,
-                  "properties": {
-                    "_parentType": "ERROR_HANDLER"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End On Block Error"
-                    }
-                  ],
-                  "children": []
-                }
-              ]
-            },
-            {
-              "name": "Add Item To List",
+              "name": "Execute X Path And Get First Value Only",
               "type": "ACTION",
-              "rawType": "Variables.AddItemToList",
-              "indent": 4,
-              "lineNumber": 46,
+              "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
+              "indent": 8,
+              "lineNumber": 10,
               "properties": {
-                "Item": "CurrArtikal",
-                "List": "ArtikalList"
+                "XPathQuery": "$'''/Artikal/Id''' XPathResult",
+                "XmlDocument": "CurrentNode",
+                "_output": "XPathIdResult"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Execute X Path And Get First Value Only"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Get Element Value As Numeric",
+              "type": "ACTION",
+              "rawType": "XML.GetXmlElementValue.GetElementValueAsNumeric",
+              "indent": 8,
+              "lineNumber": 11,
+              "properties": {
+                "Document": "XPathIdResult NumericValue",
+                "_output": "elId"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Get Element Value As Numeric"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "Set CurrArtikal['Id']",
+              "type": "VARIABLE",
+              "rawType": "SET",
+              "indent": 8,
+              "lineNumber": 12,
+              "properties": {
+                "_output": "CurrArtikal['Id']",
+                "_value": "elId",
+                "_var": "CurrArtikal['Id']"
               },
               "variables": [],
               "tokens": [
                 {
                   "type": "variable",
-                  "value": "%ArtikalList%",
-                  "target": "ArtikalList"
+                  "value": "%CurrArtikal['Id']%",
+                  "target": "CurrArtikal"
                 },
                 {
                   "type": "text",
-                  "value": " ← "
+                  "value": " = "
                 },
                 {
                   "type": "text",
-                  "value": "CurrArtikal"
+                  "value": "elId"
                 }
               ],
               "children": []
@@ -837,8 +243,8 @@
               "name": "End Loop",
               "type": "END",
               "rawType": "END",
-              "indent": 0,
-              "lineNumber": 47,
+              "indent": 4,
+              "lineNumber": 13,
               "properties": {
                 "_parentType": "LOOP"
               },
@@ -852,6 +258,510 @@
               "children": []
             }
           ]
+        },
+        {
+          "name": "Extract Name",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 4,
+          "lineNumber": 14,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Extract Name"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ACTION",
+              "rawType": "OnBlockError",
+              "indent": 0,
+              "lineNumber": 15,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 17,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Execute X Path And Get First Value Only",
+          "type": "ACTION",
+          "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
+          "indent": 8,
+          "lineNumber": 18,
+          "properties": {
+            "XPathQuery": "$'''/Artikal/Naziv''' XPathResult",
+            "XmlDocument": "CurrentNode",
+            "_output": "XPathNazivResult"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Execute X Path And Get First Value Only"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Element Value",
+          "type": "ACTION",
+          "rawType": "XML.GetXmlElementValue.GetElementValue",
+          "indent": 8,
+          "lineNumber": 19,
+          "properties": {
+            "Document": "XPathNazivResult TextValue",
+            "_output": "elName"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Element Value"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set CurrArtikal['Name']",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 8,
+          "lineNumber": 20,
+          "properties": {
+            "_output": "CurrArtikal['Name']",
+            "_value": "elName",
+            "_var": "CurrArtikal['Name']"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%CurrArtikal['Name']%",
+              "target": "CurrArtikal"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "elName"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Extract Cena",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 4,
+          "lineNumber": 22,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Extract Cena"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ACTION",
+              "rawType": "OnBlockError",
+              "indent": 0,
+              "lineNumber": 23,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 25,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Execute X Path And Get First Value Only",
+          "type": "ACTION",
+          "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
+          "indent": 8,
+          "lineNumber": 26,
+          "properties": {
+            "XPathQuery": "$'''/Artikal/Cena''' XPathResult",
+            "XmlDocument": "CurrentNode",
+            "_output": "XPathCenaResult"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Execute X Path And Get First Value Only"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Element Value As Numeric",
+          "type": "ACTION",
+          "rawType": "XML.GetXmlElementValue.GetElementValueAsNumeric",
+          "indent": 8,
+          "lineNumber": 27,
+          "properties": {
+            "Document": "XPathCenaResult NumericValue",
+            "_output": "elCena"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Element Value As Numeric"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set CurrArtikal['Cena']",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 8,
+          "lineNumber": 28,
+          "properties": {
+            "_output": "CurrArtikal['Cena']",
+            "_value": "elCena",
+            "_var": "CurrArtikal['Cena']"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%CurrArtikal['Cena']%",
+              "target": "CurrArtikal"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "elCena"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Extract Kolicina",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 4,
+          "lineNumber": 30,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Extract Kolicina"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ACTION",
+              "rawType": "OnBlockError",
+              "indent": 0,
+              "lineNumber": 31,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 33,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Execute X Path And Get First Value Only",
+          "type": "ACTION",
+          "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
+          "indent": 8,
+          "lineNumber": 34,
+          "properties": {
+            "XPathQuery": "$'''/Artikal/Kolicina''' XPathResult",
+            "XmlDocument": "CurrentNode",
+            "_output": "XPathKolicinaResult"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Execute X Path And Get First Value Only"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Element Value As Numeric",
+          "type": "ACTION",
+          "rawType": "XML.GetXmlElementValue.GetElementValueAsNumeric",
+          "indent": 8,
+          "lineNumber": 35,
+          "properties": {
+            "Document": "XPathKolicinaResult NumericValue",
+            "_output": "elKolicina"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Element Value As Numeric"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set CurrArtikal['Kolicina']",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 8,
+          "lineNumber": 36,
+          "properties": {
+            "_output": "CurrArtikal['Kolicina']",
+            "_value": "elKolicina",
+            "_var": "CurrArtikal['Kolicina']"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%CurrArtikal['Kolicina']%",
+              "target": "CurrArtikal"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "elKolicina"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Extract Opis",
+          "type": "ERROR_HANDLER",
+          "rawType": "OnBlockError",
+          "indent": 4,
+          "lineNumber": 38,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Extract Opis"
+            }
+          ],
+          "children": [
+            {
+              "name": "On Block Error",
+              "type": "ACTION",
+              "rawType": "OnBlockError",
+              "indent": 0,
+              "lineNumber": 39,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "On Block Error"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 41,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "name": "Execute X Path And Get First Value Only",
+          "type": "ACTION",
+          "rawType": "XML.ExecuteXPathQuery.ExecuteXPathAndGetFirstValueOnly",
+          "indent": 8,
+          "lineNumber": 42,
+          "properties": {
+            "XPathQuery": "$'''/Artikal/Opis''' XPathResult",
+            "XmlDocument": "CurrentNode",
+            "_output": "XPathOpisResult"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Execute X Path And Get First Value Only"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Get Element Value",
+          "type": "ACTION",
+          "rawType": "XML.GetXmlElementValue.GetElementValue",
+          "indent": 8,
+          "lineNumber": 43,
+          "properties": {
+            "Document": "XPathOpisResult TextValue",
+            "_output": "elOpis"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Get Element Value"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Set CurrArtikal['Opis']",
+          "type": "VARIABLE",
+          "rawType": "SET",
+          "indent": 8,
+          "lineNumber": 44,
+          "properties": {
+            "_output": "CurrArtikal['Opis']",
+            "_value": "elOpis",
+            "_var": "CurrArtikal['Opis']"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%CurrArtikal['Opis']%",
+              "target": "CurrArtikal"
+            },
+            {
+              "type": "text",
+              "value": " = "
+            },
+            {
+              "type": "text",
+              "value": "elOpis"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Add Item To List",
+          "type": "ACTION",
+          "rawType": "Variables.AddItemToList",
+          "indent": 4,
+          "lineNumber": 46,
+          "properties": {
+            "Item": "CurrArtikal",
+            "List": "ArtikalList"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%ArtikalList%",
+              "target": "ArtikalList"
+            },
+            {
+              "type": "text",
+              "value": " ← "
+            },
+            {
+              "type": "text",
+              "value": "CurrArtikal"
+            }
+          ],
+          "children": []
         },
         {
           "name": "Show Message",
@@ -879,18 +789,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 48,
-      "message": "unclosed block: Show Message",
-      "severity": "error",
-      "snippet": "Display.ShowMessageDialog.ShowMessage"
-    }
-  ],
   "metadata": {
-    "blockCount": 43,
+    "blockCount": 38,
     "subflowCount": 1,
     "maxDepth": 3,
-    "rawLineCount": 49
+    "rawLineCount": 48
   }
 }

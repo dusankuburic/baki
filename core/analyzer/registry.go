@@ -1,35 +1,23 @@
 package analyzer
 
+// registeredRules accumulates every Rule via each rule file's init() (see
+// registerRule) — so a new rule_*.go file is picked up by AllRules() the
+// moment it adds its own `func init() { registerRule(&XRule{}) }`, with no
+// separate "also add it to registry.go" step to forget. This replaced a
+// hand-maintained literal slice that had already drifted out of sync with the
+// rule files at least once.
+var registeredRules []Rule
+
+// registerRule adds r to the rule catalog. Called from each rule file's
+// init(); not intended to be called directly elsewhere.
+func registerRule(r Rule) {
+	registeredRules = append(registeredRules, r)
+}
+
+// AllRules returns every registered rule. Returns a fresh copy so a caller
+// that filters/reorders its result can't mutate the shared registry.
 func AllRules() []Rule {
-	return []Rule{
-		&UnhandledErrorRule{},
-		&InfiniteLoopRiskRule{},
-		&DeepNestingRule{},
-		&HardcodedCredentialRule{},
-		&DeadCodeRule{},
-		&MissingDelayRule{},
-		&DuplicateActionRule{},
-		&UnusedVariableRule{},
-		&UninitializedVariableRule{},
-		&SlowPatternRule{},
-		&EmptyHandlerRule{},
-		&ResourceLeakRule{},
-		&SubflowNoErrorHandlerRule{},
-		&GotoAntipatternRule{},
-		&EmptyBranchRule{},
-		&RedundantActionRule{},
-		&FileOpNoErrorHandlerRule{},
-		&MissingTimeoutRule{},
-		&SensitiveDataExposureRule{},
-		&ErrorSwallowRule{},
-		&MissingRetryRule{},
-		&WideLoopRule{},
-		&SubflowMismatchRule{},
-		&DeadDataRule{},
-		&HardcodedFilePathRule{},
-		&SqlInjectionRiskRule{},
-		&HardcodedURLRule{},
-		&LargeSubflowRule{},
-		&DisabledBlockRule{},
-	}
+	out := make([]Rule, len(registeredRules))
+	copy(out, registeredRules)
+	return out
 }

@@ -1,6 +1,7 @@
 package padcloud
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,13 +47,19 @@ func (s *LibraryStore) UpsertFlow(ctx context.Context, doc *models.FlowDocument,
 	}
 	flowID := uuid.NewSHA1(s.ns, []byte(sourceID)).String()
 
-	// OCC pre-check: read the existing version so the upsert matches it. A
-	// missing row (first ingest) starts at version 0.
+	// OCC pre-check: read the existing flow so the upsert matches its version.
+	// A missing row (first ingest) starts at version 0. Also compare content —
+	// if the re-ingested flow is byte-identical to the stored one, skip the
+	// write entirely so periodic sweeps don't bloat version history with
+	// no-op snapshots.
 	version := 0
-	if existing, err := s.backend.LoadFlowHeader(ctx, flowID); err == nil && existing != nil {
+	if existing, err := s.backend.LoadFlow(ctx, flowID); err == nil && existing != nil {
 		version = existing.Version
+		if bytes.Equal(existing.Content, content) {
+			return nil // identical content — no write, no version bump
+		}
 	} else if err != nil && !errors.Is(err, storageif.ErrNotFound) {
-		return fmt.Errorf("load flow header: %w", err)
+		return fmt.Errorf("load flow: %w", err)
 	}
 
 	libDoc := &storageif.FlowDocument{

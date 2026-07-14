@@ -2,6 +2,8 @@ package parser
 
 import (
 	"testing"
+
+	"pad-core/models"
 )
 
 func TestParseProperties_OutputVar(t *testing.T) {
@@ -110,5 +112,69 @@ func TestStripQuotes(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("stripQuotes(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+// TestNormalizeVariableOutput covers every variable-manipulation RawType the
+// classifier emits as an ACTION. A typo in this switch (e.g. "MergeList" vs
+// canonical "MergeLists") silently makes data-flow analysis blind to that
+// action's output variable.
+func TestNormalizeVariableOutput(t *testing.T) {
+	actions := []string{
+		"Variables.SetVariable",
+		"Variables.IncreaseVariable",
+		"Variables.DecreaseVariable",
+		"Variables.AddItemToList",
+		"Variables.RemoveItemFromList",
+		"Variables.SortList",
+		"Variables.ShuffleList",
+		"Variables.MergeLists",
+		"Variables.ReverseList",
+		"Variables.RemoveDuplicateItemsFromList",
+		"Variables.FindCommonListItems",
+		"Variables.SubtractLists",
+		"Variables.ClearList",
+	}
+	for _, rawType := range actions {
+		blk := &models.Block{
+			Type:    models.BlockTypeAction,
+			RawType: rawType,
+			Properties: map[string]string{
+				"Name": "MyList",
+			},
+		}
+		normalizeVariableOutput(blk)
+		if blk.Properties["_output"] != "MyList" {
+			t.Errorf("%s: expected _output=MyList, got %q (typo in switch?)",
+				rawType, blk.Properties["_output"])
+		}
+	}
+}
+
+func TestNormalizeVariableOutput_PercentWrapped(t *testing.T) {
+	blk := &models.Block{
+		Type:    models.BlockTypeAction,
+		RawType: "Variables.SetVariable",
+		Properties: map[string]string{
+			"Name": "%MyVar%",
+		},
+	}
+	normalizeVariableOutput(blk)
+	if blk.Properties["_output"] != "MyVar" {
+		t.Errorf("expected stripped MyVar, got %q", blk.Properties["_output"])
+	}
+}
+
+func TestNormalizeVariableOutput_CompoundExpression_Skipped(t *testing.T) {
+	blk := &models.Block{
+		Type:    models.BlockTypeAction,
+		RawType: "Variables.SetVariable",
+		Properties: map[string]string{
+			"Name": "%A% + %B%",
+		},
+	}
+	normalizeVariableOutput(blk)
+	if _, ok := blk.Properties["_output"]; ok {
+		t.Error("compound expression should not produce _output")
 	}
 }

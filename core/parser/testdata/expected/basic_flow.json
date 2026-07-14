@@ -769,24 +769,12 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e ExcelData"
-    },
-    {
-      "line": 30,
-      "message": "unclosed block: Close Excel",
-      "severity": "error",
-      "snippet": "Excel.CloseExcel"
-    },
-    {
-      "line": 41,
-      "message": "unclosed block: Close Browser",
-      "severity": "error",
-      "snippet": "WebAutomation.CloseBrowser"
     }
   ],
   "metadata": {
     "blockCount": 35,
     "subflowCount": 3,
     "maxDepth": 3,
-    "rawLineCount": 43
+    "rawLineCount": 42
   }
 }

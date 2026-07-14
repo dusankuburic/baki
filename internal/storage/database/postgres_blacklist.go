@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -28,7 +29,12 @@ func NewPostgresBlacklist(db *sql.DB) *PostgresBlacklist {
 
 func (bl *PostgresBlacklist) Add(jti string, ttl time.Duration) {
 	expiresAt := time.Now().Add(ttl).UTC()
-	if _, err := bl.db.ExecContext(context.Background(),
+	// Bound the write the same way IsRevoked/AddIfAbsent bound theirs: an
+	// unbounded ExecContext on a stalled DB would block every logout/refresh
+	// rotation and exhaust the connection pool.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := bl.db.ExecContext(ctx,
 		`INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, $2)
 		 ON CONFLICT (jti) DO UPDATE SET expires_at = GREATEST(token_blacklist.expires_at, EXCLUDED.expires_at)`,
 		jti, expiresAt); err != nil {
@@ -56,18 +62,27 @@ func (bl *PostgresBlacklist) IsRevoked(jti string) bool {
 	return true
 }
 
-func (bl *PostgresBlacklist) AddIfAbsent(jti string, ttl time.Duration) bool {
+func (bl *PostgresBlacklist) AddIfAbsent(jti string, ttl time.Duration) (bool, error) {
 	expiresAt := time.Now().Add(ttl).UTC()
-	cmd, err := bl.db.ExecContext(context.Background(),
+	// Bound the write the same way IsRevoked bounds its read: an unbounded
+	// ExecContext on a stalled DB would pile up blocked goroutines on every
+	// ticket consume / token rotation and exhaust the connection pool.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd, err := bl.db.ExecContext(ctx,
 		`INSERT INTO token_blacklist (jti, expires_at) VALUES ($1, $2)
 		 ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at
 		 WHERE token_blacklist.expires_at < NOW()`,
 		jti, expiresAt)
 	if err != nil {
-		return false
+		// Return the error rather than a bare false: callers must fail-closed
+		// (reject the ticket) instead of mistaking a DB error for "already
+		// present", which would both reject now and allow a replay once the DB
+		// recovers (the entry was never inserted).
+		return false, fmt.Errorf("blacklist insert: %w", err)
 	}
 	rows, _ := cmd.RowsAffected()
-	return rows > 0
+	return rows > 0, nil
 }
 
 func (bl *PostgresBlacklist) Stop() {

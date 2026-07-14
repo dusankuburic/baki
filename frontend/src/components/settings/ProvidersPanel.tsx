@@ -25,16 +25,29 @@ export default function ProvidersPanel() {
   // refreshLocal reloads the provider list + user info without bumping the
   // provider epoch. Used for the initial mount load (no config changed yet).
   const refreshLocal = useCallback(() => {
-    providersApi.listProviders().then((ps: {id?: string; name?: string; configured?: boolean; authType?: string}[] | null) => {
-      setProviders((ps || []).map((p: {id?: string; name?: string; configured?: boolean; authType?: string}) => ({
-        id: p.id || '',
-        name: p.name || '',
-        configured: !!p.configured,
-        authType: p.authType || '',
-      })))
-    }).catch((err) => { logger.warn('Failed to load providers', err) })
-    providersApi.getGitHubUser().then((u: {login?: string} | null) => setGithubUser(u?.login || null)).catch(() => setGithubUser(null))
-    providersApi.getCopilotUser().then((u: {login?: string} | null) => setCopilotUser(u?.login || null)).catch(() => setCopilotUser(null))
+    providersApi
+      .listProviders()
+      .then((ps: {id?: string; name?: string; configured?: boolean; authType?: string}[] | null) => {
+        setProviders(
+          (ps || []).map((p: {id?: string; name?: string; configured?: boolean; authType?: string}) => ({
+            id: p.id || '',
+            name: p.name || '',
+            configured: !!p.configured,
+            authType: p.authType || '',
+          })),
+        )
+      })
+      .catch(err => {
+        logger.warn('Failed to load providers', err)
+      })
+    providersApi
+      .getGitHubUser()
+      .then((u: {login?: string} | null) => setGithubUser(u?.login || null))
+      .catch(() => setGithubUser(null))
+    providersApi
+      .getCopilotUser()
+      .then((u: {login?: string} | null) => setCopilotUser(u?.login || null))
+      .catch(() => setCopilotUser(null))
   }, [])
 
   // refresh is refreshLocal + epoch bump. Used when a configuration actually
@@ -59,14 +72,14 @@ export default function ProvidersPanel() {
     updateAI({activeProvider: 'github-models'})
   }, [refresh, setProvider, updateAI])
 
-  useEffect(() => { refreshLocal() }, [refreshLocal])
+  useEffect(() => {
+    refreshLocal()
+  }, [refreshLocal])
 
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">AI Providers</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">
-        Configure API keys for AI-powered analysis and chat.
-      </p>
+      <p className="text-sm text-text-secondary mt-1 mb-6">Configure API keys for AI-powered analysis and chat.</p>
 
       <div className="space-y-8">
         <ProviderSection name="Claude" color="#d4a574">
@@ -93,10 +106,19 @@ export default function ProvidersPanel() {
           <div className="space-y-2">
             {githubUser ? (
               <div className="flex items-center gap-3">
-                <span className="text-sm text-text-secondary">Connected as <strong className="text-text-primary">@{githubUser}</strong></span>
+                <span className="text-sm text-text-secondary">
+                  Connected as <strong className="text-text-primary">@{githubUser}</strong>
+                </span>
                 <button
                   className="text-xs text-red-400 hover:text-red-300"
-                  onClick={() => providersApi.revokeGitHubAuth().then(() => refresh()).catch((err) => { logger.warn('Failed to revoke GitHub auth', err) })}
+                  onClick={() =>
+                    providersApi
+                      .revokeGitHubAuth()
+                      .then(() => refresh())
+                      .catch(err => {
+                        logger.warn('Failed to revoke GitHub auth', err)
+                      })
+                  }
                 >
                   Disconnect
                 </button>
@@ -111,14 +133,31 @@ export default function ProvidersPanel() {
           <div className="space-y-2.5">
             <p className="text-xs text-text-tertiary leading-relaxed">
               Requires a GitHub account with an active{' '}
-              <a href="https://github.com/features/copilot" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">Copilot subscription</a>.
+              <a
+                href="https://github.com/features/copilot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand-400 hover:underline"
+              >
+                Copilot subscription
+              </a>
+              .
             </p>
             {copilotUser ? (
               <div className="flex items-center gap-3">
-                <span className="text-sm text-text-secondary">Connected as <strong className="text-text-primary">@{copilotUser}</strong></span>
+                <span className="text-sm text-text-secondary">
+                  Connected as <strong className="text-text-primary">@{copilotUser}</strong>
+                </span>
                 <button
                   className="text-xs text-red-400 hover:text-red-300"
-                  onClick={() => providersApi.revokeCopilotAuth().then(() => refresh()).catch((err) => { logger.warn('Failed to revoke Copilot auth', err) })}
+                  onClick={() =>
+                    providersApi
+                      .revokeCopilotAuth()
+                      .then(() => refresh())
+                      .catch(err => {
+                        logger.warn('Failed to revoke Copilot auth', err)
+                      })
+                  }
                 >
                   Disconnect
                 </button>

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { parseRecoveryHash, clearRecoveryHash } from './authHash'
+import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {parseRecoveryHash, clearRecoveryHash} from './authHash'
 
 function setHash(h: string) {
   window.history.replaceState(null, '', '/' + (h ? '#' + h : ''))
@@ -16,19 +16,19 @@ describe('parseRecoveryHash', () => {
 
   it('extracts the reset token without mutating the fragment', () => {
     setHash('resetPassword=RTOKEN')
-    expect(parseRecoveryHash()).toEqual({ resetToken: 'RTOKEN' })
+    expect(parseRecoveryHash()).toEqual({resetToken: 'RTOKEN'})
     // Pure: still present until explicitly cleared (StrictMode-safe).
     expect(window.location.hash).toBe('#resetPassword=RTOKEN')
   })
 
   it('extracts the verify token', () => {
     setHash('verifyEmail=VTOKEN')
-    expect(parseRecoveryHash()).toEqual({ verifyToken: 'VTOKEN' })
+    expect(parseRecoveryHash()).toEqual({verifyToken: 'VTOKEN'})
   })
 
   it('extracts the invite token', () => {
     setHash('invite=ITOKEN')
-    expect(parseRecoveryHash()).toEqual({ inviteToken: 'ITOKEN' })
+    expect(parseRecoveryHash()).toEqual({inviteToken: 'ITOKEN'})
   })
 
   it('clearRecoveryHash strips the fragment', () => {
@@ -44,8 +44,8 @@ describe('parseRecoveryHash', () => {
     setHash('resetPassword=RTOKEN')
     const first = parseRecoveryHash()
     const second = parseRecoveryHash()
-    expect(first).toEqual({ resetToken: 'RTOKEN' })
-    expect(second).toEqual({ resetToken: 'RTOKEN' })
+    expect(first).toEqual({resetToken: 'RTOKEN'})
+    expect(second).toEqual({resetToken: 'RTOKEN'})
     expect(window.location.hash).toBe('#resetPassword=RTOKEN')
   })
 })

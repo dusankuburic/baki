@@ -61,23 +61,22 @@ export default function ParseErrorsBanner() {
               key={`${e.line}-${i}`}
               className="flex items-start gap-2 px-2 py-1 rounded bg-surface-0/60 border border-border-subtle"
             >
-              <span className={clsx(
-                'text-2xs font-mono tabular-nums shrink-0 mt-px',
-                e.severity === 'error' ? 'text-red-400' : 'text-amber-400',
-              )}>
-                L{e.line}{e.column ? `:${e.column}` : ''}
+              <span
+                className={clsx(
+                  'text-2xs font-mono tabular-nums shrink-0 mt-px',
+                  e.severity === 'error' ? 'text-red-400' : 'text-amber-400',
+                )}
+              >
+                L{e.line}
+                {e.column ? `:${e.column}` : ''}
               </span>
               <div className="min-w-0">
                 <span className="text-2xs text-text-secondary">{e.message}</span>
-                {e.snippet && (
-                  <pre className="text-2xs text-text-tertiary font-mono truncate mt-0.5">{e.snippet}</pre>
-                )}
+                {e.snippet && <pre className="text-2xs text-text-tertiary font-mono truncate mt-0.5">{e.snippet}</pre>}
               </div>
             </div>
           ))}
-          {errors.length > 50 && (
-            <div className="text-2xs text-text-tertiary px-2">…and {errors.length - 50} more</div>
-          )}
+          {errors.length > 50 && <div className="text-2xs text-text-tertiary px-2">…and {errors.length - 50} more</div>}
         </div>
       )}
     </div>

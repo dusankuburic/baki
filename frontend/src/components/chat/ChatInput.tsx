@@ -18,7 +18,16 @@ interface Props {
   placeholder?: string
 }
 
-export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, onClearThread, onShowHelp, disabled, placeholder}: Props) {
+export default function ChatInput({
+  onSend,
+  onPreview,
+  onCancel,
+  onFilesChange,
+  onClearThread,
+  onShowHelp,
+  disabled,
+  placeholder,
+}: Props) {
   const [value, setValue] = useState('')
   const [autocompleteQuery, setAutocompleteQuery] = useState<string | null>(null)
   const [slashQuery, setSlashQuery] = useState<string | null>(null)
@@ -26,7 +35,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [excludeContext, setExcludeContext] = useState(false)
   const [taggedFiles, setTaggedFiles] = useState<string[]>([])
-  
+
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
@@ -44,7 +53,9 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
     if (!activeThreadId) return
     setValue(useChatStore.getState().drafts[activeThreadId] ?? '')
     const threadId = activeThreadId
-    return () => { setDraft(threadId, valueRef.current) }
+    return () => {
+      setDraft(threadId, valueRef.current)
+    }
   }, [activeThreadId, setDraft])
 
   // Staged prompts ("Explain/Fix with AI") land in the composer for review.
@@ -57,7 +68,10 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
     setStagedPrompt(null)
     requestAnimationFrame(() => {
       const el = textareaRef.current
-      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) }
+      if (el) {
+        el.focus()
+        el.setSelectionRange(el.value.length, el.value.length)
+      }
     })
   }, [stagedPrompt, activeThreadId, setStagedPrompt])
   // Per-thread streaming: the Send/Stop toggle reflects ONLY the active thread
@@ -68,15 +82,34 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
   const atCap = useChatStore(s => Object.keys(s.streams).length >= MAX_CONCURRENT_STREAMS)
   const provider = useChatStore(s => s.selectedProvider)
   const aiSettings = useSettingsStore(s => s.settings.ai)
-  
+
+  // Track the active thread's user-message count reactively. getState() in the
+  // history memo below is a non-reactive snapshot, so this count is what
+  // triggers recomputation when messages arrive (otherwise ArrowUp history
+  // would miss the just-sent message until the active thread changed).
+  const userMsgCount = useChatStore(s => {
+    if (!activeThreadId) return 0
+    const msgs = s.conversations.get(activeThreadId)
+    if (!msgs) return 0
+    let n = 0
+    for (const m of msgs) if (m.role === 'user') n++
+    return n
+  })
+
   const history = useMemo(() => {
     if (!activeThreadId) return []
     const msgs = useChatStore.getState().getMessages(activeThreadId)
-    return msgs.filter(m => m.role === 'user').map(m => m.content).reverse()
-  }, [activeThreadId])
+    return msgs
+      .filter(m => m.role === 'user')
+      .map(m => m.content)
+      .reverse()
+  }, [activeThreadId, userMsgCount])
 
   const isDisabled = disabled || streaming
-  const capTooltip = atCap && !streaming ? `${MAX_CONCURRENT_STREAMS} chats are generating — wait for one to finish or stop it` : undefined
+  const capTooltip =
+    atCap && !streaming
+      ? `${MAX_CONCURRENT_STREAMS} chats are generating — wait for one to finish or stop it`
+      : undefined
 
   useEffect(() => {
     onFilesChange?.(taggedFiles)
@@ -117,31 +150,37 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
     onPreview(trimmed, taggedFiles, excludeContext)
   }, [value, taggedFiles, isDisabled, onPreview, excludeContext])
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Autocomplete navigation is handled by the sub-components via window event listeners
-    if (autocompleteQuery !== null || slashQuery !== null) {
-      return
-    }
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Autocomplete navigation is handled by the sub-components via window event listeners
+      if (autocompleteQuery !== null || slashQuery !== null) {
+        return
+      }
 
-    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault()
-      handleSend()
-    } else if (e.key === 'ArrowUp' && (value === '' || (textareaRef.current?.selectionStart === 0 && textareaRef.current?.selectionEnd === 0))) {
-      // History Up
-      if (historyIndex < history.length - 1) {
-        const next = historyIndex + 1
+      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        handleSend()
+      } else if (
+        e.key === 'ArrowUp' &&
+        (value === '' || (textareaRef.current?.selectionStart === 0 && textareaRef.current?.selectionEnd === 0))
+      ) {
+        // History Up
+        if (historyIndex < history.length - 1) {
+          const next = historyIndex + 1
+          setHistoryIndex(next)
+          setValue(history[next])
+          e.preventDefault()
+        }
+      } else if (e.key === 'ArrowDown' && historyIndex >= 0) {
+        // History Down
+        const next = historyIndex - 1
         setHistoryIndex(next)
-        setValue(history[next])
+        setValue(next >= 0 ? history[next] : '')
         e.preventDefault()
       }
-    } else if (e.key === 'ArrowDown' && historyIndex >= 0) {
-      // History Down
-      const next = historyIndex - 1
-      setHistoryIndex(next)
-      setValue(next >= 0 ? history[next] : '')
-      e.preventDefault()
-    }
-  }, [handleSend, autocompleteQuery, slashQuery, value, history, historyIndex])
+    },
+    [handleSend, autocompleteQuery, slashQuery, value, history, historyIndex],
+  )
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value
@@ -150,15 +189,15 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
 
     const pos = e.target.selectionStart
     const textBefore = val.slice(0, pos)
-    
+
     // Check for @ file mentions
     const lastAt = textBefore.lastIndexOf('@')
     const lastSpace = textBefore.lastIndexOf(' ')
-    
+
     if (lastAt !== -1 && lastAt > lastSpace) {
       setAutocompleteQuery(textBefore.slice(lastAt + 1))
       setSlashQuery(null)
-    } 
+    }
     // Check for / slash commands
     else {
       const lastSlash = textBefore.lastIndexOf('/')
@@ -177,20 +216,20 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
     const pos = textareaRef.current?.selectionStart ?? value.length
     const textBefore = value.slice(0, pos)
     const atIdx = textBefore.lastIndexOf('@')
-    
+
     // Remove the @query from the input text
     const newValue = value.slice(0, atIdx) + value.slice(pos)
     setValue(newValue)
-    
+
     // Add to attached files
     if (!taggedFiles.includes(filename)) {
       setTaggedFiles([...taggedFiles, filename])
     }
-    
+
     setAutocompleteQuery(null)
     textareaRef.current?.focus()
   }
-  
+
   const handleRemoveFile = (filename: string) => {
     setTaggedFiles(taggedFiles.filter(f => f !== filename))
   }
@@ -231,7 +270,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
           'relative flex flex-col bg-surface-2 border rounded-xl transition-all duration-200 shadow-sm',
           hasContent && !isDisabled
             ? 'border-brand-500/40 ring-1 ring-brand-500/10 shadow-lg shadow-brand-500/5'
-            : 'border-border-default hover:border-border-strong'
+            : 'border-border-default hover:border-border-strong',
         )}
       >
         {/* Top Attached Files Area */}
@@ -241,10 +280,15 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
               const parts = file.split(/[/\\]/)
               const name = parts[parts.length - 1]
               return (
-                <div key={file} className="flex items-center gap-1.5 px-2 py-1 bg-surface-3 border border-border-default rounded-md text-xs text-text-secondary animate-fade-in shadow-sm">
+                <div
+                  key={file}
+                  className="flex items-center gap-1.5 px-2 py-1 bg-surface-3 border border-border-default rounded-md text-xs text-text-secondary animate-fade-in shadow-sm"
+                >
                   <FileText size={12} className="text-brand-400" />
-                  <span className="truncate max-w-[150px] font-medium" title={file}>{name}</span>
-                  <button 
+                  <span className="truncate max-w-[150px] font-medium" title={file}>
+                    {name}
+                  </span>
+                  <button
                     onClick={() => handleRemoveFile(file)}
                     className="p-0.5 -mr-1 hover:bg-surface-4 rounded hover:text-text-primary transition-colors"
                   >
@@ -308,7 +352,7 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
                   'p-1.5 rounded-lg transition-all',
                   hasContent && !atCap
                     ? 'bg-brand-500 text-brand-foreground shadow-lg shadow-brand-500/20 hover:bg-brand-600'
-                    : 'text-text-tertiary hover:bg-surface-3'
+                    : 'text-text-tertiary hover:bg-surface-3',
                 )}
               >
                 <ArrowUp size={18} strokeWidth={2.5} />
@@ -322,13 +366,15 @@ export default function ChatInput({onSend, onPreview, onCancel, onFilesChange, o
           <div className="flex items-center justify-between px-3 py-1.5 bg-surface-3/50 rounded-b-xl border-t border-border-subtle/50">
             <div className="flex items-center gap-2">
               <label className="flex items-center gap-1.5 cursor-pointer group">
-                <input 
-                  type="checkbox" 
+                <input
+                  type="checkbox"
                   className="w-3.5 h-3.5 rounded border-border-default bg-surface-2 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-2"
                   checked={excludeContext}
-                  onChange={(e) => setExcludeContext(e.target.checked)}
+                  onChange={e => setExcludeContext(e.target.checked)}
                 />
-                <span className="text-[10px] font-medium text-text-tertiary group-hover:text-text-secondary transition-colors">Exclude context</span>
+                <span className="text-[10px] font-medium text-text-tertiary group-hover:text-text-secondary transition-colors">
+                  Exclude context
+                </span>
               </label>
             </div>
             <span className={clsx('text-[10px] tabular-nums', tokenClass)}>

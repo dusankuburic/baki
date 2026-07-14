@@ -42,6 +42,7 @@ var migrations = []migration{
 	{version: 4, name: "flow_analysis_v2", sql: flowAnalysisV2SQL},
 	{version: 5, name: "finding_status_created_at", sql: findingStatusCreatedAtSQL},
 	{version: 6, name: "perf_indexes", sql: perfIndexesSQL},
+	{version: 7, name: "usage_metrics_org_index", sql: usageMetricsOrgIndexSQL},
 }
 
 // findingStatusCreatedAtSQL adds a created_at column to finding_status so the
@@ -89,6 +90,16 @@ DROP INDEX IF EXISTS flows_org_id_idx;
 DROP INDEX IF EXISTS usage_metrics_user_id_idx;
 DROP INDEX IF EXISTS flow_versions_flow_id_idx;
 DROP INDEX IF EXISTS idx_share_tokens_hash;
+`
+
+// usageMetricsOrgIndexSQL adds a composite (org_id, created_at) index on
+// usage_metrics. The AI budget-check hot path (GetDailyUsage) filters by
+// org_id AND created_at on every AI call, but previously only had a
+// single-column org_id index, forcing a range scan + in-memory date filter.
+// The single-column index is dropped (covered by the composite's leftmost prefix).
+const usageMetricsOrgIndexSQL = `
+CREATE INDEX IF NOT EXISTS usage_metrics_org_created_idx ON usage_metrics (org_id, created_at);
+DROP INDEX IF EXISTS usage_metrics_org_id_idx;
 `
 
 // flowAnalysisV2SQL adds the dashboard-rollup columns to flow_analysis (and

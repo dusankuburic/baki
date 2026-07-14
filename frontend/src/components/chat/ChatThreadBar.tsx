@@ -44,7 +44,12 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
 
   return (
     <div className="flex items-center gap-0 border-b border-border-subtle">
-      <div ref={scrollRef} className="flex-1 flex items-center overflow-x-auto no-scrollbar" role="tablist" aria-label="Chat threads">
+      <div
+        ref={scrollRef}
+        className="flex-1 flex items-center overflow-x-auto no-scrollbar"
+        role="tablist"
+        aria-label="Chat threads"
+      >
         {threads.map((thread, i) => (
           <ThreadTab
             key={thread.id}
@@ -70,7 +75,15 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
   )
 }
 
-function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename, onKeyDown}: {
+function ThreadTab({
+  thread,
+  isActive,
+  isStreaming,
+  onSelect,
+  onClose,
+  onRename,
+  onKeyDown,
+}: {
   thread: ChatThread
   isActive: boolean
   isStreaming: boolean
@@ -117,20 +130,17 @@ function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename, 
       tabIndex={isActive ? 0 : -1}
       className={clsx(
         'group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px] outline-none focus-visible:ring-1 focus-visible:ring-brand-500',
-        isActive
-          ? 'border-brand-500 bg-brand-500/5'
-          : 'border-transparent hover:bg-surface-2'
+        isActive ? 'border-brand-500 bg-brand-500/5' : 'border-transparent hover:bg-surface-2',
       )}
       onClick={() => !editing && onSelect(thread.id)}
       onDoubleClick={handleDoubleClick}
-      onKeyDown={e => { if (!editing) onKeyDown(e) }}
+      onKeyDown={e => {
+        if (!editing) onKeyDown(e)
+      }}
     >
       <MessageSquare size={11} className={clsx('shrink-0', isActive ? 'text-brand-400' : 'text-text-tertiary')} />
       {isStreaming && (
-        <span
-          className="shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse"
-          title="Generating…"
-        />
+        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" title="Generating…" />
       )}
       {editing ? (
         <input
@@ -156,9 +166,14 @@ function ThreadTab({thread, isActive, isStreaming, onSelect, onClose, onRename, 
       <button
         className={clsx(
           'shrink-0 p-0.5 rounded transition-all duration-fast',
-          isActive ? 'opacity-60 hover:opacity-100 hover:bg-surface-3' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-surface-3'
+          isActive
+            ? 'opacity-60 hover:opacity-100 hover:bg-surface-3'
+            : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-surface-3',
         )}
-        onClick={e => { e.stopPropagation(); onClose(thread.id) }}
+        onClick={e => {
+          e.stopPropagation()
+          onClose(thread.id)
+        }}
         title="Close thread"
         aria-label={`Close ${label}`}
       >

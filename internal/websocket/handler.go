@@ -114,9 +114,12 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 			return
 		}
 
+		client := NewClient(hub, conn, userID, displayName, flowID)
+
 		// Periodic re-authz: if the user's access is revoked (token blacklist
 		// hit, flow ACL change, access-token expiry), close the connection so a
-		// logged-out / revoked user stops receiving real-time broadcasts.
+		// logged-out / revoked user stops receiving real-time broadcasts. See
+		// Client.runReauthzLoop for the full mechanism.
 		//
 		// Deferred so a panic anywhere below still cancels the context and stops
 		// the re-authz goroutine (previously authzCancel was a plain statement
@@ -124,61 +127,9 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 		authzCtx, authzCancel := context.WithCancel(context.Background())
 		defer authzCancel()
 		if checker != nil || isRevoked != nil {
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Warn("websocket re-authz goroutine panicked", "err", r)
-					}
-				}()
-				// Re-check at a 2-minute cadence (matches the SSE channel) so a
-				// revocation is observed promptly rather than up to 5 minutes.
-				ticker := time.NewTicker(2 * time.Minute)
-				defer ticker.Stop()
-				// expiryTimer fires once when the underlying access token
-				// expires, closing the connection — otherwise a live socket
-				// would outlive the credential indefinitely.
-				var expiryTimer *time.Timer
-				if accessJTI != "" && !accessExp.IsZero() {
-					if d := time.Until(accessExp); d > 0 {
-						expiryTimer = time.AfterFunc(d, func() {
-							slog.Info("websocket: disconnecting client after access token expired",
-								"flowId", flowID, "userID", userID)
-							_ = conn.Close()
-						})
-					}
-				}
-				if expiryTimer != nil {
-					defer expiryTimer.Stop()
-				}
-				for {
-					select {
-					case <-authzCtx.Done():
-						return
-					case <-ticker.C:
-						// Check the ACCESS token's revocation (logout, password
-						// change, admin revoke) — the ticket's own JTI was only
-						// blacklisted for ~30s at consumption, so re-checking it
-						// would never fire after that.
-						if isRevoked != nil && accessJTI != "" && isRevoked(accessJTI) {
-							slog.Info("websocket: disconnecting client after token revoked",
-								"flowId", flowID, "userID", userID)
-							conn.Close()
-							return
-						}
-						if checker != nil {
-							if err := checker.CheckAccess(authzCtx, flowID, userID); err != nil {
-								slog.Info("websocket: disconnecting client after access revoked",
-									"flowId", flowID, "userID", userID)
-								conn.Close()
-								return
-							}
-						}
-					}
-				}
-			}()
+			go client.runReauthzLoop(authzCtx, checker, accessJTI, accessExp, isRevoked)
 		}
 
-		client := NewClient(hub, conn, userID, displayName, flowID)
 		client.Run()
 	}
 }

@@ -6,7 +6,14 @@ import {getPlatformCapabilities} from '@/platform/guards'
 import type {PlatformCapabilities} from '@/platform/guards'
 
 function caps(fileSystem: boolean): PlatformCapabilities {
-  return {fileSystem, nativeDialogs: fileSystem, clipboard: true, notifications: true, systemTray: fileSystem, nativeWindow: fileSystem}
+  return {
+    fileSystem,
+    nativeDialogs: fileSystem,
+    clipboard: true,
+    notifications: true,
+    systemTray: fileSystem,
+    nativeWindow: fileSystem,
+  }
 }
 
 type DragDropEvent = {payload: {type: 'enter' | 'over' | 'leave' | 'drop'; paths?: string[]}}

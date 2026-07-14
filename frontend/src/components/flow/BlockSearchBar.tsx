@@ -29,8 +29,15 @@ export default function BlockSearchBar({query, onChange, matchIndex, matchCount,
         placeholder="Search blocks..."
         className="flex-1 bg-transparent border-none outline-none text-xs text-text-primary placeholder:text-text-disabled min-w-0"
         onKeyDown={e => {
-          if (e.key === 'Escape') { e.preventDefault(); onClose() }
-          if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) onPrev(); else onNext() }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            onClose()
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            if (e.shiftKey) onPrev()
+            else onNext()
+          }
         }}
       />
       {query && (
@@ -38,13 +45,30 @@ export default function BlockSearchBar({query, onChange, matchIndex, matchCount,
           {matchCount === 0 ? 'No matches' : `${matchIndex + 1} / ${matchCount}`}
         </span>
       )}
-      <button onClick={onPrev} disabled={matchCount === 0} className="p-0.5 text-text-tertiary hover:text-text-secondary disabled:opacity-40 transition-colors" title="Previous match (Shift+Enter)" aria-label="Previous match">
+      <button
+        onClick={onPrev}
+        disabled={matchCount === 0}
+        className="p-0.5 text-text-tertiary hover:text-text-secondary disabled:opacity-40 transition-colors"
+        title="Previous match (Shift+Enter)"
+        aria-label="Previous match"
+      >
         <ChevronUp size={14} />
       </button>
-      <button onClick={onNext} disabled={matchCount === 0} className="p-0.5 text-text-tertiary hover:text-text-secondary disabled:opacity-40 transition-colors" title="Next match (Enter)" aria-label="Next match">
+      <button
+        onClick={onNext}
+        disabled={matchCount === 0}
+        className="p-0.5 text-text-tertiary hover:text-text-secondary disabled:opacity-40 transition-colors"
+        title="Next match (Enter)"
+        aria-label="Next match"
+      >
         <ChevronDown size={14} />
       </button>
-      <button onClick={onClose} className="p-0.5 text-text-tertiary hover:text-text-secondary transition-colors" title="Close search (Escape)" aria-label="Close search">
+      <button
+        onClick={onClose}
+        className="p-0.5 text-text-tertiary hover:text-text-secondary transition-colors"
+        title="Close search (Escape)"
+        aria-label="Close search"
+      >
         <X size={14} />
       </button>
     </div>

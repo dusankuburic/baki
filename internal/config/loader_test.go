@@ -270,3 +270,116 @@ func TestValidate_TrustedProxies(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyEnvVars_BadNumericRejected confirms the silent-swallow pattern was
+// fixed: a typo in a numeric env var now returns an error at load time instead
+// of silently keeping the default (which could leave a looser rate limit than
+// the operator intended).
+func TestApplyEnvVars_BadNumericRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		val  string
+	}{
+		{"bad rate-limit float", "PAD_RATE_LIMIT_AUTH_RPS", "1O"}, // letter O
+		{"bad CB integer", "PAD_CB_FAILURES", "abc"},
+		{"bad retry integer", "PAD_RETRY_MAX_ATTEMPTS", "x"},
+		{"bad audit retention", "PAD_AUDIT_RETENTION_DAYS", "not-a-number"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, tc.val)
+			cfg := Default()
+			if err := applyEnvVars(cfg); err == nil {
+				t.Errorf("%s=%q: expected error, got nil", tc.env, tc.val)
+			}
+		})
+	}
+}
+
+// TestApplyEnvVars_NegativeAuditRetentionRejected confirms a negative
+// AuditRetentionDays is rejected (previously silently dropped, leaving the
+// default — wrong retention schedule with no feedback).
+func TestApplyEnvVars_NegativeAuditRetentionRejected(t *testing.T) {
+	t.Setenv("PAD_AUDIT_RETENTION_DAYS", "-5")
+	cfg := Default()
+	if err := applyEnvVars(cfg); err == nil {
+		t.Fatal("expected error for negative PAD_AUDIT_RETENTION_DAYS")
+	}
+}
+
+// TestApplyEnvVars_BadDurationRejected confirms duration env vars are validated
+// at load time (previously stored as raw strings with no parse, failing late
+// and inconsistently at runtime).
+func TestApplyEnvVars_BadDurationRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+	}{
+		{"bad scan interval", "PAD_SCAN_INTERVAL"},
+		{"bad CB open duration", "PAD_CB_OPEN_DURATION"},
+		{"bad retry base delay", "PAD_RETRY_BASE_DELAY"},
+		{"bad request timeout", "PAD_REQUEST_TIMEOUT"},
+		{"bad DB conn lifetime", "PAD_DB_CONN_MAX_LIFETIME"},
+		{"bad PP ingest interval", "PAD_PP_INGEST_INTERVAL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, "1hour") // should be "1h"
+			cfg := Default()
+			if err := applyEnvVars(cfg); err == nil {
+				t.Errorf("%s=1hour: expected error, got nil", tc.env)
+			}
+		})
+	}
+}
+
+// TestApplyEnvVars_GoodNumericAndDurationAccepted confirms valid values pass
+// the new validation (regression guard against over-strict parsing).
+func TestApplyEnvVars_GoodNumericAndDurationAccepted(t *testing.T) {
+	t.Setenv("PAD_RATE_LIMIT_AUTH_RPS", "0.5")
+	t.Setenv("PAD_CB_FAILURES", "7")
+	t.Setenv("PAD_AUDIT_RETENTION_DAYS", "90")
+	t.Setenv("PAD_SCAN_INTERVAL", "30m")
+	t.Setenv("PAD_REQUEST_TIMEOUT", "45s")
+	cfg := Default()
+	if err := applyEnvVars(cfg); err != nil {
+		t.Fatalf("expected valid values to pass, got: %v", err)
+	}
+	if cfg.Runtime.RateLimitAuthRPS != 0.5 {
+		t.Errorf("RateLimitAuthRPS = %v, want 0.5", cfg.Runtime.RateLimitAuthRPS)
+	}
+	if cfg.Runtime.CircuitBreakerFailures != 7 {
+		t.Errorf("CircuitBreakerFailures = %v, want 7", cfg.Runtime.CircuitBreakerFailures)
+	}
+	if cfg.Governance.AuditRetentionDays != 90 {
+		t.Errorf("AuditRetentionDays = %v, want 90", cfg.Governance.AuditRetentionDays)
+	}
+}
+
+// TestValidate_CloudEncryptionKeyStrength confirms the dedicated encryption key
+// gets the same strength gate as the JWT secret in cloud mode (prevents
+// PAD_ENCRYPTION_KEY="x" from protecting stored provider credentials).
+func TestValidate_CloudEncryptionKeyStrength(t *testing.T) {
+	t.Run("strong encryption key passes", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Auth.EncryptionKey = "a-sufficiently-long-random-enc-key-123456"
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("expected strong encryption key to pass, got %v", err)
+		}
+	})
+	t.Run("short encryption key rejected", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Auth.EncryptionKey = "x"
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected short encryption key to be rejected in cloud mode")
+		}
+	})
+	t.Run("empty encryption key allowed (falls back to auth secret)", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Auth.EncryptionKey = ""
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("expected empty encryption key to pass (fallback), got %v", err)
+		}
+	})
+}

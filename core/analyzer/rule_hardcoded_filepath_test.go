@@ -124,4 +124,21 @@ func TestSqlInjectionRiskRule(t *testing.T) {
 			t.Fatalf("expected 0 findings for non-SQL action, got %d", len(got))
 		}
 	})
+
+	// Regression: the parser preserves source case for property keys, and PAD
+	// emits PascalCase keys ("Sql", "Query"). The rule must match
+	// case-insensitively or it never fires on a real parsed flow.
+	t.Run("PascalCase Sql key triggers", func(t *testing.T) {
+		b := makeBlock("b4", "Execute query", models.BlockTypeAction, "Database.ExecuteSql", 0)
+		b.SubflowID = "sf1"
+		b.Properties = map[string]string{
+			"Sql": `SELECT * FROM Users WHERE name = '%UserName%'`,
+		}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding for PascalCase Sql key, got %d", len(got))
+		}
+	})
 }

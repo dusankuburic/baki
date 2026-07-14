@@ -59,11 +59,11 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       maxZoom: 3,
     })
 
-    instance.on('tap', 'node', (evt) => {
+    instance.on('tap', 'node', evt => {
       selectBlock(evt.target.id())
     })
 
-    instance.on('dblclick', 'node', (evt) => {
+    instance.on('dblclick', 'node', evt => {
       const node = evt.target
       if (node.data('type') === 'SUBFLOW' || node.data('hasChildren')) {
         const subId = node.data('subflowId')
@@ -187,7 +187,7 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     })
   }, [selectedVariable, subflow?.id])
 
-  const report = useAnalysisStore(s => flowDoc ? s.reports.get(flowDoc.id) : undefined)
+  const report = useAnalysisStore(s => (flowDoc ? s.reports.get(flowDoc.id) : undefined))
   useEffect(() => {
     if (!cyRef.current || !flowDoc) return
     const cy = cyRef.current
@@ -207,9 +207,8 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       for (const f of report.findings) {
         const node = cy.getElementById(f.blockId)
         if (node.length > 0) {
-          const cls = f.severity === 'error' ? 'finding-error'
-            : f.severity === 'warning' ? 'finding-warning'
-            : 'finding-info'
+          const cls =
+            f.severity === 'error' ? 'finding-error' : f.severity === 'warning' ? 'finding-warning' : 'finding-info'
           node.addClass(cls)
           counts.set(f.blockId, (counts.get(f.blockId) ?? 0) + 1)
         }
@@ -237,8 +236,8 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
         <div>
           <p className="text-lg font-medium text-text-primary mb-2">Large flow detected</p>
           <p className="text-sm text-text-secondary">
-            This subflow has {totalNodes} blocks (limit: {GRAPH_NODE_LIMIT}).
-            Use the block view for navigation and analysis.
+            This subflow has {totalNodes} blocks (limit: {GRAPH_NODE_LIMIT}). Use the block view for navigation and
+            analysis.
           </p>
         </div>
       </div>

@@ -201253,12 +201253,6 @@
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=8239)xcelInstance%!R(int= 42)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
     },
     {
-      "line": 1275,
-      "message": "unclosed block: Click",
-      "severity": "error",
-      "snippet": "WebAutomation.Click.Click"
-    },
-    {
       "line": 1297,
       "message": "malformed line",
       "severity": "warning",
@@ -201749,12 +201743,6 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=8796)xcelInstance%!R(int= 15)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
-    },
-    {
-      "line": 2552,
-      "message": "unclosed block: Navigate To",
-      "severity": "error",
-      "snippet": "WebAutomation.NavigateTo"
     },
     {
       "line": 2557,
@@ -202285,12 +202273,6 @@
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=6467)xcelInstance%!R(int= 97)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
     },
     {
-      "line": 3830,
-      "message": "unclosed block: Run Application",
-      "severity": "error",
-      "snippet": "System.RunApplication"
-    },
-    {
       "line": 3843,
       "message": "malformed line",
       "severity": "warning",
@@ -202757,12 +202739,6 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=1094)xcelInstance%!R(int= 5)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
-    },
-    {
-      "line": 5107,
-      "message": "unclosed block: Run Application",
-      "severity": "error",
-      "snippet": "System.RunApplication"
     },
     {
       "line": 5148,
@@ -203237,12 +203213,6 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=1777)xcelInstance%!R(int= 90)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
-    },
-    {
-      "line": 6384,
-      "message": "unclosed block: Run Application",
-      "severity": "error",
-      "snippet": "System.RunApplication"
     },
     {
       "line": 6408,
@@ -203755,12 +203725,6 @@
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=451)xcelInstance%!R(int= 51)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
     },
     {
-      "line": 7661,
-      "message": "unclosed block: Move Mouse",
-      "severity": "error",
-      "snippet": "Mouse.MoveMouse"
-    },
-    {
       "line": 7697,
       "message": "malformed line",
       "severity": "warning",
@@ -204221,12 +204185,6 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=4204)xcelInstance%!R(int= 46)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
-    },
-    {
-      "line": 8938,
-      "message": "unclosed block: Press Keys",
-      "severity": "error",
-      "snippet": "Keyboard.PressKeys"
     },
     {
       "line": 8950,
@@ -204767,18 +204725,12 @@
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %!E(int=5541)xcelInstance%!R(int= 36)eadOption: Excel.ReadOption.CellRange Range: $'''A1:B10''' =\u003e Data"
-    },
-    {
-      "line": 10215,
-      "message": "unclosed block: Move Mouse",
-      "severity": "error",
-      "snippet": "Mouse.MoveMouse"
     }
   ],
   "metadata": {
     "blockCount": 9533,
     "subflowCount": 8,
     "maxDepth": 4,
-    "rawLineCount": 10217
+    "rawLineCount": 10216
   }
 }

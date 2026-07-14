@@ -89,6 +89,16 @@ func (s *memOrgStore) DeleteOrg(_ context.Context, id string) error {
 		return ErrOrgNotFound
 	}
 	delete(s.orgs, id)
+	// Cascade-delete the org's invites. The Postgres backend relies on an
+	// ON DELETE CASCADE foreign key for this; the in-memory store has no such
+	// cascade, so without this the invites would be orphaned indefinitely —
+	// still returned by List/GetOrgInvites for a non-existent org, and leaking
+	// memory for the lifetime of the process.
+	for invID, inv := range s.invites {
+		if inv.OrgID == id {
+			delete(s.invites, invID)
+		}
+	}
 	return nil
 }
 

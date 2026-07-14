@@ -75,8 +75,8 @@ export const AccountDataCard: React.FC = () => {
         <div>
           <span className="text-sm font-medium text-text-primary">Download your data</span>
           <p className="text-xs text-text-tertiary mt-0.5 mb-3">
-            Export a copy of your account profile, flows, settings, API tokens, and audit
-            history (data-subject access / portability).
+            Export a copy of your account profile, flows, settings, API tokens, and audit history (data-subject access /
+            portability).
           </p>
           <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
             Download my data
@@ -89,8 +89,8 @@ export const AccountDataCard: React.FC = () => {
             Danger zone
           </span>
           <p className="text-xs text-text-tertiary mt-1 mb-3">
-            Permanently erase your account and all of your flows. Personal data is removed from
-            shared records; security audit trails are retained but anonymized. This cannot be undone.
+            Permanently erase your account and all of your flows. Personal data is removed from shared records; security
+            audit trails are retained but anonymized. This cannot be undone.
           </p>
           <label className="block text-xs text-text-secondary mb-1.5">
             Type your email (<span className="select-all">{user.email}</span>) to confirm:
@@ -98,18 +98,12 @@ export const AccountDataCard: React.FC = () => {
           <Input
             type="email"
             value={confirmEmail}
-            onChange={(e) => setConfirmEmail(e.target.value)}
+            onChange={e => setConfirmEmail(e.target.value)}
             placeholder={user.email}
             autoComplete="off"
             className="mb-3"
           />
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={handleDelete}
-            loading={deleting}
-            disabled={!confirmEmail.trim()}
-          >
+          <Button variant="danger" size="sm" onClick={handleDelete} loading={deleting} disabled={!confirmEmail.trim()}>
             Permanently delete my account
           </Button>
           {deleteErr && <p className="text-xs text-semantic-error mt-2">{deleteErr}</p>}

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {render, screen} from '@testing-library/react'
 import InviteAcceptView from './InviteAcceptView'
-import { useOrgStore } from '@/stores/orgStore'
+import {useOrgStore} from '@/stores/orgStore'
 
 const initialState = useOrgStore.getState()
 
@@ -13,7 +13,7 @@ beforeEach(() => {
 describe('InviteAcceptView', () => {
   it('redeems the token on mount and shows success', async () => {
     const acceptInvite = vi.fn().mockResolvedValue(undefined)
-    useOrgStore.setState({ acceptInvite })
+    useOrgStore.setState({acceptInvite})
 
     render(<InviteAcceptView token="tok-1" onDone={() => {}} />)
 
@@ -23,7 +23,7 @@ describe('InviteAcceptView', () => {
 
   it('shows an error state when acceptance fails', async () => {
     const acceptInvite = vi.fn().mockRejectedValue(new Error('invite not found'))
-    useOrgStore.setState({ acceptInvite })
+    useOrgStore.setState({acceptInvite})
 
     render(<InviteAcceptView token="bad" onDone={() => {}} />)
 

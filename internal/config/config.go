@@ -119,6 +119,10 @@ type ServerConfig struct {
 	AllowedOrigins []string // CORS / WebSocket origin allowlist (cloud mode)
 	TrustedProxies []string // IPs of trusted reverse proxies for rate limiting
 	StaticDir      string   // Directory for static frontend assets
+	// MetricsToken, when set, additionally requires a matching bearer token on
+	// /metrics (defense-in-depth against a misconfigured NSG exposing the
+	// endpoint publicly). Empty = IP-allowlist only (default).
+	MetricsToken string
 	// KeyVaultURL is the URL of the Azure Key Vault to fetch secrets from.
 	// When set, secrets like PAD_AUTH_SECRET and PAD_DATABASE_URL will be
 	// retrieved from Key Vault if not already provided via ENV.
@@ -185,8 +189,6 @@ type RuntimeConfig struct {
 	CircuitBreakerOpenDur   string
 	RetryMaxAttempts        int
 	RetryBaseDelay          string
-	JWTAccessTTL            string
-	JWTRefreshTTL           string
 	OTLPEndpoint            string
 	RequestTimeout          string
 }
@@ -207,8 +209,6 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		CircuitBreakerOpenDur:   "30s",
 		RetryMaxAttempts:        3,
 		RetryBaseDelay:          "500ms",
-		JWTAccessTTL:            "15m",
-		JWTRefreshTTL:           "24h",
 		OTLPEndpoint:            "",
 		RequestTimeout:          "30s",
 	}
@@ -219,6 +219,12 @@ type AuthConfig struct {
 	Enabled bool
 	// Secret is the JWT signing key (required when Enabled == true)
 	Secret string
+	// EncryptionKey is the dedicated key for at-rest encryption (e.g. the
+	// database keystore AES-256-GCM key). Separate from Secret so a JWT-key
+	// leak doesn't compromise stored provider keys, and so rotating the JWT
+	// key doesn't brick encrypted secrets. Falls back to Secret when unset
+	// (backward compatibility, emits a deprecation warning).
+	EncryptionKey string
 	// SSO configures account-level OIDC login (cloud mode only)
 	SSO SSOConfig
 }

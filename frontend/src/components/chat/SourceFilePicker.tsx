@@ -74,32 +74,33 @@ export default function SourceFilePicker({files, selected, onSelectionChange}: P
         aria-expanded={open}
         className={clsx(
           'flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg text-xs transition-colors border',
-          open ? 'bg-surface-2 border-border-default' : 'hover:bg-surface-2 border-transparent'
+          open ? 'bg-surface-2 border-border-default' : 'hover:bg-surface-2 border-transparent',
         )}
         onClick={() => setOpen(!open)}
       >
         <FileText size={12} className="text-text-tertiary shrink-0" />
-        <span className={clsx('truncate', selected.length > 0 ? 'text-text-secondary font-medium' : 'text-text-tertiary')}>
+        <span
+          className={clsx('truncate', selected.length > 0 ? 'text-text-secondary font-medium' : 'text-text-tertiary')}
+        >
           {label}
         </span>
-        {selected.length > 0 && (
-          <span className="ml-auto text-2xs text-brand-400 shrink-0">
-            {selected.length}
-          </span>
-        )}
-        <ChevronDown size={12} className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast', open && 'rotate-180')} />
+        {selected.length > 0 && <span className="ml-auto text-2xs text-brand-400 shrink-0">{selected.length}</span>}
+        <ChevronDown
+          size={12}
+          className={clsx('shrink-0 text-text-tertiary transition-transform duration-fast', open && 'rotate-180')}
+        />
       </button>
 
       {open && (
         <Portal>
-          <div 
+          <div
             className="fixed bg-surface-1 border border-border-default rounded-lg shadow-lg z-overlay py-1 animate-fade-in max-h-[280px] overflow-y-auto"
             style={{top: pos.top, left: pos.left + 12, width: pos.width - 24}}
           >
             <button
               className={clsx(
                 'flex items-center gap-2.5 px-3 py-2 text-xs w-full text-left hover:bg-surface-2 transition-colors border-b border-border-subtle',
-                allSelected && 'text-brand-400'
+                allSelected && 'text-brand-400',
               )}
               onClick={toggleAll}
             >
@@ -115,23 +116,23 @@ export default function SourceFilePicker({files, selected, onSelectionChange}: P
                   key={f.filename}
                   className={clsx(
                     'flex items-center gap-2.5 px-3 py-1.5 text-xs w-full text-left hover:bg-surface-2 transition-colors',
-                    checked && 'text-brand-400'
+                    checked && 'text-brand-400',
                   )}
                   onClick={() => toggleFile(f.filename)}
                 >
-                  <div className={clsx(
-                    'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors',
-                    checked ? 'bg-brand-500 border-brand-500' : 'border-border-default'
-                  )}>
+                  <div
+                    className={clsx(
+                      'w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors',
+                      checked ? 'bg-brand-500 border-brand-500' : 'border-border-default',
+                    )}
+                  >
                     {checked && <Check size={10} className="text-brand-foreground" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="block truncate font-medium">{f.subflowName}</span>
                     <span className="block text-2xs text-text-tertiary truncate">{f.filename}</span>
                   </div>
-                  <span className="text-2xs text-text-tertiary shrink-0">
-                    {f.blockCount} blocks
-                  </span>
+                  <span className="text-2xs text-text-tertiary shrink-0">{f.blockCount} blocks</span>
                 </button>
               )
             })}

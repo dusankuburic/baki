@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -30,8 +29,7 @@ func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.
 		Path   string `json:"path"`
 		FlowID string `json:"flowId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -59,8 +57,7 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 		Path   string `json:"path"`
 		FlowID string `json:"flowId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -99,8 +96,7 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 		Path   string `json:"path"`
 		FlowID string `json:"flowId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

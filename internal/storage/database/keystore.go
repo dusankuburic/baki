@@ -23,10 +23,12 @@ const keystoreTimeout = 5 * time.Second
 // with AES-256-GCM. It implements storage.SecretStore so it can be injected as
 // the active secret backend in cloud mode, where the OS keychain is absent.
 //
-// The encryption key is derived from a deployment secret (PAD_AUTH_SECRET) via
-// SHA-256, so rotating that secret renders previously stored ciphertext
-// undecryptable (Get then reports the key as not found, and the provider must
-// be re-authenticated).
+// The encryption key should be a dedicated deployment secret (PAD_ENCRYPTION_KEY),
+// separate from the JWT signing key (PAD_AUTH_SECRET). For backward compatibility
+// the auth secret is still accepted when no dedicated key is configured, but
+// rotating either then no longer affects the other. Rotating the encryption key
+// renders previously stored ciphertext undecryptable (Get reports the key as not
+// found, and the provider must be re-authenticated).
 type EncryptedKeyStore struct {
 	db   *sql.DB
 	aead cipher.AEAD

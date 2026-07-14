@@ -75,44 +75,124 @@
                 }
               ],
               "children": []
-            },
+            }
+          ]
+        },
+        {
+          "name": "/# The browser instance is a text value if is not instantiated and it does not have a .Handle property.\nAttempting to close with the happy path first.#/",
+          "type": "COMMENT",
+          "rawType": "COMMENT",
+          "indent": 4,
+          "lineNumber": 6,
+          "properties": {},
+          "variables": [],
+          "tokens": [
             {
-              "name": "/# The browser instance is a text value if is not instantiated and it does not have a .Handle property.\nAttempting to close with the happy path first.#/",
-              "type": "COMMENT",
-              "rawType": "COMMENT",
-              "indent": 4,
-              "lineNumber": 6,
-              "properties": {},
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "/# The browser instance is a text value if is not instantiated and it does not have a .Handle property.\nAttempting to close with the happy path first.#/"
-                }
-              ],
-              "children": []
-            },
+              "type": "text",
+              "value": "/# The browser instance is a text value if is not instantiated and it does not have a .Handle property.\nAttempting to close with the happy path first.#/"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "IF IsNotEmpty(Input_BrowserInstance)",
+          "type": "CONDITION",
+          "rawType": "IF",
+          "indent": 4,
+          "lineNumber": 8,
+          "properties": {},
+          "variables": [],
+          "tokens": [
             {
-              "name": "IF IsNotEmpty(Input_BrowserInstance)",
+              "type": "text",
+              "value": "IsNotEmpty(Input_BrowserInstance)"
+            }
+          ],
+          "children": [
+            {
+              "name": "IF Input_BrowserInstance['Handle'] \u003c\u003e (-1)",
               "type": "CONDITION",
               "rawType": "IF",
-              "indent": 4,
-              "lineNumber": 8,
+              "indent": 8,
+              "lineNumber": 9,
               "properties": {},
               "variables": [],
               "tokens": [
                 {
                   "type": "text",
-                  "value": "IsNotEmpty(Input_BrowserInstance)"
+                  "value": "Input_BrowserInstance["
+                },
+                {
+                  "type": "string",
+                  "value": "\"Handle\""
+                },
+                {
+                  "type": "text",
+                  "value": "] \u003c\u003e (-1)"
                 }
               ],
               "children": [
                 {
-                  "name": "IF Input_BrowserInstance['Handle'] \u003c\u003e (-1)",
+                  "name": "Close Web Browser",
+                  "type": "ACTION",
+                  "rawType": "WebAutomation.CloseWebBrowser",
+                  "indent": 12,
+                  "lineNumber": 10,
+                  "properties": {
+                    "BrowserInstance": "Input_BrowserInstance",
+                    "_retryCount": "3",
+                    "_retryWait": "3"
+                  },
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "Close Web Browser"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "On Block Error",
+                  "type": "ERROR_HANDLER",
+                  "rawType": "OnBlockError",
+                  "indent": 12,
+                  "lineNumber": 12,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "On Block Error"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "name": "End On Block Error",
+                      "type": "END",
+                      "rawType": "END",
+                      "indent": 12,
+                      "lineNumber": 14,
+                      "properties": {
+                        "_parentType": "ERROR_HANDLER"
+                      },
+                      "variables": [],
+                      "tokens": [
+                        {
+                          "type": "text",
+                          "value": "End On Block Error"
+                        }
+                      ],
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "name": "IF Input_BrowserInstance['IsAlive'] = False",
                   "type": "CONDITION",
                   "rawType": "IF",
-                  "indent": 8,
-                  "lineNumber": 9,
+                  "indent": 12,
+                  "lineNumber": 15,
                   "properties": {},
                   "variables": [],
                   "tokens": [
@@ -122,161 +202,63 @@
                     },
                     {
                       "type": "string",
-                      "value": "\"Handle\""
+                      "value": "\"IsAlive\""
                     },
                     {
                       "type": "text",
-                      "value": "] \u003c\u003e (-1)"
+                      "value": "] = False"
                     }
                   ],
                   "children": [
                     {
-                      "name": "Close Web Browser",
+                      "name": "Append Line",
                       "type": "ACTION",
-                      "rawType": "WebAutomation.CloseWebBrowser",
-                      "indent": 12,
-                      "lineNumber": 10,
+                      "rawType": "Text.AppendLine",
+                      "indent": 16,
+                      "lineNumber": 16,
                       "properties": {
-                        "BrowserInstance": "Input_BrowserInstance",
-                        "_retryCount": "3",
-                        "_retryWait": "3"
+                        "LineToAppend": "$'''Successfully closed %Input_Browser%.''' Result",
+                        "Text": "Output_Message",
+                        "_output": "Output_Message"
                       },
-                      "variables": [],
+                      "variables": [
+                        "Input_Browser"
+                      ],
                       "tokens": [
                         {
                           "type": "text",
-                          "value": "Close Web Browser"
+                          "value": "Append Line"
                         }
                       ],
                       "children": []
                     },
                     {
-                      "name": "On Block Error",
-                      "type": "ERROR_HANDLER",
-                      "rawType": "OnBlockError",
-                      "indent": 12,
-                      "lineNumber": 12,
+                      "name": "Exit",
+                      "type": "ACTION",
+                      "rawType": "GOTO",
+                      "indent": 16,
+                      "lineNumber": 17,
                       "properties": {},
                       "variables": [],
                       "tokens": [
                         {
                           "type": "text",
-                          "value": "On Block Error"
+                          "value": "GOTO "
+                        },
+                        {
+                          "type": "label",
+                          "value": "Exit",
+                          "target": "Exit"
                         }
                       ],
-                      "children": [
-                        {
-                          "name": "End On Block Error",
-                          "type": "END",
-                          "rawType": "END",
-                          "indent": 12,
-                          "lineNumber": 14,
-                          "properties": {
-                            "_parentType": "ERROR_HANDLER"
-                          },
-                          "variables": [],
-                          "tokens": [
-                            {
-                              "type": "text",
-                              "value": "End On Block Error"
-                            }
-                          ],
-                          "children": []
-                        }
-                      ]
-                    },
-                    {
-                      "name": "IF Input_BrowserInstance['IsAlive'] = False",
-                      "type": "CONDITION",
-                      "rawType": "IF",
-                      "indent": 12,
-                      "lineNumber": 15,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "text",
-                          "value": "Input_BrowserInstance["
-                        },
-                        {
-                          "type": "string",
-                          "value": "\"IsAlive\""
-                        },
-                        {
-                          "type": "text",
-                          "value": "] = False"
-                        }
-                      ],
-                      "children": [
-                        {
-                          "name": "Append Line",
-                          "type": "ACTION",
-                          "rawType": "Text.AppendLine",
-                          "indent": 16,
-                          "lineNumber": 16,
-                          "properties": {
-                            "LineToAppend": "$'''Successfully closed %Input_Browser%.''' Result",
-                            "Text": "Output_Message",
-                            "_output": "Output_Message"
-                          },
-                          "variables": [
-                            "Input_Browser"
-                          ],
-                          "tokens": [
-                            {
-                              "type": "text",
-                              "value": "Append Line"
-                            }
-                          ],
-                          "children": []
-                        },
-                        {
-                          "name": "Exit",
-                          "type": "ACTION",
-                          "rawType": "GOTO",
-                          "indent": 16,
-                          "lineNumber": 17,
-                          "properties": {},
-                          "variables": [],
-                          "tokens": [
-                            {
-                              "type": "text",
-                              "value": "GOTO "
-                            },
-                            {
-                              "type": "label",
-                              "value": "Exit",
-                              "target": "Exit"
-                            }
-                          ],
-                          "children": []
-                        },
-                        {
-                          "name": "End If",
-                          "type": "END",
-                          "rawType": "END",
-                          "indent": 12,
-                          "lineNumber": 18,
-                          "properties": {
-                            "_parentType": "CONDITION"
-                          },
-                          "variables": [],
-                          "tokens": [
-                            {
-                              "type": "text",
-                              "value": "End If"
-                            }
-                          ],
-                          "children": []
-                        }
-                      ]
+                      "children": []
                     },
                     {
                       "name": "End If",
                       "type": "END",
                       "rawType": "END",
-                      "indent": 8,
-                      "lineNumber": 19,
+                      "indent": 12,
+                      "lineNumber": 18,
                       "properties": {
                         "_parentType": "CONDITION"
                       },
@@ -295,8 +277,8 @@
                   "name": "End If",
                   "type": "END",
                   "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 20,
+                  "indent": 8,
+                  "lineNumber": 19,
                   "properties": {
                     "_parentType": "CONDITION"
                   },
@@ -312,313 +294,92 @@
               ]
             },
             {
-              "name": "Get Environment Variable",
-              "type": "ACTION",
-              "rawType": "System.GetEnvironmentVariable.GetEnvironmentVariable",
+              "name": "End If",
+              "type": "END",
+              "rawType": "END",
               "indent": 4,
-              "lineNumber": 21,
+              "lineNumber": 20,
               "properties": {
-                "Name": "$'''USERNAME''' Value",
-                "_output": "UserName"
+                "_parentType": "CONDITION"
               },
               "variables": [],
               "tokens": [
                 {
                   "type": "text",
-                  "value": "Get Environment Variable"
+                  "value": "End If"
                 }
               ],
               "children": []
-            },
+            }
+          ]
+        },
+        {
+          "name": "Get Environment Variable",
+          "type": "ACTION",
+          "rawType": "System.GetEnvironmentVariable.GetEnvironmentVariable",
+          "indent": 4,
+          "lineNumber": 21,
+          "properties": {
+            "Name": "$'''USERNAME''' Value",
+            "_output": "UserName"
+          },
+          "variables": [],
+          "tokens": [
             {
-              "name": "SWITCH Input_Browser",
-              "type": "SWITCH",
-              "rawType": "SWITCH",
-              "indent": 4,
-              "lineNumber": 22,
+              "type": "text",
+              "value": "Get Environment Variable"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "SWITCH Input_Browser",
+          "type": "SWITCH",
+          "rawType": "SWITCH",
+          "indent": 4,
+          "lineNumber": 22,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "variable",
+              "value": "%Input_Browser%",
+              "target": "Input_Browser"
+            }
+          ],
+          "children": [
+            {
+              "name": "CASE = $'''Chrome'''",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 23,
               "properties": {},
               "variables": [],
               "tokens": [
                 {
-                  "type": "variable",
-                  "value": "%Input_Browser%",
-                  "target": "Input_Browser"
+                  "type": "text",
+                  "value": "= "
+                },
+                {
+                  "type": "string",
+                  "value": "\"Chrome\""
                 }
               ],
               "children": [
                 {
-                  "name": "CASE = $'''Chrome'''",
-                  "type": "CASE",
-                  "rawType": "CASE",
-                  "indent": 8,
-                  "lineNumber": 23,
+                  "name": "Call CloseChrome",
+                  "type": "SUBFLOW",
+                  "rawType": "CALL",
+                  "indent": 12,
+                  "lineNumber": 24,
                   "properties": {},
                   "variables": [],
                   "tokens": [
                     {
-                      "type": "text",
-                      "value": "= "
-                    },
-                    {
-                      "type": "string",
-                      "value": "\"Chrome\""
-                    }
-                  ],
-                  "children": [
-                    {
-                      "name": "Call CloseChrome",
-                      "type": "SUBFLOW",
-                      "rawType": "CALL",
-                      "indent": 12,
-                      "lineNumber": 24,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "subflow",
-                          "value": "CloseChrome",
-                          "target": "CloseChrome"
-                        }
-                      ],
-                      "children": []
-                    }
-                  ]
-                },
-                {
-                  "name": "CASE = $'''Edge'''",
-                  "type": "CASE",
-                  "rawType": "CASE",
-                  "indent": 8,
-                  "lineNumber": 25,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "= "
-                    },
-                    {
-                      "type": "string",
-                      "value": "\"Edge\""
-                    }
-                  ],
-                  "children": [
-                    {
-                      "name": "Call CloseEdge",
-                      "type": "SUBFLOW",
-                      "rawType": "CALL",
-                      "indent": 12,
-                      "lineNumber": 26,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "subflow",
-                          "value": "CloseEdge",
-                          "target": "CloseEdge"
-                        }
-                      ],
-                      "children": []
-                    }
-                  ]
-                },
-                {
-                  "name": "CASE = $'''Firefox'''",
-                  "type": "CASE",
-                  "rawType": "CASE",
-                  "indent": 8,
-                  "lineNumber": 27,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "= "
-                    },
-                    {
-                      "type": "string",
-                      "value": "\"Firefox\""
-                    }
-                  ],
-                  "children": [
-                    {
-                      "name": "Call CloseFirefox",
-                      "type": "SUBFLOW",
-                      "rawType": "CALL",
-                      "indent": 12,
-                      "lineNumber": 28,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "subflow",
-                          "value": "CloseFirefox",
-                          "target": "CloseFirefox"
-                        }
-                      ],
-                      "children": []
-                    }
-                  ]
-                },
-                {
-                  "name": "Default",
-                  "type": "DEFAULT",
-                  "rawType": "DEFAULT",
-                  "indent": 8,
-                  "lineNumber": 29,
-                  "properties": {},
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "Default"
-                    }
-                  ],
-                  "children": [
-                    {
-                      "name": "Set Output_Message",
-                      "type": "VARIABLE",
-                      "rawType": "SET",
-                      "indent": 12,
-                      "lineNumber": 30,
-                      "properties": {
-                        "_output": "Output_Message",
-                        "_value": "$'''Closing all browsers as the input browser name was either unrecognized or empty (\\\"%Input_Browser%\\\").'''",
-                        "_var": "Output_Message"
-                      },
-                      "variables": [
-                        "Input_Browser"
-                      ],
-                      "tokens": [
-                        {
-                          "type": "variable",
-                          "value": "%Output_Message%",
-                          "target": "Output_Message"
-                        },
-                        {
-                          "type": "text",
-                          "value": " = "
-                        },
-                        {
-                          "type": "text",
-                          "value": "$"
-                        },
-                        {
-                          "type": "string",
-                          "value": "\"\""
-                        },
-                        {
-                          "type": "text",
-                          "value": "'Closing all browsers as the input browser name was either unrecognized or empty (\\\""
-                        },
-                        {
-                          "type": "variable",
-                          "value": "%Input_Browser%",
-                          "target": "Input_Browser"
-                        },
-                        {
-                          "type": "text",
-                          "value": "\\\")."
-                        },
-                        {
-                          "type": "string",
-                          "value": "\"\""
-                        },
-                        {
-                          "type": "text",
-                          "value": "'"
-                        }
-                      ],
-                      "children": []
-                    },
-                    {
-                      "name": "Call CloseChrome",
-                      "type": "SUBFLOW",
-                      "rawType": "CALL",
-                      "indent": 12,
-                      "lineNumber": 31,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "subflow",
-                          "value": "CloseChrome",
-                          "target": "CloseChrome"
-                        }
-                      ],
-                      "children": []
-                    },
-                    {
-                      "name": "Call CloseEdge",
-                      "type": "SUBFLOW",
-                      "rawType": "CALL",
-                      "indent": 12,
-                      "lineNumber": 32,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "subflow",
-                          "value": "CloseEdge",
-                          "target": "CloseEdge"
-                        }
-                      ],
-                      "children": []
-                    },
-                    {
-                      "name": "Call CloseFirefox",
-                      "type": "SUBFLOW",
-                      "rawType": "CALL",
-                      "indent": 12,
-                      "lineNumber": 33,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "subflow",
-                          "value": "CloseFirefox",
-                          "target": "CloseFirefox"
-                        }
-                      ],
-                      "children": []
-                    },
-                    {
-                      "name": "Exit",
-                      "type": "ACTION",
-                      "rawType": "GOTO",
-                      "indent": 12,
-                      "lineNumber": 34,
-                      "properties": {},
-                      "variables": [],
-                      "tokens": [
-                        {
-                          "type": "text",
-                          "value": "GOTO "
-                        },
-                        {
-                          "type": "label",
-                          "value": "Exit",
-                          "target": "Exit"
-                        }
-                      ],
-                      "children": []
-                    }
-                  ]
-                },
-                {
-                  "name": "End Switch",
-                  "type": "END",
-                  "rawType": "END",
-                  "indent": 4,
-                  "lineNumber": 35,
-                  "properties": {
-                    "_parentType": "SWITCH"
-                  },
-                  "variables": [],
-                  "tokens": [
-                    {
-                      "type": "text",
-                      "value": "End Switch"
+                      "type": "subflow",
+                      "value": "CloseChrome",
+                      "target": "CloseChrome"
                     }
                   ],
                   "children": []
@@ -626,85 +387,306 @@
               ]
             },
             {
-              "name": "Append Line",
-              "type": "ACTION",
-              "rawType": "Text.AppendLine",
-              "indent": 4,
-              "lineNumber": 36,
-              "properties": {
-                "LineToAppend": "$'''Successfully closed %Input_Browser%.''' Result",
-                "Text": "Output_Message",
-                "_output": "Output_Message"
-              },
-              "variables": [
-                "Input_Browser"
-              ],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Append Line"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "Exit",
-              "type": "ACTION",
-              "rawType": "LABEL",
-              "indent": 4,
-              "lineNumber": 37,
+              "name": "CASE = $'''Edge'''",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 25,
               "properties": {},
               "variables": [],
               "tokens": [
                 {
                   "type": "text",
-                  "value": "LABEL "
+                  "value": "= "
                 },
                 {
-                  "type": "label",
-                  "value": "Exit",
-                  "target": "Exit"
+                  "type": "string",
+                  "value": "\"Edge\""
                 }
               ],
-              "children": []
+              "children": [
+                {
+                  "name": "Call CloseEdge",
+                  "type": "SUBFLOW",
+                  "rawType": "CALL",
+                  "indent": 12,
+                  "lineNumber": 26,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "subflow",
+                      "value": "CloseEdge",
+                      "target": "CloseEdge"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
             },
             {
-              "name": "EXIT Code: 0",
-              "type": "ACTION",
-              "rawType": "EXIT",
-              "indent": 4,
-              "lineNumber": 38,
-              "properties": {
-                "Code": "0"
-              },
+              "name": "CASE = $'''Firefox'''",
+              "type": "CASE",
+              "rawType": "CASE",
+              "indent": 8,
+              "lineNumber": 27,
+              "properties": {},
               "variables": [],
               "tokens": [
                 {
                   "type": "text",
-                  "value": "EXIT Code: 0"
+                  "value": "= "
+                },
+                {
+                  "type": "string",
+                  "value": "\"Firefox\""
                 }
               ],
-              "children": []
+              "children": [
+                {
+                  "name": "Call CloseFirefox",
+                  "type": "SUBFLOW",
+                  "rawType": "CALL",
+                  "indent": 12,
+                  "lineNumber": 28,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "subflow",
+                      "value": "CloseFirefox",
+                      "target": "CloseFirefox"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
             },
             {
-              "name": "End On Block Error",
+              "name": "Default",
+              "type": "DEFAULT",
+              "rawType": "DEFAULT",
+              "indent": 8,
+              "lineNumber": 29,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "Default"
+                }
+              ],
+              "children": [
+                {
+                  "name": "Set Output_Message",
+                  "type": "VARIABLE",
+                  "rawType": "SET",
+                  "indent": 12,
+                  "lineNumber": 30,
+                  "properties": {
+                    "_output": "Output_Message",
+                    "_value": "$'''Closing all browsers as the input browser name was either unrecognized or empty (\\\"%Input_Browser%\\\").'''",
+                    "_var": "Output_Message"
+                  },
+                  "variables": [
+                    "Input_Browser"
+                  ],
+                  "tokens": [
+                    {
+                      "type": "variable",
+                      "value": "%Output_Message%",
+                      "target": "Output_Message"
+                    },
+                    {
+                      "type": "text",
+                      "value": " = "
+                    },
+                    {
+                      "type": "text",
+                      "value": "$"
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"\""
+                    },
+                    {
+                      "type": "text",
+                      "value": "'Closing all browsers as the input browser name was either unrecognized or empty (\\\""
+                    },
+                    {
+                      "type": "variable",
+                      "value": "%Input_Browser%",
+                      "target": "Input_Browser"
+                    },
+                    {
+                      "type": "text",
+                      "value": "\\\")."
+                    },
+                    {
+                      "type": "string",
+                      "value": "\"\""
+                    },
+                    {
+                      "type": "text",
+                      "value": "'"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Call CloseChrome",
+                  "type": "SUBFLOW",
+                  "rawType": "CALL",
+                  "indent": 12,
+                  "lineNumber": 31,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "subflow",
+                      "value": "CloseChrome",
+                      "target": "CloseChrome"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Call CloseEdge",
+                  "type": "SUBFLOW",
+                  "rawType": "CALL",
+                  "indent": 12,
+                  "lineNumber": 32,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "subflow",
+                      "value": "CloseEdge",
+                      "target": "CloseEdge"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Call CloseFirefox",
+                  "type": "SUBFLOW",
+                  "rawType": "CALL",
+                  "indent": 12,
+                  "lineNumber": 33,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "subflow",
+                      "value": "CloseFirefox",
+                      "target": "CloseFirefox"
+                    }
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Exit",
+                  "type": "ACTION",
+                  "rawType": "GOTO",
+                  "indent": 12,
+                  "lineNumber": 34,
+                  "properties": {},
+                  "variables": [],
+                  "tokens": [
+                    {
+                      "type": "text",
+                      "value": "GOTO "
+                    },
+                    {
+                      "type": "label",
+                      "value": "Exit",
+                      "target": "Exit"
+                    }
+                  ],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "name": "End Switch",
               "type": "END",
               "rawType": "END",
-              "indent": 0,
-              "lineNumber": 39,
+              "indent": 4,
+              "lineNumber": 35,
               "properties": {
-                "_parentType": "ERROR_HANDLER"
+                "_parentType": "SWITCH"
               },
               "variables": [],
               "tokens": [
                 {
                   "type": "text",
-                  "value": "End On Block Error"
+                  "value": "End Switch"
                 }
               ],
               "children": []
             }
           ]
+        },
+        {
+          "name": "Append Line",
+          "type": "ACTION",
+          "rawType": "Text.AppendLine",
+          "indent": 4,
+          "lineNumber": 36,
+          "properties": {
+            "LineToAppend": "$'''Successfully closed %Input_Browser%.''' Result",
+            "Text": "Output_Message",
+            "_output": "Output_Message"
+          },
+          "variables": [
+            "Input_Browser"
+          ],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Append Line"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Exit",
+          "type": "ACTION",
+          "rawType": "LABEL",
+          "indent": 4,
+          "lineNumber": 37,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "LABEL "
+            },
+            {
+              "type": "label",
+              "value": "Exit",
+              "target": "Exit"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "EXIT Code: 0",
+          "type": "ACTION",
+          "rawType": "EXIT",
+          "indent": 4,
+          "lineNumber": 38,
+          "properties": {
+            "Code": "0"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "EXIT Code: 0"
+            }
+          ],
+          "children": []
         },
         {
           "name": "Error =\u003e ErrorMessage",
@@ -986,63 +968,45 @@
                 }
               ],
               "children": []
-            },
-            {
-              "name": "Attach To Foreground Chrome",
-              "type": "ACTION",
-              "rawType": "WebAutomation.LaunchChrome.AttachToForegroundChrome",
-              "indent": 4,
-              "lineNumber": 14,
-              "properties": {
-                "AttachTimeout": "5 BrowserInstance",
-                "_output": "BrowserToClose"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Attach To Foreground Chrome"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "Close Web Browser",
-              "type": "ACTION",
-              "rawType": "WebAutomation.CloseWebBrowser",
-              "indent": 4,
-              "lineNumber": 15,
-              "properties": {
-                "BrowserInstance": "BrowserToClose"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Close Web Browser"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "End On Block Error",
-              "type": "END",
-              "rawType": "END",
-              "indent": 0,
-              "lineNumber": 16,
-              "properties": {
-                "_parentType": "ERROR_HANDLER"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "End On Block Error"
-                }
-              ],
-              "children": []
             }
           ]
+        },
+        {
+          "name": "Attach To Foreground Chrome",
+          "type": "ACTION",
+          "rawType": "WebAutomation.LaunchChrome.AttachToForegroundChrome",
+          "indent": 4,
+          "lineNumber": 14,
+          "properties": {
+            "AttachTimeout": "5 BrowserInstance",
+            "_output": "BrowserToClose"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Attach To Foreground Chrome"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close Web Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.CloseWebBrowser",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {
+            "BrowserInstance": "BrowserToClose"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Web Browser"
+            }
+          ],
+          "children": []
         },
         {
           "name": "IF (UIAutomation.IfWindow.IsOpenByTitleClass Title: $'''*Google Chrome*''' Class: $'''*''')",
@@ -1706,63 +1670,45 @@
                 }
               ],
               "children": []
-            },
-            {
-              "name": "Attach To The Foreground Edge",
-              "type": "ACTION",
-              "rawType": "WebAutomation.LaunchEdge.AttachToTheForegroundEdge",
-              "indent": 4,
-              "lineNumber": 14,
-              "properties": {
-                "AttachTimeout": "5 BrowserInstance",
-                "_output": "BrowserToClose"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Attach To The Foreground Edge"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "Close Web Browser",
-              "type": "ACTION",
-              "rawType": "WebAutomation.CloseWebBrowser",
-              "indent": 4,
-              "lineNumber": 15,
-              "properties": {
-                "BrowserInstance": "BrowserToClose"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Close Web Browser"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "End On Block Error",
-              "type": "END",
-              "rawType": "END",
-              "indent": 0,
-              "lineNumber": 16,
-              "properties": {
-                "_parentType": "ERROR_HANDLER"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "End On Block Error"
-                }
-              ],
-              "children": []
             }
           ]
+        },
+        {
+          "name": "Attach To The Foreground Edge",
+          "type": "ACTION",
+          "rawType": "WebAutomation.LaunchEdge.AttachToTheForegroundEdge",
+          "indent": 4,
+          "lineNumber": 14,
+          "properties": {
+            "AttachTimeout": "5 BrowserInstance",
+            "_output": "BrowserToClose"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Attach To The Foreground Edge"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close Web Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.CloseWebBrowser",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {
+            "BrowserInstance": "BrowserToClose"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Web Browser"
+            }
+          ],
+          "children": []
         },
         {
           "name": "IF (UIAutomation.IfWindow.IsOpenByTitleClass Title: $'''*Microsoft​ Edge*''' Class: $'''*''')",
@@ -2426,63 +2372,45 @@
                 }
               ],
               "children": []
-            },
-            {
-              "name": "Attach To Foreground Firefox",
-              "type": "ACTION",
-              "rawType": "WebAutomation.LaunchFirefox.AttachToForegroundFirefox",
-              "indent": 4,
-              "lineNumber": 14,
-              "properties": {
-                "AttachTimeout": "5 BrowserInstance",
-                "_output": "BrowserToClose"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Attach To Foreground Firefox"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "Close Web Browser",
-              "type": "ACTION",
-              "rawType": "WebAutomation.CloseWebBrowser",
-              "indent": 4,
-              "lineNumber": 15,
-              "properties": {
-                "BrowserInstance": "BrowserToClose"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "Close Web Browser"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "End On Block Error",
-              "type": "END",
-              "rawType": "END",
-              "indent": 0,
-              "lineNumber": 16,
-              "properties": {
-                "_parentType": "ERROR_HANDLER"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "End On Block Error"
-                }
-              ],
-              "children": []
             }
           ]
+        },
+        {
+          "name": "Attach To Foreground Firefox",
+          "type": "ACTION",
+          "rawType": "WebAutomation.LaunchFirefox.AttachToForegroundFirefox",
+          "indent": 4,
+          "lineNumber": 14,
+          "properties": {
+            "AttachTimeout": "5 BrowserInstance",
+            "_output": "BrowserToClose"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Attach To Foreground Firefox"
+            }
+          ],
+          "children": []
+        },
+        {
+          "name": "Close Web Browser",
+          "type": "ACTION",
+          "rawType": "WebAutomation.CloseWebBrowser",
+          "indent": 4,
+          "lineNumber": 15,
+          "properties": {
+            "BrowserInstance": "BrowserToClose"
+          },
+          "variables": [],
+          "tokens": [
+            {
+              "type": "text",
+              "value": "Close Web Browser"
+            }
+          ],
+          "children": []
         },
         {
           "name": "IF (UIAutomation.IfWindow.IsOpenByTitleClass Title: $'''*Mozilla Firefox*''' Class: $'''MozillaWindowClass''')",
@@ -2938,18 +2866,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 42,
-      "message": "unclosed block: Append Line",
-      "severity": "error",
-      "snippet": "Text.AppendLine"
-    }
-  ],
   "metadata": {
-    "blockCount": 140,
+    "blockCount": 136,
     "subflowCount": 4,
     "maxDepth": 6,
-    "rawLineCount": 163
+    "rawLineCount": 159
   }
 }

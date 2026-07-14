@@ -40,14 +40,17 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>()
 
   useEffect(() => {
-    provider.getUser()
+    provider
+      .getUser()
       .then(user => {
         if (user?.login) {
           setUsername(user.login)
           setState('configured')
         }
       })
-      .catch((err) => { logger.warn('Failed to check existing auth', err) })
+      .catch(err => {
+        logger.warn('Failed to check existing auth', err)
+      })
     return () => {
       pollingRef.current = false
       clearTimeout(timeoutRef.current)
@@ -85,7 +88,9 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
             setErrorMsg(result.error || 'Authentication failed')
             return
           }
-        } catch { /* polling error — retry on next interval */ }
+        } catch {
+          /* polling error — retry on next interval */
+        }
         if (pollingRef.current) {
           timeoutRef.current = setTimeout(poll, interval)
         }
@@ -107,7 +112,9 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   const disconnect = useCallback(async () => {
     try {
       await provider.revokeAuth()
-    } catch (e) { logger.warn(`Revoke ${provider.name} auth failed:`, e) }
+    } catch (e) {
+      logger.warn(`Revoke ${provider.name} auth failed:`, e)
+    }
     setState('unconfigured')
     setUsername('')
   }, [provider])
@@ -127,9 +134,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     case 'authorizing':
       return (
         <div className="bg-surface-2 border border-border-default rounded-lg p-4 space-y-3">
-          <p className="text-sm text-text-secondary">
-            To authenticate, visit:
-          </p>
+          <p className="text-sm text-text-secondary">To authenticate, visit:</p>
           <a
             href={verificationURI}
             className="text-sm text-brand-400 underline break-all"
@@ -140,20 +145,13 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           >
             {verificationURI}
           </a>
-          <p className="text-sm text-text-secondary">
-            Enter code:
-          </p>
-          <p className="text-2xl font-mono font-bold text-text-primary tracking-wider">
-            {userCode}
-          </p>
+          <p className="text-sm text-text-secondary">Enter code:</p>
+          <p className="text-2xl font-mono font-bold text-text-primary tracking-wider">{userCode}</p>
           <div className="flex items-center gap-2 text-sm text-text-tertiary">
             <Loader2 size={14} className="animate-spin" />
             Waiting for authorization...
           </div>
-          <button
-            className="text-xs text-text-tertiary hover:text-text-secondary"
-            onClick={cancel}
-          >
+          <button className="text-xs text-text-tertiary hover:text-text-secondary" onClick={cancel}>
             Cancel
           </button>
         </div>
@@ -163,13 +161,8 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       return (
         <div className="flex items-center gap-2">
           <Check size={14} className="text-green-500" />
-          <span className="text-sm text-text-secondary">
-            Connected as @{username}
-          </span>
-          <button
-            className="text-xs text-text-tertiary hover:text-text-secondary ml-2"
-            onClick={disconnect}
-          >
+          <span className="text-sm text-text-secondary">Connected as @{username}</span>
+          <button className="text-xs text-text-tertiary hover:text-text-secondary ml-2" onClick={disconnect}>
             Disconnect
           </button>
         </div>
@@ -179,10 +172,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       return (
         <div className="space-y-2">
           <p className="text-sm text-red-400">{errorMsg}</p>
-          <button
-            className="text-xs text-brand-400 hover:text-brand-300"
-            onClick={startAuth}
-          >
+          <button className="text-xs text-brand-400 hover:text-brand-300" onClick={startAuth}>
             Retry
           </button>
         </div>

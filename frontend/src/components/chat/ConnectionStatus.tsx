@@ -40,9 +40,7 @@ export default function ConnectionStatus({provider, isStreaming}: Props) {
           (display === 'connecting' || display === 'reconnecting') && 'bg-warning animate-pulse-soft',
         )}
       />
-      <span className="text-2xs text-text-tertiary">
-        {labels[display]}
-      </span>
+      <span className="text-2xs text-text-tertiary">{labels[display]}</span>
       {provider && (display === 'ready' || display === 'streaming') && (
         <span className="text-2xs text-text-tertiary/60">· {provider}</span>
       )}

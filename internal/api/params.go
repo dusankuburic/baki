@@ -43,3 +43,17 @@ func clampListLimit(w http.ResponseWriter, raw string) (limit int, ok bool) {
 	}
 	return limit, true
 }
+
+// clampListOffset parses an optional ?offset= query value (defaulting to 0) and
+// clamps it to >= 0. A negative offset would otherwise flow into SQL as
+// "OFFSET -1" and surface as a confusing 500 instead of a benign clamp.
+func clampListOffset(w http.ResponseWriter, raw string) (offset int, ok bool) {
+	offset, ok = parseIntParam(w, raw, "offset", 0)
+	if !ok {
+		return 0, false
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return offset, true
+}

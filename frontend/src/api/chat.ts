@@ -14,16 +14,16 @@ export interface BeginStreamResult {
 }
 
 export const chatApi = {
-  streamChatMessage: (req: ChatRequest): Promise<string> =>
-    request('/api/chat/stream', req),
+  streamChatMessage: (req: ChatRequest): Promise<string> => request('/api/chat/stream', req),
 
-  beginStream: (id: string): Promise<BeginStreamResult> =>
-    request('/api/chat/begin', {id}),
+  beginStream: (id: string): Promise<BeginStreamResult> => request('/api/chat/begin', {id}),
 
-  cancelStream: (id: string): Promise<void> =>
-    request('/api/chat/cancel', {id}),
+  cancelStream: (id: string): Promise<void> => request('/api/chat/cancel', {id}),
 
-  resumeStream: (id: string, from = 0): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
+  resumeStream: (
+    id: string,
+    from = 0,
+  ): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
     request('/api/chat/resume', {id, from}),
 
   getConversation: (flowId: string, provider: string): Promise<ConversationFile> =>
@@ -38,12 +38,9 @@ export const chatApi = {
   getSuggestedPrompts: (hasBlock: boolean, hasFindings?: boolean): Promise<string[]> =>
     request('/api/chat/suggested-prompts', {hasBlock, hasFindings: hasFindings ?? false}),
 
-  getDemoRemaining: (): Promise<number> =>
-    request('/api/chat/demo-remaining', undefined, 'GET'),
+  getDemoRemaining: (): Promise<number> => request('/api/chat/demo-remaining', undefined, 'GET'),
 
-  previewContext: (req: ChatRequest): Promise<ContextPreview> =>
-    request('/api/chat/preview-context', req),
+  previewContext: (req: ChatRequest): Promise<ContextPreview> => request('/api/chat/preview-context', req),
 
-  readSourceFiles: (files: string[]): Promise<Record<string, string>> =>
-    request('/api/flow/read-sources', {files}),
+  readSourceFiles: (files: string[]): Promise<Record<string, string>> => request('/api/flow/read-sources', {files}),
 }

@@ -2,6 +2,7 @@ package export
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
 
 	"pad-core/models"
@@ -9,31 +10,58 @@ import (
 	"github.com/go-pdf/fpdf"
 )
 
+//go:embed fonts/JetBrainsMono-Regular.ttf
+var jetbrainsMonoTTF []byte
+
+//go:embed fonts/JetBrainsMono-Bold.ttf
+var jetbrainsMonoBoldTTF []byte
+
+const pdfFontFamily = "JetBrainsMono"
+
 func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
+	if report == nil {
+		report = &models.AnalysisReport{}
+	}
+
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetAutoPageBreak(true, 20)
 	pdf.AddPage()
 
-	pdf.SetFont("Helvetica", "B", 20)
+	// Register the embedded Unicode TTFs so non-ASCII characters (é, ü, —, curly
+	// quotes, CJK) render correctly. The built-in core fonts (Helvetica) use
+	// WinAnsi encoding and either mis-render or error on anything outside ASCII.
+	pdf.AddUTF8FontFromBytes(pdfFontFamily, "", jetbrainsMonoTTF)
+	pdf.AddUTF8FontFromBytes(pdfFontFamily, "B", jetbrainsMonoBoldTTF)
+
+	pdf.SetFont(pdfFontFamily, "B", 20)
 	pdf.Cell(0, 12, "PAD Analyzer")
 	pdf.Ln(8)
-	pdf.SetFont("Helvetica", "", 11)
+	pdf.SetFont(pdfFontFamily, "", 11)
 	pdf.Cell(0, 6, "Analysis Report")
 	pdf.Ln(12)
 
-	pdf.SetFont("Helvetica", "", 10)
-	pdf.Cell(0, 5, fmt.Sprintf("Flow: %s", doc.Name))
+	pdf.SetFont(pdfFontFamily, "", 10)
+	if doc != nil {
+		pdf.Cell(0, 5, fmt.Sprintf("Flow: %s", doc.Name))
+	} else {
+		pdf.Cell(0, 5, "Flow: (unknown)")
+	}
 	pdf.Ln(5)
-	pdf.Cell(0, 5, fmt.Sprintf("Generated: %s", report.GeneratedAt.Format("2006-01-02 15:04:05")))
+	if !report.GeneratedAt.IsZero() {
+		pdf.Cell(0, 5, fmt.Sprintf("Generated: %s", report.GeneratedAt.Format("2006-01-02 15:04:05")))
+		pdf.Ln(5)
+	}
+	if report.DurationMs > 0 {
+		pdf.Cell(0, 5, fmt.Sprintf("Duration: %dms", report.DurationMs))
+		pdf.Ln(5)
+	}
 	pdf.Ln(5)
-	pdf.Cell(0, 5, fmt.Sprintf("Duration: %dms", report.DurationMs))
-	pdf.Ln(10)
 
-	pdf.SetFont("Helvetica", "B", 14)
+	pdf.SetFont(pdfFontFamily, "B", 14)
 	pdf.Cell(0, 8, "Summary")
 	pdf.Ln(8)
 
-	pdf.SetFont("Helvetica", "", 10)
+	pdf.SetFont(pdfFontFamily, "", 10)
 	pdf.Cell(0, 5, fmt.Sprintf("Blocks analyzed: %d", report.Stats.BlocksAnalyzed))
 	pdf.Ln(5)
 	pdf.Cell(0, 5, fmt.Sprintf("Rules run: %d", report.Stats.RulesRun))
@@ -43,12 +71,12 @@ func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 	pdf.Ln(10)
 
 	if len(report.Findings) == 0 {
-		pdf.SetFont("Helvetica", "", 11)
+		pdf.SetFont(pdfFontFamily, "", 11)
 		pdf.Cell(0, 6, "No findings detected. The flow looks good!")
 		return finishPDF(pdf)
 	}
 
-	pdf.SetFont("Helvetica", "B", 14)
+	pdf.SetFont(pdfFontFamily, "B", 14)
 	pdf.Cell(0, 8, fmt.Sprintf("Findings (%d)", len(report.Findings)))
 	pdf.Ln(10)
 
@@ -59,7 +87,7 @@ func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 			continue
 		}
 
-		pdf.SetFont("Helvetica", "B", 12)
+		pdf.SetFont(pdfFontFamily, "B", 12)
 		pdf.Cell(0, 7, fmt.Sprintf("%s (%d)", severityTitle(sev), len(findings)))
 		pdf.Ln(8)
 
@@ -68,11 +96,13 @@ func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 				pdf.AddPage()
 			}
 
-			pdf.SetFont("Helvetica", "B", 10)
-			pdf.Cell(0, 5, fmt.Sprintf("%d. %s", i+1, f.Title))
-			pdf.Ln(5)
+			// Use MultiCell (not Cell) for the title so long titles wrap
+			// instead of overflowing past the right margin.
+			pdf.SetFont(pdfFontFamily, "B", 10)
+			pdf.MultiCell(0, 5, fmt.Sprintf("%d. %s", i+1, f.Title), "", "", false)
+			pdf.Ln(1)
 
-			pdf.SetFont("Helvetica", "", 9)
+			pdf.SetFont(pdfFontFamily, "", 9)
 			pdf.Cell(0, 4, fmt.Sprintf("Rule: %s  |  Block: %s", f.RuleID, f.BlockID))
 			pdf.Ln(4)
 
@@ -80,7 +110,7 @@ func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 			pdf.Ln(2)
 
 			if f.Suggestion != "" {
-				pdf.SetFont("Helvetica", "I", 9)
+				pdf.SetFont(pdfFontFamily, "", 9)
 				pdf.MultiCell(0, 4, "Suggestion: "+f.Suggestion, "", "", false)
 				pdf.Ln(3)
 			}

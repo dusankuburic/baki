@@ -27,7 +27,7 @@ export function useCytoscapeGraph(subflowId?: string) {
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
   const graphZoom = useUIStore(s => s.graphZoom)
   const setGraphZoom = useUIStore(s => s.setGraphZoom)
-  const report = useAnalysisStore(s => flowDoc ? s.reports.get(flowDoc.id) : undefined)
+  const report = useAnalysisStore(s => (flowDoc ? s.reports.get(flowDoc.id) : undefined))
 
   const loadGraph = async () => {
     if (!flowDoc) return
@@ -61,12 +61,12 @@ export function useCytoscapeGraph(subflowId?: string) {
               blockCount: n.blockCount,
               errorCount: n.errorCount,
               warnCount: n.warnCount,
-              isCenter: n.id === subflowId ? 'true' : 'false'
-            }
+              isCenter: n.id === subflowId ? 'true' : 'false',
+            },
           })),
           ...edges.map(e => ({
-            data: { source: e.source, target: e.target }
-          }))
+            data: {source: e.source, target: e.target},
+          })),
         ]
 
         const cy = cyRef.current
@@ -82,7 +82,7 @@ export function useCytoscapeGraph(subflowId?: string) {
           nodeSep: subflowId ? 120 : 80,
           rankSep: subflowId ? 160 : 120,
           animate: true,
-          animationDuration: 500
+          animationDuration: 500,
         } as cytoscape.LayoutOptions).run()
 
         cy.fit(undefined, 50)
@@ -107,62 +107,62 @@ export function useCytoscapeGraph(subflowId?: string) {
         {
           selector: 'node',
           style: {
-            'shape': 'round-rectangle',
-            'width': '220px',
-            'height': '80px',
+            shape: 'round-rectangle',
+            width: '220px',
+            height: '80px',
             'background-color': cssVar('--surface-2'),
             'border-width': 2,
             'border-color': cssVar('--border-strong'),
-            'label': 'data(label)',
-            'color': cssVar('--text-primary'),
+            label: 'data(label)',
+            color: cssVar('--text-primary'),
             'font-size': '14px',
             'font-weight': 'bold',
             'text-valign': 'center',
             'text-halign': 'center',
             'text-margin-y': -10,
-            'padding': '10px'
-          }
+            padding: '10px',
+          },
         },
         {
           selector: 'node[isCenter = "true"]',
           style: {
             'border-color': cssVar('--brand-500'),
             'border-width': 3,
-            'background-color': cssVar('--surface-3')
-          }
+            'background-color': cssVar('--surface-3'),
+          },
         },
         {
           selector: 'edge',
           style: {
-            'width': 2,
+            width: 2,
             'line-color': cssVar('--border-strong'),
             'target-arrow-color': cssVar('--border-strong'),
             'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier'
-          }
+            'curve-style': 'bezier',
+          },
         },
         {
           selector: 'node:selected',
           style: {
             'border-color': cssVar('--brand-500'),
-            'border-width': 3
-          }
+            'border-width': 3,
+          },
         },
         // Error indicator
         {
           selector: 'node[errorCount > 0]',
           style: {
             'border-color': cssVar('--error'),
-            'border-width': 2
-          }
+            'border-width': 2,
+          },
         },
         // Warning indicator
         {
           selector: 'node[warnCount > 0][errorCount = 0]',
           style: {
             'border-color': cssVar('--warning'),
-            'border-width': 2
-          }
+            'border-width': 2,
+          },
         },
         // Search highlight + dim
         {
@@ -170,15 +170,15 @@ export function useCytoscapeGraph(subflowId?: string) {
           style: {
             'border-color': cssVar('--brand-500'),
             'border-width': 4,
-            'background-color': cssVar('--surface-3')
-          }
+            'background-color': cssVar('--surface-3'),
+          },
         },
         {
           selector: '.search-dim',
           style: {
-            'opacity': 0.2
-          }
-        }
+            opacity: 0.2,
+          },
+        },
       ],
       minZoom: 0.1,
       maxZoom: 2,
@@ -188,7 +188,7 @@ export function useCytoscapeGraph(subflowId?: string) {
       setGraphZoom(instance.zoom())
     })
 
-    instance.on('dblclick', 'node', (evt) => {
+    instance.on('dblclick', 'node', evt => {
       selectSubflow(evt.target.id())
     })
 
@@ -242,7 +242,11 @@ export function useCytoscapeGraph(subflowId?: string) {
       setMatchCount(null)
       return
     }
-    const matched = cy.nodes().filter(n => String(n.data('label') ?? '').toLowerCase().includes(q))
+    const matched = cy.nodes().filter(n =>
+      String(n.data('label') ?? '')
+        .toLowerCase()
+        .includes(q),
+    )
     cy.batch(() => {
       cy.elements().removeClass('search-match search-dim')
       matched.addClass('search-match')
@@ -256,15 +260,17 @@ export function useCytoscapeGraph(subflowId?: string) {
     if (!cyRef.current || !searchQuery) return
     const cy = cyRef.current
     const nodes = cy.nodes().filter(n =>
-      String(n.data('label') ?? '').toLowerCase().includes(searchQuery.toLowerCase())
+      String(n.data('label') ?? '')
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase()),
     )
     if (nodes.length > 0) {
       cy.nodes().unselect()
       nodes.select()
       cy.animate({
-        center: { eles: nodes },
+        center: {eles: nodes},
         zoom: 0.8,
-        duration: 500
+        duration: 500,
       })
     }
   }

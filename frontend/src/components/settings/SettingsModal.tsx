@@ -15,10 +15,23 @@ import {
   ApiTokensPanel,
   ShortcutsPanel,
   PrivacyPanel,
-  AboutPanel
+  AboutPanel,
 } from './index'
 
-type SettingsSection = 'general' | 'parser' | 'accounts' | 'behavior' | 'prompts' | 'appearance' | 'analysis' | 'orgs' | 'knowledge' | 'tokens' | 'shortcuts' | 'privacy' | 'about'
+type SettingsSection =
+  | 'general'
+  | 'parser'
+  | 'accounts'
+  | 'behavior'
+  | 'prompts'
+  | 'appearance'
+  | 'analysis'
+  | 'orgs'
+  | 'knowledge'
+  | 'tokens'
+  | 'shortcuts'
+  | 'privacy'
+  | 'about'
 
 // Organisations are a cloud-mode (multi-user) concept; the desktop app is
 // single-user and has no notion of orgs, so hide that entry there.
@@ -32,11 +45,13 @@ const sections: {id: SettingsSection; label: string}[] = [
   {id: 'prompts', label: 'AI Prompts'},
   {id: 'appearance', label: 'Appearance'},
   {id: 'analysis', label: 'Analysis'},
-  ...(isCloud ? [
-    {id: 'orgs' as const, label: 'Organizations'},
-    {id: 'knowledge' as const, label: 'Knowledge Base'},
-    {id: 'tokens' as const, label: 'API Tokens'},
-  ] : []),
+  ...(isCloud
+    ? [
+        {id: 'orgs' as const, label: 'Organizations'},
+        {id: 'knowledge' as const, label: 'Knowledge Base'},
+        {id: 'tokens' as const, label: 'API Tokens'},
+      ]
+    : []),
   {id: 'shortcuts', label: 'Shortcuts'},
   {id: 'privacy', label: 'Privacy'},
   {id: 'about', label: 'About'},
@@ -51,7 +66,7 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
         {/* Sidebar */}
         <div className="w-48 border-r border-border-default px-4 py-3 overflow-y-auto shrink-0">
           <nav className="space-y-0.5">
-            {sections.map((s) => (
+            {sections.map(s => (
               <button
                 key={s.id}
                 onClick={() => setActiveSection(s.id)}
@@ -59,7 +74,7 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
                   'w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors',
                   activeSection === s.id
                     ? 'bg-brand-500/10 text-brand-500'
-                    : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary'
+                    : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary',
                 )}
               >
                 {s.label}

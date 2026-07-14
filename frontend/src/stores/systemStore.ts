@@ -10,7 +10,7 @@ interface SystemState {
   loadInfo: () => Promise<void>
 }
 
-export const useSystemStore = create<SystemState>((set) => ({
+export const useSystemStore = create<SystemState>(set => ({
   info: null,
   isLoaded: false,
 

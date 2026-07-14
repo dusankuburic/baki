@@ -28,7 +28,7 @@ function formatTime(ts: string): string {
   }
 }
 
-const MentionPill = ({ path }: { path: string }) => {
+const MentionPill = ({path}: {path: string}) => {
   const parts = path.split(/[/\\]/)
   const filename = parts[parts.length - 1]
   // Clicking a mention jumps the graph to the matching subflow (imperative
@@ -63,7 +63,11 @@ const BlockLink = ({href, children}: {href?: string; children?: React.ReactNode}
       useUIStore.getState().setInspectorTab('details')
     }
     return (
-      <button type="button" onClick={handleClick} className="text-brand-400 hover:text-brand-300 underline underline-offset-2">
+      <button
+        type="button"
+        onClick={handleClick}
+        className="text-brand-400 hover:text-brand-300 underline underline-offset-2"
+      >
         {children}
       </button>
     )
@@ -76,13 +80,22 @@ const BlockLink = ({href, children}: {href?: string; children?: React.ReactNode}
       useAnalysisStore.getState().setFocusedFinding(key)
     }
     return (
-      <button type="button" onClick={handleClick} className="text-brand-400 hover:text-brand-300 underline underline-offset-2">
+      <button
+        type="button"
+        onClick={handleClick}
+        className="text-brand-400 hover:text-brand-300 underline underline-offset-2"
+      >
         {children}
       </button>
     )
   }
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:text-brand-300 underline underline-offset-2">
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-brand-400 hover:text-brand-300 underline underline-offset-2"
+    >
       {children}
     </a>
   )
@@ -115,24 +128,27 @@ const urlTransform = (url: string) =>
   url.startsWith('block:') || url.startsWith('finding:') ? url : defaultUrlTransform(url)
 
 const markdownComponents = {
-  pre({ children }: MarkdownPreProps) {
+  pre({children}: MarkdownPreProps) {
     let codeProps: Record<string, unknown> = {}
     if (children && typeof children === 'object' && 'props' in (children as object)) {
       codeProps = (children as {props: Record<string, unknown>}).props
     } else if (Array.isArray(children) && children[0] && typeof children[0] === 'object' && 'props' in children[0]) {
       codeProps = (children[0] as {props: Record<string, unknown>}).props
     }
-    
+
     const className = (codeProps.className as string) || ''
     const match = /language-(\w+)/.exec(className)
     const language = match ? match[1] : ''
     const value = String(codeProps.children || '').replace(/\n$/, '')
-    
+
     return <CodeBlock language={language} value={value} />
   },
   code({inline: _inline, className, children, ...props}: MarkdownCodeProps) {
     return (
-      <code className={clsx("px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]", className)} {...props}>
+      <code
+        className={clsx('px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]', className)}
+        {...props}
+      >
         {children}
       </code>
     )
@@ -140,13 +156,13 @@ const markdownComponents = {
   a({href, children}: {href?: string; children?: React.ReactNode}) {
     return <BlockLink href={href}>{children}</BlockLink>
   },
-  text({ children }: MarkdownTextProps) {
+  text({children}: MarkdownTextProps) {
     const text = String(children)
     if (!text.includes('@')) return <>{text}</>
-    
+
     const parts = text.split(MENTION_REGEX)
     const matches = text.match(MENTION_REGEX) || []
-    
+
     return (
       <>
         {parts.map((part, i) => (
@@ -157,7 +173,7 @@ const markdownComponents = {
         ))}
       </>
     )
-  }
+  },
 }
 
 // StableMarkdown re-renders only when its content string changes (memo
@@ -191,7 +207,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
   if (isUser) {
     const parts = content.split(MENTION_REGEX)
     const matches = content.match(MENTION_REGEX) || []
-    
+
     return (
       <div className="whitespace-pre-wrap break-words">
         {parts.map((part, i) => (
@@ -219,11 +235,7 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
 
   return (
     <div className="prose-chat break-words">
-      <ReactMarkdown
-        remarkPlugins={markdownPlugins}
-        components={markdownComponents}
-        urlTransform={urlTransform}
-      >
+      <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} urlTransform={urlTransform}>
         {content}
       </ReactMarkdown>
     </div>
@@ -254,8 +266,14 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
           <div className="flex items-center gap-2">
             <div className="flex gap-1" aria-hidden="true">
               <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '0ms'}} />
-              <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '150ms'}} />
-              <span className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary" style={{animationDelay: '300ms'}} />
+              <span
+                className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary"
+                style={{animationDelay: '150ms'}}
+              />
+              <span
+                className="typing-dot w-1.5 h-1.5 rounded-full bg-text-tertiary"
+                style={{animationDelay: '300ms'}}
+              />
             </div>
             <span className="text-xs text-text-tertiary">Thinking...</span>
           </div>
@@ -271,20 +289,10 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
       onMouseLeave={() => setShowActions(false)}
     >
       <div className="flex items-center gap-1.5 px-1">
-        {isUser ? (
-          <User size={11} className="text-text-tertiary" />
-        ) : (
-          <Bot size={11} className="text-text-tertiary" />
-        )}
-        <span className="text-2xs font-medium text-text-tertiary">
-          {isUser ? 'You' : 'AI'}
-        </span>
-        {message.model && !isUser && (
-          <span className="text-2xs text-text-tertiary/60">· {message.model}</span>
-        )}
-        {time && (
-          <span className="text-2xs text-text-tertiary/40">{time}</span>
-        )}
+        {isUser ? <User size={11} className="text-text-tertiary" /> : <Bot size={11} className="text-text-tertiary" />}
+        <span className="text-2xs font-medium text-text-tertiary">{isUser ? 'You' : 'AI'}</span>
+        {message.model && !isUser && <span className="text-2xs text-text-tertiary/60">· {message.model}</span>}
+        {time && <span className="text-2xs text-text-tertiary/40">{time}</span>}
       </div>
 
       <div
@@ -293,9 +301,9 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
           isUser
             ? 'bg-brand-500/12 border border-brand-500/20 rounded-2xl rounded-tr-sm'
             : isError
-            ? 'bg-red-500/8 border border-red-500/15 rounded-2xl rounded-tl-sm'
-            : 'bg-surface-2 border border-border-subtle rounded-2xl rounded-tl-sm',
-          isStreaming && 'border-brand-500/20'
+              ? 'bg-red-500/8 border border-red-500/15 rounded-2xl rounded-tl-sm'
+              : 'bg-surface-2 border border-border-subtle rounded-2xl rounded-tl-sm',
+          isStreaming && 'border-brand-500/20',
         )}
       >
         {renderContent(message.content, isUser, isStreaming)}
@@ -309,10 +317,12 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
       )}
 
       {!isStreaming && (
-        <div className={clsx(
-          'flex items-center gap-1 px-1 transition-opacity duration-150',
-          showActions ? 'opacity-100' : 'opacity-0'
-        )}>
+        <div
+          className={clsx(
+            'flex items-center gap-1 px-1 transition-opacity duration-150',
+            showActions ? 'opacity-100' : 'opacity-0',
+          )}
+        >
           <button
             className="p-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors"
             onClick={handleCopy}

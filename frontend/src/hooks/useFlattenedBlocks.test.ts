@@ -6,8 +6,16 @@ import type {Block, FlowDocument, Subflow} from '@/types'
 
 function makeBlock(id: string, subflowId = 'sf1', children: Block[] = []): Block {
   return {
-    id, name: `Block ${id}`, type: 'ACTION', rawType: 'ACTION',
-    indent: 0, lineNumber: 0, children, properties: {}, variables: [], subflowId,
+    id,
+    name: `Block ${id}`,
+    type: 'ACTION',
+    rawType: 'ACTION',
+    indent: 0,
+    lineNumber: 0,
+    children,
+    properties: {},
+    variables: [],
+    subflowId,
   }
 }
 

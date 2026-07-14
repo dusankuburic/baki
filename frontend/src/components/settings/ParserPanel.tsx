@@ -9,9 +9,7 @@ export default function ParserPanel() {
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">Parser</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">
-        Configure how Power Automate Desktop flows are parsed.
-      </p>
+      <p className="text-sm text-text-secondary mt-1 mb-6">Configure how Power Automate Desktop flows are parsed.</p>
 
       <div className="space-y-6">
         <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
@@ -21,24 +19,16 @@ export default function ParserPanel() {
               Include comments in the parsed flow structure and AI context.
             </p>
           </div>
-          <Switch
-            checked={parser.preserveComments}
-            onChange={(v) => updateParser({preserveComments: v})}
-          />
+          <Switch checked={parser.preserveComments} onChange={v => updateParser({preserveComments: v})} />
         </div>
 
         <div className="space-y-4 pt-2">
           <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
             <div>
               <span className="text-sm font-medium text-text-primary">Treat Tabs as Spaces</span>
-              <p className="text-xs text-text-tertiary mt-0.5">
-                Convert tab characters to spaces during parsing.
-              </p>
+              <p className="text-xs text-text-tertiary mt-0.5">Convert tab characters to spaces during parsing.</p>
             </div>
-            <Switch
-              checked={parser.treatTabsAsSpaces}
-              onChange={(v) => updateParser({treatTabsAsSpaces: v})}
-            />
+            <Switch checked={parser.treatTabsAsSpaces} onChange={v => updateParser({treatTabsAsSpaces: v})} />
           </div>
 
           {parser.treatTabsAsSpaces && (
@@ -50,7 +40,7 @@ export default function ParserPanel() {
                   max={8}
                   fallback={4}
                   value={parser.spacesPerIndent}
-                  onCommit={(v) => updateParser({spacesPerIndent: v})}
+                  onCommit={v => updateParser({spacesPerIndent: v})}
                 />
               </div>
             </div>
@@ -65,12 +55,10 @@ export default function ParserPanel() {
               max={500}
               fallback={50}
               value={parser.maxFileSizeMB}
-              onCommit={(v) => updateParser({maxFileSizeMB: v})}
+              onCommit={v => updateParser({maxFileSizeMB: v})}
             />
           </div>
-          <p className="text-xs text-text-tertiary mt-2">
-            Larger flows require more memory and processing time.
-          </p>
+          <p className="text-xs text-text-tertiary mt-2">Larger flows require more memory and processing time.</p>
         </div>
       </div>
     </div>

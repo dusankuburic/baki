@@ -19,7 +19,7 @@ export default function ExpandedChatInput({
   onPreview,
   onClose,
   excludeContext,
-  onExcludeContextChange
+  onExcludeContextChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -36,7 +36,7 @@ export default function ExpandedChatInput({
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 p-4 sm:p-8">
-      <div 
+      <div
         ref={containerRef}
         className="w-full max-w-4xl bg-surface-1 border border-border-default rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 h-[80vh]"
       >
@@ -44,7 +44,9 @@ export default function ExpandedChatInput({
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface-2">
           <div className="flex flex-col">
             <h3 className="text-lg font-semibold text-text-primary">Compose Prompt</h3>
-            <p className="text-xs text-text-tertiary">Write a detailed prompt. Press Enter to send, Shift+Enter for new line.</p>
+            <p className="text-xs text-text-tertiary">
+              Write a detailed prompt. Press Enter to send, Shift+Enter for new line.
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -62,8 +64,8 @@ export default function ExpandedChatInput({
             className="flex-1 w-full bg-transparent text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none text-base leading-relaxed font-sans"
             placeholder="Type your prompt here..."
             value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => {
+            onChange={e => onChange(e.target.value)}
+            onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
                 e.preventDefault()
                 onSend()
@@ -77,11 +79,11 @@ export default function ExpandedChatInput({
         <div className="px-6 py-4 bg-surface-2 border-t border-border-subtle flex items-center justify-between">
           <div className="flex items-center gap-4">
             <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input 
-                type="checkbox" 
+              <input
+                type="checkbox"
                 className="w-4 h-4 rounded border-border-default bg-surface-3 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-2"
                 checked={excludeContext}
-                onChange={(e) => onExcludeContextChange(e.target.checked)}
+                onChange={e => onExcludeContextChange(e.target.checked)}
               />
               <span className="text-sm text-text-secondary">Exclude current file context</span>
             </label>
@@ -110,6 +112,6 @@ export default function ExpandedChatInput({
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   )
 }

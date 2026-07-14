@@ -1,12 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { useAuthStore } from '@/stores/authStore'
-import { useOrgStore } from '@/stores/orgStore'
-import { isTauri } from '@/platform/guards'
+import {useEffect, useState, type ReactNode} from 'react'
+import {useAuthStore} from '@/stores/authStore'
+import {useOrgStore} from '@/stores/orgStore'
+import {isTauri} from '@/platform/guards'
 import LoginForm from './LoginForm'
 import ResetPasswordView from './ResetPasswordView'
 import VerifyEmailView from './VerifyEmailView'
 import InviteAcceptView from './InviteAcceptView'
-import { parseRecoveryHash, clearRecoveryHash, type RecoveryHash } from './authHash'
+import {parseRecoveryHash, clearRecoveryHash, type RecoveryHash} from './authHash'
 import Spinner from '@/components/shared/Spinner'
 
 interface ProtectedRouteProps {
@@ -16,7 +16,7 @@ interface ProtectedRouteProps {
 // ProtectedRoute renders its children when the user is authenticated.
 // In Tauri (desktop) mode it skips auth entirely because the backend is
 // local and protected by the per-session token.
-export default function ProtectedRoute({ children }: ProtectedRouteProps) {
+export default function ProtectedRoute({children}: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const isLoading = useAuthStore(s => s.isLoading)
   const loadFromStorage = useAuthStore(s => s.loadFromStorage)

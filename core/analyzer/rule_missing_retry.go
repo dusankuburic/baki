@@ -8,8 +8,8 @@ import (
 
 var transientPrefixes = []string{
 	"WebAutomation.",
-	"Http.",
-	"Ftp.",
+	"HTTPClient.",
+	"FTP.",
 	"Database.",
 	"Email.",
 	"Outlook.",
@@ -70,3 +70,7 @@ func isTransientOperation(rawType string) bool {
 func isInsideRetryLoop(block *models.Block, ctx *RuleContext) bool {
 	return ctx.InsideRetryLoop[block.ID]
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&MissingRetryRule{}) }

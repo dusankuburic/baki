@@ -6,8 +6,8 @@
 // Seeded findings (so the demo is instructive):
 //   - hardcoded-credential  : an AWS-key-shaped value in ApiKey
 //   - unused-variable       : DebugFlag is set but never read
-//   - unhandled-error       : HTTP.InvokeUrl with no On Block Error
-//   - missing-timeout       : HTTP.InvokeUrl with no timeout
+//   - unhandled-error       : HTTPClient.InvokeUrl with no On Block Error
+//   - missing-timeout       : HTTPClient.InvokeUrl with no timeout
 //   - slow-pattern          : a UI click inside a LOOP with no wait
 //   - hardcoded-filepath    : an absolute Windows path
 //
@@ -21,7 +21,7 @@ export const SAMPLE_FLOW_FILES: Record<string, string> = {
   'Main.txt': `#Region "Main"
 Variables.SetVariable Name: %ApiKey% Value: 'AKIAIOSFODNN7EXAMPLE'
 Variables.SetVariable Name: %DebugFlag% Value: True
-HTTP.InvokeUrl Method: GET Url: 'https://api.example.com/customers' Accept: 'application/json' => %Response%
+HTTPClient.InvokeUrl Method: GET Url: 'https://api.example.com/customers' Accept: 'application/json' => %Response%
 LOOP FROM 1 TO 50 STEP 1
     WebAutomation.ClickLink BrowserInstance: %Browser% Link: 'next page'
     IF %Response% = '' THEN

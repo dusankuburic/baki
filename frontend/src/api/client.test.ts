@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mockFetch } from '@/testing/testHelpers'
+import {describe, it, expect, vi, afterEach} from 'vitest'
+import {mockFetch} from '@/testing/testHelpers'
 
 // Mock the platform adapter so we control the returned config
 vi.mock('@/platform/adapters', () => ({
@@ -28,8 +28,8 @@ describe('api/client', () => {
 
   describe('request()', () => {
     it('uses the adapter apiUrl as the base URL', async () => {
-      const fetchSpy = mockFetch({ result: 'ok' })
-      const { request } = await getClient()
+      const fetchSpy = mockFetch({result: 'ok'})
+      const {request} = await getClient()
 
       await request('/api/test')
 
@@ -39,8 +39,8 @@ describe('api/client', () => {
     })
 
     it('sends the Bearer token in the Authorization header', async () => {
-      const fetchSpy = mockFetch({ result: 'ok' })
-      const { request } = await getClient()
+      const fetchSpy = mockFetch({result: 'ok'})
+      const {request} = await getClient()
 
       await request('/api/test')
 
@@ -49,10 +49,10 @@ describe('api/client', () => {
     })
 
     it('defaults to POST method', async () => {
-      const fetchSpy = mockFetch({ result: 'ok' })
-      const { request } = await getClient()
+      const fetchSpy = mockFetch({result: 'ok'})
+      const {request} = await getClient()
 
-      await request('/api/test', { some: 'body' })
+      await request('/api/test', {some: 'body'})
 
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(init.method).toBe('POST')
@@ -60,7 +60,7 @@ describe('api/client', () => {
 
     it('respects explicit GET method and omits body', async () => {
       const fetchSpy = mockFetch([])
-      const { request } = await getClient()
+      const {request} = await getClient()
 
       await request('/api/list', undefined, 'GET')
 
@@ -70,29 +70,143 @@ describe('api/client', () => {
     })
 
     it('serialises the body as JSON', async () => {
-      const fetchSpy = mockFetch({ created: true })
-      const { request } = await getClient()
+      const fetchSpy = mockFetch({created: true})
+      const {request} = await getClient()
 
-      await request('/api/create', { name: 'Test' })
+      await request('/api/create', {name: 'Test'})
 
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(init.body).toBe(JSON.stringify({ name: 'Test' }))
+      expect(init.body).toBe(JSON.stringify({name: 'Test'}))
     })
 
     it('throws when the server returns a non-OK status', async () => {
-      mockFetch({ error: 'Not found' }, 404)
-      const { request } = await getClient()
+      mockFetch({error: 'Not found'}, 404)
+      const {request} = await getClient()
 
       await expect(request('/api/missing')).rejects.toThrow('Not found')
     })
 
     it('falls back to "Request failed" when error body has no message', async () => {
-      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-        new Response(JSON.stringify({}), { status: 500 })
-      )
-      const { request } = await getClient()
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({}), {status: 500}))
+      const {request} = await getClient()
 
       await expect(request('/api/broken')).rejects.toThrow('Request failed')
+    })
+  })
+
+  describe('requestValidated()', () => {
+    it('returns the parsed body when it matches the schema', async () => {
+      mockFetch({token: 'abc'})
+      const {requestValidated} = await getClient()
+      const {z} = await import('zod')
+
+      const out = await requestValidated('/api/x', z.object({token: z.string()}))
+
+      expect(out).toEqual({token: 'abc'})
+    })
+
+    it('throws ResponseValidationError when the body fails the schema', async () => {
+      mockFetch({notToken: 1})
+      const {requestValidated, ResponseValidationError} = await getClient()
+      const {z} = await import('zod')
+
+      const schema = z.object({token: z.string()})
+      await expect(requestValidated('/api/x', schema)).rejects.toBeInstanceOf(ResponseValidationError)
+    })
+
+    it('includes the failing path in the validation error message', async () => {
+      mockFetch({})
+      const {requestValidated} = await getClient()
+      const {z} = await import('zod')
+
+      await expect(requestValidated('/api/important', z.object({token: z.string()}))).rejects.toThrow('/api/important')
+    })
+  })
+
+  // Regression: the AnalysisReport/Finding schemas MUST use .passthrough() so
+  // backend fields not explicitly enumerated (autoFix, fingerprint, confidence,
+  // autoFixHint, metadata, metrics, groups, ruleProfiles) survive validation.
+  // Without passthrough, zod's default .strip() silently deletes them, breaking
+  // the Apply-fix button, health-score badge, per-rule timing, and triage keys.
+  describe('requestValidated() passthrough — no silent field stripping', () => {
+    it('preserves Finding extra fields (autoFix, confidence, fingerprint, metadata)', async () => {
+      const finding = {
+        id: 'F-001',
+        ruleId: 'hardcoded-credential',
+        severity: 'error',
+        title: 'Hardcoded credential',
+        description: '...',
+        blockId: 'b1',
+        subflowId: 'sf1',
+        autoFix: 'replace-with-variable',
+        confidence: 'high',
+        autoFixHint: 'Replace the literal with %API_KEY%.',
+        fingerprint: 'hardcoded-credential:b1:ApiKey',
+        metadata: {property: 'Value', variable: 'ApiKey'},
+      }
+      mockFetch(finding)
+      const {requestValidated} = await getClient()
+      const {FindingSchema} = await import('./schemas')
+
+      const out = await requestValidated('/api/finding', FindingSchema)
+
+      expect(out).toMatchObject(finding)
+      // The previously-stripped fields must survive:
+      expect(out).toHaveProperty('autoFix', 'replace-with-variable')
+      expect(out).toHaveProperty('confidence', 'high')
+      expect(out).toHaveProperty('fingerprint')
+      expect(out).toHaveProperty('metadata')
+    })
+
+    it('preserves AnalysisReport extra fields (metrics, groups, ruleProfiles)', async () => {
+      const report = {
+        flowId: 'f1',
+        generatedAt: '2024-01-01T00:00:00Z',
+        durationMs: 42,
+        findings: [],
+        metrics: {healthScore: 87},
+        groups: [{blockId: 'b1', count: 2}],
+        ruleProfiles: [{ruleId: 'unhandled-error', durationMs: 5}],
+      }
+      mockFetch(report)
+      const {requestValidated} = await getClient()
+      const {AnalysisReportSchema} = await import('./schemas')
+
+      const out = await requestValidated('/api/analysis/analyze', AnalysisReportSchema)
+
+      expect(out).toHaveProperty('metrics')
+      expect((out as {metrics?: {healthScore?: number}}).metrics?.healthScore).toBe(87)
+      expect(out).toHaveProperty('groups')
+      expect(out).toHaveProperty('ruleProfiles')
+    })
+  })
+
+  describe('request() transient retry', () => {
+    it('retries idempotent GET on 503 then succeeds', async () => {
+      let calls = 0
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        calls++
+        if (calls === 1) return new Response('temporarily unavailable', {status: 503})
+        return new Response(JSON.stringify({ok: true}), {status: 200})
+      })
+      const {request} = await getClient()
+
+      const out = await request('/api/x', undefined, 'GET')
+
+      expect(out).toEqual({ok: true})
+      expect(calls).toBe(2)
+    })
+
+    it('does NOT retry non-idempotent POST on 500', async () => {
+      let calls = 0
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        calls++
+        return new Response(JSON.stringify({error: 'boom'}), {status: 500})
+      })
+      const {request} = await getClient()
+
+      await expect(request('/api/x', {a: 1}, 'POST')).rejects.toThrow('boom')
+      expect(calls).toBe(1)
     })
   })
 })

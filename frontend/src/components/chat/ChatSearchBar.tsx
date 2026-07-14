@@ -26,7 +26,10 @@ export default function ChatSearchBar({query, onChange, matchCount, onClose}: Pr
         placeholder="Search messages..."
         className="flex-1 bg-transparent border-none outline-none text-xs text-text-primary placeholder:text-text-disabled min-w-0"
         onKeyDown={e => {
-          if (e.key === 'Escape') { e.preventDefault(); onClose() }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            onClose()
+          }
         }}
       />
       {query && (

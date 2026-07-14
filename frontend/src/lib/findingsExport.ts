@@ -28,7 +28,11 @@ export function exportFindingsCSV(findings: Finding[], docId: string) {
 // exportFindingsHTML downloads the backend-rendered HTML report.
 export async function exportFindingsHTML(docId: string) {
   const html = await analysisApi.exportHTML()
-  downloadBlob(html as unknown as string, 'text/html;charset=utf-8;', `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.html`)
+  downloadBlob(
+    html as unknown as string,
+    'text/html;charset=utf-8;',
+    `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.html`,
+  )
 }
 
 // exportFindingsSARIF downloads a SARIF 2.1.0 report for GitHub Code Scanning
@@ -37,5 +41,9 @@ export async function exportFindingsHTML(docId: string) {
 export async function exportFindingsSARIF(docId: string) {
   const sarif = await analysisApi.exportSARIF()
   const text = JSON.stringify(sarif, null, 2)
-  downloadBlob(text, 'application/sarif+json;charset=utf-8;', `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.sarif`)
+  downloadBlob(
+    text,
+    'application/sarif+json;charset=utf-8;',
+    `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.sarif`,
+  )
 }

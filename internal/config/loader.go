@@ -4,11 +4,46 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// parseIntOrError parses a base-10 integer env var, returning a clear error
+// (including the var name and value) on failure. Used for numeric env vars that
+// previously used the `if err == nil` silent-swallow pattern, which left the
+// default in place with no feedback on an operator typo.
+func parseIntOrError(envVar, val string) (int, error) {
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid integer: %w", envVar, val, err)
+	}
+	return n, nil
+}
+
+// parseFloatOrError parses a float64 env var with the same fail-fast contract.
+func parseFloatOrError(envVar, val string) (float64, error) {
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid number: %w", envVar, val, err)
+	}
+	return f, nil
+}
+
+// parseDurationOrError validates a duration-string env var (e.g. "30s", "5m",
+// "1h") at load time rather than at runtime consumption. Returns the original
+// string (the fields are stored as strings consumed later by time.ParseDuration)
+// so callers can keep their existing storage type while gaining fail-fast
+// validation.
+func parseDurationOrError(envVar, val string) (string, error) {
+	if _, err := time.ParseDuration(val); err != nil {
+		return "", fmt.Errorf("config: %s=%q is not a valid duration (use e.g. \"30s\", \"5m\", \"1h\"): %w", envVar, val, err)
+	}
+	return val, nil
+}
 
 // LoadRaw reads configuration from the given JSON file without validating.
 // The caller is responsible for calling Validate on the returned Config.
@@ -88,6 +123,7 @@ func Save(cfg *Config, path string) error {
 //	PAD_DATABASE_URL           postgres DSN            (required when PAD_STORAGE=database)
 //	PAD_AUTH_ENABLED           "true" / "false"        (default: "false")
 //	PAD_AUTH_SECRET            JWT signing key
+//	PAD_ENCRYPTION_KEY         at-rest encryption key (keystore); falls back to PAD_AUTH_SECRET
 //	PAD_DB_MAX_OPEN_CONNS      max open PostgreSQL connections (default: 25)
 //	PAD_DB_MAX_IDLE_CONNS      max idle PostgreSQL connections (default: 5)
 //	PAD_DB_CONN_MAX_LIFETIME   max connection lifetime (e.g. "1h", "30m"; default: "1h")
@@ -102,266 +138,248 @@ func LoadFromEnv() (*Config, error) {
 	return cfg, nil
 }
 
-// applyEnvVars reads PAD_* environment variables into cfg.
-// It returns an error only for syntactically invalid numeric values; all other
-// validation is deferred to Validate().
-func applyEnvVars(cfg *Config) error {
-	if v := os.Getenv("PAD_MODE"); v != "" {
-		cfg.Mode = DeploymentMode(v)
-	}
-	if v := os.Getenv("PAD_HOST"); v != "" {
-		cfg.Server.Host = v
-	}
-	if v := os.Getenv("PAD_STATIC_DIR"); v != "" {
-		cfg.Server.StaticDir = v
-	}
-	if v := os.Getenv("PAD_KEYVAULT_URL"); v != "" {
-		cfg.Server.KeyVaultURL = v
-	}
-	if v := os.Getenv("PAD_ALLOWED_ORIGINS"); v != "" {
-		for _, o := range strings.Split(v, ",") {
-			if trimmed := strings.TrimSpace(o); trimmed != "" {
-				cfg.Server.AllowedOrigins = append(cfg.Server.AllowedOrigins, trimmed)
-			}
-		}
-	}
-	if v := os.Getenv("PAD_TRUSTED_PROXIES"); v != "" {
-		for _, p := range strings.Split(v, ",") {
-			if trimmed := strings.TrimSpace(p); trimmed != "" {
-				cfg.Server.TrustedProxies = append(cfg.Server.TrustedProxies, trimmed)
-			}
-		}
-	}
-	if v := os.Getenv("PAD_PORT"); v != "" {
-		p, err := strconv.Atoi(v)
+// envBinding maps one PAD_* environment variable to a setter that parses its
+// value and assigns it into Config. The typed constructors below (strEnv,
+// intEnv, floatEnv, durEnv, boolEnv) build these, so each variable is one
+// declarative table row instead of a hand-written if-block.
+type envBinding struct {
+	key   string
+	apply func(*Config, string) error
+}
+
+func strEnv(key string, set func(*Config, string)) envBinding {
+	return envBinding{key, func(c *Config, v string) error { set(c, v); return nil }}
+}
+
+func intEnv(key string, set func(*Config, int)) envBinding {
+	return envBinding{key, func(c *Config, v string) error {
+		n, err := parseIntOrError(key, v)
 		if err != nil {
-			return fmt.Errorf("config: PAD_PORT is not a valid integer: %w", err)
+			return err
 		}
-		cfg.Server.Port = p
-	}
-	if v := os.Getenv("PAD_SCAN_INTERVAL"); v != "" {
-		cfg.Governance.ScanInterval = v
-	}
-	if v := os.Getenv("PAD_NOTIFY_WEBHOOK_URL"); v != "" {
-		cfg.Governance.NotifyWebhookURL = v
-	}
-	if v := os.Getenv("PAD_NOTIFY_TEAMS_URL"); v != "" {
-		cfg.Governance.NotifyTeamsURL = v
-	}
-	if v := os.Getenv("PAD_RETENTION_PURGE_INTERVAL"); v != "" {
-		cfg.Governance.RetentionPurgeInterval = v
-	}
-	if v := os.Getenv("PAD_AUDIT_RETENTION_DAYS"); v != "" {
-		if days, err := strconv.Atoi(v); err == nil && days >= 0 {
-			cfg.Governance.AuditRetentionDays = days
+		set(c, n)
+		return nil
+	}}
+}
+
+func floatEnv(key string, set func(*Config, float64)) envBinding {
+	return envBinding{key, func(c *Config, v string) error {
+		f, err := parseFloatOrError(key, v)
+		if err != nil {
+			return err
+		}
+		set(c, f)
+		return nil
+	}}
+}
+
+// durEnv validates a duration string but stores it as a string (the Config
+// fields are consumed later by time.ParseDuration; see parseDurationOrError).
+func durEnv(key string, set func(*Config, string)) envBinding {
+	return envBinding{key, func(c *Config, v string) error {
+		d, err := parseDurationOrError(key, v)
+		if err != nil {
+			return err
+		}
+		set(c, d)
+		return nil
+	}}
+}
+
+func boolEnv(key string, set func(*Config, bool)) envBinding {
+	return envBinding{key, func(c *Config, v string) error {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("%s=%q: %w (use true/false, 1/0, or TRUE/FALSE)", key, v, err)
+		}
+		set(c, b)
+		return nil
+	}}
+}
+
+// envBindings is the declarative table of every simple one-variable→one-field
+// binding. Variables needing bespoke handling (list-splitting, the PowerPlatform
+// block, PAD_STORAGE normalisation, the PAD_AUDIT_RETENTION_DAYS >= 0 guard) are
+// applied separately in applyEnvVars.
+var envBindings = []envBinding{
+	// Server / mode
+	strEnv("PAD_MODE", func(c *Config, v string) { c.Mode = DeploymentMode(v) }),
+	strEnv("PAD_HOST", func(c *Config, v string) { c.Server.Host = v }),
+	strEnv("PAD_STATIC_DIR", func(c *Config, v string) { c.Server.StaticDir = v }),
+	strEnv("PAD_KEYVAULT_URL", func(c *Config, v string) { c.Server.KeyVaultURL = v }),
+	intEnv("PAD_PORT", func(c *Config, n int) { c.Server.Port = n }),
+	strEnv("PAD_METRICS_TOKEN", func(c *Config, v string) { c.Server.MetricsToken = v }),
+	strEnv("PAD_TLS_CERT", func(c *Config, v string) { c.Server.TLSCert = v }),
+	strEnv("PAD_TLS_KEY", func(c *Config, v string) { c.Server.TLSKey = v }),
+	boolEnv("PAD_BEHIND_PROXY", func(c *Config, b bool) { c.Server.BehindProxy = b }),
+
+	// Governance
+	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d string) { c.Governance.ScanInterval = d }),
+	strEnv("PAD_NOTIFY_WEBHOOK_URL", func(c *Config, v string) { c.Governance.NotifyWebhookURL = v }),
+	strEnv("PAD_NOTIFY_TEAMS_URL", func(c *Config, v string) { c.Governance.NotifyTeamsURL = v }),
+	durEnv("PAD_RETENTION_PURGE_INTERVAL", func(c *Config, d string) { c.Governance.RetentionPurgeInterval = d }),
+
+	// Email
+	strEnv("PAD_SMTP_HOST", func(c *Config, v string) { c.Email.SMTPHost = v }),
+	intEnv("PAD_SMTP_PORT", func(c *Config, n int) { c.Email.SMTPPort = n }),
+	strEnv("PAD_SMTP_USERNAME", func(c *Config, v string) { c.Email.Username = v }),
+	strEnv("PAD_SMTP_PASSWORD", func(c *Config, v string) { c.Email.Password = v }),
+	strEnv("PAD_EMAIL_FROM", func(c *Config, v string) { c.Email.From = v }),
+	strEnv("PAD_APP_BASE_URL", func(c *Config, v string) { c.Email.AppBaseURL = v }),
+
+	// Redis
+	strEnv("PAD_REDIS_URL", func(c *Config, v string) { c.Redis.URL = v }),
+
+	// Storage
+	strEnv("PAD_DATA_DIR", func(c *Config, v string) { c.Storage.DataDir = v }),
+	strEnv("PAD_DATABASE_URL", func(c *Config, v string) { c.Storage.DatabaseURL = v }),
+	strEnv("PAD_DB_REQUIRE_SSL", func(c *Config, v string) { c.Storage.DBRequireSSL = v }),
+	strEnv("PAD_AZURE_STORAGE_ACCOUNT", func(c *Config, v string) { c.Storage.AzureStorageAccount = v }),
+	strEnv("PAD_AZURE_STORAGE_CONTAINER", func(c *Config, v string) { c.Storage.AzureStorageContainer = v }),
+	strEnv("PAD_AZURE_BLOB_CONNECTION_STRING", func(c *Config, v string) { c.Storage.AzureBlobConnectionString = v }),
+	// PostgreSQL connection pool tuning — right-size the pool for the Azure
+	// Database for PostgreSQL SKU without a code change.
+	intEnv("PAD_DB_MAX_OPEN_CONNS", func(c *Config, n int) { c.Storage.DBMaxOpenConns = n }),
+	intEnv("PAD_DB_MAX_IDLE_CONNS", func(c *Config, n int) { c.Storage.DBMaxIdleConns = n }),
+	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d string) { c.Storage.DBConnMaxLifetime = d }),
+	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d string) { c.Storage.DBConnMaxIdleTime = d }),
+
+	// Auth / SSO
+	boolEnv("PAD_AUTH_ENABLED", func(c *Config, b bool) { c.Auth.Enabled = b }),
+	strEnv("PAD_AUTH_SECRET", func(c *Config, v string) { c.Auth.Secret = v }),
+	strEnv("PAD_ENCRYPTION_KEY", func(c *Config, v string) { c.Auth.EncryptionKey = v }),
+	strEnv("PAD_SSO_ISSUER", func(c *Config, v string) { c.Auth.SSO.IssuerURL = v }),
+	strEnv("PAD_SSO_CLIENT_ID", func(c *Config, v string) { c.Auth.SSO.ClientID = v }),
+	strEnv("PAD_SSO_CLIENT_SECRET", func(c *Config, v string) { c.Auth.SSO.ClientSecret = v }),
+	strEnv("PAD_SSO_REDIRECT_URL", func(c *Config, v string) { c.Auth.SSO.RedirectURL = v }),
+	strEnv("PAD_SSO_PROVIDER_NAME", func(c *Config, v string) { c.Auth.SSO.ProviderName = v }),
+
+	// Logging
+	strEnv("PAD_LOG_LEVEL", func(c *Config, v string) { c.Log.Level = v }),
+
+	// Runtime tuning — rate limits
+	floatEnv("PAD_RATE_LIMIT_GENERAL_RPS", func(c *Config, f float64) { c.Runtime.RateLimitGeneralRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_GENERAL_BURST", func(c *Config, f float64) { c.Runtime.RateLimitGeneralBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_AUTH_RPS", func(c *Config, f float64) { c.Runtime.RateLimitAuthRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_AUTH_BURST", func(c *Config, f float64) { c.Runtime.RateLimitAuthBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_EXPENSIVE_RPS", func(c *Config, f float64) { c.Runtime.RateLimitExpensiveRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_EXPENSIVE_BURST", func(c *Config, f float64) { c.Runtime.RateLimitExpensiveBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_CHAT_RPS", func(c *Config, f float64) { c.Runtime.RateLimitChatRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_CHAT_BURST", func(c *Config, f float64) { c.Runtime.RateLimitChatBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_UPLOAD_RPS", func(c *Config, f float64) { c.Runtime.RateLimitUploadRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_UPLOAD_BURST", func(c *Config, f float64) { c.Runtime.RateLimitUploadBurst = f }),
+
+	// Runtime tuning — resilience / observability
+	intEnv("PAD_CB_FAILURES", func(c *Config, n int) { c.Runtime.CircuitBreakerFailures = n }),
+	durEnv("PAD_CB_OPEN_DURATION", func(c *Config, d string) { c.Runtime.CircuitBreakerOpenDur = d }),
+	intEnv("PAD_RETRY_MAX_ATTEMPTS", func(c *Config, n int) { c.Runtime.RetryMaxAttempts = n }),
+	durEnv("PAD_RETRY_BASE_DELAY", func(c *Config, d string) { c.Runtime.RetryBaseDelay = d }),
+	strEnv("PAD_OTLP_ENDPOINT", func(c *Config, v string) { c.Runtime.OTLPEndpoint = v }),
+	durEnv("PAD_REQUEST_TIMEOUT", func(c *Config, d string) { c.Runtime.RequestTimeout = d }),
+}
+
+// applyEnvVars reads PAD_* environment variables into cfg.
+// It returns an error only for syntactically invalid numeric/duration/bool
+// values; all other validation is deferred to Validate().
+func applyEnvVars(cfg *Config) error {
+	for _, b := range envBindings {
+		if v := os.Getenv(b.key); v != "" {
+			if err := b.apply(cfg, v); err != nil {
+				return err
+			}
 		}
 	}
 
-	// Power Platform connector (desktop-flow ingestion; EXPERIMENTAL — see
-	// config.PowerPlatformConfig). The core auth/client fields plus
-	// DataverseURL and IngestInterval must be set to enable the periodic pull.
+	// Comma-separated lists: appended (not replaced) after trimming blanks.
+	applyListEnv("PAD_ALLOWED_ORIGINS", &cfg.Server.AllowedOrigins)
+	applyListEnv("PAD_TRUSTED_PROXIES", &cfg.Server.TrustedProxies)
+
+	if err := applyStorageBackendEnv(cfg); err != nil {
+		return err
+	}
+	if err := applyAuditRetentionEnv(cfg); err != nil {
+		return err
+	}
+	return applyPowerPlatformEnv(cfg)
+}
+
+// applyListEnv appends the trimmed, non-empty comma-separated entries of key
+// onto dst (leaving dst untouched when key is unset).
+func applyListEnv(key string, dst *[]string) {
+	v := os.Getenv(key)
+	if v == "" {
+		return
+	}
+	for _, item := range strings.Split(v, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			*dst = append(*dst, trimmed)
+		}
+	}
+}
+
+// applyStorageBackendEnv normalises PAD_STORAGE case/whitespace so a capitalised
+// "Database" or "LOCAL" isn't silently treated as an unknown backend — without
+// this, the cloud-mode storage check passes vacuously (the literal "Database" !=
+// "database") and the deployment runs with NO backend.
+func applyStorageBackendEnv(cfg *Config) error {
+	v := os.Getenv("PAD_STORAGE")
+	if v == "" {
+		return nil
+	}
+	switch norm := strings.ToLower(strings.TrimSpace(v)); norm {
+	case "local", "database":
+		cfg.Storage.Backend = StorageBackend(norm)
+		return nil
+	default:
+		return fmt.Errorf("PAD_STORAGE=%q: unknown backend (use \"local\" or \"database\")", v)
+	}
+}
+
+// applyAuditRetentionEnv parses PAD_AUDIT_RETENTION_DAYS and rejects negatives
+// (0 = keep audit history indefinitely).
+func applyAuditRetentionEnv(cfg *Config) error {
+	v := os.Getenv("PAD_AUDIT_RETENTION_DAYS")
+	if v == "" {
+		return nil
+	}
+	days, err := parseIntOrError("PAD_AUDIT_RETENTION_DAYS", v)
+	if err != nil {
+		return err
+	}
+	if days < 0 {
+		return fmt.Errorf("config: PAD_AUDIT_RETENTION_DAYS=%q must be >= 0", v)
+	}
+	cfg.Governance.AuditRetentionDays = days
+	return nil
+}
+
+// applyPowerPlatformEnv wires the optional Power Platform connector (desktop-flow
+// ingestion; EXPERIMENTAL — see config.PowerPlatformConfig). The bare
+// assignments intentionally overwrite defaults even with empty values, matching
+// the original behaviour. The core auth/client fields plus DataverseURL and
+// IngestInterval must be set to enable the periodic pull.
+func applyPowerPlatformEnv(cfg *Config) error {
 	cfg.PowerPlatform.TenantID = os.Getenv("PAD_PP_TENANT_ID")
 	cfg.PowerPlatform.ClientID = os.Getenv("PAD_PP_CLIENT_ID")
 	cfg.PowerPlatform.DataverseURL = os.Getenv("PAD_PP_DATAVERSE_URL")
 	cfg.PowerPlatform.Scope = os.Getenv("PAD_PP_SCOPE")
 	if cfg.PowerPlatform.Scope == "" {
 		cfg.PowerPlatform.Scope = "https://api.powerplatform.com/.default"
+		// The default scope grants access to the ENTIRE Power Platform API
+		// surface, not just the intended Dataverse environment. A leaked token
+		// could access other environments, Power Apps, etc. Set PAD_PP_SCOPE
+		// to an environment-specific scope for least-privilege.
+		slog.Warn("PAD_PP_SCOPE unset — using broad /.default scope; set PAD_PP_SCOPE to an environment-specific scope for least-privilege")
 	}
-	cfg.PowerPlatform.IngestInterval = os.Getenv("PAD_PP_INGEST_INTERVAL")
+	if v := os.Getenv("PAD_PP_INGEST_INTERVAL"); v != "" {
+		d, err := parseDurationOrError("PAD_PP_INGEST_INTERVAL", v)
+		if err != nil {
+			return err
+		}
+		cfg.PowerPlatform.IngestInterval = d
+	}
 	cfg.PowerPlatform.OwnerUserID = os.Getenv("PAD_PP_OWNER_USER")
 	cfg.PowerPlatform.OwnerOrgID = os.Getenv("PAD_PP_OWNER_ORG")
-	if v := os.Getenv("PAD_SMTP_HOST"); v != "" {
-		cfg.Email.SMTPHost = v
-	}
-	if v := os.Getenv("PAD_REDIS_URL"); v != "" {
-		cfg.Redis.URL = v
-	}
-	if v := os.Getenv("PAD_SMTP_PORT"); v != "" {
-		p, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("config: PAD_SMTP_PORT is not a valid integer: %w", err)
-		}
-		cfg.Email.SMTPPort = p
-	}
-	if v := os.Getenv("PAD_SMTP_USERNAME"); v != "" {
-		cfg.Email.Username = v
-	}
-	if v := os.Getenv("PAD_SMTP_PASSWORD"); v != "" {
-		cfg.Email.Password = v
-	}
-	if v := os.Getenv("PAD_EMAIL_FROM"); v != "" {
-		cfg.Email.From = v
-	}
-	if v := os.Getenv("PAD_APP_BASE_URL"); v != "" {
-		cfg.Email.AppBaseURL = v
-	}
-	if v := os.Getenv("PAD_DATA_DIR"); v != "" {
-		cfg.Storage.DataDir = v
-	}
-	if v := os.Getenv("PAD_STORAGE"); v != "" {
-		// Normalise case/whitespace so a capitalised "Database" or "LOCAL"
-		// isn't silently treated as an unknown backend — without this, the
-		// cloud-mode storage check below passes vacuously (the literal
-		// "Database" != "database") and the deployment runs with NO backend.
-		norm := strings.ToLower(strings.TrimSpace(v))
-		switch norm {
-		case "local", "database":
-			cfg.Storage.Backend = StorageBackend(norm)
-		default:
-			return fmt.Errorf("PAD_STORAGE=%q: unknown backend (use \"local\" or \"database\")", v)
-		}
-	}
-	if v := os.Getenv("PAD_DATABASE_URL"); v != "" {
-		cfg.Storage.DatabaseURL = v
-	}
-	if v := os.Getenv("PAD_AUTH_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("PAD_AUTH_ENABLED=%q: %w (use true/false, 1/0, or TRUE/FALSE)", v, err)
-		}
-		cfg.Auth.Enabled = b
-	}
-	if v := os.Getenv("PAD_AUTH_SECRET"); v != "" {
-		cfg.Auth.Secret = v
-	}
-	if v := os.Getenv("PAD_SSO_ISSUER"); v != "" {
-		cfg.Auth.SSO.IssuerURL = v
-	}
-	if v := os.Getenv("PAD_SSO_CLIENT_ID"); v != "" {
-		cfg.Auth.SSO.ClientID = v
-	}
-	if v := os.Getenv("PAD_SSO_CLIENT_SECRET"); v != "" {
-		cfg.Auth.SSO.ClientSecret = v
-	}
-	if v := os.Getenv("PAD_SSO_REDIRECT_URL"); v != "" {
-		cfg.Auth.SSO.RedirectURL = v
-	}
-	if v := os.Getenv("PAD_SSO_PROVIDER_NAME"); v != "" {
-		cfg.Auth.SSO.ProviderName = v
-	}
-	if v := os.Getenv("PAD_TLS_CERT"); v != "" {
-		cfg.Server.TLSCert = v
-	}
-	if v := os.Getenv("PAD_TLS_KEY"); v != "" {
-		cfg.Server.TLSKey = v
-	}
-	if v := os.Getenv("PAD_BEHIND_PROXY"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("PAD_BEHIND_PROXY=%q: %w (use true/false, 1/0, or TRUE/FALSE)", v, err)
-		}
-		cfg.Server.BehindProxy = b
-	}
-	if v := os.Getenv("PAD_LOG_LEVEL"); v != "" {
-		cfg.Log.Level = v
-	}
-	// PostgreSQL connection pool tuning — allows operators to right-size the pool
-	// for the Azure Database for PostgreSQL SKU without a code change.
-	if v := os.Getenv("PAD_DB_MAX_OPEN_CONNS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("config: PAD_DB_MAX_OPEN_CONNS is not a valid integer: %w", err)
-		}
-		cfg.Storage.DBMaxOpenConns = n
-	}
-	if v := os.Getenv("PAD_DB_MAX_IDLE_CONNS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("config: PAD_DB_MAX_IDLE_CONNS is not a valid integer: %w", err)
-		}
-		cfg.Storage.DBMaxIdleConns = n
-	}
-	if v := os.Getenv("PAD_DB_CONN_MAX_LIFETIME"); v != "" {
-		cfg.Storage.DBConnMaxLifetime = v
-	}
-	if v := os.Getenv("PAD_DB_CONN_MAX_IDLE_TIME"); v != "" {
-		cfg.Storage.DBConnMaxIdleTime = v
-	}
-	if v := os.Getenv("PAD_DB_REQUIRE_SSL"); v != "" {
-		cfg.Storage.DBRequireSSL = v
-	}
-	if v := os.Getenv("PAD_AZURE_STORAGE_ACCOUNT"); v != "" {
-		cfg.Storage.AzureStorageAccount = v
-	}
-	if v := os.Getenv("PAD_AZURE_STORAGE_CONTAINER"); v != "" {
-		cfg.Storage.AzureStorageContainer = v
-	}
-	if v := os.Getenv("PAD_AZURE_BLOB_CONNECTION_STRING"); v != "" {
-		cfg.Storage.AzureBlobConnectionString = v
-	}
-	// Runtime tuning parameters
-	if v := os.Getenv("PAD_RATE_LIMIT_GENERAL_RPS"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitGeneralRPS = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_GENERAL_BURST"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitGeneralBurst = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_AUTH_RPS"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitAuthRPS = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_AUTH_BURST"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitAuthBurst = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_EXPENSIVE_RPS"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitExpensiveRPS = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_EXPENSIVE_BURST"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitExpensiveBurst = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_CHAT_RPS"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitChatRPS = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_CHAT_BURST"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitChatBurst = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_UPLOAD_RPS"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitUploadRPS = f
-		}
-	}
-	if v := os.Getenv("PAD_RATE_LIMIT_UPLOAD_BURST"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.Runtime.RateLimitUploadBurst = f
-		}
-	}
-	if v := os.Getenv("PAD_CB_FAILURES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Runtime.CircuitBreakerFailures = n
-		}
-	}
-	if v := os.Getenv("PAD_CB_OPEN_DURATION"); v != "" {
-		cfg.Runtime.CircuitBreakerOpenDur = v
-	}
-	if v := os.Getenv("PAD_RETRY_MAX_ATTEMPTS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Runtime.RetryMaxAttempts = n
-		}
-	}
-	if v := os.Getenv("PAD_RETRY_BASE_DELAY"); v != "" {
-		cfg.Runtime.RetryBaseDelay = v
-	}
-	if v := os.Getenv("PAD_OTLP_ENDPOINT"); v != "" {
-		cfg.Runtime.OTLPEndpoint = v
-	}
-	if v := os.Getenv("PAD_REQUEST_TIMEOUT"); v != "" {
-		cfg.Runtime.RequestTimeout = v
-	}
 	return nil
 }
 
@@ -412,6 +430,14 @@ func Validate(cfg *Config) error {
 	// short or placeholder secrets that would make token forgery trivial.
 	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && isWeakSecret(cfg.Auth.Secret) {
 		return fmt.Errorf("config: auth.secret must be at least %d characters and not a known placeholder in cloud mode (set PAD_AUTH_SECRET to a long random value)", minSecretLength)
+	}
+	// The dedicated encryption key protects stored provider credentials at rest
+	// (AES-256-GCM). Apply the same strength gate as the JWT secret so a weak
+	// PAD_ENCRYPTION_KEY can't make a DB leak trivially brute-forceable. When
+	// unset, the auth secret is used as a backward-compat fallback (warned in
+	// main.go), so only enforce when an explicit key is provided.
+	if cfg.Mode == ModeCloud && cfg.Auth.EncryptionKey != "" && isWeakSecret(cfg.Auth.EncryptionKey) {
+		return fmt.Errorf("config: auth.encryption_key must be at least %d characters and not a known placeholder in cloud mode (set PAD_ENCRYPTION_KEY to a long random value)", minSecretLength)
 	}
 	// A wildcard CORS origin would let any site make credentialed requests.
 	// (An empty list is fine: the SPA is served same-origin by the backend.)

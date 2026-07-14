@@ -104,33 +104,33 @@ export default function RuleDependencyView() {
         {
           selector: 'node',
           style: {
-            'shape': 'round-rectangle',
-            'width': '180px',
-            'height': '44px',
+            shape: 'round-rectangle',
+            width: '180px',
+            height: '44px',
             'background-color': cssVar('--surface-2'),
             'border-width': 1.5,
             'border-color': cssVar('--border-strong'),
-            'label': 'data(label)',
-            'color': cssVar('--text-primary'),
+            label: 'data(label)',
+            color: cssVar('--text-primary'),
             'font-size': '11px',
             'font-family': 'var(--font-mono)',
             'text-valign': 'center',
             'text-halign': 'center',
             'text-wrap': 'ellipsis',
-            'padding': '6px',
+            padding: '6px',
           },
         },
         {
           selector: 'edge',
           style: {
-            'width': 1.5,
+            width: 1.5,
             'line-color': cssVar('--border-strong'),
             'target-arrow-color': cssVar('--border-strong'),
             'target-arrow-shape': 'triangle',
             'curve-style': 'bezier',
-            'label': 'data(reason)',
+            label: 'data(reason)',
             'font-size': '9px',
-            'color': cssVar('--text-tertiary'),
+            color: cssVar('--text-tertiary'),
             'text-background-color': cssVar('--surface-1'),
             'text-background-padding': '2px',
             'text-background-opacity': 0.9,
@@ -166,12 +166,14 @@ export default function RuleDependencyView() {
     } else {
       load()
     }
-    return () => { instance.destroy(); cyRef.current = null }
+    return () => {
+      instance.destroy()
+      cyRef.current = null
+    }
   }, [resolvedTheme])
 
-  const selectedDeps = data && selected
-    ? (data.dependencies ?? []).filter(d => d.fromRuleId === selected || d.toRuleId === selected)
-    : []
+  const selectedDeps =
+    data && selected ? (data.dependencies ?? []).filter(d => d.fromRuleId === selected || d.toRuleId === selected) : []
   const hasCycles = !!(data?.cycles && data.cycles.length > 0)
 
   return (
@@ -222,7 +224,10 @@ export default function RuleDependencyView() {
           <div>
             <span className="font-semibold">Circular dependency detected:</span>{' '}
             {(data!.cycles ?? []).map((c, i) => (
-              <span key={i} className="font-mono">{c.join(' → ')}{i < (data!.cycles!.length - 1) ? '; ' : ''}</span>
+              <span key={i} className="font-mono">
+                {c.join(' → ')}
+                {i < data!.cycles!.length - 1 ? '; ' : ''}
+              </span>
             ))}
           </div>
         </div>
@@ -233,7 +238,15 @@ export default function RuleDependencyView() {
         <div className="absolute bottom-3 left-3 w-72 max-w-[80%] p-3 rounded-lg bg-surface-2/90 border border-border-subtle backdrop-blur text-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="font-mono font-semibold text-text-primary">{selected}</span>
-            <button onClick={() => { setSelected(null); cyRef.current?.$(':selected').unselect() }} className="text-text-tertiary hover:text-text-primary">×</button>
+            <button
+              onClick={() => {
+                setSelected(null)
+                cyRef.current?.$(':selected').unselect()
+              }}
+              className="text-text-tertiary hover:text-text-primary"
+            >
+              ×
+            </button>
           </div>
           {selectedDeps.length === 0 ? (
             <p className="text-text-tertiary">No dependency edges.</p>

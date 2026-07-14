@@ -269,7 +269,7 @@ func (h *AuthHandler) resolveSSOUser(ctx context.Context, ident *sso.Identity) (
 				storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
 				logger.Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
 			}
-			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "email", ident.Email)
+			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "userID", existing.ID, "email", redactEmail(ident.Email))
 		}
 
 		if err := h.identityStore.SaveIdentityLink(ctx, newLink); err != nil {

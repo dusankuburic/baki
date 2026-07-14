@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
-import { History, Plus, Tag } from 'lucide-react'
-import { versionsApi, type FlowVersion } from '@/api/admin'
-import { useFlowStore } from '@/stores/flowStore'
-import { EmptyState, ErrorState, Spinner } from '@/components/shared'
-import { relativeTime, absoluteTime } from '@/lib/time'
-import { useAsync } from '@/hooks/useAsync'
+import React, {useState} from 'react'
+import {History, Plus, Tag} from 'lucide-react'
+import {versionsApi, type FlowVersion} from '@/api/admin'
+import {useFlowStore} from '@/stores/flowStore'
+import {EmptyState, ErrorState, Spinner} from '@/components/shared'
+import {relativeTime, absoluteTime} from '@/lib/time'
+import {useAsync} from '@/hooks/useAsync'
 
 export const HistoryTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -12,8 +12,13 @@ export const HistoryTab: React.FC = () => {
   const [comment, setComment] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  const {data, isLoading, error: fetchError, refetch: fetchVersions} = useAsync<FlowVersion[]>(
-    () => document?.id ? versionsApi.list(document.id, 50) : Promise.resolve([]),
+  const {
+    data,
+    isLoading,
+    error: fetchError,
+    refetch: fetchVersions,
+  } = useAsync<FlowVersion[]>(
+    () => (document?.id ? versionsApi.list(document.id, 50) : Promise.resolve([])),
     [document?.id],
   )
   // Clear stale results on a fetch error (matches the previous behavior of
@@ -73,24 +78,24 @@ export const HistoryTab: React.FC = () => {
       </div>
 
       <div className="flex-1 p-4">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">
-          Version History
-        </h3>
+        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-3">Version History</h3>
         {isLoading ? (
-          <div className="flex justify-center p-8"><Spinner size={20} /></div>
+          <div className="flex justify-center p-8">
+            <Spinner size={20} />
+          </div>
         ) : versions.length === 0 ? (
           error ? (
             <ErrorState message={error} onRetry={fetchVersions} />
           ) : (
-            <EmptyState
-              title="No history yet"
-              description="Run analysis to create snapshots over time."
-            />
+            <EmptyState title="No history yet" description="Run analysis to create snapshots over time." />
           )
         ) : (
           <div className="space-y-2">
             {versions.map(v => (
-              <div key={v.id} className="flex items-start gap-3 p-2.5 rounded-lg bg-surface-2 border border-border-subtle/50">
+              <div
+                key={v.id}
+                className="flex items-start gap-3 p-2.5 rounded-lg bg-surface-2 border border-border-subtle/50"
+              >
                 <div className="flex flex-col items-center gap-1 shrink-0">
                   <Tag size={13} className="text-text-tertiary" />
                   <span className="text-2xs text-text-tertiary font-mono">v{v.version}</span>

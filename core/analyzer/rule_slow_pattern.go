@@ -50,3 +50,7 @@ func (r *SlowPatternRule) Check(block *models.Block, ctx *RuleContext) []models.
 		Suggestion:  "Add a 'Wait' or 'Delay' action inside the loop to reduce load on the target application.",
 	}}
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&SlowPatternRule{}) }

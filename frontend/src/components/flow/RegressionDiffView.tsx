@@ -13,7 +13,7 @@ export default function RegressionDiffView() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [currentIndex, setCurrentIndex] = useState(-1)
-  
+
   // Flatten the diff for virtualization — must be before any early return to satisfy rules-of-hooks
   const items = useMemo(() => {
     if (!diff) return []
@@ -29,7 +29,7 @@ export default function RegressionDiffView() {
 
   const changeIndices = useMemo(() => {
     return items
-      .map((item, idx) => item.type === 'block' && item.data.change !== 'none' ? idx : -1)
+      .map((item, idx) => (item.type === 'block' && item.data.change !== 'none' ? idx : -1))
       .filter(idx => idx !== -1)
   }, [items])
 
@@ -62,7 +62,7 @@ export default function RegressionDiffView() {
     virtuosoRef.current?.scrollToIndex({
       index: nextIdx,
       align: 'center',
-      behavior: 'smooth'
+      behavior: 'smooth',
     })
   }
 
@@ -80,22 +80,12 @@ export default function RegressionDiffView() {
               <span className="text-2xs text-text-tertiary mr-2 font-medium">
                 {currentIndex !== -1 ? changeIndices.indexOf(currentIndex) + 1 : 0} / {changeIndices.length} CHANGES
               </span>
-              <IconButton 
-                icon={ArrowUp} 
-                size="sm" 
-                label="Previous Change" 
-                onClick={() => jumpToChange('prev')} 
-              />
-              <IconButton 
-                icon={ArrowDown} 
-                size="sm" 
-                label="Next Change" 
-                onClick={() => jumpToChange('next')} 
-              />
+              <IconButton icon={ArrowUp} size="sm" label="Previous Change" onClick={() => jumpToChange('prev')} />
+              <IconButton icon={ArrowDown} size="sm" label="Next Change" onClick={() => jumpToChange('next')} />
             </div>
           )}
         </div>
-        <button 
+        <button
           onClick={() => setMainPaneView('block')}
           className="text-2xs font-black uppercase tracking-widest text-brand-500 hover:text-brand-400 transition-colors"
         >
@@ -113,12 +103,14 @@ export default function RegressionDiffView() {
                 <FileText size={16} className="text-text-tertiary" />
                 <h3 className="text-sm font-bold text-text-primary">Subflow: {item.data.name}</h3>
                 {item.data.change !== 'none' && (
-                  <span className={clsx(
-                    "text-2xs font-black uppercase px-1.5 py-0.5 rounded",
-                    item.data.change === 'added' && "bg-semantic-success/10 text-semantic-success",
-                    item.data.change === 'removed' && "bg-semantic-error/10 text-semantic-error",
-                    item.data.change === 'modified' && "bg-semantic-warning/10 text-semantic-warning"
-                  )}>
+                  <span
+                    className={clsx(
+                      'text-2xs font-black uppercase px-1.5 py-0.5 rounded',
+                      item.data.change === 'added' && 'bg-semantic-success/10 text-semantic-success',
+                      item.data.change === 'removed' && 'bg-semantic-error/10 text-semantic-error',
+                      item.data.change === 'modified' && 'bg-semantic-warning/10 text-semantic-warning',
+                    )}
+                  >
                     {item.data.change}
                   </span>
                 )}
@@ -128,17 +120,19 @@ export default function RegressionDiffView() {
 
           const block = item.data.new || item.data.old
           if (!block) return null
-          
+
           const Icon = getBlockIcon(block.type)
           const isAdded = item.data.change === 'added'
           const isRemoved = item.data.change === 'removed'
 
           return (
-            <div className={clsx(
-              "px-6 py-1 flex group transition-colors",
-              isAdded && "bg-semantic-success/5 hover:bg-semantic-success/10",
-              isRemoved && "bg-semantic-error/5 hover:bg-semantic-error/10"
-            )}>
+            <div
+              className={clsx(
+                'px-6 py-1 flex group transition-colors',
+                isAdded && 'bg-semantic-success/5 hover:bg-semantic-success/10',
+                isRemoved && 'bg-semantic-error/5 hover:bg-semantic-error/10',
+              )}
+            >
               {/* Diff Gutter */}
               <div className="w-8 flex flex-col items-center shrink-0 border-r border-border-subtle/30 mr-4">
                 {isAdded && <Plus size={12} className="text-semantic-success mt-1" />}
@@ -147,22 +141,27 @@ export default function RegressionDiffView() {
               </div>
 
               {/* Indent Spacer */}
-              <div style={{ width: block.indent * 20 }} className="shrink-0" />
+              <div style={{width: block.indent * 20}} className="shrink-0" />
 
               {/* Block Content */}
               <div className="flex-1 flex items-center gap-3 py-1.5 min-w-0">
-                <Icon size={16} className={clsx(
-                   isAdded ? "text-semantic-success" : isRemoved ? "text-semantic-error" : "text-text-tertiary"
-                )} />
-                <span className={clsx(
-                  "text-sm font-medium truncate",
-                  isAdded && "text-semantic-success",
-                  isRemoved && "text-semantic-error line-through",
-                  !isAdded && !isRemoved && "text-text-primary"
-                )}>
+                <Icon
+                  size={16}
+                  className={clsx(
+                    isAdded ? 'text-semantic-success' : isRemoved ? 'text-semantic-error' : 'text-text-tertiary',
+                  )}
+                />
+                <span
+                  className={clsx(
+                    'text-sm font-medium truncate',
+                    isAdded && 'text-semantic-success',
+                    isRemoved && 'text-semantic-error line-through',
+                    !isAdded && !isRemoved && 'text-text-primary',
+                  )}
+                >
                   {block.name}
                 </span>
-                
+
                 {item.data.change === 'modified' && (
                   <span className="text-2xs text-semantic-warning font-bold bg-semantic-warning/10 px-1.5 rounded ml-auto">
                     MODIFIED

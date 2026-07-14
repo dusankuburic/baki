@@ -21,9 +21,14 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   try {
     let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     switch (b64.length % 4) {
-      case 2: b64 += '=='; break
-      case 3: b64 += '='; break
-      case 1: return null // not a valid base64 length
+      case 2:
+        b64 += '=='
+        break
+      case 3:
+        b64 += '='
+        break
+      case 1:
+        return null // not a valid base64 length
     }
     const parsed: unknown = JSON.parse(atob(b64))
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null

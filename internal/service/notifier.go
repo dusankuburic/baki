@@ -2,8 +2,8 @@ package service
 
 import "sync"
 
-// Notifier defines an interface for sending events to the frontend.
-type Notifier interface {
+// EventNotifier defines an interface for sending events to the frontend.
+type EventNotifier interface {
 	Emit(name string, data any)
 	// EmitTo sends an event only to the SSE client(s) associated with userID.
 	// In local mode (single client) this behaves identically to Emit.
@@ -16,14 +16,14 @@ type Notifier interface {
 	HasSubscriber(userID string) bool
 }
 
-// NilNotifier is a no-op implementation of Notifier.
+// NilNotifier is a no-op implementation of EventNotifier.
 type NilNotifier struct{}
 
 func (n NilNotifier) Emit(name string, data any)           {}
 func (n NilNotifier) EmitTo(userID, name string, data any) {}
 func (n NilNotifier) HasSubscriber(userID string) bool     { return true }
 
-// GlobalNotifier is a concrete implementation of Notifier that allows
+// GlobalNotifier is a concrete implementation of EventNotifier that allows
 // multiple subscribers to listen for emitted events.
 type GlobalNotifier struct {
 	mu          sync.RWMutex

@@ -14,7 +14,7 @@ const keyringService = "pad-analyzer"
 // keyringStore is the default SecretStore, backed by the OS keychain.
 // It is the right choice for desktop (Tauri) mode. In headless/cloud
 // deployments the keychain is typically unavailable, so a database-backed
-// store should be injected via SetSecretStore instead.
+// store is constructed and injected instead — see NewKeyringSecretStore.
 type keyringStore struct{}
 
 var warnUnavailableOnce sync.Once

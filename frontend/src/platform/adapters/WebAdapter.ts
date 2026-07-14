@@ -2,41 +2,35 @@
  * Web-specific platform adapter implementation
  */
 
-import type {
-  PlatformAdapter,
-  BackendConfig,
-  FileOpenOptions,
-  FileSaveOptions,
-  NotificationOptions,
-} from '../types';
-import {logger} from '@/lib/logger';
+import type {PlatformAdapter, BackendConfig, FileOpenOptions, FileSaveOptions, NotificationOptions} from '../types'
+import {logger} from '@/lib/logger'
 
 /**
  * Web adapter for browser-specific operations
  */
 export class WebAdapter implements PlatformAdapter {
-  private config: BackendConfig | null = null;
+  private config: BackendConfig | null = null
 
   /**
    * Get backend configuration from environment or API
    */
   async getBackendConfig(): Promise<BackendConfig> {
     if (this.config) {
-      return this.config;
+      return this.config
     }
 
-    const apiUrl = import.meta.env.VITE_API_URL || window.location.origin;
+    const apiUrl = import.meta.env.VITE_API_URL || window.location.origin
 
     // In local (non-JWT) mode the backend generates a random per-session token
     // and exposes it on a public endpoint so the web client can self-configure.
     // In JWT/cloud mode this endpoint returns 404 and the client authenticates
     // via login instead (sessionToken is set by authStore after login).
-    let token: string | undefined;
+    let token: string | undefined
     try {
-      const res = await fetch(`${apiUrl}/api/local-config`);
+      const res = await fetch(`${apiUrl}/api/local-config`)
       if (res.ok) {
-        const data = await res.json();
-        token = data.token;
+        const data = await res.json()
+        token = data.token
       }
     } catch {
       // backend unreachable or JWT mode — leave token undefined
@@ -46,157 +40,164 @@ export class WebAdapter implements PlatformAdapter {
       apiUrl,
       token,
       version: import.meta.env.VITE_APP_VERSION,
-    };
+    }
 
-    return this.config;
+    return this.config
   }
 
   /**
    * Open file dialog using HTML5 File API
    */
   async fileOpen(options: FileOpenOptions): Promise<string | string[] | null> {
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.multiple = options.multiple || false;
-      input.style.display = 'none';
+    return new Promise(resolve => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.multiple = options.multiple || false
+      input.style.display = 'none'
 
       if (options.filters && options.filters.length > 0) {
-        const extensions = options.filters.flatMap(f => f.extensions);
-        input.accept = extensions.map(ext => `.${ext}`).join(',');
+        const extensions = options.filters.flatMap(f => f.extensions)
+        input.accept = extensions.map(ext => `.${ext}`).join(',')
       }
 
-      let settled = false;
+      let settled = false
       const cleanup = () => {
-        if (input.parentNode) document.body.removeChild(input);
-      };
+        if (input.parentNode) document.body.removeChild(input)
+      }
       const done = (val: string | string[] | null) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        clearTimeout(fallbackTimer);
-        resolve(val);
-      };
+        if (settled) return
+        settled = true
+        cleanup()
+        clearTimeout(fallbackTimer)
+        resolve(val)
+      }
       // Fallback: if neither onchange nor oncancel fires (some browsers don't
       // fire oncancel when the user dismisses via Esc), resolve after 5 minutes.
-      const fallbackTimer = setTimeout(() => done(null), 300_000);
+      const fallbackTimer = setTimeout(() => done(null), 300_000)
 
-      input.onchange = (e) => {
-        const files = (e.target as HTMLInputElement).files;
+      input.onchange = e => {
+        const files = (e.target as HTMLInputElement).files
         if (!files || files.length === 0) {
-          done(null);
-          return;
+          done(null)
+          return
         }
 
-        const file = files[0];
-        const maxBytes = 100 * 1024 * 1024;
+        const file = files[0]
+        const maxBytes = 100 * 1024 * 1024
         if (file.size > maxBytes) {
-          logger.warn('File exceeds 100MB limit', {size: file.size});
-          done(null);
-          return;
+          logger.warn('File exceeds 100MB limit', {size: file.size})
+          done(null)
+          return
         }
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const content = e.target?.result as string;
-          done(JSON.stringify({
-            __is_web_upload__: true,
-            name: file.name,
-            files: { [file.name]: content }
-          }));
-        };
+        const reader = new FileReader()
+        reader.onload = e => {
+          const content = e.target?.result as string
+          done(
+            JSON.stringify({
+              __is_web_upload__: true,
+              name: file.name,
+              files: {[file.name]: content},
+            }),
+          )
+        }
         reader.onerror = () => {
-          logger.warn('FileReader error', {name: file.name});
-          done(null);
-        };
-        reader.readAsText(file);
-      };
+          logger.warn('FileReader error', {name: file.name})
+          done(null)
+        }
+        reader.readAsText(file)
+      }
 
-      input.oncancel = () => done(null);
+      input.oncancel = () => done(null)
 
-      document.body.appendChild(input);
-      input.click();
-    });
+      document.body.appendChild(input)
+      input.click()
+    })
   }
 
   /**
    * Open directory dialog using webkitdirectory
    */
   async fileOpenDirectory(): Promise<string | null> {
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.webkitdirectory = true;
-      input.style.display = 'none';
+    return new Promise(resolve => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.webkitdirectory = true
+      input.style.display = 'none'
 
-      let settled = false;
+      let settled = false
       const cleanup = () => {
-        if (input.parentNode) document.body.removeChild(input);
-      };
+        if (input.parentNode) document.body.removeChild(input)
+      }
       const done = (val: string | null) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        clearTimeout(fallbackTimer);
-        resolve(val);
-      };
-      const fallbackTimer = setTimeout(() => done(null), 300_000);
+        if (settled) return
+        settled = true
+        cleanup()
+        clearTimeout(fallbackTimer)
+        resolve(val)
+      }
+      const fallbackTimer = setTimeout(() => done(null), 300_000)
 
-      input.onchange = async (e) => {
-        const files = (e.target as HTMLInputElement).files;
+      input.onchange = async e => {
+        const files = (e.target as HTMLInputElement).files
         if (!files || files.length === 0) {
-          done(null);
-          return;
+          done(null)
+          return
         }
 
-        const fileMap: Record<string, string> = {};
-        let directoryName = '';
+        const fileMap: Record<string, string> = {}
+        let directoryName = ''
 
         const promises = Array.from(files)
           .filter(file => file.name.toLowerCase().endsWith('.txt'))
           .map(file => {
             if (!directoryName && file.webkitRelativePath) {
-              directoryName = file.webkitRelativePath.split('/')[0];
+              directoryName = file.webkitRelativePath.split('/')[0]
             }
-            return new Promise<void>((res) => {
-              const maxBytes = 100 * 1024 * 1024;
-              if (file.size > maxBytes) { res(); return; }
-              const reader = new FileReader();
-              reader.onload = (e) => {
-                fileMap[file.name] = e.target?.result as string;
-                res();
-              };
-              reader.onerror = () => res();
-              reader.readAsText(file);
-            });
-          });
+            return new Promise<void>(res => {
+              const maxBytes = 100 * 1024 * 1024
+              if (file.size > maxBytes) {
+                res()
+                return
+              }
+              const reader = new FileReader()
+              reader.onload = e => {
+                fileMap[file.name] = e.target?.result as string
+                res()
+              }
+              reader.onerror = () => res()
+              reader.readAsText(file)
+            })
+          })
 
-        await Promise.all(promises);
+        await Promise.all(promises)
 
         if (Object.keys(fileMap).length === 0) {
-          done(null);
-          return;
+          done(null)
+          return
         }
 
-        done(JSON.stringify({
-          __is_web_upload__: true,
-          name: directoryName || 'Uploaded Folder',
-          files: fileMap
-        }));
-      };
+        done(
+          JSON.stringify({
+            __is_web_upload__: true,
+            name: directoryName || 'Uploaded Folder',
+            files: fileMap,
+          }),
+        )
+      }
 
-      input.oncancel = () => done(null);
+      input.oncancel = () => done(null)
 
-      document.body.appendChild(input);
-      input.click();
-    });
+      document.body.appendChild(input)
+      input.click()
+    })
   }
 
   /**
    * Save file using browser download
    */
   async fileSave(_options: FileSaveOptions): Promise<string | null> {
-    logger.warn('File save dialogs not supported in web browsers. Use download instead.');
-    return null;
+    logger.warn('File save dialogs not supported in web browsers. Use download instead.')
+    return null
   }
 
   /**
@@ -204,14 +205,14 @@ export class WebAdapter implements PlatformAdapter {
    */
   async fileReveal(_path: string): Promise<void> {
     // Revealing a file in the OS file manager has no browser equivalent — no-op.
-    logger.warn('File reveal is not supported in web browsers');
+    logger.warn('File reveal is not supported in web browsers')
   }
 
   /**
    * Open URL in new tab
    */
   async openURL(url: string): Promise<void> {
-    window.open(url, '_blank');
+    window.open(url, '_blank')
   }
 
   /**
@@ -223,19 +224,19 @@ export class WebAdapter implements PlatformAdapter {
         new Notification(options.title, {
           body: options.body,
           icon: options.icon,
-        });
+        })
       } else if (Notification.permission !== 'denied') {
-        Notification.requestPermission().then((permission) => {
+        Notification.requestPermission().then(permission => {
           if (permission === 'granted') {
             new Notification(options.title, {
               body: options.body,
               icon: options.icon,
-            });
+            })
           }
-        });
+        })
       }
     } else {
-      logger.warn('Notifications not supported in this browser');
+      logger.warn('Notifications not supported in this browser')
     }
   }
 
@@ -245,14 +246,14 @@ export class WebAdapter implements PlatformAdapter {
   async readClipboard(): Promise<string> {
     try {
       if (navigator.clipboard && navigator.clipboard.readText) {
-        return await navigator.clipboard.readText();
+        return await navigator.clipboard.readText()
       } else {
-        logger.warn('Clipboard API not available');
-        return '';
+        logger.warn('Clipboard API not available')
+        return ''
       }
     } catch (error) {
-      logger.warn('Failed to read clipboard:', error);
-      return '';
+      logger.warn('Failed to read clipboard:', error)
+      return ''
     }
   }
 
@@ -262,14 +263,14 @@ export class WebAdapter implements PlatformAdapter {
   async writeClipboard(text: string): Promise<void> {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(text)
       } else {
-        logger.warn('Clipboard API not available');
-        throw new Error('Clipboard API not available');
+        logger.warn('Clipboard API not available')
+        throw new Error('Clipboard API not available')
       }
     } catch (error) {
-      logger.warn('Failed to write to clipboard:', error);
-      throw error;
+      logger.warn('Failed to write to clipboard:', error)
+      throw error
     }
   }
 

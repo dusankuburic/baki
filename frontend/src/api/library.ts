@@ -1,5 +1,5 @@
-import { request } from './client'
-import type { FlowDocument, PagedResponse } from '@/types'
+import {request} from './client'
+import type {FlowDocument, PagedResponse} from '@/types'
 
 export interface LibraryFlow {
   id: string
@@ -100,23 +100,19 @@ export const libraryApi = {
     return request(`/api/library/portfolio${qs}`, undefined, 'GET')
   },
 
-  get: (id: string): Promise<LibraryFlow> =>
-    request(`/api/library/${id}`, undefined, 'GET'),
+  get: (id: string): Promise<LibraryFlow> => request(`/api/library/${id}`, undefined, 'GET'),
 
-  getContent: (id: string): Promise<FlowDocument> =>
-    request(`/api/library/${id}/content`, undefined, 'GET'),
+  getContent: (id: string): Promise<FlowDocument> => request(`/api/library/${id}/content`, undefined, 'GET'),
 
   versions: (id: string, limit?: number): Promise<LibraryFlowVersion[]> => {
     const qs = limit ? `?limit=${limit}` : ''
     return request(`/api/library/${id}/versions${qs}`, undefined, 'GET')
   },
 
-  create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> =>
-    request('/api/library', req),
+  create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> => request('/api/library', req),
 
   update: (id: string, req: UpdateLibraryFlowRequest): Promise<LibraryFlow> =>
     request(`/api/library/${id}`, req, 'PUT'),
 
-  delete: (id: string): Promise<void> =>
-    request(`/api/library/${id}`, undefined, 'DELETE'),
+  delete: (id: string): Promise<void> => request(`/api/library/${id}`, undefined, 'DELETE'),
 }

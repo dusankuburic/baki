@@ -22,7 +22,7 @@ func (r *LargeSubflowRule) Check(block *models.Block, ctx *RuleContext) []models
 	if block.ParentID != "" {
 		return nil
 	}
-	if ctx.BlockIndex[block.ID] != 0 {
+	if block.Type == models.BlockTypeComment {
 		return nil
 	}
 
@@ -39,6 +39,12 @@ func (r *LargeSubflowRule) Check(block *models.Block, ctx *RuleContext) []models
 
 	sf := ctx.SubflowByID[block.SubflowID]
 	if sf == nil {
+		return nil
+	}
+	// Fire once per subflow on the first non-comment top-level block, so the
+	// finding's line/suppression target points at an actionable block rather
+	// than a leading comment (whose BlockID would point at the wrong line).
+	if firstActionableBlockID(sf.Blocks) != block.ID {
 		return nil
 	}
 	count := countAllBlocks(sf.Blocks)
@@ -68,3 +74,23 @@ func countAllBlocks(blocks []models.Block) int {
 	}
 	return count
 }
+
+// firstActionableBlockID returns the ID of the first top-level block that is
+// neither a comment nor an END marker, or "" if there is none. Per-subflow
+// rules (large-subflow, subflow-no-error-handler) attach their finding to this
+// block so the finding's line number / inline-suppression target points at an
+// actionable block rather than a leading comment (whose BlockID would point at
+// the wrong line).
+func firstActionableBlockID(blocks []models.Block) string {
+	for i := range blocks {
+		t := blocks[i].Type
+		if t != models.BlockTypeComment && t != models.BlockTypeEnd {
+			return blocks[i].ID
+		}
+	}
+	return ""
+}
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&LargeSubflowRule{}) }

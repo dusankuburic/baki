@@ -208,6 +208,46 @@ func TestMemOrgStore_InviteSaveAndList(t *testing.T) {
 	}
 }
 
+// Regression: DeleteOrg must cascade-delete the org's invites. The Postgres
+// backend relies on an ON DELETE CASCADE foreign key; the in-memory store had
+// no such cascade, so invites were orphaned (still returned by List/Get, and
+// leaking memory for the process lifetime).
+func TestMemOrgStore_DeleteOrg_CascadesInvites(t *testing.T) {
+	store := NewMemOrgStore()
+	ctx := context.Background()
+
+	store.SaveOrg(ctx, &interfaces.Organisation{ID: "org-1", Name: "O", OwnerID: "u1", CreatedAt: now(), UpdatedAt: now()})
+	store.SaveOrgInvite(ctx, &interfaces.OrgInvite{
+		ID: "inv-1", OrgID: "org-1", Email: "a@example.com", Role: auth.RoleMember,
+		TokenHash: "h1", ExpiresAt: now().Add(time.Hour), CreatedAt: now(),
+	})
+	store.SaveOrgInvite(ctx, &interfaces.OrgInvite{
+		ID: "inv-2", OrgID: "org-1", Email: "b@example.com", Role: auth.RoleMember,
+		TokenHash: "h2", ExpiresAt: now().Add(time.Hour), CreatedAt: now(),
+	})
+	// An invite for a different org must survive.
+	store.SaveOrgInvite(ctx, &interfaces.OrgInvite{
+		ID: "inv-3", OrgID: "org-2", Email: "c@example.com", Role: auth.RoleMember,
+		TokenHash: "h3", ExpiresAt: now().Add(time.Hour), CreatedAt: now(),
+	})
+
+	if err := store.DeleteOrg(ctx, "org-1"); err != nil {
+		t.Fatalf("DeleteOrg: %v", err)
+	}
+
+	if got, _ := store.ListOrgInvites(ctx, "org-1"); len(got) != 0 {
+		t.Errorf("expected org-1 invites to be cascade-deleted, got %d", len(got))
+	}
+	// Direct lookup of a deleted invite must be not-found.
+	if _, err := store.GetOrgInvite(ctx, "org-1", "inv-1"); !errors.Is(err, ErrInviteNotFound) {
+		t.Errorf("expected ErrInviteNotFound for cascade-deleted invite, got %v", err)
+	}
+	// The other org's invite is unaffected.
+	if got, _ := store.ListOrgInvites(ctx, "org-2"); len(got) != 1 {
+		t.Errorf("org-2 invite should survive, got %d", len(got))
+	}
+}
+
 func TestMemOrgStore_InviteDuplicateRejected(t *testing.T) {
 	store := NewMemOrgStore()
 	ctx := context.Background()

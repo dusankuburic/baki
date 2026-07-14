@@ -2,10 +2,12 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
+	"net/http"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
@@ -15,8 +17,12 @@ import (
 // local developer credentials (Azure CLI, etc.).
 //
 // Secrets are mapped from their Key Vault names to Config fields:
-//   - "pad-auth-secret" -> Auth.Secret
-//   - "pad-database-url" -> Storage.DatabaseURL
+//   - "pad-auth-secret"          -> Auth.Secret
+//   - "pad-database-url"         -> Storage.DatabaseURL
+//   - "pad-encryption-key"       -> Auth.EncryptionKey
+//   - "pad-sso-client-secret"    -> Auth.SSO.ClientSecret
+//   - "pad-smtp-password"        -> Email.Password
+//   - "pad-metrics-token"        -> Server.MetricsToken
 //
 // If a secret is already set in the Config (from ENV or JSON), the Key Vault value
 // is ignored to allow for local overrides.
@@ -45,6 +51,10 @@ func ResolveAzureSecrets(ctx context.Context, cfg *Config) error {
 	}{
 		{"pad-auth-secret", &cfg.Auth.Secret},
 		{"pad-database-url", &cfg.Storage.DatabaseURL},
+		{"pad-encryption-key", &cfg.Auth.EncryptionKey},
+		{"pad-sso-client-secret", &cfg.Auth.SSO.ClientSecret},
+		{"pad-smtp-password", &cfg.Email.Password},
+		{"pad-metrics-token", &cfg.Server.MetricsToken},
 	}
 
 	for _, m := range mappings {
@@ -55,9 +65,12 @@ func ResolveAzureSecrets(ctx context.Context, cfg *Config) error {
 
 		resp, err := client.GetSecret(ctx, m.kvName, "", nil)
 		if err != nil {
-			// If secret doesn't exist, we might want to log a warning or error.
-			// For production readiness, we fail if a required secret is missing from KV.
-			if strings.Contains(err.Error(), "SecretNotFound") {
+			// A missing secret (404) is logged and skipped: not every mapping
+			// is required for every deployment. Use the SDK's typed
+			// ResponseError rather than string-matching the message, so this
+			// survives SDK version bumps and localization.
+			var respErr *azcore.ResponseError
+			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
 				slog.Warn("azure: secret not found in Key Vault", "name", m.kvName)
 				continue
 			}

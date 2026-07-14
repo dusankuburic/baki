@@ -36,6 +36,38 @@ func TestWSTicket_IssuedForAuthenticatedUser(t *testing.T) {
 	}
 }
 
+// Regression: verifyAPIToken (personal access token / machine auth) returns
+// Claims with a zero-valued RegisteredClaims — ExpiresAt is nil. handleWSTicket
+// used to dereference claims.ExpiresAt.Time unconditionally, panicking into a
+// 500 on every PAT-bearing ws-ticket request (and a stack-dump DoS on repeat).
+// Such claims must no longer panic and must yield a usable ticket.
+func TestWSTicket_PATClaimsWithNilExpiresAt_DoesNotPanic(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	// Reuse the router's configured AuthMgr; handleWSTicket only needs security.
+	h := NewAuthHandler(nil, nil, rt.security, nil, nil, nil, nil)
+
+	// PAT-style claims: exactly what verifyAPIToken returns — ExpiresAt is nil.
+	patClaims := &auth.Claims{UserID: "ci-bot", Email: "bot@example.com", Role: auth.RoleAdmin}
+	if patClaims.ExpiresAt != nil {
+		t.Fatalf("test fixture: expected nil ExpiresAt for PAT-style claims")
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/api/ws-ticket", nil)
+	r = r.WithContext(auth.WithClaims(r.Context(), patClaims))
+	rr := httptest.NewRecorder()
+
+	h.handleWSTicket(rr, r) // must not panic
+	checkStatus(t, rr, http.StatusOK)
+
+	var resp struct {
+		Ticket string `json:"ticket"`
+	}
+	decodeJSON(t, rr, &resp)
+	if resp.Ticket == "" {
+		t.Fatal("expected a ticket for a PAT-authenticated request")
+	}
+}
+
 // The ticket endpoint requires authentication in cloud mode.
 func TestWSTicket_RequiresAuth(t *testing.T) {
 	rt := newJWTTestRouter(t)

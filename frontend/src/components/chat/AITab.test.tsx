@@ -1,12 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {render, screen, waitFor, act} from '@testing-library/react'
 import AITab from './AITab'
-import { chatApi, providersApi, flowApi } from '@/api'
-import { useFlowStore } from '@/stores/flowStore'
-import { useChatStore } from '@/stores/chatStore'
-import { ToastProvider } from '@/components/shared/Toast'
-import type { ConversationFile } from '@/types'
-import type { ProviderInfo } from '@/types'
+import {chatApi, providersApi, flowApi} from '@/api'
+import {useFlowStore} from '@/stores/flowStore'
+import {useChatStore} from '@/stores/chatStore'
+import {ToastProvider} from '@/components/shared/Toast'
+import type {ConversationFile} from '@/types'
+import type {ProviderInfo} from '@/types'
 
 // Prevent real network calls from all API modules.
 vi.mock('@/api', () => ({
@@ -44,13 +44,19 @@ beforeEach(() => {
   vi.mocked(providersApi.listProviders).mockResolvedValue([])
   vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue([])
   vi.mocked(chatApi.getDemoRemaining).mockResolvedValue(5)
-  vi.mocked(chatApi.getConversation).mockResolvedValue({ messages: [] } as unknown as ConversationFile)
+  vi.mocked(chatApi.getConversation).mockResolvedValue({messages: []} as unknown as ConversationFile)
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
 })
 
 describe('AITab', () => {
   it('shows setup prompt when no providers are configured', async () => {
-    await act(async () => { render(<ToastProvider><AITab /></ToastProvider>) })
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <AITab />
+        </ToastProvider>,
+      )
+    })
     // listProviders resolves [] → configured stays false → shows ApiKeyMissingState
     expect(screen.getByText('Add an API key to start')).toBeInTheDocument()
   })
@@ -58,13 +64,20 @@ describe('AITab', () => {
   it('shows "No flow loaded" state after providers load but no document is open', async () => {
     vi.mocked(providersApi.listProviders).mockResolvedValue([
       {
-        id: 'claude', name: 'Claude', configured: true, authType: 'api_key',
-        models: [{ id: 'claude-3', displayName: 'Claude 3', contextLimit: 200000, inputCostPerM: 3, outputCostPerM: 15 }],
+        id: 'claude',
+        name: 'Claude',
+        configured: true,
+        authType: 'api_key',
+        models: [{id: 'claude-3', displayName: 'Claude 3', contextLimit: 200000, inputCostPerM: 3, outputCostPerM: 15}],
         defaultModel: 'claude-3',
       },
     ] as ProviderInfo[])
 
-    render(<ToastProvider><AITab /></ToastProvider>)
+    render(
+      <ToastProvider>
+        <AITab />
+      </ToastProvider>,
+    )
 
     // After the listProviders effect resolves, configured becomes true and the flow document is null.
     await waitFor(() => {
@@ -74,7 +87,13 @@ describe('AITab', () => {
   })
 
   it('shows "Open settings" button in unconfigured state', async () => {
-    await act(async () => { render(<ToastProvider><AITab /></ToastProvider>) })
-    expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument()
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <AITab />
+        </ToastProvider>,
+      )
+    })
+    expect(screen.getByRole('button', {name: /open settings/i})).toBeInTheDocument()
   })
 })

@@ -53,7 +53,13 @@ function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (
 // DeadDataPanel lists each dead-data variable (previously a count-only header).
 // Each row shows the variable, why it's dead, and jumps to the block that sets
 // it so the developer can decide whether to remove the write.
-function DeadDataPanel({paths, onNavigate}: {paths: NonNullable<DataFlowAnalysis['deadData']>; onNavigate: (id: string) => void}) {
+function DeadDataPanel({
+  paths,
+  onNavigate,
+}: {
+  paths: NonNullable<DataFlowAnalysis['deadData']>
+  onNavigate: (id: string) => void
+}) {
   const [showAll, setShowAll] = React.useState(false)
   const INITIAL = 5
   const visible = showAll ? paths : paths.slice(0, INITIAL)
@@ -65,7 +71,9 @@ function DeadDataPanel({paths, onNavigate}: {paths: NonNullable<DataFlowAnalysis
         <span className="text-xs font-bold text-text-tertiary">Dead Data ({paths.length})</span>
         <span className="text-2xs text-text-tertiary">set, only read by unreachable code</span>
       </div>
-      <p className="text-2xs text-text-tertiary mb-2">Variables written but only consumed where execution can't reach.</p>
+      <p className="text-2xs text-text-tertiary mb-2">
+        Variables written but only consumed where execution can't reach.
+      </p>
       {visible.map((dp, i) => (
         <button
           key={i}
@@ -74,7 +82,9 @@ function DeadDataPanel({paths, onNavigate}: {paths: NonNullable<DataFlowAnalysis
         >
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-xs text-text-primary font-mono truncate">%{dp.variable}%</span>
-            <span className="text-2xs text-text-tertiary ml-auto shrink-0 truncate">{dp.reason || 'unreachable reader'}</span>
+            <span className="text-2xs text-text-tertiary ml-auto shrink-0 truncate">
+              {dp.reason || 'unreachable reader'}
+            </span>
           </div>
         </button>
       ))}
@@ -96,18 +106,29 @@ export default function DataFlowInsights() {
   const [dataFlow, setDataFlow] = React.useState<DataFlowAnalysis | null>(null)
   // Re-fetch when a new analysis lands, not just when the document changes —
   // otherwise these insights show the previous run's data after re-analyze.
-  const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
+  const generatedAt = useAnalysisStore(s => (doc ? s.reports.get(doc.id)?.generatedAt : undefined))
 
   React.useEffect(() => {
     if (!doc) return
     let cancelled = false
-    analysisApi.getDataFlow()
-      .then(r => { if (!cancelled) setDataFlow(r as DataFlowAnalysis) })
-      .catch((err) => { if (!cancelled) logger.warn('Failed to load dataflow analysis', err) })
-    return () => { cancelled = true }
+    analysisApi
+      .getDataFlow()
+      .then(r => {
+        if (!cancelled) setDataFlow(r as DataFlowAnalysis)
+      })
+      .catch(err => {
+        if (!cancelled) logger.warn('Failed to load dataflow analysis', err)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [doc, generatedAt])
 
-  if (!dataFlow || ((!dataFlow.taintPaths || dataFlow.taintPaths.length === 0) && (!dataFlow.deadData || dataFlow.deadData.length === 0))) {
+  if (
+    !dataFlow ||
+    ((!dataFlow.taintPaths || dataFlow.taintPaths.length === 0) &&
+      (!dataFlow.deadData || dataFlow.deadData.length === 0))
+  ) {
     return null
   }
 

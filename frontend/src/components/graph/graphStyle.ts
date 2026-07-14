@@ -62,15 +62,13 @@ const typeColorMap: Record<string, keyof GraphTokenColors> = {
 }
 
 export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
-  const typeStyles: cytoscape.StylesheetJson = Object.entries(typeColorMap).map(
-    ([type, key]) => ({
-      selector: `node[type="${type}"]`,
-      style: {
-        'border-color': t[key],
-        'border-width': 2,
-      },
-    })
-  )
+  const typeStyles: cytoscape.StylesheetJson = Object.entries(typeColorMap).map(([type, key]) => ({
+    selector: `node[type="${type}"]`,
+    style: {
+      'border-color': t[key],
+      'border-width': 2,
+    },
+  }))
 
   return [
     {
@@ -126,13 +124,13 @@ export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
     {
       selector: 'node.variable-dimmed',
       style: {
-        'opacity': 0.3,
+        opacity: 0.3,
       },
     },
     {
       selector: 'edge.variable-dimmed',
       style: {
-        'opacity': 0.1,
+        opacity: 0.1,
       },
     },
     {

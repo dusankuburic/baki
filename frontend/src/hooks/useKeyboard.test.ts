@@ -87,10 +87,9 @@ describe('useKeyboard', () => {
   it('always calls the latest handler reference without re-registering the listener', () => {
     const first = vi.fn()
     const second = vi.fn()
-    const {rerender} = renderHook(
-      ({handler}) => useKeyboard({scope: 'global', handlers: {'file.open': handler}}),
-      {initialProps: {handler: first}},
-    )
+    const {rerender} = renderHook(({handler}) => useKeyboard({scope: 'global', handlers: {'file.open': handler}}), {
+      initialProps: {handler: first},
+    })
     rerender({handler: second})
 
     dispatchKey({key: 'o', ctrlKey: true})

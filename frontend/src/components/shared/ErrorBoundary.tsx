@@ -3,64 +3,59 @@ import {systemApi} from '@/api'
 import {logger} from '@/lib/logger'
 
 type ErrorBoundaryProps = {
-    children: ReactNode
-    fallback?: ReactNode
-    fallbackMessage?: string
+  children: ReactNode
+  fallback?: ReactNode
+  fallbackMessage?: string
 }
 
 type ErrorBoundaryState = {
-    hasError: boolean
-    error: Error | null
+  hasError: boolean
+  error: Error | null
 }
 
 export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-    state: ErrorBoundaryState = {hasError: false, error: null}
+  state: ErrorBoundaryState = {hasError: false, error: null}
 
-    static getDerivedStateFromError(error: Error) {
-        return {hasError: true, error}
+  static getDerivedStateFromError(error: Error) {
+    return {hasError: true, error}
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    logger.error('ErrorBoundary caught:', error, info)
+    try {
+      systemApi.logError({
+        message: error.message,
+        stack: error.stack || '',
+        componentStack: info.componentStack || '',
+        // Send the pathname only — never the full href. Recovery/SSO
+        // tokens (#resetPassword=…, #verifyEmail=…, #invite=…, the SSO
+        // ticket) live in the fragment, and a render error during a
+        // deep-link load could otherwise capture them into the error
+        // report before the fragment is cleared.
+        url: window.location.pathname,
+      })
+    } catch {
+      // backend not available during SSR or tests
     }
+  }
 
-    componentDidCatch(error: Error, info: React.ErrorInfo) {
-        logger.error('ErrorBoundary caught:', error, info)
-        try {
-            systemApi.logError({
-                message: error.message,
-                stack: error.stack || '',
-                componentStack: info.componentStack || '',
-                // Send the pathname only — never the full href. Recovery/SSO
-                // tokens (#resetPassword=…, #verifyEmail=…, #invite=…, the SSO
-                // ticket) live in the fragment, and a render error during a
-                // deep-link load could otherwise capture them into the error
-                // report before the fragment is cleared.
-                url: window.location.pathname,
-            })
-        } catch {
-            // backend not available during SSR or tests
-        }
+  private retry = () => this.setState({hasError: false, error: null})
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback
+      return (
+        <div className="flex flex-col items-center justify-center p-8">
+          <div className="text-semantic-error text-sm font-medium mb-2">
+            {this.props.fallbackMessage ?? 'Something went wrong'}
+          </div>
+          <div className="text-xs text-text-tertiary max-w-md text-center">{this.state.error?.message}</div>
+          <button onClick={this.retry} className="mt-4 text-xs text-brand-400 hover:text-brand-300">
+            Try again
+          </button>
+        </div>
+      )
     }
-
-    private retry = () => this.setState({hasError: false, error: null})
-
-    render() {
-        if (this.state.hasError) {
-            if (this.props.fallback) return this.props.fallback
-            return (
-                <div className="flex flex-col items-center justify-center p-8">
-                    <div className="text-semantic-error text-sm font-medium mb-2">
-                        {this.props.fallbackMessage ?? 'Something went wrong'}
-                    </div>
-                    <div className="text-xs text-text-tertiary max-w-md text-center">
-                        {this.state.error?.message}
-                    </div>
-                    <button
-                        onClick={this.retry}
-                        className="mt-4 text-xs text-brand-400 hover:text-brand-300"
-                    >
-                        Try again
-                    </button>
-                </div>
-            )
-        }
-        return this.props.children
-    }
+    return this.props.children
+  }
 }

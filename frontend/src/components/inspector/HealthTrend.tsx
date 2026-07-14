@@ -11,17 +11,24 @@ import type {AnalysisSnapshot} from '@/types'
 // least two distinct runs to connect.
 export default function HealthTrend() {
   const doc = useFlowStore(s => s.document)
-  const generatedAt = useAnalysisStore(s => doc ? s.reports.get(doc.id)?.generatedAt : undefined)
+  const generatedAt = useAnalysisStore(s => (doc ? s.reports.get(doc.id)?.generatedAt : undefined))
   const [snapshots, setSnapshots] = React.useState<AnalysisSnapshot[]>([])
   const [hover, setHover] = React.useState<number | null>(null)
 
   React.useEffect(() => {
     if (!doc) return
     let cancelled = false
-    analysisApi.getHistory()
-      .then(s => { if (!cancelled) setSnapshots((s ?? []).slice(-20)) })
-      .catch((err) => { if (!cancelled) logger.warn('Failed to load history', err) })
-    return () => { cancelled = true }
+    analysisApi
+      .getHistory()
+      .then(s => {
+        if (!cancelled) setSnapshots((s ?? []).slice(-20))
+      })
+      .catch(err => {
+        if (!cancelled) logger.warn('Failed to load history', err)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [doc, generatedAt])
 
   if (snapshots.length < 2) return null

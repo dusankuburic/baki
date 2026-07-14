@@ -83,7 +83,7 @@ func TestFlowHash(t *testing.T) {
 	// call. Before sorting the property keys, Go's randomized map iteration made
 	// FlowHash non-deterministic, so the cache never hit for real flows.
 	t.Run("hash is deterministic across many calls (multi-property block)", func(t *testing.T) {
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{
 			"url": "https://x", "method": "GET", "timeout": "30", "body": "{}", "header": "h",
@@ -96,6 +96,27 @@ func TestFlowHash(t *testing.T) {
 			}
 		}
 	})
+
+	// Regression: the parser mints fresh UUIDs for every block/subflow on each
+	// parse. FlowHash must NOT fold those IDs in, or the analysis cache never
+	// hits across re-parses of byte-identical source. Two docs with identical
+	// content but different minted IDs must hash equally.
+	t.Run("stable across re-parses (different UUIDs, same content)", func(t *testing.T) {
+		mk := func(blockID, sfID string) *models.FlowDocument {
+			b := makeBlock(blockID, "Set X", models.BlockTypeAction, "SetVariable.Set", 0)
+			b.SubflowID = sfID
+			return &models.FlowDocument{
+				ID:       "t",
+				Subflows: []models.Subflow{{ID: sfID, Name: "Main", Blocks: []models.Block{*b}}},
+			}
+		}
+		h1 := FlowHash(mk("uuid-aaaa", "sf-1111"))
+		h2 := FlowHash(mk("uuid-bbbb", "sf-2222"))
+		if h1 != h2 {
+			t.Fatalf("FlowHash changed across re-parses: %s vs %s\n"+
+				"Block/subflow UUIDs must not participate in the content hash.", h1, h2)
+		}
+	})
 }
 
 func TestCustomRule(t *testing.T) {
@@ -106,13 +127,13 @@ func TestCustomRule(t *testing.T) {
 			Description:  "HTTP GET actions are not allowed",
 			Severity:     "warning",
 			Category:     "Security",
-			RawTypeMatch: "Http\\.Invoke",
+			RawTypeMatch: "HTTPClient\\.Invoke",
 			Suggestion:   "Use POST instead of GET.",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
 		ctx := buildContext(flow, nil)
@@ -130,7 +151,7 @@ func TestCustomRule(t *testing.T) {
 			ID:           "custom-1",
 			Name:         "No HTTP GET",
 			Description:  "HTTP GET actions are not allowed",
-			RawTypeMatch: "Http\\.Invoke",
+			RawTypeMatch: "HTTPClient\\.Invoke",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -150,13 +171,13 @@ func TestCustomRule(t *testing.T) {
 			ID:           "custom-2",
 			Name:         "HTTP without body",
 			Description:  "HTTP request with empty body",
-			RawTypeMatch: "Http\\..*",
+			RawTypeMatch: "HTTPClient\\..*",
 			PropertyHas:  map[string]string{"method": "GET"},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := makeBlock("b1", "HTTP GET", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP GET", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{"method": "GET", "url": "https://example.com"}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
@@ -189,7 +210,7 @@ func TestCachedAnalysis(t *testing.T) {
 	// before the key-sort fix the second call recomputed instead of hitting.
 	t.Run("multi-property flow hits cache on second call", func(t *testing.T) {
 		DefaultCache = NewAnalysisCache(10)
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{"url": "https://x", "method": "GET", "timeout": "30", "body": "{}"}
 		doc := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
@@ -205,7 +226,7 @@ func TestCachedAnalysis(t *testing.T) {
 func TestComputeSubflowHashesDeterministic(t *testing.T) {
 	// Regression: ComputeSubflowHashes must be stable across calls for a subflow
 	// containing multi-property blocks (same map-iteration-order bug as FlowHash).
-	b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+	b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 	b.Properties = map[string]string{"a": "1", "b": "2", "c": "3", "d": "4", "e": "5"}
 	doc := &models.FlowDocument{ID: "t", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
 	first := ComputeSubflowHashes(doc)

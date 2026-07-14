@@ -1,6 +1,6 @@
-import { render, type RenderOptions } from '@testing-library/react'
-import { type ReactElement } from 'react'
-import { vi } from 'vitest'
+import {render, type RenderOptions} from '@testing-library/react'
+import {type ReactElement} from 'react'
+import {vi} from 'vitest'
 
 /**
  * Render a component with no extra providers.
@@ -45,8 +45,8 @@ export function mockFetch<T>(payload: T, status = 200) {
   const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify(payload), {
       status,
-      headers: { 'Content-Type': 'application/json' },
-    })
+      headers: {'Content-Type': 'application/json'},
+    }),
   )
   return spy
 }

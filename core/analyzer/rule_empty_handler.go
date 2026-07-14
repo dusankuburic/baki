@@ -39,3 +39,7 @@ func (r *EmptyHandlerRule) Check(block *models.Block, ctx *RuleContext) []models
 		Suggestion:  "Add error handling logic such as logging, retrying, or notifying the user.",
 	}}
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&EmptyHandlerRule{}) }

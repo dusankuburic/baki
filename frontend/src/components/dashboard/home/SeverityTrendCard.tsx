@@ -20,7 +20,11 @@ export function SeverityTrendCard({data, className}: {data: DailySeverityPoint[]
       ) : !hasData ? (
         <CardPlaceholder message="No findings in the last 30 days." />
       ) : (
-        <div className="h-48" role="img" aria-label="Stacked area chart of daily error, warning, and info finding counts over the last 30 days">
+        <div
+          className="h-48"
+          role="img"
+          aria-label="Stacked area chart of daily error, warning, and info finding counts over the last 30 days"
+        >
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={rows} margin={{top: 10, right: 10, left: -20, bottom: 0}}>
               <defs>
@@ -57,16 +61,44 @@ export function SeverityTrendCard({data, className}: {data: DailySeverityPoint[]
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
                 labelStyle={{color: 'var(--text-primary)'}}
               />
               <Legend wrapperStyle={{fontSize: 11, color: 'var(--text-tertiary)'}} />
               {/* A one-day series has no horizontal extent, so the stacked
                   ribbons are invisible — render dots so the lone day still shows. */}
-              <Area type="monotone" dataKey="errors" name="Errors" stackId="1" stroke={colors.error} fill="url(#dashSevError)" dot={rows.length === 1} isAnimationActive={false} />
-              <Area type="monotone" dataKey="warnings" name="Warnings" stackId="1" stroke={colors.warning} fill="url(#dashSevWarn)" dot={rows.length === 1} isAnimationActive={false} />
-              <Area type="monotone" dataKey="info" name="Info" stackId="1" stroke={colors.brand400} fill="url(#dashSevInfo)" dot={rows.length === 1} isAnimationActive={false} />
+              <Area
+                type="monotone"
+                dataKey="errors"
+                name="Errors"
+                stackId="1"
+                stroke={colors.error}
+                fill="url(#dashSevError)"
+                dot={rows.length === 1}
+                isAnimationActive={false}
+              />
+              <Area
+                type="monotone"
+                dataKey="warnings"
+                name="Warnings"
+                stackId="1"
+                stroke={colors.warning}
+                fill="url(#dashSevWarn)"
+                dot={rows.length === 1}
+                isAnimationActive={false}
+              />
+              <Area
+                type="monotone"
+                dataKey="info"
+                name="Info"
+                stackId="1"
+                stroke={colors.brand400}
+                fill="url(#dashSevInfo)"
+                dot={rows.length === 1}
+                isAnimationActive={false}
+              />
             </AreaChart>
           </ResponsiveContainer>
         </div>

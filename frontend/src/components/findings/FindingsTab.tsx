@@ -16,7 +16,7 @@ import type {AnalysisDiff, Finding, AnalysisReport} from '@/types'
 
 export default function FindingsTab() {
   const doc = useFlowStore(s => s.document)
-  const report = useAnalysisStore(s => doc ? s.reports.get(doc.id) : undefined)
+  const report = useAnalysisStore(s => (doc ? s.reports.get(doc.id) : undefined))
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
   const progress = useAnalysisStore(s => s.progress)
   const setReport = useAnalysisStore(s => s.setReport)
@@ -37,7 +37,7 @@ export default function FindingsTab() {
   const [dedupLoading, setDedupLoading] = useState(false)
   const [sortMode, setSortMode] = useState<'default' | 'severity' | 'count'>('severity')
   const cycleSortMode = useCallback(() => {
-    setSortMode(m => m === 'severity' ? 'count' : m === 'count' ? 'default' : 'severity')
+    setSortMode(m => (m === 'severity' ? 'count' : m === 'count' ? 'default' : 'severity'))
   }, [])
 
   // Leave the diff view when switching documents or after a fresh analysis.
@@ -58,7 +58,7 @@ export default function FindingsTab() {
   // Build a blockId → label index once per document so the findings list can
   // resolve each row's block name in O(1), instead of walking the whole block
   // tree per finding (which made a large report's render O(findings × blocks)).
-  const blockLookup = useMemo<BlockLookup>(() => doc ? buildBlockLookup(doc) : new Map(), [doc])
+  const blockLookup = useMemo<BlockLookup>(() => (doc ? buildBlockLookup(doc) : new Map()), [doc])
 
   const findings = useMemo(() => {
     if (!report) return []
@@ -68,7 +68,13 @@ export default function FindingsTab() {
       if (!severityFilter.has(f.severity)) return false
       if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
       if (suppressedKeys.has(findingKey(f))) return false
-      if (q && !f.title.toLowerCase().includes(q) && !f.description.toLowerCase().includes(q) && !f.ruleId.toLowerCase().includes(q)) return false
+      if (
+        q &&
+        !f.title.toLowerCase().includes(q) &&
+        !f.description.toLowerCase().includes(q) &&
+        !f.ruleId.toLowerCase().includes(q)
+      )
+        return false
       return true
     })
   }, [report, severityFilter, categoryFilter, findingSearch, suppressedKeys, dedupGroups])
@@ -103,10 +109,13 @@ export default function FindingsTab() {
     }
   }, [doc, toast, setReport, setAnalyzing, beginAnalyzing, setProgress])
 
-  const handleFixWithAI = useCallback((finding: Finding) => {
-    if (!doc) return
-    stageFindingFix(finding, doc.id)
-  }, [doc])
+  const handleFixWithAI = useCallback(
+    (finding: Finding) => {
+      if (!doc) return
+      stageFindingFix(finding, doc.id)
+    },
+    [doc],
+  )
 
   const handleShowDiff = useCallback(async () => {
     setDiffLoading(true)
@@ -172,9 +181,7 @@ export default function FindingsTab() {
       const result = await flowApi.createShare(doc.id)
       const url = `${window.location.origin}/shared?token=${result.token}`
       await navigator.clipboard.writeText(url)
-      const expires = result.expiresAt
-        ? ` · expires ${new Date(result.expiresAt).toLocaleDateString()}`
-        : ''
+      const expires = result.expiresAt ? ` · expires ${new Date(result.expiresAt).toLocaleDateString()}` : ''
       toast.success('Share link copied to clipboard', {description: `${url}${expires}`})
     } catch (err) {
       toast.error('Failed to create share link', {description: String(err)})
@@ -219,7 +226,9 @@ export default function FindingsTab() {
       />
       {dedupGroups && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-brand-400 bg-brand-500/5 border-b border-border-subtle">
-          <span>Grouped: {findings.length} unique findings ({report.findings.length - findings.length} duplicates folded)</span>
+          <span>
+            Grouped: {findings.length} unique findings ({report.findings.length - findings.length} duplicates folded)
+          </span>
           <button
             onClick={() => setDedupGroups(null)}
             className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
@@ -230,7 +239,9 @@ export default function FindingsTab() {
       )}
       {suppressedCount > 0 && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-text-tertiary border-b border-border-subtle">
-          <span>{suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed</span>
+          <span>
+            {suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed
+          </span>
           <button
             onClick={() => useAnalysisStore.getState().clearSuppressed()}
             className="text-brand-400 hover:text-brand-300 px-1.5 py-0.5 rounded hover:bg-brand-500/10 transition-colors"
@@ -240,7 +251,12 @@ export default function FindingsTab() {
         </div>
       )}
       {diff ? (
-        <AnalysisDiffView diff={diff} blockLookup={blockLookup} onBack={() => setDiff(null)} onFixWithAI={handleFixWithAI} />
+        <AnalysisDiffView
+          diff={diff}
+          blockLookup={blockLookup}
+          onBack={() => setDiff(null)}
+          onFixWithAI={handleFixWithAI}
+        />
       ) : (
         <>
           {report.findings.length > 0 && (
@@ -269,7 +285,12 @@ export default function FindingsTab() {
               </div>
             )
           ) : (
-            <FindingsList findings={findings} blockLookup={blockLookup} onFixWithAI={handleFixWithAI} sortMode={sortMode} />
+            <FindingsList
+              findings={findings}
+              blockLookup={blockLookup}
+              onFixWithAI={handleFixWithAI}
+              sortMode={sortMode}
+            />
           )}
         </>
       )}

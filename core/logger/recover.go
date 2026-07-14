@@ -49,17 +49,26 @@ func notifyHook(operation string, r any, stack []byte) {
 	fn(operation, r, stack)
 }
 
+// logPanic logs a recovered panic value with a stack trace and notifies the
+// panic hook. Shared by every recover helper below; each helper must still
+// call recover() itself, because recover() only works when invoked directly
+// by a deferred function — that constraint is why the helpers can't simply
+// delegate to one another.
+func logPanic(operation string, r any) {
+	stack := captureStack()
+	slog.Error("panic recovered",
+		"operation", operation,
+		"panic", r,
+		"stack", string(stack),
+	)
+	notifyHook(operation, r, stack)
+}
+
 // Guard recovers from a panic, logs it with a stack trace, and sets *err.
 // Use as: defer logger.Guard("App.Method", &err)
 func Guard(operation string, err *error) {
 	if r := recover(); r != nil {
-		stack := captureStack()
-		slog.Error("panic recovered",
-			"operation", operation,
-			"panic", r,
-			"stack", string(stack),
-		)
-		notifyHook(operation, r, stack)
+		logPanic(operation, r)
 		*err = fmt.Errorf("panic in %s: %v", operation, r)
 	}
 }
@@ -68,37 +77,21 @@ func Guard(operation string, err *error) {
 // Use as: defer logger.GuardRecover("App.Method")
 func GuardRecover(operation string) {
 	if r := recover(); r != nil {
-		stack := captureStack()
-		slog.Error("panic recovered",
-			"operation", operation,
-			"panic", r,
-			"stack", string(stack),
-		)
-		notifyHook(operation, r, stack)
+		logPanic(operation, r)
 	}
 }
 
+// RecoverPanic is equivalent to GuardRecover; both exported names are kept for
+// existing callers.
 func RecoverPanic(operation string) {
 	if r := recover(); r != nil {
-		stack := captureStack()
-		slog.Error("panic recovered",
-			"operation", operation,
-			"panic", r,
-			"stack", string(stack),
-		)
-		notifyHook(operation, r, stack)
+		logPanic(operation, r)
 	}
 }
 
 func RecoverPanicWithError(operation string) error {
 	if r := recover(); r != nil {
-		stack := captureStack()
-		slog.Error("panic recovered",
-			"operation", operation,
-			"panic", r,
-			"stack", string(stack),
-		)
-		notifyHook(operation, r, stack)
+		logPanic(operation, r)
 		return fmt.Errorf("panic in %s: %v", operation, r)
 	}
 	return nil

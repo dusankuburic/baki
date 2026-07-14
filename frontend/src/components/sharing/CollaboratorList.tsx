@@ -1,5 +1,5 @@
-import { Trash2 } from 'lucide-react'
-import type { Collaborator, Permission } from '@/api/sharing'
+import {Trash2} from 'lucide-react'
+import type {Collaborator, Permission} from '@/api/sharing'
 import PermissionSelect from './PermissionSelect'
 import IconButton from '@/components/shared/IconButton'
 import Avatar from '@/components/shared/Avatar'
@@ -20,11 +20,7 @@ export default function CollaboratorList({
   disabled,
 }: CollaboratorListProps) {
   if (collaborators.length === 0) {
-    return (
-      <p className="py-4 text-center text-sm text-text-muted">
-        No collaborators yet
-      </p>
-    )
+    return <p className="py-4 text-center text-sm text-text-muted">No collaborators yet</p>
   }
 
   return (

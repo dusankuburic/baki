@@ -23,6 +23,9 @@ export function registerStoreReset(handler: ResetHandler): void {
 }
 
 export async function resetAllStores(): Promise<void> {
-  const run = (fn: ResetHandler) => Promise.resolve().then(fn).catch(() => {})
+  const run = (fn: ResetHandler) =>
+    Promise.resolve()
+      .then(fn)
+      .catch(() => {})
   await Promise.all([...handlers].map(run))
 }

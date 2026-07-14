@@ -16,7 +16,7 @@ func TestSampleFlow_ParsesAndTriggersFindings(t *testing.T) {
 	const sample = `#Region "Main"
 Variables.SetVariable Name: %ApiKey% Value: 'AKIAIOSFODNN7EXAMPLE'
 Variables.SetVariable Name: %DebugFlag% Value: True
-HTTP.InvokeUrl Method: GET Url: 'https://api.example.com/customers' Accept: 'application/json' => %Response%
+HTTPClient.InvokeUrl Method: GET Url: 'https://api.example.com/customers' Accept: 'application/json' => %Response%
 LOOP FROM 1 TO 50 STEP 1
     WebAutomation.ClickLink BrowserInstance: %Browser% Link: 'next page'
     IF %Response% = '' THEN

@@ -64,6 +64,17 @@ type TicketProvider = () => Promise<string>
 
 const MAX_RECONNECT_DELAY_MS = 30_000
 
+// Liveness watchdog for half-open sockets (suspend/resume, silent network
+// drop): the server's protocol-level pings never reach JS, so liveness must
+// come from app-level traffic. The client sends {type:'ping'} every
+// WS_PING_INTERVAL_MS (the server answers with 'pong' — see
+// internal/websocket/client.go), and any incoming message re-arms a
+// WS_INACTIVITY_TIMEOUT_MS timer. The interval guarantees ≥2 pong
+// opportunities inside the window; 45s matches the SSE watchdog
+// (SSE_INACTIVITY_TIMEOUT_MS in api/client.ts) for consistent recovery UX.
+const WS_PING_INTERVAL_MS = 20_000
+const WS_INACTIVITY_TIMEOUT_MS = 45_000
+
 class CollaborationService {
   private ws: WebSocket | null = null
   private flowId: string | null = null
@@ -75,6 +86,9 @@ class CollaborationService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
   private shouldReconnect = false
+  // Liveness watchdog timers. See WS_PING_INTERVAL_MS / WS_INACTIVITY_TIMEOUT_MS.
+  private pingTimer: ReturnType<typeof setInterval> | null = null
+  private inactivityTimer: ReturnType<typeof setTimeout> | null = null
   // Bumped on every connect()/disconnect() so an in-flight ticket fetch from a
   // superseded attempt can detect it is stale and abort before opening a socket.
   private generation = 0
@@ -93,6 +107,7 @@ class CollaborationService {
     this.shouldReconnect = false
     this.generation++
     this.clearReconnectTimer()
+    this.clearWatchdog()
     if (this.ws) {
       this.ws.close()
       this.ws = null
@@ -140,9 +155,7 @@ class CollaborationService {
     }
     if (gen !== this.generation || !this.shouldReconnect) return
 
-    const wsBase = this.apiUrl
-      .replace(/^http/, 'ws')
-      .replace(/\/$/, '')
+    const wsBase = this.apiUrl.replace(/^http/, 'ws').replace(/\/$/, '')
     const wsUrl = `${wsBase}/ws?flowId=${encodeURIComponent(this.flowId)}&ticket=${encodeURIComponent(ticket)}`
 
     const ws = new WebSocket(wsUrl)
@@ -152,10 +165,15 @@ class CollaborationService {
       if (this.ws !== ws) return // superseded socket
       this.reconnectAttempt = 0
       this.setStatus('connected')
+      this.startWatchdog()
     }
 
     ws.onmessage = (event: MessageEvent) => {
       if (this.ws !== ws) return // superseded socket
+      // Any inbound frame (real events or a pong reply) proves the socket is
+      // alive — re-arm the inactivity watchdog before parsing so even a
+      // malformed frame counts as liveness.
+      this.armInactivity()
       try {
         const env = JSON.parse(event.data as string) as Envelope
         this.handlers.forEach(h => h(env))
@@ -168,6 +186,7 @@ class CollaborationService {
       // A close from a superseded socket (e.g. one we already replaced during a
       // rapid reconnect) must not clobber the current connection's state.
       if (this.ws !== ws) return
+      this.clearWatchdog()
       this.ws = null
       if (this.shouldReconnect) {
         this.scheduleReconnect()
@@ -196,6 +215,42 @@ class CollaborationService {
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+  }
+
+  // Starts the liveness watchdog for the just-opened socket: a periodic
+  // app-level ping (the server's protocol-level pings never surface in JS) plus
+  // an inactivity timer that any inbound frame re-arms. Clearing any stale
+  // timers first guards against a superseded socket's onopen overwriting refs
+  // before that socket's onclose runs.
+  private startWatchdog(): void {
+    this.clearWatchdog()
+    this.armInactivity()
+    this.pingTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({type: 'ping'}))
+      }
+    }, WS_PING_INTERVAL_MS)
+  }
+
+  private armInactivity(): void {
+    if (this.inactivityTimer) clearTimeout(this.inactivityTimer)
+    this.inactivityTimer = setTimeout(() => {
+      // Nothing arrived (not even a pong) within the window — presume the
+      // socket is half-open (suspend/resume, silent network drop) and force it
+      // closed so onclose runs the reconnect backoff.
+      if (this.ws) this.ws.close()
+    }, WS_INACTIVITY_TIMEOUT_MS)
+  }
+
+  private clearWatchdog(): void {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
+    }
+    if (this.inactivityTimer !== null) {
+      clearTimeout(this.inactivityTimer)
+      this.inactivityTimer = null
     }
   }
 

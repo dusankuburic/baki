@@ -1974,43 +1974,25 @@
                 }
               ],
               "children": []
-            },
-            {
-              "name": "Call Framework_CloseAllApplications",
-              "type": "SUBFLOW",
-              "rawType": "CALL",
-              "indent": 4,
-              "lineNumber": 8,
-              "properties": {},
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "subflow",
-                  "value": "Framework_CloseAllApplications",
-                  "target": "Framework_CloseAllApplications"
-                }
-              ],
-              "children": []
-            },
-            {
-              "name": "End On Block Error",
-              "type": "END",
-              "rawType": "END",
-              "indent": 0,
-              "lineNumber": 9,
-              "properties": {
-                "_parentType": "ERROR_HANDLER"
-              },
-              "variables": [],
-              "tokens": [
-                {
-                  "type": "text",
-                  "value": "End On Block Error"
-                }
-              ],
-              "children": []
             }
           ]
+        },
+        {
+          "name": "Call Framework_CloseAllApplications",
+          "type": "SUBFLOW",
+          "rawType": "CALL",
+          "indent": 4,
+          "lineNumber": 8,
+          "properties": {},
+          "variables": [],
+          "tokens": [
+            {
+              "type": "subflow",
+              "value": "Framework_CloseAllApplications",
+              "target": "Framework_CloseAllApplications"
+            }
+          ],
+          "children": []
         },
         {
           "name": "Call Framework_InitAllApplications",
@@ -2837,76 +2819,16 @@
   ],
   "parseErrors": [
     {
-      "line": 31,
-      "message": "unclosed block: Call Framework_LogMessage",
-      "severity": "error",
-      "snippet": "CALL"
-    },
-    {
-      "line": 1,
-      "message": "unclosed block: Do the necessary procedures closing the used applications.",
-      "severity": "error",
-      "snippet": "COMMENT"
-    },
-    {
-      "line": 1,
-      "message": "unclosed block: Extract all items that the bot needs to process in a variable",
-      "severity": "error",
-      "snippet": "COMMENT"
-    },
-    {
-      "line": 4,
-      "message": "unclosed block: Close",
-      "severity": "error",
-      "snippet": "Excel.CloseExcel.Close"
-    },
-    {
-      "line": 28,
-      "message": "unclosed block: Close",
-      "severity": "error",
-      "snippet": "Excel.CloseExcel.Close"
-    },
-    {
-      "line": 1,
-      "message": "unclosed block: Force the termination of the used applications.",
-      "severity": "error",
-      "snippet": "COMMENT"
-    },
-    {
-      "line": 1,
-      "message": "unclosed block: Run major steps of the process, which are implemented by multiple subflows.",
-      "severity": "error",
-      "snippet": "COMMENT"
-    },
-    {
-      "line": 10,
-      "message": "unclosed block: Call Framework_InitAllApplications",
-      "severity": "error",
-      "snippet": "CALL"
-    },
-    {
-      "line": 19,
-      "message": "unclosed block: Increase Variable",
-      "severity": "error",
-      "snippet": "Variables.IncreaseVariable"
-    },
-    {
-      "line": 2,
-      "message": "unclosed block: Take Screenshot Of Primary Screen And Save To File",
-      "severity": "error",
-      "snippet": "Workstation.TakeScreenshot.TakeScreenshotOfPrimaryScreenAndSaveToFile"
-    },
-    {
-      "line": 6,
-      "message": "unclosed block: EXIT Code: 0",
-      "severity": "error",
-      "snippet": "EXIT"
+      "line": 24,
+      "message": "ELSE outside IF",
+      "severity": "warning",
+      "snippet": "ELSE"
     }
   ],
   "metadata": {
-    "blockCount": 116,
+    "blockCount": 115,
     "subflowCount": 13,
     "maxDepth": 5,
-    "rawLineCount": 140
+    "rawLineCount": 127
   }
 }

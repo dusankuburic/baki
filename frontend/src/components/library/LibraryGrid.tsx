@@ -27,7 +27,12 @@ function LibraryGridImpl({items, selectedId, onSelect, onOpen}: LibraryGridProps
   )
 }
 
-function SelectableCard({flow, selected, onClick, onDoubleClick}: {
+function SelectableCard({
+  flow,
+  selected,
+  onClick,
+  onDoubleClick,
+}: {
   flow: LibraryFlow
   selected: boolean
   onClick: () => void
@@ -43,7 +48,7 @@ function SelectableCard({flow, selected, onClick, onDoubleClick}: {
         'group flex flex-col gap-3 p-4 rounded-xl border bg-surface-2 transition-colors text-left w-full',
         selected
           ? 'border-brand-500 ring-2 ring-brand-500/30 bg-surface-3'
-          : 'border-border-default hover:border-brand-500/50 hover:bg-surface-3'
+          : 'border-border-default hover:border-brand-500/50 hover:bg-surface-3',
       )}
       aria-pressed={selected}
     >
@@ -55,9 +60,7 @@ function SelectableCard({flow, selected, onClick, onDoubleClick}: {
           <p className="text-sm font-semibold text-text-primary truncate group-hover:text-brand-400 transition-colors">
             {flow.name}
           </p>
-          {flow.description && (
-            <p className="mt-0.5 text-xs text-text-muted line-clamp-2">{flow.description}</p>
-          )}
+          {flow.description && <p className="mt-0.5 text-xs text-text-muted line-clamp-2">{flow.description}</p>}
         </div>
       </div>
 

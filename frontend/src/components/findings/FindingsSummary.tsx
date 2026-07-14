@@ -17,7 +17,13 @@ export default function FindingsSummary({stats, durationMs, healthScore}: Props)
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           {healthScore !== undefined && (
-            <div className={clsx('px-2 py-0.5 rounded-md font-mono text-sm font-bold', scoreBg(healthScore), scoreColor(healthScore))}>
+            <div
+              className={clsx(
+                'px-2 py-0.5 rounded-md font-mono text-sm font-bold',
+                scoreBg(healthScore),
+                scoreColor(healthScore),
+              )}
+            >
               {healthScore}
             </div>
           )}

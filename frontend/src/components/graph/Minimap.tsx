@@ -17,22 +17,35 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
   const dragging = useRef(false)
 
   // Resolve node dot color from theme tokens (falls back to neutral grey).
-  const getDotColor = useCallback((type: string): string => {
-    if (!tokens) {
-      const fallback: Record<string, string> = {
-        ACTION: '#3b82f6', LOOP: '#f59e0b', CONDITION: '#10b981',
-        SUBFLOW: '#a855f7', ERROR_HANDLER: '#ef4444', COMMENT: '#6b7280',
-        VARIABLE: '#ec4899', WAIT: '#14b8a6',
+  const getDotColor = useCallback(
+    (type: string): string => {
+      if (!tokens) {
+        const fallback: Record<string, string> = {
+          ACTION: '#3b82f6',
+          LOOP: '#f59e0b',
+          CONDITION: '#10b981',
+          SUBFLOW: '#a855f7',
+          ERROR_HANDLER: '#ef4444',
+          COMMENT: '#6b7280',
+          VARIABLE: '#ec4899',
+          WAIT: '#14b8a6',
+        }
+        return fallback[type] ?? '#6b7280'
       }
-      return fallback[type] ?? '#6b7280'
-    }
-    const map: Record<string, keyof GraphTokenColors> = {
-      ACTION: 'blockAction', LOOP: 'blockLoop', CONDITION: 'blockCondition',
-      SUBFLOW: 'blockSubflow', ERROR_HANDLER: 'blockError', COMMENT: 'blockComment',
-      VARIABLE: 'blockVariable', WAIT: 'blockWait',
-    }
-    return map[type] ? tokens[map[type]] : tokens.blockComment
-  }, [tokens])
+      const map: Record<string, keyof GraphTokenColors> = {
+        ACTION: 'blockAction',
+        LOOP: 'blockLoop',
+        CONDITION: 'blockCondition',
+        SUBFLOW: 'blockSubflow',
+        ERROR_HANDLER: 'blockError',
+        COMMENT: 'blockComment',
+        VARIABLE: 'blockVariable',
+        WAIT: 'blockWait',
+      }
+      return map[type] ? tokens[map[type]] : tokens.blockComment
+    },
+    [tokens],
+  )
 
   const drawMinimap = useCallback(() => {
     const canvas = canvasRef.current
@@ -62,8 +75,8 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     const scaleX = (width - pad * 2) / graphW
     const scaleY = (height - pad * 2) / graphH
     const scale = Math.min(scaleX, scaleY)
-    const offsetX = pad + ((width - pad * 2) - graphW * scale) / 2
-    const offsetY = pad + ((height - pad * 2) - graphH * scale) / 2
+    const offsetX = pad + (width - pad * 2 - graphW * scale) / 2
+    const offsetY = pad + (height - pad * 2 - graphH * scale) / 2
 
     nodes.forEach((node: cytoscape.NodeSingular) => {
       const pos = node.position()
@@ -91,46 +104,51 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
   }, [cy, width, height, getDotColor])
 
   // Pan the main graph so the clicked/dragged minimap point is centered.
-  const panToMinimapPoint = useCallback((clientX: number, clientY: number) => {
-    if (!cy) return
-    const canvas = canvasRef.current
-    if (!canvas) return
+  const panToMinimapPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!cy) return
+      const canvas = canvasRef.current
+      if (!canvas) return
 
-    const rect = canvas.getBoundingClientRect()
-    const x = clientX - rect.left
-    const y = clientY - rect.top
+      const rect = canvas.getBoundingClientRect()
+      const x = clientX - rect.left
+      const y = clientY - rect.top
 
-    const nodes = cy.nodes()
-    if (nodes.length === 0) return
+      const nodes = cy.nodes()
+      if (nodes.length === 0) return
 
-    const bounds = nodes.boundingBox()
-    const graphW = bounds.x2 - bounds.x1
-    const graphH = bounds.y2 - bounds.y1
-    if (graphW === 0 || graphH === 0) return
+      const bounds = nodes.boundingBox()
+      const graphW = bounds.x2 - bounds.x1
+      const graphH = bounds.y2 - bounds.y1
+      if (graphW === 0 || graphH === 0) return
 
-    const pad = 10
-    const scaleX = (width - pad * 2) / graphW
-    const scaleY = (height - pad * 2) / graphH
-    const scale = Math.min(scaleX, scaleY)
-    const offsetX = pad + ((width - pad * 2) - graphW * scale) / 2
-    const offsetY = pad + ((height - pad * 2) - graphH * scale) / 2
+      const pad = 10
+      const scaleX = (width - pad * 2) / graphW
+      const scaleY = (height - pad * 2) / graphH
+      const scale = Math.min(scaleX, scaleY)
+      const offsetX = pad + (width - pad * 2 - graphW * scale) / 2
+      const offsetY = pad + (height - pad * 2 - graphH * scale) / 2
 
-    const graphX = (x - offsetX) / scale + bounds.x1
-    const graphY = (y - offsetY) / scale + bounds.y1
+      const graphX = (x - offsetX) / scale + bounds.x1
+      const graphY = (y - offsetY) / scale + bounds.y1
 
-    // Set absolute pan so the clicked graph point is centered in the viewport.
-    cy.pan({
-      x: cy.width() / 2 - graphX * cy.zoom(),
-      y: cy.height() / 2 - graphY * cy.zoom(),
-    })
-    drawMinimap()
-  }, [cy, width, height, drawMinimap])
+      // Set absolute pan so the clicked graph point is centered in the viewport.
+      cy.pan({
+        x: cy.width() / 2 - graphX * cy.zoom(),
+        y: cy.height() / 2 - graphY * cy.zoom(),
+      })
+      drawMinimap()
+    },
+    [cy, width, height, drawMinimap],
+  )
 
   useEffect(() => {
     if (!cy) return
     cy.on('viewport resize', drawMinimap)
     drawMinimap()
-    return () => { cy.off('viewport resize', drawMinimap) }
+    return () => {
+      cy.off('viewport resize', drawMinimap)
+    }
   }, [cy, drawMinimap])
 
   // Window-level drag handlers so dragging outside the canvas still works.
@@ -138,7 +156,9 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     const onMouseMove = (e: MouseEvent) => {
       if (dragging.current) panToMinimapPoint(e.clientX, e.clientY)
     }
-    const onMouseUp = () => { dragging.current = false }
+    const onMouseUp = () => {
+      dragging.current = false
+    }
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
     return () => {
@@ -147,10 +167,13 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     }
   }, [panToMinimapPoint])
 
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    dragging.current = true
-    panToMinimapPoint(e.clientX, e.clientY)
-  }, [panToMinimapPoint])
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      dragging.current = true
+      panToMinimapPoint(e.clientX, e.clientY)
+    },
+    [panToMinimapPoint],
+  )
 
   return (
     <canvas

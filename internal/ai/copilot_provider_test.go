@@ -269,8 +269,12 @@ func TestCopilotProvider_Chat_TokenFnError(t *testing.T) {
 	copilotBaseURL = server.URL
 
 	p := &CopilotProvider{
-		tokenFn: func(_ context.Context) (string, error) { return "", tokenErr },
-		client:  server.Client(),
+		openaiBase: openaiBase{
+			tokenFn:       func(_ context.Context) (string, error) { return "", tokenErr },
+			client:        server.Client(),
+			baseURL:       &copilotBaseURL,
+			providerLabel: "copilot",
+		},
 	}
 
 	_, err := p.Chat(context.Background(), Request{
@@ -294,7 +298,7 @@ func TestCopilotProvider_Stream_Success(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write([]byte("data: {\"choices\": [{\"delta\": {\"content\": \"Hello\"}}]}\n\n"))
-		w.Write([]byte("data: {\"choices\": [{\"delta\": {\"content\": \" Copilot\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"completion_tokens\": 2}}\n\n"))
+		w.Write([]byte("data: {\"choices\": [{\"delta\": {\"content\": \" Copilot\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 2}}\n\n"))
 		w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -307,13 +311,13 @@ func TestCopilotProvider_Stream_Success(t *testing.T) {
 	p.client = server.Client()
 
 	var chunks []string
-	var done bool
+	var doneChunk Chunk
 	err := p.Stream(context.Background(), Request{
 		Model:    "gpt-4o",
 		Messages: []Message{{Role: "user", Content: "Hi"}},
 	}, func(chunk Chunk) {
 		if chunk.Done {
-			done = true
+			doneChunk = chunk
 		} else if chunk.Text != "" {
 			chunks = append(chunks, chunk.Text)
 		}
@@ -321,11 +325,19 @@ func TestCopilotProvider_Stream_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !done {
+	if !doneChunk.Done {
 		t.Error("expected done signal")
 	}
 	if len(chunks) != 2 || chunks[0] != "Hello" || chunks[1] != " Copilot" {
 		t.Errorf("expected [Hello, \" Copilot\"], got %v", chunks)
+	}
+	// Verify StreamOptions.include_usage is sent and usage is parsed — the fix
+	// for Copilot streaming omitting usage (previously tokensIn/tokensOut were 0).
+	if doneChunk.TokensOut != 2 {
+		t.Errorf("TokensOut = %d, want 2 (include_usage not working?)", doneChunk.TokensOut)
+	}
+	if doneChunk.TokensIn != 10 {
+		t.Errorf("TokensIn = %d, want 10", doneChunk.TokensIn)
 	}
 }
 
@@ -340,8 +352,12 @@ func TestCopilotProvider_Stream_TokenFnError(t *testing.T) {
 	copilotBaseURL = server.URL
 
 	p := &CopilotProvider{
-		tokenFn: func(_ context.Context) (string, error) { return "", fmt.Errorf("auth error") },
-		client:  server.Client(),
+		openaiBase: openaiBase{
+			tokenFn:       func(_ context.Context) (string, error) { return "", fmt.Errorf("auth error") },
+			client:        server.Client(),
+			baseURL:       &copilotBaseURL,
+			providerLabel: "copilot",
+		},
 	}
 
 	err := p.Stream(context.Background(), Request{

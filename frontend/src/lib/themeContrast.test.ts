@@ -34,10 +34,12 @@ function parseThemes(css: string): {
   const root = rootMatch ? parseTokens(rootMatch[1]) : {}
 
   const themes: Record<string, Record<string, string>> = {}
-  const themeRe = /\[data-theme="([\w-]+)"\]\s*\{([^}]+)\}/g
+  // Quote style is Prettier's call (currently single for CSS attribute
+  // selectors), so accept either rather than coupling this parser to it.
+  const themeRe = /\[data-theme=(["'])([\w-]+)\1\]\s*\{([^}]+)\}/g
   let m: RegExpExecArray | null
   while ((m = themeRe.exec(css)) !== null) {
-    themes[m[1]] = parseTokens(m[2])
+    themes[m[2]] = parseTokens(m[3])
   }
   return {root, themes}
 }
@@ -48,22 +50,20 @@ const {root, themes: perTheme} = parseThemes(css)
 // theme's overrides onto the root defaults so every theme has a full token set.
 const allThemes: Record<string, Record<string, string>> = {
   dark: root,
-  ...Object.fromEntries(
-    Object.entries(perTheme).map(([id, overrides]) => [id, {...root, ...overrides}])
-  ),
+  ...Object.fromEntries(Object.entries(perTheme).map(([id, overrides]) => [id, {...root, ...overrides}])),
 }
 
 // ---- WCAG color math ------------------------------------------------------
 
 function hexToRgb(hex: string): [number, number, number] | null {
   let h = hex.replace('#', '').trim()
-  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  if (h.length === 3)
+    h = h
+      .split('')
+      .map(c => c + c)
+      .join('')
   if (!/^[0-9a-fA-F]{6}$/.test(h)) return null
-  return [
-    parseInt(h.slice(0, 2), 16),
-    parseInt(h.slice(2, 4), 16),
-    parseInt(h.slice(4, 6), 16),
-  ]
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
 }
 
 /** WCAG 2.1 relative luminance. */
@@ -88,7 +88,7 @@ export function contrastRatio(fg: string, bg: string): number {
 // ---- Test cases -----------------------------------------------------------
 
 const AA_NORMAL = 4.5 // body text
-const AA_LARGE = 3.0  // ≥18px or ≥14px bold — used for tertiary labels/captions
+const AA_LARGE = 3.0 // ≥18px or ≥14px bold — used for tertiary labels/captions
 
 const themeEntries = Object.entries(allThemes)
 
@@ -97,7 +97,7 @@ describe('theme contrast (WCAG AA)', () => {
     const surfaces = ['--surface-0', '--surface-1', '--surface-2'] as const
 
     // Primary text is body copy — must meet AA normal (4.5:1).
-    describe.each(surfaces)('primary text on %s', (surf) => {
+    describe.each(surfaces)('primary text on %s', surf => {
       it(`≥ ${AA_NORMAL}:1`, () => {
         const ratio = contrastRatio(tokens['--text-primary'], tokens[surf])
         expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL)
@@ -105,7 +105,7 @@ describe('theme contrast (WCAG AA)', () => {
     })
 
     // Secondary text is subtitles/labels — must meet AA normal (4.5:1).
-    describe.each(surfaces)('secondary text on %s', (surf) => {
+    describe.each(surfaces)('secondary text on %s', surf => {
       it(`≥ ${AA_NORMAL}:1`, () => {
         const ratio = contrastRatio(tokens['--text-secondary'], tokens[surf])
         expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL)
@@ -113,7 +113,7 @@ describe('theme contrast (WCAG AA)', () => {
     })
 
     // Tertiary text is captions/hints — AA large threshold (3:1).
-    describe.each(surfaces)('tertiary text on %s', (surf) => {
+    describe.each(surfaces)('tertiary text on %s', surf => {
       it(`≥ ${AA_LARGE}:1`, () => {
         const ratio = contrastRatio(tokens['--text-tertiary'], tokens[surf])
         expect(ratio).toBeGreaterThanOrEqual(AA_LARGE)
@@ -136,13 +136,18 @@ describe('theme contrast (WCAG AA)', () => {
     // that pastel themes (Catppuccin, Rose Pine) have inherently softer contrast.
     const AA_BLOCK = 2.5
     const blockColors = [
-      '--block-action', '--block-loop', '--block-condition',
-      '--block-subflow', '--block-error',
-      '--block-variable', '--block-string', '--block-wait',
+      '--block-action',
+      '--block-loop',
+      '--block-condition',
+      '--block-subflow',
+      '--block-error',
+      '--block-variable',
+      '--block-string',
+      '--block-wait',
     ] as const
     const cardSurfaces = ['--surface-1', '--surface-2'] as const
-    describe.each(blockColors)('%s on card surfaces', (block) => {
-      describe.each(cardSurfaces)('%s', (surf) => {
+    describe.each(blockColors)('%s on card surfaces', block => {
+      describe.each(cardSurfaces)('%s', surf => {
         it(`≥ ${AA_BLOCK}:1`, () => {
           const ratio = contrastRatio(tokens[block], tokens[surf])
           expect(ratio).toBeGreaterThanOrEqual(AA_BLOCK)

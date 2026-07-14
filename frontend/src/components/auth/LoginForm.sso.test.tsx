@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {render, screen, waitFor, fireEvent} from '@testing-library/react'
 
 const ssoInfoMock = vi.fn()
 const ssoExchangeMock = vi.fn()
 
-vi.mock('@/api/auth', async (importOriginal) => {
+vi.mock('@/api/auth', async importOriginal => {
   const mod = await importOriginal<typeof import('@/api/auth')>()
   return {
     ...mod,
@@ -18,14 +18,14 @@ vi.mock('@/api/auth', async (importOriginal) => {
 
 vi.mock('@/api/client', () => ({
   request: vi.fn(),
-  getBackendConfig: vi.fn().mockResolvedValue({ apiUrl: 'http://api.test' }),
+  getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://api.test'}),
   registerRefreshCallback: vi.fn(),
   invalidateConfigCache: vi.fn(),
   setSessionToken: vi.fn(),
 }))
 
 import LoginForm from './LoginForm'
-import { useAuthStore } from '@/stores/authStore'
+import {useAuthStore} from '@/stores/authStore'
 
 const initialState = useAuthStore.getState()
 
@@ -42,22 +42,22 @@ beforeEach(() => {
 
 describe('LoginForm SSO', () => {
   it('hides the SSO button when SSO is not configured', async () => {
-    ssoInfoMock.mockResolvedValue({ enabled: false })
+    ssoInfoMock.mockResolvedValue({enabled: false})
     render(<LoginForm />)
     await waitFor(() => expect(ssoInfoMock).toHaveBeenCalled())
     expect(screen.queryByText(/continue with/i)).not.toBeInTheDocument()
   })
 
   it('shows the provider button when SSO is enabled', async () => {
-    ssoInfoMock.mockResolvedValue({ enabled: true, provider: 'Microsoft' })
+    ssoInfoMock.mockResolvedValue({enabled: true, provider: 'Microsoft'})
     render(<LoginForm />)
     expect(await screen.findByText('Continue with Microsoft')).toBeInTheDocument()
   })
 
   it('exchanges an ssoTicket from the URL fragment on mount', async () => {
-    ssoInfoMock.mockResolvedValue({ enabled: true, provider: 'Microsoft' })
+    ssoInfoMock.mockResolvedValue({enabled: true, provider: 'Microsoft'})
     const ticketMock = vi.fn().mockResolvedValue(undefined)
-    useAuthStore.setState({ ...initialState, loginWithSSOTicket: ticketMock }, true)
+    useAuthStore.setState({...initialState, loginWithSSOTicket: ticketMock}, true)
     setHash('#ssoTicket=ticket-abc')
 
     render(<LoginForm />)
@@ -68,7 +68,7 @@ describe('LoginForm SSO', () => {
   })
 
   it('surfaces an ssoError from the URL fragment', async () => {
-    ssoInfoMock.mockResolvedValue({ enabled: true, provider: 'Microsoft' })
+    ssoInfoMock.mockResolvedValue({enabled: true, provider: 'Microsoft'})
     setHash('#ssoError=' + encodeURIComponent('identity verification failed'))
 
     render(<LoginForm />)
@@ -78,15 +78,19 @@ describe('LoginForm SSO', () => {
   })
 
   it('clicking the SSO button navigates to the backend start endpoint', async () => {
-    ssoInfoMock.mockResolvedValue({ enabled: true, provider: 'Microsoft' })
+    ssoInfoMock.mockResolvedValue({enabled: true, provider: 'Microsoft'})
     const hrefSpy = vi.fn()
     const original = window.location
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: {
         ...original,
-        get href() { return original.href },
-        set href(v: string) { hrefSpy(v) },
+        get href() {
+          return original.href
+        },
+        set href(v: string) {
+          hrefSpy(v)
+        },
         hash: '',
         pathname: '/',
         search: '',
@@ -96,11 +100,9 @@ describe('LoginForm SSO', () => {
     try {
       render(<LoginForm />)
       fireEvent.click(await screen.findByText('Continue with Microsoft'))
-      await waitFor(() =>
-        expect(hrefSpy).toHaveBeenCalledWith('http://api.test/api/auth/sso/start'),
-      )
+      await waitFor(() => expect(hrefSpy).toHaveBeenCalledWith('http://api.test/api/auth/sso/start'))
     } finally {
-      Object.defineProperty(window, 'location', { configurable: true, value: original })
+      Object.defineProperty(window, 'location', {configurable: true, value: original})
     }
   })
 })

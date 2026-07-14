@@ -54,10 +54,17 @@ func StaticTokenMiddleware(token string, next http.Handler) http.Handler {
 // logs and Referer headers; restricting it to the SSE path confines that
 // exposure to the one endpoint that needs it. Returns the raw token string
 // (without the "Bearer " prefix).
+//
+// The auth scheme is case-insensitive per RFC 7235 §2.1, so "bearer <jwt>",
+// "BEARER <jwt>", etc. are all accepted (some client libraries emit lowercase).
 func ExtractToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); h != "" {
-		if after, ok := strings.CutPrefix(h, "Bearer "); ok {
-			return after
+		// Match the scheme case-insensitively, then take the remainder of the
+		// original header (preserving the token's exact casing) after a single
+		// space separator.
+		if idx := strings.IndexByte(h, ' '); idx == len("bearer") &&
+			strings.EqualFold(h[:idx], "bearer") {
+			return strings.TrimSpace(h[idx+1:])
 		}
 	}
 	if r.URL.Path == sseTokenPath {

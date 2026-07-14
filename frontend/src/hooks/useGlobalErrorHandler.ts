@@ -8,31 +8,31 @@ import {systemApi} from '@/api'
 // reject again… a self-sustaining loop that hammers an already-struggling
 // backend and never stops. Swallow the rejection to break the cycle.
 function report(message: string, stack: string, componentStack: string, url: string) {
-    try {
-        const result = systemApi.logError({message, stack, componentStack, url})
-        if (result && typeof result.catch === 'function') {
-            result.catch(() => {
-                /* backend unavailable — swallow to avoid a rejection loop */
-            })
-        }
-    } catch {
-        /* logError threw synchronously (e.g. before the fetch) — swallow */
+  try {
+    const result = systemApi.logError({message, stack, componentStack, url})
+    if (result && typeof result.catch === 'function') {
+      result.catch(() => {
+        /* backend unavailable — swallow to avoid a rejection loop */
+      })
     }
+  } catch {
+    /* logError threw synchronously (e.g. before the fetch) — swallow */
+  }
 }
 
 export function useGlobalErrorHandler() {
-    useEffect(() => {
-        const handler = (event: ErrorEvent) => {
-            report(event.message, event.error?.stack || '', '', event.filename)
-        }
-        const rejectionHandler = (event: PromiseRejectionEvent) => {
-            report(String(event.reason), '', '', '')
-        }
-        window.addEventListener('error', handler)
-        window.addEventListener('unhandledrejection', rejectionHandler)
-        return () => {
-            window.removeEventListener('error', handler)
-            window.removeEventListener('unhandledrejection', rejectionHandler)
-        }
-    }, [])
+  useEffect(() => {
+    const handler = (event: ErrorEvent) => {
+      report(event.message, event.error?.stack || '', '', event.filename)
+    }
+    const rejectionHandler = (event: PromiseRejectionEvent) => {
+      report(String(event.reason), '', '', '')
+    }
+    window.addEventListener('error', handler)
+    window.addEventListener('unhandledrejection', rejectionHandler)
+    return () => {
+      window.removeEventListener('error', handler)
+      window.removeEventListener('unhandledrejection', rejectionHandler)
+    }
+  }, [])
 }

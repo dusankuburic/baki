@@ -9,40 +9,40 @@ import {Spinner} from '@/components/shared'
 // report exists; otherwise the run button is shown (caller guarantees no report
 // in that branch).
 export interface AnalysisRunnerProps {
-    onAnalyze: () => void
-    isAnalyzing: boolean
-    progress: {current: number; total: number; ruleName: string}
+  onAnalyze: () => void
+  isAnalyzing: boolean
+  progress: {current: number; total: number; ruleName: string}
 }
 
 export default function AnalysisRunner({onAnalyze, isAnalyzing, progress}: AnalysisRunnerProps) {
-    if (isAnalyzing) {
-        const pct = progress.total > 0 ? Math.round(progress.current / progress.total * 100) : 0
-        return (
-            <div
-                className="flex flex-col items-center justify-center h-full gap-3 p-4"
-                role="progressbar"
-                aria-valuenow={pct}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-label="Analysis progress"
-            >
-                <Spinner size={24} />
-                <span className="text-sm text-text-secondary tabular-nums">
-                    Analyzing... {pct}% ({progress.ruleName})
-                </span>
-            </div>
-        )
-    }
-
+  if (isAnalyzing) {
+    const pct = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0
     return (
-        <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
-            <span className="text-sm text-text-tertiary">No analysis run yet</span>
-            <button
-                onClick={onAnalyze}
-                className="px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors"
-            >
-                Run Analysis
-            </button>
-        </div>
+      <div
+        className="flex flex-col items-center justify-center h-full gap-3 p-4"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Analysis progress"
+      >
+        <Spinner size={24} />
+        <span className="text-sm text-text-secondary tabular-nums">
+          Analyzing... {pct}% ({progress.ruleName})
+        </span>
+      </div>
     )
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-3 p-4">
+      <span className="text-sm text-text-tertiary">No analysis run yet</span>
+      <button
+        onClick={onAnalyze}
+        className="px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors"
+      >
+        Run Analysis
+      </button>
+    </div>
+  )
 }

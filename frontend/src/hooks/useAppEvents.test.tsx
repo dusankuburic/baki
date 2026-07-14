@@ -9,7 +9,9 @@ let capturedCallback: ((ev: {name: string; data?: unknown}) => void) | null = nu
 vi.mock('@/api/client', () => ({
   subscribeToEvents: vi.fn(async (cb: (ev: {name: string; data?: unknown}) => void) => {
     capturedCallback = cb
-    return () => { capturedCallback = null }
+    return () => {
+      capturedCallback = null
+    }
   }),
 }))
 

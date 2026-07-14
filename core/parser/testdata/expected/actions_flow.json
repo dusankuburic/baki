@@ -602,24 +602,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 17,
-      "message": "unclosed block: Close Excel",
-      "severity": "error",
-      "snippet": "Excel.CloseExcel"
-    },
-    {
-      "line": 32,
-      "message": "unclosed block: Show Message Box",
-      "severity": "error",
-      "snippet": "Display.ShowMessageBox"
-    }
-  ],
   "metadata": {
     "blockCount": 27,
     "subflowCount": 3,
     "maxDepth": 3,
-    "rawLineCount": 34
+    "rawLineCount": 33
   }
 }

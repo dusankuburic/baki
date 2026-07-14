@@ -10,7 +10,8 @@ export function SecurityPostureCard({data, className}: {data: DashboardSecurity;
       icon: AlertTriangle,
       label: 'Failed logins (24h)',
       value: data.failedLogins24h,
-      tone: data.failedLogins24h > 5 ? 'text-red-400' : data.failedLogins24h > 0 ? 'text-amber-400' : 'text-emerald-400',
+      tone:
+        data.failedLogins24h > 5 ? 'text-red-400' : data.failedLogins24h > 0 ? 'text-amber-400' : 'text-emerald-400',
     },
     {
       icon: Lock,
@@ -35,7 +36,7 @@ export function SecurityPostureCard({data, className}: {data: DashboardSecurity;
         </div>
       ) : (
         <div className="flex flex-col gap-3 py-2">
-          {items.map((item) => (
+          {items.map(item => (
             <div key={item.label} className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-surface-3 flex items-center justify-center shrink-0">
                 <item.icon size={15} className={item.tone} />

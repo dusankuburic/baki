@@ -11,7 +11,7 @@ func TestMissingTimeoutRule(t *testing.T) {
 	rule := &MissingTimeoutRule{}
 
 	t.Run("HTTP action without timeout emits finding", func(t *testing.T) {
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{"url": "https://example.com"}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
@@ -26,7 +26,7 @@ func TestMissingTimeoutRule(t *testing.T) {
 	})
 
 	t.Run("HTTP action with timeout emits no finding", func(t *testing.T) {
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{"url": "https://example.com", "timeoutInSeconds": "30"}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
@@ -140,13 +140,31 @@ func TestErrorSwallowRule(t *testing.T) {
 			t.Fatalf("expected 0 findings, got %d", len(got))
 		}
 	})
+
+	// Regression: a handler whose only child is an unrelated action (no logging,
+	// no error-variable reference) must STILL be flagged as swallowing. Previously
+	// a catch-all "any BlockTypeAction counts as doing something" suppressed this.
+	t.Run("handler with unrelated placeholder action still emits finding", func(t *testing.T) {
+		action := makeBlock("a1", "noop", models.BlockTypeAction, "Variables.SetVariable", 4)
+		action.SubflowID = "sf1"
+		action.Properties = map[string]string{"Name": "Counter", "Value": "1"}
+		handler := makeBlock("h1", "OnError", models.BlockTypeErrorHandler, "OnError.Handler", 0)
+		handler.SubflowID = "sf1"
+		handler.Children = []models.Block{*action}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*handler}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(handler, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding for handler with unrelated action, got %d", len(got))
+		}
+	})
 }
 
 func TestMissingRetryRule(t *testing.T) {
 	rule := &MissingRetryRule{}
 
 	t.Run("HTTP action without handler emits finding", func(t *testing.T) {
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
 		ctx := buildContext(flow, nil)
@@ -160,7 +178,7 @@ func TestMissingRetryRule(t *testing.T) {
 	})
 
 	t.Run("HTTP action with error handler emits no finding", func(t *testing.T) {
-		action := makeBlock("b2", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 4)
+		action := makeBlock("b2", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 4)
 		action.SubflowID = "sf1"
 		handler := makeBlock("h1", "OnError", models.BlockTypeErrorHandler, "OnError.Handler", 0)
 		handler.SubflowID = "sf1"
@@ -188,7 +206,7 @@ func TestMissingRetryRule(t *testing.T) {
 	// Before the fix, isInsideRetryLoop computed hasRetry then discarded it
 	// (`_ = hasRetry; return false`), so this case produced a false positive.
 	t.Run("HTTP action inside retry loop emits no finding", func(t *testing.T) {
-		action := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 4)
+		action := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 4)
 		action.SubflowID = "sf1"
 		loop := makeBlock("loop1", "Retry loop", models.BlockTypeLoop, "Loop.Loop", 0)
 		loop.SubflowID = "sf1"
@@ -204,7 +222,7 @@ func TestMissingRetryRule(t *testing.T) {
 	// A loop whose name carries no retry/attempt hint should NOT suppress the
 	// finding — confirms the fix walks up rather than blanket-suppressing on any loop.
 	t.Run("HTTP action inside plain loop still emits finding", func(t *testing.T) {
-		action := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 4)
+		action := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 4)
 		action.SubflowID = "sf1"
 		loop := makeBlock("loop1", "For each item", models.BlockTypeLoop, "Loop.ForEach", 0)
 		loop.SubflowID = "sf1"
@@ -268,4 +286,34 @@ func TestWideLoopRule(t *testing.T) {
 			t.Fatalf("expected 0 findings, got %d", len(got))
 		}
 	})
+}
+
+// TestCanonicalModulePrefixes_FireRules is a regression guard: the canonical PAD
+// module names (per the classifier) are "HTTPClient." and "FTP.", not "Http."/"Ftp.".
+// The reliability rules (unhandled-error, missing-retry, missing-timeout) must fire
+// on the canonical spelling — otherwise they silently miss real-world flows.
+func TestCanonicalModulePrefixes_FireRules(t *testing.T) {
+	canonicalActions := []string{
+		"HTTPClient.InvokeService",
+		"HTTPClient.InvokeUrl",
+		"FTP.DownloadFiles",
+	}
+	for _, rawType := range canonicalActions {
+		rawType := rawType
+		t.Run(rawType+"/unhandled-error", func(t *testing.T) {
+			if !isFallible(rawType) {
+				t.Errorf("isFallible(%q) = false; canonical module must be flagged", rawType)
+			}
+		})
+		t.Run(rawType+"/missing-retry", func(t *testing.T) {
+			if !isTransientOperation(rawType) {
+				t.Errorf("isTransientOperation(%q) = false; canonical module must be flagged", rawType)
+			}
+		})
+		t.Run(rawType+"/missing-timeout", func(t *testing.T) {
+			if !requiresTimeout(rawType) {
+				t.Errorf("requiresTimeout(%q) = false; canonical module must be flagged", rawType)
+			}
+		})
+	}
 }

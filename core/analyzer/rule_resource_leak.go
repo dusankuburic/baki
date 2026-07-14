@@ -131,3 +131,7 @@ func buildClosedResourceVars(ctx *RuleContext) map[string]map[string]bool {
 	}
 	return out
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&ResourceLeakRule{}) }

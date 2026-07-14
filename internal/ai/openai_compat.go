@@ -12,7 +12,15 @@ import (
 )
 
 type openaiBase struct {
-	apiKey        string
+	// apiKey is the static bearer token, used when tokenFn is nil. Providers
+	// with a fixed API key (OpenAI, GLM, GitHub Models, …) set this.
+	apiKey string
+	// tokenFn resolves the bearer token per-call, for providers whose token is
+	// dynamic and can expire/require exchange (Copilot's session token). When
+	// set, it takes precedence over apiKey. Errors propagate to the caller
+	// instead of reaching the network — a stale/invalid token never becomes a
+	// wasted HTTP round trip.
+	tokenFn       func(ctx context.Context) (string, error)
 	client        *http.Client
 	baseURL       *string
 	providerLabel string
@@ -22,6 +30,15 @@ type openaiBase struct {
 	embeddingModel string
 	extraHeaders   func(req *http.Request, model string)
 	handle429      func(resp *http.Response, apiErr openAIErrorResp) error
+}
+
+// resolveToken returns the bearer token for a request: tokenFn when set
+// (dynamic token, e.g. Copilot's session exchange), else the static apiKey.
+func (b *openaiBase) resolveToken(ctx context.Context) (string, error) {
+	if b.tokenFn != nil {
+		return b.tokenFn(ctx)
+	}
+	return b.apiKey, nil
 }
 
 func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
@@ -42,7 +59,11 @@ func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq.Header.Set("Authorization", "Bearer "+b.apiKey)
+	token, err := b.resolveToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	if b.extraHeaders != nil {
 		b.extraHeaders(httpReq, req.Model)
@@ -96,6 +117,9 @@ func (b *openaiBase) handleChatError(resp *http.Response, respBody []byte) error
 		case resp.StatusCode >= 500:
 			return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 		}
+		if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+			return err
+		}
 		return fmt.Errorf("%s API: %s", b.providerLabel, apiErr.Error.Message)
 	}
 	return fmt.Errorf("%s API error (status %d)", b.providerLabel, resp.StatusCode)
@@ -121,7 +145,11 @@ func (b *openaiBase) stream(ctx context.Context, req Request, onChunk func(Chunk
 		return err
 	}
 
-	httpReq.Header.Set("Authorization", "Bearer "+b.apiKey)
+	token, err := b.resolveToken(ctx)
+	if err != nil {
+		return fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	if b.extraHeaders != nil {
@@ -158,6 +186,9 @@ func (b *openaiBase) handleStreamError(resp *http.Response, respBody []byte) err
 		case resp.StatusCode >= 500:
 			return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 		}
+		if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+			return err
+		}
 		return fmt.Errorf("%s stream error (status %d): %s", b.providerLabel, resp.StatusCode, apiErr.Error.Message)
 	}
 	if resp.StatusCode >= 500 {
@@ -190,7 +221,11 @@ func (b *openaiBase) embed(ctx context.Context, text []string) ([][]float32, err
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+b.apiKey)
+	token, err := b.resolveToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get %s token: %w", b.providerLabel, err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	if b.extraHeaders != nil {
 		b.extraHeaders(httpReq, b.embeddingModel)

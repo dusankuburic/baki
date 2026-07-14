@@ -25,10 +25,12 @@ export const OrganisationsCard: React.FC<{
               <li key={org.id} className="flex items-center justify-between gap-3 rounded-lg bg-surface-3 px-3 py-2.5">
                 <span className="text-sm text-text-primary truncate">{org.name}</span>
                 {membership && (
-                  <span className={clsx(
-                    'px-2 py-0.5 rounded-md text-xs font-semibold uppercase flex-shrink-0',
-                    roleBadgeClass(membership.role)
-                  )}>
+                  <span
+                    className={clsx(
+                      'px-2 py-0.5 rounded-md text-xs font-semibold uppercase flex-shrink-0',
+                      roleBadgeClass(membership.role),
+                    )}
+                  >
                     {membership.role}
                   </span>
                 )}

@@ -33,7 +33,11 @@ export function ConfidenceDonutCard({confidence, className}: {confidence: Record
         <CardPlaceholder message="Analyze a flow to see how much to trust its findings." />
       ) : (
         <div className="h-48 flex items-center gap-2">
-          <div className="flex-1 h-full relative" role="img" aria-label="Donut chart of findings by confidence tier: high, medium, and low">
+          <div
+            className="flex-1 h-full relative"
+            role="img"
+            aria-label="Donut chart of findings by confidence tier: high, medium, and low"
+          >
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -57,7 +61,8 @@ export function ConfidenceDonutCard({confidence, className}: {confidence: Record
                     borderColor: 'var(--border-subtle)',
                     borderRadius: 8,
                     backdropFilter: 'var(--glass-blur)',
-                    fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                    fontSize: 12,
+                    fontVariantNumeric: 'tabular-nums',
                   }}
                   formatter={(v, _name, entry) => {
                     const tier = CONF_COLORS[(entry?.payload as Slice | undefined)?.key ?? '']
@@ -80,9 +85,7 @@ export function ConfidenceDonutCard({confidence, className}: {confidence: Record
                   style={{backgroundColor: CONF_COLORS[s.key]?.color ?? colors.brand500}}
                 />
                 <span className="text-text-secondary">{CONF_COLORS[s.key]?.label ?? s.key}</span>
-                <span className="text-text-tertiary tabular-nums ml-auto">
-                  {Math.round((s.value / total) * 100)}%
-                </span>
+                <span className="text-text-tertiary tabular-nums ml-auto">{Math.round((s.value / total) * 100)}%</span>
               </div>
             ))}
           </div>

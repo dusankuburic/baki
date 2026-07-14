@@ -34,146 +34,178 @@ import {isTauri} from '@/platform/guards'
 import type {FlowDocument as DomainFlowDocument, RecentFile} from './types'
 
 function AppInner() {
-    const toast = useToast()
-    const sidebarCollapsed = useUIStore(s => s.sidebarCollapsed)
-    const inspectorCollapsed = useUIStore(s => s.inspectorCollapsed)
-    const setCommandPaletteOpen = useUIStore(s => s.setCommandPaletteOpen)
-    const globalSearchOpen = useUIStore(s => s.globalSearchOpen)
-    const setGlobalSearchOpen = useUIStore(s => s.setGlobalSearchOpen)
-    const toggleSidebar = useUIStore(s => s.toggleSidebar)
-    const toggleInspector = useUIStore(s => s.toggleInspector)
-    const toggleSettings = useUIStore(s => s.toggleSettings)
-    const commandPaletteOpen = useUIStore(s => s.commandPaletteOpen)
-    const settingsOpen = useUIStore(s => s.settingsOpen)
-    const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
-    const setMainPaneView = useUIStore(s => s.setMainPaneView)
-    const setDocument = useFlowStore(s => s.setDocument)
-    const document = useFlowStore(s => s.document)
-    const user = useAuthStore(s => s.user)
-    const isAuthenticated = useAuthStore(s => s.isAuthenticated)
-    const requestSearchFocus = useSearchStore(s => s.requestFocus)
-    const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
-    const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
+  const toast = useToast()
+  const sidebarCollapsed = useUIStore(s => s.sidebarCollapsed)
+  const inspectorCollapsed = useUIStore(s => s.inspectorCollapsed)
+  const setCommandPaletteOpen = useUIStore(s => s.setCommandPaletteOpen)
+  const globalSearchOpen = useUIStore(s => s.globalSearchOpen)
+  const setGlobalSearchOpen = useUIStore(s => s.setGlobalSearchOpen)
+  const toggleSidebar = useUIStore(s => s.toggleSidebar)
+  const toggleInspector = useUIStore(s => s.toggleInspector)
+  const toggleSettings = useUIStore(s => s.toggleSettings)
+  const commandPaletteOpen = useUIStore(s => s.commandPaletteOpen)
+  const settingsOpen = useUIStore(s => s.settingsOpen)
+  const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
+  const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const setDocument = useFlowStore(s => s.setDocument)
+  const document = useFlowStore(s => s.document)
+  const user = useAuthStore(s => s.user)
+  const isAuthenticated = useAuthStore(s => s.isAuthenticated)
+  const requestSearchFocus = useSearchStore(s => s.requestFocus)
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
 
-    const openDocument = useCallback((doc: DomainFlowDocument | null) => {
-        setDocument(doc)
-        useFlowStore.setState({ libraryFlowId: null, libraryVersion: 0 })
-        if (doc && isSystemView(useUIStore.getState().mainPaneView)) {
-            setMainPaneView('block')
-        }
-    }, [setDocument, setMainPaneView])
+  const openDocument = useCallback(
+    (doc: DomainFlowDocument | null) => {
+      setDocument(doc)
+      useFlowStore.setState({libraryFlowId: null, libraryVersion: 0})
+      if (doc && isSystemView(useUIStore.getState().mainPaneView)) {
+        setMainPaneView('block')
+      }
+    },
+    [setDocument, setMainPaneView],
+  )
 
-    useEffect(() => {
-        useSystemStore.getState().loadInfo()
-    }, [])
+  useEffect(() => {
+    useSystemStore.getState().loadInfo()
+  }, [])
 
-    useEffect(() => {
-        let cancelled = false
-        flowApi.recentFiles()
-            .then((files: RecentFile[]) => { if (!cancelled && files) setRecentFiles(files) })
-            .catch((err) => { if (!cancelled) logger.warn('Failed to load recent files', err) })
-        return () => { cancelled = true }
-    }, [document?.id])
+  useEffect(() => {
+    let cancelled = false
+    flowApi
+      .recentFiles()
+      .then((files: RecentFile[]) => {
+        if (!cancelled && files) setRecentFiles(files)
+      })
+      .catch(err => {
+        if (!cancelled) logger.warn('Failed to load recent files', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [document?.id])
 
-    const documentId = document?.id ?? null
-    useEffect(() => {
-        if (isTauri() || !documentId) return
-        usePresenceStore.getState().connectToFlow(documentId)
-        return () => usePresenceStore.getState().disconnect()
-    }, [documentId])
+  const documentId = document?.id ?? null
+  useEffect(() => {
+    if (isTauri() || !documentId) return
+    usePresenceStore.getState().connectToFlow(documentId)
+    return () => usePresenceStore.getState().disconnect()
+  }, [documentId])
 
-    useSettingsPersistence(isAuthenticated)
-    useGlobalErrorHandler()
-    useFlowChangeSync()
+  useSettingsPersistence(isAuthenticated)
+  useGlobalErrorHandler()
+  useFlowChangeSync()
 
-    useAppEvents({openDocument})
+  useAppEvents({openDocument})
 
-    const {toggleTheme} = useTheme()
-    useAutoAnalyze()
+  const {toggleTheme} = useTheme()
+  useAutoAnalyze()
 
-    const showShortcuts = useCallback(() => setShortcutsHelpOpen(true), [])
-    useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts: showShortcuts})
+  const showShortcuts = useCallback(() => setShortcutsHelpOpen(true), [])
+  useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts: showShortcuts})
 
-    const pane = usePaneResize()
-    const {dragOver, handleDragOver, handleDragLeave, handleDrop} = useFileDrop(openDocument)
+  const pane = usePaneResize()
+  const {dragOver, handleDragOver, handleDragLeave, handleDrop} = useFileDrop(openDocument)
 
-    useAppShortcuts({openDocument, toggleTheme, toast, setShortcutsHelpOpen})
+  useAppShortcuts({openDocument, toggleTheme, toast, setShortcutsHelpOpen})
 
-    const commands = useCommandList({
-        openDocument, toggleSidebar, toggleInspector, toggleSettings,
-        setMainPaneView, requestSearchFocus, recentFiles,
-        sidebarCollapsed, document, user, toast,
-    })
+  const commands = useCommandList({
+    openDocument,
+    toggleSidebar,
+    toggleInspector,
+    toggleSettings,
+    setMainPaneView,
+    requestSearchFocus,
+    recentFiles,
+    sidebarCollapsed,
+    document,
+    user,
+    toast,
+  })
 
-    return (
-        <>
-        <div
-            className={`flex flex-col h-screen w-screen overflow-hidden bg-surface-0 text-text-primary ${dragOver ? 'ring-2 ring-brand-500 ring-inset' : ''}`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-        >
-            <TitleBar />
-            <div className="flex flex-1 overflow-hidden print:overflow-visible">
-                {!sidebarCollapsed && (
-                    <>
-                        <div className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden" style={{width: pane.sidebarWidth}}>
-                            <ErrorBoundary fallbackMessage="Sidebar error">
-                                <Sidebar />
-                            </ErrorBoundary>
-                        </div>
-                        <PaneDivider onDrag={pane.handleSidebarDrag} onResizeEnd={pane.handleSidebarResizeEnd} onDoubleClick={pane.handleSidebarReset} />
-                    </>
-                )}
-                <div className="flex-1 overflow-hidden print:overflow-visible">
-                    <ErrorBoundary fallbackMessage="Main pane error">
-                        <MainPane />
-                    </ErrorBoundary>
-                </div>
-                {!inspectorCollapsed && (
-                    <>
-                        <PaneDivider onDrag={pane.handleInspectorDrag} onResizeEnd={pane.handleInspectorResizeEnd} onDoubleClick={pane.handleInspectorReset} />
-                        <div className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden" style={{width: pane.inspectorWidth}}>
-                            <ErrorBoundary fallbackMessage="Inspector error">
-                                <InspectorPanel />
-                            </ErrorBoundary>
-                        </div>
-                    </>
-                )}
-            </div>
-            <StatusBar />
-            {dragOver && (
-                <div className="fixed inset-0 z-modal bg-surface-overlay flex items-center justify-center pointer-events-none">
-                    <div className="text-lg font-medium text-text-primary animate-fade-in">Drop flow file to open</div>
-                </div>
-            )}
+  return (
+    <>
+      <div
+        className={`flex flex-col h-screen w-screen overflow-hidden bg-surface-0 text-text-primary ${dragOver ? 'ring-2 ring-brand-500 ring-inset' : ''}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <TitleBar />
+        <div className="flex flex-1 overflow-hidden print:overflow-visible">
+          {!sidebarCollapsed && (
+            <>
+              <div
+                className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden"
+                style={{width: pane.sidebarWidth}}
+              >
+                <ErrorBoundary fallbackMessage="Sidebar error">
+                  <Sidebar />
+                </ErrorBoundary>
+              </div>
+              <PaneDivider
+                onDrag={pane.handleSidebarDrag}
+                onResizeEnd={pane.handleSidebarResizeEnd}
+                onDoubleClick={pane.handleSidebarReset}
+              />
+            </>
+          )}
+          <div className="flex-1 overflow-hidden print:overflow-visible">
+            <ErrorBoundary fallbackMessage="Main pane error">
+              <MainPane />
+            </ErrorBoundary>
+          </div>
+          {!inspectorCollapsed && (
+            <>
+              <PaneDivider
+                onDrag={pane.handleInspectorDrag}
+                onResizeEnd={pane.handleInspectorResizeEnd}
+                onDoubleClick={pane.handleInspectorReset}
+              />
+              <div
+                className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden"
+                style={{width: pane.inspectorWidth}}
+              >
+                <ErrorBoundary fallbackMessage="Inspector error">
+                  <InspectorPanel />
+                </ErrorBoundary>
+              </div>
+            </>
+          )}
         </div>
-        <ErrorBoundary>
+        <StatusBar />
+        {dragOver && (
+          <div className="fixed inset-0 z-modal bg-surface-overlay flex items-center justify-center pointer-events-none">
+            <div className="text-lg font-medium text-text-primary animate-fade-in">Drop flow file to open</div>
+          </div>
+        )}
+      </div>
+      <ErrorBoundary>
         <CommandPalette isOpen={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} commands={commands} />
-        </ErrorBoundary>
-        <ErrorBoundary>
+      </ErrorBoundary>
+      <ErrorBoundary>
         <GlobalSearchOverlay isOpen={globalSearchOpen} onClose={() => setGlobalSearchOpen(false)} />
-        </ErrorBoundary>
-        <ErrorBoundary>
+      </ErrorBoundary>
+      <ErrorBoundary>
         <Suspense fallback={null}>
-            <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+          <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
         </Suspense>
-        </ErrorBoundary>
-        <ErrorBoundary>
+      </ErrorBoundary>
+      <ErrorBoundary>
         <ShortcutsHelpDialog isOpen={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} />
-        </ErrorBoundary>
-        </>
-    )
+      </ErrorBoundary>
+    </>
+  )
 }
 
 export default function App() {
-    return (
-        <ErrorBoundary>
-            <ToastProvider>
-                <ConfirmProvider>
-                    <AppInner />
-                </ConfirmProvider>
-            </ToastProvider>
-        </ErrorBoundary>
-    )
+  return (
+    <ErrorBoundary>
+      <ToastProvider>
+        <ConfirmProvider>
+          <AppInner />
+        </ConfirmProvider>
+      </ToastProvider>
+    </ErrorBoundary>
+  )
 }

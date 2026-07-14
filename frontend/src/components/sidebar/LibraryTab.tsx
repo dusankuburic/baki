@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react'
-import { Library, Search, Trash2, FolderOpen, Save, RefreshCw } from 'lucide-react'
-import { libraryApi, type LibraryFlow } from '@/api/library'
-import { VersionConflictError } from '@/api/client'
-import { useFlowStore } from '@/stores/flowStore'
-import { useUIStore } from '@/stores/uiStore'
-import { useOrgStore } from '@/stores/orgStore'
-import { Spinner, useToast, useConfirm } from '@/components/shared'
-import type { FlowDocument } from '@/types'
+import React, {useState, useEffect} from 'react'
+import {Library, Search, Trash2, FolderOpen, Save, RefreshCw} from 'lucide-react'
+import {libraryApi, type LibraryFlow} from '@/api/library'
+import {VersionConflictError} from '@/api/client'
+import {useFlowStore} from '@/stores/flowStore'
+import {useUIStore} from '@/stores/uiStore'
+import {useOrgStore} from '@/stores/orgStore'
+import {Spinner, useToast, useConfirm} from '@/components/shared'
+import type {FlowDocument} from '@/types'
 import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
@@ -31,10 +31,20 @@ export default function LibraryTab() {
     return () => clearTimeout(t)
   }, [search])
 
-  const {data, isLoading, setData: setFlows, refetch: fetchLibrary} = useAsync<LibraryFlow[]>(
-    () => libraryApi.list({ query: debouncedSearch, orgId: activeOrgId ?? undefined })
-      .then(page => page.items)
-      .catch(err => { logger.warn('Failed to fetch library', err); throw err }),
+  const {
+    data,
+    isLoading,
+    setData: setFlows,
+    refetch: fetchLibrary,
+  } = useAsync<LibraryFlow[]>(
+    () =>
+      libraryApi
+        .list({query: debouncedSearch, orgId: activeOrgId ?? undefined})
+        .then(page => page.items)
+        .catch(err => {
+          logger.warn('Failed to fetch library', err)
+          throw err
+        }),
     [debouncedSearch, activeOrgId],
   )
   const flows = data ?? []
@@ -80,12 +90,9 @@ export default function LibraryTab() {
 
   const reloadFromLibrary = async (id: string) => {
     try {
-      const [fullDoc, meta] = await Promise.all([
-        libraryApi.getContent(id),
-        libraryApi.get(id),
-      ])
+      const [fullDoc, meta] = await Promise.all([libraryApi.getContent(id), libraryApi.get(id)])
       setDocument(fullDoc as FlowDocument)
-      useFlowStore.setState({ libraryVersion: meta.version })
+      useFlowStore.setState({libraryVersion: meta.version})
       toast.success('Reloaded latest version')
     } catch (err) {
       toast.error('Failed to reload', {
@@ -104,7 +111,7 @@ export default function LibraryTab() {
           content: currentDoc,
           version: libraryVersion,
         })
-        useFlowStore.setState({ libraryVersion: updated.version })
+        useFlowStore.setState({libraryVersion: updated.version})
         toast.success('Flow updated')
         fetchLibrary()
       } catch (err) {
@@ -172,18 +179,14 @@ export default function LibraryTab() {
             className="w-full bg-surface-2 border border-border-default rounded-md py-1.5 pl-8 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-brand-500"
           />
         </div>
-        
+
         {currentDoc && (
           <button
             onClick={handleSaveCurrent}
             disabled={isSaving}
             className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-brand-600 text-brand-foreground rounded-md text-xs font-medium hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-50"
           >
-            {isSaving ? (
-              <RefreshCw size={12} className="animate-spin" />
-            ) : (
-              <Save size={12} />
-            )}
+            {isSaving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
             {libraryFlowId ? 'Update library flow' : 'Save current to library'}
           </button>
         )}
@@ -204,12 +207,18 @@ export default function LibraryTab() {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <div title={f.name} className="text-xs font-semibold text-text-primary truncate">{f.name}</div>
-                    {f.description && <div title={f.description} className="text-2xs text-text-tertiary truncate">{f.description}</div>}
+                    <div title={f.name} className="text-xs font-semibold text-text-primary truncate">
+                      {f.name}
+                    </div>
+                    {f.description && (
+                      <div title={f.description} className="text-2xs text-text-tertiary truncate">
+                        {f.description}
+                      </div>
+                    )}
                   </div>
                   {(f.canDelete ?? !f.isSharedWithMe) && (
                     <button
-                      onClick={(e) => handleDelete(e, f.id)}
+                      onClick={e => handleDelete(e, f.id)}
                       className="p-1 text-text-tertiary hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <Trash2 size={12} />

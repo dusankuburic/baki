@@ -27,53 +27,64 @@ export function useProviderSetup() {
   const [demoRemaining, setDemoRemaining] = useState<number | null>(null)
 
   const providerRef = useRef(provider)
-  useEffect(() => { providerRef.current = provider })
+  useEffect(() => {
+    providerRef.current = provider
+  })
   const aiSettingsProvidersRef = useRef(aiSettings.providers)
-  useEffect(() => { aiSettingsProvidersRef.current = aiSettings.providers })
+  useEffect(() => {
+    aiSettingsProvidersRef.current = aiSettings.providers
+  })
 
   useEffect(() => {
     let cancelled = false
-    providersApi.listProviders().then((ps: ProviderInfo[]) => {
-      if (cancelled) return
-      const list: ProviderOption[] = (ps || []).map((p: ProviderInfo) => ({
-        id: p.id || '',
-        name: p.name || '',
-        configured: !!p.configured,
-        authType: p.authType || '',
-        models: (p.models || []).map((m: ModelDetail) => ({
-          id: m.id || '',
-          displayName: m.displayName || m.id || '',
-          contextLimit: m.contextLimit || 0,
-          inputCostPerM: m.inputCostPerM || 0,
-          outputCostPerM: m.outputCostPerM || 0,
-        })),
-        defaultModel: p.defaultModel || '',
-      }))
-      setProviders(list)
+    providersApi
+      .listProviders()
+      .then((ps: ProviderInfo[]) => {
+        if (cancelled) return
+        const list: ProviderOption[] = (ps || []).map((p: ProviderInfo) => ({
+          id: p.id || '',
+          name: p.name || '',
+          configured: !!p.configured,
+          authType: p.authType || '',
+          models: (p.models || []).map((m: ModelDetail) => ({
+            id: m.id || '',
+            displayName: m.displayName || m.id || '',
+            contextLimit: m.contextLimit || 0,
+            inputCostPerM: m.inputCostPerM || 0,
+            outputCostPerM: m.outputCostPerM || 0,
+          })),
+          defaultModel: p.defaultModel || '',
+        }))
+        setProviders(list)
 
-      const anyConfigured = list.some(p => p.configured)
-      if (anyConfigured) {
-        setConfigured(true)
-        const cur = list.find(p => p.id === providerRef.current)
-        if (!cur?.configured) {
-          const first = list.find(p => p.configured)
-          if (first) {
-            setProvider(first.id as ProviderID)
-            updateAI({activeProvider: first.id as ProviderID})
+        const anyConfigured = list.some(p => p.configured)
+        if (anyConfigured) {
+          setConfigured(true)
+          const cur = list.find(p => p.id === providerRef.current)
+          if (!cur?.configured) {
+            const first = list.find(p => p.configured)
+            if (first) {
+              setProvider(first.id as ProviderID)
+              updateAI({activeProvider: first.id as ProviderID})
+            }
           }
+        } else {
+          setConfigured(false)
         }
-      } else {
-        setConfigured(false)
-      }
-    }).catch((err) => { logger.warn('Failed to check provider status', err) })
-    return () => { cancelled = true }
+      })
+      .catch(err => {
+        logger.warn('Failed to check provider status', err)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [setProvider, updateAI, providerEpoch])
 
   useEffect(() => {
     const config = aiSettingsProvidersRef.current[provider as keyof typeof aiSettings.providers]
     const prov = providers.find(p => p.id === provider)
     const model = config?.defaultModel || prov?.defaultModel || ''
-    setSelectedModel(prev => prev === model ? prev : model)
+    setSelectedModel(prev => (prev === model ? prev : model))
   }, [provider, providers, aiSettings.providers])
 
   useEffect(() => {
@@ -82,16 +93,26 @@ export function useProviderSetup() {
       return
     }
     let cancelled = false
-    chatApi.getDemoRemaining()
-      .then(r => { if (!cancelled) setDemoRemaining(r) })
-      .catch(() => { if (!cancelled) setDemoRemaining(null) })
-    return () => { cancelled = true }
+    chatApi
+      .getDemoRemaining()
+      .then(r => {
+        if (!cancelled) setDemoRemaining(r)
+      })
+      .catch(() => {
+        if (!cancelled) setDemoRemaining(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [provider])
 
-  const handleSetProvider = useCallback((p: ProviderID) => {
-    setProvider(p)
-    updateAI({activeProvider: p})
-  }, [setProvider, updateAI])
+  const handleSetProvider = useCallback(
+    (p: ProviderID) => {
+      setProvider(p)
+      updateAI({activeProvider: p})
+    },
+    [setProvider, updateAI],
+  )
 
   const currentProvider = useMemo(() => providers.find(p => p.id === provider), [providers, provider])
   const currentModels = useMemo(() => currentProvider?.models ?? [], [currentProvider])

@@ -50,8 +50,15 @@ export default function HomeDashboard() {
   const load = useCallback(() => {
     loadIdRef.current++
     const myId = loadIdRef.current
-    dashboardApi.getHome()
-      .then(d => { if (myId === loadIdRef.current) { setData(d); hasDataRef.current = true; setError(null) } })
+    dashboardApi
+      .getHome()
+      .then(d => {
+        if (myId === loadIdRef.current) {
+          setData(d)
+          hasDataRef.current = true
+          setError(null)
+        }
+      })
       .catch(e => {
         if (myId !== loadIdRef.current) return
         logger.error('dashboard: load failed', e)
@@ -63,7 +70,9 @@ export default function HomeDashboard() {
           setError(e instanceof Error ? e.message : 'Failed to load dashboard')
         }
       })
-      .finally(() => { if (myId === loadIdRef.current) setLoading(false) })
+      .finally(() => {
+        if (myId === loadIdRef.current) setLoading(false)
+      })
   }, [])
 
   const retry = useCallback(() => {
@@ -77,7 +86,9 @@ export default function HomeDashboard() {
     setLoading(true)
     setError(null)
     load()
-    return () => { loadIdRef.current++ }
+    return () => {
+      loadIdRef.current++
+    }
   }, [load, activeOrgId, docId])
 
   // Re-fetch dashboard when analysis completes (isAnalyzing goes true→false).
@@ -89,21 +100,24 @@ export default function HomeDashboard() {
     wasAnalyzing.current = isAnalyzing
   }, [isAnalyzing, load])
 
-  const openFlow = useCallback(async (id: string) => {
-    const gen = beginDocLoad()
-    try {
-      const full = await libraryApi.getContent(id)
-      if (!isDocLoadCurrent(gen)) return
-      setDocument(full as FlowDocument)
-      useFlowStore.setState({libraryFlowId: id, libraryVersion: 0})
-      setMainPaneView('block')
-    } catch (e) {
-      if (!isDocLoadCurrent(gen)) return
-      toastRef.current.error('Failed to open flow', {
-        description: e instanceof Error ? e.message : 'Unknown error',
-      })
-    }
-  }, [setDocument, setMainPaneView])
+  const openFlow = useCallback(
+    async (id: string) => {
+      const gen = beginDocLoad()
+      try {
+        const full = await libraryApi.getContent(id)
+        if (!isDocLoadCurrent(gen)) return
+        setDocument(full as FlowDocument)
+        useFlowStore.setState({libraryFlowId: id, libraryVersion: 0})
+        setMainPaneView('block')
+      } catch (e) {
+        if (!isDocLoadCurrent(gen)) return
+        toastRef.current.error('Failed to open flow', {
+          description: e instanceof Error ? e.message : 'Unknown error',
+        })
+      }
+    },
+    [setDocument, setMainPaneView],
+  )
 
   if (loading) {
     return (
@@ -133,7 +147,25 @@ export default function HomeDashboard() {
     )
   }
 
-  const {greeting, overview, tokenUsage, recentFlows, findings, isCloud, healthTrend, costByProvider, ruleFrequency, activity, complexity, security, severityTrend, confidenceDist, healthBuckets, fixability, workflow} = data
+  const {
+    greeting,
+    overview,
+    tokenUsage,
+    recentFlows,
+    findings,
+    isCloud,
+    healthTrend,
+    costByProvider,
+    ruleFrequency,
+    activity,
+    complexity,
+    security,
+    severityTrend,
+    confidenceDist,
+    healthBuckets,
+    fixability,
+    workflow,
+  } = data
   const orgName = greeting.activeOrgName || activeOrg?.name
 
   return (
@@ -174,7 +206,11 @@ export default function HomeDashboard() {
 
             {/* Row 3: AI Token Usage + Health Gauge */}
             <AITokenUsageCard data={tokenUsage} className="col-span-12 lg:col-span-8" />
-            <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
+            <HealthGaugeCard
+              overview={overview}
+              bySeverity={findings.bySeverity}
+              className="col-span-12 lg:col-span-4"
+            />
 
             {/* Row 4: Rule Frequency + Findings Radar */}
             <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
@@ -207,7 +243,11 @@ export default function HomeDashboard() {
           <>
             {/* Row 2: Rule Frequency + Health Gauge */}
             <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
-            <HealthGaugeCard overview={overview} bySeverity={findings.bySeverity} className="col-span-12 lg:col-span-4" />
+            <HealthGaugeCard
+              overview={overview}
+              bySeverity={findings.bySeverity}
+              className="col-span-12 lg:col-span-4"
+            />
 
             {/* Row 3: Confidence + Health Distribution + Fix Availability (developer analytics) */}
             <ConfidenceDonutCard confidence={confidenceDist} className="col-span-12 lg:col-span-4" />

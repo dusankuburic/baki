@@ -62,6 +62,24 @@ func TestExtractToken_QueryParamOnlyOnSSEPath(t *testing.T) {
 			path: "/api/flow/upload",
 			want: "",
 		},
+		{
+			name:   "lowercase bearer scheme accepted",
+			header: "bearer abc.def.ghi",
+			path:   "/api/flow/upload",
+			want:   "abc.def.ghi",
+		},
+		{
+			name:   "uppercase BEARER scheme accepted",
+			header: "BEARER abc.def.ghi",
+			path:   "/api/flow/upload",
+			want:   "abc.def.ghi",
+		},
+		{
+			name:   "mixed-case Bearer scheme accepted",
+			header: "BeArEr abc.def.ghi",
+			path:   "/api/flow/upload",
+			want:   "abc.def.ghi",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

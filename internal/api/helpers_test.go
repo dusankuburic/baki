@@ -72,7 +72,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
-	sysSvc := service.NewSystemService(settings, storage.CurrentSecretStore(), notifier, backend, cfg.Mode)
+	sysSvc := service.NewSystemService(settings, storage.NewKeyringSecretStore(), notifier, backend, cfg.Mode)
 	docProv := service.DocumentProvider(service.NewLocalDocumentProvider())
 	if jwtEnabled {
 		docProv = service.NewCloudDocumentProvider(backend)
@@ -100,7 +100,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
-	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.CurrentSecretStore())
+	providerSvc := service.NewProviderService(ghAuth, cpAuth, factory, storage.NewKeyringSecretStore())
 
 	security := &SecurityConfig{
 		JWTEnabled:     jwtEnabled,
@@ -116,6 +116,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	eventManager := NewEventManager(make(chan struct{}))
 
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc)
+	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
 	handlers := Handlers{
 		Sys:       NewSystemHandler(sysSvc, security, backend),
 		Flow:      NewFlowHandler(flowSvc, docProv, backend, security),
@@ -124,7 +125,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security),
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
 		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
-		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
+		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
 		Admin:     NewAdminHandler(backend, security, NewMigrationRunner(nil), nil),
 		Provider:  NewProviderHandler(providerSvc, security),
 		Org:       NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),

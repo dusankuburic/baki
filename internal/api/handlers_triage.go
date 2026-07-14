@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -77,8 +76,7 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 		Justification string `json:"justification"`
 		AssigneeID    string `json:"assigneeId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.FindingKey == "" {
@@ -133,8 +131,7 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 			AssigneeID    string `json:"assigneeId"`
 		} `json:"items"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	const maxBatch = 1000
@@ -191,8 +188,7 @@ func (h *AnalysisHandler) handleClearFindingStatus(w http.ResponseWriter, r *htt
 		FlowID     string `json:"flowId"`
 		FindingKey string `json:"findingKey"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.FindingKey == "" {

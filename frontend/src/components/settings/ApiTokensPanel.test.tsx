@@ -27,9 +27,7 @@ function renderPanel() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  listApiTokens.mockResolvedValue([
-    {id: 't1', name: 'ci-pipeline', createdAt: '2026-01-01T00:00:00Z'},
-  ])
+  listApiTokens.mockResolvedValue([{id: 't1', name: 'ci-pipeline', createdAt: '2026-01-01T00:00:00Z'}])
 })
 
 describe('ApiTokensPanel', () => {
@@ -40,7 +38,10 @@ describe('ApiTokensPanel', () => {
 
   it('creates a token and reveals the raw secret exactly once', async () => {
     createApiToken.mockResolvedValue({
-      id: 't2', name: 'new', token: 'pad_pat_secret123', createdAt: '2026-01-02T00:00:00Z',
+      id: 't2',
+      name: 'new',
+      token: 'pad_pat_secret123',
+      createdAt: '2026-01-02T00:00:00Z',
     })
     renderPanel()
     await screen.findByText('ci-pipeline')

@@ -18,7 +18,11 @@ func (r *HardcodedURLRule) DefaultSeverity() models.Severity { return models.Sev
 func (r *HardcodedURLRule) Category() string                 { return "Portability" }
 
 var (
-	urlPattern     = regexp.MustCompile(`(?i)\b(https?://|ftp://|www\.)[^\s"')\]}>.,;]+`)
+	// The character class excludes whitespace, quotes, brackets and sentence
+	// punctuation (>,;) but NOT "." — dots occur inside every domain/path, so
+	// excluding them truncated URLs at the first dot and collapsed distinct
+	// URLs to the same dedup key. A trailing "." is trimmed after the match.
+	urlPattern     = regexp.MustCompile(`(?i)\b(https?://|ftp://|www\.)[^\s"')\]}>,;]+`)
 	padVariableRef = regexp.MustCompile(`%[A-Za-z_][A-Za-z0-9_]*%`)
 )
 
@@ -39,7 +43,8 @@ func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models
 			strings.Contains(lowerKey, "api") ||
 			strings.Contains(lowerKey, "web") ||
 			strings.Contains(lowerKey, "connection") {
-			if m := urlPattern.FindString(val); m != "" && !seen[m] {
+			m := strings.TrimRight(urlPattern.FindString(val), ".")
+			if m != "" && !seen[m] {
 				seen[m] = true
 				findings = append(findings, models.Finding{
 					RuleID:      r.ID(),
@@ -57,3 +62,7 @@ func (r *HardcodedURLRule) Check(block *models.Block, ctx *RuleContext) []models
 
 	return findings
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&HardcodedURLRule{}) }

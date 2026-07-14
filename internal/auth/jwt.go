@@ -222,7 +222,19 @@ func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
 	}
 	if m.blacklist != nil && claims.ID != "" {
 		ttl := time.Until(claims.ExpiresAt.Time)
-		if ttl <= 0 || !m.blacklist.AddIfAbsent(claims.ID, ttl) {
+		if ttl <= 0 {
+			return nil, errors.New("auth: ws ticket already used")
+		}
+		added, err := m.blacklist.AddIfAbsent(claims.ID, ttl)
+		if err != nil {
+			// Fail-closed: the single-use check could not be performed, so
+			// reject the ticket. The entry was NOT inserted, so the caller
+			// may retry once the store recovers — this avoids the replay
+			// window where a bare "already used" on a DB error would both
+			// reject now and permit a later replay.
+			return nil, fmt.Errorf("auth: ws ticket single-use check unavailable: %w", err)
+		}
+		if !added {
 			return nil, errors.New("auth: ws ticket already used")
 		}
 	}
@@ -270,7 +282,14 @@ func (m *Manager) ConsumeSSOTicket(tokenStr string) (*Claims, error) {
 	}
 	if m.blacklist != nil && claims.ID != "" {
 		ttl := time.Until(claims.ExpiresAt.Time)
-		if ttl <= 0 || !m.blacklist.AddIfAbsent(claims.ID, ttl) {
+		if ttl <= 0 {
+			return nil, errors.New("auth: sso ticket already used")
+		}
+		added, err := m.blacklist.AddIfAbsent(claims.ID, ttl)
+		if err != nil {
+			return nil, fmt.Errorf("auth: sso ticket single-use check unavailable: %w", err)
+		}
+		if !added {
 			return nil, errors.New("auth: sso ticket already used")
 		}
 	}
@@ -333,6 +352,41 @@ func (m *Manager) Revoke(claims *Claims) {
 		return
 	}
 	m.blacklist.Add(claims.ID, ttl)
+}
+
+// RevokeJTI blacklists an arbitrary JTI for the given TTL, without needing a
+// Claims struct. It is used to revoke personal access tokens: a PAT is not a
+// JWT (it has no Claims), so Revoke cannot be used. The TTL should cover at
+// least one cycle of the WS re-authz loop (2 min) so a live socket authenticated
+// by the revoked credential is disconnected before the entry expires.
+func (m *Manager) RevokeJTI(jti string, ttl time.Duration) {
+	if m.blacklist == nil || jti == "" || ttl <= 0 {
+		return
+	}
+	m.blacklist.Add(jti, ttl)
+}
+
+// PATJTI derives a stable, revocable JTI from a personal access token's id.
+// PATs are not JWTs (they carry no JTI), so without a synthetic one a
+// WebSocket ticket issued from a PAT-authenticated request embeds an empty
+// SrcJTI — the WS re-authz loop then calls IsRevoked("") which is always false,
+// so a revoked PAT's live socket is never disconnected. The "pat:" prefix
+// keeps it out of the JWT-JTI namespace. Used both when authenticating a PAT
+// (to populate the claims the WS ticket embeds) and when deleting a PAT (to
+// blacklist the same id).
+func PATJTI(tokenID string) string { return "pat:" + tokenID }
+
+// ClaimsForPAT builds the Claims for a personal access token, carrying a stable
+// JTI (PATJTI) and the token's expiry. This lets a WebSocket ticket issued from
+// a PAT-authenticated request embed a real SrcJTI/SrcExp so the live socket is
+// disconnectable on PAT revocation and respects the PAT's expiry.
+func ClaimsForPAT(userID, email string, role Role, tokenID string, expiresAt *time.Time) *Claims {
+	c := &Claims{UserID: userID, Email: email, Role: role}
+	c.ID = PATJTI(tokenID)
+	if expiresAt != nil {
+		c.ExpiresAt = jwt.NewNumericDate(*expiresAt)
+	}
+	return c
 }
 
 // IsRevoked returns true if the given JTI has been blacklisted. Today only

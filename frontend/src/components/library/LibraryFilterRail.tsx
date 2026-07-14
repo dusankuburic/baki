@@ -27,9 +27,7 @@ export default function LibraryFilterRail({orgs}: LibraryFilterRailProps) {
   return (
     <nav className="p-3 space-y-4">
       <div>
-        <div className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 px-2">
-          Scope
-        </div>
+        <div className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-1.5 px-2">Scope</div>
         <ul className="space-y-0.5">
           {SCOPES.map(s => (
             <li key={s.value}>
@@ -40,7 +38,7 @@ export default function LibraryFilterRail({orgs}: LibraryFilterRailProps) {
                   'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
                   scope === s.value
                     ? 'bg-brand-500/15 text-brand-400 font-medium'
-                    : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary'
+                    : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary',
                 )}
               >
                 <s.icon size={13} />
@@ -53,9 +51,7 @@ export default function LibraryFilterRail({orgs}: LibraryFilterRailProps) {
 
       <div>
         <div className="flex items-center justify-between mb-1.5 px-2">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary">
-            Organisations
-          </span>
+          <span className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary">Organisations</span>
           {!isAllOrgs && (
             <button
               type="button"
@@ -67,33 +63,23 @@ export default function LibraryFilterRail({orgs}: LibraryFilterRailProps) {
           )}
         </div>
         <ul className="space-y-0.5">
-          <OrgRow
-            id=""
-            label="Personal"
-            checked={isOrgChecked('')}
-            onToggle={toggleOrg}
-          />
+          <OrgRow id="" label="Personal" checked={isOrgChecked('')} onToggle={toggleOrg} />
           {orgs.map(o => (
-            <OrgRow
-              key={o.id}
-              id={o.id}
-              label={o.name}
-              checked={isOrgChecked(o.id)}
-              onToggle={toggleOrg}
-            />
+            <OrgRow key={o.id} id={o.id} label={o.name} checked={isOrgChecked(o.id)} onToggle={toggleOrg} />
           ))}
-          {orgs.length === 0 && (
-            <li className="px-2 py-1.5 text-2xs text-text-tertiary italic">
-              No organisations
-            </li>
-          )}
+          {orgs.length === 0 && <li className="px-2 py-1.5 text-2xs text-text-tertiary italic">No organisations</li>}
         </ul>
       </div>
     </nav>
   )
 }
 
-function OrgRow({id, label, checked, onToggle}: {
+function OrgRow({
+  id,
+  label,
+  checked,
+  onToggle,
+}: {
   id: string
   label: string
   checked: boolean
@@ -102,12 +88,7 @@ function OrgRow({id, label, checked, onToggle}: {
   return (
     <li>
       <label className="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-text-secondary hover:bg-surface-2 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={() => onToggle(id)}
-          className="accent-brand-500 w-3 h-3"
-        />
+        <input type="checkbox" checked={checked} onChange={() => onToggle(id)} className="accent-brand-500 w-3 h-3" />
         <Building2 size={12} className="text-text-tertiary" />
         <span className="truncate">{label}</span>
       </label>

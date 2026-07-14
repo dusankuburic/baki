@@ -23,7 +23,11 @@ vi.mock('@/api', () => ({
 // a passthrough that renders every row. The tests assert on findings content, not
 // on windowing behaviour.
 vi.mock('react-virtuoso', () => ({
-  Virtuoso: ({data = [], itemContent, computeItemKey}: {
+  Virtuoso: ({
+    data = [],
+    itemContent,
+    computeItemKey,
+  }: {
     data?: unknown[]
     itemContent: (i: number, item: unknown) => ReactNode
     computeItemKey?: (i: number, item: unknown) => string | number
@@ -37,22 +41,63 @@ vi.mock('react-virtuoso', () => ({
 }))
 
 const mockDoc = {
-  id: 'flow-1', name: 'Test', filePath: '/test.txt',
+  id: 'flow-1',
+  name: 'Test',
+  filePath: '/test.txt',
   subflows: [{id: 'sf1', name: 'Main', blocks: []}],
   metadata: {fileSize: 1000, totalBlocks: 10, totalSubflows: 1},
 } as unknown as FlowDocument
 
-const f1: Finding = {id: 'f1', ruleId: 'dead-code', severity: 'info', category: 'Style', title: 'Dead code', description: 'Unused block', blockId: 'b1', subflowId: 'sf1'}
-const f1dup: Finding = {id: 'f1d', ruleId: 'dead-code', severity: 'info', category: 'Style', title: 'Dead code', description: 'Unused block', blockId: 'b1', subflowId: 'sf1'}
-const f2: Finding = {id: 'f2', ruleId: 'unhandled-error', severity: 'warning', category: 'Reliability', title: 'Unhandled error', description: 'No handler', blockId: 'b2', subflowId: 'sf1'}
+const f1: Finding = {
+  id: 'f1',
+  ruleId: 'dead-code',
+  severity: 'info',
+  category: 'Style',
+  title: 'Dead code',
+  description: 'Unused block',
+  blockId: 'b1',
+  subflowId: 'sf1',
+}
+const f1dup: Finding = {
+  id: 'f1d',
+  ruleId: 'dead-code',
+  severity: 'info',
+  category: 'Style',
+  title: 'Dead code',
+  description: 'Unused block',
+  blockId: 'b1',
+  subflowId: 'sf1',
+}
+const f2: Finding = {
+  id: 'f2',
+  ruleId: 'unhandled-error',
+  severity: 'warning',
+  category: 'Reliability',
+  title: 'Unhandled error',
+  description: 'No handler',
+  blockId: 'b2',
+  subflowId: 'sf1',
+}
 
 const mockReport = {
-  flowId: 'flow-1', flowName: 'Test',
+  flowId: 'flow-1',
+  flowName: 'Test',
   generatedAt: '2024-01-01T00:00:00Z',
   findings: [f1, f1dup, f2],
   stats: {errors: 0, warnings: 1, info: 2, blocksAnalyzed: 10, rulesRun: 29},
   durationMs: 50,
-  metrics: {healthScore: 75, totalBlocks: 10, totalVariables: 5, subflowCount: 1, subflows: [], maxCyclomatic: 1, avgCyclomatic: 1, maxCognitive: 1, avgCognitive: 1, variableDensity: 0.5},
+  metrics: {
+    healthScore: 75,
+    totalBlocks: 10,
+    totalVariables: 5,
+    subflowCount: 1,
+    subflows: [],
+    maxCyclomatic: 1,
+    avgCyclomatic: 1,
+    maxCognitive: 1,
+    avgCognitive: 1,
+    variableDensity: 0.5,
+  },
 } as unknown as AnalysisReport
 
 function setupStores() {
@@ -142,7 +187,12 @@ describe('FindingsTab', () => {
 
   it('shows empty state when no findings', async () => {
     useAnalysisStore.setState({
-      reports: new Map([['flow-1', {...mockReport, findings: [], stats: {errors: 0, warnings: 0, info: 0, blocksAnalyzed: 10, rulesRun: 29}}] as [string, AnalysisReport]]),
+      reports: new Map([
+        [
+          'flow-1',
+          {...mockReport, findings: [], stats: {errors: 0, warnings: 0, info: 0, blocksAnalyzed: 10, rulesRun: 29}},
+        ] as [string, AnalysisReport],
+      ]),
     })
 
     await renderTab()

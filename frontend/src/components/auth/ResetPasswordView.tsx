@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { Lock, KeyRound, CheckCircle2 } from 'lucide-react'
+import {useState} from 'react'
+import {Lock, KeyRound, CheckCircle2} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
-import { authApi } from '@/api/auth'
+import {authApi} from '@/api/auth'
 
 interface ResetPasswordViewProps {
   token: string
@@ -13,7 +13,7 @@ interface ResetPasswordViewProps {
 // ResetPasswordView consumes a #resetPassword=<token> deep link: it collects a
 // new password and submits it with the single-use token. The backend enforces
 // the full password policy and returns a message on failure.
-export default function ResetPasswordView({ token, onDone }: ResetPasswordViewProps) {
+export default function ResetPasswordView({token, onDone}: ResetPasswordViewProps) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState<string | null>(null)

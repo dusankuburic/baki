@@ -48,7 +48,8 @@ export function FlowComplexityCard({data, className}: {data: FlowComplexityPoint
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
                 cursor={{strokeDasharray: '3 3', stroke: colors.textTertiary, strokeOpacity: 0.3}}
                 formatter={(v, name) => {
@@ -62,7 +63,13 @@ export function FlowComplexityCard({data, className}: {data: FlowComplexityPoint
               />
               <Scatter data={chartData} isAnimationActive={false}>
                 {chartData.map((entry, i) => (
-                  <Cell key={`cell-${i}`} fill={dotColor(entry.health)} fillOpacity={0.6} strokeWidth={1} stroke={dotColor(entry.health)} />
+                  <Cell
+                    key={`cell-${i}`}
+                    fill={dotColor(entry.health)}
+                    fillOpacity={0.6}
+                    strokeWidth={1}
+                    stroke={dotColor(entry.health)}
+                  />
                 ))}
               </Scatter>
             </ScatterChart>

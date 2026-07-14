@@ -16,7 +16,7 @@ export default function TokenCounter({promptTokens, completionTokens, inputCostP
 
   let costStr = ''
   if (hasPricing) {
-    const cost = ((promptTokens * (inputCostPerM ?? 0)) + (completionTokens * (outputCostPerM ?? 0))) / 1_000_000
+    const cost = (promptTokens * (inputCostPerM ?? 0) + completionTokens * (outputCostPerM ?? 0)) / 1_000_000
     costStr = cost < 0.001 ? '<$0.001' : `$${cost.toFixed(3)}`
   }
 
@@ -26,7 +26,10 @@ export default function TokenCounter({promptTokens, completionTokens, inputCostP
       <span className="text-2xs text-text-tertiary tabular-nums">
         {formatCompact(total)} tokens
         {promptTokens > 0 && completionTokens > 0 && (
-          <span className="text-text-tertiary/50"> ({formatCompact(promptTokens)} in / {formatCompact(completionTokens)} out)</span>
+          <span className="text-text-tertiary/50">
+            {' '}
+            ({formatCompact(promptTokens)} in / {formatCompact(completionTokens)} out)
+          </span>
         )}
         {costStr && <span className="text-text-tertiary/50"> · {costStr}</span>}
       </span>

@@ -63,3 +63,7 @@ func isWaitAction(rawType string) bool {
 	rt := strings.ToLower(rawType)
 	return strings.Contains(rt, "wait") || strings.Contains(rt, "delay")
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&MissingDelayRule{}) }

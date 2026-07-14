@@ -19,16 +19,13 @@ interface KnowledgeDoc {
 export default function KnowledgeBasePanel() {
   const {organisations, activeOrgId} = useOrgStore()
   const currentUser = useAuthStore(s => s.user)
-  const activeOrg = useMemo(() => 
-    organisations.find(o => o.id === activeOrgId), 
-    [organisations, activeOrgId]
-  )
+  const activeOrg = useMemo(() => organisations.find(o => o.id === activeOrgId), [organisations, activeOrgId])
   const canManage = useMemo(() => {
     if (!activeOrg || !currentUser) return false
     const membership = activeOrg.members.find(m => m.userId === currentUser.id)
     return membership?.role === 'admin' || membership?.role === 'member'
   }, [activeOrg, currentUser])
-  
+
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -36,15 +33,20 @@ export default function KnowledgeBasePanel() {
   const {confirm} = useConfirm()
   const {success: toastSuccess, error: toastError} = useToast()
 
-  const {data, isLoading: loading, error: fetchError, refetch: loadDocs} = useAsync<KnowledgeDoc[]>(
-    () => {
-      if (!activeOrgId) return Promise.resolve([])
-      return request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
-        .then(res => res || [])
-        .catch(e => { logger.warn(e); throw e })
-    },
-    [activeOrgId],
-  )
+  const {
+    data,
+    isLoading: loading,
+    error: fetchError,
+    refetch: loadDocs,
+  } = useAsync<KnowledgeDoc[]>(() => {
+    if (!activeOrgId) return Promise.resolve([])
+    return request<KnowledgeDoc[]>(`/api/orgs/${activeOrgId}/knowledge`)
+      .then(res => res || [])
+      .catch(e => {
+        logger.warn(e)
+        throw e
+      })
+  }, [activeOrgId])
   const docs = data ?? []
   const loadError = fetchError ? 'Failed to load documents' : null
 
@@ -61,7 +63,7 @@ export default function KnowledgeBasePanel() {
       const content = await selectedFile.text()
       await request(`/api/orgs/${activeOrgId}/knowledge/upload`, {
         filename: selectedFile.name,
-        content
+        content,
       })
       setSelectedFile(null)
       toastSuccess('Document added')
@@ -108,7 +110,8 @@ export default function KnowledgeBasePanel() {
       <p className="text-sm text-text-secondary mt-1 mb-6">
         Organization: <span className="font-medium text-text-primary">{activeOrg?.name}</span>
         <br />
-        Upload organizational guidelines, SOPs, or coding standards. The AI will use these to contextualize its analysis.
+        Upload organizational guidelines, SOPs, or coding standards. The AI will use these to contextualize its
+        analysis.
       </p>
 
       {canManage && (
@@ -120,34 +123,33 @@ export default function KnowledgeBasePanel() {
               <span className="text-sm text-text-primary truncate">
                 {selectedFile ? selectedFile.name : 'Select text or markdown file...'}
               </span>
-              <input 
-                type="file" 
-                className="hidden" 
-                accept=".txt,.md" 
-                onChange={e => { setSelectedFile(e.target.files?.[0] || null); setUploadError(null) }}
+              <input
+                type="file"
+                className="hidden"
+                accept=".txt,.md"
+                onChange={e => {
+                  setSelectedFile(e.target.files?.[0] || null)
+                  setUploadError(null)
+                }}
               />
             </label>
-            <Button 
-              variant="primary" 
-              disabled={!selectedFile || uploading}
-              onClick={handleUpload}
-            >
+            <Button variant="primary" disabled={!selectedFile || uploading} onClick={handleUpload}>
               {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Index Document'}
             </Button>
           </div>
           <p className="text-2xs text-text-tertiary mt-2">
             Currently supports .txt and .md files up to {maxFileSizeMB}MB.
           </p>
-          {uploadError && (
-            <p className="text-xs text-red-400 mt-2">{uploadError}</p>
-          )}
+          {uploadError && <p className="text-xs text-red-400 mt-2">{uploadError}</p>}
         </div>
       )}
 
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-text-primary">Indexed Documents</h3>
         {loading ? (
-          <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>
+          <div className="flex justify-center p-8">
+            <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
+          </div>
         ) : loadError ? (
           <ErrorState message={loadError} onRetry={loadDocs} />
         ) : docs.length === 0 ? (
@@ -157,18 +159,25 @@ export default function KnowledgeBasePanel() {
         ) : (
           <div className="grid gap-2">
             {docs.map(doc => (
-              <div key={doc.id} className="flex items-center justify-between p-3 bg-surface-2 border border-border-default rounded-lg group hover:border-brand-500/50 transition-colors">
+              <div
+                key={doc.id}
+                className="flex items-center justify-between p-3 bg-surface-2 border border-border-default rounded-lg group hover:border-brand-500/50 transition-colors"
+              >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div className="p-2 bg-brand-500/10 rounded shrink-0">
                     <FileText className="w-5 h-5 text-brand-500" />
                   </div>
                   <div className="min-w-0">
-                    <div title={doc.filename} className="text-sm font-medium text-text-primary truncate">{doc.filename}</div>
-                    <div className="text-xs text-text-tertiary" title={absoluteTime(doc.createdAt)}>Indexed {relativeTime(doc.createdAt)}</div>
+                    <div title={doc.filename} className="text-sm font-medium text-text-primary truncate">
+                      {doc.filename}
+                    </div>
+                    <div className="text-xs text-text-tertiary" title={absoluteTime(doc.createdAt)}>
+                      Indexed {relativeTime(doc.createdAt)}
+                    </div>
                   </div>
                 </div>
                 {canManage && (
-                  <button 
+                  <button
                     onClick={() => handleDelete(doc.id)}
                     className="p-2 text-text-tertiary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                   >

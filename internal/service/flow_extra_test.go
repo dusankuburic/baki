@@ -244,3 +244,78 @@ func TestSuppressFindingInSource_PersistsAndReparses(t *testing.T) {
 	}
 	_ = reparsed // (full analysis is exercised by the analyzer-level round-trip test)
 }
+
+// Regression: PatchFlow must validate the patched source before persisting. A
+// patch that breaks block structure (here: clobbering the END closer so the
+// LOOP is left unclosed) must be rejected, and the original file left intact —
+// not silently overwritten with degraded source the user can't undo.
+func TestPatchFlow_RejectsPatchThatIntroducesParseErrors(t *testing.T) {
+	// Minimal valid flow: a loop with a body and a matching END.
+	const source = "LOOP FOREACH item IN %List%\n    Display.UiFlow\nEND\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Main.txt")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	svc := NewFlowService(&testutil.CountingNotifier{}, newTestSettingsStore(t), NewLocalDocumentProvider(), nil, nil, nil)
+
+	doc, err := svc.LoadFlowFromPath(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Sanity: the fixture must parse cleanly or the test is meaningless.
+	if n := parseErrorCount(source, "Main.txt"); n != 0 {
+		t.Fatalf("fixture should parse cleanly, has %d error-severity parse errors", n)
+	}
+
+	// Clobbering the END closer leaves the LOOP unclosed → an error-severity
+	// "unclosed block" parse error that wasn't present in the original.
+	patch := models.Patch{
+		Ops: []models.PatchOp{{
+			Kind:      "replace",
+			StartLine: 3, // the END line (1-based)
+			Old:       "END",
+			New:       "BROKEN_NOT_AN_END",
+		}},
+	}
+	if _, err := svc.PatchFlow(doc, patch); err == nil {
+		t.Fatal("expected PatchFlow to reject a structurally-breaking patch, got nil error")
+	}
+
+	// The source file on disk must be unchanged.
+	onDisk, _ := os.ReadFile(path)
+	if string(onDisk) != source {
+		t.Errorf("source file was corrupted by a rejected patch;\n got: %q\nwant: %q", string(onDisk), source)
+	}
+}
+
+// Positive control: a patch that keeps structure valid (adding an innocuous
+// comment) is accepted and persisted, confirming the guard doesn't over-reject.
+func TestPatchFlow_AcceptsStructurallyValidPatch(t *testing.T) {
+	const source = "LOOP FOREACH item IN %List%\n    Display.UiFlow\nEND\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Main.txt")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	svc := NewFlowService(&testutil.CountingNotifier{}, newTestSettingsStore(t), NewLocalDocumentProvider(), nil, nil, nil)
+
+	doc, err := svc.LoadFlowFromPath(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	patch := models.Patch{
+		Ops: []models.PatchOp{{
+			Kind:       "insert",
+			BeforeLine: 1,
+			Lines:      []string{"# harmless comment"},
+		}},
+	}
+	if _, err := svc.PatchFlow(doc, patch); err != nil {
+		t.Fatalf("expected the valid comment-insert patch to be accepted, got: %v", err)
+	}
+	onDisk, _ := os.ReadFile(path)
+	if !strings.Contains(string(onDisk), "# harmless comment") {
+		t.Errorf("valid patch was not persisted; content:\n%s", onDisk)
+	}
+}

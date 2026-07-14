@@ -12,17 +12,17 @@ const root = createRoot(container)
 // The /shared path is an UNAUTHENTICATED public viewer for share-link
 // recipients — it renders outside the app shell so no auth/stores are needed.
 if (window.location.pathname.endsWith('/shared')) {
-    root.render(
-        <React.StrictMode>
-            <SharedReportView/>
-        </React.StrictMode>
-    )
+  root.render(
+    <React.StrictMode>
+      <SharedReportView />
+    </React.StrictMode>,
+  )
 } else {
-    root.render(
-        <React.StrictMode>
-            <ProtectedRoute>
-                <App/>
-            </ProtectedRoute>
-        </React.StrictMode>
-    )
+  root.render(
+    <React.StrictMode>
+      <ProtectedRoute>
+        <App />
+      </ProtectedRoute>
+    </React.StrictMode>,
+  )
 }

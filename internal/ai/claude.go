@@ -289,6 +289,9 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			case resp.StatusCode >= 500:
 				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
+			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("claude API: %s", apiErr.Error.Message)
 		}
 		return nil, fmt.Errorf("claude API error (status %d)", resp.StatusCode)
@@ -359,6 +362,9 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 				return rateLimitErr(resp)
 			case resp.StatusCode >= 500:
 				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
+			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return err
 			}
 			return fmt.Errorf("claude stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
 		}

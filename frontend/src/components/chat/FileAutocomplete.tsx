@@ -14,7 +14,12 @@ export default function FileAutocomplete({query, onSelect}: Props) {
   const [files, setFiles] = useState<SourceFileInfo[]>([])
 
   useEffect(() => {
-    flowApi.getSourceFiles().then(setFiles).catch((err) => { logger.warn('Failed to load source files', err) })
+    flowApi
+      .getSourceFiles()
+      .then(setFiles)
+      .catch(err => {
+        logger.warn('Failed to load source files', err)
+      })
   }, [])
 
   const filtered = useMemo(() => {

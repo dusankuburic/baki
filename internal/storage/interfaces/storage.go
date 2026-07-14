@@ -102,8 +102,11 @@ type PurgeResult struct {
 
 // StorageBackend defines the interface for storage implementations
 // This allows abstraction between local file system and cloud database storage
-type StorageBackend interface {
-	// Flow document operations
+// FlowStore covers flow document CRUD/listing. Callers that only need to
+// load/save/list flows (not the full StorageBackend) should depend on this
+// narrower interface — e.g. services that shouldn't be able to touch users,
+// orgs, or audit logs.
+type FlowStore interface {
 	SaveFlow(ctx context.Context, flow *FlowDocument) error
 	// TransferFlowOwner changes owner_id and org_id on a flow. This is the
 	// ONLY way to reassign ownership — SaveFlow's ON CONFLICT intentionally
@@ -121,21 +124,37 @@ type StorageBackend interface {
 	// ignoring Limit/Offset — used for list pagination totals.
 	CountFlows(ctx context.Context, filter FlowFilter) (int, error)
 	DeleteFlow(ctx context.Context, id string) error
+}
 
-	// Settings operations
+// FlowVersionStore covers flow version history (snapshots taken on save).
+type FlowVersionStore interface {
+	// SaveFlowVersion assigns v.Version atomically (any caller-set value is
+	// overwritten), so callers must read it back from v after a successful save.
+	SaveFlowVersion(ctx context.Context, v *FlowVersion) error
+	ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*FlowVersion, error)
+	LoadFlowVersion(ctx context.Context, flowID string, version int) (*FlowVersion, error)
+}
+
+// AppSettingsStore covers global/user/org application settings.
+type AppSettingsStore interface {
 	SaveSettings(ctx context.Context, settings *AppSettings) error
 	LoadSettings(ctx context.Context) (*AppSettings, error)
 	SaveUserSettings(ctx context.Context, userID string, settings *AppSettings) error
 	LoadUserSettings(ctx context.Context, userID string) (*AppSettings, error)
 	SaveOrgSettings(ctx context.Context, orgID string, settings *AppSettings) error
 	LoadOrgSettings(ctx context.Context, orgID string) (*AppSettings, error)
+}
 
-	// Conversation operations
+// ConversationStore covers persisted chat conversation history.
+type ConversationStore interface {
 	SaveConversation(ctx context.Context, flowID, scope string, messages []ChatMessage) error
 	LoadConversation(ctx context.Context, flowID, scope string) ([]ChatMessage, error)
 	DeleteConversation(ctx context.Context, flowID, scope string) error
+}
 
-	// User operations
+// UserStore covers user account CRUD, role/password/profile updates, and the
+// GDPR-related bulk operations (export, erasure, retention purge).
+type UserStore interface {
 	SaveUser(ctx context.Context, user *User) error
 	CreateUser(ctx context.Context, user *User) error
 	LoadUserByEmail(ctx context.Context, email string) (*User, error)
@@ -173,25 +192,34 @@ type StorageBackend interface {
 	// older than auditRetentionDays (0 = keep audit history indefinitely). It
 	// returns counts of what was removed. Intended for a periodic background job.
 	PurgeExpiredData(ctx context.Context, auditRetentionDays int) (*PurgeResult, error)
+}
 
-	// Organisation operations
+// OrgStore covers organisation CRUD and membership lookup.
+type OrgStore interface {
 	SaveOrg(ctx context.Context, org *Organisation) error
 	LoadOrg(ctx context.Context, id string) (*Organisation, error)
 	ListOrgsForUser(ctx context.Context, userID string) ([]*Organisation, error)
 	DeleteOrg(ctx context.Context, id string) error
+}
 
-	// Sharing operations
+// SharingStore covers per-flow collaborator management.
+type SharingStore interface {
 	ListCollaborators(ctx context.Context, flowID string) ([]*Collaborator, error)
 	ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*Collaborator, error)
 	AddCollaborator(ctx context.Context, flowID string, c *Collaborator) error
 	UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error
 	RemoveCollaborator(ctx context.Context, flowID, userID string) error
+}
 
-	// Usage tracking
+// UsageStore covers AI usage/cost tracking for budget enforcement.
+type UsageStore interface {
 	SaveUsageMetric(ctx context.Context, metric *UsageMetric) error
 	GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error)
+}
 
-	// Dashboard
+// DashboardStore covers the persisted flow-health snapshots and the rollup
+// queries backing the portfolio/home dashboards.
+type DashboardStore interface {
 	SaveFlowAnalysis(ctx context.Context, fa *FlowAnalysis) error
 	// LoadFlowHealth returns the most recent persisted analysis snapshot for a
 	// single flow, or (nil, nil) when the flow has never been analyzed. Caller
@@ -206,8 +234,10 @@ type StorageBackend interface {
 	// FlowDashboardAdvanced returns trend, cost-by-provider, rule-frequency,
 	// activity-feed, complexity-scatter, and security-posture data.
 	FlowDashboardAdvanced(ctx context.Context, ownerID string, days int) (*DashboardAdvancedData, error)
+}
 
-	// Knowledge Base
+// KnowledgeStore covers the org knowledge base (RAG source documents + chunks).
+type KnowledgeStore interface {
 	SaveKnowledgeDocument(ctx context.Context, doc *KnowledgeDocument) error
 	// DeleteKnowledgeDocument removes a document only when it belongs to orgID,
 	// so a caller scoped to one org cannot delete another org's documents.
@@ -215,23 +245,25 @@ type StorageBackend interface {
 	ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*KnowledgeDocument, error)
 	SaveKnowledgeChunks(ctx context.Context, chunks []KnowledgeChunk) error
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]KnowledgeChunk, error)
+}
 
-	// Health check
+// HealthChecker covers backend liveness/lifecycle, independent of any one
+// storage domain — every backend must support it regardless of which other
+// role interfaces it implements.
+type HealthChecker interface {
 	Ping(ctx context.Context) error
 	Close() error
+}
 
-	// Audit log
+// AuditStore covers the append-only security/governance audit log.
+type AuditStore interface {
 	SaveAuditEvent(ctx context.Context, event *AuditEvent) error
 	ListAuditEvents(ctx context.Context, filter AuditFilter) ([]*AuditEvent, error)
+}
 
-	// Flow versioning. SaveFlowVersion assigns v.Version atomically (any
-	// caller-set value is overwritten), so callers must read it back from v
-	// after a successful save.
-	SaveFlowVersion(ctx context.Context, v *FlowVersion) error
-	ListFlowVersions(ctx context.Context, flowID string, limit int) ([]*FlowVersion, error)
-	LoadFlowVersion(ctx context.Context, flowID string, version int) (*FlowVersion, error)
-
-	// Finding triage & baselines
+// TriageStore covers finding triage state (status overrides) and per-flow
+// accepted-findings baselines.
+type TriageStore interface {
 	// SetFindingStatus upserts the triage state for one finding (keyed by
 	// FlowID + FindingKey).
 	SetFindingStatus(ctx context.Context, st *FindingStatus) error
@@ -248,8 +280,10 @@ type StorageBackend interface {
 	SetFlowBaseline(ctx context.Context, b *FlowBaseline) error
 	// ClearFlowBaseline removes the flow's baseline. Idempotent.
 	ClearFlowBaseline(ctx context.Context, flowID string) error
+}
 
-	// Finding comments (team-shared review threads on individual findings)
+// CommentStore covers team-shared review threads on individual findings.
+type CommentStore interface {
 	AddFindingComment(ctx context.Context, c *FindingComment) error
 	ListFindingComments(ctx context.Context, flowID, findingKey string) ([]*FindingComment, error)
 	// DeleteFindingComment removes a comment. When authorID is non-empty the
@@ -257,14 +291,18 @@ type StorageBackend interface {
 	// returns ErrNotCommentAuthor. Empty authorID deletes unconditionally
 	// (flow-admin moderation). Deleting an absent comment is a no-op.
 	DeleteFindingComment(ctx context.Context, flowID, commentID, authorID string) error
+}
 
-	// Share tokens (read-only public report links)
+// ShareTokenStore covers read-only public report links.
+type ShareTokenStore interface {
 	CreateShareToken(ctx context.Context, t *ShareToken) error
 	GetShareTokenByHash(ctx context.Context, tokenHash string) (*ShareToken, error)
 	ListShareTokens(ctx context.Context, flowID string) ([]*ShareToken, error)
 	RevokeShareToken(ctx context.Context, flowID, tokenID string) error
+}
 
-	// API tokens (machine credentials)
+// APITokenStore covers machine credentials (personal access tokens).
+type APITokenStore interface {
 	CreateAPIToken(ctx context.Context, t *APIToken) error
 	// GetAPITokenByHash resolves a token by its hash for authentication, or
 	// returns ErrNotFound. Revocation is a delete, so a revoked token is not found.
@@ -274,9 +312,12 @@ type StorageBackend interface {
 	// DeleteAPIToken removes a token owned by userID. Scoped to the owner so one
 	// user cannot revoke another's; idempotent.
 	DeleteAPIToken(ctx context.Context, userID, id string) error
+}
 
-	// One-shot user tokens (password reset, email verification). Only the hash
-	// is stored; the raw value lives only in the email link sent to the user.
+// UserTokenStore covers one-shot user tokens (password reset, email
+// verification). Only the hash is stored; the raw value lives only in the
+// email link sent to the user.
+type UserTokenStore interface {
 	CreateUserToken(ctx context.Context, t *UserToken) error
 	// ConsumeUserToken atomically redeems a valid (unused, unexpired) token of
 	// the given purpose, marks it used, and returns the owning user ID. It
@@ -293,6 +334,32 @@ type StorageBackend interface {
 	InvalidateUserTokens(ctx context.Context, userID string, purposes ...string) error
 	// SetUserEmailVerified marks a user's email as verified.
 	SetUserEmailVerified(ctx context.Context, userID string) error
+}
+
+// StorageBackend is the full storage capability set, composed from the role
+// interfaces above. It exists so the DI container and the two concrete
+// backends (Postgres, filesystem) have one thing to implement/inject; most
+// consumers should instead depend on the narrowest role interface(s) they
+// actually use (e.g. ConversationStore, DashboardStore) so a change to one
+// domain doesn't ripple through unrelated callers.
+type StorageBackend interface {
+	FlowStore
+	FlowVersionStore
+	AppSettingsStore
+	ConversationStore
+	UserStore
+	OrgStore
+	SharingStore
+	UsageStore
+	DashboardStore
+	KnowledgeStore
+	HealthChecker
+	AuditStore
+	TriageStore
+	CommentStore
+	ShareTokenStore
+	APITokenStore
+	UserTokenStore
 }
 
 // UserToken purposes.

@@ -8,6 +8,10 @@ import (
 	"pad-analyzer/internal/api/middleware"
 )
 
+// registerRoutes applies chi's inner middleware layer (below) and the full
+// route table. It runs after the outer layers built by BuildHandler
+// (middleware_chain.go, same package) — see that file's doc comment for the
+// complete, resolved end-to-end order.
 func registerRoutes(rt *Router, r chi.Router) {
 	// Cross-cutting middleware — applied to every request in order.
 	r.Use(rt.securityHeaders)
@@ -39,7 +43,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// /metrics is protected by a private-IP allowlist to prevent public internet
 	// access to internal operational data. Supplement this with Azure NSG /
 	// ACA ingress rules that block /metrics from the public load balancer.
-	r.Handle("/metrics", middleware.MetricsGuard(rt.trustedProxies)(middleware.MetricsHandler()))
+	r.Handle("/metrics", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(middleware.MetricsHandler()))
 	r.Get("/api/events", rt.eventManager.HandleEvents)
 
 	// --- System & Keys ---

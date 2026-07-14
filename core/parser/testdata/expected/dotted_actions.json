@@ -687,28 +687,16 @@
   ],
   "parseErrors": [
     {
-      "line": 20,
-      "message": "unclosed block: Close Browser",
-      "severity": "error",
-      "snippet": "WebAutomation.CloseBrowser"
-    },
-    {
       "line": 24,
       "message": "malformed line",
       "severity": "warning",
       "snippet": "    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:D100''' =\u003e ExcelData"
-    },
-    {
-      "line": 34,
-      "message": "unclosed block: Write Text",
-      "severity": "error",
-      "snippet": "File.WriteText"
     }
   ],
   "metadata": {
     "blockCount": 30,
     "subflowCount": 2,
     "maxDepth": 4,
-    "rawLineCount": 36
+    "rawLineCount": 35
   }
 }

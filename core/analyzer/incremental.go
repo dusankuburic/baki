@@ -148,13 +148,13 @@ func ComputeSubflowHashes(doc *models.FlowDocument) []models.SubflowHash {
 
 func computeSubflowHash(sf *models.Subflow) string {
 	d := fnvBuilder()
-	d.write(sf.ID)
 	d.write(sf.Name)
 	walkSubflowBlocks(sf, func(b *models.Block) {
-		d.write(b.ID)
+		// b.ID/sf.ID excluded — parser-minted UUIDs, unstable across re-parses.
 		d.write(b.Name)
 		d.write(string(b.Type))
 		d.write(b.RawType)
+		d.write(fmt.Sprintf("%d", b.Indent))
 		// Sort keys for a deterministic hash — Go randomizes map iteration, so
 		// unsorted hashing makes identical subflows hash differently and breaks
 		// subflow dedup/comparison.

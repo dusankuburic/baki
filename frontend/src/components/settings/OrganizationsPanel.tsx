@@ -36,12 +36,11 @@ export default function OrganizationsPanel() {
   const [inviteRole, setInviteRole] = useState<OrgRole>('member')
   const [inviteBusy, setInviteBusy] = useState(false)
 
-  useEffect(() => { void loadOrgs() }, [loadOrgs])
+  useEffect(() => {
+    void loadOrgs()
+  }, [loadOrgs])
 
-  const selected = useMemo(
-    () => organisations.find(o => o.id === activeOrgId) ?? null,
-    [organisations, activeOrgId],
-  )
+  const selected = useMemo(() => organisations.find(o => o.id === activeOrgId) ?? null, [organisations, activeOrgId])
 
   const handleCreate = async () => {
     const name = newName.trim()
@@ -140,7 +139,9 @@ export default function OrganizationsPanel() {
         <div className="flex items-start gap-2 p-3 rounded-lg bg-semantic-error/10 border border-semantic-error/30 text-semantic-error">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span className="text-sm flex-1">{error}</span>
-          <button onClick={clearError} className="text-xs hover:opacity-80">Dismiss</button>
+          <button onClick={clearError} className="text-xs hover:opacity-80">
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -150,14 +151,19 @@ export default function OrganizationsPanel() {
           <input
             autoFocus
             value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleCreate() }}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') void handleCreate()
+            }}
             placeholder="e.g. Acme RPA"
             className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
           />
           <div className="flex gap-2 justify-end">
             <button
-              onClick={() => { setCreating(false); setNewName('') }}
+              onClick={() => {
+                setCreating(false)
+                setNewName('')
+              }}
               className="px-3 py-1.5 rounded-lg text-sm text-text-secondary hover:bg-surface-3"
             >
               Cancel
@@ -182,7 +188,7 @@ export default function OrganizationsPanel() {
         </div>
       ) : (
         <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">
-          {organisations.map((org) => {
+          {organisations.map(org => {
             const isOwner = currentUser?.id === org.ownerId
             const isAdmin = org.members.find(m => m.userId === currentUser?.id)?.role === 'admin'
             const canManageMembers = isOwner || isAdmin
@@ -201,9 +207,13 @@ export default function OrganizationsPanel() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span title={org.name} className="text-sm font-semibold text-text-primary truncate">{org.name}</span>
+                      <span title={org.name} className="text-sm font-semibold text-text-primary truncate">
+                        {org.name}
+                      </span>
                       {isOwner && (
-                        <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">Owner</span>
+                        <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">
+                          Owner
+                        </span>
                       )}
                     </div>
                     <p className="text-xs text-text-tertiary mt-0.5">
@@ -212,7 +222,10 @@ export default function OrganizationsPanel() {
                   </div>
                   {isOwner && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); void handleDeleteOrg(org) }}
+                      onClick={e => {
+                        e.stopPropagation()
+                        void handleDeleteOrg(org)
+                      }}
                       className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors"
                       title="Delete organization"
                     >
@@ -238,21 +251,30 @@ export default function OrganizationsPanel() {
                               )}
                             >
                               <div className="flex-1 min-w-0">
-                                <p title={m.user?.displayName || m.user?.email || m.userId} className="text-sm text-text-primary truncate">
+                                <p
+                                  title={m.user?.displayName || m.user?.email || m.userId}
+                                  className="text-sm text-text-primary truncate"
+                                >
                                   {m.user?.displayName || m.user?.email || m.userId}
                                 </p>
                                 {m.user?.email && m.user.displayName && (
-                                  <p title={m.user.email} className="text-xs text-text-tertiary truncate">{m.user.email}</p>
+                                  <p title={m.user.email} className="text-xs text-text-tertiary truncate">
+                                    {m.user.email}
+                                  </p>
                                 )}
                               </div>
                               {canManageMembers ? (
                                 <select
                                   value={m.role}
-                                  onChange={(e) => void handleRoleChange(m.userId, e.target.value as OrgRole)}
+                                  onChange={e => void handleRoleChange(m.userId, e.target.value as OrgRole)}
                                   disabled={m.userId === org.ownerId}
                                   className="px-2 py-1 rounded-md bg-surface-2 border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-500 disabled:opacity-50"
                                 >
-                                  {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                  {ROLES.map(r => (
+                                    <option key={r} value={r}>
+                                      {r}
+                                    </option>
+                                  ))}
                                 </select>
                               ) : (
                                 <span className="px-2 py-1 text-xs text-text-tertiary capitalize">{m.role}</span>
@@ -276,31 +298,37 @@ export default function OrganizationsPanel() {
                     {canManageMembers && (
                       <div>
                         <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Invite</h4>
-                      <div className="flex gap-2">
-                        <input
-                          value={inviteEmail}
-                          onChange={(e) => setInviteEmail(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') void handleInvite() }}
-                          placeholder="teammate@example.com"
-                          type="email"
-                          className="flex-1 px-3 py-1.5 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
-                        />
-                        <select
-                          value={inviteRole}
-                          onChange={(e) => setInviteRole(e.target.value as OrgRole)}
-                          className="px-2 py-1.5 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
-                        >
-                          {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
-                        <button
-                          onClick={handleInvite}
-                          disabled={!inviteEmail.trim() || inviteBusy}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-sm font-medium"
-                        >
-                          <UserPlus size={14} />
-                          {inviteBusy ? 'Inviting…' : 'Invite'}
-                        </button>
-                      </div>
+                        <div className="flex gap-2">
+                          <input
+                            value={inviteEmail}
+                            onChange={e => setInviteEmail(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') void handleInvite()
+                            }}
+                            placeholder="teammate@example.com"
+                            type="email"
+                            className="flex-1 px-3 py-1.5 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
+                          />
+                          <select
+                            value={inviteRole}
+                            onChange={e => setInviteRole(e.target.value as OrgRole)}
+                            className="px-2 py-1.5 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
+                          >
+                            {ROLES.map(r => (
+                              <option key={r} value={r}>
+                                {r}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handleInvite}
+                            disabled={!inviteEmail.trim() || inviteBusy}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-sm font-medium"
+                          >
+                            <UserPlus size={14} />
+                            {inviteBusy ? 'Inviting…' : 'Invite'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

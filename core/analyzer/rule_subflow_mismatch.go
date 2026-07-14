@@ -127,7 +127,7 @@ func providesInputs(block *models.Block, target *models.Subflow) bool {
 	if block.Properties != nil {
 		for _, v := range block.Properties {
 			v = strings.TrimSpace(v)
-			if strings.HasPrefix(v, "%") && strings.HasSuffix(v, "%") {
+			if len(v) >= 2 && strings.HasPrefix(v, "%") && strings.HasSuffix(v, "%") {
 				blockVars[strings.ToLower(v[1:len(v)-1])] = true
 			}
 		}
@@ -143,3 +143,7 @@ func providesInputs(block *models.Block, target *models.Subflow) bool {
 	}
 	return true
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&SubflowMismatchRule{}) }

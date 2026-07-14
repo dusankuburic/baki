@@ -61,3 +61,7 @@ func hasExitCondition(loop *models.Block) bool {
 	})
 	return found
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&InfiniteLoopRiskRule{}) }

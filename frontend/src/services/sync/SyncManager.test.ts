@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 
 const mockStatus = {
   value: 'disconnected' as string,
@@ -9,15 +9,20 @@ const sentEnvs: unknown[] = []
 vi.mock('@/services/collaboration/CollaborationService', () => ({
   collaborationService: {
     getStatus: () => mockStatus.value,
-    send: (env: unknown) => { sentEnvs.push(env); return true },
+    send: (env: unknown) => {
+      sentEnvs.push(env)
+      return true
+    },
     onStatusChange: (cb: (s: string) => void) => {
       mockStatus.cb = cb
-      return () => { mockStatus.cb = null }
+      return () => {
+        mockStatus.cb = null
+      }
     },
   },
 }))
 
-import { syncManager } from './SyncManager'
+import {syncManager} from './SyncManager'
 
 beforeEach(() => {
   localStorage.clear()
@@ -34,8 +39,8 @@ afterEach(() => {
 describe('start(flowId)', () => {
   it('loads persisted queue from localStorage', () => {
     const flowId = 'flow-1'
-    const op = { id: 'op-1-1', env: { type: 'block.update' }, queuedAt: Date.now() }
-    localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({ queue: [op], counter: 1 }))
+    const op = {id: 'op-1-1', env: {type: 'block.update'}, queuedAt: Date.now()}
+    localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({queue: [op], counter: 1}))
 
     syncManager.start(flowId)
 
@@ -45,9 +50,9 @@ describe('start(flowId)', () => {
 
   it('drops stale ops on load (TTL expired)', () => {
     const flowId = 'flow-2'
-    const freshOp = { id: 'op-1', env: { type: 'block.update' }, queuedAt: Date.now() }
-    const staleOp = { id: 'op-2', env: { type: 'cursor.move' }, queuedAt: Date.now() - 120_000 }
-    localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({ queue: [freshOp, staleOp], counter: 2 }))
+    const freshOp = {id: 'op-1', env: {type: 'block.update'}, queuedAt: Date.now()}
+    const staleOp = {id: 'op-2', env: {type: 'cursor.move'}, queuedAt: Date.now() - 120_000}
+    localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({queue: [freshOp, staleOp], counter: 2}))
 
     syncManager.start(flowId)
 
@@ -67,14 +72,20 @@ describe('start(flowId)', () => {
   })
 
   it('switches queues when flowId changes', () => {
-    localStorage.setItem('baki-sync-queue-a', JSON.stringify({
-      queue: [{ id: 'a1', env: { type: 'block.update' }, queuedAt: Date.now() }],
-      counter: 1,
-    }))
-    localStorage.setItem('baki-sync-queue-b', JSON.stringify({
-      queue: [{ id: 'b1', env: { type: 'cursor.move' }, queuedAt: Date.now() }],
-      counter: 1,
-    }))
+    localStorage.setItem(
+      'baki-sync-queue-a',
+      JSON.stringify({
+        queue: [{id: 'a1', env: {type: 'block.update'}, queuedAt: Date.now()}],
+        counter: 1,
+      }),
+    )
+    localStorage.setItem(
+      'baki-sync-queue-b',
+      JSON.stringify({
+        queue: [{id: 'b1', env: {type: 'cursor.move'}, queuedAt: Date.now()}],
+        counter: 1,
+      }),
+    )
 
     syncManager.start('a')
     expect(syncManager.getQueue()).toHaveLength(1)
@@ -91,7 +102,7 @@ describe('enqueue()', () => {
     mockStatus.value = 'disconnected'
     syncManager.start('flow-enq-1')
 
-    syncManager.enqueue({ type: 'block.update', payload: { blockId: 'b1' } })
+    syncManager.enqueue({type: 'block.update', payload: {blockId: 'b1'}})
 
     const raw = localStorage.getItem('baki-sync-queue-flow-enq-1')
     expect(raw).not.toBeNull()
@@ -104,7 +115,7 @@ describe('enqueue()', () => {
     mockStatus.value = 'connected'
     syncManager.start('flow-enq-2')
 
-    syncManager.enqueue({ type: 'block.update' })
+    syncManager.enqueue({type: 'block.update'})
 
     expect(sentEnvs).toHaveLength(1)
     expect(syncManager.getQueue()).toHaveLength(0)
@@ -116,7 +127,7 @@ describe('enqueue()', () => {
     syncManager.start('flow-enq-3')
 
     for (let i = 0; i < 210; i++) {
-      syncManager.enqueue({ type: 'block.update' })
+      syncManager.enqueue({type: 'block.update'})
     }
 
     expect(syncManager.getQueue().length).toBe(200)
@@ -127,8 +138,8 @@ describe('flush on reconnect', () => {
   it('sends queued ops and clears storage', () => {
     const flowId = 'flow-flush-1'
     syncManager.start(flowId)
-    syncManager.enqueue({ type: 'block.update' })
-    syncManager.enqueue({ type: 'cursor.move' })
+    syncManager.enqueue({type: 'block.update'})
+    syncManager.enqueue({type: 'cursor.move'})
 
     expect(localStorage.getItem(`baki-sync-queue-${flowId}`)).not.toBeNull()
 
@@ -144,7 +155,7 @@ describe('flush on reconnect', () => {
 describe('stop()', () => {
   it('persists queue to localStorage', () => {
     syncManager.start('flow-stop-1')
-    syncManager.enqueue({ type: 'block.update' })
+    syncManager.enqueue({type: 'block.update'})
 
     syncManager.stop()
 
@@ -153,17 +164,31 @@ describe('stop()', () => {
     const data = JSON.parse(raw!)
     expect(data.queue).toHaveLength(1)
   })
+
+  it('start(sameFlowId) after stop() resumes the persisted queue', () => {
+    syncManager.start('flow-stop-2')
+    syncManager.enqueue({type: 'block.update'})
+    syncManager.stop()
+
+    // Reopening the SAME flow must reload the queue stop() persisted —
+    // previously the stale flowId made start() skip loadFromStorage(),
+    // orphaning the persisted ops.
+    syncManager.start('flow-stop-2')
+
+    expect(syncManager.getQueue()).toHaveLength(1)
+    expect(syncManager.getQueue()[0].env.type).toBe('block.update')
+  })
 })
 
 describe('reset()', () => {
   it('clears the in-memory queue AND every persisted per-flow queue', () => {
     // The active flow persists its own queue...
     syncManager.start('flow-a')
-    syncManager.enqueue({ type: 'block.update' })
+    syncManager.enqueue({type: 'block.update'})
     expect(syncManager.getQueue()).toHaveLength(1)
     expect(localStorage.getItem('baki-sync-queue-flow-a')).not.toBeNull()
     // ...and an earlier flow left an orphaned persisted queue behind.
-    localStorage.setItem('baki-sync-queue-flow-b', JSON.stringify({ queue: [], counter: 0 }))
+    localStorage.setItem('baki-sync-queue-flow-b', JSON.stringify({queue: [], counter: 0}))
 
     syncManager.reset()
 
@@ -176,7 +201,7 @@ describe('reset()', () => {
 
   it('only removes baki-sync-queue-* keys, leaving unrelated storage intact', () => {
     syncManager.start('flow-a')
-    syncManager.enqueue({ type: 'block.update' })
+    syncManager.enqueue({type: 'block.update'})
     localStorage.setItem('unrelated-key', 'keep-me')
 
     syncManager.reset()

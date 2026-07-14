@@ -11,10 +11,10 @@ var falliblePrefixes = []string{
 	"UIAutomation.",
 	"Excel.",
 	"File.",
-	"Http.",
+	"HTTPClient.",
 	"Database.",
 	"Email.",
-	"Ftp.",
+	"FTP.",
 	"ActiveDirectory.",
 	"SharePoint.",
 	"OneDrive.",
@@ -63,3 +63,7 @@ func isFallible(rawType string) bool {
 	}
 	return false
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&UnhandledErrorRule{}) }

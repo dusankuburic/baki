@@ -15,11 +15,18 @@ import DataFlowInsights from './DataFlowInsights'
 function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
   const rows = [
     ['Subflow', 'Blocks', 'Cyclomatic', 'Cognitive', 'Fan-In', 'Fan-Out', 'Max Depth', 'Variables'],
-    ...metrics.subflows.map(m => [
-      csvCell(m.subflowName),
-      m.blockCount, m.cyclomaticComplexity, m.cognitiveComplexity,
-      m.fanIn, m.fanOut, m.maxNestingDepth, m.variableCount,
-    ].map(String)),
+    ...metrics.subflows.map(m =>
+      [
+        csvCell(m.subflowName),
+        m.blockCount,
+        m.cyclomaticComplexity,
+        m.cognitiveComplexity,
+        m.fanIn,
+        m.fanOut,
+        m.maxNestingDepth,
+        m.variableCount,
+      ].map(String),
+    ),
     [],
     ['Health Score', String(metrics.healthScore)],
     ['Total Blocks', String(metrics.totalBlocks)],
@@ -32,7 +39,7 @@ function exportMetricsCSV(metrics: FlowMetrics, flowId: string) {
 
 export default function MetricsTab() {
   const doc = useFlowStore(s => s.document)
-  const report = useAnalysisStore(s => doc ? s.reports.get(doc.id) : undefined)
+  const report = useAnalysisStore(s => (doc ? s.reports.get(doc.id) : undefined))
   const selectSubflow = useFlowStore(s => s.selectSubflow)
 
   const metrics = report?.metrics
@@ -78,7 +85,10 @@ export default function MetricsTab() {
           </div>
           <div className="h-2 w-full bg-surface-3 rounded-full overflow-hidden mb-2">
             <div
-              className={clsx('h-full rounded-full transition-all duration-fast', scoreColor(metrics.healthScore).replace('text-', 'bg-'))}
+              className={clsx(
+                'h-full rounded-full transition-all duration-fast',
+                scoreColor(metrics.healthScore).replace('text-', 'bg-'),
+              )}
               style={{width: `${metrics.healthScore}%`}}
             />
           </div>
@@ -112,13 +122,9 @@ export default function MetricsTab() {
 
         <DataFlowInsights />
 
-        {report?.findings && report.findings.length > 0 && (
-          <ImpactEffortMatrix findings={report.findings} />
-        )}
+        {report?.findings && report.findings.length > 0 && <ImpactEffortMatrix findings={report.findings} />}
 
-        {metrics.subflows.length > 0 && (
-          <ComplexityScatter subflows={metrics.subflows} />
-        )}
+        {metrics.subflows.length > 0 && <ComplexityScatter subflows={metrics.subflows} />}
 
         {ruleProfiles && ruleProfiles.length > 0 && (
           <div>
@@ -129,10 +135,20 @@ export default function MetricsTab() {
                 .sort((a, b) => b.durationMs - a.durationMs)
                 .slice(0, 8)
                 .map(rp => (
-                  <div key={rp.ruleId} className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-0">
+                  <div
+                    key={rp.ruleId}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-0"
+                  >
                     <span className="text-xs text-text-primary flex-1 truncate">{rp.ruleName}</span>
-                    <span className="text-xs text-text-tertiary tabular-nums">{formatCount(rp.findingCount)} findings</span>
-                    <span className={clsx('text-xs font-mono tabular-nums', rp.durationMs > 50 ? 'text-amber-400' : 'text-text-tertiary')}>
+                    <span className="text-xs text-text-tertiary tabular-nums">
+                      {formatCount(rp.findingCount)} findings
+                    </span>
+                    <span
+                      className={clsx(
+                        'text-xs font-mono tabular-nums',
+                        rp.durationMs > 50 ? 'text-amber-400' : 'text-text-tertiary',
+                      )}
+                    >
                       {rp.durationMs}ms
                     </span>
                   </div>
@@ -142,14 +158,12 @@ export default function MetricsTab() {
         )}
 
         <div>
-          <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">Per-Subflow Complexity</h3>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-text-tertiary mb-2">
+            Per-Subflow Complexity
+          </h3>
           <div className="space-y-2">
             {metrics.subflows.map(sf => (
-              <SubflowMetricsRow
-                key={sf.subflowId}
-                m={sf}
-                onSelect={() => selectSubflow(sf.subflowId)}
-              />
+              <SubflowMetricsRow key={sf.subflowId} m={sf} onSelect={() => selectSubflow(sf.subflowId)} />
             ))}
           </div>
         </div>

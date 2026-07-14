@@ -27,18 +27,19 @@ export function useAutoAnalyze(): void {
     if (inflightRef.current === docId) return
 
     const analysis = useAnalysisStore.getState()
-    if (analysis.reports.has(docId)) return  // already analyzed
-    if (analysis.isAnalyzing) return         // something else is running
+    if (analysis.reports.has(docId)) return // already analyzed
+    if (analysis.isAnalyzing) return // something else is running
 
     inflightRef.current = docId
     const gen = analysis.beginAnalyzing()
     analysis.setProgress({current: 0, total: 0, ruleName: ''})
 
-    analysisApi.analyzeFlow()
-      .then((r) => {
+    analysisApi
+      .analyzeFlow()
+      .then(r => {
         if (r) useAnalysisStore.getState().setReport(docId, r as unknown as AnalysisReport)
       })
-      .catch((err) => {
+      .catch(err => {
         logger.warn('auto-analyze failed:', err)
       })
       .finally(() => {

@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Mail, Lock, LogIn, UserPlus, KeyRound, Send } from 'lucide-react'
+import {useEffect, useState} from 'react'
+import {Mail, Lock, LogIn, UserPlus, KeyRound, Send} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
-import { useAuthStore } from '@/stores/authStore'
-import { authApi, type SSOInfo } from '@/api/auth'
-import { getBackendConfig } from '@/api/client'
+import {useAuthStore} from '@/stores/authStore'
+import {authApi, type SSOInfo} from '@/api/auth'
+import {getBackendConfig} from '@/api/client'
 
 interface LoginFormProps {
   onSuccess?: () => void
@@ -13,7 +13,7 @@ interface LoginFormProps {
 // readSSOHash pulls ssoTicket / ssoError out of the URL fragment placed there
 // by the OIDC callback redirect, and strips it from the address bar so the
 // single-use ticket never lingers in history.
-function readSSOHash(): { ticket?: string; error?: string } {
+function readSSOHash(): {ticket?: string; error?: string} {
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash.includes('ssoTicket=') && !hash.includes('ssoError=')) return {}
   const params = new URLSearchParams(hash)
@@ -25,7 +25,7 @@ function readSSOHash(): { ticket?: string; error?: string } {
   return out
 }
 
-export default function LoginForm({ onSuccess }: LoginFormProps) {
+export default function LoginForm({onSuccess}: LoginFormProps) {
   const [isRegister, setIsRegister] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -51,18 +51,29 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
     // Cancellation guard: these promises can resolve after unmount (route
     // change, test teardown) — a setState then hits a dead component.
     let cancelled = false
-    authApi.ssoInfo()
-      .then(info => { if (!cancelled) setSso(info) })
-      .catch(() => { if (!cancelled) setSso(null) })
+    authApi
+      .ssoInfo()
+      .then(info => {
+        if (!cancelled) setSso(info)
+      })
+      .catch(() => {
+        if (!cancelled) setSso(null)
+      })
 
-    const { ticket, error: hashError } = readSSOHash()
+    const {ticket, error: hashError} = readSSOHash()
     if (hashError) setSsoError(hashError)
     if (ticket) {
-      loginWithSSOTicket(ticket).then(() => { if (!cancelled) onSuccess?.() }).catch(() => {
-        // error message lands in the store's `error` field
-      })
+      loginWithSSOTicket(ticket)
+        .then(() => {
+          if (!cancelled) onSuccess?.()
+        })
+        .catch(() => {
+          // error message lands in the store's `error` field
+        })
     }
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -108,9 +119,9 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
 
     try {
       if (isRegister) {
-        await register({ email, password }, remember)
+        await register({email, password}, remember)
       } else {
-        await login({ email, password }, remember)
+        await login({email, password}, remember)
       }
       onSuccess?.()
     } catch {
@@ -209,7 +220,7 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
           value={password}
           onChange={e => setPassword(e.target.value)}
           required
-          autoComplete={isRegister ? "new-password" : "current-password"}
+          autoComplete={isRegister ? 'new-password' : 'current-password'}
         />
 
         {isRegister && (
@@ -239,7 +250,11 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
           <button
             type="button"
             className="text-sm text-brand-500 hover:underline font-medium self-start -mt-2"
-            onClick={() => { clearError(); setFormError(null); setForgot(true) }}
+            onClick={() => {
+              clearError()
+              setFormError(null)
+              setForgot(true)
+            }}
           >
             Forgot password?
           </button>

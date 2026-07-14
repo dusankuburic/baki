@@ -60,6 +60,32 @@ func TestStreamScrubber_MatchesScrubTextForAnyChunking(t *testing.T) {
 	}
 }
 
+// TestSecretPatternRepresentationsStayInSync is a structural guard, not an
+// example-based one: the "anyChunking" test above only proves the SAMPLES it
+// already knows about stream-scrub correctly, so a NEW secretRegexes pattern
+// added without a matching viablePrefixRegexes entry (and a representative
+// sample here) would pass CI silently — the exact "streaming under-masks a
+// secret type that ScrubText catches" failure mode this package's streaming
+// design exists to prevent.
+//
+// secretRegexes (scrubber.go) and viablePrefixRegexes (stream.go) are meant to
+// correspond 1:1 in the same order: each full-match pattern has exactly one
+// "is this buffer tail still a viable prefix of that pattern" counterpart. If
+// this test fails after adding a pattern to secretRegexes, add its
+// viable-prefix counterpart to viablePrefixRegexes (same index) AND a
+// representative sample to TestStreamScrubber_MatchesScrubTextForAnyChunking
+// above — a count match alone doesn't prove the new pair actually agrees on
+// what a viable prefix looks like, only the chunking test does that.
+func TestSecretPatternRepresentationsStayInSync(t *testing.T) {
+	if len(secretRegexes) != len(viablePrefixRegexes) {
+		t.Fatalf("secretRegexes has %d pattern(s) but viablePrefixRegexes has %d — "+
+			"every full-match pattern needs exactly one corresponding viable-prefix "+
+			"pattern in stream.go (same index), or streamed responses can under-mask "+
+			"a secret type that ScrubText still catches",
+			len(secretRegexes), len(viablePrefixRegexes))
+	}
+}
+
 // TestStreamScrubber_NeverEmitsHeldSecretEarly: the first Write ending inside
 // a secret must not release any part of the value.
 func TestStreamScrubber_NeverEmitsHeldSecretEarly(t *testing.T) {

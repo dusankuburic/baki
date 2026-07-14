@@ -15,10 +15,10 @@ type ProviderService struct {
 	auth        *ai.GitHubAuth
 	copilotAuth *ai.CopilotAuth
 	factory     *ai.ProviderFactory
-	secrets     SecretStore
+	secrets     KeyStore
 }
 
-func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets SecretStore) *ProviderService {
+func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore) *ProviderService {
 	return &ProviderService{auth: auth, copilotAuth: copilotAuth, factory: factory, secrets: secrets}
 }
 

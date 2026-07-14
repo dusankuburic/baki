@@ -23,7 +23,9 @@ const stateListeners = new Set<StateCb>()
 vi.mock('@/api/client', () => ({
   subscribeToEvents: vi.fn(async (cb: EventCb) => {
     capturedCb = cb
-    return () => { capturedCb = null }
+    return () => {
+      capturedCb = null
+    }
   }),
   subscribeConnectionState: vi.fn((cb: StateCb) => {
     stateListeners.add(cb)
@@ -39,7 +41,9 @@ vi.mock('@/api', () => ({
     cancelStream: vi.fn().mockResolvedValue(undefined),
     beginStream: vi.fn(),
     resumeStream: vi.fn().mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0}),
-    getConversation: vi.fn().mockResolvedValue({version: 1, flowKey: 'flow1', scope: 'flow', updatedAt: '', messages: []}),
+    getConversation: vi
+      .fn()
+      .mockResolvedValue({version: 1, flowKey: 'flow1', scope: 'flow', updatedAt: '', messages: []}),
     saveConversation: vi.fn().mockResolvedValue(undefined),
     clearConversation: vi.fn().mockResolvedValue(undefined),
     previewContext: vi.fn(),
@@ -60,7 +64,10 @@ function errorEvent(streamId: string, message: string) {
 }
 
 const doc = {
-  id: 'flow1', name: 'Flow', filePath: '/f.txt', subflows: [],
+  id: 'flow1',
+  name: 'Flow',
+  filePath: '/f.txt',
+  subflows: [],
   metadata: {blockCount: 0, subflowCount: 0, maxDepth: 0, parsedAt: '', fileSize: 0, rawLineCount: 0},
 } as FlowDocument
 
@@ -87,7 +94,13 @@ beforeEach(() => {
   capturedCb = null
   stateListeners.clear()
   vi.clearAllMocks()
-  vi.mocked(chatApi.getConversation).mockResolvedValue({version: 1, flowKey: 'flow1', scope: 'flow', updatedAt: '', messages: []})
+  vi.mocked(chatApi.getConversation).mockResolvedValue({
+    version: 1,
+    flowKey: 'flow1',
+    scope: 'flow',
+    updatedAt: '',
+    messages: [],
+  })
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
   vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
   vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
@@ -100,7 +113,9 @@ describe('useAIChat send/stream/commit', () => {
     const {result} = await renderChat()
     const threadId = result.current.activeThreadId!
 
-    await act(async () => { result.current.handleSend('hello', []) })
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
 
     // User message appended immediately, request sent with the right shape.
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1))
@@ -113,21 +128,37 @@ describe('useAIChat send/stream/commit', () => {
 
     await waitFor(() => expect(capturedCb).not.toBeNull())
 
-    act(() => { capturedCb!(chunkEvent(sid, 'Hel')) })
-    act(() => { capturedCb!(chunkEvent(sid, 'lo!')) })
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'Hel'))
+    })
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'lo!'))
+    })
     await waitFor(() => expect(useChatStore.getState().streams[threadId]?.text).toBe('Hello!'))
 
-    act(() => { capturedCb!(doneEvent(sid, 7, 3)) })
+    act(() => {
+      capturedCb!(doneEvent(sid, 7, 3))
+    })
 
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
     const messages = useChatStore.getState().getMessages(threadId)
-    expect(messages[1]).toMatchObject({role: 'assistant', content: 'Hello!', finishReason: 'stop', tokensOut: 7, tokensIn: 3})
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: 'Hello!',
+      finishReason: 'stop',
+      tokensOut: 7,
+      tokensIn: 3,
+    })
     // The stream slot is cleared once committed.
     expect(useChatStore.getState().streams[threadId]).toBeUndefined()
-    expect(chatApi.saveConversation).toHaveBeenCalledWith('flow1', 'flow', expect.arrayContaining([
-      expect.objectContaining({role: 'user', content: 'hello'}),
-      expect.objectContaining({role: 'assistant', content: 'Hello!'}),
-    ]))
+    expect(chatApi.saveConversation).toHaveBeenCalledWith(
+      'flow1',
+      'flow',
+      expect.arrayContaining([
+        expect.objectContaining({role: 'user', content: 'hello'}),
+        expect.objectContaining({role: 'assistant', content: 'Hello!'}),
+      ]),
+    )
   })
 
   it('appends an error bubble when the stream reports an error mid-flight', async () => {
@@ -135,12 +166,18 @@ describe('useAIChat send/stream/commit', () => {
     const {result} = await renderChat()
     const threadId = result.current.activeThreadId!
 
-    await act(async () => { result.current.handleSend('hi', []) })
+    await act(async () => {
+      result.current.handleSend('hi', [])
+    })
     const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
 
-    act(() => { capturedCb!(chunkEvent(sid, 'partial')) })
-    act(() => { capturedCb!(errorEvent(sid, 'provider exploded')) })
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial'))
+    })
+    act(() => {
+      capturedCb!(errorEvent(sid, 'provider exploded'))
+    })
 
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
     const messages = useChatStore.getState().getMessages(threadId)
@@ -153,9 +190,13 @@ describe('useAIChat send/stream/commit', () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     const {result} = await renderChat()
 
-    await act(async () => { result.current.handleSend('first', []) })
+    await act(async () => {
+      result.current.handleSend('first', [])
+    })
     await waitFor(() => expect(capturedCb).not.toBeNull())
-    await act(async () => { result.current.handleSend('second', []) })
+    await act(async () => {
+      result.current.handleSend('second', [])
+    })
 
     // Only the first send reached the API; the second was a no-op per-thread guard.
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
@@ -168,14 +209,20 @@ describe('useAIChat handleCancelStream', () => {
     const {result} = await renderChat()
     const threadId = result.current.activeThreadId!
 
-    await act(async () => { result.current.handleSend('hi', []) })
+    await act(async () => {
+      result.current.handleSend('hi', [])
+    })
     const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
 
-    act(() => { capturedCb!(chunkEvent(sid, 'partial answer')) })
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial answer'))
+    })
     await waitFor(() => expect(useChatStore.getState().streams[threadId]?.text).toBe('partial answer'))
 
-    act(() => { result.current.handleCancelStream() })
+    act(() => {
+      result.current.handleCancelStream()
+    })
 
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
     const messages = useChatStore.getState().getMessages(threadId)
@@ -186,7 +233,11 @@ describe('useAIChat handleCancelStream', () => {
 
   it('is a no-op when nothing is streaming', async () => {
     const {result} = await renderChat()
-    expect(() => act(() => { result.current.handleCancelStream() })).not.toThrow()
+    expect(() =>
+      act(() => {
+        result.current.handleCancelStream()
+      }),
+    ).not.toThrow()
     expect(chatApi.cancelStream).not.toHaveBeenCalled()
   })
 })
@@ -197,13 +248,19 @@ describe('useAIChat handleResend', () => {
     const {result} = await renderChat()
     const threadId = result.current.activeThreadId!
 
-    await act(async () => { result.current.handleSend('first question', []) })
+    await act(async () => {
+      result.current.handleSend('first question', [])
+    })
     const sid1 = vi.mocked(chatApi.streamChatMessage).mock.calls[0][0].clientStreamId!
     await waitFor(() => expect(capturedCb).not.toBeNull())
-    act(() => { capturedCb!(doneEvent(sid1)) })
+    act(() => {
+      capturedCb!(doneEvent(sid1))
+    })
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
 
-    act(() => { result.current.handleResend() })
+    act(() => {
+      result.current.handleResend()
+    })
 
     // Both messages from the first turn are gone, and a new send goes out
     // with the truncated history explicitly included.
@@ -215,7 +272,9 @@ describe('useAIChat handleResend', () => {
 
   it('is a no-op when there is no completed assistant reply yet', async () => {
     const {result} = await renderChat()
-    act(() => { result.current.handleResend() })
+    act(() => {
+      result.current.handleResend()
+    })
     expect(chatApi.streamChatMessage).not.toHaveBeenCalled()
   })
 })

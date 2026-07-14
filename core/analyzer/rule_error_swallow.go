@@ -89,11 +89,10 @@ func handlerDoesSomething(handler *models.Block) bool {
 			found = true
 			return
 		}
-
-		if b.Type == models.BlockTypeAction {
-			found = true
-			return
-		}
 	})
 	return found
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&ErrorSwallowRule{}) }

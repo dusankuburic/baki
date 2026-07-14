@@ -24,13 +24,19 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
     }
   }, [doc, createThread, sourceFiles, updateThread])
 
-  const handleCloseThread = useCallback((threadId: string) => {
-    closeThread(threadId)
-  }, [closeThread])
+  const handleCloseThread = useCallback(
+    (threadId: string) => {
+      closeThread(threadId)
+    },
+    [closeThread],
+  )
 
-  const handleRenameThread = useCallback((threadId: string, title: string) => {
-    updateThread(threadId, {title})
-  }, [updateThread])
+  const handleRenameThread = useCallback(
+    (threadId: string, title: string) => {
+      updateThread(threadId, {title})
+    },
+    [updateThread],
+  )
 
   const handleClearContext = useCallback(() => {
     if (!activeThreadId) return
@@ -48,17 +54,26 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
     compactThread(activeThreadId, 3)
   }, [activeThreadId, compactThread])
 
-  const setThreadContextBlock = useCallback((blockId: string | null) => {
-    if (activeThreadId) updateThread(activeThreadId, {contextBlockId: blockId})
-  }, [activeThreadId, updateThread])
+  const setThreadContextBlock = useCallback(
+    (blockId: string | null) => {
+      if (activeThreadId) updateThread(activeThreadId, {contextBlockId: blockId})
+    },
+    [activeThreadId, updateThread],
+  )
 
-  const setThreadSourceFiles = useCallback((files: string[]) => {
-    if (activeThreadId) updateThread(activeThreadId, {selectedSourceFiles: files})
-  }, [activeThreadId, updateThread])
+  const setThreadSourceFiles = useCallback(
+    (files: string[]) => {
+      if (activeThreadId) updateThread(activeThreadId, {selectedSourceFiles: files})
+    },
+    [activeThreadId, updateThread],
+  )
 
-  const setThreadUseTools = useCallback((useTools: boolean) => {
-    if (activeThreadId) updateThread(activeThreadId, {useTools})
-  }, [activeThreadId, updateThread])
+  const setThreadUseTools = useCallback(
+    (useTools: boolean) => {
+      if (activeThreadId) updateThread(activeThreadId, {useTools})
+    },
+    [activeThreadId, updateThread],
+  )
 
   return {
     switchThread,

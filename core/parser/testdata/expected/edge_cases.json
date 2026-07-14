@@ -357,18 +357,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 18,
-      "message": "unclosed block: The end",
-      "severity": "error",
-      "snippet": "COMMENT"
-    }
-  ],
   "metadata": {
     "blockCount": 17,
     "subflowCount": 1,
     "maxDepth": 3,
-    "rawLineCount": 20
+    "rawLineCount": 19
   }
 }

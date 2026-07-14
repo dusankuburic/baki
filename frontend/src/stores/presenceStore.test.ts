@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
 
 vi.mock('@/services/collaboration/CollaborationService', () => ({
   collaborationService: {
@@ -29,14 +29,10 @@ vi.mock('@/api/client', () => ({
   getWsTicket: vi.fn().mockResolvedValue('test-ticket'),
 }))
 
-import {
-  collaborationService,
-  type Envelope,
-  type ConnectionStatus,
-} from '@/services/collaboration/CollaborationService'
-import { syncManager } from '@/services/sync/SyncManager'
-import { getWsTicket } from '@/api/client'
-import { usePresenceStore } from './presenceStore'
+import {collaborationService, type Envelope, type ConnectionStatus} from '@/services/collaboration/CollaborationService'
+import {syncManager} from '@/services/sync/SyncManager'
+import {getWsTicket} from '@/api/client'
+import {usePresenceStore} from './presenceStore'
 
 const mockConnect = collaborationService.connect as ReturnType<typeof vi.fn>
 const mockDisconnect = collaborationService.disconnect as ReturnType<typeof vi.fn>
@@ -70,7 +66,7 @@ describe('connectToFlow', () => {
   })
 
   it('sets flowId and clears existing users', async () => {
-    usePresenceStore.setState({ users: { u1: { userId: 'u1', displayName: 'Alice' } } })
+    usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}})
     await usePresenceStore.getState().connectToFlow('flow-abc')
 
     const s = usePresenceStore.getState()
@@ -101,7 +97,7 @@ describe('disconnect', () => {
 
   it('clears all presence state', () => {
     usePresenceStore.setState({
-      users: { u1: { userId: 'u1', displayName: 'Alice' } },
+      users: {u1: {userId: 'u1', displayName: 'Alice'}},
       flowId: 'flow-1',
       status: 'connected' as ConnectionStatus,
     })
@@ -121,7 +117,7 @@ describe('updateSelectedBlock', () => {
     usePresenceStore.getState().updateSelectedBlock('block-42')
     expect(mockEnqueue).toHaveBeenCalledWith({
       type: 'presence.update',
-      payload: { selectedBlockId: 'block-42' },
+      payload: {selectedBlockId: 'block-42'},
     })
   })
 })
@@ -144,7 +140,7 @@ describe('envelope handling', () => {
       type: 'presence.join',
       flowId: 'flow-1',
       ts: new Date().toISOString(),
-      payload: { userId: 'u1', displayName: 'Alice' },
+      payload: {userId: 'u1', displayName: 'Alice'},
     })
     expect(usePresenceStore.getState().users['u1']).toMatchObject({
       userId: 'u1',
@@ -157,13 +153,13 @@ describe('envelope handling', () => {
       type: 'presence.join',
       flowId: 'flow-1',
       ts: new Date().toISOString(),
-      payload: { userId: 'u2' },
+      payload: {userId: 'u2'},
     })
     expect(usePresenceStore.getState().users['u2']?.displayName).toBe('u2')
   })
 
   it('removes a user on presence.leave', () => {
-    usePresenceStore.setState({ users: { u1: { userId: 'u1', displayName: 'Alice' } } })
+    usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}})
     handleEnvelope({
       type: 'presence.leave',
       flowId: 'flow-1',
@@ -174,7 +170,7 @@ describe('envelope handling', () => {
   })
 
   it('ignores presence.leave when userId is missing', () => {
-    usePresenceStore.setState({ users: { u1: { userId: 'u1', displayName: 'Alice' } } })
+    usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}})
     handleEnvelope({
       type: 'presence.leave',
       flowId: 'flow-1',
@@ -184,13 +180,13 @@ describe('envelope handling', () => {
   })
 
   it('updates selectedBlockId on presence.update', () => {
-    usePresenceStore.setState({ users: { u1: { userId: 'u1', displayName: 'Alice' } } })
+    usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}})
     handleEnvelope({
       type: 'presence.update',
       flowId: 'flow-1',
       userId: 'u1',
       ts: new Date().toISOString(),
-      payload: { selectedBlockId: 'block-5' },
+      payload: {selectedBlockId: 'block-5'},
     })
     expect(usePresenceStore.getState().users['u1']?.selectedBlockId).toBe('block-5')
   })
@@ -201,7 +197,7 @@ describe('envelope handling', () => {
       flowId: 'flow-1',
       userId: 'ghost',
       ts: new Date().toISOString(),
-      payload: { selectedBlockId: 'block-5' },
+      payload: {selectedBlockId: 'block-5'},
     })
     expect(usePresenceStore.getState().users).toEqual({})
   })
@@ -218,7 +214,7 @@ describe('status propagation', () => {
     })
 
     await usePresenceStore.getState().connectToFlow('flow-1')
-    ;(capturedHandler as unknown as ((s: ConnectionStatus) => void))?.('connected')
+    ;(capturedHandler as unknown as (s: ConnectionStatus) => void)?.('connected')
 
     expect(usePresenceStore.getState().status).toBe('connected')
   })

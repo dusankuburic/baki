@@ -183,3 +183,25 @@ func TestSeverityTitle(t *testing.T) {
 		}
 	}
 }
+
+// TestReportToMarkdown_NilDocAndReport confirms the markdown exporter doesn't
+// panic on nil doc/report (mirrors the SARIF guard; previously it dereferenced
+// doc.Name and report.GeneratedAt unconditionally).
+func TestReportToMarkdown_NilDocAndReport(t *testing.T) {
+	// Both nil — must not panic.
+	out := ReportToMarkdown(nil, nil)
+	if !strings.Contains(out, "PAD Analyzer") {
+		t.Errorf("expected header in output, got: %s", out)
+	}
+
+	// Nil doc, real report — must not panic, must include generated-at.
+	rep := &models.AnalysisReport{
+		GeneratedAt: time.Now(),
+		DurationMs:  42,
+		Findings:    []models.Finding{{RuleID: "r1", Severity: models.SeverityError, Title: "T", Description: "D"}},
+	}
+	out = ReportToMarkdown(rep, nil)
+	if !strings.Contains(out, "42ms") {
+		t.Errorf("expected duration in output, got: %s", out)
+	}
+}

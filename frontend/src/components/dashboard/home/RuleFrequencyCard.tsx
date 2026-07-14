@@ -26,10 +26,19 @@ export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; cla
       {!hasData ? (
         <CardPlaceholder message="No rule frequency data yet. Analyze flows to populate this." />
       ) : (
-        <div className="h-56" role="img" aria-label="Bar chart of the ten most frequent finding rules, tinted by severity">
+        <div
+          className="h-56"
+          role="img"
+          aria-label="Bar chart of the ten most frequent finding rules, tinted by severity"
+        >
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} layout="vertical" margin={{top: 0, right: 10, left: 0, bottom: 0}}>
-              <CartesianGrid strokeDasharray="3 3" stroke={colors.borderStrong} strokeOpacity={0.3} horizontal={false} />
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke={colors.borderStrong}
+                strokeOpacity={0.3}
+                horizontal={false}
+              />
               <XAxis
                 type="number"
                 stroke={colors.borderStrong}
@@ -42,7 +51,7 @@ export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; cla
                 stroke={colors.borderStrong}
                 tick={{fill: colors.textTertiary, fontSize: 10}}
                 width={120}
-                tickFormatter={(d: string) => d.length > 18 ? d.slice(0, 17) + '…' : d}
+                tickFormatter={(d: string) => (d.length > 18 ? d.slice(0, 17) + '…' : d)}
               />
               <Tooltip
                 contentStyle={{
@@ -50,12 +59,13 @@ export function RuleFrequencyCard({data, className}: {data: RuleFrequency[]; cla
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
                 cursor={{fill: colors.surface3, fillOpacity: 0.3}}
               />
               <Bar dataKey="count" radius={[0, 4, 4, 0]} isAnimationActive={false}>
-                {chartData.map((entry) => (
+                {chartData.map(entry => (
                   <Cell key={entry.rule} fill={barColor(entry.sev)} />
                 ))}
               </Bar>

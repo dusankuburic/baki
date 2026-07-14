@@ -16,22 +16,22 @@ interface UseAsyncResult<T> {
  * needing to be in the dependency array. Pass the values fn depends on
  * as `deps` — when they change, the effect re-runs.
  */
-export function useAsync<T>(
-  fn: () => Promise<T>,
-  deps: React.DependencyList,
-): UseAsyncResult<T> {
+export function useAsync<T>(fn: () => Promise<T>, deps: React.DependencyList): UseAsyncResult<T> {
   const [data, setData] = useState<T | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const fnRef = useRef(fn)
-  useEffect(() => { fnRef.current = fn })
+  useEffect(() => {
+    fnRef.current = fn
+  })
 
   useEffect(() => {
     let cancelled = false
     setIsLoading(true)
     setError(null)
-    fnRef.current()
+    fnRef
+      .current()
       .then(result => {
         if (cancelled) return
         setData(result)
@@ -42,7 +42,9 @@ export function useAsync<T>(
         setError(err instanceof Error ? err.message : String(err))
         setIsLoading(false)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [...deps, nonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const refetch = useCallback(() => setNonce(n => n + 1), [])

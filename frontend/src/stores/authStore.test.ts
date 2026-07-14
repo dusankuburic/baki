@@ -1,13 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useAuthStore } from './authStore'
-import type { AuthUser, LoginResponse } from '@/api/auth'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {useAuthStore} from './authStore'
+import type {AuthUser, LoginResponse} from '@/api/auth'
 
 vi.mock('@/api/auth', () => ({
   authApi: {
-    login:   vi.fn(),
-    logout:  vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
     refresh: vi.fn(),
-    me:      vi.fn(),
+    me: vi.fn(),
   },
 }))
 
@@ -22,28 +22,28 @@ vi.mock('@/platform/adapters', () => ({
   }),
 }))
 
-import { authApi } from '@/api/auth'
+import {authApi} from '@/api/auth'
 
-const mockLogin   = authApi.login   as ReturnType<typeof vi.fn>
-const mockLogout  = authApi.logout  as ReturnType<typeof vi.fn>
+const mockLogin = authApi.login as ReturnType<typeof vi.fn>
+const mockLogout = authApi.logout as ReturnType<typeof vi.fn>
 const mockRefresh = authApi.refresh as ReturnType<typeof vi.fn>
-const mockMe      = authApi.me      as ReturnType<typeof vi.fn>
+const mockMe = authApi.me as ReturnType<typeof vi.fn>
 
-const fakeUser: AuthUser = { id: 'u1', email: 'alice@example.com', role: 'member' }
+const fakeUser: AuthUser = {id: 'u1', email: 'alice@example.com', role: 'member'}
 
 // Build a token whose middle segment decodes to a JWT payload with the given
 // `exp` (seconds). loadFromStorage decodes this to decide whether to skip a
 // doomed refresh call. Default: 15 minutes in the future (valid).
 function makeJwt(expMsFromNow = 900_000): string {
-  const payload = btoa(JSON.stringify({ exp: Math.floor((Date.now() + expMsFromNow) / 1000) }))
+  const payload = btoa(JSON.stringify({exp: Math.floor((Date.now() + expMsFromNow) / 1000)}))
   return `header.${payload}.sig`
 }
 
 const fakeLoginResponse: LoginResponse = {
-  accessToken:  'access-abc',
+  accessToken: 'access-abc',
   refreshToken: 'refresh-xyz',
-  expiresAt:    new Date(Date.now() + 900_000).toISOString(),
-  user:          fakeUser,
+  expiresAt: new Date(Date.now() + 900_000).toISOString(),
+  user: fakeUser,
 }
 
 // jsdom's storage implementations in vitest 4 are incomplete — stub them.
@@ -51,16 +51,24 @@ const fakeLoginResponse: LoginResponse = {
 // in memory (via setSessionToken), never in localStorage.
 let _local: Record<string, string> = {}
 vi.stubGlobal('localStorage', {
-  getItem:    (key: string) => _local[key] ?? null,
-  setItem:    (key: string, value: string) => { _local[key] = value },
-  removeItem: (key: string) => { delete _local[key] },
+  getItem: (key: string) => _local[key] ?? null,
+  setItem: (key: string, value: string) => {
+    _local[key] = value
+  },
+  removeItem: (key: string) => {
+    delete _local[key]
+  },
 })
 
 let _session: Record<string, string> = {}
 vi.stubGlobal('sessionStorage', {
-  getItem:    (key: string) => _session[key] ?? null,
-  setItem:    (key: string, value: string) => { _session[key] = value },
-  removeItem: (key: string) => { delete _session[key] },
+  getItem: (key: string) => _session[key] ?? null,
+  setItem: (key: string, value: string) => {
+    _session[key] = value
+  },
+  removeItem: (key: string) => {
+    delete _session[key]
+  },
 })
 
 const initialState = useAuthStore.getState()
@@ -79,7 +87,7 @@ describe('login', () => {
   it('sets isAuthenticated and user on success', async () => {
     mockLogin.mockResolvedValue(fakeLoginResponse)
 
-    await useAuthStore.getState().login({ email: 'alice@example.com', password: 'secret' })
+    await useAuthStore.getState().login({email: 'alice@example.com', password: 'secret'})
 
     const s = useAuthStore.getState()
     expect(s.isAuthenticated).toBe(true)
@@ -91,7 +99,7 @@ describe('login', () => {
 
   it('stores the refresh token in sessionStorage and the access token in state', async () => {
     mockLogin.mockResolvedValue(fakeLoginResponse)
-    await useAuthStore.getState().login({ email: 'a@b.com', password: 'p' })
+    await useAuthStore.getState().login({email: 'a@b.com', password: 'p'})
 
     // Access token lives in memory/state only — never in web storage (XSS hardening).
     expect(useAuthStore.getState().accessToken).toBe('access-abc')
@@ -102,9 +110,9 @@ describe('login', () => {
   it('sets error and rethrows on failure', async () => {
     mockLogin.mockRejectedValue(new Error('Invalid credentials'))
 
-    await expect(
-      useAuthStore.getState().login({ email: 'a@b.com', password: 'wrong' })
-    ).rejects.toThrow('Invalid credentials')
+    await expect(useAuthStore.getState().login({email: 'a@b.com', password: 'wrong'})).rejects.toThrow(
+      'Invalid credentials',
+    )
 
     const s = useAuthStore.getState()
     expect(s.isAuthenticated).toBe(false)
@@ -118,7 +126,7 @@ describe('login', () => {
 describe('logout', () => {
   it('clears user and token after logout', async () => {
     // Seed logged-in state
-    useAuthStore.setState({ user: fakeUser, accessToken: 'tok', isAuthenticated: true })
+    useAuthStore.setState({user: fakeUser, accessToken: 'tok', isAuthenticated: true})
 
     await useAuthStore.getState().logout()
 
@@ -138,7 +146,7 @@ describe('logout', () => {
 
   it('clears state even when the API call fails', async () => {
     mockLogout.mockRejectedValue(new Error('server error'))
-    useAuthStore.setState({ user: fakeUser, isAuthenticated: true })
+    useAuthStore.setState({user: fakeUser, isAuthenticated: true})
 
     await useAuthStore.getState().logout()
 
@@ -151,7 +159,7 @@ describe('logout', () => {
 describe('refresh', () => {
   it('updates the access token and returns true on success', async () => {
     sessionStorage.setItem('auth_refresh_token', 'refresh-xyz')
-    mockRefresh.mockResolvedValue({ accessToken: 'new-access', expiresAt: new Date().toISOString() })
+    mockRefresh.mockResolvedValue({accessToken: 'new-access', expiresAt: new Date().toISOString()})
 
     const ok = await useAuthStore.getState().refresh()
 
@@ -160,7 +168,7 @@ describe('refresh', () => {
   })
 
   it('clears auth and returns false when no refresh token is stored', async () => {
-    useAuthStore.setState({ user: fakeUser, isAuthenticated: true })
+    useAuthStore.setState({user: fakeUser, isAuthenticated: true})
 
     const ok = await useAuthStore.getState().refresh()
 
@@ -171,7 +179,7 @@ describe('refresh', () => {
   it('clears auth and returns false when refresh API fails', async () => {
     sessionStorage.setItem('auth_refresh_token', 'expired-refresh')
     mockRefresh.mockRejectedValue(new Error('expired'))
-    useAuthStore.setState({ user: fakeUser, isAuthenticated: true })
+    useAuthStore.setState({user: fakeUser, isAuthenticated: true})
 
     const ok = await useAuthStore.getState().refresh()
 
@@ -185,7 +193,7 @@ describe('refresh', () => {
 describe('loadFromStorage', () => {
   it('restores session when a valid (unexpired) refresh token is stored', async () => {
     sessionStorage.setItem('auth_refresh_token', makeJwt())
-    mockRefresh.mockResolvedValue({ accessToken: 'new-access', expiresAt: new Date().toISOString() })
+    mockRefresh.mockResolvedValue({accessToken: 'new-access', expiresAt: new Date().toISOString()})
     mockMe.mockResolvedValue(fakeUser)
 
     await useAuthStore.getState().loadFromStorage()
@@ -227,7 +235,7 @@ describe('loadFromStorage', () => {
 
 describe('clearError', () => {
   it('resets the error field', () => {
-    useAuthStore.setState({ error: 'some error' })
+    useAuthStore.setState({error: 'some error'})
     useAuthStore.getState().clearError()
     expect(useAuthStore.getState().error).toBeNull()
   })

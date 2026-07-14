@@ -20,10 +20,12 @@ export default function ApiTokensPanel() {
   const toast = useToast()
   const {confirm} = useConfirm()
 
-  const {data, isLoading: loading, error: loadError, refetch: load} = useAsync<ApiToken[]>(
-    () => authApi.listApiTokens().then(t => t ?? []),
-    [],
-  )
+  const {
+    data,
+    isLoading: loading,
+    error: loadError,
+    refetch: load,
+  } = useAsync<ApiToken[]>(() => authApi.listApiTokens().then(t => t ?? []), [])
   const tokens = data ?? []
 
   const handleCreate = async () => {
@@ -82,8 +84,8 @@ export default function ApiTokensPanel() {
           API Tokens
         </h2>
         <p className="text-sm text-text-secondary mt-1">
-          Personal access tokens let CI and automation call the API as you, without a login.
-          Send them as <code className="text-brand-400">Authorization: Bearer pad_pat_…</code>.
+          Personal access tokens let CI and automation call the API as you, without a login. Send them as{' '}
+          <code className="text-brand-400">Authorization: Bearer pad_pat_…</code>.
         </p>
       </div>
 
@@ -116,8 +118,10 @@ export default function ApiTokensPanel() {
             className="flex-1"
             placeholder="Name (e.g. ci-pipeline)"
             value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleCreate() }}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') void handleCreate()
+            }}
           />
           <Input
             className="sm:w-40"
@@ -125,7 +129,7 @@ export default function ApiTokensPanel() {
             min={0}
             placeholder="Expires (days, 0 = never)"
             value={expiresDays}
-            onChange={(e) => setExpiresDays(e.target.value)}
+            onChange={e => setExpiresDays(e.target.value)}
           />
           <Button variant="primary" onClick={handleCreate} loading={creating} disabled={!name.trim()}>
             <Plus size={16} />
@@ -136,7 +140,9 @@ export default function ApiTokensPanel() {
 
       {/* Existing tokens */}
       {loading ? (
-        <div className="p-8 flex justify-center"><Spinner /></div>
+        <div className="p-8 flex justify-center">
+          <Spinner />
+        </div>
       ) : loadError ? (
         <div className="p-4 flex items-start gap-3 border border-semantic-error/30 bg-semantic-error/5 rounded-xl">
           <AlertCircle className="text-semantic-error shrink-0 mt-0.5" size={18} />
@@ -152,7 +158,11 @@ export default function ApiTokensPanel() {
           {tokens.map((tok, i) => (
             <div
               key={tok.id}
-              className={i !== tokens.length - 1 ? 'p-4 flex items-center justify-between border-b border-border-subtle' : 'p-4 flex items-center justify-between'}
+              className={
+                i !== tokens.length - 1
+                  ? 'p-4 flex items-center justify-between border-b border-border-subtle'
+                  : 'p-4 flex items-center justify-between'
+              }
             >
               <div className="min-w-0">
                 <p className="text-sm font-medium text-text-primary truncate">{tok.name || tok.id}</p>

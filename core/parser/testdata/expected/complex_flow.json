@@ -707,18 +707,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 15,
-      "message": "unclosed block: Write Text",
-      "severity": "error",
-      "snippet": "File.WriteText"
-    }
-  ],
   "metadata": {
     "blockCount": 32,
     "subflowCount": 2,
     "maxDepth": 4,
-    "rawLineCount": 37
+    "rawLineCount": 36
   }
 }

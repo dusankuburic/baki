@@ -12,13 +12,18 @@ export function useCopy(timeout = 2000): {
   const [copied, setCopied] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const copy = useCallback((text: string) => {
-    writeClipboard(text).then(() => {
-      setCopied(true)
-      if (timerRef.current) clearTimeout(timerRef.current)
-      timerRef.current = setTimeout(() => setCopied(false), timeout)
-    }).catch(() => {})
-  }, [timeout])
+  const copy = useCallback(
+    (text: string) => {
+      writeClipboard(text)
+        .then(() => {
+          setCopied(true)
+          if (timerRef.current) clearTimeout(timerRef.current)
+          timerRef.current = setTimeout(() => setCopied(false), timeout)
+        })
+        .catch(() => {})
+    },
+    [timeout],
+  )
 
   return {copied, copy}
 }

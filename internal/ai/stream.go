@@ -88,6 +88,11 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 	var eventType string
 	var doneSent bool
 	var parseErrors int
+	// tokensIn is captured from the message_start event and carried onto the
+	// Done chunk. Claude emits input_tokens on a separate metadata chunk (not
+	// on message_delta), so without this the Done chunk carries TokensIn=0 and
+	// the client-visible token accounting is wrong.
+	var tokensIn int
 	// toolBlocks accumulates streamed tool_use blocks keyed by their content
 	// block index; finalized onto the Done chunk at message_delta.
 	toolBlocks := map[int]*pendingToolCall{}
@@ -107,7 +112,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			if !doneSent {
-				onChunk(Chunk{Done: true, ToolCalls: assembleToolCalls(toolBlocks)})
+				onChunk(Chunk{Done: true, TokensIn: tokensIn, ToolCalls: assembleToolCalls(toolBlocks)})
 			}
 			return nil
 		}
@@ -126,7 +131,8 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				continue
 			}
 			if parsed.Message.Usage.InputTokens > 0 {
-				onChunk(Chunk{TokensIn: parsed.Message.Usage.InputTokens})
+				tokensIn = parsed.Message.Usage.InputTokens
+				onChunk(Chunk{TokensIn: tokensIn})
 			}
 
 		case "content_block_start":
@@ -190,6 +196,7 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				doneSent = true
 				onChunk(Chunk{
 					Done:         true,
+					TokensIn:     tokensIn,
 					TokensOut:    parsed.Usage.OutputTokens,
 					ToolCalls:    assembleToolCalls(toolBlocks),
 					FinishReason: parsed.Delta.StopReason,
@@ -394,18 +401,21 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 				if part.Text != "" {
 					onChunk(Chunk{Text: part.Text})
 				}
-				if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
-					if len(args) == 0 {
-						args = []byte("{}")
-					}
-					toolCalls = append(toolCalls, ToolCall{
-						ID:    fmt.Sprintf("call_%d", toolCallsIdx),
-						Name:  part.FunctionCall.Name,
-						Input: json.RawMessage(args),
-					})
-					toolCallsIdx++
+			if part.FunctionCall != nil {
+				// A nil Args map marshals to the literal `null`, which is not a
+				// valid tool-arguments object; send `{}` like the OpenAI
+				// provider and the non-streaming Gemini path (gemini.go).
+				args := []byte("{}")
+				if part.FunctionCall.Args != nil {
+					args, _ = json.Marshal(part.FunctionCall.Args)
 				}
+				toolCalls = append(toolCalls, ToolCall{
+					ID:    fmt.Sprintf("call_%d", toolCallsIdx),
+					Name:  part.FunctionCall.Name,
+					Input: json.RawMessage(args),
+				})
+				toolCallsIdx++
+			}
 			}
 			if cand.FinishReason != "" {
 				if !doneSent {

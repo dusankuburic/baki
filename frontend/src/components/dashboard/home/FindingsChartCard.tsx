@@ -45,11 +45,18 @@ export function FindingsChartCard({
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
                 labelStyle={{color: 'var(--text-primary)'}}
               />
-              <Radar dataKey="count" stroke={colors.brand500} fill={colors.brand500} fillOpacity={0.3} isAnimationActive={false} />
+              <Radar
+                dataKey="count"
+                stroke={colors.brand500}
+                fill={colors.brand500}
+                fillOpacity={0.3}
+                isAnimationActive={false}
+              />
             </RadarChart>
           </ResponsiveContainer>
         </div>

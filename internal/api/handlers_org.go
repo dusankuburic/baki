@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -111,8 +110,7 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		Filename string `json:"filename"`
 		Content  string `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if len(req.Content) > maxKnowledgeUploadBytes {
@@ -153,8 +151,7 @@ func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	userID := h.security.CallerID(r)
@@ -178,8 +175,7 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -225,8 +221,7 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 		UserID string `json:"userId"`
 		Role   string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -245,7 +240,12 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 	} else if req.Email != "" {
 		u, err := h.backend.LoadUserByEmail(r.Context(), req.Email)
 		if err != nil {
-			render.Error(w, fmt.Errorf("user not found"), http.StatusNotFound)
+			// Anti-enumeration: return the same 200 "ok" as a successful add
+			// rather than 404 "user not found", so an admin can't probe whether
+			// an arbitrary email is registered (matching the forgot-password
+			// flow's indistinguishable-response design). No member is added for
+			// an unknown target.
+			render.JSON(w, map[string]string{"status": "ok"})
 			return
 		}
 		targetID = u.ID
@@ -254,7 +254,15 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := h.orgSvc.AddMember(r.Context(), id, targetID, auth.Role(req.Role)); err != nil {
+	role := auth.Role(req.Role)
+	if role == "" {
+		role = auth.RoleMember
+	}
+	if !role.IsValid() {
+		render.Error(w, fmt.Errorf("invalid role %q", req.Role), http.StatusBadRequest)
+		return
+	}
+	if err := h.orgSvc.AddMember(r.Context(), id, targetID, role); err != nil {
 		if errors.Is(err, collaboration.ErrAlreadyMember) {
 			render.Error(w, err, http.StatusConflict)
 			return
@@ -327,8 +335,7 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 		Email string `json:"email"`
 		Role  string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	email, err := validateEmail(req.Email)
@@ -427,15 +434,19 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 	var req struct {
 		Role string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
 	if h.requireAdmin(w, r) == nil {
 		return
 	}
-	if err := h.orgSvc.SetRole(r.Context(), id, userID, auth.Role(req.Role)); err != nil {
+	role := auth.Role(req.Role)
+	if !role.IsValid() {
+		render.Error(w, fmt.Errorf("invalid role %q", req.Role), http.StatusBadRequest)
+		return
+	}
+	if err := h.orgSvc.SetRole(r.Context(), id, userID, role); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

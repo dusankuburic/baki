@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -59,13 +60,21 @@ func (b *PostgresStorageBackend) SaveFlowAnalysis(ctx context.Context, fa *inter
 		return fmt.Errorf("upsert flow_analysis: %w", err)
 	}
 
-	// Append to the history table for trend charts (best-effort; a failure
-	// here doesn't affect the upsert above).
-	_, _ = b.query(ctx).ExecContext(ctx, `
+	// Append to the history table for trend charts. Run this on the connection
+	// pool (autocommit) rather than b.query(ctx): when the caller is inside an
+	// RLS transaction, executing the best-effort insert on the tx executor would
+	// poison the whole transaction on failure ("current transaction is aborted,
+	// commands ignored until end of transaction block") — every subsequent
+	// statement and the eventual COMMIT would fail with an error unrelated to the
+	// analysis upsert above. The flow_analysis_history RLS policy explicitly
+	// allows this internal write via its NOT app_rls_active() clause.
+	if _, hErr := b.db.ExecContext(ctx, `
 		INSERT INTO flow_analysis_history (flow_id, health_score, errors, warnings, info, by_rule, by_confidence, auto_fixable_count, total_findings, analyzed_at)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, COALESCE($10, NOW()))`,
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, COALESCE($10, NOW()))`,
 		fa.FlowID, fa.HealthScore, fa.Errors, fa.Warnings, fa.Info, string(ruleJSON), string(confJSON), fa.AutoFixableCount, fa.TotalFindings, nullableTime(analyzedAt),
-	)
+	); hErr != nil {
+		slog.Warn("flow_analysis_history insert failed (best-effort)", "flowId", fa.FlowID, "err", hErr)
+	}
 
 	return nil
 }

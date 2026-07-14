@@ -6,17 +6,27 @@ import type {Finding} from '@/types'
 
 function finding(p: Partial<Finding> = {}): Finding {
   return {
-    id: 'F1', ruleId: 'hardcoded-credential', blockId: 'blk-1',
-    title: 'Hardcoded password', description: 'A secret is inlined.',
-    severity: 'error', category: 'security', suggestion: 'Use a variable.',
+    id: 'F1',
+    ruleId: 'hardcoded-credential',
+    blockId: 'blk-1',
+    title: 'Hardcoded password',
+    description: 'A secret is inlined.',
+    severity: 'error',
+    category: 'security',
+    suggestion: 'Use a variable.',
     ...p,
   } as Finding
 }
 
 beforeEach(() => {
   useChatStore.setState({
-    threads: [], activeThreadId: null, conversations: new Map(), streams: {},
-    selectedProvider: 'claude', stagedPrompt: null, drafts: {},
+    threads: [],
+    activeThreadId: null,
+    conversations: new Map(),
+    streams: {},
+    selectedProvider: 'claude',
+    stagedPrompt: null,
+    drafts: {},
   })
 })
 

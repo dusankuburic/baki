@@ -137,7 +137,10 @@ func shannonEntropy(s string) float64 {
 		freq[r]++
 	}
 	var entropy float64
-	total := float64(len(s))
+	// total must be the rune count, not the byte length: freq counts runes, so
+	// dividing by byte length under-states entropy for multibyte UTF-8 (each
+	// multibyte rune's probability is divided by a too-large total).
+	total := float64(len([]rune(s)))
 	for _, count := range freq {
 		p := count / total
 		if p > 0 {
@@ -146,3 +149,7 @@ func shannonEntropy(s string) float64 {
 	}
 	return entropy
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&HardcodedCredentialRule{}) }

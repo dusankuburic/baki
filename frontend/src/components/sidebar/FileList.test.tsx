@@ -70,7 +70,7 @@ describe('FileList', () => {
         onSelectFile={vi.fn()}
         onRevealFile={onRevealFile}
         onReloadFile={onReloadFile}
-      />
+      />,
     )
     fireEvent.contextMenu(screen.getAllByRole('option')[0])
     fireEvent.click(screen.getByText('Reveal in file manager'))

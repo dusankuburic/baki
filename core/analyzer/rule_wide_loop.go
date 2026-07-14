@@ -56,3 +56,7 @@ func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		Metadata:    map[string]interface{}{"blockCount": count, "maxBlocks": maxBlocks},
 	}}
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&WideLoopRule{}) }

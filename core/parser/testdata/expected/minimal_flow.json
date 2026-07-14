@@ -25,18 +25,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 2,
-      "message": "unclosed block: Show Message Box",
-      "severity": "error",
-      "snippet": "Display.ShowMessageBox"
-    }
-  ],
   "metadata": {
     "blockCount": 1,
     "subflowCount": 1,
     "maxDepth": 1,
-    "rawLineCount": 4
+    "rawLineCount": 3
   }
 }

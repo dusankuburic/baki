@@ -15,46 +15,44 @@ const KNOWN_ROLES = new Set(['user', 'assistant', 'system'])
 // the read boundary so a malformed server/fixture message can't reach the chat
 // store with a missing id, an unknown role, or a non-string content.
 export function parseChatMessage(raw: unknown): ChatMessage | null {
-    if (!raw || typeof raw !== 'object') return null
-    const m = raw as Record<string, unknown>
+  if (!raw || typeof raw !== 'object') return null
+  const m = raw as Record<string, unknown>
 
-    const id = typeof m.id === 'string' ? m.id : ''
-    const timestamp = typeof m.timestamp === 'string' ? m.timestamp : ''
-    // id + timestamp are required to append/reconcile a message; content may be
-    // empty but must be a string so renderers can call .slice/.length safely.
-    if (!id || !timestamp) return null
+  const id = typeof m.id === 'string' ? m.id : ''
+  const timestamp = typeof m.timestamp === 'string' ? m.timestamp : ''
+  // id + timestamp are required to append/reconcile a message; content may be
+  // empty but must be a string so renderers can call .slice/.length safely.
+  if (!id || !timestamp) return null
 
-    const role = typeof m.role === 'string' && KNOWN_ROLES.has(m.role)
-        ? (m.role as ChatMessage['role'])
-        : 'assistant'
+  const role = typeof m.role === 'string' && KNOWN_ROLES.has(m.role) ? (m.role as ChatMessage['role']) : 'assistant'
 
-    const out: ChatMessage = {
-        id,
-        role,
-        content: typeof m.content === 'string' ? m.content : '',
-        timestamp,
-    }
-    // Optional fields are attached only when present with the right type, so the
-    // parsed message never carries an undefined-valued key the store would have
-    // to defend against.
-    if (typeof m.contextBlockId === 'string' && m.contextBlockId) out.contextBlockId = m.contextBlockId
-    if (typeof m.tokensIn === 'number') out.tokensIn = m.tokensIn
-    if (typeof m.tokensOut === 'number') out.tokensOut = m.tokensOut
-    if (typeof m.provider === 'string' && m.provider) out.provider = m.provider as ChatMessage['provider']
-    if (typeof m.model === 'string' && m.model) out.model = m.model
-    if (typeof m.finishReason === 'string') out.finishReason = m.finishReason as ChatMessage['finishReason']
-    return out
+  const out: ChatMessage = {
+    id,
+    role,
+    content: typeof m.content === 'string' ? m.content : '',
+    timestamp,
+  }
+  // Optional fields are attached only when present with the right type, so the
+  // parsed message never carries an undefined-valued key the store would have
+  // to defend against.
+  if (typeof m.contextBlockId === 'string' && m.contextBlockId) out.contextBlockId = m.contextBlockId
+  if (typeof m.tokensIn === 'number') out.tokensIn = m.tokensIn
+  if (typeof m.tokensOut === 'number') out.tokensOut = m.tokensOut
+  if (typeof m.provider === 'string' && m.provider) out.provider = m.provider as ChatMessage['provider']
+  if (typeof m.model === 'string' && m.model) out.model = m.model
+  if (typeof m.finishReason === 'string') out.finishReason = m.finishReason as ChatMessage['finishReason']
+  return out
 }
 
 // parseChatMessages validates a backend conversation's message list, dropping
 // any entries that fail parseChatMessage. Callers can append the result without
 // a per-message guard. A non-array or empty payload yields an empty list.
 export function parseChatMessages(raw: unknown): ChatMessage[] {
-    if (!Array.isArray(raw)) return []
-    const out: ChatMessage[] = []
-    for (const m of raw) {
-        const parsed = parseChatMessage(m)
-        if (parsed) out.push(parsed)
-    }
-    return out
+  if (!Array.isArray(raw)) return []
+  const out: ChatMessage[] = []
+  for (const m of raw) {
+    const parsed = parseChatMessage(m)
+    if (parsed) out.push(parsed)
+  }
+  return out
 }

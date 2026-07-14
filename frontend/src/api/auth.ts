@@ -1,4 +1,5 @@
-import { request, requestBlob } from './client'
+import {request, requestValidated, requestBlob} from './client'
+import {LoginResponseSchema, RefreshResponseSchema, AuthUserSchema} from './schemas'
 
 export interface LoginRequest {
   email: string
@@ -61,69 +62,58 @@ export interface CreatedApiToken extends ApiToken {
 
 export const authApi = {
   login: (credentials: LoginRequest): Promise<LoginResponse> =>
-    request('/api/auth/login', credentials),
+    requestValidated('/api/auth/login', LoginResponseSchema, credentials),
 
   register: (credentials: LoginRequest): Promise<LoginResponse> =>
-    request('/api/auth/register', credentials),
+    requestValidated('/api/auth/register', LoginResponseSchema, credentials),
 
-  logout: (): Promise<void> =>
-    request('/api/auth/logout'),
+  logout: (): Promise<void> => request('/api/auth/logout'),
 
   refresh: (refreshToken: string): Promise<RefreshResponse> =>
-    request('/api/auth/refresh', { refreshToken }),
+    requestValidated('/api/auth/refresh', RefreshResponseSchema, {refreshToken}),
 
-  me: (): Promise<AuthUser> =>
-    request('/api/auth/me', undefined, 'GET'),
+  me: (): Promise<AuthUser> => requestValidated('/api/auth/me', AuthUserSchema, undefined, 'GET'),
 
-  updateProfile: (profile: UpdateProfileRequest): Promise<AuthUser> =>
-    request('/api/auth/profile', profile, 'PUT'),
+  updateProfile: (profile: UpdateProfileRequest): Promise<AuthUser> => request('/api/auth/profile', profile, 'PUT'),
 
   // The backend decodes the JSON key `oldPassword`; map the param to it.
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
-    request('/api/auth/change-password', { oldPassword: currentPassword, newPassword }),
+    request('/api/auth/change-password', {oldPassword: currentPassword, newPassword}),
 
   // Account recovery / verification (pre-authentication). forgotPassword always
   // resolves for any input — the server never reveals whether an email exists.
-  forgotPassword: (email: string): Promise<{ status: string }> =>
-    request('/api/auth/forgot-password', { email }),
+  forgotPassword: (email: string): Promise<{status: string}> => request('/api/auth/forgot-password', {email}),
 
-  resetPassword: (token: string, newPassword: string): Promise<{ status: string }> =>
-    request('/api/auth/reset-password', { token, newPassword }),
+  resetPassword: (token: string, newPassword: string): Promise<{status: string}> =>
+    request('/api/auth/reset-password', {token, newPassword}),
 
-  verifyEmail: (token: string): Promise<{ status: string }> =>
-    request('/api/auth/verify-email', { token }),
+  verifyEmail: (token: string): Promise<{status: string}> => request('/api/auth/verify-email', {token}),
 
-  listSessions: (): Promise<SessionInfo[]> =>
-    request('/api/auth/sessions', undefined, 'GET'),
+  listSessions: (): Promise<SessionInfo[]> => request('/api/auth/sessions', undefined, 'GET'),
 
-  revokeSession: (id: string): Promise<void> =>
-    request(`/api/auth/sessions/${id}`, undefined, 'DELETE'),
+  revokeSession: (id: string): Promise<void> => request(`/api/auth/sessions/${id}`, undefined, 'DELETE'),
 
-  ssoInfo: (): Promise<SSOInfo> =>
-    request('/api/auth/sso/info', undefined, 'GET'),
+  ssoInfo: (): Promise<SSOInfo> => request('/api/auth/sso/info', undefined, 'GET'),
 
   // Exchanges the single-use ticket from the OIDC callback redirect for a
   // regular token pair (same shape as login).
   ssoExchange: (ticket: string): Promise<LoginResponse> =>
-    request('/api/auth/sso/exchange', { ticket }),
+    requestValidated('/api/auth/sso/exchange', LoginResponseSchema, {ticket}),
 
   // Machine API tokens (PATs) for headless/CI access.
-  listApiTokens: (): Promise<ApiToken[]> =>
-    request('/api/auth/tokens', undefined, 'GET'),
+  listApiTokens: (): Promise<ApiToken[]> => request('/api/auth/tokens', undefined, 'GET'),
 
   // expiresInDays <= 0 (or omitted) creates a non-expiring token. The returned
   // CreatedApiToken.token is the only time the raw secret is available.
   createApiToken: (name: string, expiresInDays?: number): Promise<CreatedApiToken> =>
-    request('/api/auth/tokens', { name, expiresInDays: expiresInDays ?? 0 }, 'POST'),
+    request('/api/auth/tokens', {name, expiresInDays: expiresInDays ?? 0}, 'POST'),
 
-  revokeApiToken: (id: string): Promise<void> =>
-    request(`/api/auth/tokens/${id}`, undefined, 'DELETE'),
+  revokeApiToken: (id: string): Promise<void> => request(`/api/auth/tokens/${id}`, undefined, 'DELETE'),
 
   // Self-service GDPR data-subject export (downloads a JSON bundle).
-  exportAccount: (): Promise<Blob> =>
-    requestBlob('/api/auth/account/export', 'GET'),
+  exportAccount: (): Promise<Blob> => requestBlob('/api/auth/account/export', 'GET'),
 
   // Self-service account erasure. confirmEmail must match the caller's email.
-  deleteAccount: (confirmEmail: string): Promise<{ status: string }> =>
-    request('/api/auth/account', { confirmEmail }, 'DELETE'),
+  deleteAccount: (confirmEmail: string): Promise<{status: string}> =>
+    request('/api/auth/account', {confirmEmail}, 'DELETE'),
 }

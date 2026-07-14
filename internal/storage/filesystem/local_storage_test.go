@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/interfaces"
@@ -130,6 +131,99 @@ func TestLocalStorageBackend_ListFlows_AllFlows(t *testing.T) {
 	all, err := storage.ListFlows(ctx, interfaces.FlowFilter{AllFlows: true})
 	testutil.AssertNoError(t, err, "ListFlows AllFlows")
 	testutil.AssertEqual(t, len(flows), len(all), "AllFlows must return every flow")
+}
+
+// TestLocalStorageBackend_ListFlows_OrdersByUpdatedAtDesc is a regression guard:
+// the filesystem backend previously returned directory (alphabetical) order,
+// which diverged from the Postgres default (updated_at DESC) and made
+// offset/limit pagination unstable (skips/dupes across pages).
+func TestLocalStorageBackend_ListFlows_OrdersByUpdatedAtDesc(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorageBackend: %v", err)
+	}
+	ctx := context.Background()
+	owner := "u"
+
+	// Save in a fixed order with distinct UpdatedAt timestamps.
+	mk := func(id string, updatedAt time.Time) {
+		f := &interfaces.FlowDocument{ID: id, Name: id, Content: []byte(`{}`), OwnerID: owner}
+		f.UpdatedAt = updatedAt
+		if err := storage.SaveFlow(ctx, f); err != nil {
+			t.Fatalf("SaveFlow %s: %v", id, err)
+		}
+	}
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	mk("alpha", base.Add(1*time.Hour))   // oldest
+	mk("bravo", base.Add(3*time.Hour))   // newest
+	mk("charlie", base.Add(2*time.Hour)) // middle
+
+	got, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner})
+	if err != nil {
+		t.Fatalf("ListFlows: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 flows, got %d", len(got))
+	}
+	// Expected descending by UpdatedAt: bravo, charlie, alpha.
+	want := []string{"bravo", "charlie", "alpha"}
+	for i, w := range want {
+		if got[i].ID != w {
+			t.Errorf("position %d: got %s, want %s (not ordered by updated_at DESC)", i, got[i].ID, w)
+		}
+	}
+
+	// Pagination must be stable under the new ordering: offset 1, limit 1 → charlie.
+	page, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner, Offset: 1, Limit: 1})
+	if err != nil {
+		t.Fatalf("ListFlows paged: %v", err)
+	}
+	if len(page) != 1 || page[0].ID != "charlie" {
+		t.Errorf("offset/limit page = %+v, want [charlie]", page)
+	}
+}
+
+// TestLocalStorageBackend_ListFlows_OrdersByBlocksDesc verifies the FlowSortBlocksDesc
+// mode mirrors the Postgres ORDER BY (block_count DESC, updated_at DESC) rather
+// than falling through to updated_at DESC (the previous divergence).
+func TestLocalStorageBackend_ListFlows_OrdersByBlocksDesc(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStorageBackend: %v", err)
+	}
+	ctx := context.Background()
+	owner := "u"
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	mk := func(id string, blockCount int, updatedAt time.Time) {
+		f := &interfaces.FlowDocument{
+			ID: id, Name: id, Content: []byte(`{}`), OwnerID: owner,
+			Metadata: interfaces.FlowMetadata{BlockCount: blockCount},
+		}
+		f.UpdatedAt = updatedAt
+		if err := storage.SaveFlow(ctx, f); err != nil {
+			t.Fatalf("SaveFlow %s: %v", id, err)
+		}
+	}
+	// "big" has 100 blocks but oldest timestamp; "small" has 1 block but newest.
+	// Under BlocksDesc, "big" must rank first despite being oldest.
+	mk("big", 100, base.Add(1*time.Hour))
+	mk("mid", 50, base.Add(2*time.Hour))
+	mk("small", 1, base.Add(3*time.Hour))
+
+	got, err := storage.ListFlows(ctx, interfaces.FlowFilter{UserID: owner, SortBy: interfaces.FlowSortBlocksDesc})
+	if err != nil {
+		t.Fatalf("ListFlows BlocksDesc: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 flows, got %d", len(got))
+	}
+	want := []string{"big", "mid", "small"} // by block count, not recency
+	for i, w := range want {
+		if got[i].ID != w {
+			t.Errorf("BlocksDesc position %d: got %s, want %s", i, got[i].ID, w)
+		}
+	}
 }
 
 // TestLocalStorageBackend_DeleteFlow tests deleting flow documents
@@ -339,4 +433,32 @@ func TestLocalStorageBackend_SaveFlow_ConcurrentRetry(t *testing.T) {
 	testutil.AssertNoError(t, err, "load final")
 	// Seed left version 0; each of the writers commits exactly one increment.
 	testutil.AssertEqual(t, writers, final.Version, "every writer's increment should land exactly once")
+}
+
+// TestLocalStorageBackend_SaveFlow_NewFlowForcesVersionZero verifies that a
+// brand-new flow is always stored at version 0, matching the Postgres backend
+// (INSERT ... VALUES (..., 0)). Previously the filesystem backend left
+// flow.Version at whatever the caller passed, so a new flow saved with a stale
+// non-zero version would later reject a legitimate Version=0 save.
+func TestLocalStorageBackend_SaveFlow_NewFlowForcesVersionZero(t *testing.T) {
+	storage, err := NewLocalStorageBackend(t.TempDir())
+	testutil.AssertNoError(t, err, "NewLocalStorageBackend")
+	ctx := context.Background()
+
+	// A new flow carrying a fabricated, non-zero version (e.g. a doc struct
+	// reused from a prior save).
+	flow := createTestFlow("versioned-flow")
+	flow.Version = 7
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, flow), "save new flow")
+
+	loaded, err := storage.LoadFlow(ctx, "versioned-flow")
+	testutil.AssertNoError(t, err, "load new flow")
+	testutil.AssertEqual(t, 0, loaded.Version, "new flow must start at version 0 (match Postgres)")
+
+	// A subsequent legitimate save at version 0 must succeed (no spurious conflict).
+	loaded.Name = "v2"
+	testutil.AssertNoError(t, storage.SaveFlow(ctx, loaded), "second save at version 0")
+	reloaded, err := storage.LoadFlow(ctx, "versioned-flow")
+	testutil.AssertNoError(t, err, "load after second save")
+	testutil.AssertEqual(t, 1, reloaded.Version, "version should bump to 1")
 }

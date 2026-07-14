@@ -285,26 +285,30 @@ return allowed
 `)
 
 type redisStore struct {
-	client *redis.Client
+	client   *redis.Client
+	fallback *inMemoryStore
 }
 
 func newRedisStore(client *redis.Client) *redisStore {
-	return &redisStore{client: client}
+	return &redisStore{client: client, fallback: newInMemoryStore()}
 }
 
 func (s *redisStore) Allow(ctx context.Context, key string, rate, capacity float64) bool {
 	now := time.Now().UnixMilli()
 	res, err := tokenBucketScript.Run(ctx, s.client, []string{key},
 		rate, capacity, now, redisBucketTTL.Milliseconds()).Int()
-	// Fail open on a Redis error: a backplane blip must not take the whole API
-	// offline (every request would 429-on-no-quorum). The in-memory fallback
-	// covers planned single-replica; an unreachable Redis during a transient
-	// outage degrading the limit is preferable to a hard outage. Operators alert
-	// on the backplane being down via the redisx boot ping + ACA readiness.
 	if err != nil {
-		return true
+		// Redis error: fall back to a per-replica in-memory bucket instead of
+		// fully uncapping (the previous "return true" let an attacker who DoS'd
+		// Redis disable ALL rate limiting). The fallback enforces the same
+		// rate/capacity per replica, so a Redis outage degrades — but does not
+		// eliminate — the limit. Operators still alert on Redis being down via
+		// the redisx boot ping + ACA readiness.
+		return s.fallback.Allow(ctx, key, rate, capacity)
 	}
 	return res == 1
 }
 
-func (s *redisStore) Stop() {} // client closed by the redisx fx lifecycle
+func (s *redisStore) Stop() {
+	s.fallback.Stop()
+}

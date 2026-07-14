@@ -39,8 +39,12 @@ export function RecentFlowsCard({
                 className="w-full flex items-center gap-3 py-2 px-1 text-left rounded-md hover:bg-surface-3/60 transition-colors"
               >
                 <FileText size={15} className="text-text-tertiary shrink-0" />
-                <span title={f.name || 'Untitled flow'} className="flex-1 truncate text-sm text-text-primary">{f.name || 'Untitled flow'}</span>
-                <span title={absoluteTime(f.updatedAt)} className="text-2xs text-text-tertiary tabular-nums shrink-0">{relativeTime(f.updatedAt)}</span>
+                <span title={f.name || 'Untitled flow'} className="flex-1 truncate text-sm text-text-primary">
+                  {f.name || 'Untitled flow'}
+                </span>
+                <span title={absoluteTime(f.updatedAt)} className="text-2xs text-text-tertiary tabular-nums shrink-0">
+                  {relativeTime(f.updatedAt)}
+                </span>
                 <HealthBadge score={f.healthScore} />
               </button>
             </li>
@@ -55,9 +59,12 @@ function HealthBadge({score}: {score: number | null}) {
   if (score == null) {
     return <span className="w-9 text-center text-2xs font-mono text-text-tertiary shrink-0">—</span>
   }
-  const tone = score >= 80 ? 'text-emerald-400 bg-emerald-500/10'
-    : score >= 50 ? 'text-amber-400 bg-amber-500/10'
-    : 'text-red-400 bg-red-500/10'
+  const tone =
+    score >= 80
+      ? 'text-emerald-400 bg-emerald-500/10'
+      : score >= 50
+        ? 'text-amber-400 bg-amber-500/10'
+        : 'text-red-400 bg-red-500/10'
   return (
     <span className={clsx('w-9 text-center text-2xs font-mono font-semibold rounded px-1 py-0.5 shrink-0', tone)}>
       {score}

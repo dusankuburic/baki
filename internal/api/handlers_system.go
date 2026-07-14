@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -71,8 +70,7 @@ func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 
 func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req models.AppSettings
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -108,8 +106,7 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 		return
 	}
 	var req models.AppSettings
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req); err != nil {
@@ -131,8 +128,7 @@ func (h *SystemHandler) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 
 func (h *SystemHandler) handleLogError(w http.ResponseWriter, r *http.Request) {
 	var req models.FrontendError
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	h.sysSvc.LogError(req)
@@ -144,8 +140,7 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 		Provider string `json:"provider"`
 		Key      string `json:"key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Provider == "" || !validProviders[req.Provider] {
@@ -163,8 +158,7 @@ func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		Provider string `json:"provider"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	has, err := h.sysSvc.HasApiKey(h.security.KeyScope(r), req.Provider)
@@ -179,8 +173,7 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Provider string `json:"provider"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Provider == "" || !validProviders[req.Provider] {

@@ -1,11 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { decodeJwtPayload } from './jwt'
+import {describe, it, expect} from 'vitest'
+import {decodeJwtPayload} from './jwt'
 
 // Build a JWT-shaped "<header>.<payload>.<sig>" whose payload is real base64url
 // ('+'→'-', '/'→'_', padding stripped) exactly as a signing library emits it.
 function jwtWith(payload: Record<string, unknown>): string {
-  const seg = btoa(JSON.stringify(payload))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const seg = btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   return `header.${seg}.signature`
 }
 
@@ -13,14 +12,14 @@ describe('decodeJwtPayload', () => {
   it('decodes a base64url payload containing - and _ (which raw atob rejects)', () => {
     // This payload is engineered so its base64url segment contains BOTH '-' and
     // '_'; the test would fail if the helper still used a bare atob().
-    const payload = { exp: 1700000000, role: 'admin', s: '????>>>>' }
+    const payload = {exp: 1700000000, role: 'admin', s: '????>>>>'}
     const token = jwtWith(payload)
     expect(token.split('.')[1]).toMatch(/[-_]/) // precondition
     expect(decodeJwtPayload(token)).toEqual(payload)
   })
 
   it('round-trips a typical access-token payload with stripped padding', () => {
-    const payload = { uid: 'a3f9-c2', email: 'u@x.io', role: 'member', exp: 1893456000 }
+    const payload = {uid: 'a3f9-c2', email: 'u@x.io', role: 'member', exp: 1893456000}
     expect(decodeJwtPayload(jwtWith(payload))).toEqual(payload)
   })
 

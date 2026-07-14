@@ -2,8 +2,39 @@ import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {FlowDiff} from '@/types'
 
-export type MainPaneView = 'home' | 'block' | 'graph' | 'map' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'library' | 'portfolio' | 'deps'
-export type ResolvedTheme = 'dark' | 'light' | 'midnight' | 'warm' | 'tokyo-night' | 'one-dark' | 'dracula' | 'nord' | 'gruvbox-dark' | 'gruvbox-light' | 'catppuccin-mocha' | 'catppuccin-latte' | 'rose-pine' | 'rose-pine-moon' | 'rose-pine-dawn' | 'github-dark' | 'github-light' | 'kanagawa' | 'everforest'
+export type MainPaneView =
+  | 'home'
+  | 'block'
+  | 'graph'
+  | 'map'
+  | 'local-map'
+  | 'diff'
+  | 'profile'
+  | 'admin'
+  | 'dashboard'
+  | 'library'
+  | 'portfolio'
+  | 'deps'
+export type ResolvedTheme =
+  | 'dark'
+  | 'light'
+  | 'midnight'
+  | 'warm'
+  | 'tokyo-night'
+  | 'one-dark'
+  | 'dracula'
+  | 'nord'
+  | 'gruvbox-dark'
+  | 'gruvbox-light'
+  | 'catppuccin-mocha'
+  | 'catppuccin-latte'
+  | 'rose-pine'
+  | 'rose-pine-moon'
+  | 'rose-pine-dawn'
+  | 'github-dark'
+  | 'github-light'
+  | 'kanagawa'
+  | 'everforest'
 export type SidebarTab = 'explorer' | 'variables' | 'library'
 export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
 
@@ -11,7 +42,14 @@ export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing'
 // Sidebar handlers use isSystemView to know when opening a flow should also
 // transition the main pane back to a flow view ('block') so the new flow
 // becomes visible; staying on a system view would leave the flow off-screen.
-const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set(['home', 'dashboard', 'profile', 'admin', 'library', 'portfolio'])
+const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set([
+  'home',
+  'dashboard',
+  'profile',
+  'admin',
+  'library',
+  'portfolio',
+])
 export const isSystemView = (v: MainPaneView): boolean => SYSTEM_VIEWS.has(v)
 
 interface UiState {
@@ -49,7 +87,7 @@ interface UiState {
   toggleSettings: () => void
 }
 
-export const useUIStore = create<UiState>((set) => ({
+export const useUIStore = create<UiState>(set => ({
   resolvedTheme: 'dark',
   sidebarTab: 'explorer',
   mainPaneView: 'home',
@@ -65,23 +103,25 @@ export const useUIStore = create<UiState>((set) => ({
   graphZoom: 1,
   activeDiff: null,
 
-  setResolvedTheme: (t) => set({resolvedTheme: t}),
-  setSidebarTab: (t) => set({sidebarTab: t}),
-  setMainPaneView: (v) => set({mainPaneView: v}),
-  setInspectorTab: (t) => set({inspectorTab: t}),
-  setSidebarCollapsed: (v) => set({sidebarCollapsed: v}),
-  setInspectorCollapsed: (v) => set({inspectorCollapsed: v}),
-  setCommandPaletteOpen: (o) => set(s => ({
-    commandPaletteOpen: typeof o === 'function' ? o(s.commandPaletteOpen) : o,
-  })),
-  setGlobalSearchOpen: (o) => set(s => ({
-    globalSearchOpen: typeof o === 'function' ? o(s.globalSearchOpen) : o,
-  })),
-  setSettingsOpen: (o) => set({settingsOpen: o}),
-  setVariablePanelOpen: (o) => set({variablePanelOpen: o}),
-  setSelectedVariable: (v) => set({selectedVariable: v}),
-  setGraphZoom: (z) => set({graphZoom: z}),
-  setActiveDiff: (d) => set({activeDiff: d}),
+  setResolvedTheme: t => set({resolvedTheme: t}),
+  setSidebarTab: t => set({sidebarTab: t}),
+  setMainPaneView: v => set({mainPaneView: v}),
+  setInspectorTab: t => set({inspectorTab: t}),
+  setSidebarCollapsed: v => set({sidebarCollapsed: v}),
+  setInspectorCollapsed: v => set({inspectorCollapsed: v}),
+  setCommandPaletteOpen: o =>
+    set(s => ({
+      commandPaletteOpen: typeof o === 'function' ? o(s.commandPaletteOpen) : o,
+    })),
+  setGlobalSearchOpen: o =>
+    set(s => ({
+      globalSearchOpen: typeof o === 'function' ? o(s.globalSearchOpen) : o,
+    })),
+  setSettingsOpen: o => set({settingsOpen: o}),
+  setVariablePanelOpen: o => set({variablePanelOpen: o}),
+  setSelectedVariable: v => set({selectedVariable: v}),
+  setGraphZoom: z => set({graphZoom: z}),
+  setActiveDiff: d => set({activeDiff: d}),
   toggleSidebar: () => set(s => ({sidebarCollapsed: !s.sidebarCollapsed})),
   toggleComplexityMode: () => set(s => ({complexityMode: !s.complexityMode})),
   toggleInspector: () => set(s => ({inspectorCollapsed: !s.inspectorCollapsed})),
@@ -90,9 +130,20 @@ export const useUIStore = create<UiState>((set) => ({
 
 // Reset on logout (see storeRegistry). resolvedTheme is intentionally preserved
 // so the login screen doesn't flash before settings reload.
-registerStoreReset(() => useUIStore.setState({
-  sidebarTab: 'explorer', mainPaneView: 'home', inspectorTab: 'details',
-  sidebarCollapsed: false, inspectorCollapsed: false, commandPaletteOpen: false,
-  globalSearchOpen: false, complexityMode: false, settingsOpen: false,
-  variablePanelOpen: false, selectedVariable: null, graphZoom: 1, activeDiff: null,
-}))
+registerStoreReset(() =>
+  useUIStore.setState({
+    sidebarTab: 'explorer',
+    mainPaneView: 'home',
+    inspectorTab: 'details',
+    sidebarCollapsed: false,
+    inspectorCollapsed: false,
+    commandPaletteOpen: false,
+    globalSearchOpen: false,
+    complexityMode: false,
+    settingsOpen: false,
+    variablePanelOpen: false,
+    selectedVariable: null,
+    graphZoom: 1,
+    activeDiff: null,
+  }),
+)

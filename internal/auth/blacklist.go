@@ -12,7 +12,15 @@ import (
 type BlacklistStore interface {
 	Add(jti string, ttl time.Duration)
 	IsRevoked(jti string) bool
-	AddIfAbsent(jti string, ttl time.Duration) bool
+	// AddIfAbsent atomically checks whether jti is already blacklisted and, if
+	// not, inserts it. It returns (true, nil) if the entry was freshly added,
+	// (false, nil) if it was already present, and (false, err) if the check
+	// could not be performed (e.g. a transient DB error). Callers MUST treat an
+	// error as fail-closed (reject the request) rather than as "already
+	// present": on error the entry was NOT inserted, so inferring "already
+	// present" would both reject the current attempt AND permit a later replay
+	// of the same single-use token once the store recovers.
+	AddIfAbsent(jti string, ttl time.Duration) (added bool, err error)
 	Stop()
 }
 
@@ -49,17 +57,20 @@ func (bl *TokenBlacklist) IsRevoked(jti string) bool {
 }
 
 // AddIfAbsent atomically checks whether jti is already blacklisted and, if
-// not, inserts it under a single write lock. Returns true if the entry was
-// freshly added, false if it was already present. This eliminates the TOCTOU
-// race between a separate IsRevoked + Add sequence.
-func (bl *TokenBlacklist) AddIfAbsent(jti string, ttl time.Duration) bool {
+// not, inserts it under a single write lock. Returns (true, nil) if the entry
+// was freshly added, (false, nil) if it was already present. The in-memory
+// implementation cannot fail, so the error is always nil; the (bool, error)
+// signature matches the Postgres-backed implementation where a DB error must
+// be distinguishable from "already present". This eliminates the TOCTOU race
+// between a separate IsRevoked + Add sequence.
+func (bl *TokenBlacklist) AddIfAbsent(jti string, ttl time.Duration) (bool, error) {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 	if exp, ok := bl.entries[jti]; ok && time.Now().Before(exp) {
-		return false
+		return false, nil
 	}
 	bl.entries[jti] = time.Now().Add(ttl)
-	return true
+	return true, nil
 }
 
 func (bl *TokenBlacklist) Stop() {

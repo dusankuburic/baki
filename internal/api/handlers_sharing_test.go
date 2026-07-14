@@ -108,7 +108,7 @@ func TestHandleSharingAdd_DefaultsToViewer(t *testing.T) {
 	}
 }
 
-func TestHandleSharingAdd_UserNotFoundReturns404(t *testing.T) {
+func TestHandleSharingAdd_UnknownUserReturnsOk_NoEnumeration(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	token := jwtBearer(t, rt, "admin", "admin@example.com")
 	seedFlow(t, rt, "flow-1", "admin")
@@ -116,7 +116,10 @@ func TestHandleSharingAdd_UserNotFoundReturns404(t *testing.T) {
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flows/flow-1/collaborators", token, map[string]any{
 		"email": "nobody@example.com",
 	})
-	checkStatus(t, rr, http.StatusNotFound)
+	// Anti-enumeration (M-Wave4): an unknown email returns the same 200 "ok" as
+	// a successful add, so an admin can't probe whether an email is registered.
+	// The collaborator is NOT actually added.
+	checkStatus(t, rr, http.StatusOK)
 }
 
 func TestHandleSharingAdd_InvalidPermissionReturns400(t *testing.T) {

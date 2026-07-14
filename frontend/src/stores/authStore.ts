@@ -1,8 +1,8 @@
-import { create } from 'zustand'
-import { authApi, type AuthUser, type LoginRequest } from '@/api/auth'
-import { registerRefreshCallback, invalidateConfigCache, setSessionToken } from '@/api/client'
-import { decodeJwtPayload } from '@/lib/jwt'
-import { resetAllStores } from './storeRegistry'
+import {create} from 'zustand'
+import {authApi, type AuthUser, type LoginRequest} from '@/api/auth'
+import {registerRefreshCallback, invalidateConfigCache, setSessionToken} from '@/api/client'
+import {decodeJwtPayload} from '@/lib/jwt'
+import {resetAllStores} from './storeRegistry'
 
 const REFRESH_TOKEN_KEY = 'auth_refresh_token'
 
@@ -110,7 +110,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (credentials, remember = false) => {
     if (get().isLoading) return
-    set({ isLoading: true, error: null })
+    set({isLoading: true, error: null})
     try {
       const res = await authApi.login(credentials)
       writeRefresh(res.refreshToken, remember)
@@ -132,7 +132,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   register: async (credentials, remember = false) => {
     if (get().isLoading) return
-    set({ isLoading: true, error: null })
+    set({isLoading: true, error: null})
     try {
       const res = await authApi.register(credentials)
       writeRefresh(res.refreshToken, remember)
@@ -152,9 +152,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  loginWithSSOTicket: async (ticket) => {
+  loginWithSSOTicket: async ticket => {
     if (get().isLoading) return
-    set({ isLoading: true, error: null })
+    set({isLoading: true, error: null})
     try {
       const res = await authApi.ssoExchange(ticket)
       // SSO sessions persist like "remember me" — the user already chose a
@@ -163,7 +163,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       setSessionToken(res.accessToken)
       // The exchange response carries only the token pair; resolve the
       // profile explicitly so the UI has email/role immediately.
-      const user = res.user ?? await authApi.me()
+      const user = res.user ?? (await authApi.me())
       set({
         user,
         accessToken: res.accessToken,
@@ -182,14 +182,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     // Increment epoch so any in-flight refresh won't write new tokens after logout.
     sessionEpoch++
-    set({ isLoading: true })
+    set({isLoading: true})
     try {
       await authApi.logout()
     } catch {
       // Best-effort logout — clear local state regardless
     } finally {
       clearTokens()
-      set({ user: null, accessToken: null, isAuthenticated: false, isLoading: false, error: null })
+      set({user: null, accessToken: null, isAuthenticated: false, isLoading: false, error: null})
       // Reset all domain stores + tear down live connections to prevent
       // cross-session data leakage. Awaited so a caller knows teardown completed.
       await resetAllStores()
@@ -204,7 +204,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const refreshToken = readRefresh()
       if (!refreshToken) {
         clearTokens()
-        set({ user: null, accessToken: null, isAuthenticated: false })
+        set({user: null, accessToken: null, isAuthenticated: false})
         return false
       }
 
@@ -219,14 +219,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (res.refreshToken) {
           writeRefresh(res.refreshToken, isPersistent())
         }
-        set({ accessToken: res.accessToken })
+        set({accessToken: res.accessToken})
         return true
       } catch {
         clearTokens()
-        set({ user: null, accessToken: null, isAuthenticated: false })
+        set({user: null, accessToken: null, isAuthenticated: false})
         return false
       }
-    })().finally(() => { refreshInFlight = null })
+    })().finally(() => {
+      refreshInFlight = null
+    })
 
     return refreshInFlight
   },
@@ -237,28 +239,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // the login form without any network call (avoids a startup 401).
     if (!refreshToken || isJwtExpired(refreshToken)) {
       clearTokens()
-      set({ user: null, accessToken: null, isAuthenticated: false })
+      set({user: null, accessToken: null, isAuthenticated: false})
       return
     }
 
-    set({ isLoading: true })
+    set({isLoading: true})
     try {
       const ok = await get().refresh()
       if (!ok) {
-        set({ isLoading: false })
+        set({isLoading: false})
         return
       }
       const user = await authApi.me()
-      set({ user, isAuthenticated: true, isLoading: false })
+      set({user, isAuthenticated: true, isLoading: false})
     } catch {
       clearTokens()
-      set({ user: null, accessToken: null, isAuthenticated: false, isLoading: false })
+      set({user: null, accessToken: null, isAuthenticated: false, isLoading: false})
     }
   },
 
-  updateUser: (patch) => set(s => ({ user: s.user ? { ...s.user, ...patch } : s.user })),
+  updateUser: patch => set(s => ({user: s.user ? {...s.user, ...patch} : s.user})),
 
-  clearError: () => set({ error: null }),
+  clearError: () => set({error: null}),
 }))
 
 // Register with the API client so it can transparently refresh expired tokens.
@@ -275,4 +277,4 @@ registerRefreshCallback(async () => {
 // all). syncStore has no handler of its own — it mirrors the SyncManager queue
 // and is torn down inside presenceStore's handler (disconnect → syncManager.reset).
 // Re-exported so callers/tests can import it from this module as before.
-export { resetAllStores }
+export {resetAllStores}

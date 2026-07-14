@@ -50,8 +50,8 @@ type Event struct {
 	At          time.Time `json:"at"`
 }
 
-// Notifier delivers a single event to one channel.
-type Notifier interface {
+// AlertNotifier delivers a single event to one channel.
+type AlertNotifier interface {
 	Notify(ctx context.Context, ev Event) error
 	Name() string
 }
@@ -65,7 +65,7 @@ type Config struct {
 
 // Dispatcher fans an event out to every configured channel.
 type Dispatcher struct {
-	notifiers []Notifier
+	notifiers []AlertNotifier
 	timeout   time.Duration
 }
 
@@ -102,7 +102,7 @@ func New(cfg Config) (*Dispatcher, error) {
 	}
 	client := &http.Client{Timeout: timeout}
 
-	var notifiers []Notifier
+	var notifiers []AlertNotifier
 	if cfg.WebhookURL != "" {
 		u, err := validateAlertURL(cfg.WebhookURL)
 		if err != nil {
@@ -142,7 +142,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev Event) {
 }
 
 // deliver runs one notifier with a timeout and panic recovery.
-func deliver(ctx context.Context, n Notifier, ev Event, timeout time.Duration) {
+func deliver(ctx context.Context, n AlertNotifier, ev Event, timeout time.Duration) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("notify: channel panicked", "channel", n.Name(), "recover", r)

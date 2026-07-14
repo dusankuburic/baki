@@ -16,19 +16,27 @@ vi.mock('@/api', () => ({
   },
 }))
 
-vi.mock('recharts', async (importOriginal) => {
+vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   return {
     ...actual,
-    ResponsiveContainer: ({children}: {children: React.ReactNode}) => <div style={{width: 400, height: 200}}>{children}</div>,
+    ResponsiveContainer: ({children}: {children: React.ReactNode}) => (
+      <div style={{width: 400, height: 200}}>{children}</div>
+    ),
   }
 })
 
 vi.mock('./home/useChartColors', () => ({
   useChartColors: () => ({
-    success: '#22c55e', warning: '#eab308', error: '#ef4444',
-    brand400: '#818cf8', brand500: '#5b61ef', brand600: '#4f46d5',
-    surface3: '#26262d', borderStrong: '#3f3f47', textTertiary: '#71717a',
+    success: '#22c55e',
+    warning: '#eab308',
+    error: '#ef4444',
+    brand400: '#818cf8',
+    brand500: '#5b61ef',
+    brand600: '#4f46d5',
+    surface3: '#26262d',
+    borderStrong: '#3f3f47',
+    textTertiary: '#71717a',
   }),
   healthColor: (score: number, c: Record<string, string>) => {
     if (score >= 80) return c.success
@@ -40,12 +48,19 @@ vi.mock('./home/useChartColors', () => ({
 const emptyData = {
   greeting: {userDisplayName: 'Tester'},
   overview: {avgHealthScore: 0, healthAvailable: false, totalFlows: 0, totalSubflows: 0},
-  tokenUsage: [], recentFlows: [],
+  tokenUsage: [],
+  recentFlows: [],
   findings: {available: false, bySeverity: {}, byCategory: []},
   isCloud: false,
-  healthTrend: [], costByProvider: [], ruleFrequency: [], activity: [],
-  complexity: [], security: {failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
-  severityTrend: [], confidenceDist: {}, healthBuckets: [],
+  healthTrend: [],
+  costByProvider: [],
+  ruleFrequency: [],
+  activity: [],
+  complexity: [],
+  security: {failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
+  severityTrend: [],
+  confidenceDist: {},
+  healthBuckets: [],
   fixability: {available: 0, total: 0, autoFixableRules: 0, totalRules: 0},
   workflow: {available: false, funnel: {}, mttrHours: 0, resolvedCount: 0, staleCount: 0},
 }
@@ -75,7 +90,7 @@ describe('HomeDashboard', () => {
   it('hides advanced cards in local mode (isCloud: false)', async () => {
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
-    
+
     // Cards that should be hidden
     expect(screen.queryByText(/Health Score Trend/)).toBeNull()
     expect(screen.queryByText(/AI Cost by Provider/)).toBeNull()
@@ -99,7 +114,7 @@ describe('HomeDashboard', () => {
     })
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
-    
+
     expect(screen.getByText(/Health Score Trend/)).toBeInTheDocument()
     expect(screen.getByText(/AI Cost by Provider/)).toBeInTheDocument()
     expect(screen.getByText(/Recent Activity/)).toBeInTheDocument()

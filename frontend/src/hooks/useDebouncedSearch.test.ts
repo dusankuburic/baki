@@ -18,7 +18,9 @@ describe('useDebouncedSearch', () => {
     act(() => result.current.search('  hello  '))
     expect(onSearch).not.toHaveBeenCalled()
 
-    act(() => { vi.advanceTimersByTime(150) })
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
     expect(onSearch).toHaveBeenCalledWith('hello')
   })
 
@@ -35,12 +37,18 @@ describe('useDebouncedSearch', () => {
     const {result} = renderHook(() => useDebouncedSearch({delay: 150, onSearch}))
 
     act(() => result.current.search('first'))
-    act(() => { vi.advanceTimersByTime(100) })
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
     act(() => result.current.search('second'))
-    act(() => { vi.advanceTimersByTime(100) })
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
     expect(onSearch).not.toHaveBeenCalled()
 
-    act(() => { vi.advanceTimersByTime(50) })
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
     expect(onSearch).toHaveBeenCalledTimes(1)
     expect(onSearch).toHaveBeenCalledWith('second')
   })
@@ -48,14 +56,15 @@ describe('useDebouncedSearch', () => {
   it('uses the latest onSearch callback even if search was called before it updated', () => {
     const onSearchA = vi.fn()
     const onSearchB = vi.fn()
-    const {result, rerender} = renderHook(
-      ({onSearch}) => useDebouncedSearch({delay: 150, onSearch}),
-      {initialProps: {onSearch: onSearchA}},
-    )
+    const {result, rerender} = renderHook(({onSearch}) => useDebouncedSearch({delay: 150, onSearch}), {
+      initialProps: {onSearch: onSearchA},
+    })
 
     act(() => result.current.search('query'))
     rerender({onSearch: onSearchB})
-    act(() => { vi.advanceTimersByTime(150) })
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
 
     expect(onSearchA).not.toHaveBeenCalled()
     expect(onSearchB).toHaveBeenCalledWith('query')
@@ -66,7 +75,9 @@ describe('useDebouncedSearch', () => {
     const {result, unmount} = renderHook(() => useDebouncedSearch({delay: 150, onSearch}))
     act(() => result.current.search('x'))
     unmount()
-    act(() => { vi.advanceTimersByTime(150) })
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
     expect(onSearch).not.toHaveBeenCalled()
   })
 })

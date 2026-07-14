@@ -21,7 +21,7 @@ export default function StreamingProgress() {
     // only needs ~4fps to feel live; this keeps AITab off the per-frame path.
     const read = () => {
       const st = useChatStore.getState()
-      setTokens(st.activeThreadId ? (st.streams[st.activeThreadId]?.tokens || 0) : 0)
+      setTokens(st.activeThreadId ? st.streams[st.activeThreadId]?.tokens || 0 : 0)
     }
     read()
     const id = setInterval(read, TOKEN_REFRESH_MS)

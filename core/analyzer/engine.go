@@ -17,8 +17,8 @@ var variableRefRegex = regexp.MustCompile(`%([^%]+)%`)
 
 // subjectMetaKeys are the metadata keys that name WHAT a finding is about. They
 // disambiguate two findings of the same rule on the same block (e.g. two
-// uninitialized variables) so each gets a distinct content key. Must stay in
-// sync with dedup.go's subjectKeys.
+// uninitialized variables) so each gets a distinct content key. dedup.go's
+// subjectKeys aliases this slice rather than redeclaring it.
 var subjectMetaKeys = []string{"variable", "property", "resource"}
 
 // ruleConfidence is a per-rule default certainty for findings. Rules not listed

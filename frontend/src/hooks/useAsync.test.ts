@@ -60,7 +60,12 @@ describe('useAsync', () => {
 
   it('ignores a stale resolution after the component unmounts', async () => {
     let resolveFn: (v: string) => void = () => {}
-    const fn = vi.fn(() => new Promise<string>(res => { resolveFn = res }))
+    const fn = vi.fn(
+      () =>
+        new Promise<string>(res => {
+          resolveFn = res
+        }),
+    )
     const {result, unmount} = renderHook(() => useAsync(fn, []))
     unmount()
     resolveFn('too late')

@@ -10,8 +10,12 @@ beforeEach(() => {
 
 function result(blockId: string): SearchResult {
   return {
-    blockId, subflowId: 'sf1', matchedField: 'name', matchedText: 'x',
-    score: 1, highlights: [],
+    blockId,
+    subflowId: 'sf1',
+    matchedField: 'name',
+    matchedText: 'x',
+    score: 1,
+    highlights: [],
   }
 }
 
@@ -72,7 +76,13 @@ describe('nextResult / prevResult', () => {
 
 describe('clear', () => {
   it('resets query, results, index, isSearching, and totalCount', () => {
-    useSearchStore.setState({query: 'x', results: [result('a')], activeResultIndex: 0, isSearching: true, totalCount: 1})
+    useSearchStore.setState({
+      query: 'x',
+      results: [result('a')],
+      activeResultIndex: 0,
+      isSearching: true,
+      totalCount: 1,
+    })
     useSearchStore.getState().clear()
     const s = useSearchStore.getState()
     expect(s.query).toBe('')

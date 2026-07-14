@@ -9,9 +9,7 @@ export interface FrontendError {
 }
 
 export const systemApi = {
-  logError: (err: FrontendError): Promise<void> =>
-    request('/api/system/log-error', err),
+  logError: (err: FrontendError): Promise<void> => request('/api/system/log-error', err),
 
-  appInfo: (): Promise<AppInfoType> =>
-    request('/api/system/info', undefined, 'GET'),
+  appInfo: (): Promise<AppInfoType> => request('/api/system/info', undefined, 'GET'),
 }

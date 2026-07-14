@@ -21,11 +21,7 @@ export function HealthDistributionCard({data, className}: {data: HealthBucket[];
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{top: 10, right: 10, left: -20, bottom: 0}}>
               <CartesianGrid strokeDasharray="3 3" stroke={colors.borderStrong} strokeOpacity={0.3} vertical={false} />
-              <XAxis
-                dataKey="label"
-                stroke={colors.borderStrong}
-                tick={{fill: colors.textTertiary, fontSize: 11}}
-              />
+              <XAxis dataKey="label" stroke={colors.borderStrong} tick={{fill: colors.textTertiary, fontSize: 11}} />
               <YAxis
                 stroke={colors.borderStrong}
                 tick={{fill: colors.textTertiary, fontSize: 11, fontFamily: 'var(--font-mono)'}}
@@ -39,10 +35,11 @@ export function HealthDistributionCard({data, className}: {data: HealthBucket[];
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
-                labelFormatter={(l) => `Health ${l}`}
-                formatter={(v) => [`${v} flows`, 'Count']}
+                labelFormatter={l => `Health ${l}`}
+                formatter={v => [`${v} flows`, 'Count']}
               />
               <Bar dataKey="count" isAnimationActive={false} radius={[3, 3, 0, 0]}>
                 {chartData.map(b => (

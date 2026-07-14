@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { PendingOp } from '@/services/sync/SyncManager'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
+import type {PendingOp} from '@/services/sync/SyncManager'
 
 // vi.mock factories are hoisted before let declarations, so use vi.hoisted() to
 // share state between the factory and the test body.
@@ -15,12 +15,14 @@ vi.mock('@/services/sync/SyncManager', () => ({
     getQueue: vi.fn().mockReturnValue([]),
     onQueueChange: vi.fn((h: (q: readonly PendingOp[]) => void) => {
       capture.queueChangeHandler = h
-      return () => { capture.queueChangeHandler = null }
+      return () => {
+        capture.queueChangeHandler = null
+      }
     }),
   },
 }))
 
-import { useSyncStore } from './syncStore'
+import {useSyncStore} from './syncStore'
 
 const initialState = useSyncStore.getState()
 
@@ -45,8 +47,8 @@ describe('initial state', () => {
 describe('queue synchronization', () => {
   it('updates queue and pendingCount when syncManager fires a change', () => {
     const ops: PendingOp[] = [
-      { id: 'op-1', env: { type: 'block.update' }, queuedAt: Date.now() },
-      { id: 'op-2', env: { type: 'cursor.move' }, queuedAt: Date.now() },
+      {id: 'op-1', env: {type: 'block.update'}, queuedAt: Date.now()},
+      {id: 'op-2', env: {type: 'cursor.move'}, queuedAt: Date.now()},
     ]
     capture.queueChangeHandler?.(ops)
 
@@ -56,7 +58,7 @@ describe('queue synchronization', () => {
   })
 
   it('resets to zero when all ops are flushed', () => {
-    const op: PendingOp = { id: 'op-1', env: { type: 'block.update' }, queuedAt: Date.now() }
+    const op: PendingOp = {id: 'op-1', env: {type: 'block.update'}, queuedAt: Date.now()}
     capture.queueChangeHandler?.([op])
     expect(useSyncStore.getState().pendingCount).toBe(1)
 

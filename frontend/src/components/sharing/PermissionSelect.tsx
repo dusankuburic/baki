@@ -1,16 +1,16 @@
 import clsx from 'clsx'
-import type { Permission } from '@/api/sharing'
+import type {Permission} from '@/api/sharing'
 
 const LABELS: Record<Permission, string> = {
   viewer: 'Viewer',
   editor: 'Editor',
-  admin:  'Admin',
+  admin: 'Admin',
 }
 
 const DESCRIPTIONS: Record<Permission, string> = {
   viewer: 'Can view',
   editor: 'Can edit',
-  admin:  'Full control',
+  admin: 'Full control',
 }
 
 interface PermissionSelectProps {
@@ -20,12 +20,7 @@ interface PermissionSelectProps {
   className?: string
 }
 
-export default function PermissionSelect({
-  value,
-  onChange,
-  disabled,
-  className,
-}: PermissionSelectProps) {
+export default function PermissionSelect({value, onChange, disabled, className}: PermissionSelectProps) {
   return (
     <select
       value={value}

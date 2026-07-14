@@ -2,7 +2,7 @@ package testutil
 
 import "sync"
 
-// CountingNotifier implements service.Notifier for tests. It counts all
+// CountingNotifier implements service.EventNotifier for tests. It counts all
 // Emit calls and captures the last emitted event for assertions.
 type CountingNotifier struct {
 	mu           sync.Mutex

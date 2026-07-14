@@ -47,10 +47,10 @@ const DEFAULTS = {
 export const useLibraryBrowseStore = create<LibraryBrowseState>((set, get) => ({
   ...DEFAULTS,
 
-  setView: (v) => set({view: v}),
-  setScope: (s) => set({scope: s, page: 0, selectedFlowId: null}),
-  setSelectedOrgIds: (ids) => set({selectedOrgIds: ids, page: 0, selectedFlowId: null}),
-  toggleOrg: (id) => {
+  setView: v => set({view: v}),
+  setScope: s => set({scope: s, page: 0, selectedFlowId: null}),
+  setSelectedOrgIds: ids => set({selectedOrgIds: ids, page: 0, selectedFlowId: null}),
+  toggleOrg: id => {
     const current = get().selectedOrgIds
     // Going from "all" (null) to a curated set: start from just-this-one.
     if (current === null) {
@@ -63,10 +63,10 @@ export const useLibraryBrowseStore = create<LibraryBrowseState>((set, get) => ({
     // Empty set is a degenerate state (nothing visible). Snap back to "all".
     set({selectedOrgIds: next.size === 0 ? null : next, page: 0, selectedFlowId: null})
   },
-  setSort: (s) => set({sort: s, page: 0}),
-  setQuery: (q) => set({query: q, page: 0, selectedFlowId: null}),
-  setPage: (p) => set({page: Math.max(0, p)}),
-  setSelectedFlow: (id) => set({selectedFlowId: id}),
+  setSort: s => set({sort: s, page: 0}),
+  setQuery: q => set({query: q, page: 0, selectedFlowId: null}),
+  setPage: p => set({page: Math.max(0, p)}),
+  setSelectedFlow: id => set({selectedFlowId: id}),
   reset: () => set(DEFAULTS),
 }))
 

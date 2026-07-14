@@ -22,7 +22,8 @@ export function KPIStripCard({
   className?: string
 }) {
   const colors = useChartColors()
-  const totalFindings = (findings.bySeverity.error ?? 0) + (findings.bySeverity.warning ?? 0) + (findings.bySeverity.info ?? 0)
+  const totalFindings =
+    (findings.bySeverity.error ?? 0) + (findings.bySeverity.warning ?? 0) + (findings.bySeverity.info ?? 0)
   const totalCost = costByProvider.reduce((s, p) => s + p.cost, 0)
   const score = overview.avgHealthScore
   const scoreColor = overview.healthAvailable ? healthColor(score, colors) : colors.textTertiary
@@ -55,11 +56,20 @@ export function KPIStripCard({
   }
 
   return (
-    <div className={clsx('grid gap-3', className, costByProvider.length > 0 ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3')}>
-      {kpis.map((kpi) => (
+    <div
+      className={clsx(
+        'grid gap-3',
+        className,
+        costByProvider.length > 0 ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3',
+      )}
+    >
+      {kpis.map(kpi => (
         <div key={kpi.label} className="bg-surface-2 border border-border-subtle rounded-xl p-3 flex flex-col gap-0.5">
           <span className="text-2xs uppercase tracking-wider text-text-tertiary">{kpi.label}</span>
-          <span className="text-2xl font-black font-mono tabular-nums" style={kpi.accent ? {color: kpi.accent} : undefined}>
+          <span
+            className="text-2xl font-black font-mono tabular-nums"
+            style={kpi.accent ? {color: kpi.accent} : undefined}
+          >
             {kpi.value}
           </span>
           {kpi.sub && <span className="text-2xs text-text-tertiary tabular-nums">{kpi.sub}</span>}

@@ -99,3 +99,7 @@ func isAssignedAnywhere(vname string, ctx *RuleContext) bool {
 	// same union this function previously derived by scanning every block.
 	return len(ctx.WritersByVar[vname]) > 0
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&UninitializedVariableRule{}) }

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -31,8 +30,7 @@ func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, 
 func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxChatMessageBodyBytes)
 	var req models.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -46,6 +44,11 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	// The paid LLM streaming operation is the one chat action without an audit
+	// trail — every other sensitive action (analyze, share, triage, role
+	// change) is audited. Record it on accept so cost-amplification / abuse has
+	// a non-repudiation record (no-op in local mode where backend is nil).
+	logAudit(r.Context(), h.common.Backend, r, h.common.TrustedProxies, AuditActionChatStream, "flow", req.FlowID, map[string]string{"streamId": id})
 	render.JSON(w, id)
 }
 
@@ -53,8 +56,7 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if !h.ownsStream(w, r, req.ID) {
@@ -82,8 +84,7 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if !h.ownsStream(w, r, req.ID) {
@@ -98,8 +99,7 @@ func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request)
 		ID   string `json:"id"`
 		From int    `json:"from,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if !h.ownsStream(w, r, req.ID) {
@@ -124,7 +124,10 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	owner := h.chatSvc.OwnerOf(r.Context(), streamID)
 	caller := h.common.CallerID(r)
 	if owner == "" || owner != caller {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		// Return the standard JSON error envelope (every other authz failure in
+		// the API does) so frontend handlers parsing {code,message,requestId}
+		// don't choke on a plain-text "Forbidden" body.
+		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return false
 	}
 	return true
@@ -135,8 +138,7 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 		FlowID   string `json:"flowId"`
 		Provider string `json:"provider"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -163,8 +165,7 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 		Provider string               `json:"provider"`
 		Messages []models.ChatMessage `json:"messages"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -185,8 +186,7 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 		FlowID   string `json:"flowId"`
 		Provider string `json:"provider"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -212,8 +212,7 @@ func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Re
 		Provider string `json:"provider"`
 		Path     string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -240,8 +239,7 @@ func (h *ChatHandler) handleGetDemoRemaining(w http.ResponseWriter, r *http.Requ
 
 func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Request) {
 	var req models.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -263,8 +261,7 @@ func (h *ChatHandler) handleGetSuggestedPrompts(w http.ResponseWriter, r *http.R
 		HasBlock    bool `json:"hasBlock"`
 		HasFindings bool `json:"hasFindings"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	prompts, err := h.chatSvc.GetSuggestedPrompts(req.HasBlock, req.HasFindings)

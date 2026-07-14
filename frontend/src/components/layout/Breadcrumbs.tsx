@@ -4,65 +4,67 @@ import {useFlowStore} from '@/stores/flowStore'
 import {findBlockPath} from '@/lib/tree'
 
 export default function Breadcrumbs() {
-    const document = useFlowStore(s => s.document)
-    const selectedBlockId = useFlowStore(s => s.selectedBlockId)
-    const selectedSubflowId = useFlowStore(s => s.selectedSubflowId)
-    const selectBlock = useFlowStore(s => s.selectBlock)
-    const selectSubflow = useFlowStore(s => s.selectSubflow)
+  const document = useFlowStore(s => s.document)
+  const selectedBlockId = useFlowStore(s => s.selectedBlockId)
+  const selectedSubflowId = useFlowStore(s => s.selectedSubflowId)
+  const selectBlock = useFlowStore(s => s.selectBlock)
+  const selectSubflow = useFlowStore(s => s.selectSubflow)
 
-    const path = useMemo(() => {
-        if (!document || !selectedSubflowId) return []
-        
-        const subflow = document.subflows.find(s => s.id === selectedSubflowId)
-        if (!subflow) return []
+  const path = useMemo(() => {
+    if (!document || !selectedSubflowId) return []
 
-        const crumbs: {id: string, name: string, type: 'subflow' | 'block'}[] = [
-            {id: subflow.id, name: subflow.name, type: 'subflow'}
-        ]
+    const subflow = document.subflows.find(s => s.id === selectedSubflowId)
+    if (!subflow) return []
 
-        if (selectedBlockId) {
-            const blockPath = findBlockPath(subflow.blocks, selectedBlockId)
-            if (blockPath) {
-                crumbs.push(...blockPath.map(b => ({
-                    id: b.id,
-                    name: b.name,
-                    type: 'block' as const
-                })))
-            }
-        }
+    const crumbs: {id: string; name: string; type: 'subflow' | 'block'}[] = [
+      {id: subflow.id, name: subflow.name, type: 'subflow'},
+    ]
 
-        return crumbs
-    }, [document, selectedSubflowId, selectedBlockId])
+    if (selectedBlockId) {
+      const blockPath = findBlockPath(subflow.blocks, selectedBlockId)
+      if (blockPath) {
+        crumbs.push(
+          ...blockPath.map(b => ({
+            id: b.id,
+            name: b.name,
+            type: 'block' as const,
+          })),
+        )
+      }
+    }
 
-    if (!document || path.length === 0) return null
+    return crumbs
+  }, [document, selectedSubflowId, selectedBlockId])
 
-    return (
-        <div className="flex items-center gap-1.5 px-3 h-8 text-[11px] text-text-tertiary bg-surface-1 border-b border-border-subtle overflow-hidden">
-            <button 
-                className="flex items-center gap-1 hover:text-text-primary transition-colors flex-shrink-0"
-                onClick={() => document.subflows[0] && selectSubflow(document.subflows[0].id)}
-            >
-                <Home size={12} />
-                <span className="truncate max-w-[100px]">{document.name}</span>
-            </button>
-            
-            {path.map((crumb, i) => (
-                <div key={crumb.id} className="flex items-center gap-1.5 min-w-0">
-                    <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
-                    <button
-                        className={`hover:text-text-primary transition-colors truncate ${
-                            i === path.length - 1 ? 'text-text-secondary font-medium' : ''
-                        }`}
-                        onClick={() => {
-                            if (crumb.type === 'subflow') selectSubflow(crumb.id)
-                            else selectBlock(crumb.id)
-                        }}
-                        title={crumb.name}
-                    >
-                        {crumb.name}
-                    </button>
-                </div>
-            ))}
+  if (!document || path.length === 0) return null
+
+  return (
+    <div className="flex items-center gap-1.5 px-3 h-8 text-[11px] text-text-tertiary bg-surface-1 border-b border-border-subtle overflow-hidden">
+      <button
+        className="flex items-center gap-1 hover:text-text-primary transition-colors flex-shrink-0"
+        onClick={() => document.subflows[0] && selectSubflow(document.subflows[0].id)}
+      >
+        <Home size={12} />
+        <span className="truncate max-w-[100px]">{document.name}</span>
+      </button>
+
+      {path.map((crumb, i) => (
+        <div key={crumb.id} className="flex items-center gap-1.5 min-w-0">
+          <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
+          <button
+            className={`hover:text-text-primary transition-colors truncate ${
+              i === path.length - 1 ? 'text-text-secondary font-medium' : ''
+            }`}
+            onClick={() => {
+              if (crumb.type === 'subflow') selectSubflow(crumb.id)
+              else selectBlock(crumb.id)
+            }}
+            title={crumb.name}
+          >
+            {crumb.name}
+          </button>
         </div>
-    )
+      ))}
+    </div>
+  )
 }

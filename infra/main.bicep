@@ -38,9 +38,13 @@ param cpu string = '0.5'
 @description('Memory per replica.')
 param memory string = '1.0Gi'
 
-@description('Auth secret (JWT signing + AES keystore key). Becomes a Container App secret; pass at deploy time, never commit.')
+@description('Auth secret (JWT signing key). Becomes a Container App secret; pass at deploy time, never commit.')
 @secure()
 param authSecret string
+
+@description('Dedicated at-rest encryption key for the provider-key keystore (AES-256-GCM). Separate from the JWT secret so rotating either doesn'\''t affect the other. Defaults to authSecret for backward compatibility.')
+@secure()
+param encryptionKey string = ''
 
 @description('Postgres connection string (sslmode=verify-full recommended). Becomes a Container App secret.')
 @secure()
@@ -132,6 +136,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
       }
       secrets: [
         { name: 'auth-secret', value: authSecret }
+        { name: 'encryption-key', value: !empty(encryptionKey) ? encryptionKey : authSecret }
         { name: 'database-url', value: databaseUrl }
       ]
       registries: []
@@ -168,6 +173,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             // Empty value = unused (the app treats an empty PAD_KEYVAULT_URL as unset).
             { name: 'PAD_KEYVAULT_URL', value: keyVaultUrl }
             { name: 'PAD_AUTH_SECRET', secretRef: 'auth-secret' }
+            { name: 'PAD_ENCRYPTION_KEY', secretRef: 'encryption-key' }
             { name: 'PAD_DATABASE_URL', secretRef: 'database-url' }
           ]
           volumeMounts: [

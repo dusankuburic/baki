@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
@@ -30,8 +29,7 @@ func (h *ProviderHandler) handleTestProviderConnection(w http.ResponseWriter, r 
 	var req struct {
 		Provider string `json:"provider"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	res, err := h.providerSvc.TestProviderConnection(r.Context(), h.security.KeyScope(r), req.Provider)
@@ -55,8 +53,7 @@ func (h *ProviderHandler) handlePollGitHubAuth(w http.ResponseWriter, r *http.Re
 	var req struct {
 		DeviceCode string `json:"deviceCode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	res, err := h.providerSvc.PollGitHubAuth(r.Context(), h.security.KeyScope(r), req.DeviceCode)
@@ -97,8 +94,7 @@ func (h *ProviderHandler) handlePollCopilotAuth(w http.ResponseWriter, r *http.R
 	var req struct {
 		DeviceCode string `json:"deviceCode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	res, err := h.providerSvc.PollCopilotAuth(r.Context(), h.security.KeyScope(r), req.DeviceCode)

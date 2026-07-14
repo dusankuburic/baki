@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"pad-core/analyzer"
@@ -20,8 +19,7 @@ func (h *AnalysisHandler) handleEvaluatePolicy(w http.ResponseWriter, r *http.Re
 		FlowID string        `json:"flowId"`
 		Policy models.Policy `json:"policy"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

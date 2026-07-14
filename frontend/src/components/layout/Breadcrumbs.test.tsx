@@ -5,7 +5,18 @@ import {useFlowStore} from '@/stores/flowStore'
 import type {FlowDocument, Block} from '@/types'
 
 function makeBlock(id: string, name: string, children: Block[] = []): Block {
-  return {id, name, type: 'ACTION', rawType: 'Test.Action', properties: {}, variables: [], children, subflowId: 'sf1', indent: 0, lineNumber: 0}
+  return {
+    id,
+    name,
+    type: 'ACTION',
+    rawType: 'Test.Action',
+    properties: {},
+    variables: [],
+    children,
+    subflowId: 'sf1',
+    indent: 0,
+    lineNumber: 0,
+  }
 }
 
 function makeDoc(): FlowDocument {
@@ -16,11 +27,7 @@ function makeDoc(): FlowDocument {
       {
         id: 'sf1',
         name: 'Main',
-        blocks: [
-          makeBlock('b1', 'Parent Action', [
-            makeBlock('b2', 'Child Action'),
-          ]),
-        ],
+        blocks: [makeBlock('b1', 'Parent Action', [makeBlock('b2', 'Child Action')])],
       },
     ],
   } as FlowDocument

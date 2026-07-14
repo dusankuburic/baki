@@ -67,3 +67,7 @@ func isFileOperation(rawType string) bool {
 	}
 	return false
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&FileOpNoErrorHandlerRule{}) }

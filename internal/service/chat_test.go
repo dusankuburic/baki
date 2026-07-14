@@ -491,43 +491,9 @@ func TestNormalizeChatParams(t *testing.T) {
 	}
 }
 
-// loopTurn scripts one streamed turn: optional assistant text streamed first,
-// then a terminal chunk carrying any tool calls and token usage.
-type loopTurn struct {
-	text      string
-	toolCalls []ai.ToolCall
-	tokensIn  int
-	tokensOut int
-}
-
-// loopStub scripts a sequence of streamed turns; only Stream is exercised by
-// runToolLoop (other Provider methods are never called).
-type loopStub struct {
-	ai.Provider
-	calls int
-	turns []loopTurn
-	err   error
-}
-
-func (s *loopStub) Stream(_ context.Context, _ ai.Request, onChunk func(ai.Chunk)) error {
-	if s.err != nil {
-		return s.err
-	}
-	i := s.calls
-	s.calls++
-	var turn loopTurn
-	if i < len(s.turns) {
-		turn = s.turns[i]
-	} else {
-		// Default: keep requesting a tool (drives the iteration-cap path).
-		turn = loopTurn{toolCalls: []ai.ToolCall{{ID: "t", Name: "search_flow", Input: []byte(`{"query":"x"}`)}}}
-	}
-	if turn.text != "" {
-		onChunk(ai.Chunk{Text: turn.text})
-	}
-	onChunk(ai.Chunk{Done: true, ToolCalls: turn.toolCalls, TokensIn: turn.tokensIn, TokensOut: turn.tokensOut})
-	return nil
-}
+// Tool-loop tests use the shared testutil.FakeProvider (scriptable streamed
+// turns + context-window guard). A turn with no scripted entry and a Fallback
+// set drives the iteration-cap path.
 
 func toolLoopDoc() *models.FlowDocument {
 	doc := &models.FlowDocument{
@@ -598,9 +564,9 @@ func TestEnforceBudget_AllowsUnderBudget(t *testing.T) {
 }
 
 func TestRunToolLoop_ExecutesToolThenFinal(t *testing.T) {
-	stub := &loopStub{turns: []loopTurn{
-		{toolCalls: []ai.ToolCall{{ID: "t1", Name: "search_flow", Input: []byte(`{"query":"xav"}`)}}, tokensIn: 10, tokensOut: 5},
-		{text: "Final answer", tokensIn: 8, tokensOut: 3},
+	stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{
+		{ToolCalls: []ai.ToolCall{{ID: "t1", Name: "search_flow", Input: []byte(`{"query":"xav"}`)}}, TokensIn: 10, TokensOut: 5},
+		{Text: "Final answer", TokensIn: 8, TokensOut: 3},
 	}}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
@@ -609,8 +575,8 @@ func TestRunToolLoop_ExecutesToolThenFinal(t *testing.T) {
 	svc.runToolLoop(context.Background(), stub, ai.Request{Messages: []ai.Message{{Role: "user", Content: "hi"}}},
 		toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
 
-	if stub.calls != 2 {
-		t.Fatalf("expected 2 Stream calls, got %d", stub.calls)
+	if stub.Calls() != 2 {
+		t.Fatalf("expected 2 Stream calls, got %d", stub.Calls())
 	}
 	if got := strings.Join(*evs, ","); got != "tool,chunk,done" {
 		t.Errorf("expected tool,chunk,done events, got %q", got)
@@ -624,15 +590,15 @@ func TestRunToolLoop_ExecutesToolThenFinal(t *testing.T) {
 }
 
 func TestRunToolLoop_NoToolsFinalImmediately(t *testing.T) {
-	stub := &loopStub{turns: []loopTurn{{text: "Direct", tokensIn: 1, tokensOut: 2}}}
+	stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "Direct", TokensIn: 1, TokensOut: 2}}}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
 
 	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
 
-	if stub.calls != 1 {
-		t.Fatalf("expected 1 Stream call, got %d", stub.calls)
+	if stub.Calls() != 1 {
+		t.Fatalf("expected 1 Stream call, got %d", stub.Calls())
 	}
 	// Two chunk events: "Direct" ends in "t" — a possible prefix of the
 	// "token" secret anchor — so the output scrubber holds that byte until the
@@ -649,7 +615,7 @@ func TestRunToolLoop_NoToolsFinalImmediately(t *testing.T) {
 // secret — even one split across stream chunks — must reach the client (and
 // the resume buffer) masked.
 func TestRunToolLoop_MasksSecretSplitAcrossChunks(t *testing.T) {
-	stub := &splitSecretStub{parts: []string{"the flow uses password=sup", "ersecret123 in Database.Connect"}}
+	stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Parts: []string{"the flow uses password=sup", "ersecret123 in Database.Connect"}}}}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
 
@@ -672,23 +638,8 @@ func TestRunToolLoop_MasksSecretSplitAcrossChunks(t *testing.T) {
 	}
 }
 
-// splitSecretStub streams one turn as two text chunks (splitting mid-secret)
-// followed by a terminal Done.
-type splitSecretStub struct {
-	ai.Provider
-	parts []string
-}
-
-func (s *splitSecretStub) Stream(_ context.Context, _ ai.Request, onChunk func(ai.Chunk)) error {
-	for _, p := range s.parts {
-		onChunk(ai.Chunk{Text: p})
-	}
-	onChunk(ai.Chunk{Done: true})
-	return nil
-}
-
 func TestRunToolLoop_ChatErrorEmitsError(t *testing.T) {
-	stub := &loopStub{err: fmt.Errorf("boom")}
+	stub := &testutil.FakeProvider{Err: fmt.Errorf("boom")}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
@@ -704,15 +655,15 @@ func TestRunToolLoop_ChatErrorEmitsError(t *testing.T) {
 }
 
 func TestRunToolLoop_IterationCap(t *testing.T) {
-	stub := &loopStub{} // always returns a tool call → never terminates
+	stub := &testutil.FakeProvider{Fallback: &testutil.FakeTurn{ToolCalls: []ai.ToolCall{{ID: "t", Name: "search_flow", Input: []byte(`{"query":"x"}`)}}}} // never terminates
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
 
 	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
 
-	if stub.calls != maxToolIterations {
-		t.Errorf("expected %d Stream calls at cap, got %d", maxToolIterations, stub.calls)
+	if stub.Calls() != maxToolIterations {
+		t.Errorf("expected %d Stream calls at cap, got %d", maxToolIterations, stub.Calls())
 	}
 	last := (*evs)[len(*evs)-1]
 	if last != "error" {
@@ -721,7 +672,7 @@ func TestRunToolLoop_IterationCap(t *testing.T) {
 }
 
 func TestRunToolLoop_NotStartedEmitsNothing(t *testing.T) {
-	stub := &loopStub{turns: []loopTurn{{text: "x"}}}
+	stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "x"}}}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()

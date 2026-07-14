@@ -21,31 +21,33 @@ interface DetailData {
 export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: Props) {
   const orgs = useOrgStore(s => s.organisations)
 
-  const {data, isLoading: loading, error, refetch: load} = useAsync<DetailData | null>(
-    () => {
-      if (!flowId) return Promise.resolve(null)
-      return Promise.all([libraryApi.get(flowId), libraryApi.versions(flowId, 10).catch(() => [])])
-        .then(([flow, versions]) => ({flow, versions}))
-        .catch(e => {
-          logger.warn('Library: detail load failed', e)
-          throw e
-        })
-    },
-    [flowId],
-  )
+  const {
+    data,
+    isLoading: loading,
+    error,
+    refetch: load,
+  } = useAsync<DetailData | null>(() => {
+    if (!flowId) return Promise.resolve(null)
+    return Promise.all([libraryApi.get(flowId), libraryApi.versions(flowId, 10).catch(() => [])])
+      .then(([flow, versions]) => ({flow, versions}))
+      .catch(e => {
+        logger.warn('Library: detail load failed', e)
+        throw e
+      })
+  }, [flowId])
   const flow = data?.flow ?? null
   const versions = data?.versions ?? []
 
   if (!flowId) {
-    return (
-      <div className="p-6 text-center text-sm text-text-tertiary">
-        Select a flow to see its details.
-      </div>
-    )
+    return <div className="p-6 text-center text-sm text-text-tertiary">Select a flow to see its details.</div>
   }
 
   if (loading && !flow) {
-    return <div className="flex justify-center p-8"><Spinner /></div>
+    return (
+      <div className="flex justify-center p-8">
+        <Spinner />
+      </div>
+    )
   }
 
   if (error) {
@@ -63,9 +65,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
       <header className="flex items-start justify-between gap-2 px-4 pt-4 pb-2 border-b border-border-subtle flex-shrink-0">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text-primary truncate">{flow.name}</h2>
-          {flow.description && (
-            <p className="mt-1 text-xs text-text-muted line-clamp-3">{flow.description}</p>
-          )}
+          {flow.description && <p className="mt-1 text-xs text-text-muted line-clamp-3">{flow.description}</p>}
         </div>
         <button
           type="button"
@@ -81,7 +81,11 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
         <Section title="Overview">
           <Row icon={User} label="Owner" value={flow.ownerDisplayName ?? flow.ownerId} />
           <Row icon={Users} label="Organisation" value={orgName} />
-          <Row icon={Calendar} label="Last updated" value={<span title={absoluteTime(flow.updatedAt)}>{relativeTime(flow.updatedAt)}</span>} />
+          <Row
+            icon={Calendar}
+            label="Last updated"
+            value={<span title={absoluteTime(flow.updatedAt)}>{relativeTime(flow.updatedAt)}</span>}
+          />
           <Row icon={FileCode} label="Blocks / subflows" value={`${flow.blockCount} / ${flow.subflowCount}`} />
           <Row icon={GitBranch} label="Version" value={`#${flow.version}`} />
         </Section>
@@ -92,11 +96,15 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
               icon={Activity}
               label="Health score"
               value={
-                <span className={
-                  flow.healthScore >= 80 ? 'text-semantic-success' :
-                  flow.healthScore >= 60 ? 'text-amber-500' :
-                  'text-semantic-error'
-                }>
+                <span
+                  className={
+                    flow.healthScore >= 80
+                      ? 'text-semantic-success'
+                      : flow.healthScore >= 60
+                        ? 'text-amber-500'
+                        : 'text-semantic-error'
+                  }
+                >
                   {flow.healthScore}%
                 </span>
               }
@@ -115,7 +123,9 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
                 <li key={v.id} className="text-xs text-text-secondary">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="font-medium text-text-primary">v{v.version}</span>
-                    <span className="text-text-tertiary" title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
+                    <span className="text-text-tertiary" title={absoluteTime(v.createdAt)}>
+                      {relativeTime(v.createdAt)}
+                    </span>
                   </div>
                   {v.comment && <div className="text-text-muted truncate">{v.comment}</div>}
                 </li>
@@ -142,19 +152,13 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
 function Section({title, children}: {title: string; children: React.ReactNode}) {
   return (
     <div>
-      <div className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-2">
-        {title}
-      </div>
+      <div className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-2">{title}</div>
       <div className="space-y-1.5">{children}</div>
     </div>
   )
 }
 
-function Row({icon: Icon, label, value}: {
-  icon: typeof Activity
-  label: string
-  value: React.ReactNode
-}) {
+function Row({icon: Icon, label, value}: {icon: typeof Activity; label: string; value: React.ReactNode}) {
   return (
     <div className="flex items-baseline gap-2 text-xs">
       <Icon size={11} className="text-text-tertiary translate-y-0.5 flex-shrink-0" />

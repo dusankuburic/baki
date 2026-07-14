@@ -104,30 +104,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 4,
-      "message": "unclosed block: Call AnotherSubflow",
-      "severity": "error",
-      "snippet": "CALL"
-    },
-    {
-      "line": 7,
-      "message": "unclosed block: Show Message Box",
-      "severity": "error",
-      "snippet": "Display.ShowMessageBox"
-    },
-    {
-      "line": 10,
-      "message": "unclosed block: Show Message Box",
-      "severity": "error",
-      "snippet": "Display.ShowMessageBox"
-    }
-  ],
   "metadata": {
     "blockCount": 5,
     "subflowCount": 3,
     "maxDepth": 1,
-    "rawLineCount": 12
+    "rawLineCount": 11
   }
 }

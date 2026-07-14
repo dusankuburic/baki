@@ -41,13 +41,16 @@ export default function ModelSelector({models, selected, onSelect}: Props) {
               key={m.id}
               className={clsx(
                 'flex flex-col gap-0.5 px-3 py-2 text-left w-full hover:bg-surface-2 transition-colors',
-                m.id === selected && 'text-brand-400'
+                m.id === selected && 'text-brand-400',
               )}
-              onClick={() => { onSelect(m.id); setOpen(false) }}
+              onClick={() => {
+                onSelect(m.id)
+                setOpen(false)
+              }}
             >
               <span className="text-xs font-medium">{m.displayName}</span>
               <span className="text-2xs text-text-tertiary">
-                {(m.contextLimit / 1000)}k ctx
+                {m.contextLimit / 1000}k ctx
                 {m.inputCostPerM > 0 && ` \u00b7 $${m.inputCostPerM}/$${m.outputCostPerM} per 1M`}
               </span>
             </button>

@@ -48,11 +48,16 @@ func FlowHash(doc *models.FlowDocument) string {
 		io.WriteString(h, sf.Name)
 		h.Write([]byte{0})
 		walkSubflowBlocks(&sf, func(b *models.Block) {
-			io.WriteString(h, b.ID)
-			h.Write([]byte{0})
+			// NOTE: b.ID is intentionally excluded — the parser mints a fresh UUID
+			// per block on every parse, so including it would make FlowHash
+			// differ across re-parses of byte-identical source and defeat the
+			// analysis cache. Structural identity comes from RawType/Name/Indent
+			// plus properties/variables and the tree walk order.
 			io.WriteString(h, b.RawType)
 			h.Write([]byte{0})
 			io.WriteString(h, b.Name)
+			h.Write([]byte{0})
+			fmt.Fprintf(h, "%d", b.Indent)
 			h.Write([]byte{0})
 			if b.Properties != nil {
 				keys := make([]string, 0, len(b.Properties))

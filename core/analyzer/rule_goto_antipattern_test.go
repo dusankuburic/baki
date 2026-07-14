@@ -102,3 +102,26 @@ func TestGotoAntipattern_AcrossSiblingScopes_IsScopeBreaking(t *testing.T) {
 		t.Fatalf("expected 1 finding for a GOTO crossing sibling loop/condition scopes, got %d", len(f))
 	}
 }
+
+// Regression: the parser produces GOTO blocks with no "_target" property — the
+// target lives in the "label" token and the block Name (the tokenizer strips
+// the "GOTO " verb). The rule must resolve the target from those, otherwise it
+// would silently never fire on any real parsed flow.
+func TestGotoAntipattern_ParserProducedBlock_ResolvesTargetFromToken(t *testing.T) {
+	loop := makeBlock("loop1", "Loop", models.BlockTypeLoop, "Loop.ForEach", 0)
+	// Mirrors the parser output for "GOTO End": Name is the bare label, no
+	// _target/labelName/target property, target carried by a "label" token.
+	g := makeBlock("g1", "End", models.BlockTypeAction, "GOTO", 4)
+	g.Tokens = []models.BlockToken{
+		{Type: "text", Value: "GOTO "},
+		{Type: "label", Value: "End", Target: "End"},
+	}
+	loop.Children = []models.Block{*g}
+	label := makeBlock("end", "End", models.BlockTypeAction, "LABEL", 0)
+
+	flow := makeFlowWithSubflows(makeSubflow("sf1", "Main", loop, label))
+
+	if f := gotoFindings(t, flow); len(f) != 1 {
+		t.Fatalf("expected the parser-style GOTO to resolve its target and flag, got %d findings", len(f))
+	}
+}

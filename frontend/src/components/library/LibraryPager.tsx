@@ -12,7 +12,9 @@ export default function LibraryPager({page, totalPages, total, onChange}: Props)
   const canNext = page + 1 < totalPages
   return (
     <div className="flex items-center justify-between text-xs text-text-tertiary">
-      <span>{total} flow{total === 1 ? '' : 's'} total</span>
+      <span>
+        {total} flow{total === 1 ? '' : 's'} total
+      </span>
       <div className="flex items-center gap-2">
         <button
           type="button"

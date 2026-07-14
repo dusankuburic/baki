@@ -24,11 +24,13 @@ vi.mock('./useChartColors', () => ({
 }))
 
 // Mock recharts ResponsiveContainer to avoid jsdom sizing issues
-vi.mock('recharts', async (importOriginal) => {
+vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   return {
     ...actual,
-    ResponsiveContainer: ({children}: {children: React.ReactNode}) => <div style={{width: 400, height: 200}}>{children}</div>,
+    ResponsiveContainer: ({children}: {children: React.ReactNode}) => (
+      <div style={{width: 400, height: 200}}>{children}</div>
+    ),
   }
 })
 
@@ -66,7 +68,13 @@ describe('KPIStripCard', () => {
   })
 
   it('shows dash when health not available', () => {
-    render(<KPIStripCard overview={mockOverview({healthAvailable: false, avgHealthScore: 0})} findings={mockFindings()} costByProvider={[]} />)
+    render(
+      <KPIStripCard
+        overview={mockOverview({healthAvailable: false, avgHealthScore: 0})}
+        findings={mockFindings()}
+        costByProvider={[]}
+      />,
+    )
     expect(screen.getByText('not analyzed')).toBeTruthy()
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1)
   })
@@ -78,7 +86,16 @@ describe('KPIStripCard', () => {
   })
 
   it('shows AI spend when providers have cost', () => {
-    render(<KPIStripCard overview={mockOverview()} findings={mockFindings()} costByProvider={[{provider: 'claude', cost: 1.5}, {provider: 'openai', cost: 0.84}]} />)
+    render(
+      <KPIStripCard
+        overview={mockOverview()}
+        findings={mockFindings()}
+        costByProvider={[
+          {provider: 'claude', cost: 1.5},
+          {provider: 'openai', cost: 0.84},
+        ]}
+      />,
+    )
     expect(screen.getByText('$2.34')).toBeTruthy()
     expect(screen.getByText('2 providers')).toBeTruthy()
   })
@@ -180,18 +197,26 @@ describe('RuleFrequencyCard', () => {
   })
 
   it('renders with server-provided topSeverity', () => {
-    render(<RuleFrequencyCard data={[
-      {rule: 'hardcoded-credential', count: 5, topSeverity: 'error'},
-      {rule: 'missing-timeout', count: 2, topSeverity: 'warning'},
-    ]} />)
+    render(
+      <RuleFrequencyCard
+        data={[
+          {rule: 'hardcoded-credential', count: 5, topSeverity: 'error'},
+          {rule: 'missing-timeout', count: 2, topSeverity: 'warning'},
+        ]}
+      />,
+    )
     expect(screen.getByRole('img', {name: /most frequent finding rules/i})).toBeTruthy()
   })
 
   it('renders with the neutral info tint when topSeverity is absent', () => {
-    render(<RuleFrequencyCard data={[
-      {rule: 'missing-timeout', count: 4},
-      {rule: 'some-unknown-rule', count: 1},
-    ]} />)
+    render(
+      <RuleFrequencyCard
+        data={[
+          {rule: 'missing-timeout', count: 4},
+          {rule: 'some-unknown-rule', count: 1},
+        ]}
+      />,
+    )
     expect(screen.getByRole('img', {name: /most frequent finding rules/i})).toBeTruthy()
   })
 })
@@ -216,10 +241,14 @@ describe('HealthDistributionCard', () => {
   })
 
   it('renders bucket labels when data present', () => {
-    render(<HealthDistributionCard data={[
-      {label: '0-20', lo: 0, hi: 20, count: 1},
-      {label: '80-100', lo: 80, hi: 100, count: 3},
-    ]} />)
+    render(
+      <HealthDistributionCard
+        data={[
+          {label: '0-20', lo: 0, hi: 20, count: 1},
+          {label: '80-100', lo: 80, hi: 100, count: 3},
+        ]}
+      />,
+    )
     // Data present ⇒ title renders and the placeholder is absent.
     expect(screen.getByText('Health Distribution')).toBeTruthy()
     expect(screen.queryByText(/distributed/)).toBeNull()
@@ -250,13 +279,17 @@ describe('WorkflowFunnelCard', () => {
   })
 
   it('renders status distribution, MTTR, and stale count when available', () => {
-    render(<WorkflowFunnelCard data={{
-      available: true,
-      funnel: {open: 10, acknowledged: 3, in_progress: 2, resolved: 8, suppressed: 1},
-      mttrHours: 16.5,
-      resolvedCount: 8,
-      staleCount: 4,
-    }} />)
+    render(
+      <WorkflowFunnelCard
+        data={{
+          available: true,
+          funnel: {open: 10, acknowledged: 3, in_progress: 2, resolved: 8, suppressed: 1},
+          mttrHours: 16.5,
+          resolvedCount: 8,
+          staleCount: 4,
+        }}
+      />,
+    )
     // Status labels render.
     expect(screen.getByText('Open')).toBeTruthy()
     expect(screen.getByText('Resolved')).toBeTruthy()
@@ -269,13 +302,17 @@ describe('WorkflowFunnelCard', () => {
   })
 
   it('shows an em-dash MTTR when nothing has been resolved', () => {
-    render(<WorkflowFunnelCard data={{
-      available: true,
-      funnel: {open: 5},
-      mttrHours: 0,
-      resolvedCount: 0,
-      staleCount: 0,
-    }} />)
+    render(
+      <WorkflowFunnelCard
+        data={{
+          available: true,
+          funnel: {open: 5},
+          mttrHours: 0,
+          resolvedCount: 0,
+          staleCount: 0,
+        }}
+      />,
+    )
     expect(screen.getByText('—')).toBeTruthy()
   })
 })

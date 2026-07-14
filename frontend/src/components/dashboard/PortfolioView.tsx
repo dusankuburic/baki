@@ -26,13 +26,25 @@ function Stat({label, value, accent}: {label: string; value: string | number; ac
  * (cloud mode). Read-only for now.
  */
 export default function PortfolioView() {
-  const {data, isLoading: loading, error} = useAsync<Portfolio>(
-    () => libraryApi.portfolio().catch(e => { logger.warn('Failed to load portfolio', e); throw e }),
+  const {
+    data,
+    isLoading: loading,
+    error,
+  } = useAsync<Portfolio>(
+    () =>
+      libraryApi.portfolio().catch(e => {
+        logger.warn('Failed to load portfolio', e)
+        throw e
+      }),
     [],
   )
 
   if (loading) {
-    return <div className="h-full flex items-center justify-center"><Spinner /></div>
+    return (
+      <div className="h-full flex items-center justify-center">
+        <Spinner />
+      </div>
+    )
   }
 
   if (error) {
@@ -69,15 +81,17 @@ export default function PortfolioView() {
             <LayoutGrid size={20} className="text-brand-500" />
             Flow Portfolio
           </h1>
-          <p className="text-sm text-text-secondary mt-1">
-            Every flow you can access, ranked worst-health-first.
-          </p>
+          <p className="text-sm text-text-secondary mt-1">Every flow you can access, ranked worst-health-first.</p>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Stat label="Flows" value={data.totalFlows} />
           <Stat label="Analyzed" value={`${data.analyzedFlows}/${data.totalFlows}`} />
-          <Stat label="Avg health" value={data.analyzedFlows > 0 ? `${data.avgHealth}` : '—'} accent={data.analyzedFlows > 0 ? healthColor(data.avgHealth) : undefined} />
+          <Stat
+            label="Avg health"
+            value={data.analyzedFlows > 0 ? `${data.avgHealth}` : '—'}
+            accent={data.analyzedFlows > 0 ? healthColor(data.avgHealth) : undefined}
+          />
           <Stat label="Open errors" value={data.errors} accent={data.errors > 0 ? 'text-semantic-error' : undefined} />
         </div>
 
@@ -98,18 +112,26 @@ export default function PortfolioView() {
                 <tr key={e.flowId} className="border-b border-border-subtle last:border-0 hover:bg-surface-2/50">
                   <td className="px-4 py-2 text-text-tertiary tabular-nums">{i + 1}</td>
                   <td className="px-4 py-2 text-text-primary truncate max-w-[16rem]">{e.flowName || e.flowId}</td>
-                  <td className="px-4 py-2 text-text-tertiary truncate max-w-[12rem]">{e.ownerName || e.ownerId || '—'}</td>
-                  <td className={`px-4 py-2 text-right font-semibold tabular-nums ${e.analyzed ? healthColor(e.healthScore) : 'text-text-tertiary'}`}>
+                  <td className="px-4 py-2 text-text-tertiary truncate max-w-[12rem]">
+                    {e.ownerName || e.ownerId || '—'}
+                  </td>
+                  <td
+                    className={`px-4 py-2 text-right font-semibold tabular-nums ${e.analyzed ? healthColor(e.healthScore) : 'text-text-tertiary'}`}
+                  >
                     {e.analyzed ? e.healthScore : '—'}
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">
                     {e.analyzed ? (
                       <span className="inline-flex gap-2">
                         <span className={e.errors > 0 ? 'text-semantic-error' : 'text-text-tertiary'}>{e.errors}e</span>
-                        <span className={e.warnings > 0 ? 'text-semantic-warning' : 'text-text-tertiary'}>{e.warnings}w</span>
+                        <span className={e.warnings > 0 ? 'text-semantic-warning' : 'text-text-tertiary'}>
+                          {e.warnings}w
+                        </span>
                         <span className="text-text-tertiary">{e.info}i</span>
                       </span>
-                    ) : <span className="text-text-tertiary">not analyzed</span>}
+                    ) : (
+                      <span className="text-text-tertiary">not analyzed</span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-right text-text-tertiary tabular-nums">
                     {e.analyzedAt ? new Date(e.analyzedAt).toLocaleDateString() : '—'}

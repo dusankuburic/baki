@@ -38,24 +38,39 @@ export const AuditLogSection: React.FC<{
           <thead className="bg-surface-3">
             <tr>
               {['Time', 'User', 'Action', 'Resource', 'IP'].map(h => (
-                <th key={h} className="px-4 py-2 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider">{h}</th>
+                <th
+                  key={h}
+                  className="px-4 py-2 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider"
+                >
+                  {h}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-border-subtle">
             {events.map(ev => (
               <tr key={ev.id} className="bg-surface-2 hover:bg-surface-3 transition-colors">
-                <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">{new Date(ev.createdAt).toLocaleString()}</td>
+                <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">
+                  {new Date(ev.createdAt).toLocaleString()}
+                </td>
                 <td className="px-4 py-2 text-xs text-text-primary whitespace-nowrap">{ev.email || ev.userId}</td>
                 <td className="px-4 py-2 whitespace-nowrap">
-                  <span className={clsx(
-                    'text-2xs font-mono px-1.5 py-0.5 rounded',
-                    ev.action.startsWith('auth.') ? 'bg-blue-500/10 text-blue-400' :
-                    ev.action.startsWith('admin.') ? 'bg-red-500/10 text-red-400' :
-                    'bg-surface-3 text-text-secondary'
-                  )}>{ev.action}</span>
+                  <span
+                    className={clsx(
+                      'text-2xs font-mono px-1.5 py-0.5 rounded',
+                      ev.action.startsWith('auth.')
+                        ? 'bg-blue-500/10 text-blue-400'
+                        : ev.action.startsWith('admin.')
+                          ? 'bg-red-500/10 text-red-400'
+                          : 'bg-surface-3 text-text-secondary',
+                    )}
+                  >
+                    {ev.action}
+                  </span>
                 </td>
-                <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">{ev.resourceType ? `${ev.resourceType}/${ev.resourceId.slice(0, 8)}` : '—'}</td>
+                <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">
+                  {ev.resourceType ? `${ev.resourceType}/${ev.resourceId.slice(0, 8)}` : '—'}
+                </td>
                 <td className="px-4 py-2 text-xs text-text-tertiary font-mono whitespace-nowrap">{ev.ip || '—'}</td>
               </tr>
             ))}

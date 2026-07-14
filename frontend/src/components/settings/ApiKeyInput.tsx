@@ -21,10 +21,15 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
   const [hasKey, setHasKey] = useState<boolean | null>(null)
 
   const checkKey = useCallback(() => {
-    providersApi.hasApiKey(provider).then(setHasKey).catch(() => setHasKey(false))
+    providersApi
+      .hasApiKey(provider)
+      .then(setHasKey)
+      .catch(() => setHasKey(false))
   }, [provider])
 
-  useEffect(() => { checkKey() }, [checkKey])
+  useEffect(() => {
+    checkKey()
+  }, [checkKey])
 
   const handleSave = useCallback(async () => {
     if (!key.trim()) return
@@ -49,14 +54,16 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
       setHasKey(false)
       setTestResult(null)
       onConfigured?.()
-    } catch (e) { logger.warn('Delete API key failed:', e) }
+    } catch (e) {
+      logger.warn('Delete API key failed:', e)
+    }
   }, [provider, onConfigured])
 
   const handleTest = useCallback(async () => {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await providersApi.testProviderConnection(provider) as ProviderTestResult
+      const result = (await providersApi.testProviderConnection(provider)) as ProviderTestResult
       setTestResult(result?.ok ? 'valid' : 'invalid')
     } catch {
       setTestResult('invalid')
@@ -71,7 +78,9 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
       {hasKey ? (
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-secondary">API key configured (saved in keychain)</span>
-          <Button size="sm" variant="secondary" onClick={handleDelete}>Remove</Button>
+          <Button size="sm" variant="secondary" onClick={handleDelete}>
+            Remove
+          </Button>
           <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing}>
             {testing ? 'Testing...' : 'Test'}
           </Button>
@@ -83,7 +92,7 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
           <Input
             type={showKey ? 'text' : 'password'}
             value={key}
-            onChange={(e) => setKey((e.target as HTMLInputElement).value)}
+            onChange={e => setKey((e.target as HTMLInputElement).value)}
             placeholder="Enter API key..."
             className="flex-1"
           />

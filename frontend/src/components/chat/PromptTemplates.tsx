@@ -9,14 +9,61 @@ export interface PromptTemplate {
 }
 
 const builtInTemplates: PromptTemplate[] = [
-  {id: 't-explain-block', label: 'Explain block in detail', prompt: 'Explain what this block does step by step, including all properties and variables it uses.', category: 'explain'},
-  {id: 't-explain-flow', label: 'Explain entire flow', prompt: 'Explain what this entire flow does from start to finish. Describe the main purpose, key decision points, and the overall logic.', category: 'explain'},
-  {id: 't-find-bugs', label: 'Find bugs', prompt: 'Analyze this for potential bugs, race conditions, unhandled errors, and edge cases. List each issue with severity and a suggested fix.', category: 'debug'},
-  {id: 't-error-handling', label: 'Check error handling', prompt: 'Review the error handling in this flow. Are there actions that could fail without proper error handlers? List missing error handling and suggest improvements.', category: 'debug'},
-  {id: 't-performance', label: 'Performance review', prompt: 'Analyze this for performance issues. Look for unnecessary loops, redundant API calls, missing parallelism, and suggest optimizations.', category: 'analysis'},
-  {id: 't-security', label: 'Security audit', prompt: 'Perform a security audit. Check for hardcoded credentials, injection vulnerabilities, insecure data handling, and missing input validation.', category: 'analysis'},
-  {id: 't-simplify', label: 'Simplify logic', prompt: 'Suggest ways to simplify this flow. Look for redundant blocks, overly complex conditions, and opportunities to reduce nesting.', category: 'refactor'},
-  {id: 't-variables', label: 'Variable usage review', prompt: 'Review variable usage in this flow. Find unused variables, variables that could be consolidated, and naming improvements.', category: 'refactor'},
+  {
+    id: 't-explain-block',
+    label: 'Explain block in detail',
+    prompt: 'Explain what this block does step by step, including all properties and variables it uses.',
+    category: 'explain',
+  },
+  {
+    id: 't-explain-flow',
+    label: 'Explain entire flow',
+    prompt:
+      'Explain what this entire flow does from start to finish. Describe the main purpose, key decision points, and the overall logic.',
+    category: 'explain',
+  },
+  {
+    id: 't-find-bugs',
+    label: 'Find bugs',
+    prompt:
+      'Analyze this for potential bugs, race conditions, unhandled errors, and edge cases. List each issue with severity and a suggested fix.',
+    category: 'debug',
+  },
+  {
+    id: 't-error-handling',
+    label: 'Check error handling',
+    prompt:
+      'Review the error handling in this flow. Are there actions that could fail without proper error handlers? List missing error handling and suggest improvements.',
+    category: 'debug',
+  },
+  {
+    id: 't-performance',
+    label: 'Performance review',
+    prompt:
+      'Analyze this for performance issues. Look for unnecessary loops, redundant API calls, missing parallelism, and suggest optimizations.',
+    category: 'analysis',
+  },
+  {
+    id: 't-security',
+    label: 'Security audit',
+    prompt:
+      'Perform a security audit. Check for hardcoded credentials, injection vulnerabilities, insecure data handling, and missing input validation.',
+    category: 'analysis',
+  },
+  {
+    id: 't-simplify',
+    label: 'Simplify logic',
+    prompt:
+      'Suggest ways to simplify this flow. Look for redundant blocks, overly complex conditions, and opportunities to reduce nesting.',
+    category: 'refactor',
+  },
+  {
+    id: 't-variables',
+    label: 'Variable usage review',
+    prompt:
+      'Review variable usage in this flow. Find unused variables, variables that could be consolidated, and naming improvements.',
+    category: 'refactor',
+  },
 ]
 
 interface Props {
@@ -43,11 +90,14 @@ export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName
     refactor: 'Refactor',
   }
 
-  const grouped = builtInTemplates.reduce((acc, t) => {
-    if (!acc[t.category]) acc[t.category] = []
-    acc[t.category].push(t)
-    return acc
-  }, {} as Record<string, PromptTemplate[]>)
+  const grouped = builtInTemplates.reduce(
+    (acc, t) => {
+      if (!acc[t.category]) acc[t.category] = []
+      acc[t.category].push(t)
+      return acc
+    },
+    {} as Record<string, PromptTemplate[]>,
+  )
 
   return (
     <div className="px-3">

@@ -12,9 +12,11 @@ export default function ShortcutsHelpDialog({isOpen, onClose}: Props) {
   const [search, setSearch] = useState('')
 
   const filtered = search
-    ? shortcuts.filter(s =>
-        s.description.toLowerCase().includes(search.toLowerCase()) ||
-        s.keys.toLowerCase().includes(search.toLowerCase()))
+    ? shortcuts.filter(
+        s =>
+          s.description.toLowerCase().includes(search.toLowerCase()) ||
+          s.keys.toLowerCase().includes(search.toLowerCase()),
+      )
     : shortcuts
 
   const grouped = new Map<string, typeof shortcuts>()
@@ -28,7 +30,7 @@ export default function ShortcutsHelpDialog({isOpen, onClose}: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Keyboard Shortcuts" size="lg">
       <Input
         value={search}
-        onChange={(e) => setSearch((e.target as HTMLInputElement).value)}
+        onChange={e => setSearch((e.target as HTMLInputElement).value)}
         placeholder="Search shortcuts..."
         className="mb-4"
       />

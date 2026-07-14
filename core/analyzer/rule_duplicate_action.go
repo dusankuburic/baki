@@ -101,3 +101,7 @@ func blockSignature(b *models.Block) string {
 	h := md5.Sum([]byte(sb.String())) // #nosec G401 -- content fingerprint for dedup, not security
 	return hex.EncodeToString(h[:])
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&DuplicateActionRule{}) }

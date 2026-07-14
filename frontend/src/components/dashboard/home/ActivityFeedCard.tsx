@@ -1,4 +1,16 @@
-import {LogIn, LogOut, Upload, Save, Trash2, Activity as ActivityIcon, Share2, Bot, Key, Settings, UserPlus} from 'lucide-react'
+import {
+  LogIn,
+  LogOut,
+  Upload,
+  Save,
+  Trash2,
+  Activity as ActivityIcon,
+  Share2,
+  Bot,
+  Key,
+  Settings,
+  UserPlus,
+} from 'lucide-react'
 import {CardShell, CardPlaceholder} from './CardShell'
 import type {ActivityEntry} from '@/types'
 
@@ -43,10 +55,17 @@ export function ActivityFeedCard({data, className}: {data: ActivityEntry[]; clas
       ) : (
         <div className="h-56 overflow-y-auto scrollbar-thin space-y-1 pr-1">
           {data.slice(0, 15).map((entry, i) => {
-            const meta = ACTION_META[entry.action] ?? {icon: ActivityIcon, label: entry.action, color: 'text-text-tertiary'}
+            const meta = ACTION_META[entry.action] ?? {
+              icon: ActivityIcon,
+              label: entry.action,
+              color: 'text-text-tertiary',
+            }
             const Icon = meta.icon
             return (
-              <div key={`${entry.action}-${i}`} className="flex items-center gap-2.5 py-1 px-1 rounded-md hover:bg-surface-3/40 transition-colors">
+              <div
+                key={`${entry.action}-${i}`}
+                className="flex items-center gap-2.5 py-1 px-1 rounded-md hover:bg-surface-3/40 transition-colors"
+              >
                 <Icon size={13} className={`${meta.color} shrink-0`} />
                 <div className="flex-1 min-w-0">
                   <span className="text-xs text-text-primary">{meta.label}</span>
@@ -54,7 +73,9 @@ export function ActivityFeedCard({data, className}: {data: ActivityEntry[]; clas
                     <span className="text-xs text-text-tertiary ml-1 truncate">· {entry.flowName}</span>
                   )}
                 </div>
-                <span className="text-2xs text-text-tertiary tabular-nums shrink-0">{relativeTime(entry.createdAt)}</span>
+                <span className="text-2xs text-text-tertiary tabular-nums shrink-0">
+                  {relativeTime(entry.createdAt)}
+                </span>
               </div>
             )
           })}

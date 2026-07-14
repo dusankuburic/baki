@@ -3,17 +3,20 @@ import {request} from './client'
 // Bulk flow uploads and folder loads can involve parsing many/large files
 // server-side, well beyond the default request timeout.
 const BULK_LOAD_TIMEOUT_MS = 300_000
-import { createAdapter } from '@/platform/adapters'
+import {createAdapter} from '@/platform/adapters'
 import type {FlowDocument, RecentFile, SearchQuery, SearchResults, SourceFileInfo} from '@/types'
 
 export const flowApi = {
   openFlowFile: async (): Promise<FlowDocument | null> => {
     const adapter = createAdapter()
     const result = await adapter.fileOpen({
-      filters: [{name: 'PAD Flow Export', extensions: ['txt']}, {name: 'All Files', extensions: ['*']}]
+      filters: [
+        {name: 'PAD Flow Export', extensions: ['txt']},
+        {name: 'All Files', extensions: ['*']},
+      ],
     })
     if (!result) return null
-    
+
     // Check if it's a web upload (JSON content) or a Tauri path
     if (typeof result === 'string') {
       try {
@@ -50,8 +53,7 @@ export const flowApi = {
     return request('/api/flow/load-folder', {path: result}, 'POST', BULK_LOAD_TIMEOUT_MS)
   },
 
-  loadFlowFromPath: (path: string): Promise<FlowDocument | null> =>
-    request('/api/flow/load-path', {path}),
+  loadFlowFromPath: (path: string): Promise<FlowDocument | null> => request('/api/flow/load-path', {path}),
 
   loadFlowFolder: (path: string): Promise<FlowDocument | null> =>
     request('/api/flow/load-folder', {path}, 'POST', BULK_LOAD_TIMEOUT_MS),
@@ -59,23 +61,18 @@ export const flowApi = {
   uploadFlow: (name: string, files: Record<string, string>): Promise<FlowDocument | null> =>
     request('/api/flow/upload', {name, files}, 'POST', BULK_LOAD_TIMEOUT_MS),
 
-  recentFiles: (): Promise<RecentFile[]> =>
-    request('/api/flow/recent', undefined, 'GET'),
+  recentFiles: (): Promise<RecentFile[]> => request('/api/flow/recent', undefined, 'GET'),
 
-  removeRecentFile: (path: string): Promise<void> =>
-    request('/api/flow/remove-recent', {path}),
+  removeRecentFile: (path: string): Promise<void> => request('/api/flow/remove-recent', {path}),
 
-  clearRecentFiles: (): Promise<void> =>
-    request('/api/flow/clear-recent'),
+  clearRecentFiles: (): Promise<void> => request('/api/flow/clear-recent'),
 
   searchFlow: (flowId: string, query: SearchQuery): Promise<SearchResults> =>
     request('/api/flow/search', {id: flowId, query}),
 
-  revealInFileManager: (path: string): Promise<void> =>
-    request('/api/flow/reveal', {path}),
+  revealInFileManager: (path: string): Promise<void> => request('/api/flow/reveal', {path}),
 
-  getSourceFiles: (): Promise<SourceFileInfo[]> =>
-    request('/api/flow/source-files', undefined, 'GET'),
+  getSourceFiles: (): Promise<SourceFileInfo[]> => request('/api/flow/source-files', undefined, 'GET'),
 
   // suppressInSource writes a `# pad-ignore[ruleId]` directive into the flow's
   // source file before the given block and returns the RE-PARSED document
@@ -89,26 +86,36 @@ export const flowApi = {
   // block in the flow's source file and returns the re-parsed document. Desktop
   // only. The finding carries the available fixType in its `autoFix` field;
   // show "Apply fix" only when that is set.
-  applyFix: (flowId: string, blockId: string, fixType: string, ruleId?: string, variable?: string, property?: string): Promise<FlowDocument> =>
-    request('/api/flow/apply-fix', {flowId, blockId, fixType, ruleId, variable, property}),
+  applyFix: (
+    flowId: string,
+    blockId: string,
+    fixType: string,
+    ruleId?: string,
+    variable?: string,
+    property?: string,
+  ): Promise<FlowDocument> => request('/api/flow/apply-fix', {flowId, blockId, fixType, ruleId, variable, property}),
 
-  previewFix: (flowId: string, blockId: string, fixType: string, ruleId?: string, variable?: string, property?: string): Promise<{original: string, patched: string}> =>
+  previewFix: (
+    flowId: string,
+    blockId: string,
+    fixType: string,
+    ruleId?: string,
+    variable?: string,
+    property?: string,
+  ): Promise<{original: string; patched: string}> =>
     request('/api/flow/preview-fix', {flowId, blockId, fixType, ruleId, variable, property}),
 
   // reimport re-reads the currently-loaded flow's source file (desktop), re-
   // parses it, and returns the fresh document — so a user who edited the flow
   // in PAD can refresh in one click. Callers should setDocument(result) + re-
   // analyze to show what changed.
-  reimport: (flowId: string): Promise<FlowDocument> =>
-    request('/api/flow/reimport', {flowId}),
+  reimport: (flowId: string): Promise<FlowDocument> => request('/api/flow/reimport', {flowId}),
 
   // Share links (read-only public report; cloud mode only)
   createShare: (flowId: string): Promise<{id: string; token: string; expiresAt?: string}> =>
     request('/api/flow/share/create', {flowId}),
 
-  listShares: (flowId: string): Promise<unknown[]> =>
-    request('/api/flow/share/list', {flowId}),
+  listShares: (flowId: string): Promise<unknown[]> => request('/api/flow/share/list', {flowId}),
 
-  revokeShare: (flowId: string, tokenId: string): Promise<void> =>
-    request('/api/flow/share/revoke', {flowId, tokenId}),
+  revokeShare: (flowId: string, tokenId: string): Promise<void> => request('/api/flow/share/revoke', {flowId, tokenId}),
 }

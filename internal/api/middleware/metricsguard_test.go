@@ -35,7 +35,7 @@ func TestIsPrivateIP(t *testing.T) {
 }
 
 func TestMetricsGuard_PrivateIPAllowed(t *testing.T) {
-	handler := MetricsGuard(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard(nil, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -50,7 +50,7 @@ func TestMetricsGuard_PrivateIPAllowed(t *testing.T) {
 }
 
 func TestMetricsGuard_PublicIPBlocked(t *testing.T) {
-	handler := MetricsGuard(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard(nil, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for public IP")
 	}))
 
@@ -65,7 +65,7 @@ func TestMetricsGuard_PublicIPBlocked(t *testing.T) {
 }
 
 func TestMetricsGuard_LoopbackAllowed(t *testing.T) {
-	handler := MetricsGuard(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard(nil, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -80,7 +80,7 @@ func TestMetricsGuard_LoopbackAllowed(t *testing.T) {
 }
 
 func TestMetricsGuard_TrustedProxyXFF(t *testing.T) {
-	handler := MetricsGuard([]string{"10.0.0.0/8"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard([]string{"10.0.0.0/8"}, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -100,7 +100,7 @@ func TestMetricsGuard_PublicViaTrustedProxyXFF(t *testing.T) {
 	// X-Forwarded-For header must NOT bypass the private-IP check.
 	// Protection against public /metrics access relies on network ACLs
 	// (NSG/ingress), not on the client-controlled XFF header.
-	handler := MetricsGuard([]string{"10.0.0.0/8"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard([]string{"10.0.0.0/8"}, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -113,4 +113,61 @@ func TestMetricsGuard_PublicViaTrustedProxyXFF(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200 (RemoteAddr is private; XFF is ignored), got %d", rr.Code)
 	}
+}
+
+// TestMetricsGuard_TokenRequiredWhenSet verifies the optional bearer token:
+// when configured, a private-IP request without the token is rejected, and one
+// with the correct token is admitted. Defense-in-depth against a misconfigured NSG.
+func TestMetricsGuard_TokenRequiredWhenSet(t *testing.T) {
+	const tok = "scrape-secret"
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	t.Run("private IP without token rejected when token set", func(t *testing.T) {
+		handler := MetricsGuard(nil, tok)(ok)
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.RemoteAddr = "10.0.0.1:12345"
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 without token, got %d", rr.Code)
+		}
+	})
+
+	t.Run("private IP with correct token admitted", func(t *testing.T) {
+		handler := MetricsGuard(nil, tok)(ok)
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.RemoteAddr = "10.0.0.1:12345"
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 with token, got %d", rr.Code)
+		}
+	})
+
+	t.Run("private IP with wrong token rejected", func(t *testing.T) {
+		handler := MetricsGuard(nil, tok)(ok)
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.RemoteAddr = "10.0.0.1:12345"
+		req.Header.Set("Authorization", "Bearer wrong")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 with wrong token, got %d", rr.Code)
+		}
+	})
+
+	// The scheme is case-insensitive per RFC 7235 — a scraper sending lowercase
+	// "bearer" must be admitted (consistent with auth.ExtractToken).
+	t.Run("private IP with lowercase bearer token admitted", func(t *testing.T) {
+		handler := MetricsGuard(nil, tok)(ok)
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.RemoteAddr = "10.0.0.1:12345"
+		req.Header.Set("Authorization", "bearer "+tok)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 with lowercase bearer, got %d", rr.Code)
+		}
+	})
 }

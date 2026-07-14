@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -198,6 +199,14 @@ func (cb *CircuitBreakerProvider) record(err error) {
 	// Permanent errors (bad key, invalid request, user cancellation) must not
 	// open the circuit for everyone.
 	if !isRetryable(err) {
+		return
+	}
+	// Rate-limit (429) is per-API-key, not "provider down for everyone." In
+	// multi-tenant deployments each tenant has their own key, so one noisy
+	// tenant's 429s must not trip the shared breaker and block healthy tenants.
+	// The retry layer still backs off on 429 (isRetryable returns true); we just
+	// don't count it toward the circuit-open threshold.
+	if errors.Is(err, ErrRateLimited) {
 		return
 	}
 	cb.st.failures++

@@ -43,11 +43,17 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   // arrays — re-subscribing the SSE listener on every prop change would drop
   // in-flight streams.
   const docRef = useRef(doc)
-  useEffect(() => { docRef.current = doc })
+  useEffect(() => {
+    docRef.current = doc
+  })
   const providerRef = useRef(provider)
-  useEffect(() => { providerRef.current = provider })
+  useEffect(() => {
+    providerRef.current = provider
+  })
   const selectedModelRef = useRef(selectedModel)
-  useEffect(() => { selectedModelRef.current = selectedModel })
+  useEffect(() => {
+    selectedModelRef.current = selectedModel
+  })
 
   const streamAccRef = useRef(new Map<string, StreamAcc>())
   const teardownRef = useRef<(streamId: string) => void>(() => {})
@@ -64,45 +70,56 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
     threadGenRef.current.set(threadId, next)
     return next
   }, [])
-  const isCurrentGen = useCallback((threadId: string, gen: number) =>
-    threadGenRef.current.get(threadId) === gen, [])
+  const isCurrentGen = useCallback((threadId: string, gen: number) => threadGenRef.current.get(threadId) === gen, [])
 
-  const flushAcc = useCallback((streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    acc.raf = null
-    // One atomic store update (text + tokens) instead of two set() calls —
-    // halves per-frame subscriber notifications during streaming.
-    updateStream(acc.threadId, {text: acc.text, tokens: Math.ceil(acc.text.length / 4)})
-  }, [updateStream])
+  const flushAcc = useCallback(
+    (streamId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc) return
+      acc.raf = null
+      // One atomic store update (text + tokens) instead of two set() calls —
+      // halves per-frame subscriber notifications during streaming.
+      updateStream(acc.threadId, {text: acc.text, tokens: Math.ceil(acc.text.length / 4)})
+    },
+    [updateStream],
+  )
 
-  const onChunk = useCallback((text: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    acc.text += text
-    if (!acc.first) {
-      // First chunk: flush synchronously so the slot text appears in the same
-      // React render that clears the thinking indicator — no empty-frame gap.
+  const onChunk = useCallback(
+    (text: string, streamId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc) return
+      acc.text += text
+      if (!acc.first) {
+        // First chunk: flush synchronously so the slot text appears in the same
+        // React render that clears the thinking indicator — no empty-frame gap.
+        acc.first = true
+        updateStream(acc.threadId, {text: acc.text, isThinking: false, tokens: Math.ceil(acc.text.length / 4)})
+      } else if (acc.raf === null) {
+        acc.raf = requestAnimationFrame(() => flushAcc(streamId))
+      }
+    },
+    [flushAcc, updateStream],
+  )
+
+  const onReplace = useCallback(
+    (text: string, streamId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc) return
+      acc.text = text
       acc.first = true
-      updateStream(acc.threadId, {text: acc.text, isThinking: false, tokens: 1})
-    } else if (acc.raf === null) {
-      acc.raf = requestAnimationFrame(() => flushAcc(streamId))
-    }
-  }, [flushAcc, updateStream])
+      updateStream(acc.threadId, {text, isThinking: false, tokens: Math.ceil(text.length / 4)})
+    },
+    [updateStream],
+  )
 
-  const onReplace = useCallback((text: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    acc.text = text
-    acc.first = true
-    updateStream(acc.threadId, {text, isThinking: false, tokens: Math.ceil(text.length / 4)})
-  }, [updateStream])
-
-  const onToolStatus = useCallback((label: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc) return
-    setStreamMeta(acc.threadId, {isThinking: false, toolStatus: label})
-  }, [setStreamMeta])
+  const onToolStatus = useCallback(
+    (label: string, streamId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc) return
+      setStreamMeta(acc.threadId, {isThinking: false, toolStatus: label})
+    },
+    [setStreamMeta],
+  )
 
   // takeAcc removes and returns a finished stream's accumulation state,
   // cancelling any pending flush. The store slot must still match the
@@ -144,79 +161,94 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   // (onDone) and the user-stop path (stopAndCommit) so an interrupted answer
   // is kept, not discarded. Persisted messages are filtered of the transient
   // error bubbles so reloaded history isn't littered with them.
-  const commitAssistantMessage = useCallback((
-    threadId: string,
-    messageId: string | undefined,
-    content: string,
-    opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
-  ) => {
-    const curDoc = docRef.current
-    const msg: ChatMessage = {
-      id: messageId || crypto.randomUUID(),
-      role: 'assistant',
-      content,
-      timestamp: new Date().toISOString(),
-      provider: providerRef.current,
-      model: selectedModelRef.current,
-      tokensIn: opts.tokensIn,
-      tokensOut: opts.tokensOut,
-      finishReason: opts.finishReason,
-    }
-    if (!curDoc) return
-    appendMessage(threadId, msg)
-    const thread = useChatStore.getState().threads.find(t => t.id === threadId)
-    if (!thread) return
-    const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
-    chatApi.saveConversation(curDoc.id, thread.contextBlockId || 'flow', persistable).catch((err) => { logger.warn('Failed to save conversation', err) })
-    if (opts.tokensIn != null || opts.tokensOut != null) {
-      updateThread(threadId, {
-        tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),
-        tokensOut: (thread.tokensOut ?? 0) + (opts.tokensOut ?? 0),
+  const commitAssistantMessage = useCallback(
+    (
+      threadId: string,
+      messageId: string | undefined,
+      content: string,
+      opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
+    ) => {
+      const curDoc = docRef.current
+      const msg: ChatMessage = {
+        id: messageId || crypto.randomUUID(),
+        role: 'assistant',
+        content,
+        timestamp: new Date().toISOString(),
+        provider: providerRef.current,
+        model: selectedModelRef.current,
+        tokensIn: opts.tokensIn,
+        tokensOut: opts.tokensOut,
+        finishReason: opts.finishReason,
+      }
+      if (!curDoc) return
+      appendMessage(threadId, msg)
+      const thread = useChatStore.getState().threads.find(t => t.id === threadId)
+      if (!thread) return
+      const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
+      chatApi.saveConversation(curDoc.id, thread.contextBlockId || 'flow', persistable).catch(err => {
+        logger.warn('Failed to save conversation', err)
       })
-    }
-  }, [appendMessage, getMessages, updateThread])
+      if (opts.tokensIn != null || opts.tokensOut != null) {
+        updateThread(threadId, {
+          tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),
+          tokensOut: (thread.tokensOut ?? 0) + (opts.tokensOut ?? 0),
+        })
+      }
+    },
+    [appendMessage, getMessages, updateThread],
+  )
 
-  const onDone = useCallback((tokensOut: number, tokensIn: number, streamId: string) => {
-    const acc = takeAcc(streamId)
-    if (!acc) return
-    const slot = useChatStore.getState().streams[acc.threadId]
-    commitAssistantMessage(acc.threadId, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
-    endStream(acc.threadId)
-  }, [commitAssistantMessage, endStream, takeAcc])
+  const onDone = useCallback(
+    (tokensOut: number, tokensIn: number, streamId: string) => {
+      const acc = takeAcc(streamId)
+      if (!acc) return
+      const slot = useChatStore.getState().streams[acc.threadId]
+      commitAssistantMessage(acc.threadId, slot?.messageId, acc.text, {tokensIn, tokensOut, finishReason: 'stop'})
+      endStream(acc.threadId)
+    },
+    [commitAssistantMessage, endStream, takeAcc],
+  )
 
-  const onError = useCallback((error: string, streamId: string) => {
-    const acc = takeAcc(streamId)
-    if (!acc) return
-    const curDoc = docRef.current
-    const slot = useChatStore.getState().streams[acc.threadId]
-    const displayContent = acc.text
-      ? acc.text + '\n\n---\n*Error: ' + error + '*'
-      : '*Error: ' + error + '*'
-    const msg: ChatMessage = {
-      id: slot?.messageId || crypto.randomUUID(),
-      role: 'assistant',
-      content: displayContent,
-      timestamp: new Date().toISOString(),
-      provider: providerRef.current,
-      model: selectedModelRef.current,
-      finishReason: 'error',
-    }
-    if (curDoc) appendMessage(acc.threadId, msg)
-    endStream(acc.threadId)
-  }, [appendMessage, endStream, takeAcc])
+  const onError = useCallback(
+    (error: string, streamId: string) => {
+      const acc = takeAcc(streamId)
+      if (!acc) return
+      const curDoc = docRef.current
+      const slot = useChatStore.getState().streams[acc.threadId]
+      const displayContent = acc.text ? acc.text + '\n\n---\n*Error: ' + error + '*' : '*Error: ' + error + '*'
+      const msg: ChatMessage = {
+        id: slot?.messageId || crypto.randomUUID(),
+        role: 'assistant',
+        content: displayContent,
+        timestamp: new Date().toISOString(),
+        provider: providerRef.current,
+        model: selectedModelRef.current,
+        finishReason: 'error',
+      }
+      if (curDoc) appendMessage(acc.threadId, msg)
+      endStream(acc.threadId)
+    },
+    [appendMessage, endStream, takeAcc],
+  )
 
   // onAppend adds a delta-resume tail to the stream's accumulated text and
   // flushes it synchronously to the slot (no RAF — a resume delivers a known
   // tail after a reconnect, not a stream of live chunks). Used by
   // useStreamingMessage.resumeInto in 'delta' mode.
-  const onAppend = useCallback((delta: string, streamId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (!acc || !delta) return
-    acc.text += delta
-    acc.first = true
-    if (acc.raf !== null) { cancelAnimationFrame(acc.raf); acc.raf = null }
-    updateStream(acc.threadId, {text: acc.text, isThinking: false, tokens: Math.ceil(acc.text.length / 4)})
-  }, [updateStream])
+  const onAppend = useCallback(
+    (delta: string, streamId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc || !delta) return
+      acc.text += delta
+      acc.first = true
+      if (acc.raf !== null) {
+        cancelAnimationFrame(acc.raf)
+        acc.raf = null
+      }
+      updateStream(acc.threadId, {text: acc.text, isThinking: false, tokens: Math.ceil(acc.text.length / 4)})
+    },
+    [updateStream],
+  )
 
   // getAccLength reports how many UTF-8 BYTES the client already holds for a
   // stream, so a delta-resume can request only the tail from the backend. The
@@ -228,30 +260,46 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
     return acc ? utf8ByteLength(acc.text) : 0
   }, [])
 
-  const handler = useMemo(() => ({
-    onChunk, onReplace, onDone, onError, onToolStatus, onAppend, getAccLength,
-  }), [onChunk, onReplace, onDone, onError, onToolStatus, onAppend, getAccLength])
+  const handler = useMemo(
+    () => ({
+      onChunk,
+      onReplace,
+      onDone,
+      onError,
+      onToolStatus,
+      onAppend,
+      getAccLength,
+    }),
+    [onChunk, onReplace, onDone, onError, onToolStatus, onAppend, getAccLength],
+  )
 
   const {registerStream, cancel, teardownStream} = useStreamingMessage(handler)
-  useEffect(() => { teardownRef.current = teardownStream }, [teardownStream])
-  useEffect(() => { cancelRef.current = cancel }, [cancel])
+  useEffect(() => {
+    teardownRef.current = teardownStream
+  }, [teardownStream])
+  useEffect(() => {
+    cancelRef.current = cancel
+  }, [cancel])
 
   const cancelStream = useCallback((streamId: string) => cancelRef.current(streamId), [])
 
   // stopAndCommit cancels a stream the user stopped mid-generation, keeping
   // whatever text was already generated as a permanent 'interrupted' message
   // instead of discarding it.
-  const stopAndCommit = useCallback((streamId: string, threadId: string, messageId: string) => {
-    const acc = streamAccRef.current.get(streamId)
-    if (acc) {
-      if (acc.raf !== null) cancelAnimationFrame(acc.raf)
-      streamAccRef.current.delete(streamId)
-      if (acc.text) {
-        commitAssistantMessage(threadId, messageId, acc.text, {finishReason: 'interrupted'})
+  const stopAndCommit = useCallback(
+    (streamId: string, threadId: string, messageId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (acc) {
+        if (acc.raf !== null) cancelAnimationFrame(acc.raf)
+        streamAccRef.current.delete(streamId)
+        if (acc.text) {
+          commitAssistantMessage(threadId, messageId, acc.text, {finishReason: 'interrupted'})
+        }
       }
-    }
-    cancelStream(streamId)
-  }, [commitAssistantMessage, cancelStream])
+      cancelStream(streamId)
+    },
+    [commitAssistantMessage, cancelStream],
+  )
 
   return {
     registerStream,

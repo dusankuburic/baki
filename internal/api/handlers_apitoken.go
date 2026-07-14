@@ -127,6 +127,21 @@ func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Blacklist the PAT's derived JTI so live WebSocket connections authenticated
+	// via this PAT are disconnected by the WS re-authz loop (2-min ticker). PATs
+	// are not JWTs, so the normal logout path (which blacklists the access JTI)
+	// never fires for them — without this, a deleted PAT's open socket stays live.
+	// 10 min covers ~5 re-authz cycles; no new tickets can be issued afterward
+	// since the PAT row is gone (verifyAPIToken returns nil).
+	if h.security.AuthMgr != nil {
+		h.security.AuthMgr.RevokeJTI(auth.PATJTI(id), patRevokeBlacklistTTL)
+	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionTokenRevoke, "api_token", id, nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
+
+// patRevokeBlacklistTTL is how long a deleted PAT's derived JTI stays in the
+// blacklist. It only needs to outlive the WS re-authz loop's interval (2 min)
+// so an already-open socket sees the revocation; a few cycles of margin is
+// plenty since a deleted PAT can no longer mint new WS tickets.
+const patRevokeBlacklistTTL = 10 * time.Minute

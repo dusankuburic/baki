@@ -50,12 +50,29 @@ export function AITokenUsageCard({data, className}: {data: DailyTokenUsage[]; cl
                   borderColor: 'var(--border-subtle)',
                   borderRadius: 8,
                   backdropFilter: 'var(--glass-blur)',
-                  fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                  fontSize: 12,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
                 labelStyle={{color: 'var(--text-primary)'}}
               />
-              <Area type="monotone" dataKey="tokensIn" name="In" stackId="1" stroke={colors.brand400} fill="url(#dashTokColorIn)" isAnimationActive={false} />
-              <Area type="monotone" dataKey="tokensOut" name="Out" stackId="1" stroke={colors.brand600} fill="url(#dashTokColorOut)" isAnimationActive={false} />
+              <Area
+                type="monotone"
+                dataKey="tokensIn"
+                name="In"
+                stackId="1"
+                stroke={colors.brand400}
+                fill="url(#dashTokColorIn)"
+                isAnimationActive={false}
+              />
+              <Area
+                type="monotone"
+                dataKey="tokensOut"
+                name="Out"
+                stackId="1"
+                stroke={colors.brand600}
+                fill="url(#dashTokColorOut)"
+                isAnimationActive={false}
+              />
             </AreaChart>
           </ResponsiveContainer>
         </div>

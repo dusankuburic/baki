@@ -50,7 +50,7 @@ func TestUnhandledErrorRule(t *testing.T) {
 	})
 
 	t.Run("Http action is fallible", func(t *testing.T) {
-		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Http.Invoke", 0)
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
 		b.SubflowID = "sf1"
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
 		ctx := buildContext(flow, nil)
@@ -793,6 +793,37 @@ func TestHardcodedURLRule(t *testing.T) {
 		got := rule.Check(b, ctx)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 findings for non-network property, got %d", len(got))
+		}
+	})
+
+	// Regression: the URL regex used to exclude "." from the match, truncating
+	// every URL at the first dot and collapsing distinct URLs that share a
+	// prefix into one dedup key. Assert the full URL is captured and that two
+	// different hosts both produce findings.
+	t.Run("full URL captured, not truncated at first dot", func(t *testing.T) {
+		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Web.Call", 0)
+		b.SubflowID = "sf1"
+		b.Properties = map[string]string{
+			"url":   "https://api.example.com/v2/users",
+			"server": "https://api.different.com/health",
+		}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(b, ctx)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 distinct URL findings, got %d (dedup false-negative?)", len(got))
+		}
+		urls := map[string]bool{}
+		for _, f := range got {
+			if u, ok := f.Metadata["url"].(string); ok {
+				urls[u] = true
+			}
+		}
+		want := []string{"https://api.example.com/v2/users", "https://api.different.com/health"}
+		for _, u := range want {
+			if !urls[u] {
+				t.Errorf("expected captured URL %q; got %v", u, urls)
+			}
 		}
 	})
 }

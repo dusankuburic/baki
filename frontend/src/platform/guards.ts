@@ -6,40 +6,40 @@
  * Check if running in Tauri desktop environment
  */
 export function isTauri(): boolean {
-  return '__TAURI_INTERNALS__' in window || '__TAURI__' in window;
+  return '__TAURI_INTERNALS__' in window || '__TAURI__' in window
 }
 
 /**
  * Check if running in web browser environment
  */
 export function isWeb(): boolean {
-  return !isTauri();
+  return !isTauri()
 }
 
 /**
  * Get current platform type
  */
-export type PlatformType = 'tauri' | 'web' | 'unknown';
+export type PlatformType = 'tauri' | 'web' | 'unknown'
 
 export function getPlatformType(): PlatformType {
-  if (isTauri()) return 'tauri';
-  if (isWeb()) return 'web';
-  return 'unknown';
+  if (isTauri()) return 'tauri'
+  if (isWeb()) return 'web'
+  return 'unknown'
 }
 
 /**
  * Platform-specific feature detection
  */
 export interface PlatformCapabilities {
-  fileSystem: boolean;
-  nativeDialogs: boolean;
-  clipboard: boolean;
-  notifications: boolean;
-  systemTray: boolean;
+  fileSystem: boolean
+  nativeDialogs: boolean
+  clipboard: boolean
+  notifications: boolean
+  systemTray: boolean
   // nativeWindow: native menu bar / title bar / window controls (minimize,
   // maximize, close, fullscreen) — only available in the Tauri shell, which
   // owns the OS window; the web build renders in a normal browser tab.
-  nativeWindow: boolean;
+  nativeWindow: boolean
 }
 
 export function getPlatformCapabilities(): PlatformCapabilities {
@@ -51,7 +51,7 @@ export function getPlatformCapabilities(): PlatformCapabilities {
       notifications: true,
       systemTray: true,
       nativeWindow: true,
-    };
+    }
   }
 
   return {
@@ -61,5 +61,5 @@ export function getPlatformCapabilities(): PlatformCapabilities {
     notifications: true, // Notifications API available in browsers
     systemTray: false,
     nativeWindow: false,
-  };
+  }
 }

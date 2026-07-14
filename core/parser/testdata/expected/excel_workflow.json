@@ -558,24 +558,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 18,
-      "message": "unclosed block: Close Excel",
-      "severity": "error",
-      "snippet": "Excel.CloseExcel"
-    },
-    {
-      "line": 26,
-      "message": "unclosed block: Close Excel",
-      "severity": "error",
-      "snippet": "Excel.CloseExcel"
-    }
-  ],
   "metadata": {
     "blockCount": 23,
     "subflowCount": 2,
     "maxDepth": 5,
-    "rawLineCount": 28
+    "rawLineCount": 27
   }
 }

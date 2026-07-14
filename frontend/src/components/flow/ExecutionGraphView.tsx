@@ -2,9 +2,8 @@ import {Loader2, AlertCircle, AlertTriangle, Search} from 'lucide-react'
 import {useCytoscapeGraph} from './useCytoscapeGraph'
 
 export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {}) {
-  const {
-    containerRef, loading, error, searchQuery, setSearchQuery, matchCount, handleSearch, retry,
-  } = useCytoscapeGraph(subflowId)
+  const {containerRef, loading, error, searchQuery, setSearchQuery, matchCount, handleSearch, retry} =
+    useCytoscapeGraph(subflowId)
 
   return (
     <div className="flex-1 relative bg-surface-0 overflow-hidden">

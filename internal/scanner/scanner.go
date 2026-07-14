@@ -21,6 +21,7 @@ import (
 	"pad-core/logger"
 	"pad-core/models"
 
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/notify"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -46,30 +47,19 @@ type Scanner struct {
 	mu      sync.Mutex
 	lastSig map[string]string // (flowID|eventType) -> last alert signature, for dedup
 
-	// rootCtx is cancelled by Stop so an in-flight sweep bails out promptly
-	// instead of running until the per-tick timeout elapses. Without it, Stop
-	// only prevents the NEXT tick; the current sweep keeps scanning every flow
-	// for up to PAD_SCAN_INTERVAL (e.g. 1h), racing fx's shutdown timeout.
-	rootCtx    context.Context
-	rootCancel context.CancelFunc
-	stop       chan struct{}
-	stopOnce   sync.Once
+	loop lifecycle.TickerLoop
 }
 
 // New creates a Scanner. interval <= 0 disables periodic scanning (Start is a
 // no-op), but ScanOnce can still be invoked directly (e.g. from a test or an
 // admin "scan now" action).
 func New(backend storageif.StorageBackend, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration) *Scanner {
-	ctx, cancel := context.WithCancel(context.Background())
 	return &Scanner{
-		backend:    backend,
-		analyze:    analyze,
-		notifier:   notifier,
-		interval:   interval,
-		lastSig:    make(map[string]string),
-		rootCtx:    ctx,
-		rootCancel: cancel,
-		stop:       make(chan struct{}),
+		backend:  backend,
+		analyze:  analyze,
+		notifier: notifier,
+		interval: interval,
+		lastSig:  make(map[string]string),
 	}
 }
 
@@ -80,47 +70,34 @@ func (s *Scanner) enabled() bool {
 }
 
 // Start launches the periodic scan loop in a background goroutine. It returns
-// immediately and is a no-op when scanning is disabled. The loop runs until Stop.
+// immediately and is a no-op when scanning is disabled. The loop runs until
+// Stop. Unlike the padcloud ingester, Scanner does not sweep immediately on
+// Start — it waits for the first tick.
 func (s *Scanner) Start() {
 	if !s.enabled() {
 		logger.Info("scanner: disabled (needs backend, notifier, and a positive interval)")
 		return
 	}
 	logger.Info("scanner: starting", "interval", s.interval.String())
-	go s.loop()
-}
-
-func (s *Scanner) loop() {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error("scanner: loop panicked", "recover", r)
-		}
-	}()
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.stop:
-			return
-		case <-ticker.C:
-			// Derive the tick ctx from rootCtx so Stop cancels an in-flight
-			// sweep (not just the next tick): ScanOnce checks ctx.Err() between
-			// flows, so cancelling rootCtx makes the current sweep exit at the
-			// next flow boundary rather than running for up to PAD_SCAN_INTERVAL.
-			ctx, cancel := context.WithTimeout(s.rootCtx, s.interval)
-			s.ScanOnce(ctx)
-			cancel()
-		}
-	}
+	s.loop.Start(s.interval, false, func(ctx context.Context) {
+		// Derive the tick ctx from the loop's root ctx so Stop cancels an
+		// in-flight sweep (not just the next tick): ScanOnce checks ctx.Err()
+		// between flows, so cancelling the root makes the current sweep exit
+		// at the next flow boundary rather than running for up to
+		// PAD_SCAN_INTERVAL.
+		tickCtx, cancel := context.WithTimeout(ctx, s.interval)
+		defer cancel()
+		s.ScanOnce(tickCtx)
+	}, func(r any) {
+		logger.Error("scanner: loop panicked", "recover", r)
+	})
 }
 
 // Stop halts the scan loop and cancels any in-flight sweep. Safe to call
-// multiple times.
+// multiple times, and safe to call even if Start was never invoked (e.g. a
+// disabled scanner).
 func (s *Scanner) Stop() {
-	s.stopOnce.Do(func() {
-		s.rootCancel()
-		close(s.stop)
-	})
+	s.loop.Stop()
 }
 
 // ScanOnce scans every stored flow once, paginating to cover the entire

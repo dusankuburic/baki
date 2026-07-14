@@ -1,6 +1,14 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
-import type {AnalysisReport, Severity, Finding, VariableHistory, FindingStatus, FlowBaseline, TriageStatus} from '@/types'
+import type {
+  AnalysisReport,
+  Severity,
+  Finding,
+  VariableHistory,
+  FindingStatus,
+  FlowBaseline,
+  TriageStatus,
+} from '@/types'
 import {toggleSetMember} from '@/lib/collections'
 import {analysisApi} from '@/api'
 import {isTauri} from '@/platform/guards'
@@ -20,7 +28,7 @@ const SAVED_VIEWS_KEY = 'baki:savedFilterViews'
 function loadSavedViews(): SavedFilterView[] {
   try {
     const raw = localStorage.getItem(SAVED_VIEWS_KEY)
-    return raw ? JSON.parse(raw) as SavedFilterView[] : []
+    return raw ? (JSON.parse(raw) as SavedFilterView[]) : []
   } catch {
     return []
   }
@@ -132,39 +140,40 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   selectedFindingIds: new Set(),
   focusedFindingKey: null,
 
-  setFocusedFinding: (key) => set({focusedFindingKey: key}),
+  setFocusedFinding: key => set({focusedFindingKey: key}),
 
-  setReport: (flowId, report) => set(state => {
-    const next = new Map(state.reports)
-    next.set(flowId, report)
-    // Build per-block findings index for O(1) lookup in findingsForBlock.
-    const nextIndex = new Map(state.findingsByBlock)
-    const blockIndex = new Map<string, Finding[]>()
-    for (const f of report.findings) {
-      const arr = blockIndex.get(f.blockId)
-      if (arr) arr.push(f)
-      else blockIndex.set(f.blockId, [f])
-    }
-    nextIndex.set(flowId, blockIndex)
-    // Evict oldest entries beyond the cap, but never evict the currently-open
-    // flow's report — losing it causes the per-block findings UI to silently
-    // go empty while the dashboard aggregate still shows it.
-    const protectedId = state.protectedFlowId
-    while (next.size > MAX_REPORTS) {
-      let evicted = false
-      for (const key of next.keys()) {
-        if (key === protectedId) continue
-        next.delete(key)
-        nextIndex.delete(key)
-        evicted = true
-        break
+  setReport: (flowId, report) =>
+    set(state => {
+      const next = new Map(state.reports)
+      next.set(flowId, report)
+      // Build per-block findings index for O(1) lookup in findingsForBlock.
+      const nextIndex = new Map(state.findingsByBlock)
+      const blockIndex = new Map<string, Finding[]>()
+      for (const f of report.findings) {
+        const arr = blockIndex.get(f.blockId)
+        if (arr) arr.push(f)
+        else blockIndex.set(f.blockId, [f])
       }
-      if (!evicted) break
-    }
-    return {reports: next, findingsByBlock: nextIndex}
-  }),
+      nextIndex.set(flowId, blockIndex)
+      // Evict oldest entries beyond the cap, but never evict the currently-open
+      // flow's report — losing it causes the per-block findings UI to silently
+      // go empty while the dashboard aggregate still shows it.
+      const protectedId = state.protectedFlowId
+      while (next.size > MAX_REPORTS) {
+        let evicted = false
+        for (const key of next.keys()) {
+          if (key === protectedId) continue
+          next.delete(key)
+          nextIndex.delete(key)
+          evicted = true
+          break
+        }
+        if (!evicted) break
+      }
+      return {reports: next, findingsByBlock: nextIndex}
+    }),
 
-  setAnalyzing: (b) => set({isAnalyzing: b}),
+  setAnalyzing: b => set({isAnalyzing: b}),
 
   beginAnalyzing: () => {
     const gen = get().analyzingGen + 1
@@ -172,19 +181,21 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     return gen
   },
 
-  setProgress: (p) => set({progress: p}),
+  setProgress: p => set({progress: p}),
 
-  toggleSeverityFilter: (s) => set(state => ({
-    severityFilter: toggleSetMember(state.severityFilter, s),
-  })),
+  toggleSeverityFilter: s =>
+    set(state => ({
+      severityFilter: toggleSetMember(state.severityFilter, s),
+    })),
 
-  setSeverityFilter: (s) => set({severityFilter: new Set(s)}),
+  setSeverityFilter: s => set({severityFilter: new Set(s)}),
 
-  toggleCategoryFilter: (c) => set(state => ({
-    categoryFilter: toggleSetMember(state.categoryFilter, c),
-  })),
+  toggleCategoryFilter: c =>
+    set(state => ({
+      categoryFilter: toggleSetMember(state.categoryFilter, c),
+    })),
 
-  setCategoryFilter: (c) => set({categoryFilter: new Set(c)}),
+  setCategoryFilter: c => set({categoryFilter: new Set(c)}),
 
   findingsForBlock: (flowId, blockId) => {
     const flowIndex = get().findingsByBlock.get(flowId)
@@ -192,9 +203,9 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     return flowIndex.get(blockId) ?? []
   },
 
-  setVariableLineage: (h) => set({variableLineage: h}),
+  setVariableLineage: h => set({variableLineage: h}),
 
-  setFindingSearch: (q) => set({findingSearch: q}),
+  setFindingSearch: q => set({findingSearch: q}),
 
   // Suppression is keyed by the stable findingKey and, in cloud mode, persisted
   // as team-shared triage state (status="suppressed"). Updates are optimistic;
@@ -208,11 +219,15 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       keys.add(key)
       return {
         suppressedKeys: keys,
-        suppressedFindings: [...state.suppressedFindings, {key, ruleId: finding.ruleId, reason, suppressedAt: new Date().toISOString()}],
+        suppressedFindings: [
+          ...state.suppressedFindings,
+          {key, ruleId: finding.ruleId, reason, suppressedAt: new Date().toISOString()},
+        ],
       }
     })
     if (!isTauri()) {
-      analysisApi.setFindingStatus({findingKey: key, ruleId: finding.ruleId, status: 'suppressed', justification: reason})
+      analysisApi
+        .setFindingStatus({findingKey: key, ruleId: finding.ruleId, status: 'suppressed', justification: reason})
         .catch(err => {
           logger.warn('Failed to persist suppression', err)
           set(state => {
@@ -239,21 +254,31 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
     if (!isTauri()) {
       const addedKeys = new Set(toAdd.map(findingKey))
-      analysisApi.setFindingStatusBatch(
-        toAdd.map(f => ({findingKey: findingKey(f), ruleId: f.ruleId, status: 'suppressed' as const, justification: reason})),
-      ).catch(err => {
-        logger.warn('Failed to persist bulk suppression', err)
-        // Roll back the optimistic update so local state matches the server.
-        set(state => {
-          const keys = new Set(state.suppressedKeys)
-          for (const k of addedKeys) keys.delete(k)
-          return {suppressedKeys: keys, suppressedFindings: state.suppressedFindings.filter(s => !addedKeys.has(s.key))}
+      analysisApi
+        .setFindingStatusBatch(
+          toAdd.map(f => ({
+            findingKey: findingKey(f),
+            ruleId: f.ruleId,
+            status: 'suppressed' as const,
+            justification: reason,
+          })),
+        )
+        .catch(err => {
+          logger.warn('Failed to persist bulk suppression', err)
+          // Roll back the optimistic update so local state matches the server.
+          set(state => {
+            const keys = new Set(state.suppressedKeys)
+            for (const k of addedKeys) keys.delete(k)
+            return {
+              suppressedKeys: keys,
+              suppressedFindings: state.suppressedFindings.filter(s => !addedKeys.has(s.key)),
+            }
+          })
         })
-      })
     }
   },
 
-  unsuppressFinding: (finding) => {
+  unsuppressFinding: finding => {
     const key = findingKey(finding)
     set(state => {
       const keys = new Set(state.suppressedKeys)
@@ -267,12 +292,16 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   clearSuppressed: () => set({suppressedFindings: [], suppressedKeys: new Set()}),
 
-  isSuppressed: (finding) => get().suppressedKeys.has(findingKey(finding)),
+  isSuppressed: finding => get().suppressedKeys.has(findingKey(finding)),
 
-  loadSuppressions: async (flowId) => {
+  loadSuppressions: async flowId => {
     if (isTauri() || !flowId) return
     try {
       const statuses = await analysisApi.listFindingStatuses(flowId)
+      // Guard against a stale response: if the user switched flows while this
+      // request was in flight, applying flowId's suppressions would clobber the
+      // now-current flow's triage state.
+      if (useFlowStore.getState().document?.id !== flowId) return
       const suppressed = (statuses || []).filter(s => s.status === 'suppressed')
       const triageMap = new Map<string, FindingStatus>()
       for (const s of statuses || []) {
@@ -308,21 +337,48 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           updatedAt: new Date().toISOString(),
         })
       }
+      // Keep the suppress filter in sync with the triage status. A finding is
+      // hidden by the suppress filter iff its status is 'suppressed'; any other
+      // status (open/acknowledged/in_progress/resolved) must reveal it. Without
+      // this, choosing "Suppressed" from the triage menu persisted the status
+      // but left the finding visible and suppressedCount stale until reload.
+      const isSuppressed = status === 'suppressed'
+      if (isSuppressed && !state.suppressedKeys.has(key)) {
+        const keys = new Set(state.suppressedKeys)
+        keys.add(key)
+        return {
+          triageMap,
+          suppressedKeys: keys,
+          suppressedFindings: [
+            ...state.suppressedFindings,
+            {key, ruleId: finding.ruleId, reason: '', suppressedAt: new Date().toISOString()},
+          ],
+        }
+      }
+      if (!isSuppressed && state.suppressedKeys.has(key)) {
+        const keys = new Set(state.suppressedKeys)
+        keys.delete(key)
+        return {
+          triageMap,
+          suppressedKeys: keys,
+          suppressedFindings: state.suppressedFindings.filter(s => s.key !== key),
+        }
+      }
       return {triageMap}
     })
     if (!isTauri()) {
-      analysisApi.setFindingStatus({findingKey: key, ruleId: finding.ruleId, status})
+      analysisApi
+        .setFindingStatus({findingKey: key, ruleId: finding.ruleId, status})
         .catch(err => logger.warn('Failed to persist triage status', err))
     }
   },
 
-  loadBaseline: async (flowId) => {
+  loadBaseline: async flowId => {
     if (isTauri() || !flowId) return
     try {
-      const [bl, drift] = await Promise.all([
-        analysisApi.getBaseline(flowId),
-        analysisApi.baselineDrift(flowId),
-      ])
+      const [bl, drift] = await Promise.all([analysisApi.getBaseline(flowId), analysisApi.baselineDrift(flowId)])
+      // Guard against a stale response overwriting the now-current flow's baseline.
+      if (useFlowStore.getState().document?.id !== flowId) return
       set({baseline: bl, baselineNewCount: drift.hasBaseline ? drift.new.length : null})
     } catch (err) {
       logger.warn('Failed to load baseline', err)
@@ -368,7 +424,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
   },
 
-  deleteSavedView: (name) => {
+  deleteSavedView: name => {
     set(state => {
       const views = state.savedViews.filter(v => v.name !== name)
       persistSavedViews(views)
@@ -376,7 +432,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
   },
 
-  toggleFindingSelection: (id) => {
+  toggleFindingSelection: id => {
     set(state => {
       const ids = new Set(state.selectedFindingIds)
       if (ids.has(id)) ids.delete(id)
@@ -385,7 +441,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
   },
 
-  selectAllFindings: (ids) => {
+  selectAllFindings: ids => {
     set(state => {
       const current = state.selectedFindingIds
       // If all given ids are already selected, deselect them (toggle-all)
@@ -402,27 +458,29 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   clearFindingSelection: () => set({selectedFindingIds: new Set()}),
 
-  setProtectedFlowId: (id) => set({protectedFlowId: id}),
+  setProtectedFlowId: id => set({protectedFlowId: id}),
 
-  reset: () => set({
-    reports: new Map(),
-    findingsByBlock: new Map(),
-    isAnalyzing: false,
-    analyzingGen: 0,
-    progress: {current: 0, total: 0, ruleName: ''},
-    severityFilter: defaultSeverityFilter(),
-    categoryFilter: defaultCategoryFilter(),
-    variableLineage: null,
-    suppressedFindings: [],
-    suppressedKeys: new Set(),
-    findingSearch: '',
-    protectedFlowId: null,
-    triageMap: new Map(),
-    baseline: null,
-    baselineNewCount: null,
-    selectedFindingIds: new Set(),
-    savedViews: [],
-  }),
+  reset: () =>
+    set({
+      reports: new Map(),
+      findingsByBlock: new Map(),
+      isAnalyzing: false,
+      analyzingGen: 0,
+      progress: {current: 0, total: 0, ruleName: ''},
+      severityFilter: defaultSeverityFilter(),
+      categoryFilter: defaultCategoryFilter(),
+      variableLineage: null,
+      suppressedFindings: [],
+      suppressedKeys: new Set(),
+      findingSearch: '',
+      protectedFlowId: null,
+      triageMap: new Map(),
+      baseline: null,
+      baselineNewCount: null,
+      selectedFindingIds: new Set(),
+      savedViews: [],
+      focusedFindingKey: null,
+    }),
 }))
 
 // Reset on logout (see storeRegistry).

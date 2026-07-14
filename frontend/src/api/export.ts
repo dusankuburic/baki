@@ -12,7 +12,7 @@ export const exportApi = {
     let path = ''
     if (getPlatformCapabilities().nativeDialogs) {
       const p = await createAdapter().fileSave({
-        filters: [{name: 'PDF', extensions: ['pdf']}]
+        filters: [{name: 'PDF', extensions: ['pdf']}],
       })
       if (!p) return ''
       path = p
@@ -35,7 +35,7 @@ export const exportApi = {
     let path = ''
     if (getPlatformCapabilities().nativeDialogs) {
       const p = await createAdapter().fileSave({
-        filters: [{name: 'Markdown', extensions: ['md']}]
+        filters: [{name: 'Markdown', extensions: ['md']}],
       })
       if (!p) return ''
       path = p
@@ -54,13 +54,12 @@ export const exportApi = {
     return path
   },
 
-  compareCurrentWith: (path: string): Promise<FlowDiff> =>
-    request('/api/export/compare', {path}),
+  compareCurrentWith: (path: string): Promise<FlowDiff> => request('/api/export/compare', {path}),
 
   pickFile: async (filter: string): Promise<string | null> => {
     const extensions = filter ? filter.split(',') : undefined
     const path = await createAdapter().fileOpen({
-      filters: extensions ? [{name: 'Files', extensions}] : undefined
+      filters: extensions ? [{name: 'Files', extensions}] : undefined,
     })
     return Array.isArray(path) ? path[0] : path
   },

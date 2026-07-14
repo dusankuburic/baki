@@ -12,11 +12,7 @@ interface Props {
 const MIN_HEIGHT = 300
 const MAX_HEIGHT = 900
 
-export default function ResizableChatPanel({
-  children,
-  minHeight = MIN_HEIGHT,
-  maxHeight = MAX_HEIGHT,
-}: Props) {
+export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, maxHeight = MAX_HEIGHT}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const startYRef = useRef(0)
   const startHeightRef = useRef(0)
@@ -38,17 +34,20 @@ export default function ResizableChatPanel({
 
   // DOM mutation only — no React state update on each pixel.
   // setHeight is called once in stopResize to sync React state with the final value.
-  const resize = useCallback((e: MouseEvent) => {
-    if (!isResizingRef.current) return
-    const delta = startYRef.current - e.clientY
-    // Round to whole pixels: clientY is fractional on HiDPI displays and the
-    // persisted chatPanelHeight is an int server-side (decode rejects floats).
-    const newHeight = Math.round(Math.max(minHeight, Math.min(maxHeight, startHeightRef.current + delta)))
-    pendingHeightRef.current = newHeight
-    if (containerRef.current) {
-      containerRef.current.style.height = newHeight + 'px'
-    }
-  }, [minHeight, maxHeight])
+  const resize = useCallback(
+    (e: MouseEvent) => {
+      if (!isResizingRef.current) return
+      const delta = startYRef.current - e.clientY
+      // Round to whole pixels: clientY is fractional on HiDPI displays and the
+      // persisted chatPanelHeight is an int server-side (decode rejects floats).
+      const newHeight = Math.round(Math.max(minHeight, Math.min(maxHeight, startHeightRef.current + delta)))
+      pendingHeightRef.current = newHeight
+      if (containerRef.current) {
+        containerRef.current.style.height = newHeight + 'px'
+      }
+    },
+    [minHeight, maxHeight],
+  )
 
   const stopResize = useCallback(() => {
     if (!isResizingRef.current) return
@@ -109,9 +108,7 @@ export default function ResizableChatPanel({
             <Minimize2 size={14} />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
-          {children}
-        </div>
+        <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
       </div>
     )
   }
@@ -136,9 +133,7 @@ export default function ResizableChatPanel({
         <Maximize2 size={12} />
       </button>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {children}
-      </div>
+      <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
 
       {/* Resize handle — three-dot pill indicator with accent line */}
       <div
@@ -150,21 +145,25 @@ export default function ResizableChatPanel({
         onDoubleClick={handleDoubleClick}
         title="Drag to resize · Double-click to reset"
       >
-        <div className={clsx(
-          'flex items-center gap-[3px] transition-all duration-150',
-          isResizing ? 'opacity-100 scale-110' : 'opacity-0 group-hover/handle:opacity-50',
-        )}>
+        <div
+          className={clsx(
+            'flex items-center gap-[3px] transition-all duration-150',
+            isResizing ? 'opacity-100 scale-110' : 'opacity-0 group-hover/handle:opacity-50',
+          )}
+        >
           <div className="w-[3px] h-[3px] rounded-full bg-brand-400" />
           <div className="w-[3px] h-[3px] rounded-full bg-brand-400" />
           <div className="w-[3px] h-[3px] rounded-full bg-brand-400" />
         </div>
         {/* Accent line */}
-        <div className={clsx(
-          'absolute bottom-0 left-6 right-6 h-px bg-brand-500 transition-all duration-200 origin-center',
-          isResizing
-            ? 'opacity-70 scale-x-100'
-            : 'opacity-0 scale-x-0 group-hover/handle:opacity-25 group-hover/handle:scale-x-100',
-        )} />
+        <div
+          className={clsx(
+            'absolute bottom-0 left-6 right-6 h-px bg-brand-500 transition-all duration-200 origin-center',
+            isResizing
+              ? 'opacity-70 scale-x-100'
+              : 'opacity-0 scale-x-0 group-hover/handle:opacity-25 group-hover/handle:scale-x-100',
+          )}
+        />
       </div>
     </div>
   )

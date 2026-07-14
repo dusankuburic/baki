@@ -126,11 +126,11 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	query := q.Get("q")
 	sort := q.Get("sort")
 	scope := service.LibraryScope(q.Get("scope"))
-	limit, ok := parseIntParam(w, q.Get("limit"), "limit", 0)
+	limit, ok := clampListLimit(w, q.Get("limit"))
 	if !ok {
 		return
 	}
-	offset, ok := parseIntParam(w, q.Get("offset"), "offset", 0)
+	offset, ok := clampListOffset(w, q.Get("offset"))
 	if !ok {
 		return
 	}
@@ -186,8 +186,7 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 		OrgID       string          `json:"orgId"`
 		Content     json.RawMessage `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Name == "" {
@@ -208,8 +207,7 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 	if req.OrgID != "" {
 		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowSave, "flow", saved.ID, map[string]string{"orgId": req.OrgID})
 	}
-	w.WriteHeader(http.StatusCreated)
-	render.JSON(w, h.toLibraryFlow(r.Context(), saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
+	render.JSONStatus(w, http.StatusCreated, h.toLibraryFlow(r.Context(), saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
 }
 
 func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request) {
@@ -282,8 +280,7 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 		Content     json.RawMessage `json:"content"`
 		Version     int             `json:"version"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -393,8 +390,7 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		return
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(v.Version)})
-	w.WriteHeader(http.StatusCreated)
-	render.JSON(w, v)
+	render.JSONStatus(w, http.StatusCreated, v)
 }
 
 // handleGetFlowVersion loads a specific historical version.

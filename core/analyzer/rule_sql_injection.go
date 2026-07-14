@@ -41,9 +41,11 @@ func (r *SqlInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 		return nil
 	}
 
-	for _, key := range []string{"sql", "query", "statement", "command"} {
-		sqlText, ok := block.Properties[key]
-		if !ok {
+	// Property keys preserve source case (PascalCase in PAD, e.g. "Sql"), so
+	// compare case-insensitively instead of looking up lowercase keys.
+	for key, sqlText := range block.Properties {
+		keyLower := strings.ToLower(key)
+		if keyLower != "sql" && keyLower != "query" && keyLower != "statement" && keyLower != "command" {
 			continue
 		}
 
@@ -63,3 +65,7 @@ func (r *SqlInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []mo
 
 	return nil
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&SqlInjectionRiskRule{}) }

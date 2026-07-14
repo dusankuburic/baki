@@ -46,6 +46,11 @@ func TestResolveAzureSecrets_SkipAlreadySet(t *testing.T) {
 	cfg.Server.KeyVaultURL = "https://fake-kv.vault.azure.net/"
 	cfg.Auth.Secret = "pre-existing-secret"
 	cfg.Storage.DatabaseURL = "pre-existing-db-url"
+	// Pre-set every mapped secret so none trigger a KV fetch (which would DNS-fail).
+	cfg.Auth.EncryptionKey = "pre-existing-enc-key"
+	cfg.Auth.SSO.ClientSecret = "pre-existing-sso-secret"
+	cfg.Email.Password = "pre-existing-smtp-password"
+	cfg.Server.MetricsToken = "pre-existing-metrics-token"
 
 	err := ResolveAzureSecrets(context.Background(), cfg)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,15 @@ func login(t *testing.T, rt *Router, email, password string) map[string]any {
 		})
 		if rrReg.Code != http.StatusOK && rrReg.Code != http.StatusConflict {
 			t.Fatalf("failed to register test user: %v - body: %s", rrReg.Code, rrReg.Body.String())
+		}
+		// Login requires a verified email (M9). Test users are verified
+		// immediately after registration so this helper exercises the normal
+		// verified-user login path; tests that specifically want an unverified
+		// account register without calling this helper.
+		if rt.security.Backend != nil {
+			if u, err := rt.security.Backend.LoadUserByEmail(context.Background(), email); err == nil && u != nil {
+				_ = rt.security.Backend.SetUserEmailVerified(context.Background(), u.ID)
+			}
 		}
 	}
 
@@ -96,6 +106,43 @@ func TestHandleAuthLogin_ReturnsTokenPair(t *testing.T) {
 			t.Errorf("response missing field %q", field)
 		}
 	}
+}
+
+// M9: a registered-but-unverified user must not be able to log in. This blocks
+// the shadow-registration takeover where an attacker registers a victim's email
+// and immediately gets a working session.
+func TestHandleAuthLogin_UnverifiedEmail_Returns403(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	// Register (leaves EmailVerified=false) but do NOT call login(), which
+	// would verify the email.
+	rrReg := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email":    "unverified@example.com",
+		"password": "Password123!",
+	})
+	checkStatus(t, rrReg, http.StatusOK)
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"email":    "unverified@example.com",
+		"password": "Password123!",
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+	if !strings.Contains(rr.Body.String(), "not verified") {
+		t.Errorf("expected 'not verified' in body, got: %s", rr.Body.String())
+	}
+
+	// After verifying the email, the same credentials must succeed.
+	u, err := rt.security.Backend.LoadUserByEmail(context.Background(), "unverified@example.com")
+	if err != nil {
+		t.Fatalf("LoadUserByEmail: %v", err)
+	}
+	if err := rt.security.Backend.SetUserEmailVerified(context.Background(), u.ID); err != nil {
+		t.Fatalf("SetUserEmailVerified: %v", err)
+	}
+	rr2 := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/login", "", map[string]any{
+		"email":    "unverified@example.com",
+		"password": "Password123!",
+	})
+	checkStatus(t, rr2, http.StatusOK)
 }
 
 func TestHandleAuthLogin_EmptyFieldsGetDefaults(t *testing.T) {

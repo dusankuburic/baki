@@ -17,8 +17,14 @@ func (r *DisabledBlockRule) DefaultSeverity() models.Severity { return models.Se
 func (r *DisabledBlockRule) Category() string                 { return "Style" }
 
 func (r *DisabledBlockRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if !strings.HasPrefix(block.RawType, "DISABLED_") &&
-		!strings.Contains(block.Name, "(disabled)") {
+	// The DISABLED_ RawType prefix is the primary signal (Power Automate marks
+	// disabled actions this way). The "(disabled)" name substring is a secondary
+	// heuristic for renamed actions — but it must NOT match COMMENT blocks,
+	// whose Name carries arbitrary comment text (e.g. "# TODO re-enable
+	// (disabled) action"), which would otherwise be a false positive.
+	isDisabled := strings.HasPrefix(block.RawType, "DISABLED_") ||
+		(block.Type != models.BlockTypeComment && strings.Contains(block.Name, "(disabled)"))
+	if !isDisabled {
 		return nil
 	}
 
@@ -32,3 +38,7 @@ func (r *DisabledBlockRule) Check(block *models.Block, ctx *RuleContext) []model
 		Suggestion:  "Remove disabled blocks to keep the flow clean, or re-enable them if they are needed.",
 	}}
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&DisabledBlockRule{}) }

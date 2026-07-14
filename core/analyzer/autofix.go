@@ -39,7 +39,17 @@ func ApplyPatch(source string, p models.Patch) string {
 	if len(p.Ops) == 0 {
 		return source
 	}
-	lines := strings.Split(source, "\n")
+	// Detect and normalize CRLF: strings.Split(source, "\n") leaves a trailing
+	// \r on each line of a CRLF source, and inserted patch lines (built with \n
+	// separators) would produce mixed line endings on round-trip — silently
+	// corrupting the file's line-ending convention. Normalize to LF internally,
+	// then restore the original convention on join.
+	crlf := strings.Contains(source, "\r\n")
+	raw := source
+	if crlf {
+		raw = strings.ReplaceAll(source, "\r\n", "\n")
+	}
+	lines := strings.Split(raw, "\n")
 
 	// Wraps first (they replace a range), then replaces, then appends, then
 	// inserts bottom-up. Apply-fix patches carry a single op, so multi-op
@@ -86,7 +96,11 @@ func ApplyPatch(source string, p models.Patch) string {
 		newLines = append(newLines, lines[idx:]...)
 		lines = newLines
 	}
-	return strings.Join(lines, "\n")
+	out := strings.Join(lines, "\n")
+	if crlf {
+		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	return out
 }
 
 // applyWrap replaces the inclusive 1-based range [StartLine..EndLine] with

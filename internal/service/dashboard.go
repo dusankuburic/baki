@@ -20,12 +20,12 @@ import (
 // in-process analyzer cache via AnalysisService.ComputeDashboard, and token
 // usage is not tracked.
 type DashboardService struct {
-	backend  storageif.StorageBackend
+	backend  storageif.DashboardStore
 	analysis *AnalysisService
 	flowSvc  *FlowService
 }
 
-func NewDashboardService(backend storageif.StorageBackend, analysis *AnalysisService, flowSvc *FlowService) *DashboardService {
+func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService) *DashboardService {
 	return &DashboardService{backend: backend, analysis: analysis, flowSvc: flowSvc}
 }
 

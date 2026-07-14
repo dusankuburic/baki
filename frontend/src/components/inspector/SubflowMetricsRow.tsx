@@ -12,9 +12,17 @@ function MiniBar({value, max, color}: {value: number; max: number; color: string
   )
 }
 
-const SubflowMetricsRow = React.memo(function SubflowMetricsRow({m, onSelect}: {m: SubflowMetrics; onSelect: () => void}) {
-  const cycloColor = m.cyclomaticComplexity > 20 ? 'bg-red-500' : m.cyclomaticComplexity > 10 ? 'bg-amber-500' : 'bg-green-500'
-  const cogColor = m.cognitiveComplexity > 30 ? 'bg-red-500' : m.cognitiveComplexity > 15 ? 'bg-amber-500' : 'bg-green-500'
+const SubflowMetricsRow = React.memo(function SubflowMetricsRow({
+  m,
+  onSelect,
+}: {
+  m: SubflowMetrics
+  onSelect: () => void
+}) {
+  const cycloColor =
+    m.cyclomaticComplexity > 20 ? 'bg-red-500' : m.cyclomaticComplexity > 10 ? 'bg-amber-500' : 'bg-green-500'
+  const cogColor =
+    m.cognitiveComplexity > 30 ? 'bg-red-500' : m.cognitiveComplexity > 15 ? 'bg-amber-500' : 'bg-green-500'
 
   return (
     <button
@@ -48,12 +56,8 @@ const SubflowMetricsRow = React.memo(function SubflowMetricsRow({m, onSelect}: {
         <span className="flex items-center gap-1 text-xs text-text-tertiary">
           <ArrowUpFromLine size={12} /> Fan-out: {m.fanOut}
         </span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          Depth: {m.maxNestingDepth}
-        </span>
-        <span className="flex items-center gap-1 text-xs text-text-tertiary">
-          Vars: {m.variableCount}
-        </span>
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">Depth: {m.maxNestingDepth}</span>
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">Vars: {m.variableCount}</span>
       </div>
     </button>
   )

@@ -9,8 +9,8 @@ import (
 var timeoutRequiredPrefixes = []string{
 	"WebAutomation.",
 	"UIAutomation.",
-	"Http.",
-	"Ftp.",
+	"HTTPClient.",
+	"FTP.",
 	"Database.",
 	"Outlook.SendEmail",
 	"Email.SendEmail",
@@ -80,3 +80,7 @@ func hasTimeoutConfigured(block *models.Block) bool {
 
 	return false
 }
+
+// init self-registers this rule with the analyzer's rule catalog
+// (see registry.go) — no separate registration step required.
+func init() { registerRule(&MissingTimeoutRule{}) }

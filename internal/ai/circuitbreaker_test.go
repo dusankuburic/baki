@@ -155,6 +155,30 @@ func TestCircuitBreaker_PermanentErrorsDoNotTrip(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_RateLimitedDoesNotTrip verifies that 429 (ErrRateLimited)
+// — though retryable — does NOT count toward the circuit-open threshold. A 429
+// is per-API-key, not "provider down for everyone"; in multi-tenant deployments
+// one tenant's rate-limit must not trip the shared breaker and block healthy
+// tenants. The retry layer still backs off on 429; only the breaker ignores it.
+func TestCircuitBreaker_RateLimitedDoesNotTrip(t *testing.T) {
+	errs := make([]error, cbFailureThreshold*3)
+	for i := range errs {
+		errs[i] = ErrRateLimited
+	}
+	resetBreakerRegistry()
+	cb := NewCircuitBreakerProvider(newCBStub(errs...))
+
+	for range cbFailureThreshold * 3 {
+		if err := cbCall(t, cb); !errors.Is(err, ErrRateLimited) {
+			t.Fatalf("expected ErrRateLimited, got %v", err)
+		}
+	}
+	// Circuit must still be closed — 429s must not trip it.
+	if err := cbCall(t, cb); err != nil {
+		t.Fatalf("circuit should be closed after only 429s, got %v (circuit may have opened)", err)
+	}
+}
+
 // TestCircuitBreaker_ClosesOnSuccessAfterOpen verifies the half-open → closed path.
 func TestCircuitBreaker_ClosesOnSuccessAfterOpen(t *testing.T) {
 	errs := make([]error, cbFailureThreshold)

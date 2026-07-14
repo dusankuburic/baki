@@ -24,9 +24,11 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
   const maxLen = Math.max(aFull.length, bFull.length)
   let firstDiff = 0
   while (firstDiff < maxLen && aFull[firstDiff] === bFull[firstDiff]) firstDiff++
-  let lastDiffA = aFull.length - 1, lastDiffB = bFull.length - 1
+  let lastDiffA = aFull.length - 1,
+    lastDiffB = bFull.length - 1
   while (lastDiffA >= firstDiff && lastDiffB >= firstDiff && aFull[lastDiffA] === bFull[lastDiffB]) {
-    lastDiffA--; lastDiffB--
+    lastDiffA--
+    lastDiffB--
   }
   const windowBefore = 3
   const windowAfter = 3
@@ -36,7 +38,8 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
 
   const a = aFull.slice(trimStart, trimEndA)
   const b = bFull.slice(trimStart, trimEndB)
-  const m = a.length, n = b.length
+  const m = a.length,
+    n = b.length
 
   // LCS DP table
   const dp: number[][] = Array.from({length: m + 1}, () => new Array(n + 1).fill(0))
@@ -50,11 +53,13 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
   // changed window, so no further trimming is needed — just add ellipsis
   // markers if the source was truncated.
   const rawDiff: DiffLine[] = []
-  let i = 0, j = 0
+  let i = 0,
+    j = 0
   while (i < m && j < n) {
     if (a[i] === b[j]) {
       rawDiff.push({type: 'context', text: a[i]})
-      i++; j++
+      i++
+      j++
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
       rawDiff.push({type: 'removed', text: a[i]})
       i++
@@ -63,8 +68,14 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
       j++
     }
   }
-  while (i < m) { rawDiff.push({type: 'removed', text: a[i]}); i++ }
-  while (j < n) { rawDiff.push({type: 'added', text: b[j]}); j++ }
+  while (i < m) {
+    rawDiff.push({type: 'removed', text: a[i]})
+    i++
+  }
+  while (j < n) {
+    rawDiff.push({type: 'added', text: b[j]})
+    j++
+  }
 
   const result: DiffLine[] = []
   if (trimStart > 0) result.push({type: 'context', text: '⋯'})
@@ -87,7 +98,9 @@ export default function PatchPreviewModal({open, original, patched, fixType, onA
 
   // Reset applying state whenever the modal closes so re-opening doesn't
   // leave the buttons permanently disabled.
-  useEffect(() => { if (!open) setApplying(false) }, [open])
+  useEffect(() => {
+    if (!open) setApplying(false)
+  }, [open])
 
   const diff = useMemo(() => computeDiff(original, patched), [original, patched])
 

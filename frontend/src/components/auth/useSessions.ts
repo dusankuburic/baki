@@ -12,25 +12,30 @@ export function useSessions() {
   // no extra request and no backend change to know "which row is me".
   const currentSessionId = getCurrentSessionId()
 
-  const {data, isLoading: loading, error: fetchError, setData: setSessions} = useAsync<SessionInfo[]>(
-    () => authApi.listSessions().then(list => list ?? []),
-    [],
-  )
+  const {
+    data,
+    isLoading: loading,
+    error: fetchError,
+    setData: setSessions,
+  } = useAsync<SessionInfo[]>(() => authApi.listSessions().then(list => list ?? []), [])
   const sessions = useMemo(() => data ?? [], [data])
   const error = actionError ?? fetchError
 
-  const revoke = useCallback(async (id: string) => {
-    setRevokingId(id)
-    setActionError(null)
-    try {
-      await authApi.revokeSession(id)
-      setSessions(sessions.filter(s => s.id !== id))
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to revoke session')
-    } finally {
-      setRevokingId(null)
-    }
-  }, [sessions, setSessions])
+  const revoke = useCallback(
+    async (id: string) => {
+      setRevokingId(id)
+      setActionError(null)
+      try {
+        await authApi.revokeSession(id)
+        setSessions(sessions.filter(s => s.id !== id))
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'Failed to revoke session')
+      } finally {
+        setRevokingId(null)
+      }
+    },
+    [sessions, setSessions],
+  )
 
   // revokeOthers signs out every session except the current one. There's no
   // dedicated "revoke all others" endpoint — each other session is already

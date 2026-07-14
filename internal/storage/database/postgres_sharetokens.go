@@ -61,7 +61,7 @@ func (b *PostgresStorageBackend) ListShareTokens(ctx context.Context, flowID str
 		}
 		out = append(out, t)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (b *PostgresStorageBackend) RevokeShareToken(ctx context.Context, flowID, tokenID string) error {

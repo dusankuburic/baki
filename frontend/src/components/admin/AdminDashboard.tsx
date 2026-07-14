@@ -8,7 +8,17 @@ import {UserManagementSection} from './UserManagementSection'
 import {DataMigrationSection} from './DataMigrationSection'
 import {AuditLogSection} from './AuditLogSection'
 
-function StatCard({ icon: Icon, label, value, color }: { icon: React.ElementType; label: string; value: number; color: string }) {
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  color,
+}: {
+  icon: React.ElementType
+  label: string
+  value: number
+  color: string
+}) {
   return (
     <div className="bg-surface-2 border border-border-default rounded-xl p-4 flex flex-col gap-2">
       <div className="flex items-center gap-1.5">
@@ -25,9 +35,17 @@ export const AdminDashboard: React.FC = () => {
   const isAdmin = currentUser?.role === 'admin'
 
   const {
-    migrationStatus, users, auditEvents, auditAction,
-    isLoading, isStarting, error,
-    fetchAll, startMigration, changeRole, filterAudit,
+    migrationStatus,
+    users,
+    auditEvents,
+    auditAction,
+    isLoading,
+    isStarting,
+    error,
+    fetchAll,
+    startMigration,
+    changeRole,
+    filterAudit,
   } = useAdminData(isAdmin)
 
   if (!isAdmin) {
@@ -39,9 +57,9 @@ export const AdminDashboard: React.FC = () => {
     )
   }
 
-  const adminCount  = users.filter(u => u.role === 'admin').length
+  const adminCount = users.filter(u => u.role === 'admin').length
   const memberCount = users.filter(u => u.role === 'member').length
-  const otherCount  = users.filter(u => u.role !== 'admin' && u.role !== 'member').length
+  const otherCount = users.filter(u => u.role !== 'admin' && u.role !== 'member').length
 
   return (
     <div className="p-6 md:p-8 space-y-6 max-w-5xl mx-auto">
@@ -50,20 +68,32 @@ export const AdminDashboard: React.FC = () => {
           <h1 className="text-2xl font-semibold text-text-primary">Admin Dashboard</h1>
           <p className="text-sm text-text-tertiary mt-0.5">Manage users and system settings</p>
         </div>
-        <Button variant="ghost" size="sm" icon={isLoading ? Loader : RefreshCw} onClick={fetchAll} disabled={isLoading} className={clsx(isLoading && '[&_svg]:animate-spin')}>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={isLoading ? Loader : RefreshCw}
+          onClick={fetchAll}
+          disabled={isLoading}
+          className={clsx(isLoading && '[&_svg]:animate-spin')}
+        >
           {isLoading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard icon={Users}  label="Total Users" value={users.length} color="text-text-secondary" />
-        <StatCard icon={Shield} label="Admins"       value={adminCount}  color="text-block-subflow" />
-        <StatCard icon={Users}  label="Members"      value={memberCount} color="text-block-action" />
-        <StatCard icon={Users}  label="Other"        value={otherCount}  color="text-text-tertiary" />
+        <StatCard icon={Users} label="Total Users" value={users.length} color="text-text-secondary" />
+        <StatCard icon={Shield} label="Admins" value={adminCount} color="text-block-subflow" />
+        <StatCard icon={Users} label="Members" value={memberCount} color="text-block-action" />
+        <StatCard icon={Users} label="Other" value={otherCount} color="text-text-tertiary" />
       </div>
 
       <UserManagementSection users={users} onRoleChange={(userId, role) => changeRole(userId, role, currentUser?.id)} />
-      <DataMigrationSection status={migrationStatus} isLoading={isLoading} isStarting={isStarting} onStart={startMigration} />
+      <DataMigrationSection
+        status={migrationStatus}
+        isLoading={isLoading}
+        isStarting={isStarting}
+        onStart={startMigration}
+      />
       <AuditLogSection events={auditEvents} action={auditAction} onFilterChange={filterAudit} />
 
       {error && (

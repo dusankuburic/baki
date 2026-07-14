@@ -30,9 +30,7 @@ export default function CodeBlock({language, value}: Props) {
   return (
     <div className="relative group rounded-xl overflow-hidden border border-border-default my-3 bg-surface-0">
       <div className="flex items-center justify-between px-4 py-2 bg-surface-3/80 backdrop-blur-sm border-b border-border-subtle">
-        <span className="text-xs font-mono text-text-tertiary select-none">
-          {language || 'text'}
-        </span>
+        <span className="text-xs font-mono text-text-tertiary select-none">{language || 'text'}</span>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1.5 px-2 py-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-4 transition-all duration-200"
@@ -52,11 +50,7 @@ export default function CodeBlock({language, value}: Props) {
         </button>
       </div>
 
-      <Highlight
-        theme={prismTheme}
-        code={code}
-        language={language || 'text'}
-      >
+      <Highlight theme={prismTheme} code={code} language={language || 'text'}>
         {({className, style, tokens, getLineProps, getTokenProps}) => (
           <pre
             className={className}

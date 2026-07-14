@@ -9,9 +9,7 @@ interface Props {
 
 export default function LibraryEmptyState({scope, hasQuery, hasOrgFilter}: Props) {
   if (hasQuery) {
-    return (
-      <Centered icon={SearchX} title="No matching flows" subtitle="Try a different search term." />
-    )
+    return <Centered icon={SearchX} title="No matching flows" subtitle="Try a different search term." />
   }
   if (hasOrgFilter) {
     return (
@@ -20,12 +18,20 @@ export default function LibraryEmptyState({scope, hasQuery, hasOrgFilter}: Props
   }
   if (scope === 'shared') {
     return (
-      <Centered icon={FolderOpen} title="Nothing shared with you yet" subtitle="Flows shared by collaborators will appear here." />
+      <Centered
+        icon={FolderOpen}
+        title="Nothing shared with you yet"
+        subtitle="Flows shared by collaborators will appear here."
+      />
     )
   }
   if (scope === 'mine') {
     return (
-      <Centered icon={FolderOpen} title="You haven't saved any flows yet" subtitle="Save a flow to the cloud library from the sidebar." />
+      <Centered
+        icon={FolderOpen}
+        title="You haven't saved any flows yet"
+        subtitle="Save a flow to the cloud library from the sidebar."
+      />
     )
   }
   return (
@@ -33,11 +39,7 @@ export default function LibraryEmptyState({scope, hasQuery, hasOrgFilter}: Props
   )
 }
 
-function Centered({icon: Icon, title, subtitle}: {
-  icon: typeof FolderOpen
-  title: string
-  subtitle: string
-}) {
+function Centered({icon: Icon, title, subtitle}: {icon: typeof FolderOpen; title: string; subtitle: string}) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <Icon size={28} className="text-text-tertiary mb-3 opacity-60" />

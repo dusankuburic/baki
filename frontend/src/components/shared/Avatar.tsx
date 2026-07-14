@@ -46,12 +46,7 @@ export default function Avatar({name, colorSeed, avatarUrl, size = 'md', classNa
       style={showImage ? undefined : {background: userColor(colorSeed || name)}}
     >
       {showImage ? (
-        <img
-          src={avatarUrl}
-          alt={name}
-          className="w-full h-full object-cover"
-          onError={() => setImgFailed(true)}
-        />
+        <img src={avatarUrl} alt={name} className="w-full h-full object-cover" onError={() => setImgFailed(true)} />
       ) : (
         userInitials(name)
       )}

@@ -1571,30 +1571,10 @@
       ]
     }
   ],
-  "parseErrors": [
-    {
-      "line": 15,
-      "message": "unclosed block: List Of Random Numbers",
-      "severity": "error",
-      "snippet": "Variables.GenerateRandomNumber.ListOfRandomNumbers"
-    },
-    {
-      "line": 3,
-      "message": "unclosed block: Round Number",
-      "severity": "error",
-      "snippet": "Variables.TruncateNumber.RoundNumber"
-    },
-    {
-      "line": 22,
-      "message": "unclosed block: Decrease Variable",
-      "severity": "error",
-      "snippet": "Variables.DecreaseVariable"
-    }
-  ],
   "metadata": {
     "blockCount": 72,
     "subflowCount": 5,
     "maxDepth": 3,
-    "rawLineCount": 88
+    "rawLineCount": 83
   }
 }

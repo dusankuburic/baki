@@ -72,7 +72,7 @@ export default function VariablesTab() {
               'w-full text-left px-3 py-1.5 rounded text-sm font-mono truncate transition-colors flex items-center gap-2',
               selectedVariable === v
                 ? 'bg-block-variable-bg text-block-variable ring-1 ring-block-variable/30'
-                : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary'
+                : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary',
             )}
           >
             <span className="opacity-50 text-xs">%</span>

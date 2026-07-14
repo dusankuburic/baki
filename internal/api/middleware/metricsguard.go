@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -53,7 +54,12 @@ func isPrivateIP(ipStr string) bool {
 // ClientIP, because ClientIP honours X-Forwarded-For whose leftmost entry is
 // client-controlled and trivially spoofable. The metrics endpoint must only be
 // reachable from inside the cluster network.
-func MetricsGuard(_ []string) func(http.Handler) http.Handler {
+//
+// When token is non-empty, a matching bearer token is ALSO required (constant
+// time compared). This is defense-in-depth against a misconfigured NSG/ingress
+// exposing /metrics via the public load balancer: even if a public IP somehow
+// reaches the pod, scraping still needs the shared secret.
+func MetricsGuard(_ []string, token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -64,7 +70,28 @@ func MetricsGuard(_ []string) func(http.Handler) http.Handler {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
+			if token != "" {
+				// Case-insensitive scheme match (RFC 7235 §2.1), consistent with
+				// auth.ExtractToken: a scraper sending "bearer <token>" must work.
+				got := extractBearerToken(r.Header.Get("Authorization"))
+				if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// extractBearerToken returns the token portion of a "Bearer <token>"
+// Authorization header, matching the scheme case-insensitively (RFC 7235
+// §2.1) so "bearer"/"BEARER" work like "Bearer". Returns "" when the header
+// is absent or uses a different scheme.
+func extractBearerToken(header string) string {
+	if idx := strings.IndexByte(header, ' '); idx == len("bearer") &&
+		strings.EqualFold(header[:idx], "bearer") {
+		return strings.TrimSpace(header[idx+1:])
+	}
+	return ""
 }

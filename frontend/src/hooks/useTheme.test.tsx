@@ -35,7 +35,11 @@ beforeEach(() => {
   document.documentElement.removeAttribute('data-density')
   document.documentElement.removeAttribute('data-reduce-motion')
   document.documentElement.removeAttribute('data-high-contrast')
-  try { localStorage.clear() } catch { /* jsdom guard */ }
+  try {
+    localStorage.clear()
+  } catch {
+    /* jsdom guard */
+  }
 })
 
 afterEach(() => {
