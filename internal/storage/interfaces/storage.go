@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-core/models"
 )
 
 // ErrNotFound is returned by backend methods when the requested record does not exist.
@@ -360,6 +361,17 @@ type StorageBackend interface {
 	ShareTokenStore
 	APITokenStore
 	UserTokenStore
+	PolicyStore
+}
+
+// PolicyStore covers org-scoped governance policies (named rule sets with a
+// pass/fail gate severity). Policies are team-shared in cloud mode; the
+// filesystem backend stubs these as no-ops (local mode has no orgs).
+type PolicyStore interface {
+	SavePolicy(ctx context.Context, p *models.Policy) error
+	GetPolicy(ctx context.Context, orgID, id string) (*models.Policy, error)
+	ListPolicies(ctx context.Context, orgID string) ([]*models.Policy, error)
+	DeletePolicy(ctx context.Context, orgID, id string) error
 }
 
 // UserToken purposes.

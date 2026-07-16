@@ -140,6 +140,8 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/history", h.Analysis.handleGetHistory)
 		r.Post("/export/html", h.Analysis.handleExportHTML)
 		r.Post("/export/sarif", h.Analysis.handleExportSARIF)
+		r.Post("/export/junit", h.Analysis.handleExportJUnit)
+		r.Post("/export/csv", h.Analysis.handleExportCSV)
 		r.Get("/dependencies", h.Analysis.handleGetDependencies)
 		r.Get("/dashboard", h.Analysis.handleGetDashboard)
 		r.Post("/subflow-hashes", h.Analysis.handleGetSubflowHashes)
@@ -159,7 +161,12 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/baseline/set", h.Analysis.handleSetBaseline)
 		r.Post("/baseline/clear", h.Analysis.handleClearBaseline)
 		r.Post("/baseline/drift", h.Analysis.handleBaselineDrift)
-		r.Post("/policy/evaluate", h.Analysis.handleEvaluatePolicy) // gate a flow against a policy
+		r.Post("/policy/evaluate", h.Analysis.handleEvaluatePolicy)           // gate a flow against an inline policy
+		r.Post("/policy/save", h.Analysis.handleSavePolicy)                   // persist a named policy (cloud)
+		r.Post("/policy/list", h.Analysis.handleListPolicies)                 // list org's policies (cloud)
+		r.Post("/policy/get", h.Analysis.handleGetPolicy)                     // get a single policy (cloud)
+		r.Post("/policy/delete", h.Analysis.handleDeletePolicy)               // delete a policy (cloud)
+		r.Post("/policy/evaluate-by-id", h.Analysis.handleEvaluatePolicyByID) // gate a flow against a persisted policy
 		// Finding comments (team-shared review threads)
 		r.Post("/comments/list", h.Analysis.handleListComments)
 		r.Post("/comments/add", h.Analysis.handleAddComment)

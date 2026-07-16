@@ -1,5 +1,4 @@
 export {default as SeverityBadge} from './SeverityBadge'
-export {default as SeverityFilter} from './SeverityFilter'
 export {default as FindingsSummary} from './FindingsSummary'
 export {default as FindingCard} from './FindingCard'
 export {default as FindingsList} from './FindingsList'

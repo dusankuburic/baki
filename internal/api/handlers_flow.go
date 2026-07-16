@@ -126,9 +126,10 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Stash the raw source for single-file flows so cloud-mode apply-fix/
-	// preview-fix (which patch line-based source) have the original text. For
-	// multi-file/folder flows the patch targets a subflow file and cloud fix is
-	// deferred; leave Source empty there.
+	// preview-fix (which patch line-based source) have the original text.
+	// Multi-file flows are NOT supported for cloud fix — per-file source
+	// storage is a future enhancement. Leave Source empty there; the fix
+	// path returns a clear error ("source not available").
 	if len(req.Files) == 1 {
 		for _, text := range req.Files {
 			doc.Source = text

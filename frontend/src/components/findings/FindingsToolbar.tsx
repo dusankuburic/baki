@@ -13,6 +13,7 @@ import {
 import {useAnalysisStore, type FindingCategory, type SavedFilterView} from '@/stores/analysisStore'
 import {categoryColors, categoryBackgrounds} from '@/lib/findingsColors'
 import {isTauri} from '@/platform/guards'
+import {useConfirm} from '@/components/shared'
 import type {Severity} from '@/types'
 import clsx from 'clsx'
 import {useState} from 'react'
@@ -73,10 +74,11 @@ export default function FindingsToolbar({
   const saveCurrentView = useAnalysisStore(s => s.saveCurrentView)
   const deleteSavedView = useAnalysisStore(s => s.deleteSavedView)
   const [showViews, setShowViews] = useState(false)
+  const {prompt} = useConfirm()
 
-  const handleSaveView = () => {
+  const handleSaveView = async () => {
     setShowViews(false)
-    const name = window.prompt('Name this filter view')
+    const name = await prompt({title: 'Save filter view', message: 'Name this filter view'})
     if (!name?.trim()) return
     saveCurrentView(name.trim(), severityFilter, categoryFilter)
   }
@@ -93,7 +95,7 @@ export default function FindingsToolbar({
   }
 
   return (
-    <div className="px-3 py-1.5 flex items-center justify-between border-b border-border-subtle gap-2">
+    <div className="px-3 py-1.5 flex items-center justify-between border-b border-border-subtle gap-2 flex-wrap">
       <div className="flex items-center gap-1">
         {[
           {s: 'error' as Severity, label: 'Errors', color: 'text-red-500', bg: 'bg-red-500/10'},

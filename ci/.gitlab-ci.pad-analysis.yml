@@ -14,11 +14,11 @@
 #       # POLICY: 'policy.json'       # authoritative gate (overrides FAIL_ON)
 #
 # This template builds bakicli from source, runs analysis with SARIF output,
-# publishes the SARIF report as a GitLab artifact (compatible with GitLab's
-# SARIF-based code quality display), and fails the pipeline on threshold breach.
+# publishes the SARIF report as a GitLab artifact, and fails the pipeline on
+# threshold breach.
 
 .pad-analysis:
-  image: golang:1.23-alpine
+  image: golang:1.25-alpine
   variables:
     FLOW_PATH: '.'
     FAIL_ON: 'error'
@@ -27,8 +27,7 @@
     SARIF_FILE: 'pad-analysis.sarif'
   before_script:
     - apk add --no-cache jq
-    - cd /baki && go build -o /usr/local/bin/bakicli ./cmd/bakicli
-    - cd "$CI_PROJECT_DIR"
+    - cd "$CI_PROJECT_DIR" && go build -o /usr/local/bin/bakicli ./cmd/bakicli
   script:
     - |
       set -euo pipefail
@@ -70,16 +69,11 @@
           exit "$code"
         fi
       fi
-  after_script:
-    - |
-      # Link the SARIF report for GitLab's code quality display
-      if [ -f "$SARIF_FILE" ]; then
-        echo "SARIF report available at: $SARIF_FILE"
-      fi
   artifacts:
     when: always
     reports:
-      codequality: pad-analysis.sarif
+      # SARIF reports are surfaced in GitLab merge request widgets as SAST.
+      sast: pad-analysis.sarif
     paths:
       - pad-analysis.sarif
       - pad-report.json

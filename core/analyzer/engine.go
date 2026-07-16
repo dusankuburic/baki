@@ -37,13 +37,16 @@ var ruleConfidence = map[string]models.Confidence{
 	"empty-branch":         models.ConfidenceHigh,
 	"redundant-action":     models.ConfidenceHigh,
 	// Low — heuristic / style, frequent false positives.
-	"uninitialized-variable": models.ConfidenceLow,
-	"unused-variable":        models.ConfidenceLow,
-	"deep-nesting":           models.ConfidenceLow,
-	"wide-loop":              models.ConfidenceLow,
-	"large-subflow":          models.ConfidenceLow,
-	"hardcoded-url":          models.ConfidenceLow,
-	"hardcoded-filepath":     models.ConfidenceLow,
+	"uninitialized-variable":      models.ConfidenceLow,
+	"unused-variable":             models.ConfidenceLow,
+	"deep-nesting":                models.ConfidenceLow,
+	"wide-loop":                   models.ConfidenceLow,
+	"large-subflow":               models.ConfidenceLow,
+	"hardcoded-url":               models.ConfidenceLow,
+	"hardcoded-filepath":          models.ConfidenceLow,
+	"hardcoded-ip":                models.ConfidenceLow,
+	"circular-subflow-dependency": models.ConfidenceHigh,
+	"parse-error":                 models.ConfidenceHigh,
 }
 
 // ruleAutoFix maps a rule to the deterministic fix the user can apply in one
@@ -53,21 +56,35 @@ var ruleConfidence = map[string]models.Confidence{
 var ruleAutoFix = map[string]string{
 	"unhandled-error":          "wrap-error-handler",
 	"file-op-no-error-handler": "wrap-error-handler",
+	"subflow-no-error-handler": "wrap-error-handler",
 	"resource-leak":            "insert-close",
 	"missing-timeout":          "set-timeout",
 	"missing-delay":            "insert-delay",
 	"empty-handler":            "insert-handler-log",
 	"uninitialized-variable":   "init-variable",
 	"error-swallow":            "insert-error-log",
-	"hardcoded-credential":     "replace-with-variable",
 	"missing-retry":            "wrap-in-retry",
 	"infinite-loop-risk":       "insert-exit-condition",
 	// remove-block: delete the offending block outright.
-	"duplicate-action":   "remove-block",
-	"redundant-action":   "remove-block",
-	"dead-code":          "remove-block",
-	"unused-variable":    "remove-block",
-	"disabled-block":     "remove-block",
+	"duplicate-action": "remove-block",
+	"redundant-action": "remove-block",
+	"dead-code":        "remove-block",
+	"dead-data":        "remove-block",
+	"empty-branch":     "remove-block",
+	"empty-subflow":    "remove-block",
+	"uncalled-subflow": "remove-block",
+	"unused-variable":  "remove-block",
+	"disabled-block":   "remove-block",
+	"wait-zero":        "remove-block",
+	// replace-with-variable: swap a hardcoded literal for %input_<key>%.
+	"hardcoded-credential": "replace-with-variable",
+	"hardcoded-filepath":   "replace-with-variable",
+	"hardcoded-url":        "replace-with-variable",
+	"hardcoded-ip":         "replace-with-variable",
+	"sensitive-exposure":   "mask-sensitive-variable",
+	"switch-no-default":    "insert-default",
+	// insert-delay-in-loop: insert WAIT inside a tight loop body.
+	"slow-pattern":       "insert-delay-in-loop",
 	"sql-injection-risk": "parameterize-sql",
 }
 
@@ -180,6 +197,22 @@ type RuleContext struct {
 	// properties include "retry"/"attempt". Precomputed once so the
 	// missing-retry rule does an O(1) lookup instead of re-walking + allocating.
 	InsideRetryLoop map[string]bool
+	// CircularSubflows marks every subflow ID that participates in a circular
+	// dependency cycle (detected via DFS on the call graph). Precomputed once
+	// so the circular-subflow-dependency rule does an O(1) lookup instead of
+	// rebuilding the call graph per subflow.
+	CircularSubflows map[string]bool
+	// SubflowCyclo maps a subflow ID to its cyclomatic complexity. Precomputed
+	// once so the high-cyclomatic-complexity rule does an O(1) lookup.
+	SubflowCyclo map[string]int
+	// SubflowFanIn maps a subflow ID to its fan-in count (number of distinct
+	// callers). Precomputed once so the uncalled-subflow rule does an O(1)
+	// lookup.
+	SubflowFanIn map[string]int
+	// DuplicateSubflowNames is the set of subflow names that appear more than
+	// once in the flow. Precomputed once so the duplicate-subflow-name rule
+	// does an O(1) lookup per subflow.
+	DuplicateSubflowNames map[string]bool
 }
 
 // blockSig returns the memoized content signature for b, computing it once.
@@ -271,6 +304,47 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 	for id := range ctx.AllBlocks {
 		ctx.computeHasErrorHandler(id)
 		ctx.computeInsideRetryLoop(id)
+	}
+
+	// Precompute circular subflow dependencies (DFS on the call graph) so the
+	// circular-subflow-dependency rule does an O(1) set lookup per subflow.
+	ctx.CircularSubflows = make(map[string]bool)
+	callGraph := buildCallGraph(flow)
+	for _, sfID := range detectCircularDeps(flow, callGraph) {
+		ctx.CircularSubflows[sfID] = true
+	}
+
+	// Precompute per-subflow cyclomatic complexity and fan-in (mirror the call
+	// graph inversion in ComputeFlowMetrics) so the high-cyclomatic and
+	// uncalled-subflow rules do O(1) lookups.
+	fanInByID := make(map[string]int, len(callGraph))
+	for src, targets := range callGraph {
+		for tgt := range targets {
+			if tgt != src {
+				fanInByID[tgt]++
+			}
+		}
+	}
+	ctx.SubflowCyclo = make(map[string]int, len(flow.Subflows))
+	ctx.SubflowFanIn = make(map[string]int, len(flow.Subflows))
+	for i := range flow.Subflows {
+		sf := &flow.Subflows[i]
+		m := computeSubflowMetrics(sf, callGraph, fanInByID)
+		ctx.SubflowCyclo[sf.ID] = m.CyclomaticComplexity
+		ctx.SubflowFanIn[sf.ID] = m.FanIn
+	}
+
+	// Precompute duplicate subflow names so the duplicate-subflow-name rule
+	// does an O(1) set lookup.
+	ctx.DuplicateSubflowNames = make(map[string]bool)
+	nameCount := make(map[string]int, len(flow.Subflows))
+	for i := range flow.Subflows {
+		nameCount[flow.Subflows[i].Name]++
+	}
+	for name, count := range nameCount {
+		if count > 1 {
+			ctx.DuplicateSubflowNames[name] = true
+		}
 	}
 
 	return ctx
@@ -507,6 +581,56 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 	}
 	if onProgress != nil && len(enabledRules) > 0 {
 		onProgress(counter, total, enabledRules[len(enabledRules)-1].Name())
+	}
+
+	// Fallback for parse-error findings: the parse-error rule anchors on the
+	// first block of the first subflow, so when no block is parseable (or the
+	// first subflow has zero blocks), the per-block Check never fires. Emit
+	// them here as a document-level fallback — but only if (a) the parse-error
+	// rule is enabled and (b) no parse-error findings were already produced
+	// by the per-block rule (avoids duplicates).
+	if len(flow.ParseErrors) > 0 {
+		// Respect the rule's enabled/disabled setting.
+		peEnabled := true
+		if settings != nil {
+			if rc, ok := settings.Analysis.Rules["parse-error"]; ok {
+				peEnabled = rc.Enabled
+			}
+		}
+		if peEnabled {
+			hasParseErrors := false
+			for _, f := range findings {
+				if f.RuleID == "parse-error" {
+					hasParseErrors = true
+					break
+				}
+			}
+			if !hasParseErrors {
+				anchorID := ""
+				anchorSF := ""
+				if len(flow.Subflows) > 0 {
+					anchorSF = flow.Subflows[0].ID
+				}
+				for _, pe := range flow.ParseErrors {
+					sev := models.SeverityError
+					if pe.Severity == "warning" {
+						sev = models.SeverityWarning
+					} else if pe.Severity == "info" {
+						sev = models.SeverityInfo
+					}
+					findings = append(findings, models.Finding{
+						RuleID:      "parse-error",
+						Severity:    sev,
+						Title:       "Parse error (line " + itoa(pe.Line) + ")",
+						Description: pe.Message,
+						BlockID:     anchorID,
+						SubflowID:   anchorSF,
+						Suggestion:  "Fix the syntax error so the parser can produce a complete block tree.",
+						Metadata:    map[string]interface{}{"line": pe.Line, "column": pe.Column, "snippet": pe.Snippet},
+					})
+				}
+			}
+		}
 	}
 
 	if findings == nil {

@@ -310,6 +310,28 @@ func InsertDelayPatch(block *models.Block) models.Patch {
 	}}}
 }
 
+// InsertDelayInLoopPatch builds a Patch that inserts a `WAIT 1` action INSIDE
+// a loop body (before the first child), resolving slow-pattern. Unlike
+// InsertDelayPatch (which goes before the block), this inserts one indent
+// level deeper — as the first child of the LOOP — so after re-parse the loop's
+// walkBlockTree finds a Wait action and hasWait → true.
+func InsertDelayInLoopPatch(block *models.Block) models.Patch {
+	if len(block.Children) == 0 {
+		return InsertDelayPatch(block)
+	}
+	firstChildLine := block.Children[0].LineNumber
+	if firstChildLine == 0 {
+		firstChildLine = block.LineNumber + 1
+	}
+	indent := strings.Repeat("    ", block.Indent+1)
+	delayLine := indent + "WAIT 1"
+	return models.Patch{Ops: []models.PatchOp{{
+		Kind:       "insert",
+		BeforeLine: firstChildLine,
+		Lines:      []string{delayLine},
+	}}}
+}
+
 // InsertHandlerLogPatch builds a Patch that inserts a logging action before the
 // error handler's END line, resolving empty-handler. After re-parse the handler
 // has a real child (non-END) so hasRealChildren → true. The inserted action
@@ -458,9 +480,10 @@ func InsertExitConditionPatch(block *models.Block) models.Patch {
 // apply + re-parse the block is gone, so rules that flag a block as redundant /
 // dead / unused / disabled / duplicate no longer have a target to fire on.
 //
-// Used by: duplicate-action, redundant-action, dead-code, unused-variable,
-// disabled-block. Each of those rules attaches its finding to the very block
-// that should be removed, so deleting the finding's block resolves it.
+// Used by: duplicate-action, redundant-action, dead-code, dead-data,
+// empty-branch, unused-variable, disabled-block. Each of those rules attaches
+// its finding to the very block that should be removed, so deleting the
+// finding's block resolves it.
 //
 // For duplicate-action the finding is on the first of a run of ≥3 identical
 // actions; removing one leaves N-1 below the minRepeats threshold, so the
@@ -516,4 +539,52 @@ func ParameterizeSqlPatch(block *models.Block, propKey string) models.Patch {
 		return models.Patch{}
 	}
 	return models.Patch{Ops: ops}
+}
+
+// AppendOutputPatch builds a Patch that appends ` => %Output_Result%` to the
+// CALL block's source line, resolving the uncaptured-output pattern of
+// subflow-mismatch. After apply + re-parse, the _output property is set, so
+// capturesOutput → true and the finding no longer fires. The output variable
+// name is a placeholder the user renames to match the target subflow's actual
+// output variable.
+func AppendOutputPatch(block *models.Block) models.Patch {
+	return models.Patch{Ops: []models.PatchOp{{
+		Kind:      "append",
+		StartLine: block.LineNumber,
+		Lines:     []string{" => %Output_Result%"},
+	}}}
+}
+
+// InsertDefaultPatch builds a Patch that inserts a DEFAULT branch as the last
+// child of a SWITCH block, resolving switch-no-default. After apply + re-parse,
+// the SWITCH has a BlockTypeDefault child so the rule no longer fires. The
+// default body is a single comment action (the user replaces it with real
+// handling). The insert goes AFTER the SWITCH's blockEndLine (before its END).
+func InsertDefaultPatch(block *models.Block) models.Patch {
+	indent := strings.Repeat("    ", block.Indent+1)
+	defaultLine := indent + "DEFAULT"
+	return models.Patch{Ops: []models.PatchOp{{
+		Kind:       "insert",
+		BeforeLine: blockEndLine(block),
+		Lines:      []string{defaultLine},
+	}}}
+}
+
+// MaskSensitiveVariablePatch builds a Patch that replaces %SensitiveVar% with
+// '*** MASKED ***' on the block's source line, resolving sensitive-exposure.
+// After apply + re-parse, the variable reference is gone from the block's
+// properties, so block.Variables no longer contains the sensitive name and the
+// rule doesn't fire. This is a "stop the bleed" fix — the action's behavior
+// changes (the masked value replaces the real credential), so the user must
+// follow up with proper credential handling.
+func MaskSensitiveVariablePatch(block *models.Block, varName string) models.Patch {
+	if varName == "" {
+		return models.Patch{}
+	}
+	return models.Patch{Ops: []models.PatchOp{{
+		Kind:      "replace",
+		StartLine: block.LineNumber,
+		Old:       "%" + varName + "%",
+		New:       "'*** MASKED ***'",
+	}}}
 }

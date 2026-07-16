@@ -1,11 +1,15 @@
 import {useState, useEffect} from 'react'
 import {WifiOff} from 'lucide-react'
+import {useSyncStore} from '@/stores/syncStore'
 
 // OfflineIndicator shows a small banner at the bottom of the screen when the
 // network connection drops. Listens to navigator.onLine + window online/offline
 // events. Hidden in Tauri (always "online" — the sidecar runs locally).
+// When offline with pending sync operations, shows the queue depth so users
+// know how many changes will sync when they reconnect.
 export default function OfflineIndicator() {
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const pendingCount = useSyncStore(s => s.pendingCount)
 
   useEffect(() => {
     const goOnline = () => setOnline(true)
@@ -28,6 +32,7 @@ export default function OfflineIndicator() {
     >
       <WifiOff size={12} />
       You're offline — showing cached data. Some actions are unavailable.
+      {pendingCount > 0 && <span className="font-semibold"> ({pendingCount} changes queued)</span>}
     </div>
   )
 }

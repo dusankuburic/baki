@@ -51,6 +51,42 @@ func TestAnalyzeRaw_ReturnsSARIF(t *testing.T) {
 	}
 }
 
+// TestAnalyzeRaw_ReturnsJUnit verifies the format=junit path returns JUnit XML.
+func TestAnalyzeRaw_ReturnsJUnit(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPost, "/api/analysis/analyze-raw", map[string]any{
+		"files":  map[string]string{"Main.txt": rawSampleFlow},
+		"name":   "raw-sample",
+		"format": "junit",
+	})
+	checkStatus(t, rr, http.StatusOK)
+	body := rr.Body.String()
+	if !strings.Contains(body, "<testsuites") {
+		t.Errorf("expected JUnit XML with <testsuites>, got: %s", body[:min(200, len(body))])
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/xml") {
+		t.Errorf("expected application/xml content-type, got %q", ct)
+	}
+}
+
+// TestAnalyzeRaw_ReturnsCSV verifies the format=csv path returns CSV text.
+func TestAnalyzeRaw_ReturnsCSV(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPost, "/api/analysis/analyze-raw", map[string]any{
+		"files":  map[string]string{"Main.txt": rawSampleFlow},
+		"name":   "raw-sample",
+		"format": "csv",
+	})
+	checkStatus(t, rr, http.StatusOK)
+	body := rr.Body.String()
+	if !strings.Contains(body, "Rule,Severity") {
+		t.Errorf("expected CSV with header row, got: %s", body[:min(200, len(body))])
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/csv") {
+		t.Errorf("expected text/csv content-type, got %q", ct)
+	}
+}
+
 // TestAnalyzeRaw_NoFilesReturns400 confirms a missing body is a clean 400.
 func TestAnalyzeRaw_NoFilesReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
@@ -60,9 +96,10 @@ func TestAnalyzeRaw_NoFilesReturns400(t *testing.T) {
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
-// TestAnalyzeRaw_GarbageIsGraceful confirms unparseable text doesn't crash —
-// the parser is lenient by design (produces an empty doc, 0 findings) rather
-// than erroring, so the endpoint returns a clean 200 with an empty report.
+// TestAnalyzeRaw_GarbageIsGraceful confirms unparseable text doesn't crash.
+// The parser is lenient by design (produces a doc with parse errors rather than
+// erroring). With the parse-error rule, garbage input now correctly surfaces
+// parse-error findings — the endpoint returns a clean 200 with those findings.
 func TestAnalyzeRaw_GarbageIsGraceful(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := doRequest(t, rt, http.MethodPost, "/api/analysis/analyze-raw", map[string]any{
@@ -71,7 +108,11 @@ func TestAnalyzeRaw_GarbageIsGraceful(t *testing.T) {
 	checkStatus(t, rr, http.StatusOK)
 	var report models.AnalysisReport
 	decodeJSON(t, rr, &report)
-	if len(report.Findings) != 0 {
-		t.Errorf("expected 0 findings for garbage input, got %d", len(report.Findings))
+	// Parse-error findings are expected (and correct) for unparseable input.
+	// The point of this test is that the endpoint doesn't crash.
+	for _, f := range report.Findings {
+		if f.RuleID != "parse-error" {
+			t.Errorf("expected only parse-error findings for garbage input, got %q", f.RuleID)
+		}
 	}
 }

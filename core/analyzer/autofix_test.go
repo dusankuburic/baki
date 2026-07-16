@@ -805,6 +805,16 @@ func TestRemoveBlockPatch_RoundTripResolvesFinding(t *testing.T) {
 			ruleID: "disabled-block",
 			source: "#Region \"Main\"\nDISABLE CALL DoThing\n#EndRegion\n",
 		},
+		{
+			name:   "dead-data variable only read after terminator",
+			ruleID: "dead-data",
+			source: "#Region \"Main\"\nSET TempVar TO 'data'\nExitSubflow.Exit Code: 0\nDisplay.ShowMessage Message: %TempVar%\n#EndRegion\n",
+		},
+		{
+			name:   "empty-branch empty else",
+			ruleID: "empty-branch",
+			source: "#Region \"Main\"\nIF %Flag%\nELSE\nEND\n#EndRegion\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -913,5 +923,49 @@ func TestParameterizeSqlPatch_MultipleVars(t *testing.T) {
 	}
 	if strings.Count(got, "@A") != 2 || strings.Count(got, "@B") != 1 {
 		t.Errorf("expected 2 @A and 1 @B, got: %s", got)
+	}
+}
+
+// TestSubflowNoErrorHandler_RoundTripResolvesFinding verifies the
+// wrap-error-handler fixer resolves a subflow-no-error-handler finding.
+// Wrapping the first actionable block in ON BLOCK ERROR...END gives the
+// subflow tree an error-handler block, so sfHasErrorHandler returns true.
+func TestSubflowNoErrorHandler_RoundTripResolvesFinding(t *testing.T) {
+	const source = "#Region \"Main\"\n" +
+		"WebAutomation.Click Element: 'b1'\n" +
+		"WebAutomation.Click Element: 'b2'\n" +
+		"WebAutomation.Click Element: 'b3'\n" +
+		"WebAutomation.Click Element: 'b4'\n" +
+		"#EndRegion\n"
+	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
+	var sfFinding *models.Finding
+	for i := range report.Findings {
+		if report.Findings[i].RuleID == "subflow-no-error-handler" {
+			sfFinding = &report.Findings[i]
+			break
+		}
+	}
+	if sfFinding == nil {
+		t.Fatalf("expected subflow-no-error-handler finding, got: %v", ruleIDs(report.Findings))
+	}
+	block := doc.BlocksByID[sfFinding.BlockID]
+	if block == nil {
+		t.Fatalf("block not found")
+	}
+
+	patched := ApplyPatch(source, WrapInErrorHandlerPatch(block))
+	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
+	if err != nil {
+		t.Fatalf("re-parse failed (not faithful): %v\npatched:\n%s", err, patched)
+	}
+	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
+	for _, f := range report2.Findings {
+		if f.RuleID == "subflow-no-error-handler" {
+			t.Errorf("subflow-no-error-handler still present after fix\npatched:\n%s", patched)
+		}
 	}
 }

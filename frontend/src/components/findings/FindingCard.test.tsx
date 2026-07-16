@@ -27,6 +27,12 @@ vi.mock('@/components/shared/Portal', () => ({
   default: ({children}: {children: React.ReactNode}) => <>{children}</>,
 }))
 
+// Mock platform guards so isTauri returns true (desktop mode) — the
+// FindingCard guards Apply fix / Suppress in file behind isTauri().
+vi.mock('@/platform/guards', () => ({
+  isTauri: () => true,
+}))
+
 import FindingCard from './FindingCard'
 
 const mockDoc = {

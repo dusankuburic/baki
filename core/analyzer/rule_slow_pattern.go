@@ -31,7 +31,8 @@ func (r *SlowPatternRule) Check(block *models.Block, ctx *RuleContext) []models.
 		if strings.HasPrefix(b.RawType, "WebAutomation.") || strings.HasPrefix(b.RawType, "UIAutomation.") {
 			hasUI = true
 		}
-		if strings.Contains(b.RawType, "Wait") || strings.Contains(b.RawType, "Delay") {
+		rtLower := strings.ToLower(b.RawType)
+		if strings.Contains(rtLower, "wait") || strings.Contains(rtLower, "delay") {
 			hasWait = true
 		}
 	})

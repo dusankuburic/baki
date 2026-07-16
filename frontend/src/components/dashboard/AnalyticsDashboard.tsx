@@ -249,7 +249,7 @@ export default function AnalyticsDashboard() {
         </div>
       ) : loading ? (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {[0, 1, 2].map(i => (
               <div key={i} className="p-3 rounded-xl border border-border-subtle bg-surface-0">
                 <div className="animate-pulse bg-surface-3 rounded h-3 w-16 mb-2" />
@@ -280,7 +280,7 @@ export default function AnalyticsDashboard() {
         stats &&
         !isEmpty && (
           <>
-            <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <StatCard label="Flows Analyzed" value={formatCount(stats.totalFlowsAnalyzed)} />
               <StatCard label="Total Findings" value={formatCount(stats.totalFindings)} />
               <StatCard

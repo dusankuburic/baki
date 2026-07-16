@@ -2,6 +2,7 @@ import type {ReactNode} from 'react'
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
+import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import type {Finding, AnalysisReport, FlowDocument} from '@/types'
@@ -119,7 +120,9 @@ async function renderTab() {
   const FindingsTab = (await import('./FindingsTab')).default
   return render(
     <ToastProvider>
-      <FindingsTab />
+      <ConfirmProvider>
+        <FindingsTab />
+      </ConfirmProvider>
     </ToastProvider>,
   )
 }

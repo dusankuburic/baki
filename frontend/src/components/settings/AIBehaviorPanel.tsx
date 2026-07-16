@@ -4,6 +4,7 @@ import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
+import {isTauri} from '@/platform/guards'
 import type {ProviderID, AIProviderConfig} from '@/types'
 
 export default function AIBehaviorPanel() {
@@ -34,18 +35,20 @@ export default function AIBehaviorPanel() {
           </p>
         </div>
 
-        <div>
-          <label className="text-sm font-medium text-text-primary block mb-3">Embedding Assistant</label>
-          <SegmentedControl
-            value={ai.embeddingProvider}
-            onChange={v => updateAI({embeddingProvider: v as ProviderID})}
-            options={[
-              {value: 'openai', label: 'OpenAI'},
-              {value: 'gemini', label: 'Gemini'},
-            ]}
-          />
-          <p className="text-xs text-text-tertiary mt-2">Provider used to index and search your Knowledge Base.</p>
-        </div>
+        {!isTauri() && (
+          <div>
+            <label className="text-sm font-medium text-text-primary block mb-3">Embedding Assistant</label>
+            <SegmentedControl
+              value={ai.embeddingProvider}
+              onChange={v => updateAI({embeddingProvider: v as ProviderID})}
+              options={[
+                {value: 'openai', label: 'OpenAI'},
+                {value: 'gemini', label: 'Gemini'},
+              ]}
+            />
+            <p className="text-xs text-text-tertiary mt-2">Provider used to index and search your Knowledge Base.</p>
+          </div>
+        )}
 
         <div className="space-y-4 pt-2">
           <label className="text-sm font-medium text-text-primary block">History & Costs</label>

@@ -29,6 +29,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "baki",
+    "category": "DeveloperTool",
+    "shortDescription": "Static analysis for Power Automate Desktop flows",
+    "longDescription": "PAD Analyzer is a static analysis tool that detects reliability, security, and performance issues in Power Automate Desktop flow exports.",
     "externalBin": [
       "bin/pad-backend"
     ],

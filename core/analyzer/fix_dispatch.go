@@ -27,6 +27,8 @@ func PatchForFix(block *models.Block, fixType, ruleID, variable, property string
 		return SetTimeoutPatch(block), nil
 	case "insert-delay":
 		return InsertDelayPatch(block), nil
+	case "insert-delay-in-loop":
+		return InsertDelayInLoopPatch(block), nil
 	case "insert-handler-log":
 		return InsertHandlerLogPatch(block), nil
 	case "init-variable":
@@ -43,6 +45,12 @@ func PatchForFix(block *models.Block, fixType, ruleID, variable, property string
 		return RemoveBlockPatch(block), nil
 	case "parameterize-sql":
 		return ParameterizeSqlPatch(block, property), nil
+	case "append-output":
+		return AppendOutputPatch(block), nil
+	case "mask-sensitive-variable":
+		return MaskSensitiveVariablePatch(block, variable), nil
+	case "insert-default":
+		return InsertDefaultPatch(block), nil
 	case "suppress":
 		return SuppressFindingPatch(block, ruleID), nil
 	default:

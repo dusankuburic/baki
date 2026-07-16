@@ -42,6 +42,7 @@ func (r *SubflowMismatchRule) Check(block *models.Block, ctx *RuleContext) []mod
 			BlockID:     block.ID,
 			SubflowID:   block.SubflowID,
 			Suggestion:  "Store the subflow's output in a variable so the result is not lost.",
+			AutoFix:     "append-output",
 			Metadata:    map[string]interface{}{"targetSubflow": targetName, "pattern": "uncaptured-output"},
 		})
 	}

@@ -43,6 +43,7 @@ var migrations = []migration{
 	{version: 5, name: "finding_status_created_at", sql: findingStatusCreatedAtSQL},
 	{version: 6, name: "perf_indexes", sql: perfIndexesSQL},
 	{version: 7, name: "usage_metrics_org_index", sql: usageMetricsOrgIndexSQL},
+	{version: 8, name: "policies", sql: policiesSQL},
 }
 
 // findingStatusCreatedAtSQL adds a created_at column to finding_status so the
@@ -865,8 +866,35 @@ CREATE POLICY rls_flow_baselines_visible ON flow_baselines FOR ALL USING (
         SELECT 1 FROM flows f
         WHERE f.id = flow_baselines.flow_id
           AND (f.owner_id = app_current_user_id()
-               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
-               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
-    )
+                OR EXISTS (SELECT 1 from flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+                OR EXISTS (SELECT 1 from org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+     )
+);
+`
+
+const policiesSQL = `
+CREATE TABLE IF NOT EXISTS policies (
+    id            TEXT        NOT NULL,
+    org_id        TEXT        NOT NULL,
+    name          TEXT        NOT NULL,
+    description   TEXT        DEFAULT '',
+    rules         JSONB       NOT NULL DEFAULT '[]',
+    gate_severity TEXT        NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id, org_id)
+);
+
+CREATE INDEX IF NOT EXISTS policies_org_id_idx ON policies (org_id);
+
+ALTER TABLE policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE policies FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY rls_policies_visible ON policies FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = policies.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = policies.org_id AND om.user_id = app_current_user_id())
 );
 `

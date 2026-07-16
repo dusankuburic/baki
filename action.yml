@@ -14,6 +14,14 @@ inputs:
     description: 'Minimum severity that fails the build: error, warning, info, or none (report-only).'
     required: false
     default: 'error'
+  rules:
+    description: 'Comma-separated rule IDs to enable (empty = all enabled rules).'
+    required: false
+    default: ''
+  format:
+    description: 'Output format for the report: sarif, json, junit, csv, text.'
+    required: false
+    default: 'sarif'
   policy:
     description: 'Optional path to a policy JSON file. When set it is the authoritative gate (overrides fail-on).'
     required: false
@@ -51,7 +59,9 @@ runs:
     - name: Build bakicli
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: go build -o "${{ runner.temp }}/bakicli" ./cmd/bakicli
+      run: |
+        VERSION=$(git describe --tags --always 2>/dev/null || echo "ci")
+        go build -ldflags "-X main.version=${VERSION}" -o "${{ runner.temp }}/bakicli" ./cmd/bakicli
 
     - name: Analyze flows (SARIF + gate)
       id: analyze
@@ -63,18 +73,21 @@ runs:
           args+=(-policy "${{ inputs.policy }}")
         else
           gate="${{ inputs.fail-on }}"
-          # bakicli only knows error/warning/info; "none" means report-only, so
-          # run with the loosest real threshold and ignore the exit code below.
           [ "$gate" = "none" ] && gate="info"
           args+=(-fail-on "$gate")
+        fi
+        if [ -n "${{ inputs.rules }}" ]; then
+          args+=(-rules "${{ inputs.rules }}")
         fi
         if [ -n "${{ inputs.baseline }}" ]; then
           args+=(-baseline "${{ inputs.baseline }}")
         fi
-        # bakicli writes the full SARIF to stdout *before* applying the gate, so
-        # the report is complete even when the gate then exits non-zero.
+        out_format="${{ inputs.format }}"
+        [ -z "$out_format" ] && out_format="sarif"
+        out_file="${{ inputs.sarif-file }}"
+        # SARIF is emitted before the gate exits non-zero, so the report is complete.
         set +e
-        "${{ runner.temp }}/bakicli" -format sarif "${args[@]}" "${{ inputs.flow-path }}" > "${{ inputs.sarif-file }}"
+        "${{ runner.temp }}/bakicli" -format "$out_format" "${args[@]}" "${{ inputs.flow-path }}" > "$out_file"
         code=$?
         set -e
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"

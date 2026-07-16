@@ -804,7 +804,7 @@ func TestHardcodedURLRule(t *testing.T) {
 		b := makeBlock("b1", "HTTP Request", models.BlockTypeAction, "Web.Call", 0)
 		b.SubflowID = "sf1"
 		b.Properties = map[string]string{
-			"url":   "https://api.example.com/v2/users",
+			"url":    "https://api.example.com/v2/users",
 			"server": "https://api.different.com/health",
 		}
 		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*b}}}}

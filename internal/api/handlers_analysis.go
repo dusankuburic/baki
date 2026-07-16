@@ -92,6 +92,14 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Validate format — unknown values are rejected (consistent with the CLI).
+	switch req.Format {
+	case "", "json", "sarif", "junit", "csv":
+	default:
+		render.Error(w, fmt.Errorf("unknown format %q (must be json, sarif, junit, or csv)", req.Format), http.StatusBadRequest)
+		return
+	}
+
 	// Parse purely (no docProvider side effect — this is stateless).
 	doc, err := parser.ParseFiles(req.Files, req.Name)
 	if err != nil {
@@ -112,6 +120,27 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		}
 		w.Header().Set("Content-Type", "application/sarif+json")
 		fmt.Fprintf(w, "%s\n", out)
+		return
+	}
+	if req.Format == "junit" {
+		out, err := export.ReportToJUnit(report, doc)
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		fmt.Fprintf(w, "%s\n", out)
+		return
+	}
+	if req.Format == "csv" {
+		out, err := export.ReportToCSV(report, doc)
+		if err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.csv"`)
+		fmt.Fprintf(w, "%s", out)
 		return
 	}
 	render.JSON(w, report)
@@ -450,6 +479,74 @@ func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/sarif+json")
 	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.sarif"`)
 	fmt.Fprintf(w, "%s\n", out)
+}
+
+// handleExportJUnit emits a JUnit XML report for the flow, suitable for CI
+// pipelines (Jenkins, GitLab CI). Mirrors handleExportSARIF.
+func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	out, err := export.ReportToJUnit(report, doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.xml"`)
+	fmt.Fprintf(w, "%s\n", out)
+}
+
+// handleExportCSV emits a CSV report for the flow, suitable for spreadsheet
+// triage. Mirrors handleExportSARIF.
+func (h *AnalysisHandler) handleExportCSV(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID string `json:"flowId"`
+	}
+	if err := decodeOptional(r.Body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	out, err := export.ReportToCSV(report, doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.csv"`)
+	fmt.Fprintf(w, "%s", out)
 }
 
 func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -21,6 +22,7 @@ type CustomRuleConfig struct {
 	PropertyNot  map[string]string `json:"propertyNot"`
 	TypeMatch    string            `json:"typeMatch"`
 	Suggestion   string            `json:"suggestion"`
+	AutoFix      string            `json:"autoFix,omitempty"`
 }
 
 type CustomRule struct {
@@ -76,6 +78,11 @@ func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {
 			return nil, err
 		}
 		r.rawRe = re
+	}
+	if cfg.AutoFix != "" {
+		if !isValidFixType(cfg.AutoFix) {
+			return nil, fmt.Errorf("custom rule %q: unknown autoFix %q", cfg.ID, cfg.AutoFix)
+		}
 	}
 	return r, nil
 }
@@ -136,5 +143,21 @@ func (r *CustomRule) Check(block *models.Block, ctx *RuleContext) []models.Findi
 		SubflowID:   block.SubflowID,
 		Suggestion:  suggestion,
 		Category:    r.config.Category,
+		AutoFix:     r.config.AutoFix,
 	}}
+}
+
+// isValidFixType reports whether fixType is a recognized auto-fixer name
+// (matches the switch cases in PatchForFix). Used to validate CustomRuleConfig.
+func isValidFixType(fixType string) bool {
+	switch fixType {
+	case "wrap-error-handler", "insert-close", "set-timeout", "insert-delay",
+		"insert-delay-in-loop", "insert-handler-log", "init-variable",
+		"insert-error-log", "replace-with-variable", "wrap-in-retry",
+		"insert-exit-condition", "remove-block", "parameterize-sql",
+		"append-output", "mask-sensitive-variable", "insert-default", "suppress":
+		return true
+	default:
+		return false
+	}
 }

@@ -44,7 +44,7 @@ export function useCommandList(deps: {
   toggleInspector: () => void
   toggleSettings: () => void
   setMainPaneView: (
-    v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'portfolio',
+    v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'portfolio' | 'rules',
   ) => void
   requestSearchFocus: () => void
   recentFiles: RecentFile[]
@@ -280,6 +280,13 @@ export function useCommandList(deps: {
         onSelect: () => setMainPaneView('portfolio'),
       })
     }
+
+    cmds.push({
+      id: 'view.rules',
+      label: 'Rule Reference',
+      section: 'Analysis',
+      onSelect: () => setMainPaneView('rules'),
+    })
 
     if (getPlatformCapabilities().fileSystem) {
       for (const f of recentFiles.slice(0, 5)) {

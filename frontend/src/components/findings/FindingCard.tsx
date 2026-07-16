@@ -14,6 +14,7 @@ import FindingCommentsPanel from './FindingCommentsPanel'
 import {useRelatedFindings} from './hooks/useRelatedFindings'
 import {useFindingComments} from './hooks/useFindingComments'
 import {useFindingFix} from './hooks/useFindingFix'
+import {isTauri} from '@/platform/guards'
 
 interface Props {
   finding: Finding
@@ -29,6 +30,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const unsuppressFinding = useAnalysisStore(s => s.unsuppressFinding)
   const toast = useToast()
   const [showHint, setShowHint] = useState(false)
+  const isDesktop = isTauri()
 
   const {showRelated, related, relatedLoading, relatedError, handleRelated, fetchRelated} = useRelatedFindings(finding)
   const {showComments, comments, commentBody, setCommentBody, commentLoading, handleComments, handleSubmitComment} =
@@ -53,7 +55,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
 
   return (
     <div className="hover:bg-surface-2/50 transition-colors group">
-      <div className="px-4 py-2 pl-9 flex items-center gap-3">
+      <div className="px-4 py-2 pl-9 flex items-center gap-2 flex-wrap">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-primary font-mono truncate">{blockLabel}</span>
@@ -150,27 +152,29 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           </button>
         )}
 
-        {finding.autoFix && finding.autoFix !== 'suppress' && (
+        {finding.autoFix && finding.autoFix !== 'suppress' && isDesktop && (
           <button
             onClick={() => handleApplyFix(finding.autoFix!)}
             disabled={applyingFix}
             className="flex items-center gap-1 text-2xs text-emerald-400 hover:text-emerald-300 px-1.5 py-1 rounded hover:bg-emerald-500/10 transition-colors shrink-0 disabled:opacity-50"
-            title="Apply this fix to the flow source file and re-analyze (desktop)"
+            title="Apply this fix to the flow source file and re-analyze"
           >
             <Wrench size={10} />
             {applyingFix ? 'Applying…' : 'Apply fix'}
           </button>
         )}
 
-        <button
-          onClick={() => handleApplyFix('suppress')}
-          disabled={applyingFix}
-          className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-1.5 py-1 rounded hover:bg-brand-500/10 transition-colors shrink-0 disabled:opacity-50"
-          title="Write a pad-ignore directive into the flow source file (desktop) and re-analyze"
-        >
-          <FilePen size={10} />
-          {applyingFix ? 'Applying…' : 'Suppress in file'}
-        </button>
+        {isDesktop && (
+          <button
+            onClick={() => handleApplyFix('suppress')}
+            disabled={applyingFix}
+            className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-1.5 py-1 rounded hover:bg-brand-500/10 transition-colors shrink-0 disabled:opacity-50"
+            title="Write a pad-ignore directive into the flow source file and re-analyze"
+          >
+            <FilePen size={10} />
+            {applyingFix ? 'Applying…' : 'Suppress in file'}
+          </button>
+        )}
 
         <button
           onClick={handleSuppress}

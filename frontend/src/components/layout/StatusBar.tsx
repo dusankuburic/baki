@@ -1,10 +1,11 @@
 import {useEffect, useState} from 'react'
-import {Check, User, Shield} from 'lucide-react'
+import {Check, User, Shield, Radio} from 'lucide-react'
 import {Spinner} from '@/components/shared'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useUIStore} from '@/stores/uiStore'
+import {useSyncStore} from '@/stores/syncStore'
 import {subscribeConnectionState, type EventConnectionState} from '@/api/client'
 
 export default function StatusBar() {
@@ -16,6 +17,7 @@ export default function StatusBar() {
   const report = useAnalysisStore(s => (document ? s.reports.get(document.id) : undefined))
   const user = useAuthStore(s => s.user)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  const pendingCount = useSyncStore(s => s.pendingCount)
 
   const [conn, setConn] = useState<EventConnectionState>('idle')
   useEffect(() => {
@@ -58,10 +60,21 @@ export default function StatusBar() {
         )}
       </div>
       <div className="flex items-center gap-4">
+        {conn === 'open' && (
+          <span className="flex items-center gap-1 text-semantic-success" title="Live updates connected">
+            <Radio size={10} />
+            <span>Live</span>
+          </span>
+        )}
         {(conn === 'reconnecting' || conn === 'connecting') && (
           <span className="flex items-center gap-1 text-semantic-warning" title="Live updates connection">
             <Spinner size={10} />
             {conn === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+          </span>
+        )}
+        {pendingCount > 0 && (
+          <span className="flex items-center gap-1 text-semantic-warning" title={`${pendingCount} change(s) pending sync`}>
+            <span>⇅ {pendingCount} unsaved</span>
           </span>
         )}
         {user && (

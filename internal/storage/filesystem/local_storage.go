@@ -15,6 +15,7 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
 )
 
 // LocalStorageBackend implements StorageBackend for local file system storage
@@ -528,6 +529,20 @@ func (b *LocalStorageBackend) SaveAuditEvent(ctx context.Context, event *interfa
 }
 func (b *LocalStorageBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
 	return []*interfaces.AuditEvent{}, nil
+}
+
+// Policies — not persisted in local mode (no orgs).
+func (b *LocalStorageBackend) SavePolicy(ctx context.Context, p *models.Policy) error {
+	return nil
+}
+func (b *LocalStorageBackend) GetPolicy(ctx context.Context, orgID, id string) (*models.Policy, error) {
+	return nil, interfaces.ErrNotFound
+}
+func (b *LocalStorageBackend) ListPolicies(ctx context.Context, orgID string) ([]*models.Policy, error) {
+	return []*models.Policy{}, nil
+}
+func (b *LocalStorageBackend) DeletePolicy(ctx context.Context, orgID, id string) error {
+	return nil
 }
 
 // Flow versioning — not supported in local desktop mode.

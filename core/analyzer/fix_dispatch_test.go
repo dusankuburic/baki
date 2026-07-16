@@ -27,6 +27,7 @@ func TestPatchForFix(t *testing.T) {
 		{"insert-close", "insert-close", &models.Block{RawType: "Excel.LaunchExcel", LineNumber: 1, Properties: map[string]string{"_output": "ExcelInstance"}}, "", "", "", false, "insert"},
 		{"set-timeout", "set-timeout", leaf, "", "", "", false, "append"},
 		{"insert-delay", "insert-delay", leaf, "", "", "", false, "insert"},
+		{"insert-delay-in-loop", "insert-delay-in-loop", &models.Block{LineNumber: 2, Indent: 0, Children: []models.Block{{LineNumber: 3}}}, "", "", "", false, "insert"},
 		{"insert-handler-log", "insert-handler-log", leaf, "", "", "", false, "insert"},
 		{"init-variable", "init-variable", leaf, "", "MyVar", "", false, "insert"},
 		{"insert-error-log", "insert-error-log", leaf, "", "", "", false, "insert"},
@@ -35,6 +36,9 @@ func TestPatchForFix(t *testing.T) {
 		{"insert-exit-condition", "insert-exit-condition", &models.Block{LineNumber: 2, Children: []models.Block{{LineNumber: 3}}}, "", "", "", false, "insert"},
 		{"remove-block", "remove-block", leaf, "", "", "", false, "remove"},
 		{"parameterize-sql", "parameterize-sql", &models.Block{LineNumber: 1, Properties: map[string]string{"Sql": "SELECT * FROM t WHERE id = %X%"}}, "", "", "Sql", false, "replace"},
+		{"append-output", "append-output", leaf, "", "", "", false, "append"},
+		{"mask-sensitive-variable", "mask-sensitive-variable", &models.Block{LineNumber: 1, Properties: map[string]string{"password": "secret"}}, "", "Password", "", false, "replace"},
+		{"insert-default", "insert-default", &models.Block{LineNumber: 1, Indent: 0}, "", "", "", false, "insert"},
 		{"suppress", "suppress", leaf, "missing-timeout", "", "", false, "insert"},
 		{"unknown fixType errors", "bogus", leaf, "", "", "", true, ""},
 	}

@@ -4,7 +4,7 @@ import {versionsApi, type FlowVersion} from '@/api/admin'
 import {libraryApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
-import {useToast} from '@/components/shared'
+import {useToast, useConfirm} from '@/components/shared'
 import {EmptyState, ErrorState, Spinner} from '@/components/shared'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
@@ -16,6 +16,7 @@ export const HistoryTab: React.FC = () => {
   const setActiveDiff = useUIStore(s => s.setActiveDiff)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const toast = useToast()
+  const {confirm} = useConfirm()
 
   const [isSaving, setIsSaving] = useState(false)
   const [comment, setComment] = useState('')
@@ -80,9 +81,13 @@ export const HistoryTab: React.FC = () => {
   // overwrites the current content.
   const handleRestore = async (v: FlowVersion) => {
     if (!document?.id || busyVersion !== null) return
-    if (!window.confirm(`Restore flow to v${v.version}? This overwrites the current content (recoverable from history).`)) {
-      return
-    }
+    const ok = await confirm({
+      title: 'Restore flow',
+      message: `Restore flow to v${v.version}? This overwrites the current content (recoverable from history).`,
+      danger: true,
+      confirmLabel: 'Restore',
+    })
+    if (!ok) return
     setBusyVersion(v.version)
     try {
       await versionsApi.restore(document.id, v.version)

@@ -5,7 +5,7 @@ import {useAuthStore} from '@/stores/authStore'
 import {logger} from '@/lib/logger'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
-import {useToast} from '@/components/shared'
+import {useToast, useConfirm} from '@/components/shared'
 
 // AccountDataCard holds account-management actions that were previously
 // buried in Settings > Privacy: exporting a data-subject bundle and the
@@ -14,6 +14,7 @@ import {useToast} from '@/components/shared'
 export const AccountDataCard: React.FC = () => {
   const {user, logout} = useAuthStore()
   const toast = useToast()
+  const {confirm} = useConfirm()
   const [exporting, setExporting] = useState(false)
 
   const [confirmEmail, setConfirmEmail] = useState('')
@@ -49,9 +50,13 @@ export const AccountDataCard: React.FC = () => {
       setDeleteErr('Type your email exactly as shown to confirm.')
       return
     }
-    if (!window.confirm('This permanently erases your account and your flows. This cannot be undone. Continue?')) {
-      return
-    }
+    const ok = await confirm({
+      title: 'Delete account',
+      message: 'This permanently erases your account and your flows. This cannot be undone. Continue?',
+      danger: true,
+      confirmLabel: 'Delete account',
+    })
+    if (!ok) return
     setDeleting(true)
     try {
       await authApi.deleteAccount(confirmEmail.trim())

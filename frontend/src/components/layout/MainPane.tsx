@@ -43,8 +43,10 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
   const toast = useToast()
   const editor = useEditorGroups()
   const [loadingSample, setLoadingSample] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
-  const [showSource, setShowSource] = useState(false)
+  const showHelp = useUIStore(s => s.showHelpOverlay)
+  const setShowHelp = useUIStore(s => s.setShowHelpOverlay)
+  const showSource = useUIStore(s => s.showSourceEditor)
+  const setShowSource = useUIStore(s => s.setShowSourceEditor)
 
   // Keep the flow store's selected subflow in sync with the focused group's
   // active tab, whatever changed it — tab click, closing a tab (a neighbor
@@ -109,7 +111,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
                 {loadingSample ? 'Loading sample…' : 'Try a sample flow'}
               </button>
               <button
-                onClick={() => setShowHelp(s => !s)}
+                onClick={() => setShowHelp(!showHelp)}
                 className="mt-4 flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
               >
                 <HelpCircle size={12} />
@@ -147,19 +149,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
   if (showSource && document) {
     return (
       <div className="flex flex-col h-full">
-        <div className="relative">
-          <MainPaneToolbar />
-          <div className="absolute top-1 right-3 z-20">
-            <button
-              onClick={() => setShowSource(false)}
-              className="flex items-center gap-1 text-2xs px-2 py-1 rounded bg-brand-500/15 text-brand-400 hover:bg-brand-500/25 transition-colors"
-              title="Switch to block view"
-            >
-              <Code2 size={12} />
-              Block view
-            </button>
-          </div>
-        </div>
+        <MainPaneToolbar />
         <SourceEditor onClose={() => setShowSource(false)} />
       </div>
     )

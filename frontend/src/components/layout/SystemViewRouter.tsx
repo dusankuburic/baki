@@ -14,6 +14,7 @@ const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
 const LibraryWorkspace = lazy(() => import('@/components/library/LibraryWorkspace'))
 const PortfolioView = lazy(() => import('@/components/dashboard/PortfolioView'))
 const RuleDependencyView = lazy(() => import('@/components/analyzer/RuleDependencyView'))
+const RuleReference = lazy(() => import('@/components/analyzer/RuleReference'))
 const AdminDashboard = lazy(() => import('@/components/admin/AdminDashboard').then(m => ({default: m.AdminDashboard})))
 
 // SystemViewRouter renders the top-level views that are NOT the flow editor:
@@ -87,15 +88,23 @@ export function SystemViewRouter({view}: {view: string}) {
         </div>
       )
     case 'deps':
-      // Rule dependency DAG (cytoscape) — needs a fixed-height, non-scroll
-      // container so the canvas fills the pane. Lazy: pulls cytoscape only
-      // when this niche analyzer-internals view is opened.
       return (
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-hidden">
             <Suspense fallback={<Spinner />}>
               <RuleDependencyView />
+            </Suspense>
+          </div>
+        </div>
+      )
+    case 'rules':
+      return (
+        <div className="flex flex-col h-full bg-surface-1">
+          <MainPaneToolbar />
+          <div className="flex-1 overflow-y-auto">
+            <Suspense fallback={<Spinner />}>
+              <RuleReference />
             </Suspense>
           </div>
         </div>
@@ -116,6 +125,7 @@ export function isSystemView(view: string): boolean {
     view === 'home' ||
     view === 'library' ||
     view === 'portfolio' ||
-    view === 'deps'
+    view === 'deps' ||
+    view === 'rules'
   )
 }

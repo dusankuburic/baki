@@ -754,15 +754,17 @@ func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, bl
 
 // applyPatchToCloudSource patches the stored raw PAD source (cloud mode),
 // validates the result (no new parse errors), re-parses, and persists the
-// updated content + source via SaveFlow. SaveFlow's OCC guards against a
-// concurrent edit (a stale doc → ErrVersionConflict, mapped by the handler to 409).
+// updated content + source via SaveFlow. For single-file flows, patches the
+// doc.Source directly. For multi-file flows, doc.Source contains the combined
+// applyPatchToCloudSource patches the stored raw PAD source (cloud mode),
+// validates the result (no new parse errors), re-parses, and persists the
+// updated content + source via SaveFlow. Only works for single-file flows
+// (multi-file flows don't have stored per-file source — cloud fix is deferred).
 func (s *FlowService) applyPatchToCloudSource(ctx context.Context, doc *models.FlowDocument, patch models.Patch) (*models.FlowDocument, error) {
 	if doc.Source == "" {
-		return nil, fmt.Errorf("source not available for this flow (cloud fix requires a single-file flow)")
+		return nil, fmt.Errorf("source not available — cloud fix requires a single-file flow (multi-file cloud fix is not yet supported)")
 	}
 	patched := analyzer.ApplyPatch(doc.Source, patch)
-	// Same gate as PatchFlow: reject patches that introduce block-structure
-	// errors, so a malformed patch can't replace valid source with degraded source.
 	if parseErrorCount(patched, doc.Name) > parseErrorCount(doc.Source, doc.Name) {
 		return nil, fmt.Errorf("patch would introduce parse errors (flow left unchanged)")
 	}
@@ -786,7 +788,7 @@ func (s *FlowService) applyPatchToCloudSource(ctx context.Context, doc *models.F
 			ID:             doc.ID,
 			Name:           doc.Name,
 			Content:        content,
-			Source:         patched,
+			Source:         updated.Source, // empty for multi-file flows
 			OwnerID:        doc.OwnerID,
 			OrganizationID: doc.OrganizationID,
 			Metadata: storageif.FlowMetadata{

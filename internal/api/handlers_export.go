@@ -49,10 +49,6 @@ func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.
 }
 
 func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {
-	if h.security.JWTEnabled {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-		return
-	}
 	var req struct {
 		Path   string `json:"path"`
 		FlowID string `json:"flowId"`
@@ -88,10 +84,6 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) {
-	if h.security.JWTEnabled {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
-		return
-	}
 	var req struct {
 		Path   string `json:"path"`
 		FlowID string `json:"flowId"`

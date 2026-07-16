@@ -1,6 +1,7 @@
 import {LayoutGrid, AlertCircle} from 'lucide-react'
 import {libraryApi, type Portfolio} from '@/api/library'
 import {Spinner, EmptyState} from '@/components/shared'
+import {useUIStore} from '@/stores/uiStore'
 import {logger} from '@/lib/logger'
 import {useAsync} from '@/hooks/useAsync'
 
@@ -26,6 +27,7 @@ function Stat({label, value, accent}: {label: string; value: string | number; ac
  * (cloud mode). Read-only for now.
  */
 export default function PortfolioView() {
+  const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const {
     data,
     isLoading: loading,
@@ -95,8 +97,8 @@ export default function PortfolioView() {
           <Stat label="Open errors" value={data.errors} accent={data.errors > 0 ? 'text-semantic-error' : undefined} />
         </div>
 
-        <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">
-          <table className="w-full text-sm">
+        <div className="border border-border-default rounded-xl overflow-x-auto bg-surface-1">
+          <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="text-2xs uppercase tracking-wider text-text-tertiary border-b border-border-default">
                 <th className="text-left font-medium px-4 py-2 w-8">#</th>
@@ -109,7 +111,11 @@ export default function PortfolioView() {
             </thead>
             <tbody>
               {data.entries.map((e, i) => (
-                <tr key={e.flowId} className="border-b border-border-subtle last:border-0 hover:bg-surface-2/50">
+                <tr
+                  key={e.flowId}
+                  className="border-b border-border-subtle last:border-0 hover:bg-surface-2/50 cursor-pointer transition-colors"
+                  onClick={() => setMainPaneView('library')}
+                >
                   <td className="px-4 py-2 text-text-tertiary tabular-nums">{i + 1}</td>
                   <td className="px-4 py-2 text-text-primary truncate max-w-[16rem]">{e.flowName || e.flowId}</td>
                   <td className="px-4 py-2 text-text-tertiary truncate max-w-[12rem]">

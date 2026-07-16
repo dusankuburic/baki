@@ -7,6 +7,7 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
 )
 
 // FakeBackend is an in-memory implementation of storageinterfaces.StorageBackend
@@ -537,3 +538,13 @@ func (m *FakeBackend) RevokeShareToken(_ context.Context, flowID, tokenID string
 	}
 	return nil
 }
+
+// Policies — in-memory stub for tests.
+func (m *FakeBackend) SavePolicy(_ context.Context, p *models.Policy) error { return nil }
+func (m *FakeBackend) GetPolicy(_ context.Context, _, _ string) (*models.Policy, error) {
+	return nil, interfaces.ErrNotFound
+}
+func (m *FakeBackend) ListPolicies(_ context.Context, _ string) ([]*models.Policy, error) {
+	return []*models.Policy{}, nil
+}
+func (m *FakeBackend) DeletePolicy(_ context.Context, _, _ string) error { return nil }

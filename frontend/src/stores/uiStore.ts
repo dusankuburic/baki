@@ -15,6 +15,7 @@ export type MainPaneView =
   | 'library'
   | 'portfolio'
   | 'deps'
+  | 'rules'
 export type ResolvedTheme =
   | 'dark'
   | 'light'
@@ -67,6 +68,8 @@ interface UiState {
   selectedVariable: string | null
   graphZoom: number
   activeDiff: FlowDiff | null
+  showSourceEditor: boolean
+  showHelpOverlay: boolean
 
   setResolvedTheme: (t: ResolvedTheme) => void
   setSidebarTab: (t: SidebarTab) => void
@@ -81,6 +84,8 @@ interface UiState {
   setSelectedVariable: (v: string | null) => void
   setGraphZoom: (z: number) => void
   setActiveDiff: (d: FlowDiff | null) => void
+  setShowSourceEditor: (v: boolean) => void
+  setShowHelpOverlay: (v: boolean) => void
   toggleSidebar: () => void
   toggleComplexityMode: () => void
   toggleInspector: () => void
@@ -102,6 +107,8 @@ export const useUIStore = create<UiState>(set => ({
   selectedVariable: null,
   graphZoom: 1,
   activeDiff: null,
+  showSourceEditor: false,
+  showHelpOverlay: false,
 
   setResolvedTheme: t => set({resolvedTheme: t}),
   setSidebarTab: t => set({sidebarTab: t}),
@@ -122,6 +129,8 @@ export const useUIStore = create<UiState>(set => ({
   setSelectedVariable: v => set({selectedVariable: v}),
   setGraphZoom: z => set({graphZoom: z}),
   setActiveDiff: d => set({activeDiff: d}),
+  setShowSourceEditor: v => set({showSourceEditor: v}),
+  setShowHelpOverlay: v => set({showHelpOverlay: v}),
   toggleSidebar: () => set(s => ({sidebarCollapsed: !s.sidebarCollapsed})),
   toggleComplexityMode: () => set(s => ({complexityMode: !s.complexityMode})),
   toggleInspector: () => set(s => ({inspectorCollapsed: !s.inspectorCollapsed})),
@@ -145,5 +154,7 @@ registerStoreReset(() =>
     selectedVariable: null,
     graphZoom: 1,
     activeDiff: null,
+    showSourceEditor: false,
+    showHelpOverlay: false,
   }),
 )

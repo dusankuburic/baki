@@ -1,0 +1,55 @@
+name: Benchmarks & Fuzz
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Go Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run benchmarks (core)
+        run: go test -bench=. -benchmem -run=^$ ./core/...
+      - name: Run benchmarks (internal)
+        run: go test -bench=. -benchmem -run=^$ ./internal/...
+
+  fuzz:
+    name: Fuzz Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - FuzzApplyPatch
+          - FuzzFixerPipeline
+          - FuzzParser
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run fuzzer
+        run: go test -fuzz=${{ matrix.target }} -fuzztime=5m -run=^${{ matrix.target }}$ ./core/...
+        continue-on-error: true
+      - name: Upload crash corpus
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: |
+            core/analyzer/testdata/fuzz/
+            core/parser/testdata/fuzz/
+          if-no-files-found: ignore
+          retention-days: 30

@@ -69,7 +69,3 @@ internal/*/conversations/
 docs/docs.go
 docs/swagger.json
 docs/swagger.yaml
-
-# Markdown — ignore all .md files except README (matches README.md at any depth)
-*.md
-!README.md

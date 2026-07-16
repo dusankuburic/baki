@@ -3,7 +3,7 @@ import {Save, RotateCcw, Code2} from 'lucide-react'
 import {flowApi, analysisApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import {useToast, Spinner} from '@/components/shared'
+import {useToast, useConfirm, Spinner} from '@/components/shared'
 import type {AnalysisReport} from '@/types'
 
 interface SourceEditorProps {
@@ -20,6 +20,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const setDocument = useFlowStore(s => s.setDocument)
   const setReport = useAnalysisStore(s => s.setReport)
   const toast = useToast()
+  const {confirm} = useConfirm()
 
   const [source, setSource] = useState('')
   const [original, setOriginal] = useState('')
@@ -80,6 +81,32 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     textareaRef.current?.focus()
   }, [original])
 
+  // Guard: confirm before discarding unsaved edits when switching to Block view.
+  const handleClose = useCallback(async () => {
+    if (dirty) {
+      const ok = await confirm({
+        title: 'Discard unsaved changes?',
+        message: 'You have unsaved edits in the source editor. Switching to Block view will discard them.',
+        danger: true,
+        confirmLabel: 'Discard',
+      })
+      if (!ok) return
+    }
+    onClose()
+  }, [dirty, confirm, onClose])
+
+  // Ctrl+S / Cmd+S keyboard shortcut for save.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault()
+        handleSave()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [handleSave])
+
   // Sync line-number gutter scroll with the textarea.
   const handleScroll = useCallback(() => {
     if (gutterRef.current && textareaRef.current) {
@@ -123,7 +150,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
             {saving ? <Spinner size={12} /> : <Save size={12} />}
             {saving ? 'Saving…' : 'Save & Re-parse'}
           </button>
-          <button onClick={onClose} className="text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors">
+          <button onClick={handleClose} className="text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors">
             Block view
           </button>
         </div>
