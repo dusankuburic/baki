@@ -246,3 +246,60 @@ func TestComputeStats(t *testing.T) {
 		t.Errorf("stats mismatch: %+v", stats)
 	}
 }
+
+// panickingRule is a synthetic Rule whose Check always panics. Used to prove
+// safeCheck's recovery surfaces on AnalysisStats.RulesSkipped (M11) instead of
+// aborting the whole run silently.
+type panickingRule struct{}
+
+func (panickingRule) ID() string                   { return "panicking-test-rule" }
+func (panickingRule) Name() string                 { return "Panicking test rule" }
+func (panickingRule) Description() string          { return "Always panics; for RulesSkipped surfacing" }
+func (panickingRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
+func (panickingRule) Category() string             { return "test" }
+func (panickingRule) Check(_ *models.Block, _ *RuleContext) []models.Finding {
+	panic("intentional test panic")
+}
+
+// safeRule is a non-panicking rule that emits one finding per call, used to
+// prove the rest of the run still completes after a panic in another rule.
+type safeRule struct{}
+
+func (safeRule) ID() string                   { return "safe-test-rule" }
+func (safeRule) Name() string                 { return "Safe test rule" }
+func (safeRule) Description() string          { return "Emits one finding; for RulesSkipped surfacing" }
+func (safeRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
+func (safeRule) Category() string             { return "test" }
+func (safeRule) Check(block *models.Block, _ *RuleContext) []models.Finding {
+	return []models.Finding{{RuleID: "safe-test-rule", BlockID: block.ID, Severity: models.SeverityWarning}}
+}
+
+// TestRunAnalysis_RulesSkippedSurfaced proves safeCheck's panic recovery is
+// observable on the report: when a rule panics, RulesSkipped > 0 AND the run
+// still completes for other (non-panicking) rules. Previously the count was
+// only logged, so operators couldn't tell from SARIF/JSON that findings may be
+// missing.
+func TestRunAnalysis_RulesSkippedSurfaced(t *testing.T) {
+	flow := &models.FlowDocument{
+		Name: "panic-test",
+		Subflows: []models.Subflow{{
+			ID:     "sf1",
+			Name:   "Main",
+			Blocks: []models.Block{*makeBlock("b1", "x", models.BlockTypeAction, "Display.UiFlow", 0)},
+		}},
+	}
+	flow.RebuildIndexes()
+
+	rules := []Rule{panickingRule{}, safeRule{}}
+	report := RunAnalysis(flow, rules, nil, nil)
+
+	if report.Stats.RulesSkipped == 0 {
+		t.Errorf("expected RulesSkipped > 0 when a rule panics, got %d", report.Stats.RulesSkipped)
+	}
+	// The safe rule's findings must still appear — the panic in the other rule
+	// did not abort the run.
+	if len(report.Findings) == 0 {
+		t.Errorf("expected at least one finding from the non-panicking rule, got 0")
+	}
+}
+

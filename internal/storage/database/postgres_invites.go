@@ -84,7 +84,20 @@ func (b *PostgresStorageBackend) DeleteOrgInvite(ctx context.Context, orgID, inv
 }
 
 func (b *PostgresStorageBackend) MarkOrgInviteAccepted(ctx context.Context, inviteID string, acceptedAt time.Time) error {
-	_, err := b.db.ExecContext(ctx, `UPDATE org_invites SET accepted_at = $1 WHERE id = $2`, acceptedAt, inviteID)
+	// H11: WHERE accepted_at IS NULL + RETURNING makes the single-use contract
+	// transactional. Without the guard two concurrent AcceptInvite calls both
+	// pass the read-side nil check and both succeed (AddMember is idempotent).
+	// RETURNING id lets us detect a missing/already-accepted row — the
+	// ExecContext result's RowsAffected would also work but RETURNING is
+	// unambiguous about WHICH row matched.
+	var matchedID string
+	err := b.db.QueryRowContext(ctx,
+		`UPDATE org_invites SET accepted_at = $1 WHERE id = $2 AND accepted_at IS NULL RETURNING id`,
+		acceptedAt, inviteID,
+	).Scan(&matchedID)
+	if err == sql.ErrNoRows {
+		return interfaces.ErrOrgInviteAlreadyAccepted
+	}
 	if err != nil {
 		return fmt.Errorf("mark org invite accepted: %w", err)
 	}

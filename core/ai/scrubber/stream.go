@@ -21,12 +21,21 @@ var anchorRegex = regexp.MustCompile(`(?i)password|passwd|pwd|secret|token|api[_
 // keyword split across chunk boundaries ("passw" + "ord=…") is detected as a
 // partial anchor and held until the next chunk resolves it. Common single-
 // letter suffixes ("s" → "secret") hold at most a few bytes for one chunk.
+//
+// Anchors for the prefix-based secret patterns (AKIA/ASIA, AIza, xox, eyJ,
+// -----BEGIN) are NOT in this list: they are matched by their own dedicated
+// viablePrefixRegexes entries which the streaming scan consults after seeing
+// the anchor's first character. The anchorsByFirst table is built from this
+// list; the new prefix anchors are looked up directly by first byte ('A' for
+// AKIA/AIza, 'x' for xox, 'e' for eyJ, '-' for the PEM marker).
 var anchorLiterals = []string{
 	"password", "passwd", "pwd", "secret", "token",
 	"apikey", "api_key", "api-key",
 	"accesskey", "access_key", "access-key",
 	"privatekey", "private_key", "private-key",
 	"bearer", "sk_", "pk_", "ghp_", "glpat_",
+	"akia", "asia", "aiza", "xox", "eyj",
+	"-----begin",
 }
 
 // maxAnchorLen and anchorsByFirst are derived from anchorLiterals at init so
@@ -61,6 +70,18 @@ var viablePrefixRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^Bearer(?:\s+[A-Za-z0-9\-._~+/]*=*)?$`),
 	regexp.MustCompile(`(?i)^(?:sk_[a-zA-Z0-9_]*|pk_[a-zA-Z0-9_]*|ghp_[a-zA-Z0-9]*|glpat_[a-zA-Z0-9\-]*)$`),
 	regexp.MustCompile(`(?i)^(?:Password|PWD)\s*(?:=[^;\r\n]*)?$`),
+	// AWS access key IDs (AKIA/ASIA + up to 16 uppercase alphanumerics).
+	regexp.MustCompile(`^(?:AKIA|ASIA)[0-9A-Z]*$`),
+	// Google API key (AIza + up to 35 base64url chars).
+	regexp.MustCompile(`^AIza[0-9A-Za-z_-]*$`),
+	// Slack token (xox[abprs]- + up to N chars).
+	regexp.MustCompile(`^xox[abprs]-[A-Za-z0-9-]*$`),
+	// JWT (3 dot-separated segments, each starting with eyJ for header/payload).
+	// Segments 2 and 3 are optional in a partial buffer.
+	regexp.MustCompile(`^eyJ[A-Za-z0-9_-]*(?:\.eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*)?)?$`),
+	// PEM private key block. Held from BEGIN marker until END arrives; spans
+	// multiple lines, so [\s\S] is required (not just `.`).
+	regexp.MustCompile(`^-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z ]+)PRIVATE KEY-----)?$`),
 }
 
 // byteClass is a 256-entry membership table — the per-byte fast path for a

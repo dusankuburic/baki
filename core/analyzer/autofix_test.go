@@ -969,3 +969,56 @@ func TestSubflowNoErrorHandler_RoundTripResolvesFinding(t *testing.T) {
 		}
 	}
 }
+
+// ---- L4: out-of-range patch ops are observable no-ops, not silent corruption ----
+
+func TestApplyPatch_OutOfRangeOpsAreNoOpsAndCounted(t *testing.T) {
+	const source = "line one\nline two\nline three"
+	cases := []struct {
+		name string
+		op   models.PatchOp
+	}{
+		{"insert past EOF+1", models.PatchOp{Kind: "insert", BeforeLine: 99, Lines: []string{"x"}}},
+		{"insert at zero", models.PatchOp{Kind: "insert", BeforeLine: 0, Lines: []string{"x"}}},
+		{"wrap start past EOF", models.PatchOp{Kind: "wrap", StartLine: 42, EndLine: 43, Header: "H", Footer: "F"}},
+		{"wrap start zero", models.PatchOp{Kind: "wrap", StartLine: 0, EndLine: 1, Header: "H", Footer: "F"}},
+		{"remove past EOF", models.PatchOp{Kind: "remove", StartLine: 42, EndLine: 50}},
+		{"replace past EOF", models.PatchOp{Kind: "replace", StartLine: 42, Old: "line", New: "X"}},
+		{"append past EOF", models.PatchOp{Kind: "append", StartLine: 42, Lines: []string{" tail"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := PatchOutOfRangeOps()
+			got := ApplyPatch(source, models.Patch{Ops: []models.PatchOp{tc.op}})
+			if got != source {
+				t.Errorf("out-of-range op mutated source:\nwant %q\ngot  %q", source, got)
+			}
+			if delta := PatchOutOfRangeOps() - before; delta != 1 {
+				t.Errorf("expected exactly 1 out-of-range op recorded, got %d", delta)
+			}
+		})
+	}
+}
+
+func TestApplyPatch_LegitimateBoundaryOpsAreNotCounted(t *testing.T) {
+	const source = "a\nb\nc"
+	before := PatchOutOfRangeOps()
+
+	// Insert at EOF (BeforeLine == len+1) is valid — appends at the end.
+	got := ApplyPatch(source, models.Patch{Ops: []models.PatchOp{
+		{Kind: "insert", BeforeLine: 4, Lines: []string{"d"}},
+	}})
+	if got != "a\nb\nc\nd" {
+		t.Errorf("insert-at-EOF: got %q", got)
+	}
+	// Wrap whose EndLine spans past the last line clamps, not a fault.
+	got = ApplyPatch(source, models.Patch{Ops: []models.PatchOp{
+		{Kind: "wrap", StartLine: 1, EndLine: 999, Header: "H", Footer: "F"},
+	}})
+	if got != "H\na\nb\nc\nF" {
+		t.Errorf("wrap-spanning-EOF: got %q", got)
+	}
+	if delta := PatchOutOfRangeOps() - before; delta != 0 {
+		t.Errorf("legitimate boundary ops should record 0 faults, got %d", delta)
+	}
+}

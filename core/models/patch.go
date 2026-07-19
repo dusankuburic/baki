@@ -38,9 +38,10 @@ type Patch struct {
 // without rewriting the original line — preserves parameter order, quoting,
 // and multi-line values.
 //
-// Kind "replace": within line StartLine (1-based), replace the first occurrence
-// of Old with New. Used to swap a hardcoded credential literal for a
-// %Variable% reference in-place.
+// Kind "replace": within line StartLine (1-based), replace all occurrences of
+// Old with New on that line. Used to swap a hardcoded credential literal for a
+// %Variable% reference in-place — when the same secret value appears in
+// multiple properties on the same line, all should be replaced.
 //
 // Kind "remove": delete the inclusive 1-based range [StartLine..EndLine]. Used
 // to delete a block (and its descendants, when EndLine = the block's last

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -26,6 +27,67 @@ func (b *PostgresStorageBackend) SetFindingStatus(ctx context.Context, st *inter
 			updated_at = NOW()`,
 		st.FlowID, st.FindingKey, st.RuleID, st.Status, st.Justification, st.AssigneeID, st.UpdatedBy)
 	return err
+}
+
+// BatchSetFindingStatus upserts multiple finding-status rows for one flow in a
+// single transaction. Atomicity contract: either every row commits or none — a
+// mid-batch failure rolls back the whole batch, so the audit log's "updated: N"
+// and the actual persisted row count never diverge (the previous per-item loop
+// silently committed items 1..K-1 on a failure at item K).
+//
+// The tx is RLS-scoped to userID so existing per-flow RLS policies still apply.
+// If the RLS middleware already opened a tx on ctx we use it directly
+// (committing nested-opened transactions is the middleware's job); otherwise we
+// open and commit our own.
+func (b *PostgresStorageBackend) BatchSetFindingStatus(ctx context.Context, flowID, userID string, items []*interfaces.FindingStatus) error {
+	if len(items) == 0 {
+		return nil
+	}
+	const stmt = `
+		INSERT INTO finding_status (flow_id, finding_key, rule_id, status, justification, assignee_id, updated_by, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		ON CONFLICT (flow_id, finding_key) DO UPDATE SET
+			rule_id = EXCLUDED.rule_id,
+			status = EXCLUDED.status,
+			justification = EXCLUDED.justification,
+			assignee_id = EXCLUDED.assignee_id,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = NOW()`
+
+	// If the RLS middleware already opened a tx, run inside it (no inner
+	// commit — the middleware commits or rolls back the whole request).
+	if existingTx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && existingTx != nil {
+		for _, st := range items {
+			if _, err := existingTx.ExecContext(ctx, stmt,
+				flowID, st.FindingKey, st.RuleID, st.Status, st.Justification, st.AssigneeID, st.UpdatedBy); err != nil {
+				return fmt.Errorf("batch triage item %q: %w", st.FindingKey, err)
+			}
+		}
+		return nil
+	}
+
+	// No existing tx — open and commit our own RLS-scoped tx.
+	tx, err := b.BeginRLS(ctx, userID)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	for _, st := range items {
+		if _, err := tx.ExecContext(ctx, stmt,
+			flowID, st.FindingKey, st.RuleID, st.Status, st.Justification, st.AssigneeID, st.UpdatedBy); err != nil {
+			return fmt.Errorf("batch triage item %q: %w", st.FindingKey, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("batch triage commit: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (b *PostgresStorageBackend) ListFindingStatuses(ctx context.Context, flowID string) ([]*interfaces.FindingStatus, error) {

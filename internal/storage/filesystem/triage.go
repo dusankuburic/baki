@@ -96,6 +96,37 @@ func (lsb *LocalStorageBackend) SetFindingStatus(ctx context.Context, st *interf
 	return lsb.writeStatuses(st.FlowID, m)
 }
 
+// BatchSetFindingStatus applies all items in a single read-modify-write under
+// the triage mutex. Atomicity is guaranteed by the mutex (single-process local
+// mode); either every item lands on disk or none (writeStatuses is a single
+// atomic file replace). userID is unused — local mode has no RLS.
+func (lsb *LocalStorageBackend) BatchSetFindingStatus(ctx context.Context, flowID, userID string, items []*interfaces.FindingStatus) error {
+	if flowID == "" {
+		return fmt.Errorf("batch finding status requires flowId")
+	}
+	for _, st := range items {
+		if st == nil || st.FindingKey == "" {
+			return fmt.Errorf("batch finding status: every item requires findingKey")
+		}
+	}
+	lsb.triageMu.Lock()
+	defer lsb.triageMu.Unlock()
+
+	m, err := lsb.readStatuses(flowID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, st := range items {
+		if st.UpdatedAt.IsZero() {
+			st.UpdatedAt = now
+		}
+		cp := *st
+		m[st.FindingKey] = &cp
+	}
+	return lsb.writeStatuses(flowID, m)
+}
+
 func (lsb *LocalStorageBackend) ListFindingStatuses(ctx context.Context, flowID string) ([]*interfaces.FindingStatus, error) {
 	lsb.triageMu.Lock()
 	defer lsb.triageMu.Unlock()

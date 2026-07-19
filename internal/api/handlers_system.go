@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -47,6 +46,13 @@ type SystemHandler struct {
 	security *SecurityConfig
 	backend  storageif.StorageBackend // may be nil in local/filesystem mode
 
+	// redisPinger is a health-check interface onto the optional Redis backplane
+	// (rate limiter, hub presence, chat-stream resume). When non-nil, readiness
+	// gates on it too — a Redis outage silently degrades multi-replica
+	// correctness (all three subsystems fail open), so without this check the
+	// pod stays in rotation reporting "ready" while losing shared state.
+	redisPinger RedisPinger
+
 	readyMu       sync.Mutex
 	readyFailures int
 
@@ -54,8 +60,15 @@ type SystemHandler struct {
 	blobCheckedAt time.Time // zero when the last check failed (never cache failures)
 }
 
-func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend) *SystemHandler {
-	return &SystemHandler{sysSvc: sysSvc, security: security, backend: backend}
+// RedisPinger is the subset of the Redis client the readiness probe needs.
+// Implemented by *redis.Client; defined here so the handler can accept a nil
+// sentinel in single-replica mode without pulling the redis package into API.
+type RedisPinger interface {
+	Ping(ctx context.Context) error
+}
+
+func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend, redisPinger RedisPinger) *SystemHandler {
+	return &SystemHandler{sysSvc: sysSvc, security: security, backend: backend, redisPinger: redisPinger}
 }
 
 func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +241,19 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 				checkErr = h.checkBlobCached(ctx, bc)
 			}
 		}
+		// H21: when the Redis backplane is configured (PAD_REDIS_URL set), gate
+		// readiness on its reachability too. The rate limiter, hub presence,
+		// and chat-stream resume ALL fail open on Redis errors, so an outage
+		// silently degrades multi-replica correctness (the effective rate-limit
+		// multiplies by replica count, cross-replica presence disappears,
+		// stream-resume returns partial buffers) without taking the pod out of
+		// rotation. Operators who explicitly opt into Redis have declared it a
+		// hard dependency — surface its loss.
+		if checkErr == nil && h.redisPinger != nil {
+			redisCtx, redisCancel := context.WithTimeout(r.Context(), 2*time.Second)
+			checkErr = h.redisPinger.Ping(redisCtx)
+			redisCancel()
+		}
 
 		if checkErr != nil {
 			h.readyMu.Lock()
@@ -235,7 +261,7 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 			failed := h.readyFailures >= readinessFailureThreshold
 			h.readyMu.Unlock()
 			if failed {
-				render.Error(w, errors.New("database unavailable"), http.StatusServiceUnavailable)
+				render.Error(w, fmt.Errorf("backend unavailable: %w", checkErr), http.StatusServiceUnavailable)
 			} else {
 				render.JSON(w, map[string]string{"status": "ok"})
 			}

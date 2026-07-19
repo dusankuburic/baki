@@ -36,9 +36,9 @@ jobs:
             archive: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
 
@@ -66,12 +66,18 @@ jobs:
             tar czf bakicli-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz bakicli-${{ matrix.goos }}-${{ matrix.goarch }}
             ext="bakicli-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           fi
+          # Per-asset SHA256 sidecar so consumers can verify integrity:
+          #   sha256sum -c bakicli-<os>-<arch>.tar.gz.sha256
+          sha256sum "$ext" > "$ext.sha256"
           echo "asset=$ext" >> "$GITHUB_OUTPUT"
+          echo "asset_sha256=$ext.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          files: ${{ steps.archive.outputs.asset }}
+          files: |
+            ${{ steps.archive.outputs.asset }}
+            ${{ steps.archive.outputs.asset_sha256 }}
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

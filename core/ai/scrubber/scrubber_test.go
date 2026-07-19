@@ -46,6 +46,50 @@ func TestScrubText(t *testing.T) {
 			input:    "api_key : AKIA1234567890ABCDEF",
 			expected: "api_key : [REDACTED]",
 		},
+
+		// H15: AWS access key IDs (AKIA = normal, ASIA = temporary STS).
+		// Word-bounded so "AKIA1234567890ABCDEF" (16 chars) is masked but a
+		// shorter prefix like "AKIATEST" stays visible.
+		{
+			name:     "AWS access key AKIA",
+			input:    "Use role AKIAIOSFODNN7EXAMPLE to deploy.",
+			expected: "Use role [REDACTED] to deploy.",
+		},
+		{
+			name:     "AWS STS token ASIA",
+			input:    "export AWS_ACCESS_KEY_ID=ASIA3RF3M2X7HEXAMPLE",
+			expected: "export AWS_ACCESS_KEY_ID=[REDACTED]",
+		},
+		// H15: Google API key (AIza + exactly 35 chars = 39 chars total).
+		{
+			name:     "Google API key",
+			input:    "maps_key = AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+			expected: "maps_key = [REDACTED]",
+		},
+		// H15: Slack token (xox[abprs]- prefix).
+		{
+			name:     "Slack bot token",
+			input:    "SLACK_BOT_TOKEN=xoxb-123456789012-abcdefghij",
+			expected: "SLACK_BOT_TOKEN=[REDACTED]",
+		},
+		// H15: JWT (eyJ prefix on header + payload).
+		{
+			name:     "JWT in bearer header",
+			input:    "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+			expected: "Authorization: [REDACTED]",
+		},
+		// H15: PEM private key block (multi-line).
+		{
+			name: "PEM RSA private key",
+			input: `Here is the key:
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAz7v5g3qP6mJZ...
+-----END RSA PRIVATE KEY-----
+Don't leak it.`,
+			expected: `Here is the key:
+[REDACTED]
+Don't leak it.`,
+		},
 	}
 
 	for _, tt := range tests {

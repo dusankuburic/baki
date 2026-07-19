@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/metrics"
 	"pad-core/analyzer"
 	"pad-core/logger"
 	"pad-core/models"
@@ -145,6 +146,11 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	// since the last sweep (a partial/cancelled sweep must not prune, since
 	// seen would then be missing flows that still exist).
 	s.pruneLastSig(seen)
+
+	// H20: surface loop liveness so ops can alert on a hung scanner
+	// (time() - last_tick > 2 * interval). Without this the only signal of a
+	// deadlock is "logs stopped" — invisible to /healthz which always returns 200.
+	metrics.RecordBackgroundLoopTick("scanner")
 }
 
 // pruneLastSig drops lastSig entries for flows no longer present, so a

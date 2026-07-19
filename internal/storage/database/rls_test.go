@@ -291,3 +291,72 @@ func TestPostgres_RLS_OrgMemberAccess(t *testing.T) {
 		}
 	})
 }
+
+// TestPostgres_RLS_SaveKnowledgeChunks_EnforcesOrgMembership guards H1:
+// SaveKnowledgeChunks MUST run inside an RLS-scoped tx so the
+// knowledge_chunks WITH CHECK policy enforces org membership. Before the fix
+// the method used a bare b.db.BeginTx with no GUC set, so the policy
+// short-circuited to "allow" and any authenticated user could write chunks for
+// an arbitrary org_id. Now a non-member's SaveKnowledgeChunks must fail at
+// the RLS check.
+func TestPostgres_RLS_SaveKnowledgeChunks_EnforcesOrgMembership(t *testing.T) {
+	b := openTestDB(t)
+	ctx := context.Background()
+
+	orgOwner := "rls-kn-owner-" + time.Now().Format("150405.000000000")
+	outsider := "rls-kn-outsider-" + time.Now().Format("150405.000000000")
+	orgID := "rls-kn-org-" + time.Now().Format("150405.000000000")
+	docID := "rls-kn-doc-" + time.Now().Format("150405.000000000")
+
+	for _, id := range []string{orgOwner, outsider} {
+		if err := b.CreateUser(ctx, &interfaces.User{
+			ID:        id,
+			Email:     id + "@test.com",
+			Password:  "$2a$12$testhash",
+			Role:      "member",
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("CreateUser %s: %v", id, err)
+		}
+	}
+	if err := b.SaveOrg(ctx, &interfaces.Organisation{
+		ID: orgID, Name: "KN Org", OwnerID: orgOwner,
+		Members: []interfaces.OrgMember{{UserID: orgOwner, Role: "admin"}},
+	}); err != nil {
+		t.Fatalf("SaveOrg: %v", err)
+	}
+	if err := b.SaveKnowledgeDocument(ctx, &interfaces.KnowledgeDocument{
+		ID: docID, OrgID: orgID, Filename: "doc.txt", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveKnowledgeDocument: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = b.DB().ExecContext(ctx, `DELETE FROM knowledge_chunks WHERE doc_id = $1`, docID)
+		_, _ = b.DB().ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1`, docID)
+		b.DeleteOrg(ctx, orgID)
+		for _, id := range []string{orgOwner, outsider} {
+			cleanupUser(t, b, id)
+		}
+	})
+
+	// Sanity: owner can insert chunks into their own org's doc.
+	ownerChunks := []interfaces.KnowledgeChunk{
+		{ID: "chunk-owner-1", DocID: docID, Content: "ok", Embedding: []float32{0.1, 0.2}},
+	}
+	if err := b.SaveKnowledgeChunks(ctx, orgOwner, ownerChunks); err != nil {
+		t.Fatalf("owner SaveKnowledgeChunks should succeed: %v", err)
+	}
+
+	// H1 regression guard: a non-member writing a chunk whose doc belongs to
+	// an org they don't belong to must be rejected by the RLS WITH CHECK
+	// policy (silent success here = the H1 bug has returned).
+	skipIfRLSBypassed(t, b)
+	outsiderChunks := []interfaces.KnowledgeChunk{
+		{ID: "chunk-outsider-1", DocID: docID, Content: "leaked", Embedding: []float32{0.3, 0.4}},
+	}
+	if err := b.SaveKnowledgeChunks(ctx, outsider, outsiderChunks); err == nil {
+		t.Error("RLS leak: outsider's SaveKnowledgeChunks succeeded — the H1 fix has regressed")
+	}
+}

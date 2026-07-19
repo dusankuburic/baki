@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"slices"
 	"strings"
 
 	"pad-core/models"
@@ -90,6 +91,23 @@ func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []Finding
 	if resultGroups == nil {
 		resultGroups = []FindingGroup{}
 	}
+
+	// Map iteration order is non-deterministic; sort groups by BlockID (then
+	// primary finding title) so report.Groups is stable across runs — required
+	// for deterministic SARIF/JSON output and reproducible tests.
+	slices.SortFunc(resultGroups, func(a, b FindingGroup) int {
+		if c := strings.Compare(a.BlockID, b.BlockID); c != 0 {
+			return c
+		}
+		at, bt := "", ""
+		if a.Primary != nil {
+			at = a.Primary.Title
+		}
+		if b.Primary != nil {
+			bt = b.Primary.Title
+		}
+		return strings.Compare(at, bt)
+	})
 
 	return deduped, resultGroups
 }

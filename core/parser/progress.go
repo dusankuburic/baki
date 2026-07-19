@@ -41,7 +41,7 @@ func ParseTextWithProgress(text, fileName string, fileSize int64, onProgress Pro
 			continue
 		}
 		processed++
-		pct := 10 + (processed * 85 / maxInt(totalTokens, 1))
+		pct := 10 + (processed * 85 / max(totalTokens, 1))
 		if pct >= lastReported+5 {
 			onProgress(pct, "Parsing...")
 			lastReported = pct
@@ -56,11 +56,4 @@ func ParseTextWithProgress(text, fileName string, fileSize int64, onProgress Pro
 
 	onProgress(100, "Done")
 	return doc, nil
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

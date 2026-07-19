@@ -29,6 +29,10 @@ var (
 	ErrInviteExpired = errors.New("collaboration: invite has expired")
 	// ErrInviteAlreadyAccepted is returned when an invite token has already been used.
 	ErrInviteAlreadyAccepted = errors.New("collaboration: invite has already been accepted")
+	// ErrEmailNotVerified is returned when an action that requires a verified
+	// email (e.g. AcceptInvite) is called by an authenticated user whose email
+	// claim is not verified by the IdP / password-reset flow.
+	ErrEmailNotVerified = errors.New("collaboration: caller email is not verified")
 )
 
 // DefaultInviteTTL is how long a newly created org invite remains valid.
@@ -298,8 +302,11 @@ func (s *OrgService) RevokeInvite(ctx context.Context, orgID, inviteID string) e
 // AcceptInvite validates the given raw invite token and, if valid and not
 // expired or already used, adds userID as a member of the invite's
 // organisation with the role specified in the invite. The caller's email
-// must match the invite email to prevent token sharing attacks.
-func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail string) (*interfaces.Organisation, error) {
+// must match the invite email to prevent token sharing attacks, AND the email
+// must be verified (H12: without this check, an attacker who created a shadow
+// local-mode account with `victim@example.com` — without ever verifying it —
+// could accept invites destined to the victim).
+func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail string, emailVerified bool) (*interfaces.Organisation, error) {
 	if token == "" {
 		return nil, ErrInviteNotFound
 	}
@@ -325,6 +332,9 @@ func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail 
 	if userEmail == "" {
 		return nil, ErrInviteNotFound
 	}
+	if !emailVerified {
+		return nil, ErrEmailNotVerified
+	}
 	if invite.Email != userEmail {
 		return nil, ErrInviteNotFound
 	}
@@ -334,6 +344,12 @@ func (s *OrgService) AcceptInvite(ctx context.Context, token, userID, userEmail 
 	}
 
 	if err := s.store.MarkOrgInviteAccepted(ctx, invite.ID, time.Now().UTC()); err != nil {
+		// H11: a concurrent AcceptInvite won the race — surface it as the
+		// collaboration-level ErrInviteAlreadyAccepted so the render layer maps
+		// to 409 cleanly.
+		if errors.Is(err, interfaces.ErrOrgInviteAlreadyAccepted) {
+			return nil, ErrInviteAlreadyAccepted
+		}
 		return nil, err
 	}
 

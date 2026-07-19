@@ -22,7 +22,7 @@ func NewExportHandler(exportSvc *service.ExportService, flowSvc *service.FlowSer
 
 func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return
 	}
 	var req struct {

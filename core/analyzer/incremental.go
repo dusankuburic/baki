@@ -180,9 +180,11 @@ func fnvBuilder() *fnvHasher {
 }
 
 func (f *fnvHasher) write(s string) {
-	for _, c := range s {
-		f.h ^= uint32(c) // #nosec G115 -- rune always fits in uint32; FNV-1a hashing
-
+	// FNV-1a operates on the bytes of the string, not its runes. Iterating
+	// runes conflates distinct UTF-8 byte sequences that map to the same code
+	// point and produces non-canonical hashes for any non-ASCII content.
+	for i := 0; i < len(s); i++ {
+		f.h ^= uint32(s[i])
 		f.h *= 16777619
 	}
 }

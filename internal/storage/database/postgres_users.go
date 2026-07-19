@@ -438,14 +438,37 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 // is handled by the caller falling back to per-event writes. The 9 placeholder
 // args per row stay well under Postgres' 65535-parameter cap for any realistic
 // batch size.
-func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*interfaces.AuditEvent) error {
-	if len(events) == 0 {
-		return nil
+// auditInsertCols is the number of columns (and bind params per row) in the
+// audit_events INSERT. Postgres caps a single statement at 65535 bind
+// parameters, so batches must stay under 65535/auditInsertCols ≈ 7281 rows.
+const auditInsertCols = 9
+
+// auditInsertBatchRows bounds one INSERT well under the 65535-param ceiling
+// (5000*9 = 45000 params).
+const auditInsertBatchRows = 5000
+
+// chunkAuditEvents splits events into contiguous batches of at most size rows.
+// A size <= 0 yields a single batch (no chunking).
+func chunkAuditEvents(events []*interfaces.AuditEvent, size int) [][]*interfaces.AuditEvent {
+	if size <= 0 || len(events) <= size {
+		return [][]*interfaces.AuditEvent{events}
 	}
+	out := make([][]*interfaces.AuditEvent, 0, (len(events)+size-1)/size)
+	for start := 0; start < len(events); start += size {
+		end := min(start+size, len(events))
+		out = append(out, events[start:end])
+	}
+	return out
+}
+
+// buildAuditInsert renders a multi-row INSERT for a single batch. Callers must
+// keep len(batch) <= auditInsertBatchRows so the bind-parameter count stays
+// under the Postgres 65535 limit.
+func buildAuditInsert(batch []*interfaces.AuditEvent) (string, []any) {
 	var sb strings.Builder
-	args := make([]any, 0, len(events)*9)
+	args := make([]any, 0, len(batch)*auditInsertCols)
 	sb.WriteString(`INSERT INTO audit_events (id, user_id, email, action, resource_type, resource_id, ip, meta, created_at) VALUES `)
-	for i, e := range events {
+	for i, e := range batch {
 		meta, err := json.Marshal(e.Meta)
 		if err != nil {
 			meta = []byte("{}")
@@ -453,15 +476,42 @@ func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		base := i*9 + 1
+		base := i*auditInsertCols + 1
 		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
 		args = append(args, e.ID, e.UserID, e.Email, e.Action,
 			e.ResourceType, e.ResourceID, e.IP, meta, e.CreatedAt)
 	}
-	if _, err := b.db.ExecContext(ctx, sb.String(), args...); err != nil {
-		return fmt.Errorf("save audit events (%d): %w", len(events), err)
+	return sb.String(), args
+}
+
+func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*interfaces.AuditEvent) error {
+	if len(events) == 0 {
+		return nil
 	}
+	// A single INSERT is capped at 65535 bind parameters by the Postgres wire
+	// protocol (~7281 rows at 9 params each). Chunk larger batches and run every
+	// chunk in one transaction so the whole write stays all-or-nothing.
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("save audit events (%d): begin tx: %w", len(events), err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	for _, batch := range chunkAuditEvents(events, auditInsertBatchRows) {
+		query, args := buildAuditInsert(batch)
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("save audit events (%d): %w", len(events), err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("save audit events commit (%d): %w", len(events), err)
+	}
+	committed = true
 	return nil
 }
 

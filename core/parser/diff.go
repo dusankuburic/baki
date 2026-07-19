@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"maps"
+
 	"pad-core/models"
 )
 
@@ -154,13 +156,13 @@ func backtrack(matrix [][]int, a, b []models.Block, i, j int) []models.BlockDiff
 
 func blocksEqual(a, b *models.Block) bool {
 	// For a structural diff, equality should be based on type and content,
-	// not UUID (which is generated per parse).
-	return a.RawType == b.RawType && a.Name == b.Name && a.Indent == b.Indent
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	// not UUID (which is generated per parse). Property values are part of a
+	// block's content: a config-only edit (a changed Url:, Timeout:, connection
+	// string, …) leaves RawType/Name/Indent identical, so without comparing
+	// Properties the LCS treats it as unchanged and the edit is invisible in the
+	// diff. maps.Equal is exact and deterministic over map[string]string;
+	// synthetic keys like _output are derived deterministically from the source,
+	// so they compare stably across re-parses.
+	return a.RawType == b.RawType && a.Name == b.Name && a.Indent == b.Indent &&
+		maps.Equal(a.Properties, b.Properties)
 }

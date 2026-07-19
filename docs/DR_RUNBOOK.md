@@ -183,6 +183,32 @@ wrong, missing, or slower than the target.
 - **Key Vault unreachable:** the app reads secrets at startup; a Vault outage
   blocks boot. Restore Vault access first (Azure-side), then restart the revision.
 
+### 7a. Secret rotation impact (H19)
+
+The code paths below are affected by secret rotation in ways that may not be
+obvious from the break-glass notes. **Read this table before rotating.**
+
+| Secret rotated | Immediate user impact | Recovery action |
+|---|---|---|
+| `PAD_AUTH_SECRET` | Every outstanding JWT (access + refresh) is invalid → all users force-logged-out, all in-flight chat streams abort, all SSE channels drop. | Users re-authenticate. **Cascading impact:** when `PAD_ENCRYPTION_KEY` is UNSET (the legacy default) the keystore uses the auth secret as its AES key, so provider API keys + PAD-cloud tokens ALSO become undecryptable — see next row. |
+| `PAD_ENCRYPTION_KEY` | Every stored provider API key (Settings → Providers) becomes undecryptable. Every PAD-cloud token becomes undecryptable. Users see "provider key missing" until they re-enter credentials. | Each user re-enters provider credentials. PAD-cloud re-runs the device-code flow. |
+| `PAD_SSO_CLIENT_SECRET` | New SSO logins fail until the running process restarts (the secret is read at boot). Existing sessions unaffected. | Restart the process after updating Key Vault. |
+| Managed Identity (Postgres / Blob) | Workload-token cache flushes on next request — brief latency spike, no user-visible failure. | None. |
+
+### 7b. Zero-downtime rotation (forward path)
+
+The keystore does **not** currently support dual-key decryption. To rotate
+without bricking users, the path is:
+
+1. Ship a code change that prefixes ciphertext with a key-version byte and
+   supports decrypting with a "previous key" in-memory.
+2. Deploy with both old + new keys configured.
+3. Wait for an organic re-encryption sweep (or trigger one via an admin
+   endpoint).
+4. Deploy again with only the new key.
+
+Tracked separately as a Phase 4 larger refactor.
+
 ---
 
 ## 8. Related

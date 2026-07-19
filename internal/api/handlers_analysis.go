@@ -17,25 +17,25 @@ import (
 	"pad-core/parser"
 )
 
-// defaultWebhookNotifier is constructed once at package load to avoid
-// per-request HTTP client allocation. No-op when PAD_WEBHOOK_URL is unset.
-var defaultWebhookNotifier = service.NewWebhookNotifier()
-
 type AnalysisHandler struct {
 	analysisSvc *service.AnalysisService
 	flowSvc     *service.FlowService
 	dashboard   *service.DashboardService
 	security    *SecurityConfig
 	backend     storageif.StorageBackend
+	// webhook is best-effort / async / env-configured via PAD_WEBHOOK_URL;
+	// no-op when unset. Injected for testability (was a package-global var).
+	webhook *service.WebhookNotifier
 }
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
 		dashboard:   dashboard,
 		security:    security,
 		backend:     backend,
+		webhook:     webhook,
 	}
 }
 
@@ -66,9 +66,8 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 		h.dashboard.RecordAnalysis(r.Context(), doc, res)
 	}
 	// Webhook notification (best-effort, async, env-configured via
-	// PAD_WEBHOOK_URL). No-op if unset. Constructed once at package load
-	// to avoid per-request HTTP client allocation.
-	defaultWebhookNotifier.NotifyAnalysis(doc.Name, res)
+	// PAD_WEBHOOK_URL). No-op if unset.
+	h.webhook.NotifyAnalysis(doc.Name, res)
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowAnalyze, "flow", req.FlowID, nil)
 	render.JSON(w, res)
 }

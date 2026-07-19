@@ -74,6 +74,9 @@ var ServiceModule = fx.Options(
 		// so services depend on the interface, not the concrete filesystem
 		// implementation.
 		func(s *storage.SettingsStore) service.SettingsProvider { return s },
+		// WebhookNotifier reads PAD_WEBHOOK_URL once at construction; a single
+		// shared instance is fine (the HTTP client is reused across requests).
+		service.NewWebhookNotifier,
 		// service.KeyStore itself comes from main.go's provideKeyStore (a
 		// plain fx provider, not a global) — no adapter needed here.
 		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings *storage.SettingsStore) *rag.KnowledgeService {

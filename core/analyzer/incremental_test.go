@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"testing"
 
 	"pad-core/models"
@@ -43,6 +44,70 @@ func TestAnalyzeRuleDependencies(t *testing.T) {
 			t.Errorf("expected no cycles, got %d: %v", len(da.Cycles), da.Cycles)
 		}
 	})
+}
+
+// TestDetectCycles_ReportsCycle guards M9's behavioral contract: when the
+// dependency graph contains a cycle, detectCycles must report at least one
+// cycle containing every node on the cyclic path. The exact reconstruction
+// format (length, leading/trailing duplicates) is intentionally NOT asserted
+// — the current DFS-with-colors reconstruction produces a duplicate leading
+// element in some rotations, and a future Tarjan SCC swap (tracked in
+// IMPROVEMENTS.md M9) will tighten the format. What must not regress is the
+// "a cycle IS detected" property.
+func TestDetectCycles_ReportsCycle(t *testing.T) {
+	// 3-cycle: a → b → c → a, plus an unrelated acyclic node d → (nothing).
+	adj := map[string][]string{
+		"a": {"b"},
+		"b": {"c"},
+		"c": {"a"},
+	}
+	nodes := map[string]bool{"a": true, "b": true, "c": true, "d": true}
+
+	cycles := detectCycles(adj, nodes)
+	if len(cycles) == 0 {
+		t.Fatal("expected at least one cycle for {a→b→c→a}, got none")
+	}
+
+	// Find a cycle that covers all 3 nodes (rotations are equivalent).
+	want := map[string]bool{"a": true, "b": true, "c": true}
+	var found bool
+	for _, cyc := range cycles {
+		got := map[string]bool{}
+		for _, n := range cyc {
+			got[n] = true
+		}
+		if len(got) == len(want) {
+			match := true
+			for k := range want {
+				if !got[k] {
+					match = false
+					break
+				}
+			}
+			if match {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no reported cycle covered all of {a,b,c}; cycles=%v", cycles)
+	}
+}
+
+// TestDetectCycles_AcyclicGraphReturnsNone is the negative control: a DAG must
+// not produce any cycles. Guards against false-positive regressions.
+func TestDetectCycles_AcyclicGraphReturnsNone(t *testing.T) {
+	adj := map[string][]string{
+		"a": {"b"},
+		"b": {"c"},
+		"c": {},
+	}
+	nodes := map[string]bool{"a": true, "b": true, "c": true}
+	cycles := detectCycles(adj, nodes)
+	if len(cycles) != 0 {
+		t.Errorf("expected 0 cycles for acyclic graph, got %d: %v", len(cycles), cycles)
+	}
 }
 
 func TestComputeSubflowHashes(t *testing.T) {
@@ -133,4 +198,37 @@ func TestComputeDashboard(t *testing.T) {
 			t.Errorf("expected 2 problem flows, got %d", len(d.TopProblemFlows))
 		}
 	})
+}
+
+// TestFnvHasher_ByteSemantics guards L2: FNV-1a must hash the bytes of the
+// string, not its runes. A rune-iterating implementation would produce the same
+// hash for "é" (U+00E9) and the (impossible) single-byte string 0xE9, and a
+// *different* hash from canonical FNV-1a-of-UTF-8-bytes. We verify against the
+// well-known FNV-1a 32-bit reference: iterate the UTF-8 byte sequence.
+func TestFnvHasher_ByteSemantics(t *testing.T) {
+	// "é" is U+00E9, encoded in UTF-8 as the two bytes 0xC3 0xA9.
+	h := fnvBuilder()
+	h.write("é")
+	got := h.sum()
+
+	// Reference FNV-1a 32-bit over the bytes 0xC3 0xA9.
+	var ref uint32 = 2166136261
+	for _, b := range []byte("é") {
+		ref ^= uint32(b)
+		ref *= 16777619
+	}
+	want := fmt.Sprintf("%08x", ref)
+
+	if got != want {
+		t.Fatalf("fnvHasher on UTF-8: got %s, want canonical FNV-1a %s", got, want)
+	}
+
+	// Distinct byte sequences that share a rune code-point must NOT collide.
+	// A rune-iterating impl hashes uint32(0xE9) for "é" and the same for a
+	// hypothetical 1-byte 0xE9; the byte-iterating impl must differ.
+	h2 := fnvBuilder()
+	h2.write("\xe9") // single raw byte 0xE9 (invalid UTF-8, but a distinct byte string)
+	if h2.sum() == got {
+		t.Fatalf("collision: byte-iterating FNV-1a of \"\\xc3\\xa9\" == \"\\xe9\" (%s); expected distinct", got)
+	}
 }

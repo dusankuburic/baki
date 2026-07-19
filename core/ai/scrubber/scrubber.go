@@ -14,13 +14,30 @@ var secretRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[:=]\s*["']?([A-Za-z0-9\-._~+/=]{8,})["']?`),
 	// Bearer tokens
 	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*`),
-	// Specific well-known prefixes (e.g. Stripe, GitHub)
+	// Specific well-known prefixes (Stripe, GitHub)
 	regexp.MustCompile(`(?i)\b(sk_[a-zA-Z0-9_]{20,}|pk_[a-zA-Z0-9_]{20,}|ghp_[a-zA-Z0-9]{36}|glpat_[a-zA-Z0-9\-]{20,})\b`),
 	// Connection-string secrets: Password=/PWD= (covers User=;Password= forms).
 	// The value stops at ';' (connection-string delimiter) or end of line —
 	// letting it run to end-of-text made any prose mentioning "password=…"
 	// swallow the entire rest of the message into the mask.
 	regexp.MustCompile(`(?i)(?:Password|PWD)\s*=\s*([^;\r\n]+)`),
+	// AWS access key IDs (AKIA = normal, ASIA = temporary/STS). 16 chars after
+	// the prefix is the canonical length; word-bounded to avoid mid-word hits.
+	regexp.MustCompile(`\b((?:AKIA|ASIA)[0-9A-Z]{16})\b`),
+	// Google API key (AIza + 35 chars). Covers Google Cloud API keys and the
+	// typical Android/Maps key shape.
+	regexp.MustCompile(`\b(AIza[0-9A-Za-z_-]{35})\b`),
+	// Slack tokens: xox[abprs]- followed by 10+ chars. Covers bot (xoxb),
+	// user (xoxp), app (xoxa), refresh (xoxr), and legacy (xoxs) tokens.
+	regexp.MustCompile(`\b(xox[abprs]-[A-Za-z0-9-]{10,})\b`),
+	// JWT (eyJ prefix on both header and payload segments). The eyJ prefix is
+	// the base64url encoding of `{"` — every JWT header starts with it, so
+	// false positives require a coincidental eyJ match in two segments.
+	regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b`),
+	// PEM private key blocks (RSA, EC, OPENSSH, DSA, PGP, etc). The pattern
+	// spans multiple lines, anchored by the BEGIN/END markers — content
+	// between them is always base64-encoded key material.
+	regexp.MustCompile(`-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+)PRIVATE KEY-----`),
 }
 
 // sensitiveActions maps a PAD action RawType to specific property fields whose

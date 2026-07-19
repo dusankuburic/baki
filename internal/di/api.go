@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/fx"
 	"pad-analyzer/internal/api"
 	"pad-analyzer/internal/auth"
@@ -44,6 +45,22 @@ func ProvideFlowAccessChecker(authz *service.AuthzService, backend storageif.Sto
 		return nil // local mode: single desktop user, no room authz needed
 	}
 	return &authzFlowChecker{authz: authz}
+}
+
+// ProvideRedisPinger adapts the optional *redis.Client to the readiness-probe
+// interface. Returns nil when Redis isn't configured so SystemHandler skips
+// the check entirely in single-replica / local mode.
+func ProvideRedisPinger(client *redis.Client) api.RedisPinger {
+	if client == nil {
+		return nil
+	}
+	return redisPingerAdapter{client: client}
+}
+
+type redisPingerAdapter struct{ client *redis.Client }
+
+func (a redisPingerAdapter) Ping(ctx context.Context) error {
+	return a.client.Ping(ctx).Err()
 }
 
 func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend storageif.StorageBackend, orgSvc *collaboration.OrgService) *api.SecurityConfig {
@@ -95,6 +112,11 @@ var APIModule = fx.Options(
 		ProvideHandlers,
 		ProvideFlowAccessChecker,
 		api.NewEventManager,
+		// Adapter: *redis.Client (nil when PAD_REDIS_URL is unset) → api.RedisPinger.
+		// Wraps the cmd-returning Ping into the simple error-returning interface
+		// the readiness probe wants. Nil client produces a nil RedisPinger so the
+		// SystemHandler skips the Redis check entirely in single-replica mode.
+		ProvideRedisPinger,
 		api.NewSystemHandler,
 		api.NewFlowHandler,
 		api.NewLibraryHandler,

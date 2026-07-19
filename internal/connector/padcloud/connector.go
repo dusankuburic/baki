@@ -10,6 +10,7 @@ import (
 	"pad-core/models"
 
 	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/metrics"
 )
 
 // DesktopFlowRef identifies a desktop flow in a Power Platform environment.
@@ -189,4 +190,6 @@ func (i *Ingester) runSweep(ctx context.Context) {
 	for _, e := range res.Errors {
 		logger.Warn("padcloud ingest flow error", "error", e)
 	}
+	// H20: surface loop liveness so ops can alert when the ingester hangs.
+	metrics.RecordBackgroundLoopTick("padcloud_ingest")
 }

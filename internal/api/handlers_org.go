@@ -33,7 +33,7 @@ func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBa
 func (h *OrgHandler) requireMember(w http.ResponseWriter, r *http.Request) *storageif.Organisation {
 	id := chi.URLParam(r, "id")
 	if !h.orgSvc.IsMember(r.Context(), id, h.security.CallerID(r)) {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return nil
 	}
 	org, err := h.orgSvc.Get(r.Context(), id)
@@ -52,7 +52,7 @@ func (h *OrgHandler) requireAdmin(w http.ResponseWriter, r *http.Request) *stora
 	org, err := h.orgSvc.GetAndCheckAdmin(r.Context(), id, h.security.CallerID(r))
 	if err != nil {
 		if errors.Is(err, collaboration.ErrNotOrgAdmin) {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+			render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 			return nil
 		}
 		render.Error(w, err, http.StatusNotFound)
@@ -286,7 +286,7 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if callerID != userID {
-			render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+			render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 			return
 		}
 	}
@@ -409,8 +409,20 @@ func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) 
 	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
 		userEmail = claims.Email
 	}
+	// H12: re-verify email-verified status at invite-accept time, rather than
+	// trusting the JWT (which has no EmailVerified claim). The JWT only proves
+	// the user authenticated; it does NOT prove their email is currently
+	// verified. Without this lookup, a shadow account created with
+	// `victim@example.com` (never verified) could accept invites destined to
+	// the victim.
+	emailVerified := false
+	if h.backend != nil && userID != "" {
+		if u, err := h.backend.LoadUserByID(r.Context(), userID); err == nil && u != nil {
+			emailVerified = u.EmailVerified
+		}
+	}
 
-	org, err := h.orgSvc.AcceptInvite(r.Context(), token, userID, userEmail)
+	org, err := h.orgSvc.AcceptInvite(r.Context(), token, userID, userEmail, emailVerified)
 	if err != nil {
 		switch {
 		case errors.Is(err, collaboration.ErrInviteNotFound):

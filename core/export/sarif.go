@@ -121,12 +121,21 @@ func ReportToSARIF(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 	rules := make([]sarifReportingDescriptor, 0)
 	results := make([]sarifResult, 0, len(report.Findings))
 
+	// Track the highest-severity level observed per rule so the rule's
+	// declared DefaultConfiguration reflects the worst finding for that rule,
+	// not just the first one we happened to encounter (M7).
+	ruleMaxRank := make(map[string]int)
+
 	for _, f := range report.Findings {
 		idx, ok := ruleIndex[f.RuleID]
 		if !ok {
 			idx = len(rules)
 			ruleIndex[f.RuleID] = idx
 			rules = append(rules, ruleDescriptor(f))
+			ruleMaxRank[f.RuleID] = severityRank(sarifLevel(f.Severity))
+		} else if r := severityRank(sarifLevel(f.Severity)); r > ruleMaxRank[f.RuleID] {
+			ruleMaxRank[f.RuleID] = r
+			rules[idx].DefaultConfiguration = &sarifConfiguration{Level: sarifLevel(f.Severity)}
 		}
 
 		results = append(results, sarifResult{
@@ -179,6 +188,21 @@ func sarifLevel(s models.Severity) string {
 		return "note"
 	default:
 		return "warning"
+	}
+}
+
+// severityRank orders SARIF levels by severity so we can track the worst level
+// observed per rule (M7). Higher rank = more severe.
+func severityRank(level string) int {
+	switch level {
+	case "error":
+		return 3
+	case "warning":
+		return 2
+	case "note":
+		return 1
+	default:
+		return 0
 	}
 }
 

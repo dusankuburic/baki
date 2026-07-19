@@ -58,17 +58,20 @@ type AnalysisService struct {
 	reports *lru.Cache[string, *reportPair]
 }
 
-func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, history *analyzer.HistoryStore) *AnalysisService {
+func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, history *analyzer.HistoryStore) (*AnalysisService, error) {
 	cache, err := lru.New[string, *reportPair](maxAnalysisReports)
 	if err != nil {
-		panic(fmt.Sprintf("analysis reports LRU: %v", err))
+		// Surface the error to the caller (fx fails boot cleanly) instead of
+		// panicking mid-startup. In practice maxAnalysisReports is a >0 const
+		// and lru.New never errors, but constructors shouldn't panic.
+		return nil, fmt.Errorf("analysis reports LRU: %w", err)
 	}
 	return &AnalysisService{
 		notifier: notifier,
 		settings: settings,
 		history:  history,
 		reports:  cache,
-	}
+	}, nil
 }
 
 func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
@@ -104,6 +107,12 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 			"ruleName": ruleName,
 		})
 	})
+
+	// Surface skipped rules (safeCheck panic recovery) on a Prometheus counter
+	// so ops can alert when a rule silently produces no findings for a flow.
+	if result != nil && result.Stats.RulesSkipped > 0 {
+		metrics.RecordRulesSkipped(result.Stats.RulesSkipped)
+	}
 
 	span.SetAttributes(
 		attribute.String("flow.id", result.FlowID),

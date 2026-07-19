@@ -160,8 +160,9 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 		return
 	}
 
+	items := make([]*storageif.FindingStatus, 0, len(req.Items))
 	for _, it := range req.Items {
-		st := &storageif.FindingStatus{
+		items = append(items, &storageif.FindingStatus{
 			FlowID:        req.FlowID,
 			FindingKey:    it.FindingKey,
 			RuleID:        it.RuleID,
@@ -169,11 +170,15 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 			Justification: it.Justification,
 			AssigneeID:    it.AssigneeID,
 			UpdatedBy:     userID,
-		}
-		if err := h.backend.SetFindingStatus(r.Context(), st); err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
+		})
+	}
+	// Atomic: either all items commit or none (BatchSetFindingStatus wraps the
+	// batch in a single RLS-scoped tx). Previously the per-item loop committed
+	// items 1..K-1 on a mid-batch failure at item K, leaving the audit log's
+	// "updated: N" out of sync with reality.
+	if err := h.backend.BatchSetFindingStatus(r.Context(), req.FlowID, userID, items); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFindingTriage, "flow", req.FlowID,
 		map[string]string{"batch": fmt.Sprintf("%d", len(req.Items)), "status": req.Items[0].Status})

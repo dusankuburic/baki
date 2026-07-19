@@ -76,6 +76,7 @@ var ruleAutoFix = map[string]string{
 	"unused-variable":  "remove-block",
 	"disabled-block":   "remove-block",
 	"wait-zero":        "remove-block",
+	"todo-in-comment":  "remove-block",
 	// replace-with-variable: swap a hardcoded literal for %input_<key>%.
 	"hardcoded-credential": "replace-with-variable",
 	"hardcoded-filepath":   "replace-with-variable",
@@ -478,16 +479,18 @@ func computeStats(findings []models.Finding) models.AnalysisStats {
 
 // safeCheck runs a single rule against a block, recovering from any panic so that
 // one buggy rule (or a malformed block) can't abort the entire analysis. The
-// offending rule/block is logged and skipped.
-func safeCheck(rule Rule, block *models.Block, ctx *RuleContext) (findings []models.Finding) {
+// offending rule/block is logged and skipped; the returned `skipped` flag lets
+// the caller tally RulesSkipped on the report so operators can see that
+// findings may be missing.
+func safeCheck(rule Rule, block *models.Block, ctx *RuleContext) (findings []models.Finding, skipped bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("analysis rule panicked; skipping",
 				"rule", rule.ID(), "block", block.ID, "panic", r)
-			findings = nil
+			findings, skipped = nil, true
 		}
 	}()
-	return rule.Check(block, ctx)
+	return rule.Check(block, ctx), false
 }
 
 // RunAnalysis runs all enabled rules over flow and collects per-rule timing in
@@ -538,6 +541,7 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 	buckets := make([][]models.Finding, len(enabledRules))
 	ruleTimers := make([]int64, len(enabledRules))
 	ruleBlocks := make([]int, len(enabledRules))
+	rulesSkipped := 0
 
 	walkBlocks(flow, func(block *models.Block) {
 		if block.Type == models.BlockTypeEnd {
@@ -553,7 +557,10 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 			if profile {
 				t0 = time.Now()
 			}
-			ruleFindings := safeCheck(rule, block, ctx)
+			ruleFindings, skipped := safeCheck(rule, block, ctx)
+			if skipped {
+				rulesSkipped++
+			}
 			if profile {
 				ruleTimers[i] += time.Since(t0).Microseconds()
 			}
@@ -652,6 +659,7 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 	stats := computeStats(findings)
 	stats.BlocksAnalyzed = ctx.totalBlocks
 	stats.RulesRun = len(enabledRules)
+	stats.RulesSkipped = rulesSkipped
 	stats.Suppressed = suppressedCount
 
 	elapsed := time.Since(start)

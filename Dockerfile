@@ -44,7 +44,7 @@ ENV PAD_AUTH_ENABLED=true
 ENV PAD_BEHIND_PROXY=true
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- "http://localhost:${PAD_PORT}/healthz" >/dev/null || exit 1
+    CMD wget -qO- "http://localhost:${PAD_PORT}/readyz" >/dev/null || exit 1
 
 USER pad:pad
 

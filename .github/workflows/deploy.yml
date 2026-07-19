@@ -33,15 +33,15 @@ jobs:
       image-tag: ${{ steps.meta.outputs.tags }}
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
         id: meta
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -50,9 +50,9 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         id: build
         with:
           context: .
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # GHCR images are private; authenticate so Trivy can pull by digest.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -76,7 +76,7 @@ jobs:
       # S4 (IMPROVEMENTS.md): gate releases on image vulnerability scanning.
       # Fails the job (and therefore deploy) on any HIGH/CRITICAL finding that
       # has a published fix; unfixed issues are reported but non-blocking.
-      - uses: aquasecurity/trivy-action@0.24.0
+      - uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # 0.24.0
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
           severity: HIGH,CRITICAL
@@ -89,9 +89,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'staging' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: azure/login@v2
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -102,7 +102,7 @@ jobs:
       # reproducible environment (#13) are applied at deploy time. The image is
       # pinned by digest from the build job — a floating tag can't sneak in.
       # The resource group must pre-exist (the Bicep is resource-group scoped).
-      - uses: azure/arm-deploy-action@v2
+      - uses: azure/arm-deploy@a1361c2c2cd398621955b16ca32e01c65ea340f5  # v2
         with:
           resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
           template: infra/main.bicep

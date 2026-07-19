@@ -53,16 +53,20 @@ func TestServeHTTP_SecurityHeadersOnEveryResponse(t *testing.T) {
 // TestServeHTTP_StripsDefaultServerHeader verifies that the default Go
 // `Server: Go-http-server/...` header is removed. Fingerprinting the
 // runtime + version is a minor info-disclosure we don't need.
-// TestSwagger_GatedInCloudMode: /swagger sits outside /api/ so jwtAuth never
-// runs on it; the routes must simply not exist when JWT auth is enabled so the
-// API schema is not browsable on cloud deployments.
-func TestSwagger_GatedInCloudMode(t *testing.T) {
+// TestSwagger_AuthGatedInCloudMode: /swagger is always registered but requires
+// a Bearer token in cloud mode (JWTEnabled). Without auth → 401.
+// In local mode, open access (301 redirect to index.html).
+func TestSwagger_AuthGatedInCloudMode(t *testing.T) {
 	cloud := newJWTTestRouter(t)
-	for _, path := range []string{"/swagger", "/swagger/index.html"} {
-		rr := doRequestWithAuth(t, cloud, http.MethodGet, path, "", nil)
-		if rr.Code != http.StatusNotFound {
-			t.Errorf("cloud mode %s: got %d, want 404", path, rr.Code)
-		}
+	// /swagger redirects to /swagger/index.html — always 301 (pre-auth).
+	rr := doRequestWithAuth(t, cloud, http.MethodGet, "/swagger", "", nil)
+	if rr.Code != http.StatusMovedPermanently {
+		t.Errorf("cloud mode /swagger: got %d, want 301", rr.Code)
+	}
+	// /swagger/index.html requires auth in cloud mode → 401 without token.
+	rr = doRequestWithAuth(t, cloud, http.MethodGet, "/swagger/index.html", "", nil)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("cloud mode /swagger/index.html without auth: got %d, want 401", rr.Code)
 	}
 
 	fs, err := filesystem.NewLocalStorageBackend(t.TempDir())
@@ -70,7 +74,7 @@ func TestSwagger_GatedInCloudMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	local := newTestRouter(fs, false)
-	rr := doRequestWithAuth(t, local, http.MethodGet, "/swagger", "", nil)
+	rr = doRequestWithAuth(t, local, http.MethodGet, "/swagger", "", nil)
 	if rr.Code != http.StatusMovedPermanently {
 		t.Errorf("local mode /swagger: got %d, want 301", rr.Code)
 	}

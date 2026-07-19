@@ -414,6 +414,15 @@ func printText(report *models.AnalysisReport, quiet bool) {
 		fmt.Print("\n\n")
 	}
 
+	// Surface rule-skip events (safeCheck recovered a panic) on stderr so a CI
+	// operator can see findings may be incomplete. Stderr keeps it out of the
+	// report stream (which a pipe / file redirect captures from stdout).
+	if report.Stats.RulesSkipped > 0 {
+		fmt.Fprintf(os.Stderr,
+			"warning: %d rule evaluation(s) were skipped due to internal errors; findings may be incomplete.\n",
+			report.Stats.RulesSkipped)
+	}
+
 	for _, f := range report.Findings {
 		sev := strings.ToUpper(string(f.Severity))
 		fmt.Printf("[%s] %s\n", sev, f.Title)

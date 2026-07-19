@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 
@@ -106,7 +107,14 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		}
 	}
 
-	if err := s.store.SaveKnowledgeChunks(ctx, knowledgeChunks); err != nil {
+	// Extract the caller's userID so chunk inserts are RLS-scoped to them
+	// (matching the rest of the storage layer). Empty in local mode / unauth.
+	userID := ""
+	if claims := auth.ClaimsFromContext(ctx); claims != nil {
+		userID = claims.UserID
+	}
+
+	if err := s.store.SaveKnowledgeChunks(ctx, userID, knowledgeChunks); err != nil {
 		// Roll back the orphaned document so it doesn't appear "indexed" with no chunks.
 		_ = s.store.DeleteKnowledgeDocument(ctx, orgID, doc.ID)
 		return err

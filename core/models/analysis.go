@@ -93,6 +93,10 @@ type AnalysisStats struct {
 	Info           int `json:"info"`
 	BlocksAnalyzed int `json:"blocksAnalyzed"`
 	RulesRun       int `json:"rulesRun"`
+	// RulesSkipped counts (block, rule) evaluations that were aborted via
+	// safeCheck's panic recovery — one buggy rule or malformed block can't
+	// crash the run, but operators need to see that findings may be missing.
+	RulesSkipped int `json:"rulesSkipped"`
 	// Suppressed counts findings hidden by inline `# pad-ignore` directives in
 	// the flow source (see analyzer suppression). They are excluded from
 	// Errors/Warnings/Info and from the findings list.

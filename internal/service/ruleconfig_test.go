@@ -11,7 +11,10 @@ import (
 // (not the built-in default), and UpdateRuleConfig must not erase configured
 // Options when a client sends only {enabled, severity}.
 func TestRuleConfig_ToggleDoesNotWipeOverrides(t *testing.T) {
-	svc := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	if err != nil {
+		t.Fatalf("NewAnalysisService: %v", err)
+	}
 
 	// User configures a severity override + a threshold option.
 	if err := svc.UpdateRuleConfig("deep-nesting", models.RuleConfig{

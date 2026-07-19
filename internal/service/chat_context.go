@@ -229,7 +229,7 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 	if err != nil {
 		// Fall back to the unscrubbed doc rather than failing the request; the
 		// per-string ScrubText calls below still redact obvious secrets in output.
-		logger.Error("Failed to scrub document", map[string]interface{}{"error": err})
+		logger.Error("Failed to scrub document", "error", err)
 		scrubbedDoc = doc
 	}
 

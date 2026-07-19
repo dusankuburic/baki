@@ -27,6 +27,12 @@ var ErrNotCommentAuthor = errors.New("cannot delete another user's comment")
 // should map this to HTTP 409.
 var ErrOrgInviteExists = errors.New("an active invite for this email already exists")
 
+// ErrOrgInviteAlreadyAccepted is returned by MarkOrgInviteAccepted when the
+// invite has already been accepted (concurrent AcceptInvite race) or no longer
+// exists. The single-use contract is enforced at the storage layer via
+// `WHERE accepted_at IS NULL` so two concurrent callers cannot both succeed.
+var ErrOrgInviteAlreadyAccepted = errors.New("org invite has already been accepted or no longer exists")
+
 // ErrVersionConflict is returned by SaveFlow when the expected version does
 // not match the current row version (optimistic concurrency check failed).
 // The caller should map this to HTTP 409.
@@ -244,7 +250,10 @@ type KnowledgeStore interface {
 	// so a caller scoped to one org cannot delete another org's documents.
 	DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error
 	ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*KnowledgeDocument, error)
-	SaveKnowledgeChunks(ctx context.Context, chunks []KnowledgeChunk) error
+	// SaveKnowledgeChunks inserts chunk rows RLS-scoped to userID so the
+	// knowledge_chunks WITH CHECK policy enforces org membership. userID is
+	// the calling user's identity ("" only in non-authenticated local mode).
+	SaveKnowledgeChunks(ctx context.Context, userID string, chunks []KnowledgeChunk) error
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]KnowledgeChunk, error)
 }
 
@@ -268,6 +277,12 @@ type TriageStore interface {
 	// SetFindingStatus upserts the triage state for one finding (keyed by
 	// FlowID + FindingKey).
 	SetFindingStatus(ctx context.Context, st *FindingStatus) error
+	// BatchSetFindingStatus upserts triage state for multiple findings of the
+	// same flow atomically. Implementations must either commit all or none;
+	// the caller can rely on a nil error meaning every item was persisted.
+	// userID is the caller's identity (RLS scoping on Postgres); pass "" only
+	// in non-authenticated local mode where RLS is disabled.
+	BatchSetFindingStatus(ctx context.Context, flowID, userID string, items []*FindingStatus) error
 	// ListFindingStatuses returns all persisted triage states for a flow.
 	// Implementations return a non-nil (possibly empty) slice.
 	ListFindingStatuses(ctx context.Context, flowID string) ([]*FindingStatus, error)

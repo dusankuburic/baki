@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/storage/filesystem"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -71,6 +72,34 @@ func TestHandleAuthRegister_DuplicateReturns409(t *testing.T) {
 	checkStatus(t, first, http.StatusOK)
 	second := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", body)
 	checkStatus(t, second, http.StatusConflict)
+}
+
+// createUserErrBackend wraps a real backend and forces CreateUser to return a
+// generic (non-ErrEmailExists) error, so we can prove the Register handler
+// maps unknown backend failures to 500 instead of 409.
+type createUserErrBackend struct {
+	interfaces.StorageBackend
+	err error
+}
+
+func (b *createUserErrBackend) CreateUser(_ context.Context, _ *interfaces.User) error {
+	return b.err
+}
+
+// TestHandleAuthRegister_GenericBackendErrorReturns500 guards the regression
+// where every Register error was hard-coded to 409, masking DB outages as
+// "email already in use". The render layer's auto-map keeps ErrEmailExists→409
+// (covered by TestHandleAuthRegister_DuplicateReturns409 above) while any
+// unrecognized error must surface as 500.
+func TestHandleAuthRegister_GenericBackendErrorReturns500(t *testing.T) {
+	fs, _ := filesystem.NewLocalStorageBackend(t.TempDir())
+	wrapped := &createUserErrBackend{StorageBackend: fs, err: errors.New("connection refused")}
+	rt := newTestRouter(wrapped, true)
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email": "newuser@example.com", "password": "Password123!",
+	})
+	checkStatus(t, rr, http.StatusInternalServerError)
 }
 
 func TestHandleAuthRegister_FirstUserIsAdmin(t *testing.T) {

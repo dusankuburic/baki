@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/pprof"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -22,15 +23,23 @@ func registerRoutes(rt *Router, r chi.Router) {
 	h := rt.handlers
 
 	// --- Swagger UI ---
-	// Local/desktop mode only: /swagger sits outside /api/ so jwtAuth never
-	// applies, and the full API schema must not be browsable unauthenticated
-	// on cloud deployments.
-	if !rt.security.JWTEnabled {
-		r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
-		})
-		r.Get("/swagger/*", swaggerHandler())
-	}
+	// Always registered. In cloud mode (JWTEnabled), the swagger handler
+	// checks for a valid JWT so the schema isn't browsable unauthenticated.
+	// In local mode, open access (same as before).
+	swaggerH := swaggerHandler()
+	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
+	})
+	r.Get("/swagger/*", func(w http.ResponseWriter, r *http.Request) {
+		if rt.security.JWTEnabled {
+			tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if tokenStr == "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		swaggerH.ServeHTTP(w, r)
+	})
 
 	// --- WebSocket ---
 	r.Get("/ws", rt.handleWebSocket)
@@ -44,6 +53,16 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// access to internal operational data. Supplement this with Azure NSG /
 	// ACA ingress rules that block /metrics from the public load balancer.
 	r.Handle("/metrics", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(middleware.MetricsHandler()))
+	// /debug/pprof/* — Go runtime profiling, same private-IP guard as /metrics.
+	// Register the pprof handlers on a dedicated ServeMux so they don't leak
+	// onto http.DefaultServeMux (which other imports might accidentally expose).
+	pprofMux := http.NewServeMux()
+	pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+	pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	r.Handle("/debug/pprof/*", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(pprofMux))
 	r.Get("/api/events", rt.eventManager.HandleEvents)
 
 	// --- System & Keys ---

@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -27,6 +28,12 @@ type FakeBackend struct {
 	// FakeBackend works without NewFakeBackend.
 	FindingStatuses map[string]map[string]*interfaces.FindingStatus
 	Baselines       map[string]*interfaces.FlowBaseline
+	// BatchSetFindingStatusErr, when non-nil, makes BatchSetFindingStatus fail
+	// immediately. BatchSetFindingStatusFailAt, when >0, makes it fail at the
+	// 0-based item index (used to prove the atomicity contract — items 0..K-1
+	// must NOT persist on a mid-batch failure).
+	BatchSetFindingStatusErr    error
+	BatchSetFindingStatusFailAt int
 	// APITokens is keyed by token ID. Lazily initialized.
 	APITokens map[string]*interfaces.APIToken
 	// Users backs DeleteUser/ExportUserData for account-lifecycle tests. Lazily
@@ -316,7 +323,7 @@ func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, _, _ string) er
 func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, _ string) ([]*interfaces.KnowledgeDocument, error) {
 	return nil, nil
 }
-func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ []interfaces.KnowledgeChunk) error {
+func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, _ []interfaces.KnowledgeChunk) error {
 	return nil
 }
 func (m *FakeBackend) SearchKnowledge(_ context.Context, _ string, _ []float32, _ int) ([]interfaces.KnowledgeChunk, error) {
@@ -336,6 +343,45 @@ func (m *FakeBackend) SetFindingStatus(_ context.Context, st *interfaces.Finding
 	}
 	cp := *st
 	m.FindingStatuses[st.FlowID][st.FindingKey] = &cp
+	return nil
+}
+
+// BatchSetFindingStatus mirrors the single-item loop but stages updates in a
+// local copy so an injected failure mid-batch leaves NO partial state behind
+// (matching the Postgres impl's atomicity contract). Atomicity is the whole
+// point of the batch method — a non-atomic fake would hide real bugs.
+func (m *FakeBackend) BatchSetFindingStatus(_ context.Context, flowID, userID string, items []*interfaces.FindingStatus) error {
+	if m.FindingStatuses == nil {
+		m.FindingStatuses = make(map[string]map[string]*interfaces.FindingStatus)
+	}
+	if m.FindingStatuses[flowID] == nil {
+		m.FindingStatuses[flowID] = make(map[string]*interfaces.FindingStatus)
+	}
+
+	// Stage into a local map; only commit to the live map on full success.
+	staged := make(map[string]*interfaces.FindingStatus, len(items))
+	now := time.Now()
+	for i, st := range items {
+		if m.BatchSetFindingStatusFailAt > 0 && i == m.BatchSetFindingStatusFailAt {
+			return fmt.Errorf("injected failure at item %d", i)
+		}
+		if st == nil || st.FindingKey == "" {
+			return fmt.Errorf("batch item %d: missing findingKey", i)
+		}
+		st.FlowID = flowID
+		if st.UpdatedAt.IsZero() {
+			st.UpdatedAt = now
+		}
+		cp := *st
+		staged[st.FindingKey] = &cp
+	}
+	if m.BatchSetFindingStatusErr != nil {
+		return m.BatchSetFindingStatusErr
+	}
+	// Commit: merge staged into the live map.
+	for k, v := range staged {
+		m.FindingStatuses[flowID][k] = v
+	}
 	return nil
 }
 

@@ -320,6 +320,7 @@ func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 			"audit_events", res.AuditEvents,
 			"flow_analysis_history", res.FlowAnalysisHistory,
 			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist)
+		padmetrics.RecordBackgroundLoopTick("retention_purge")
 	}
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
@@ -569,7 +570,11 @@ func initAuditPool(lc fx.Lifecycle, backend storageif.StorageBackend) {
 // api.BuildHandler — see internal/api/middleware_chain.go for the complete,
 // resolved layer order), binds a listener, and registers the fx lifecycle
 // hooks that start/stop the HTTP server.
-func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService, redisClient *redis.Client) {
+//
+// Returns an error rather than calling os.Exit so fx can surface boot failures
+// through its normal error path (which flushes deferred log/telemetry and lets
+// tests assert against boot failures without killing the test process).
+func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSvc *service.ChatService, redisClient *redis.Client) error {
 	handler, rateLimiters := api.BuildHandler(router, cfg, redisClient)
 
 	var listener net.Listener
@@ -579,8 +584,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 		listener, err = net.Listen("tcp", addr)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to listen on %s: %v\n", addr, err)
-			os.Exit(1)
+			return fmt.Errorf("listen on %s: %w", addr, err)
 		}
 	} else {
 		// Local mode binds loopback only. The port is normally 0 (ephemeral,
@@ -589,8 +593,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		// browser-based local development can use a stable address.
 		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to listen: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("listen: %w", err)
 		}
 
 		port := listener.Addr().(*net.TCPAddr).Port
@@ -599,8 +602,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			// Writing the secret to a 0600 file is how the Tauri shell receives
 			// it without the signing key landing in stdout/logs. If that fails
 			// we cannot safely hand off the credential, so fail closed.
-			fmt.Fprintf(os.Stderr, "failed to persist session secret: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("persist session secret: %w", err)
 		}
 		startupInfo := map[string]any{
 			"port":      port,
@@ -661,6 +663,18 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			for _, rl := range rateLimiters {
 				rl.Stop()
 			}
+			// Gracefully drain WebSocket clients FIRST. http.Server.Shutdown
+			// does not close hijacked (WebSocket) sockets, so without this
+			// every rolling restart with even one live WS client takes the
+			// full shutdownCtx budget and drops in-flight collab state
+			// silently. Budget: 5s — enough for clients to receive the Close
+			// frame + pumps to exit; the remainder of shutdownCtx goes to
+			// server.Shutdown for non-WS requests.
+			wsCtx, wsCancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := router.ShutdownWebSocket(wsCtx); err != nil {
+				logger.Warn("websocket shutdown exceeded budget or was cancelled", "error", err)
+			}
+			wsCancel()
 			// fx.StopTimeout (25s) bounds the parent context. Reserve a small
 			// budget for the goroutines above to finish their teardown, then
 			// give server.Shutdown the remainder. If ctx already has a short
@@ -670,6 +684,8 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			return server.Shutdown(shutdownCtx)
 		},
 	})
+
+	return nil
 }
 
 // writeSessionSecret persists the auto-generated JWT signing secret to a 0600

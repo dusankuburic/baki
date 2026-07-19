@@ -48,6 +48,7 @@ type Result struct {
 	FlowsSkipped          int
 	FlowsFailed           int
 	ConversationsMigrated int
+	ConversationsSkipped  int
 	ConversationsFailed   int
 	SettingsMoved         bool
 	Errors                []MigrationError
@@ -221,6 +222,17 @@ func (m *Migrator) migrateSettings(ctx context.Context) error {
 	if settings == nil {
 		return errors.New("no settings in source")
 	}
+	// H2: skip-if-present mirrors migrateOneFlow's idempotency. Without this
+	// check, a re-run after an admin tunes cloud-mode settings silently rolls
+	// them back to the (stale) local-mode values. We treat dst as "present"
+	// when it has any user-visible content — analysis rule overrides or
+	// recent files — so an empty fresh dst still gets seeded.
+	if existing, err := m.dst.LoadSettings(ctx); err == nil && existing != nil {
+		if len(existing.Analysis.Rules) > 0 || len(existing.RecentFiles) > 0 {
+			logger.Info("migration: dst already has settings — skipping (clear dst to force overwrite)")
+			return nil
+		}
+	}
 	return m.dst.SaveSettings(ctx, settings)
 }
 
@@ -256,6 +268,10 @@ func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error 
 			return err
 		}
 		if migrateErr := m.migrateOneConversation(ctx, path); migrateErr != nil {
+			if errors.Is(migrateErr, errSkipped) {
+				res.ConversationsSkipped++
+				return nil // continue walking
+			}
 			res.ConversationsFailed++
 			res.Errors = append(res.Errors, MigrationError{
 				FlowID:  filepath.Base(path),
@@ -267,13 +283,24 @@ func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error 
 		res.ConversationsMigrated++
 		return nil
 	})
-	if walkErr != nil && !errors.Is(walkErr, ctx.Err()) {
+	if walkErr != nil {
+		// Distinguish "walk was cancelled mid-sweep" (operator asked us to
+		// stop) from a genuine filesystem error. Previously the cancellation
+		// was silently swallowed (returned nil), hiding partial runs.
+		if errors.Is(walkErr, ctx.Err()) {
+			logger.Warn("migration: conversations walk cancelled mid-sweep", "migrated", res.ConversationsMigrated, "failed", res.ConversationsFailed)
+			return ctx.Err()
+		}
 		return fmt.Errorf("walk conversations dir: %w", walkErr)
 	}
 	return nil
 }
 
 // migrateOneConversation reads, converts, and saves a single conversation file.
+// H3: skip-if-present — if dst already has messages for (flowID, scope) the
+// conversation is left untouched. Without this guard, re-running migration
+// clobbers any conversations the user has continued in cloud mode since the
+// first migration. Mirrors migrateOneFlow's idempotency contract.
 func (m *Migrator) migrateOneConversation(ctx context.Context, path string) error {
 	data, err := os.ReadFile(path) // #nosec G304 -- path from WalkDir over convDir, not user input
 	if err != nil {
@@ -282,6 +309,22 @@ func (m *Migrator) migrateOneConversation(ctx context.Context, path string) erro
 	var conv models.ConversationFile
 	if err := json.Unmarshal(data, &conv); err != nil {
 		return fmt.Errorf("decode: %w", err)
+	}
+
+	flowID := conv.FlowKey
+	if flowID == "" {
+		flowID = strings.TrimSuffix(filepath.Base(path), ".json")
+	}
+	scope := conv.Scope
+	if scope == "" {
+		scope = filepath.Base(filepath.Dir(path))
+	}
+
+	// Skip if dst already has messages for this (flowID, scope) — re-runs must
+	// not roll back post-migration chat activity.
+	if existing, err := m.dst.LoadConversation(ctx, flowID, scope); err == nil && len(existing) > 0 {
+		logger.Info("migration: dst already has conversation — skipping", "flowID", flowID, "scope", scope)
+		return errSkipped
 	}
 
 	msgs := make([]interfaces.ChatMessage, len(conv.Messages))
@@ -303,15 +346,6 @@ func (m *Migrator) migrateOneConversation(ctx context.Context, path string) erro
 			Model:            msg.Model,
 			FinishReason:     msg.FinishReason,
 		}
-	}
-
-	flowID := conv.FlowKey
-	if flowID == "" {
-		flowID = strings.TrimSuffix(filepath.Base(path), ".json")
-	}
-	scope := conv.Scope
-	if scope == "" {
-		scope = filepath.Base(filepath.Dir(path))
 	}
 
 	return m.dst.SaveConversation(ctx, flowID, scope, msgs)

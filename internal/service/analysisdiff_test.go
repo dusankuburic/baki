@@ -25,7 +25,10 @@ func makeAnalyzableDoc(id string, blocks ...models.Block) *models.FlowDocument {
 // docs deliberately have DIFFERENT UUIDs but the same FilePath — the parser
 // mints a fresh ID per load, so tracking must key on the stable path.
 func TestAnalyzeFlow_TracksPreviousReport(t *testing.T) {
-	svc := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	if err != nil {
+		t.Fatalf("NewAnalysisService: %v", err)
+	}
 
 	doc1 := makeAnalyzableDoc("uuid-run-1",
 		models.Block{ID: "b1", Type: models.BlockTypeAction, RawType: "Display.ShowMessage", Name: "Show", SubflowID: "main", LineNumber: 1},

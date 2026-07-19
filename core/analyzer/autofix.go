@@ -1,11 +1,33 @@
 package analyzer
 
 import (
+	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"pad-core/models"
 )
+
+// patchOutOfRangeOps counts patch ops skipped because their target line fell
+// outside the source bounds. A fixer emitting an out-of-range line is a bug:
+// rather than silently clamping the target (which can splice the edit into the
+// wrong place and corrupt the output), ApplyPatch turns the op into a no-op and
+// records it here so the fault is observable instead of invisible. Legitimate
+// boundary cases — inserting at EOF, a wrap/remove range that spans to the last
+// line — are NOT counted.
+var patchOutOfRangeOps atomic.Int64
+
+// PatchOutOfRangeOps returns the cumulative number of patch ops skipped for an
+// out-of-range target line. A non-zero value indicates a fixer produced an
+// invalid line number and its edit was dropped.
+func PatchOutOfRangeOps() int64 { return patchOutOfRangeOps.Load() }
+
+func reportOutOfRangePatchOp(kind string, target, nLines int) {
+	patchOutOfRangeOps.Add(1)
+	slog.Warn("analyzer: patch op target out of range; skipping op (fixer bug)",
+		"kind", kind, "target", target, "lines", nLines)
+}
 
 // SuppressFindingPatch builds a Patch that inserts a `# pad-ignore[ruleID]`
 // comment immediately before the block's source line, silencing the finding at
@@ -98,13 +120,14 @@ func ApplyPatch(source string, p models.Patch) string {
 	}
 	sort.Slice(inserts, func(i, j int) bool { return inserts[i].BeforeLine > inserts[j].BeforeLine })
 	for _, op := range inserts {
+		// Valid targets are [1, len+1] — BeforeLine == len+1 appends at EOF.
+		// Anything else is a fixer bug: skip rather than clamp into the wrong
+		// position.
+		if op.BeforeLine < 1 || op.BeforeLine > len(lines)+1 {
+			reportOutOfRangePatchOp("insert", op.BeforeLine, len(lines))
+			continue
+		}
 		idx := op.BeforeLine - 1 // insert BEFORE line N ⇒ at slice index N-1
-		if idx < 0 {
-			idx = 0
-		}
-		if idx > len(lines) {
-			idx = len(lines)
-		}
 		newLines := make([]string, 0, len(lines)+len(op.Lines))
 		newLines = append(newLines, lines[:idx]...)
 		newLines = append(newLines, op.Lines...)
@@ -122,22 +145,15 @@ func ApplyPatch(source string, p models.Patch) string {
 // Header, each original line re-indented by IndentDelta 4-space levels, then
 // Footer. Header and Footer may contain embedded newlines (multi-line). Used by
 // wrap-error-handler (single-line header/footer) and wrap-in-retry (multi-line).
-// Out-of-range bounds are clamped.
+// An out-of-range StartLine is a no-op (fixer bug); EndLine past EOF clamps so a
+// range may legitimately span to the last line.
 func applyWrap(lines []string, op models.PatchOp) []string {
+	if op.StartLine < 1 || op.StartLine > len(lines) {
+		reportOutOfRangePatchOp("wrap", op.StartLine, len(lines))
+		return lines
+	}
 	start := op.StartLine - 1
-	end := op.EndLine
-	if start < 0 {
-		start = 0
-	}
-	if start > len(lines) {
-		start = len(lines)
-	}
-	if end < start {
-		end = start
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
+	end := min(max(op.EndLine, start), len(lines))
 	pad := ""
 	if op.IndentDelta > 0 {
 		pad = strings.Repeat("    ", op.IndentDelta)
@@ -161,24 +177,17 @@ func applyWrap(lines []string, op models.PatchOp) []string {
 }
 
 // applyRemove deletes the inclusive 1-based range [StartLine..EndLine],
-// returning the shortened slice. Bounds are clamped the same way applyWrap
-// clamps its wrap range. Used by RemoveBlockPatch to delete a block (and its
-// descendants when EndLine spans them).
+// returning the shortened slice. An out-of-range StartLine is a no-op (fixer
+// bug); EndLine past EOF clamps the same way applyWrap does. Used by
+// RemoveBlockPatch to delete a block (and its descendants when EndLine spans
+// them).
 func applyRemove(lines []string, op models.PatchOp) []string {
+	if op.StartLine < 1 || op.StartLine > len(lines) {
+		reportOutOfRangePatchOp("remove", op.StartLine, len(lines))
+		return lines
+	}
 	start := op.StartLine - 1
-	end := op.EndLine
-	if start < 0 {
-		start = 0
-	}
-	if start > len(lines) {
-		start = len(lines)
-	}
-	if end < start {
-		end = start
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
+	end := min(max(op.EndLine, start), len(lines))
 	out := make([]string, 0, len(lines)-(end-start))
 	out = append(out, lines[:start]...)
 	out = append(out, lines[end:]...)
@@ -192,7 +201,11 @@ func applyRemove(lines []string, op models.PatchOp) []string {
 // replaced.
 func applyReplace(lines []string, op models.PatchOp) []string {
 	idx := op.StartLine - 1
-	if idx < 0 || idx >= len(lines) || op.Old == "" {
+	if idx < 0 || idx >= len(lines) {
+		reportOutOfRangePatchOp("replace", op.StartLine, len(lines))
+		return lines
+	}
+	if op.Old == "" {
 		return lines
 	}
 	lines[idx] = strings.ReplaceAll(lines[idx], op.Old, op.New)
@@ -200,10 +213,14 @@ func applyReplace(lines []string, op models.PatchOp) []string {
 }
 
 // applyAppend appends op.Lines[0] to the end of the 1-based line StartLine.
-// Out-of-range bounds are clamped (no-op if the line doesn't exist).
+// An out-of-range StartLine is a no-op fault (fixer bug).
 func applyAppend(lines []string, op models.PatchOp) []string {
 	idx := op.StartLine - 1
-	if idx < 0 || idx >= len(lines) || len(op.Lines) == 0 {
+	if idx < 0 || idx >= len(lines) {
+		reportOutOfRangePatchOp("append", op.StartLine, len(lines))
+		return lines
+	}
+	if len(op.Lines) == 0 {
 		return lines
 	}
 	lines[idx] += op.Lines[0]

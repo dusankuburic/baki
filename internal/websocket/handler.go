@@ -100,11 +100,11 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 				http.Error(w, "flow not found", http.StatusNotFound)
 				return
 			case errors.Is(err, ErrAccessDenied):
-				http.Error(w, "Forbidden", http.StatusForbidden)
+				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			default:
 				slog.Error("websocket: flow access check failed", "flowId", flowID, "error", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
 		}

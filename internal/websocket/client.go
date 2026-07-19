@@ -47,6 +47,29 @@ type Client struct {
 	// is revoked. readPump checks it per-message so a revoked user can't inject
 	// events in the window between revocation detection and connection close.
 	authorized atomic.Bool
+
+	// done is closed when Run returns, so Hub.Shutdown can wait for every
+	// client's pumps to fully exit before reporting shutdown complete.
+	done chan struct{}
+}
+
+// shutdown signals the client to exit cleanly: it sends a CloseGoingAway
+// control frame and force-closes the underlying TCP conn as a fallback so a
+// wedged writePump can't keep the client alive past the server's shutdown
+// budget.
+//
+// The Close control frame is best-effort: errors here are expected if the conn
+// is already closing. Closing the conn forces writePump's next WriteMessage
+// (ping or queued message) to error out, exiting the pump. readPump's next
+// ReadMessage also errors, exiting that pump. Run's defer then fires
+// `close(c.done)` so Hub.Shutdown can stop waiting.
+func (c *Client) shutdown() {
+	_ = c.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
+		time.Now().Add(writeWait),
+	)
+	_ = c.conn.Close()
 }
 
 func (c *Client) SetSelectedBlockID(id string) {
@@ -71,6 +94,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 		connID:      uuid.NewString(),
 		conn:        conn,
 		send:        make(chan Envelope, sendBufferCap),
+		done:        make(chan struct{}),
 	}
 	c.authorized.Store(true)
 	return c
@@ -85,6 +109,7 @@ func (c *Client) Run() {
 		//   1. Leave the hub so future Broadcast snapshots stop including us.
 		//   2. Close the underlying TCP conn so writePump's next WriteMessage
 		//      (or ping tick) errors out and the pump returns.
+		//   3. Close done so Hub.Shutdown can stop waiting on this client.
 		// We deliberately do NOT close c.send. Another goroutine that already
 		// captured an old Broadcast snapshot might still be mid-iteration
 		// calling c.Send → c.send <- env; concurrently closing c.send would
@@ -94,6 +119,7 @@ func (c *Client) Run() {
 		c.hub.Leave(c.flowID, c)
 		c.disconnected.Store(true)
 		_ = c.conn.Close()
+		close(c.done)
 	}()
 
 	go c.writePump()

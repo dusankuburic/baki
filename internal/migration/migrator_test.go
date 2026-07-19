@@ -280,3 +280,88 @@ func TestMigrator_MalformedConversationRecordedAsFailure(t *testing.T) {
 		t.Errorf("ConversationsMigrated: want 0, got %d", res.ConversationsMigrated)
 	}
 }
+
+// TestMigrator_Settings_SkipIfDstNonEmpty guards H2: a re-run after the admin
+// has tuned cloud-mode settings must NOT roll them back to the stale source
+// values. The migrator should treat dst settings as authoritative once seeded.
+func TestMigrator_Settings_SkipIfDstNonEmpty(t *testing.T) {
+	src := testutil.NewFakeBackend()
+	dst := testutil.NewFakeBackend()
+
+	// Source has the "old" settings to migrate.
+	srcSettings, _ := src.LoadSettings(context.Background())
+	srcSettings.Analysis.Rules = map[string]interfaces.RuleConfig{
+		"deep-nesting": {Enabled: false, Severity: "warning"},
+	}
+	if err := src.SaveSettings(context.Background(), srcSettings); err != nil {
+		t.Fatalf("seed src settings: %v", err)
+	}
+
+	// Destination already has DIFFERENT settings an admin applied post-migrate.
+	dstSettings, _ := dst.LoadSettings(context.Background())
+	dstSettings.Analysis.Rules = map[string]interfaces.RuleConfig{
+		"deep-nesting": {Enabled: true, Severity: "error"},
+	}
+	if err := dst.SaveSettings(context.Background(), dstSettings); err != nil {
+		t.Fatalf("seed dst settings: %v", err)
+	}
+
+	if _, err := migration.New(src, dst).Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	got, _ := dst.LoadSettings(context.Background())
+	if rc := got.Analysis.Rules["deep-nesting"]; rc.Severity != "error" || !rc.Enabled {
+		t.Errorf("dst settings were overwritten by migration: %+v (want error/enabled)", rc)
+	}
+}
+
+// TestMigrator_Conversations_SkipIfDstNonEmpty guards H3: a re-run must not
+// clobber conversations the user has continued in cloud mode. The migrator
+// loads dst first; if non-empty for (flowID, scope), it skips the file.
+func TestMigrator_Conversations_SkipIfDstNonEmpty(t *testing.T) {
+	src := testutil.NewFakeBackend()
+	dst := testutil.NewFakeBackend()
+
+	convDir := t.TempDir()
+	convPath := filepath.Join(convDir, "openai", "flow-1.json")
+	if err := os.MkdirAll(filepath.Dir(convPath), 0750); err != nil {
+		t.Fatal(err)
+	}
+	conv := models.ConversationFile{
+		Version: 1, FlowKey: "flow-1", Scope: "openai",
+		Messages: []models.ChatMessage{
+			{ID: "m1", Role: "user", Content: "OLD: from local mode", Timestamp: time.Now()},
+		},
+	}
+	data, _ := json.Marshal(conv)
+	if err := os.WriteFile(convPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Destination already has a NEWER conversation the user continued post-migrate.
+	if err := dst.SaveConversation(context.Background(), "flow-1", "openai", []interfaces.ChatMessage{
+		{ID: "new1", Role: "user", Content: "NEW: continued in cloud", Timestamp: "2026-01-01T00:00:00Z"},
+	}); err != nil {
+		t.Fatalf("seed dst conversation: %v", err)
+	}
+
+	res, err := migration.New(src, dst).
+		WithConversationsDir(convDir).
+		Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if res.ConversationsMigrated != 0 {
+		t.Errorf("ConversationsMigrated: want 0 (skipped), got %d", res.ConversationsMigrated)
+	}
+	if res.ConversationsFailed != 0 {
+		t.Errorf("ConversationsFailed: want 0, got %d", res.ConversationsFailed)
+	}
+
+	// Destination content must be the NEWER conversation, not the overwritten one.
+	got, _ := dst.LoadConversation(context.Background(), "flow-1", "openai")
+	if len(got) != 1 || got[0].Content != "NEW: continued in cloud" {
+		t.Errorf("dst conversation was overwritten: %+v", got)
+	}
+}

@@ -99,11 +99,11 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 
 	user, err := h.authSvc.Register(r.Context(), email, password)
 	if err != nil {
-		if errors.Is(err, service.ErrPasswordHashFailed) {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-		render.Error(w, err, http.StatusConflict)
+		// Let render.Error auto-map: ErrEmailExists → 409, everything else
+		// (incl. ErrPasswordHashFailed and DB outages) → 500. Previously the
+		// handler hard-coded 409 for every error, masking infra failures as
+		// "email already in use".
+		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
 

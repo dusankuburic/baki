@@ -62,7 +62,16 @@ func (p *Parser) Parse() (*models.FlowDocument, error) {
 	return buildDocument(p.text, p.fileName, p.fileSize, subflows, state.parseErrors, totalBlocks, maxDepth), nil
 }
 
+// MaxParseTextSize is the maximum source-text size the parser will accept.
+// Prevents pathological inputs from consuming unbounded memory/time. Callers
+// that need to parse larger inputs (e.g. very large multi-file folders) should
+// use ParseFiles which parses each file independently under this limit.
+const MaxParseTextSize = 50 * 1024 * 1024 // 50 MB
+
 func ParseText(text, fileName string, fileSize int64) (*models.FlowDocument, error) {
+	if len(text) > MaxParseTextSize {
+		return nil, fmt.Errorf("source too large: %d bytes (limit %d bytes); use ParseFiles for multi-file flows", len(text), MaxParseTextSize)
+	}
 	p := NewParser(text, fileName, fileSize)
 	return p.Parse()
 }

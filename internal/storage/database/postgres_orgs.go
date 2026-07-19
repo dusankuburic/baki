@@ -231,26 +231,54 @@ func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, org
 	return docs, rows.Err()
 }
 
-func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, chunks []interfaces.KnowledgeChunk) error {
-	tx, err := b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+// SaveKnowledgeChunks inserts chunk rows. The Postgres knowledge_chunks table
+// has RLS policies; to honor them the inserts MUST run in a transaction with
+// app.current_user_id set (BeginRLS) — otherwise app_rls_active() returns
+// false and the WITH CHECK policy short-circuits to "allow", letting any
+// authenticated caller write chunks for arbitrary org_id values.
+//
+// If the RLS middleware already opened a tx on ctx we run inside it; otherwise
+// we open and commit our own RLS-scoped tx.
+func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
+	if len(chunks) == 0 {
+		return nil
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO knowledge_chunks (id, doc_id, content, embedding) VALUES ($1, $2, $3, $4)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, c := range chunks {
-		embJSON, _ := json.Marshal(c.Embedding)
-		if _, err := stmt.ExecContext(ctx, c.ID, c.DocID, c.Content, embJSON); err != nil {
-			return err
+	runInserts := func(tx DBTX) error {
+		const stmt = `INSERT INTO knowledge_chunks (id, doc_id, content, embedding) VALUES ($1, $2, $3, $4)`
+		for _, c := range chunks {
+			embJSON, _ := json.Marshal(c.Embedding)
+			if _, err := tx.ExecContext(ctx, stmt, c.ID, c.DocID, c.Content, embJSON); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	return tx.Commit()
+
+	// Reuse the middleware RLS tx if present.
+	if existingTx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && existingTx != nil {
+		return runInserts(existingTx)
+	}
+
+	// No existing tx — open and commit our own RLS-scoped tx.
+	tx, err := b.BeginRLS(ctx, userID)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := runInserts(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("save knowledge chunks: commit: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {

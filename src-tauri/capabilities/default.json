@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Minimum Tauri permissions the webview actually uses. The Rust host owns the Go sidecar lifecycle (spawn/kill via std::process — no shell plugin needed); the webview invokes two custom commands (get_backend_config, restart_backend) plus opens external URLs via shellOpen. Spawn/kill/execute were previously granted and represented pure gratuitous authority an XSS payload would inherit.",
   "windows": [
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:event:default",
+    "core:webview:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
@@ -15,10 +16,7 @@
     "core:window:allow-is-fullscreen",
     "dialog:allow-open",
     "dialog:allow-save",
-    "shell:allow-spawn",
-    "shell:allow-kill",
-    "shell:allow-execute",
-    "shell:default",
+    "shell:allow-open",
     "log:default"
   ]
 }

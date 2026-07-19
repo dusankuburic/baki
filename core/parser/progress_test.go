@@ -105,19 +105,3 @@ SET X TO 'done'
 		t.Errorf("expected ≥2 subflows, got %d", doc.Metadata.SubflowCount)
 	}
 }
-
-// ---- maxInt -----------------------------------------------------------------
-
-func TestMaxInt(t *testing.T) {
-	cases := []struct{ a, b, want int }{
-		{3, 5, 5},
-		{5, 3, 5},
-		{7, 7, 7},
-		{0, -1, 0},
-	}
-	for _, tc := range cases {
-		if got := maxInt(tc.a, tc.b); got != tc.want {
-			t.Errorf("maxInt(%d,%d) = %d, want %d", tc.a, tc.b, got, tc.want)
-		}
-	}
-}

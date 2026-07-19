@@ -89,6 +89,11 @@ func NewRouter(
 	}
 
 	// Release the hub's backplane subscriber on shutdown (no-op in-memory).
+	// This is a SAFETY NET: startServer's OnStop calls Router.ShutdownWebSocket
+	// → Hub.Shutdown, which already calls Hub.Close internally. But if that
+	// hook never fires (e.g. fx fails earlier in shutdown), this hook ensures
+	// the Redis backplane subscriber is still released. Hub.Close is
+	// idempotent — calling it twice is a no-op.
 	lc.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
 
 	// Wire the WebSocket hub as a flow-change notifier so that library
@@ -126,6 +131,16 @@ func NewRouter(
 
 func (rt *Router) Shutdown() {
 	rt.shutdownOnce.Do(func() { close(rt.shutdownCh) })
+}
+
+// ShutdownWebSocket gracefully drains all connected WebSocket clients: each is
+// sent a CloseGoingAway control frame, the underlying conns are closed, and the
+// call waits for every client's read/write pumps to exit (or ctx to elapse).
+// Call BEFORE server.Shutdown — http.Server.Shutdown does not close hijacked
+// (WebSocket) sockets, so without this every rolling restart takes the full
+// shutdownCtx budget + drops in-flight collab state silently. Idempotent.
+func (rt *Router) ShutdownWebSocket(ctx context.Context) error {
+	return rt.hub.Shutdown(ctx)
 }
 
 // ServeHTTP is intentionally thin. All cross-cutting concerns (security

@@ -49,3 +49,41 @@ func TestDeduplicateFindings_CollapsesTrueDuplicates(t *testing.T) {
 		t.Errorf("groups = %+v, want one group with DuplicateCount 1", groups)
 	}
 }
+
+// TestDeduplicateFindings_GroupOrderDeterministic guards M8: report.Groups
+// must be sorted (by BlockID, then primary finding title) so output is stable
+// across runs despite Go's randomized map iteration. We run the dedup N times
+// to amplify any non-determinism and assert the order never varies.
+func TestDeduplicateFindings_GroupOrderDeterministic(t *testing.T) {
+	findings := []models.Finding{
+		{RuleID: "r3", Title: "Zeta rule", BlockID: "block-c"},
+		{RuleID: "r1", Title: "Alpha rule", BlockID: "block-a"},
+		{RuleID: "r2", Title: "Mid rule", BlockID: "block-b"},
+		// Two findings on the same block with different titles exercise the
+		// secondary sort key.
+		{RuleID: "r4", Title: "Bravo", BlockID: "block-a"},
+	}
+
+	wantBlockIDs := []string{"block-a", "block-b", "block-c"}
+	// Primary is the FIRST finding encountered for the block, so block-a's
+	// primary is whichever title was appended first to that group.
+	wantTitles := []string{"Alpha rule", "Mid rule", "Zeta rule"}
+
+	for i := 0; i < 25; i++ {
+		_, groups := DeduplicateFindings(findings)
+		if len(groups) != len(wantBlockIDs) {
+			t.Fatalf("iter %d: got %d groups, want %d", i, len(groups), len(wantBlockIDs))
+		}
+		for j, g := range groups {
+			if g.BlockID != wantBlockIDs[j] {
+				t.Fatalf("iter %d group %d: BlockID = %q, want %q", i, j, g.BlockID, wantBlockIDs[j])
+			}
+			if g.Primary == nil {
+				t.Fatalf("iter %d group %d: nil Primary", i, j)
+			}
+			if g.Primary.Title != wantTitles[j] {
+				t.Fatalf("iter %d group %d: Title = %q, want %q", i, j, g.Primary.Title, wantTitles[j])
+			}
+		}
+	}
+}

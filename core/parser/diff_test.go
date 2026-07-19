@@ -61,6 +61,64 @@ func TestBlocksEqual_DifferentIndent(t *testing.T) {
 	}
 }
 
+func TestBlocksEqual_DifferentPropertyValue(t *testing.T) {
+	// Same RawType/Name/Indent but a changed property value (e.g. a Url:) must
+	// NOT compare equal — otherwise a config-only edit is invisible in the diff.
+	a := models.Block{RawType: "ACTION", Name: "Navigate", Indent: 0,
+		Properties: map[string]string{"Url": "https://a.example"}}
+	b := models.Block{RawType: "ACTION", Name: "Navigate", Indent: 0,
+		Properties: map[string]string{"Url": "https://b.example"}}
+	if blocksEqual(&a, &b) {
+		t.Error("blocks differing only in a property value should not be equal")
+	}
+}
+
+func TestBlocksEqual_SameProperties(t *testing.T) {
+	a := models.Block{RawType: "ACTION", Name: "Navigate", Indent: 0,
+		Properties: map[string]string{"Url": "https://a.example", "Timeout": "30"}}
+	b := models.Block{RawType: "ACTION", Name: "Navigate", Indent: 0,
+		Properties: map[string]string{"Timeout": "30", "Url": "https://a.example"}}
+	if !blocksEqual(&a, &b) {
+		t.Error("blocks with identical properties (any order) should be equal")
+	}
+}
+
+// ---- DiffFlows: property-only edit surfaces as a change ---------------------
+
+func TestDiffFlows_PropertyOnlyEdit(t *testing.T) {
+	// A single block whose only change is a property value must produce a
+	// visible diff (remove-old + add-new), not an all-ChangeNone result.
+	oldBlk := models.Block{RawType: "ACTION", Name: "Navigate", Indent: 0,
+		Properties: map[string]string{"Url": "https://old.example"}}
+	newBlk := models.Block{RawType: "ACTION", Name: "Navigate", Indent: 0,
+		Properties: map[string]string{"Url": "https://new.example"}}
+
+	sfOld := makeSubflow("Main", oldBlk)
+	sfNew := makeSubflow("Main", newBlk)
+
+	diff := DiffFlows(makeDoc("old", sfOld), makeDoc("new", sfNew))
+
+	if len(diff.Subflows) != 1 {
+		t.Fatalf("expected 1 subflow diff, got %d", len(diff.Subflows))
+	}
+	sdiff := diff.Subflows[0]
+	if sdiff.Change != models.ChangeModified {
+		t.Errorf("property-only edit: subflow change = %q, want %q", sdiff.Change, models.ChangeModified)
+	}
+	var added, removed int
+	for _, bd := range sdiff.Blocks {
+		switch bd.Change {
+		case models.ChangeAdded:
+			added++
+		case models.ChangeRemoved:
+			removed++
+		}
+	}
+	if added != 1 || removed != 1 {
+		t.Errorf("property-only edit should surface as 1 add + 1 remove, got %d add / %d remove", added, removed)
+	}
+}
+
 // ---- max (local) ------------------------------------------------------------
 
 func TestMax(t *testing.T) {

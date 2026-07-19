@@ -11,7 +11,10 @@ import (
 // match the live rule catalog so a new rule can never silently fall off the
 // summary.
 func TestGetRulesSummary(t *testing.T) {
-	svc := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	if err != nil {
+		t.Fatalf("NewAnalysisService: %v", err)
+	}
 	summary := svc.GetRulesSummary()
 
 	totalRules := len(analyzer.AllRules())
@@ -68,7 +71,10 @@ func TestGetRulesSummary(t *testing.T) {
 // settings still leaves the catalog total intact (the summary reports the
 // *available* catalog, not enabled-state — enabled filtering is the UI's job).
 func TestGetRulesSummary_HonoursSettingsOverrides(t *testing.T) {
-	svc := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	svc, err := NewAnalysisService(NilNotifier{}, newTestSettingsStore(t), nil)
+	if err != nil {
+		t.Fatalf("NewAnalysisService: %v", err)
+	}
 
 	totalBefore := svc.GetRulesSummary().TotalRules
 

@@ -180,3 +180,38 @@ func TestReportToSARIF_FingerprintStableAndDistinct(t *testing.T) {
 		t.Error("expected partial fingerprint to match computed value")
 	}
 }
+
+// TestSARIF_RuleLevelTracksMaxSeverity guards M7: a rule's declared
+// defaultConfiguration.level must reflect the worst finding for that rule, not
+// just the first one we happened to encounter.
+func TestSARIF_RuleLevelTracksMaxSeverity(t *testing.T) {
+	warn := models.Finding{RuleID: "r-x", Title: "t", Severity: models.SeverityWarning, BlockID: "b1"}
+	errFinding := models.Finding{RuleID: "r-x", Title: "t", Severity: models.SeverityError, BlockID: "b2"}
+
+	// Order 1: warning first, then error — rule level must still end up "error".
+	report := makeReport(warn, errFinding)
+	log, _ := parseSARIF(t, report, makeDoc("Flow", ""))
+	if len(log.Runs[0].Tool.Driver.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(log.Runs[0].Tool.Driver.Rules))
+	}
+	got := log.Runs[0].Tool.Driver.Rules[0].DefaultConfiguration.Level
+	if got != "error" {
+		t.Errorf("warning-then-error: rule level = %q, want %q", got, "error")
+	}
+
+	// Order 2: error first, then warning — rule level must remain "error".
+	report = makeReport(errFinding, warn)
+	log, _ = parseSARIF(t, report, makeDoc("Flow", ""))
+	got = log.Runs[0].Tool.Driver.Rules[0].DefaultConfiguration.Level
+	if got != "error" {
+		t.Errorf("error-then-warning: rule level = %q, want %q", got, "error")
+	}
+
+	// Sanity: a single warning-only rule stays "warning".
+	report = makeReport(warn)
+	log, _ = parseSARIF(t, report, makeDoc("Flow", ""))
+	got = log.Runs[0].Tool.Driver.Rules[0].DefaultConfiguration.Level
+	if got != "warning" {
+		t.Errorf("warning-only: rule level = %q, want %q", got, "warning")
+	}
+}

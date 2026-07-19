@@ -1,9 +1,14 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"pad-analyzer/internal/testutil"
 )
 
 // TestReadinessProbe_OkWhenBackendUp verifies /readyz returns 200 when
@@ -69,4 +74,51 @@ func TestHandleDeleteApiKey_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/keys/delete")
 	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+// failingRedisPinger is a RedisPinger stand-in that always returns an error,
+// used to prove /readyz reports unhealthy when Redis (the optional backplane)
+// is configured but unreachable.
+type failingRedisPinger struct{ err error }
+
+func (f failingRedisPinger) Ping(_ context.Context) error { return f.err }
+
+// TestReadinessProbe_503AfterNConsecutiveRedisFailures guards H21: when Redis
+// is configured (non-nil pinger) and unreachable, the probe must accumulate
+// failures and return 503 after readinessFailureThreshold consecutive hits.
+// Previously /readyz did not check Redis at all — an outage silently degraded
+// multi-replica correctness (rate limiter, hub presence, chat-resume all fail
+// open) without taking the pod out of rotation.
+func TestReadinessProbe_503AfterNConsecutiveRedisFailures(t *testing.T) {
+	// Use FakeBackend (always-healthy Ping) so the backend check passes and we
+	// isolate the Redis check failure path.
+	h := &SystemHandler{
+		backend:     testutil.NewFakeBackend(),
+		redisPinger: failingRedisPinger{err: errors.New("redis: connection refused")},
+	}
+	for i := 1; i <= readinessFailureThreshold; i++ {
+		w := httptest.NewRecorder()
+		h.handleReadiness(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if i < readinessFailureThreshold {
+			if w.Code != http.StatusOK {
+				t.Errorf("probe %d: expected 200 (below threshold), got %d", i, w.Code)
+			}
+		} else {
+			if w.Code != http.StatusServiceUnavailable {
+				t.Errorf("probe %d: expected 503 (at threshold), got %d", i, w.Code)
+			}
+		}
+	}
+}
+
+// TestReadinessProbe_NilRedisPingerSkipsCheck proves single-replica mode
+// (Redis unconfigured) continues to pass readiness without trying to ping a
+// nil client.
+func TestReadinessProbe_NilRedisPingerSkipsCheck(t *testing.T) {
+	h := &SystemHandler{redisPinger: nil}
+	w := httptest.NewRecorder()
+	h.handleReadiness(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when Redis pinger is nil, got %d", w.Code)
+	}
 }

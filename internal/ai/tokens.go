@@ -22,7 +22,7 @@ func getTokenizer() *tiktoken.Tiktoken {
 		tiktoken.SetBpeLoader(tiktokenloader.NewOfflineLoader())
 		tkm, err := tiktoken.GetEncoding("cl100k_base")
 		if err != nil {
-			logger.Error("Failed to initialize tiktoken, falling back to heuristic", map[string]interface{}{"error": err})
+			logger.Error("Failed to initialize tiktoken, falling back to heuristic", "error", err)
 			tokenizer = nil
 			return
 		}

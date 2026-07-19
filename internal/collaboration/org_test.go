@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"pad-analyzer/internal/auth"
 )
@@ -203,5 +204,62 @@ func TestDelete_RemovesOrg(t *testing.T) {
 func TestDelete_NotFoundReturnsError(t *testing.T) {
 	if err := newSvc().Delete(context.Background(), "ghost"); !errors.Is(err, ErrOrgNotFound) {
 		t.Errorf("expected ErrOrgNotFound, got %v", err)
+	}
+}
+
+// ---- AcceptInvite ----
+
+// TestAcceptInvite_RejectsUnverifiedEmail guards H12: a caller whose email is
+// not verified must not be able to accept an invite, even when the email
+// matches. Without this check, a shadow local-mode account created with
+// `victim@example.com` (never verified) could accept invites destined to the
+// victim.
+func TestAcceptInvite_RejectsUnverifiedEmail(t *testing.T) {
+	svc := newSvc()
+	ctx := context.Background()
+
+	org, err := svc.Create(ctx, "Acme", "alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_, token, err := svc.CreateInvite(ctx, org.ID, "bob@example.com", auth.RoleMember, "alice", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+
+	// Email matches but emailVerified=false → must reject.
+	if _, err := svc.AcceptInvite(ctx, token, "bob", "bob@example.com", false); !errors.Is(err, ErrEmailNotVerified) {
+		t.Errorf("expected ErrEmailNotVerified when email is unverified, got %v", err)
+	}
+
+	// Same call with emailVerified=true succeeds.
+	if _, err := svc.AcceptInvite(ctx, token, "bob", "bob@example.com", true); err != nil {
+		t.Errorf("expected success when email is verified, got %v", err)
+	}
+}
+
+// TestAcceptInvite_SecondAcceptRejected guards H11: once an invite has been
+// accepted, a second AcceptInvite call must fail with ErrInviteAlreadyAccepted.
+// The memOrgStore implementation enforces this via AcceptedAt != nil; the
+// Postgres backend additionally enforces it transactionally at the storage
+// layer (WHERE accepted_at IS NULL).
+func TestAcceptInvite_SecondAcceptRejected(t *testing.T) {
+	svc := newSvc()
+	ctx := context.Background()
+
+	org, err := svc.Create(ctx, "Acme", "alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_, token, err := svc.CreateInvite(ctx, org.ID, "bob@example.com", auth.RoleMember, "alice", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+
+	if _, err := svc.AcceptInvite(ctx, token, "bob", "bob@example.com", true); err != nil {
+		t.Fatalf("first accept: %v", err)
+	}
+	if _, err := svc.AcceptInvite(ctx, token, "bob", "bob@example.com", true); !errors.Is(err, ErrInviteAlreadyAccepted) {
+		t.Errorf("expected ErrInviteAlreadyAccepted on second accept, got %v", err)
 	}
 }

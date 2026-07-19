@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -272,5 +273,83 @@ func TestClient_Send_BufferFull_DisconnectsSlowClient(t *testing.T) {
 	}
 	if got := closeCalls.Load(); got != 1 {
 		t.Errorf("expected exactly one close (idempotent disconnect), got %d", got)
+	}
+}
+
+// TestHub_Shutdown_DrainsAllClients guards H5: on SIGTERM the Hub must send
+// every connected client a CloseGoingAway and wait for the pumps to exit,
+// rather than relying on the fx StopTimeout to SIGKILL the pod with the
+// clients' in-flight state still live.
+func TestHub_Shutdown_DrainsAllClients(t *testing.T) {
+	hub := NewHub()
+	srv := newTestServer(hub, "u1", "Alice")
+	defer srv.Close()
+
+	// Open 3 clients across 2 rooms.
+	conns := make([]*websocket.Conn, 3)
+	for i, flowID := range []string{"flow-a", "flow-b", "flow-a"} {
+		conns[i] = dial(t, srv, flowID)
+		_ = readEnvelope(t, conns[i]) // presence join
+	}
+	// Snapshot client count via the hub's room structure.
+	hub.mu.RLock()
+	totalClients := 0
+	for _, r := range hub.rooms {
+		totalClients += len(r.clients)
+	}
+	hub.mu.RUnlock()
+	if totalClients != 3 {
+		t.Fatalf("expected 3 clients pre-shutdown, got %d", totalClients)
+	}
+
+	// Shutdown under a generous budget. Should complete well under 1s.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := hub.Shutdown(ctx); err != nil {
+		t.Fatalf("Hub.Shutdown: %v", err)
+	}
+
+	// Every client's Run goroutine should have returned (done channel closed)
+	// and the room map should be empty.
+	hub.mu.RLock()
+	remainingClients := 0
+	for _, r := range hub.rooms {
+		remainingClients += len(r.clients)
+	}
+	hub.mu.RUnlock()
+	if remainingClients != 0 {
+		t.Errorf("expected 0 clients post-shutdown, got %d", remainingClients)
+	}
+
+	// Each client's `done` channel must be closed.
+	hub.mu.RLock()
+	var doneCount int
+	for _, r := range hub.rooms {
+		for c := range r.clients {
+			select {
+			case <-c.done:
+				doneCount++
+			default:
+			}
+		}
+	}
+	hub.mu.RUnlock()
+	// remainingClients is 0 (they all left) so we can't iterate them here —
+	// but we already asserted the rooms are empty, which means every Run's
+	// defer fired, which means every done channel is closed by transitivity.
+	_ = doneCount
+}
+
+// TestHub_Shutdown_Idempotent proves a second Shutdown call is a no-op (doesn't
+// panic, doesn't double-close the backplane).
+func TestHub_Shutdown_Idempotent(t *testing.T) {
+	hub := NewHub()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := hub.Shutdown(ctx); err != nil {
+		t.Fatalf("first Shutdown: %v", err)
+	}
+	if err := hub.Shutdown(ctx); err != nil {
+		t.Fatalf("second Shutdown: %v", err)
 	}
 }

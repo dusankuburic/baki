@@ -22,7 +22,7 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 
 ## Phase 2 — Security hardening
 
-- [x] **H10** `bakicli` (tracked binary, 5.2 MB) bypasses `.gitignore`. **Fix:** `git rm --cached bakicli`; add `/bakicli` to `.gitignore`.
+- [x] **H10** `bakicli` (tracked binary, 5.2 MB) bypasses `.gitignore`. **Fix:** `git rm --cached bakicli`; add `/bakicli` to `.gitignore`. *(regressed in 53e10e3; re-fixed in Phase 3A with a CI guard preventing recurrence)*
 - [x] **H11** `main.go:509-516`, `keystore.go:46-50` — `PAD_AUTH_SECRET` shared as JWT key AND AES keystore key. **Fix:** introduced `PAD_ENCRYPTION_KEY` (config + Bicep + .env.example); backward-compat fallback to auth secret with deprecation warning.
 - [x] **M1** `auth/middleware.go:59` — case-sensitive `Bearer` parsing. **Fix:** case-insensitive scheme match (RFC 7235).
 - [x] **M3** `middleware/ratelimit.go:304-306` — Redis limiter fails OPEN on outage. **Fix:** embedded per-replica in-memory fallback bucket; rate still enforced (degraded) on Redis error.
@@ -43,7 +43,7 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 - [x] **H7** Filesystem `ListFlows` returns directory order, not `updated_at DESC` (`local_storage.go:163-222`). **Fix:** collect → sort (mirror `flowOrderBy`) → offset/limit; +ordering/pagination regression test.
 - [~] **H8** Filesystem silent-success stubs (`local_storage.go:774,798`). **Deferred** — stubs are documented intentional no-ops and internally consistent (save=no-op, load=empty/not-found); converting to errors risks breaking local-mode dashboard/refresh paths that call them. Interface split (Phase 3-deferred) is the durable fix.
 - [x] **M6-index** Missing `(org_id, created_at)` index on `usage_metrics` (hot budget path). **Fix:** migration 7 `usage_metrics_org_created_idx`.
-- [ ] **M3-RLS** `BeginTx` paths bypass RLS undocumented (`postgres_orgs.go`, `SaveFlowVersion`, `SaveKnowledgeChunks`). **Fix:** document or route via `BeginRLS`. *(deferred)*
+- [~] **M3-RLS** `BeginTx` paths bypass RLS undocumented (`postgres_orgs.go`, `SaveFlowVersion`, `SaveKnowledgeChunks`). **Partial fix:** `SaveFlowVersion` and `SaveKnowledgeChunks` now route via `BeginRLS`/`hasRLSTx` (the latter in Phase 3A); `SaveOrg`/`MutateOrg` still use raw `b.db.BeginTx` — `organisations`/`org_members` have no RLS policies so the security impact is nil, but the independent-commit footgun remains (a handler that errors after SaveOrg cannot roll back the org mutation).
 - [ ] **M9** Migration system has no checksum. **Fix:** sha256 column in `schema_migrations`; fail boot on mismatch. *(deferred)*
 
 ---
@@ -68,34 +68,34 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 ## Deferred / lower priority (not in active phases)
 
 ### Analyzer (Medium/Low)
-- M2 `patch.go:41-42` doc says "first occurrence" but code does `ReplaceAll` — update doc.
-- M3 `ReportToMarkdown` panics on nil doc (`markdown.go:16`) — mirror SARIF nil-check.
-- M4 `DiffFlows` O(m×n) memory + recursion risk — add size cap / Myers diff.
-- M5 `blocksEqual` ignores property values (`diff.go:155`) — fold property hash.
-- M6 SARIF `driver.version` never set.
-- M7 SARIF per-rule level from first finding — track max severity.
-- M8 `report.Groups` order non-deterministic (`dedup.go:64`) — sort.
-- M9 `detectCycles` malformed cycle reports — Tarjan SCC.
-- M10 `progress.go` duplicates parse pipeline — unify.
-- M11 `safeCheck` swallows panics silently — add `RulesSkipped` surfacing.
-- L1 Reinvent `max` builtin (`progress.go:61`, `diff.go:161`) — use builtin.
-- L2 `fnvHasher.write` operates on runes not bytes.
-- L4 `ApplyPatch` silently clamps out-of-range ops.
+- [x] M2 `patch.go:41-42` doc says "first occurrence" but code does `ReplaceAll` — update doc. **Fix:** doc updated to "all occurrences"; in-code comment was already correct.
+- [x] M3 `ReportToMarkdown` panics on nil doc (`markdown.go:16`) — mirror SARIF nil-check. *(previously fixed)*
+- [ ] M4 `DiffFlows` O(m×n) memory + recursion risk — add size cap / Myers diff.
+- [x] M5 `blocksEqual` ignores property values (`diff.go:155`) — fold property hash. **Fix:** `blocksEqual` now also requires `maps.Equal(a.Properties, b.Properties)`, so a config-only edit (changed `Url:`/`Timeout:`/etc.) surfaces as remove-old + add-new instead of `ChangeNone`. +`TestBlocksEqual_DifferentPropertyValue`, `TestBlocksEqual_SameProperties` (order-independent), and end-to-end `TestDiffFlows_PropertyOnlyEdit`.
+- [x] M6 SARIF `driver.version` never set. *(previously fixed)*
+- [x] M7 SARIF per-rule level from first finding — track max severity. **Fix:** track `ruleMaxRank` per rule; bump `DefaultConfiguration.Level` when a higher-severity finding arrives.
+- [x] M8 `report.Groups` order non-deterministic (`dedup.go:64`) — sort. **Fix:** `slices.SortFunc` by BlockID then Primary.Title; +25-iter determinism regression test.
+- [~] M9 `detectCycles` malformed cycle reports — Tarjan SCC. **Tests added** (`TestDetectCycles_ReportsCycle`, `TestDetectCycles_AcyclicGraphReturnsNone`) lock the "a cycle IS detected" contract. The duplicate-leading-element output imperfection is still present; a future Tarjan SCC swap (deferred) will tighten the format.
+- [ ] M10 `progress.go` duplicates parse pipeline — unify.
+- [~] M11 `safeCheck` swallows panics silently — add `RulesSkipped` surfacing. **Fix:** `AnalysisStats.RulesSkipped int` added; `safeCheck` returns `(findings, skipped)`; counter summed in `runAnalysisCore` and stamped on the report. +`TestRunAnalysis_RulesSkippedSurfaced` proves a panicking rule doesn't abort the run AND is observable on the report.
+- [x] L1 Reinvent `max` builtin (`progress.go:61`, `diff.go:161`) — use builtin. **Fix:** deleted both; Go 1.25 builtin.
+- [x] L2 `fnvHasher.write` operates on runes not bytes. **Fix:** iterate bytes (`for i := 0; i < len(s); i++`); +`TestFnvHasher_ByteSemantics` cross-checks canonical FNV-1a of UTF-8 bytes.
+- [x] L4 `ApplyPatch` silently clamps out-of-range ops. **Fix:** a genuinely out-of-range target line (insert outside `[1,len+1]`, wrap/remove/replace/append `StartLine` outside `[1,len]`) is now a no-op that bumps the `patchOutOfRangeOps` atomic counter (exposed via `PatchOutOfRangeOps()`) + emits a `slog.Warn`, so a fixer bug is observable instead of silently corrupting output. Legitimate boundary cases (insert-at-EOF, wrap/remove range spanning to the last line) are preserved and NOT counted; signature of `ApplyPatch` unchanged. +`TestApplyPatch_OutOfRangeOpsAreNoOpsAndCounted` (7 op kinds) and `TestApplyPatch_LegitimateBoundaryOpsAreNotCounted`.
 
 ### Backend API/Service (Medium/Low)
-- M `analysis.go:62` constructor panics on LRU error — return error.
-- M `handlers_auth.go:119` maps all CreateUser errors → 409 — check `ErrEmailExists`.
-- M `handlers_triage.go:166` batch triage non-atomic — add batch method.
-- M `handlers_analysis.go:22` package-global webhook notifier — DI.
-- M `chat.go:770` 290-line function — extract `prepareTurn`.
-- M `handlers_library.go:129` pagination cap inconsistent — use `clampListLimit`.
-- L `handlers_flow.go:303` swallows JSON decode error.
-- L `chat.go:671` logger uses map form instead of slog kv.
-- L capitalized "Forbidden" error strings.
-- L `events.go:274` SSE event write error unchecked.
+- [x] M `analysis.go:62` constructor panics on LRU error — return error. **Fix:** `NewAnalysisService` now returns `(*AnalysisService, error)`; fx fails boot cleanly on (impossible-in-practice) error; 5 callers updated.
+- [x] M `handlers_auth.go:119` maps all CreateUser errors → 409 — check `ErrEmailExists`. **Fix:** deleted special-case; pass `StatusInternalServerError` and let `render.Error`'s auto-map (`ErrEmailExists → 409`, everything else → 500) do the right thing. +regression test for the generic-500 path.
+- [x] M `handlers_triage.go:166` batch triage non-atomic — add batch method. **Fix:** `BatchSetFindingStatus(ctx, flowID, userID, items)` added to `TriageStore` interface; Postgres impl wraps a single RLS-scoped tx (reuses middleware tx if present); filesystem impl is single read-modify-write under the mutex; FakeBackend stages in a local map so injected failures leave no partial state. +`TestTriage_SetBatch_AtomicityGuarantee` and `TestFakeBackend_BatchSetFindingStatus_AtomicWhenInjectedFail`.
+- [x] M `handlers_analysis.go:22` package-global webhook notifier — DI. **Fix:** deleted `var defaultWebhookNotifier`; added `webhook *service.WebhookNotifier` field on `AnalysisHandler`; `service.NewWebhookNotifier` registered as an fx provider in `internal/di/services.go`; constructor parameter wired through `helpers_test.go`.
+- [x] M `chat.go:770` 290-line function — extract `prepareTurn`. *(previously fixed)*
+- [x] M `handlers_library.go:129` pagination cap inconsistent — use `clampListLimit`. *(previously fixed)*
+- [x] L `handlers_flow.go:303` swallows JSON decode error. **Fix:** surface as `400 invalid request body: %w`; +`TestHandleReimport_MalformedBodyReturns400`.
+- [x] L `chat.go:671` logger uses map form instead of slog kv. *(fixed in chat.go; persists in `chat_context.go:232` and `ai/tokens.go:25` — see "New issues" below)*
+- [x] L capitalized "Forbidden" error strings. **Fix:** Phase 3A drive-by — 6 sites lowercased across `handlers_export.go`, `handlers_org.go`, `handlers_chat.go`, `websocket/handler.go`.
+- [x] L `events.go:274` SSE event write error unchecked. *(previously fixed)*
 
 ### Storage (Medium/Low)
-- M1 `SaveAuditEvents` no 65535-param cap guard.
+- [x] M1 `SaveAuditEvents` no 65535-param cap guard. **Fix:** the single multi-row INSERT (`len(events)*9` bind params) overflowed Postgres' 65535-param wire limit at >~7281 events. Now chunked into ≤5000-row batches (`chunkAuditEvents`/`buildAuditInsert`) run inside one `BeginTx` so the write stays all-or-nothing. +pure unit tests (`TestChunkAuditEvents_RespectsParamCeiling`, `TestBuildAuditInsert_ParamCount`) and a Postgres integration test (`TestSaveAuditEvents_LargeBatch`, 8000 rows) behind the `DATABASE_URL` podman harness — verified the pre-fix single statement fails with "extended protocol limited to 65535 parameters".
 - M2 `SaveOrg`/`MutateOrg` delete-all-reinsert members.
 - M4 `SaveFlowVersion` uploads blob inside `FOR UPDATE` lock.
 - M5 `FlowSortBlocksDesc` ORDER BY casts JSONB — add expression index.
@@ -123,6 +123,49 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 - L8 Tauri CSP broad localhost connect-src.
 - I4 No SBOM generation in CI.
 - I5 Dockerfile HEALTHCHECK redundant under ACA.
+
+---
+
+## Phase 3A — Security + correctness + supply chain (2026-07-19)
+
+- [x] **H1** `SaveKnowledgeChunks` bypassed RLS (`postgres_orgs.go`). **Fix:** mirrors the `SaveFlowVersion` RLS pattern — `BeginRLS(ctx, userID)` when no middleware tx is on ctx, otherwise reuse it. `KnowledgeStore.SaveKnowledgeChunks` now takes a `userID` parameter; threaded from RAG service via `auth.ClaimsFromContext`. +Postgres RLS regression test `TestPostgres_RLS_SaveKnowledgeChunks_EnforcesOrgMembership`.
+- [x] **H2** `migrateSettings` unconditionally overwrote dst (re-run rolled back admin tuning). **Fix:** skip-if-present — dst with rule overrides or recent files is treated as authoritative.
+- [x] **H3** `migrateOneConversation` unconditionally overwrote dst (re-run clobbered post-migrate chat). **Fix:** skip-if-present via `LoadConversation`; `Result.ConversationsSkipped` counter added. Bonus: cancelled walk no longer silently swallowed.
+- [x] **H4** `startServer` called `os.Exit(1)` on listener-bind / session-secret failure, bypassing the fx error path. **Fix:** returns `fmt.Errorf(...)` so fx surfaces boot failures cleanly.
+- [x] **H5** WebSocket connections not drained on SIGTERM (`http.Server.Shutdown` doesn't close hijacked sockets; `Hub.Close` only stopped the Redis backplane). **Fix:** new `Hub.Shutdown(ctx)` snapshots all clients, sends each a `CloseGoingAway` control frame + closes the conn, waits (bounded by ctx) for every client's pumps to exit via `Client.done`. Wired into `startServer` OnStop BEFORE `server.Shutdown` with a 5s budget. +`TestHub_Shutdown_DrainsAllClients` and `TestHub_Shutdown_Idempotent`.
+- [x] **H6** `bakicli` binary re-tracked in git (H10 regression from commit `53e10e3`). **Fix:** `git rm --cached bakicli`; new `no-tracked-binaries` CI job fails the build if it ever recurs.
+- [x] **H7** `action.yml` upload-sarif step ran regardless of `inputs.format` → JSON-as-SARIF silent misclassification. **Fix:** gate on `inputs.format == 'sarif'` with a warning step explaining the skip when the combination is invalid.
+- [x] **H8** Release artifacts unsigned, no checksums. **Fix:** `release.yml` now emits a `<asset>.sha256` sidecar next to each archive; both uploaded to the GitHub Release. (Cosign signing deferred — needs key management.)
+- [x] **H9** No GitHub Action was SHA-pinned — supply-chain hole (cf. 2025 `tj-actions/changed-files` compromise). **Fix:** every `uses:` in all 6 workflow files pinned to `@<40-char-sha>` with `# <tag>` comment. Dependabot's `github-actions` updater keeps both in sync. Drive-by fix: `azure/arm-deploy-action@v2` was a 404 (real repo is `Azure/arm-deploy`) — corrected.
+- [x] **Drive-by** Capitalized "Forbidden" / "Internal Server Error" error strings (Go convention: lowercase). 6 sites in `handlers_export.go`, `handlers_org.go`, `handlers_chat.go`, `websocket/handler.go`.
+- [x] **Drive-by** `RulesSkipped` (plumbed by Tier 2A M11) was not consumed anywhere. **Fix:** `pad_rules_skipped_total` Prometheus counter incremented in `AnalyzeFlow` when `report.Stats.RulesSkipped > 0`; `bakicli` text output prints a stderr warning so CI operators see findings may be incomplete.
+
+---
+
+## Phase 3B — Phase 3A regressions + cheap security wins (2026-07-19)
+
+- [x] **U1+U2** Phase 3A SHA-pin bug: `action.yml:127` pinned `github/codeql-action/upload-sarif@b7351df…c304a1758ef9895495fa` — 43 hex chars (git SHAs are 40). Re-resolved via `gh api repos/github/codeql-action/git/refs/tags/v3` → real commit `b7351df727350dca84cb9d725d57dcf5bc82ba26`. Verified all 50 `uses:` pins across the 6 workflow files are exactly 40 hex chars.
+- [x] **U3** Tauri capability file was wide open: `src-tauri/capabilities/default.json` granted `shell:allow-spawn / shell:allow-kill / shell:allow-execute / shell:default` + `core:default` to the webview despite the Rust host owning all process spawning. **Fix:** rewrote to minimum explicit permissions (`core:event:default`, `core:webview:default`, the 5 explicit `core:window:allow-*`, `dialog:allow-open/save`, `shell:allow-open` for URL opening only, `log:default`). XSS in PAD-rendered content can no longer spawn processes.
+- [x] **U4** Dockerfile + docker-compose HEALTHCHECK hit `/healthz` (always 200) → silent on DB outage. **Fix:** both now hit `/readyz` (DB + blob + Redis reachability).
+- [x] **U5** Phase 3A removed `hub.Close()` OnStop as redundant with `Hub.Shutdown`. Restored as a safety net — `Hub.Close` is idempotent so a double-call is a no-op; if `startServer`'s OnStop never fires (fx failure path), the Redis backplane subscriber still gets released.
+- [x] **H11** AcceptInvite TOCTOU: `MarkOrgInviteAccepted` ran `UPDATE org_invites SET accepted_at=$1 WHERE id=$2` with no `AND accepted_at IS NULL` guard. **Fix:** added the guard + `RETURNING id`; new sentinel `interfaces.ErrOrgInviteAlreadyAccepted` maps to `collaboration.ErrInviteAlreadyAccepted`. Two concurrent AcceptInvite calls now have exactly one winner.
+- [x] **H12** AcceptInvite trusted JWT `claims.Email` without verifying `EmailVerified`. **Fix:** handler now `LoadUserByID` and reads `u.EmailVerified`; `AcceptInvite` takes `emailVerified bool` and rejects with new `ErrEmailNotVerified` when false. A shadow local account with `victim@example.com` (never verified) can no longer accept invites destined to the victim. +2 regression tests.
+- [x] **H13** SSO OIDC provider cached for process lifetime — IdP key rotation broke every login until restart. **Fix:** 15-min TTL via `providerFetchedAt`; `invalidateProvider` called from `Exchange` on `idToken.Verify` failure forces synchronous rediscovery. +2 tests.
+- [x] **H14** SSO external calls used caller ctx verbatim — hung IdP pinned handler goroutines indefinitely. **Fix:** discovery, code exchange, and id_token verify all wrapped in `context.WithTimeout(ctx, 15*time.Second)`. +1 test pointing at a TCP listener that accepts but never responds.
+- [x] **H15** Scrubber missing major secret formats: AWS (AKIA/ASIA), Google (AIza), Slack (xox[abprs]-), JWT (eyJ…), PEM private key blocks. **Fix:** 5 new regexes in `secretRegexes` + matching 5 `viablePrefixRegexes` entries (preserves the streaming-scrubber sync invariant). +6 test vectors.
+- [x] **H20** No metric for background-loop liveness — scanner, padcloud ingester, retention purge could silently hang with zero signal. **Fix:** `pad_background_loop_tick_total{loop}` counter + `pad_background_loop_last_tick_timestamp_seconds{loop}` gauge via new `metrics.RecordBackgroundLoopTick(name)`; called from the 3 periodic loops (worker pools like blob_cleaner/audit_pool are not periodic and are documented as such). +1 test.
+- [x] **H21** `/readyz` did not check Redis when configured — a Redis outage silently degraded multi-replica correctness (rate limiter, hub presence, chat-resume all fail open). **Fix:** new `RedisPinger` interface on `SystemHandler`; readiness pings Redis when non-nil, falls through to the existing 3-consecutive-failure threshold. Adapter `ProvideRedisPinger` in `internal/di/api.go` wraps `*redis.Client` (nil in single-replica mode). +2 tests.
+- [x] **H19** Secret rotation impact was undocumented — operators didn't know `PAD_AUTH_SECRET` rotation force-logs-out every user, `PAD_ENCRYPTION_KEY` rotation bricks provider keys + PAD-cloud tokens. **Fix:** new §7a "Secret rotation impact" table + §7b "Zero-downtime rotation (forward path)" in `docs/DR_RUNBOOK.md`.
+
+---
+
+## New issues (discovered in 2026-07-19 deep-dive, not yet fixed)
+
+- **AGENTS.md doc drift** — claims "29 rules + 11 auto-fixers"; actual is **41 rules + 16 fixers** (`rg -c 'registerRule\(&' core/analyzer/*.go` = 41; `ruleAutoFix` switch arms = 16). Update AGENTS.md `## Project Structure` section.
+- **Logger antipattern persists** in `internal/service/chat_context.go:232` and `internal/ai/tokens.go:25` — both pass `map[string]interface{}{"error": err}` to `slog` instead of variadic kv. **Fixed** in both files (now `logger.Error("...", "error", err)`).
+- **`AnalyticsDashboard.tsx` (436 lines)** — new god-component candidate (largest in the codebase after `api/client.ts` and `analysisStore.ts`). Consider extraction if it grows further.
+- **`presenceStore` module-level `setInterval`** (`stores/presenceStore.ts:153`) — H2-fe was "fixed" with an early-return guard but the 60s timer itself is never cancelled, so the closure lives for the page's lifetime even when logged out.
+- **No root-level `ErrorBoundary`** in `App.tsx`/`main.tsx` — a crash in the provider layer (ToastProvider/ConfirmProvider/OfflineIndicator) above the pane boundaries still white-screens. Add a top-level boundary as the outermost wrapper.
 
 ---
 

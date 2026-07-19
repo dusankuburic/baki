@@ -91,7 +91,12 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	flowSvc := service.NewFlowService(notifier, settings, docProv, backend, authzSvc, nil)
 	libSvc := service.NewLibraryService(backend, flowSvc, authzSvc)
-	analysisSvc := service.NewAnalysisService(notifier, settings, nil)
+	analysisSvc, err := service.NewAnalysisService(notifier, settings, nil)
+	if err != nil {
+		// maxAnalysisReports is a >0 const so lru.New never errors in
+		// practice; this helper isn't t-aware, so panic is acceptable.
+		panic("NewAnalysisService: " + err.Error())
+	}
 	exportSvc := service.NewExportService(notifier, flowSvc, analysisSvc)
 
 	demo := ai.NewDemoLimiter("")
@@ -118,11 +123,11 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc)
 	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
 	handlers := Handlers{
-		Sys:       NewSystemHandler(sysSvc, security, backend),
+		Sys:       NewSystemHandler(sysSvc, security, backend, nil),
 		Flow:      NewFlowHandler(flowSvc, docProv, backend, security),
 		Library:   NewLibraryHandler(libSvc, backend, security),
 		Chat:      NewChatHandler(chatSvc, flowSvc, security),
-		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security),
+		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier()),
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
 		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
 		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),

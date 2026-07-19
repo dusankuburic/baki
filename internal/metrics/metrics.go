@@ -96,6 +96,24 @@ var (
 		Name: "pad_analysis_runs_total",
 		Help: "Number of analysis runs",
 	})
+	rulesSkipped = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pad_rules_skipped_total",
+		Help: "Rule evaluations aborted via safeCheck's panic recovery (one buggy rule or malformed block); findings may be missing for the affected (block, rule) pairs.",
+	})
+	backgroundLoopTick = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_background_loop_tick_total",
+			Help: "Iterations of each long-running periodic background loop (scanner, padcloud_ingest, retention_purge). Stops increasing ⇒ the loop has hung. Recommended alert: time() - pad_background_loop_last_tick_timestamp_seconds > 2 * expected_interval. Worker-pool loops (blob_cleaner, audit_pool) are not periodic — they're driven by enqueue — so are not labelled here.",
+		},
+		[]string{"loop"},
+	)
+	backgroundLoopLastTick = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pad_background_loop_last_tick_timestamp_seconds",
+			Help: "Unix timestamp of the last completed iteration of each background loop. Stops updating ⇒ the loop has hung. Pair with pad_background_loop_tick_total to detect deadlocks /healthz cannot see.",
+		},
+		[]string{"loop"},
+	)
 	wsConnectionsActive = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "pad_ws_connections_active",
 		Help: "Number of active WebSocket connections",
@@ -190,6 +208,9 @@ var registry = func() *prometheus.Registry {
 		aiRequestDuration,
 		aiRequestErrorsTotal,
 		analysisRuns,
+		rulesSkipped,
+		backgroundLoopTick,
+		backgroundLoopLastTick,
 		wsConnectionsActive,
 		flowOps,
 		authOps,
@@ -279,6 +300,28 @@ func RecordAIError(provider string) {
 // of every AnalyzeFlow run.
 func RecordAnalysisRun() {
 	analysisRuns.Inc()
+}
+
+// RecordRulesSkipped adds n to the rules-skipped counter. n comes straight off
+// AnalysisStats.RulesSkipped (set by runAnalysisCore after safeCheck recovers a
+// panic). With no consumer the metric stayed invisible; this lets ops alert on
+// "a rule is silently producing no findings for this flow".
+func RecordRulesSkipped(n int) {
+	if n > 0 {
+		rulesSkipped.Add(float64(n))
+	}
+}
+
+// RecordBackgroundLoopTick records a completed iteration of one of the long-
+// running background loops (scanner, padcloud_ingest, retention_purge,
+// blob_cleaner, audit_pool). The recommended alert is
+//
+//	time() - pad_background_loop_last_tick_timestamp_seconds{loop="X"} > 2 * expected_interval
+//
+// which catches deadlocks/hangs that /healthz (always 200) cannot see.
+func RecordBackgroundLoopTick(name string) {
+	backgroundLoopTick.WithLabelValues(name).Inc()
+	backgroundLoopLastTick.WithLabelValues(name).SetToCurrentTime()
 }
 
 // RecordWSConnectionChange adjusts the active-WebSocket-connections gauge by

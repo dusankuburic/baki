@@ -126,7 +126,7 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	if owner == "" || owner != caller {
 		// Return the standard JSON error envelope (every other authz failure in
 		// the API does) so frontend handlers parsing {code,message,requestId}
-		// don't choke on a plain-text "Forbidden" body.
+		// don't choke on a plain-text body.
 		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return false
 	}
@@ -204,7 +204,7 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 
 func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Request) {
 	if h.common.JWTEnabled {
-		render.Error(w, fmt.Errorf("Forbidden"), http.StatusForbidden)
+		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 		return
 	}
 	var req struct {

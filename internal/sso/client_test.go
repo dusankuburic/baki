@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -185,5 +186,98 @@ func TestClient_ProviderName_Defaults(t *testing.T) {
 	c = NewClient(config.SSOConfig{ProviderName: "entra"})
 	if c.ProviderName() != "entra" {
 		t.Errorf("expected 'entra', got %q", c.ProviderName())
+	}
+}
+
+// TestClient_InvalidateProviderClearsCache guards H13: invalidateProvider
+// clears the cached OIDC provider so the next call re-runs discovery
+// synchronously (picks up rotated JWKS keys without a process restart).
+// Exchange calls this on Verify() failure (e.g. signature mismatch from a
+// rotated IdP signing key).
+func TestClient_InvalidateProviderClearsCache(t *testing.T) {
+	idp := newFakeIdP(t, "client-1")
+	c := NewClient(idp.clientConfig())
+
+	// Seed the cache via AuthCodeURL (cheap path through ensureProvider).
+	if _, err := c.AuthCodeURL(context.Background(), "st", "n", strings.Repeat("v", 43)); err != nil {
+		t.Fatalf("AuthCodeURL seed: %v", err)
+	}
+	c.mu.Lock()
+	cachedBefore := c.provider
+	c.mu.Unlock()
+	if cachedBefore == nil {
+		t.Fatal("expected provider to be cached after AuthCodeURL")
+	}
+
+	// Invalidate. Cache MUST be cleared.
+	c.invalidateProvider()
+	c.mu.Lock()
+	cachedAfter := c.provider
+	fetchedAfter := c.providerFetched
+	c.mu.Unlock()
+	if cachedAfter != nil {
+		t.Errorf("expected provider cache cleared, still cached: %p", cachedAfter)
+	}
+	if !fetchedAfter.IsZero() {
+		t.Errorf("expected providerFetched cleared, got %v", fetchedAfter)
+	}
+
+	// Next ensureProvider re-runs discovery and re-populates the cache.
+	if _, err := c.AuthCodeURL(context.Background(), "st", "n", strings.Repeat("v", 43)); err != nil {
+		t.Fatalf("AuthCodeURL post-invalidate: %v", err)
+	}
+	c.mu.Lock()
+	cachedRebuilt := c.provider
+	c.mu.Unlock()
+	if cachedRebuilt == nil {
+		t.Error("expected provider cache rebuilt after next ensureProvider")
+	}
+}
+
+// TestClient_BoundedExternalCallsTimeout guards H14: if the IdP hangs, every
+// external call (discovery, exchange, verify) returns within externalTimeout,
+// not the caller's ctx deadline. We can't easily make the fake IdP hang without
+// racing, so we point the client at a TCP listener that accepts but never
+// responds — any HTTP call will block forever without the timeout wrap.
+func TestClient_BoundedExternalCallsTimeout(t *testing.T) {
+	// Open a TCP listener that accepts connections but never writes a response.
+	// The OS will keep the connection open indefinitely.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection open; do not write anything.
+			_ = conn
+		}
+	}()
+
+	c := NewClient(config.SSOConfig{
+		IssuerURL: "http://" + ln.Addr().String(),
+		ClientID:  "x",
+	})
+
+	// ensureProvider (discovery) should time out within externalTimeout+slack,
+	// NOT hang forever. We bound the test's own ctx so a regression that
+	// removes the timeout causes a test failure rather than a CI hang.
+	ctx, cancel := context.WithTimeout(context.Background(), externalTimeout+2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err = c.AuthCodeURL(ctx, "st", "n", strings.Repeat("v", 43))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected discovery to fail against a hanging IdP, got nil")
+	}
+	if elapsed > externalTimeout+2*time.Second {
+		t.Errorf("discovery took %v, expected to be bounded by %v+slack", elapsed, externalTimeout)
 	}
 }

@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -67,6 +68,64 @@ func (h *Hub) Close() {
 	if h.backplane != nil {
 		h.backplane.close()
 	}
+}
+
+// Shutdown gracefully drains all connected WebSocket clients: sends each one a
+// CloseGoingAway control frame, closes the underlying TCP connection, and waits
+// for every client's read/write pumps to exit (or ctx to elapse). Call BEFORE
+// server.Shutdown so the hijacked WS connections are released first —
+// http.Server.Shutdown does not close hijacked sockets, so without this every
+// rolling restart takes the full shutdownCtx budget + drops in-flight collab
+// state silently. Idempotent: safe to call multiple times.
+func (h *Hub) Shutdown(ctx context.Context) error {
+	// Snapshot all clients across all rooms under a single lock.
+	h.mu.Lock()
+	clients := make([]*Client, 0)
+	for _, r := range h.rooms {
+		for c := range r.clients {
+			clients = append(clients, c)
+		}
+	}
+	h.mu.Unlock()
+
+	if len(clients) == 0 {
+		h.Close()
+		return nil
+	}
+
+	// Send each client a Close frame + close the conn. writePump will see the
+	// WriteMessage error (or complete the queued close) and exit; readPump
+	// will see the conn close and exit too. Each client's `done` channel is
+	// closed by Run's defer when both pumps have returned.
+	for _, c := range clients {
+		c.shutdown()
+	}
+
+	// Wait for all clients to finish draining, respecting ctx.
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		remaining := 0
+		for _, c := range clients {
+			select {
+			case <-c.done:
+			default:
+				remaining++
+			}
+		}
+		if remaining == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			h.Close()
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+
+	h.Close()
+	return nil
 }
 
 // AcquireConn atomically reserves a WebSocket connection slot for userID,

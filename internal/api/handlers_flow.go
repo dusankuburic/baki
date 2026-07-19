@@ -274,7 +274,10 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		render.Error(w, fmt.Errorf("invalid request body: %w", err), http.StatusBadRequest)
+		return
+	}
 	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "viewer")
 	if !ok {
 		return
