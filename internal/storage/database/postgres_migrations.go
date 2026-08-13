@@ -2,10 +2,21 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 )
+
+// migrationChecksum returns the hex-encoded SHA-256 of a migration's SQL. It is
+// recorded when the step is applied and re-verified on every subsequent boot so
+// that editing an already-shipped migration (which would silently diverge the
+// schema across deployments) is caught instead of ignored.
+func migrationChecksum(sqlText string) string {
+	sum := sha256.Sum256([]byte(sqlText))
+	return hex.EncodeToString(sum[:])
+}
 
 // ---- Schema migration ----
 
@@ -28,6 +39,12 @@ type migration struct {
 	version int
 	name    string
 	sql     string
+	// downSQL is the optional reverse of sql. Empty ("") means the step is
+	// intentionally irreversible (the baseline, or a step whose inverse is not
+	// safely expressible) — MigrateDown refuses to cross such a step. The
+	// down-migration is NEVER checksummed (only forward sql is) and NEVER runs
+	// on boot; it is operator-invoked via bakicli.
+	downSQL string
 }
 
 // migrations is the ordered, append-only set of schema versions. Version 1 is
@@ -36,15 +53,173 @@ type migration struct {
 // known version. Append new versions only at the end; never edit or reorder an
 // already-shipped step.
 var migrations = []migration{
-	{version: 1, name: "baseline", sql: schemaBaseline},
-	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL},
-	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL},
-	{version: 4, name: "flow_analysis_v2", sql: flowAnalysisV2SQL},
-	{version: 5, name: "finding_status_created_at", sql: findingStatusCreatedAtSQL},
-	{version: 6, name: "perf_indexes", sql: perfIndexesSQL},
-	{version: 7, name: "usage_metrics_org_index", sql: usageMetricsOrgIndexSQL},
-	{version: 8, name: "policies", sql: policiesSQL},
+	{version: 1, name: "baseline", sql: schemaBaseline, downSQL: ""}, // intentionally irreversible
+	{version: 2, name: "comments_and_shares", sql: commentsAndSharesSQL, downSQL: commentsAndSharesDownSQL},
+	{version: 3, name: "refresh_token_device_info", sql: refreshSessionDdlSQL, downSQL: refreshSessionDdlDownSQL},
+	{version: 4, name: "flow_analysis_v2", sql: flowAnalysisV2SQL, downSQL: flowAnalysisV2DownSQL},
+	{version: 5, name: "finding_status_created_at", sql: findingStatusCreatedAtSQL, downSQL: findingStatusCreatedAtDownSQL},
+	{version: 6, name: "perf_indexes", sql: perfIndexesSQL, downSQL: perfIndexesDownSQL},
+	{version: 7, name: "usage_metrics_org_index", sql: usageMetricsOrgIndexSQL, downSQL: usageMetricsOrgIndexDownSQL},
+	{version: 8, name: "policies", sql: policiesSQL, downSQL: policiesDownSQL},
+	{version: 9, name: "flow_blockcount_sort_index", sql: flowBlockCountIndexSQL, downSQL: flowBlockCountIndexDownSQL},
+	{version: 10, name: "flow_versions_blob_key", sql: flowVersionsBlobKeySQL, downSQL: flowVersionsBlobKeyDownSQL},
+	{version: 11, name: "pgvector_knowledge", sql: pgvectorKnowledgeSQL, downSQL: pgvectorKnowledgeDownSQL},
+	{version: 12, name: "governance_alerts", sql: governanceAlertsSQL, downSQL: governanceAlertsDownSQL},
 }
+
+// flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
+// ORDER BY (`COALESCE((metadata->>'BlockCount')::int, 0) DESC, updated_at DESC`),
+// which previously forced a full-table scan + in-memory sort on that sort mode.
+// The cast is safe: metadata.BlockCount is always a JSON number (or the key is
+// absent → NULL → 0), so the immutable expression never throws at index build.
+const flowBlockCountIndexSQL = `
+CREATE INDEX IF NOT EXISTS flows_blockcount_updated_idx
+    ON flows ((COALESCE((metadata->>'BlockCount')::int, 0)) DESC, updated_at DESC);
+`
+
+// flowVersionsBlobKeySQL records the content blob's storage key per version row.
+// Previously the key was derived from (flow_id, version), which forced the blob
+// upload to happen while holding the parent flow's FOR UPDATE lock (the version
+// number isn't known until then). Storing an explicit key lets SaveFlowVersion
+// key the blob on the row id and upload BEFORE taking the lock. Additive with an
+// empty-string default; legacy rows keep "" and fall back to the derived key.
+const flowVersionsBlobKeySQL = `
+ALTER TABLE flow_versions ADD COLUMN IF NOT EXISTS blob_key TEXT NOT NULL DEFAULT '';
+`
+
+// flowVersionsBlobKeyDownSQL reverses v10. Data-lossy: the stored blob key is
+// discarded; legacy rows that relied on the derived key keep working (the read
+// path falls back), but rows written post-v10 with a non-legacy key would need
+// re-derivation. Idempotent.
+const flowVersionsBlobKeyDownSQL = `
+ALTER TABLE flow_versions DROP COLUMN IF EXISTS blob_key;
+`
+
+// flowBlockCountIndexDownSQL reverses v9 (drop the expression index).
+const flowBlockCountIndexDownSQL = `
+DROP INDEX IF EXISTS flows_blockcount_updated_idx;
+`
+
+// policiesDownSQL reverses v8. Dropping the table also drops its index + RLS
+// policies. Data-lossy: saved governance policies are destroyed.
+const policiesDownSQL = `
+DROP TABLE IF EXISTS policies;
+`
+
+// usageMetricsOrgIndexDownSQL reverses v7: drop the composite, restore the
+// single-column org_id index that the forward step removed.
+const usageMetricsOrgIndexDownSQL = `
+DROP INDEX IF EXISTS usage_metrics_org_created_idx;
+CREATE INDEX IF NOT EXISTS usage_metrics_org_id_idx ON usage_metrics (org_id);
+`
+
+// perfIndexesDownSQL reverses v6: drop the three added composite indexes and
+// restore the six redundant single-column indexes the forward step removed.
+const perfIndexesDownSQL = `
+DROP INDEX IF EXISTS audit_events_user_created_idx;
+DROP INDEX IF EXISTS refresh_tokens_expires_at_idx;
+DROP INDEX IF EXISTS token_blacklist_expires_at_idx;
+CREATE INDEX IF NOT EXISTS audit_events_user_id_idx ON audit_events (user_id);
+CREATE INDEX IF NOT EXISTS flows_owner_id_idx ON flows (owner_id);
+CREATE INDEX IF NOT EXISTS flows_org_id_idx ON flows (org_id);
+CREATE INDEX IF NOT EXISTS usage_metrics_user_id_idx ON usage_metrics (user_id);
+CREATE INDEX IF NOT EXISTS flow_versions_flow_id_idx ON flow_versions (flow_id);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_hash ON share_tokens (token_hash);
+`
+
+// findingStatusCreatedAtDownSQL reverses v5. Data-lossy: the MTTR created_at
+// column (and its data) is dropped.
+const findingStatusCreatedAtDownSQL = `
+ALTER TABLE finding_status DROP COLUMN IF EXISTS created_at;
+`
+
+// flowAnalysisV2DownSQL reverses v4: drop the six dashboard-rollup columns
+// added to flow_analysis and flow_analysis_history. Data-lossy.
+const flowAnalysisV2DownSQL = `
+ALTER TABLE flow_analysis DROP COLUMN IF EXISTS by_confidence;
+ALTER TABLE flow_analysis DROP COLUMN IF EXISTS auto_fixable_count;
+ALTER TABLE flow_analysis DROP COLUMN IF EXISTS total_findings;
+ALTER TABLE flow_analysis_history DROP COLUMN IF EXISTS by_confidence;
+ALTER TABLE flow_analysis_history DROP COLUMN IF EXISTS auto_fixable_count;
+ALTER TABLE flow_analysis_history DROP COLUMN IF EXISTS total_findings;
+`
+
+// refreshSessionDdlDownSQL reverses v3: drop the device-info columns added to
+// refresh_tokens. Data-lossy (UA/IP session labels destroyed).
+const refreshSessionDdlDownSQL = `
+ALTER TABLE refresh_tokens DROP COLUMN IF EXISTS user_agent;
+ALTER TABLE refresh_tokens DROP COLUMN IF EXISTS ip;
+`
+
+// commentsAndSharesDownSQL reverses v2: drop the share_tokens and
+// finding_comments tables (their RLS policies drop with the tables). Order
+// matters only relative to FKs to flows, which both share — IF EXISTS makes
+// either order safe. Data-lossy: comments + share links destroyed.
+const commentsAndSharesDownSQL = `
+DROP TABLE IF EXISTS share_tokens;
+DROP TABLE IF EXISTS finding_comments;
+`
+
+// pgvectorKnowledgeSQL enables server-side similarity search over knowledge-base
+// embeddings. The column is intentionally DIMENSIONLESS (`vector`, pgvector
+// 0.7+) so the schema doesn't need to be rebuilt when the embedding provider
+// changes dimension; instead the application enforces the configured dimension
+// at insert time (only same-dimension chunks populate embedding_vec, the rest
+// stay NULL and are excluded from the index search, mirroring the "re-index
+// after changing the embedding provider" contract).
+//
+// Everything is guarded on the extension being installable: a deployment whose
+// Postgres role can't CREATE EXTENSION vector (or where the extension isn't
+// packaged) must still boot. The column/index/backfill then no-op, and
+// SearchKnowledge falls back to the in-Go cosine ranker. The backfill converts
+// the existing JSONB embedding array (`[0.1,0.2,…]`) into the vector text form
+// pgvector accepts; rows that fail (e.g. a corrupt JSONB array) are left NULL.
+const pgvectorKnowledgeSQL = `
+-- Best-effort extension install. Swallowed if the role lacks privilege or the
+-- extension isn't packaged — the DO block below only proceeds when it lands.
+DO $$ BEGIN
+	CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector extension unavailable; knowledge search stays Go-side';
+END $$;
+
+DO $$ BEGIN
+	IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+		ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_vec vector;
+
+		-- Backfill existing rows from the JSONB embedding array. Only touches rows
+		-- still NULL so the step is idempotent across re-runs.
+		UPDATE knowledge_chunks
+		SET embedding_vec = ('[' ||
+			(SELECT string_agg(e, ',') FROM jsonb_array_elements_text(embedding) AS e)
+			|| ']')::vector
+		WHERE embedding_vec IS NULL
+		  AND jsonb_typeof(embedding) = 'array';
+
+		-- HNSW over IVFFlat: no training step, better for incremental inserts.
+		CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_hnsw
+			ON knowledge_chunks USING hnsw (embedding_vec vector_cosine_ops);
+	END IF;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector knowledge setup skipped: %', SQLERRM;
+END $$;
+`
+
+// pgvectorKnowledgeDownSQL is the reverse of v11: drop the embedding_vec column
+// (its HNSW index drops automatically with the column) but do NOT DROP the
+// vector EXTENSION — it is database-wide and may serve other uses. The JSONB
+// embedding column remains, so SearchKnowledge falls back to the Go-side cosine
+// ranker. Idempotent. Guarded so a down without the extension/column is a no-op.
+const pgvectorKnowledgeDownSQL = `
+DO $$ BEGIN
+	IF EXISTS (SELECT 1 FROM information_schema.columns
+	           WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding_vec') THEN
+		ALTER TABLE knowledge_chunks DROP COLUMN embedding_vec;
+	END IF;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector knowledge down skipped: %', SQLERRM;
+END $$;
+`
 
 // findingStatusCreatedAtSQL adds a created_at column to finding_status so the
 // dashboard can compute mean-time-to-resolve (MTTR) and stale-finding counts.
@@ -212,6 +387,14 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
+	// Integrity gate: verify that every already-applied migration's SQL still
+	// matches the checksum recorded when it was applied. A mismatch means a
+	// shipped migration was edited in place — fail boot rather than run new
+	// steps on top of a divergent schema.
+	if err := verifyChecksums(ctx, conn, current); err != nil {
+		return err
+	}
+
 	applied := 0
 	for _, m := range migrations {
 		if m.version <= current {
@@ -239,12 +422,77 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 // boot; their already-applied baseline is then recorded as v1 by applyMigration
 // (the baseline SQL is fully idempotent, so re-running it is a no-op).
 func ensureMigrationsTable(ctx context.Context, conn *sql.Conn) error {
-	_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version    INTEGER    PRIMARY KEY,
 		name       TEXT       NOT NULL,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	)`)
+	)`); err != nil {
+		return err
+	}
+	// checksum records the SHA-256 of the step's SQL. Added additively so
+	// deployments that predate checksumming get the column on first boot; their
+	// existing rows default to '' ("unknown") and are backfilled by
+	// verifyChecksums rather than treated as drift.
+	_, err := conn.ExecContext(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`)
 	return err
+}
+
+// verifyChecksums compares each already-applied migration's recorded checksum
+// against the current SQL's checksum. Rows recorded before checksumming existed
+// (empty checksum) are adopted by backfilling the current value — we cannot know
+// the original SQL, so we trust the running binary once. A non-empty mismatch is
+// a fatal drift error.
+func verifyChecksums(ctx context.Context, conn *sql.Conn, current int) error {
+	stored, err := loadAppliedChecksums(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("load migration checksums: %w", err)
+	}
+	for _, m := range migrations {
+		if m.version > current {
+			continue // not applied yet — checksum written at apply time
+		}
+		got, ok := stored[m.version]
+		if !ok {
+			continue // recorded elsewhere / gap; nothing to compare
+		}
+		want := migrationChecksum(m.sql)
+		if got == "" {
+			// Pre-checksum deployment: adopt the current checksum as baseline.
+			if _, err := conn.ExecContext(ctx,
+				`UPDATE schema_migrations SET checksum = $1 WHERE version = $2`, want, m.version); err != nil {
+				return fmt.Errorf("backfill checksum v%d: %w", m.version, err)
+			}
+			slog.Info("schema migration checksum backfilled", "version", m.version, "name", m.name)
+			continue
+		}
+		if got != want {
+			return fmt.Errorf(
+				"schema migration drift detected: v%d %q checksum mismatch (recorded=%s computed=%s); "+
+					"an already-applied migration's SQL was modified — never edit a shipped migration, append a new one",
+				m.version, m.name, got, want)
+		}
+	}
+	return nil
+}
+
+// loadAppliedChecksums returns version → recorded checksum for every row in
+// schema_migrations.
+func loadAppliedChecksums(ctx context.Context, conn *sql.Conn) (map[int]string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT version, checksum FROM schema_migrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int]string)
+	for rows.Next() {
+		var v int
+		var c sql.NullString
+		if err := rows.Scan(&v, &c); err != nil {
+			return nil, err
+		}
+		out[v] = c.String
+	}
+	return out, rows.Err()
 }
 
 func currentVersion(ctx context.Context, conn *sql.Conn) (int, error) {
@@ -268,10 +516,134 @@ func applyMigration(ctx context.Context, conn *sql.Conn, m migration) (err error
 	if _, err = tx.ExecContext(ctx, m.sql); err != nil {
 		return fmt.Errorf("exec sql: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`, m.version, m.name); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)`,
+		m.version, m.name, migrationChecksum(m.sql)); err != nil {
 		return fmt.Errorf("record version: %w", err)
 	}
 	return tx.Commit()
+}
+
+// applyMigrationDown runs one step's downSQL and removes its version record in
+// a single transaction, mirroring applyMigration so a half-rolled-back step can
+// never be left in a partial state. The downSQL is NOT checksummed (only the
+// forward sql is immutable); deleting the version row makes verifyChecksums
+// naturally skip it on the next boot.
+func applyMigrationDown(ctx context.Context, conn *sql.Conn, m migration) (err error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, m.downSQL); err != nil {
+		return fmt.Errorf("exec down sql: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = $1`, m.version); err != nil {
+		return fmt.Errorf("delete version record: %w", err)
+	}
+	return tx.Commit()
+}
+
+// MigrationStep describes one migration for the operator-facing down tooling.
+type MigrationStep struct {
+	Version int
+	Name    string
+	// Reversible is false when downSQL is empty (the step is intentionally
+	// irreversible and MigrateDown refuses to cross it).
+	Reversible bool
+}
+
+// MigrationSteps exposes the ordered step list + reversibility for bakicli's
+// `migrate down` planning/help. It is the complete set the binary can apply.
+func MigrationSteps() []MigrationStep {
+	out := make([]MigrationStep, 0, len(migrations))
+	for _, m := range migrations {
+		out = append(out, MigrationStep{Version: m.version, Name: m.name, Reversible: m.downSQL != ""})
+	}
+	return out
+}
+
+// ErrMigrationNotReversible is returned by MigrateDown when the rollback path
+// crosses a step with no downSQL (e.g. the baseline). The operator must restore
+// from backup instead.
+var ErrMigrationNotReversible = fmt.Errorf("migration not reversible: a step in the rollback path has no down-migration (baseline or unsafe); restore from backup instead")
+
+// MigrateDown rolls the schema back to targetVersion by running each applied
+// step's downSQL in strict descending order, each in its own transaction under
+// the migration advisory lock. It is the operator-invoked reverse of migrate()
+// and is NEVER run on boot. A step with empty downSQL makes the whole rollback
+// fail with ErrMigrationNotReversible — the caller (bakicli) is expected to
+// pre-check the path and refuse interactively before any destructive work.
+//
+// Returns the list of step versions that were rolled back (descending), which
+// the caller surfaces to the operator.
+func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion int) ([]int, error) {
+	conn, err := b.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire migration conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
+	}()
+
+	current, err := currentVersion(ctx, conn)
+	if err != nil {
+		return nil, fmt.Errorf("read schema version: %w", err)
+	}
+	if targetVersion >= current {
+		return nil, nil // nothing to do (already at or below target)
+	}
+
+	// Pre-check the entire rollback path BEFORE any destructive work: every
+	// step from current down to targetVersion+1 must have a downSQL. This keeps
+	// a "not reversible" failure atomic — no half-rolled-back schema.
+	for v := current; v > targetVersion; v-- {
+		step, ok := migrationByVersion(v)
+		if !ok {
+			return nil, fmt.Errorf("unknown migration version %d in rollback path", v)
+		}
+		if step.downSQL == "" {
+			return nil, fmt.Errorf("%w: v%d %q", ErrMigrationNotReversible, step.version, step.name)
+		}
+	}
+
+	var rolledBack []int
+	for v := current; v > targetVersion; v-- {
+		step := mustMigrationByVersion(v) // presence guaranteed by the pre-check
+		slog.Warn("schema migration rolling back", "version", step.version, "name", step.name)
+		if err := applyMigrationDown(ctx, conn, step); err != nil {
+			return rolledBack, fmt.Errorf("apply down-migration v%d %q: %w", step.version, step.name, err)
+		}
+		rolledBack = append(rolledBack, step.version)
+		current = step.version - 1
+	}
+	slog.Warn("schema rollback complete", "to_version", current)
+	return rolledBack, nil
+}
+
+func migrationByVersion(v int) (migration, bool) {
+	for _, m := range migrations {
+		if m.version == v {
+			return m, true
+		}
+	}
+	return migration{}, false
+}
+
+func mustMigrationByVersion(v int) migration {
+	m, ok := migrationByVersion(v)
+	if !ok {
+		panic(fmt.Sprintf("migration version %d not found (pre-check should have caught this)", v))
+	}
+	return m
 }
 
 // CurrentSchemaVersion reports the highest applied migration version, or 0 when
@@ -448,6 +820,12 @@ CREATE TABLE IF NOT EXISTS identity_links (
 );
 CREATE INDEX IF NOT EXISTS identity_links_user_id_idx ON identity_links (user_id);
 
+-- provider_keys deliberately has NO row-level security. It is an auth-infra
+-- table (like refresh_tokens/token_blacklist/api_tokens): every keystore query
+-- carries an explicit WHERE user_id = $1, and AES-GCM AAD binds each ciphertext
+-- to its (user_id, provider) row so a row-swap can't reuse a stolen key. Adding
+-- RLS here would require switching EncryptedKeyStore to BeginRLS and giving the
+-- background retention purge a non-request principal.
 CREATE TABLE IF NOT EXISTS provider_keys (
 	user_id    TEXT        NOT NULL DEFAULT '',
 	provider   TEXT        NOT NULL,
@@ -897,4 +1275,63 @@ CREATE POLICY rls_policies_visible ON policies FOR ALL USING (
     NOT app_rls_active()
     OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = policies.org_id AND om.user_id = app_current_user_id())
 );
+`
+
+// governanceAlertsSQL (v12) adds the in-app governance alerts inbox. The
+// continuous-governance scanner writes a row whenever it detects baseline drift
+// or a health regression on a flow; the notifications bell reads them. Alerts
+// are team-shared and inherit the parent flow's visibility (same RLS shape as
+// finding_status), so a user sees alerts only for flows they own / collaborate
+// on / share an org with. read_at/dismissed_at are team-global (ack semantics:
+// one team member acknowledging clears the badge for the whole team). An index on
+// created_at DESC backs the newest-first list query.
+const governanceAlertsSQL = `
+CREATE TABLE IF NOT EXISTS gov_alerts (
+    id            TEXT        PRIMARY KEY,
+    flow_id       TEXT        NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    org_id        TEXT        NOT NULL DEFAULT '',
+    type          TEXT        NOT NULL,
+    title         TEXT        NOT NULL DEFAULT '',
+    message       TEXT        NOT NULL DEFAULT '',
+    severity      TEXT        NOT NULL DEFAULT 'warning',
+    new_errors    INT         NOT NULL DEFAULT 0,
+    new_warnings  INT         NOT NULL DEFAULT 0,
+    health_score  INT         NOT NULL DEFAULT 0,
+    prev_health   INT         NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    read_at       TIMESTAMPTZ,
+    dismissed_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS gov_alerts_created_idx ON gov_alerts (created_at DESC);
+
+ALTER TABLE gov_alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gov_alerts FORCE  ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rls_gov_alerts_visible ON gov_alerts;
+CREATE POLICY rls_gov_alerts_visible ON gov_alerts FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = gov_alerts.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (
+        SELECT 1 FROM flows f
+        WHERE f.id = gov_alerts.flow_id
+          AND (f.owner_id = app_current_user_id()
+               OR EXISTS (SELECT 1 FROM flow_collaborators fc WHERE fc.flow_id = f.id AND fc.user_id = app_current_user_id())
+               OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = f.org_id AND om.user_id = app_current_user_id()))
+    )
+);
+`
+
+// governanceAlertsDownSQL reverses v12. Data-lossy: the alerts inbox is
+// destroyed (the scanner re-populates it on the next sweep after re-upgrade).
+const governanceAlertsDownSQL = `
+DROP TABLE IF EXISTS gov_alerts;
 `

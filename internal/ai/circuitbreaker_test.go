@@ -315,3 +315,73 @@ func TestCircuitBreaker_ErrCircuitOpenIsNotRetryable(t *testing.T) {
 		t.Error("ErrCircuitOpen must not be retryable — it would cause a tight loop")
 	}
 }
+
+// cbPanicStub is a Provider whose Chat panics — simulating a downstream provider
+// crashing mid-call (nil deref, etc.). Used to prove a panic during a half-open
+// probe still resolves the circuit rather than wedging it half-open.
+type cbPanicStub struct{ Provider }
+
+func (cbPanicStub) Chat(context.Context, Request) (*Response, error) {
+	panic("simulated provider crash")
+}
+func (cbPanicStub) ID() string { return "panic-stub" }
+
+// TestCircuitBreaker_ProbePanicDoesNotWedge is the regression test for the
+// panic-skips-record wedge: if the wrapped provider panics during a HALF-OPEN
+// probe, record() (called after the provider returns) is skipped, so without the
+// recover-and-record guard the circuit stays half-open forever and check()
+// rejects every future caller. The fix records a failure on panic and re-panics.
+func TestCircuitBreaker_ProbePanicDoesNotWedge(t *testing.T) {
+	resetBreakerRegistry()
+	cb := NewCircuitBreakerProvider(cbPanicStub{})
+
+	// Drive the shared state to a half-open probe: open with an elapsed cooldown
+	// so the next check() admits exactly one probe.
+	cb.st.mu.Lock()
+	cb.st.state = circuitOpen
+	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
+	cb.st.mu.Unlock()
+
+	// The probe call panics; recover it here (as the real stream goroutine does).
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected the provider panic to propagate")
+			}
+		}()
+		_, _ = cb.Chat(context.Background(), Request{})
+	}()
+
+	// The circuit must have been resolved (reopened), NOT left half-open.
+	cb.st.mu.Lock()
+	state := cb.st.state
+	cb.st.mu.Unlock()
+	if state == circuitHalfOpen {
+		t.Fatal("circuit wedged half-open after a probe panic — record was skipped")
+	}
+	if state != circuitOpen {
+		t.Fatalf("expected circuit reopened after probe panic, got %s", state)
+	}
+
+	// And it must recover normally: after the cooldown, a healthy probe closes it.
+	// Reuse the SAME shared state (cb.st) with a healthy provider, exactly as the
+	// next admitted probe would.
+	cb.st.mu.Lock()
+	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
+	cb.st.mu.Unlock()
+	cb2 := &CircuitBreakerProvider{Provider: okStub{}, st: cb.st, failureThreshold: cbFailureThreshold, openDuration: cbOpenDuration}
+	if _, err := cb2.Chat(context.Background(), Request{}); err != nil {
+		t.Fatalf("post-cooldown probe on a healthy provider should succeed, got %v", err)
+	}
+	cb.st.mu.Lock()
+	defer cb.st.mu.Unlock()
+	if cb.st.state != circuitClosed {
+		t.Fatalf("expected circuit closed after a successful probe, got %s", cb.st.state)
+	}
+}
+
+// okStub always succeeds; used to close the circuit after recovery.
+type okStub struct{ Provider }
+
+func (okStub) Chat(context.Context, Request) (*Response, error) { return &Response{Content: "ok"}, nil }
+func (okStub) ID() string                                       { return "panic-stub" }

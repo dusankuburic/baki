@@ -15,6 +15,26 @@ func newTestManager() *Manager {
 	return NewManagerWithTTL(testSecret, 2*time.Second, 5*time.Second, "test-issuer", "test-audience", nil)
 }
 
+// TestVerify_RejectsWrongIssuer confirms the `iss` claim is validated: a token
+// issued by one manager (issuer A) must NOT verify under another (issuer B) even
+// when they share the secret + audience. Defense-in-depth against a sibling
+// service reusing the secret to mint tokens for this app's audience.
+func TestVerify_RejectsWrongIssuer(t *testing.T) {
+	a := NewManagerWithTTL(testSecret, 2*time.Second, 5*time.Second, "issuer-A", "test-audience", nil)
+	b := NewManagerWithTTL(testSecret, 2*time.Second, 5*time.Second, "issuer-B", "test-audience", nil)
+	pair, err := a.Issue("u1", "u1@example.com", RoleMember)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if claims, err := b.Verify(pair.AccessToken); err == nil {
+		t.Errorf("expected issuer-mismatch rejection, but Verify accepted the token (claims %+v)", claims)
+	}
+	// Sanity: same-issuer verify still works.
+	if _, err := a.Verify(pair.AccessToken); err != nil {
+		t.Errorf("same-issuer verify failed: %v", err)
+	}
+}
+
 // ---- Roles ----
 
 func TestRole_IsValid(t *testing.T) {

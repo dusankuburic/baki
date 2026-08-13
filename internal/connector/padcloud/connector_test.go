@@ -124,3 +124,48 @@ func TestIngester_ListErrorAborts(t *testing.T) {
 		t.Errorf("expected 0 ingested on list error, got %d", res.Ingested)
 	}
 }
+
+// panickingConverter wraps the happy-path conversion but panics on a named flow,
+// simulating a nil-deref / stack-overflow in the cloud-format bridge.
+type panickingConverter struct {
+	docs    map[string]*models.FlowDocument
+	panicOn string
+}
+
+func (p *panickingConverter) Convert(name string, def json.RawMessage) (*models.FlowDocument, error) {
+	if name == p.panicOn {
+		panic("simulated converter panic")
+	}
+	if d, ok := p.docs[name]; ok {
+		return d, nil
+	}
+	return nil, nil
+}
+
+// TestIngester_ConverterPanicContinues verifies a PANIC on one flow (not just a
+// returned error) is caught per-flow and the batch continues. Without the
+// per-flow recover, a single panicking flow unwinds the whole Ingest call and
+// every subsequent flow in the batch is skipped.
+func TestIngester_ConverterPanicContinues(t *testing.T) {
+	flows := []DesktopFlowRef{{ID: "f1", Name: "Good"}, {ID: "f2", Name: "Panics"}, {ID: "f3", Name: "AlsoGood"}}
+	client := &mockClient{
+		flows: flows,
+		defs:  map[string]json.RawMessage{"f1": []byte("a"), "f2": []byte("b"), "f3": []byte("c")},
+	}
+	converter := &panickingConverter{
+		panicOn: "Panics",
+		docs:    map[string]*models.FlowDocument{"Good": {Name: "Good"}, "AlsoGood": {Name: "AlsoGood"}},
+	}
+	store := &mockStore{}
+
+	res, err := NewIngester(client, converter, store).Ingest(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected batch-level error: %v", err)
+	}
+	if res.Ingested != 2 || res.Failed != 1 {
+		t.Errorf("ingested=%d failed=%d, want 2/1 (panicking flow recorded, rest continue)", res.Ingested, res.Failed)
+	}
+	if len(res.Errors) != 1 || res.Errors[0] == "" {
+		t.Errorf("expected 1 non-empty panic error, got %v", res.Errors)
+	}
+}

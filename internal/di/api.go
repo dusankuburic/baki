@@ -73,6 +73,7 @@ func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend st
 		Backend:        backend,
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
+		Features:       api.FeatureFlags{DisableSignUp: cfg.Features.DisableSignUp},
 	}
 }
 
@@ -126,6 +127,11 @@ var APIModule = fx.Options(
 		api.NewExportHandler,
 		api.NewAuthHandler,
 		func(cfg *config.Config) *mail.Service { return mail.NewService(cfg.Email, cfg.Mode) },
+		// CIWebhookSecret is sourced from PAD_CI_WEBHOOK_SECRET; empty disables
+		// the inbound /api/integrations/ci endpoint (it returns 503).
+		func(cfg *config.Config) api.CIWebhookSecret {
+			return api.CIWebhookSecret(cfg.Governance.InboundWebhookSecret)
+		},
 		api.NewAdminHandler,
 		api.NewProviderHandler,
 		api.NewOrgHandler,

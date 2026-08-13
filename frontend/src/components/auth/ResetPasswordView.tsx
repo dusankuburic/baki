@@ -66,7 +66,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
             </div>
 
             {error && (
-              <div className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
+              <div role="alert" className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
                 {error}
               </div>
             )}

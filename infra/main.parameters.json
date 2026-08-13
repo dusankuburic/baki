@@ -1,16 +1,21 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
+  "_comment": "Example parameter file. The deploy workflow (.github/workflows/deploy.yml) passes parameters INLINE (az deployment group create ... --parameters appName=... image=...), so this file is NOT used by CI — it exists only for manual `az deployment group create --parameters @infra/main.parameters.json`. Replace the SUB placeholder + appName/image for a manual deploy. By default the template now provisions a storage account, Redis cache, and Key Vault (provisionStorage/provisionRedis/provisionKeyVault default true); set those to false to bring your own. alertEmails is empty by default — set it to receive operational alerts.",
   "parameters": {
-    "appName":              { "value": "baki-backend" },
-    "image":                { "value": "ghcr.io/ORG/baki-backend:latest" },
-    "minReplicas":          { "value": 1 },
-    "maxReplicas":          { "value": 1 },
-    "cpu":                  { "value": "0.5" },
-    "memory":               { "value": "1.0Gi" },
-    "keyVaultUrl":          { "value": "" },
+    "appName":                  { "value": "baki-backend" },
+    "image":                    { "value": "ghcr.io/ORG/baki-backend:latest" },
+    "minReplicas":              { "value": 1 },
+    "maxReplicas":              { "value": 1 },
+    "cpu":                      { "value": "0.5" },
+    "memory":                   { "value": "1.0Gi" },
+    "provisionStorage":         { "value": true },
+    "provisionRedis":           { "value": true },
+    "provisionKeyVault":        { "value": true },
+    "alertEmails":              { "value": "" },
+    "keyVaultUrl":              { "value": "" },
     "storageAccountResourceId": { "value": "" },
-    "authSecret":           { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-auth-secret" } },
-    "databaseUrl":          { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-database-url" } }
+    "authSecret":               { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-auth-secret" } },
+    "databaseUrl":              { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-database-url" } }
   }
 }

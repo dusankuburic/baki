@@ -49,6 +49,10 @@ func PatchForFix(block *models.Block, fixType, ruleID, variable, property string
 		return AppendOutputPatch(block), nil
 	case "mask-sensitive-variable":
 		return MaskSensitiveVariablePatch(block, variable), nil
+	case "upgrade-to-https":
+		return UpgradeToHttpsPatch(block), nil
+	case "sanitize-command-vars":
+		return SanitizeCommandVarsPatch(block), nil
 	case "insert-default":
 		return InsertDefaultPatch(block), nil
 	case "suppress":

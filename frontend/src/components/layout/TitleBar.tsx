@@ -5,6 +5,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import OrgSwitcher from './OrgSwitcher'
 import PresenceIndicators from '@/components/collaboration/PresenceIndicators'
+import AlertsBell from './AlertsBell'
 
 const platform = createAdapter()
 
@@ -56,6 +57,7 @@ export default function TitleBar() {
           <PanelRight size={14} />
         </button>
         <OrgSwitcher />
+        <AlertsBell />
         <button
           onClick={toggleSettings}
           className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"

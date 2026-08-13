@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -43,7 +44,7 @@ func BenchmarkResourceLeakLarge(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = runAnalysisCore(flow, rules, nil, nil, false)
+		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
 	}
 }
 
@@ -53,7 +54,7 @@ func BenchmarkGotoLarge(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = runAnalysisCore(flow, rules, nil, nil, false)
+		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
 	}
 }
 
@@ -102,6 +103,6 @@ func BenchmarkSubflowRulesLarge(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = runAnalysisCore(flow, rules, nil, nil, false)
+		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
 	}
 }

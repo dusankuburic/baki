@@ -16,7 +16,10 @@ func makeAuditEvents(n int, userID string) []*interfaces.AuditEvent {
 	now := time.Now().UTC()
 	for i := range events {
 		events[i] = &interfaces.AuditEvent{
-			ID:           fmt.Sprintf("evt-%d", i),
+			// Namespace the primary key by userID so a unique per-run userID
+			// yields unique event IDs — leftover rows from an interrupted run
+			// can never collide on audit_events_pkey.
+			ID:           fmt.Sprintf("%s-evt-%d", userID, i),
 			UserID:       userID,
 			Email:        "audit@example.com",
 			Action:       "test.action",
@@ -103,7 +106,8 @@ func TestSaveAuditEvents_LargeBatch(t *testing.T) {
 	}
 	defer b.Close()
 
-	const userID = "audit-large-batch-user"
+	// Unique per run so leftover rows from an interrupted run can't collide.
+	userID := "audit-large-batch-" + time.Now().Format("150405.000000000")
 	// > 7281 rows: a single INSERT would overflow the bind-param ceiling.
 	const n = 8000
 	t.Cleanup(func() {

@@ -17,7 +17,27 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// Cross-cutting middleware — applied to every request in order.
 	r.Use(rt.securityHeaders)
 	r.Use(rt.corsHeaders)
+
+	// API version alias: transparently rewrite /api/v1/... → /api/... so new
+	// clients can target /api/v1/ while existing clients keep using /api/.
+	// Future breaking changes land on /api/v2/ only; /api/ stays backward-
+	// compatible. The rewrite happens before jwtAuth and routing so the rest
+	// of the pipeline is unaware of the version prefix.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if rest := strings.TrimPrefix(req.URL.Path, "/api/v1/"); rest != req.URL.Path {
+				req.URL.Path = "/api/" + rest
+			} else if rest := strings.TrimPrefix(req.URL.Path, "/api/v1"); rest == "" {
+				req.URL.Path = "/api"
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+
 	r.Use(rt.jwtAuth)
+	// Per-user write throttle (cloud mode only; pass-through when the limiter is
+	// nil). Runs after jwtAuth so claims are available, and before rlsMiddleware.
+	r.Use(rt.perUserRateLimit)
 	r.Use(rt.rlsMiddleware)
 
 	h := rt.handlers
@@ -46,6 +66,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 
 	// --- Public / Infrastructure ---
 	r.Get("/api/local-config", h.Sys.handleLocalConfig)
+	r.Get("/api/system/features", h.Sys.handleFeatures) // public: pre-auth flag read (login page)
 	r.Get("/healthz", h.Sys.handleLiveness)
 	r.Get("/readyz", h.Sys.handleReadiness)
 	r.Get("/api/health", h.Sys.handleReadiness)
@@ -94,6 +115,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/clear-recent", h.Flow.handleClearRecentFiles)
 		r.Post("/reveal", h.Flow.handleRevealInFileManager)
 		r.Post("/search", h.Flow.handleSearchFlow)
+		r.Post("/search-library", h.Flow.handleSearchLibrary)
 		r.Get("/source-files", h.Flow.handleGetSourceFiles)
 		r.Post("/read-sources", h.Flow.handleReadSourceFiles)
 		r.Post("/open-from-system", h.Flow.handleOnFileOpenFromSystem)
@@ -109,7 +131,8 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/share/list", h.Flow.handleListShares)
 		r.Post("/share/revoke", h.Flow.handleRevokeShare)
 	})
-	r.Get("/api/shared", h.Analysis.handleViewShared) // unauthenticated: ?token=...
+	r.Get("/api/shared", h.Analysis.handleViewShared)          // unauthenticated: ?token=...
+	r.Post("/api/integrations/ci", h.Analysis.handleCIWebhook) // HMAC-authenticated (X-Baki-Signature)
 
 	// --- Library (Cloud CRUD) ---
 	r.Route("/api/library", func(r chi.Router) {
@@ -194,6 +217,18 @@ func registerRoutes(rt *Router, r chi.Router) {
 
 	// --- Welcome Dashboard (BFF) ---
 	r.Get("/api/dashboard/home", h.Dashboard.handleHome)
+
+	// --- Governance alerts inbox (notifications bell) ---
+	// Scanner-written drift/regression alerts; RLS-scoped to the caller's visible
+	// flows. All read/write (no jwtAuth bypass needed).
+	r.Route("/api/governance", func(r chi.Router) {
+		r.Get("/alerts", h.Analysis.handleListGovernanceAlerts)
+		r.Get("/alerts/unread-count", h.Analysis.handleUnreadGovernanceAlertCount)
+		r.Post("/alerts/read", h.Analysis.handleMarkGovernanceAlertRead)
+		r.Post("/alerts/read-all", h.Analysis.handleMarkAllGovernanceAlertsRead)
+		r.Post("/alerts/dismiss", h.Analysis.handleDismissGovernanceAlert)
+		r.Delete("/alerts", h.Analysis.handleClearGovernanceAlerts)
+	})
 
 	r.Route("/api/export", func(r chi.Router) {
 		r.Post("/compare", h.Export.handleCompareCurrentWith)
@@ -300,6 +335,9 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/powerplatform/start", h.Admin.handlePPStartAuth)
 		r.Post("/powerplatform/poll", h.Admin.handlePPPollAuth)
 		r.Get("/powerplatform/status", h.Admin.handlePPStatus)
+		r.Post("/scanner/scan", h.Admin.handleScannerScan)
+		r.Post("/ingester/ingest", h.Admin.handleIngesterIngest)
+		r.Get("/system/health", h.Sys.handleAdminSystemHealth)
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

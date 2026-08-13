@@ -176,26 +176,52 @@ interface SettingsState {
 // An in-flight guard prevents two concurrent API calls: if a new persist
 // arrives while the previous one is still hitting the network, the new call
 // waits for the previous to settle, then retries with the latest settings.
-let persistTimer: ReturnType<typeof setTimeout> | null = null
-let resolveSuperseded: (() => void) | null = null
-let inflightPromise: Promise<void> | null = null
+//
+// The three pieces of queue state live on one object (persistQueue) rather than
+// three loose module-level vars so a test-only reset can clear them atomically
+// (otherwise the debounce timer / in-flight promise leak across test cases).
+interface PersistQueueState {
+  timer: ReturnType<typeof setTimeout> | null
+  resolveSuperseded: (() => void) | null
+  inflight: Promise<void> | null
+}
+const persistQueue: PersistQueueState = {
+  timer: null,
+  resolveSuperseded: null,
+  inflight: null,
+}
+
+// __resetPersistQueueForTest clears the debounce timer + in-flight/superseded
+// state so unit tests don't leak them across cases. Production code must not
+// call this: it would drop a pending write.
+export function __resetPersistQueueForTest(): void {
+  if (persistQueue.timer) {
+    clearTimeout(persistQueue.timer)
+  }
+  persistQueue.timer = null
+  // Resolve any superseded waiter so it doesn't hang the test.
+  persistQueue.resolveSuperseded?.()
+  persistQueue.resolveSuperseded = null
+  persistQueue.inflight = null
+}
+
 async function persist(settings: AppSettings): Promise<void> {
-  if (inflightPromise) {
-    await inflightPromise.catch(() => {})
+  if (persistQueue.inflight) {
+    await persistQueue.inflight.catch(() => {})
     return persist(settings)
   }
 
-  if (persistTimer) {
-    clearTimeout(persistTimer)
-    resolveSuperseded?.()
+  if (persistQueue.timer) {
+    clearTimeout(persistQueue.timer)
+    persistQueue.resolveSuperseded?.()
   }
 
   return new Promise((resolve, reject) => {
-    resolveSuperseded = resolve
-    persistTimer = setTimeout(() => {
-      persistTimer = null
-      resolveSuperseded = null
-      inflightPromise = settingsApi
+    persistQueue.resolveSuperseded = resolve
+    persistQueue.timer = setTimeout(() => {
+      persistQueue.timer = null
+      persistQueue.resolveSuperseded = null
+      persistQueue.inflight = settingsApi
         .updateSettings(settings)
         .then(() => resolve())
         .catch(err => {
@@ -203,7 +229,7 @@ async function persist(settings: AppSettings): Promise<void> {
           reject(err)
         })
         .finally(() => {
-          inflightPromise = null
+          persistQueue.inflight = null
         })
     }, 1000)
   })

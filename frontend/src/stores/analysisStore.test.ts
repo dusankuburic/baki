@@ -275,6 +275,62 @@ describe('finding triage status', () => {
   })
 })
 
+describe('finding assignment', () => {
+  const f = () => makeFinding('f1', {blockId: 'b1'})
+
+  beforeEach(() => {
+    vi.mocked(analysisApi.setFindingStatus).mockClear()
+  })
+
+  it('assignFinding sets the assignee on an open finding', () => {
+    useAnalysisStore.getState().assignFinding(f(), 'user-7')
+    const key = findingKey(f())
+    const entry = useAnalysisStore.getState().triageMap.get(key)
+    expect(entry?.assigneeId).toBe('user-7')
+    // Status defaults to 'open' since none was set.
+    expect(entry?.status).toBe('open')
+    // Persisted with the assignee id.
+    expect(analysisApi.setFindingStatus).toHaveBeenCalledWith(
+      expect.objectContaining({assigneeId: 'user-7'}),
+    )
+  })
+
+  it('assignFinding preserves the existing triage status', () => {
+    useAnalysisStore.getState().setFindingTriage(f(), 'in_progress')
+    vi.mocked(analysisApi.setFindingStatus).mockClear()
+
+    useAnalysisStore.getState().assignFinding(f(), 'user-9')
+    const key = findingKey(f())
+    expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('in_progress')
+    expect(useAnalysisStore.getState().triageMap.get(key)?.assigneeId).toBe('user-9')
+    // The persist call carries BOTH the preserved status and the new assignee.
+    expect(analysisApi.setFindingStatus).toHaveBeenCalledWith(
+      expect.objectContaining({status: 'in_progress', assigneeId: 'user-9'}),
+    )
+  })
+
+  it('setFindingTriage preserves an existing assignee across a status change', () => {
+    useAnalysisStore.getState().setFindingTriage(f(), 'acknowledged')
+    useAnalysisStore.getState().assignFinding(f(), 'user-2')
+
+    // Now change status — the assignee must survive.
+    useAnalysisStore.getState().setFindingTriage(f(), 'in_progress')
+    const key = findingKey(f())
+    expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('in_progress')
+    expect(useAnalysisStore.getState().triageMap.get(key)?.assigneeId).toBe('user-2')
+  })
+
+  it('assignFinding(null) unassigns', () => {
+    useAnalysisStore.getState().setFindingTriage(f(), 'in_progress')
+    useAnalysisStore.getState().assignFinding(f(), 'user-2')
+    useAnalysisStore.getState().assignFinding(f(), null)
+    const key = findingKey(f())
+    expect(useAnalysisStore.getState().triageMap.get(key)?.assigneeId).toBeUndefined()
+    // Status is untouched.
+    expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('in_progress')
+  })
+})
+
 describe('bulk finding selection', () => {
   it('toggleFindingSelection adds and removes a finding', () => {
     useAnalysisStore.getState().toggleFindingSelection('f1')

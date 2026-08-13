@@ -10,7 +10,7 @@
     "paths": {
         "/api/admin/migration/start": {
             "post": {
-                "description": "Kicks off the local→database flow migration (admin only, cloud mode). Idempotent and non-blocking.",
+                "description": "Kicks off the local\u2192database flow migration (admin only, cloud mode). Idempotent and non-blocking.",
                 "produces": [
                     "application/json"
                 ],
@@ -130,7 +130,7 @@
             }
         },
         "/api/admin/users/{userId}/role": {
-            "post": {
+            "put": {
                 "description": "Updates the system role for a specific user. Only available to system admins.",
                 "consumes": [
                     "application/json"
@@ -252,8 +252,269 @@
                 }
             }
         },
+        "/api/analysis/baseline/clear": {
+            "post": {
+                "description": "Clear the baseline for a flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "baseline"
+                ],
+                "summary": "Clear the baseline for a flow",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/baseline/drift": {
+            "post": {
+                "description": "Compare current analysis against the baseline",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "baseline"
+                ],
+                "summary": "Compare current analysis against the baseline",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/baseline/get": {
+            "post": {
+                "description": "Get the baseline snapshot for a flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "baseline"
+                ],
+                "summary": "Get the baseline snapshot for a flow",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/baseline/set": {
+            "post": {
+                "description": "Set the current analysis as the baseline",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "baseline"
+                ],
+                "summary": "Set the current analysis as the baseline",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/comments/add": {
+            "post": {
+                "description": "Add a comment to a finding",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "comments"
+                ],
+                "summary": "Add a comment to a finding",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/comments/delete": {
+            "post": {
+                "description": "Delete a comment",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "comments"
+                ],
+                "summary": "Delete a comment",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/comments/list": {
+            "post": {
+                "description": "List comments for a finding",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "comments"
+                ],
+                "summary": "List comments for a finding",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/export/csv": {
+            "post": {
+                "description": "Export findings as CSV",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "export"
+                ],
+                "summary": "Export findings as CSV",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/export/junit": {
+            "post": {
+                "description": "Export analysis results as JUnit XML",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "export"
+                ],
+                "summary": "Export analysis results as JUnit XML",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
         "/api/analysis/graph": {
-            "get": {
+            "post": {
                 "description": "Returns a graph representation of the flow's execution path.",
                 "produces": [
                     "application/json"
@@ -334,6 +595,180 @@
                                 "type": "string"
                             }
                         }
+                    }
+                }
+            }
+        },
+        "/api/analysis/policy/delete": {
+            "post": {
+                "description": "Delete a policy",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policy"
+                ],
+                "summary": "Delete a policy",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/policy/evaluate": {
+            "post": {
+                "description": "Evaluate a flow against an inline policy",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policy"
+                ],
+                "summary": "Evaluate a flow against an inline policy",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/policy/evaluate-by-id": {
+            "post": {
+                "description": "Evaluate a flow against a persisted policy",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policy"
+                ],
+                "summary": "Evaluate a flow against a persisted policy",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/policy/get": {
+            "post": {
+                "description": "Get a single policy by ID",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policy"
+                ],
+                "summary": "Get a single policy by ID",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/policy/list": {
+            "post": {
+                "description": "List policies for an organization",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policy"
+                ],
+                "summary": "List policies for an organization",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/policy/save": {
+            "post": {
+                "description": "Save a named policy for an organization",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "policy"
+                ],
+                "summary": "Save a named policy for an organization",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
                     }
                 }
             }
@@ -483,6 +918,122 @@
                                 "$ref": "#/definitions/models.Rule"
                             }
                         }
+                    }
+                }
+            }
+        },
+        "/api/analysis/triage/clear": {
+            "post": {
+                "description": "Clear triage status for a finding",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "triage"
+                ],
+                "summary": "Clear triage status for a finding",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/triage/list": {
+            "post": {
+                "description": "List finding triage statuses for a flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "triage"
+                ],
+                "summary": "List finding triage statuses for a flow",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/triage/set": {
+            "post": {
+                "description": "Set triage status for a finding",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "triage"
+                ],
+                "summary": "Set triage status for a finding",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/analysis/triage/set-batch": {
+            "post": {
+                "description": "Batch-set triage statuses for multiple findings",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "triage"
+                ],
+                "summary": "Batch-set triage statuses for multiple findings",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
                     }
                 }
             }
@@ -815,6 +1366,92 @@
                                 "type": "string"
                             }
                         }
+                    }
+                }
+            }
+        },
+        "/api/auth/sessions": {
+            "get": {
+                "description": "List active sessions for the current user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "List active sessions for the current user",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    }
+                }
+            }
+        },
+        "/api/auth/sessions/{jti}": {
+            "delete": {
+                "description": "Revoke a session by JTI",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Revoke a session by JTI",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    }
+                }
+            }
+        },
+        "/api/auth/tokens": {
+            "get": {
+                "description": "List API tokens for the current user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "List API tokens for the current user",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    }
+                }
+            }
+        },
+        "/api/auth/tokens/{tokenId}": {
+            "delete": {
+                "description": "Revoke an API token",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Revoke an API token",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "403": {
+                        "description": "Forbidden"
                     }
                 }
             }
@@ -1375,6 +2012,26 @@
                                 "type": "string"
                             }
                         }
+                    }
+                }
+            }
+        },
+        "/api/dashboard/home": {
+            "get": {
+                "description": "Aggregated dashboard data for the home view",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dashboard"
+                ],
+                "summary": "Aggregated dashboard data for the home view",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
                     }
                 }
             }
@@ -2038,6 +2695,93 @@
                                 "type": "string"
                             }
                         }
+                    }
+                }
+            }
+        },
+        "/api/flow/share/create": {
+            "post": {
+                "description": "Create a public share link for a flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Create a public share link for a flow",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/flow/share/list": {
+            "post": {
+                "description": "List active share links for a flow",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "List active share links for a flow",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
+                    }
+                }
+            }
+        },
+        "/api/flow/share/revoke": {
+            "post": {
+                "description": "Revoke a share link",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Revoke a share link",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)"
                     }
                 }
             }
@@ -3161,6 +3905,49 @@
                 }
             }
         },
+        "/api/orgs/{id}/invites": {
+            "get": {
+                "description": "List pending invites for an organization",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "orgs"
+                ],
+                "summary": "List pending invites for an organization",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    }
+                }
+            }
+        },
+        "/api/orgs/{id}/invites/{inviteId}": {
+            "delete": {
+                "description": "Revoke a pending invite",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "orgs"
+                ],
+                "summary": "Revoke a pending invite",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    }
+                }
+            }
+        },
         "/api/orgs/{id}/members": {
             "post": {
                 "description": "Adds a user to an organization with a specific role. Only organization admins can add members.",
@@ -4036,6 +4823,26 @@
                                 "type": "string"
                             }
                         }
+                    }
+                }
+            }
+        },
+        "/metrics": {
+            "get": {
+                "description": "Prometheus metrics endpoint",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Prometheus metrics endpoint",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthorized"
                     }
                 }
             }

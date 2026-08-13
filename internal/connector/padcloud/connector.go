@@ -118,29 +118,43 @@ func (i *Ingester) Ingest(ctx context.Context) (IngestResult, error) {
 			continue
 		}
 
-		def, err := i.client.GetFlowDefinition(ctx, f.ID)
-		if err != nil {
-			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): fetch definition: %v", f.Name, f.ID, err))
-			continue
-		}
-		doc, err := i.converter.Convert(f.Name, def)
-		if err != nil {
-			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): convert: %v", f.Name, f.ID, err))
-			continue
-		}
-		if doc == nil {
-			res.Skipped++
-			continue
-		}
-		if err := i.store.UpsertFlow(ctx, doc, f.ID); err != nil {
-			res.Failed++
-			res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): store: %v", f.Name, f.ID, err))
-			continue
-		}
-		i.lastModified[f.ID] = f.Modified
-		res.Ingested++
+		// Per-flow recover: a panic in fetch/convert/store (a nil-deref in the
+		// cloud-format bridge, an unbounded-recursion stack overflow on a hostile
+		// definition, a pgvector decode bug) is recorded as a failure and the
+		// batch continues — so one malformed/hostile flow doesn't abort the whole
+		// sweep (which runSweep's top-level recover would only catch after the
+		// entire Ingest call had unwound, skipping every remaining flow).
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					res.Failed++
+					res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): panic: %v", f.Name, f.ID, r))
+				}
+			}()
+			def, err := i.client.GetFlowDefinition(ctx, f.ID)
+			if err != nil {
+				res.Failed++
+				res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): fetch definition: %v", f.Name, f.ID, err))
+				return
+			}
+			doc, err := i.converter.Convert(f.Name, def)
+			if err != nil {
+				res.Failed++
+				res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): convert: %v", f.Name, f.ID, err))
+				return
+			}
+			if doc == nil {
+				res.Skipped++
+				return
+			}
+			if err := i.store.UpsertFlow(ctx, doc, f.ID); err != nil {
+				res.Failed++
+				res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): store: %v", f.Name, f.ID, err))
+				return
+			}
+			i.lastModified[f.ID] = f.Modified
+			res.Ingested++
+		}()
 	}
 
 	logger.Info("padcloud ingest complete",

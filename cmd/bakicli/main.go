@@ -10,6 +10,8 @@
 //	bakicli diff [flags] <old.txt> <new.txt>     Compare two flows
 //	bakicli rules [rule-id]                      List or describe rules
 //	bakicli init [-o .bakirc.json]               Generate a starter config
+//	bakicli watch [flags] <file.txt|folder>      Re-analyze on every save (Ctrl-C to stop)
+//	bakicli migrate down [flags] <version>       Roll schema back (operator-only)
 //	bakicli --version                            Print version
 //
 // Flags (analyze):
@@ -41,14 +43,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
+	"pad-analyzer/internal/storage/database"
 	"pad-core/analyzer"
 	"pad-core/export"
 	"pad-core/models"
@@ -67,8 +75,8 @@ func main() {
 	}
 
 	// Subcommand dispatch (backward-compatible): "fix" / "diff" / "rules" /
-	// "init" route to their own flagsets; anything else (-flags, a bare
-	// file/folder) runs the legacy analyze flow unchanged so existing CI
+	// "init" / "watch" route to their own flagsets; anything else (-flags, a
+	// bare file/folder) runs the legacy analyze flow unchanged so existing CI
 	// invocations keep working.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -84,6 +92,12 @@ func main() {
 		case "init":
 			runInit(os.Args[2:])
 			return
+		case "watch":
+			runWatch(os.Args[2:])
+			return
+		case "migrate":
+			runMigrate(os.Args[2:])
+			return
 		}
 	}
 	runAnalyze()
@@ -93,6 +107,7 @@ func runAnalyze() {
 	failOn := flag.String("fail-on", "error", "minimum severity that causes exit 1: error, warning, info")
 	format := flag.String("format", "text", "output format: text, json, sarif, junit, csv")
 	rulesFlag := flag.String("rules", "", "comma-separated rule IDs to run (empty = all)")
+	customRulesFlag := flag.String("custom-rules", "", "path to custom rules JSON file")
 	policyFlag := flag.String("policy", "", "policy JSON file; gate on its rules + gateSeverity (overrides -fail-on)")
 	baselineFlag := flag.String("baseline", "", "baseline JSON file (finding fingerprints); gate on NEW findings only (ratchet)")
 	updateBaseline := flag.String("update-baseline", "", "write the current run's findings as the baseline to this file and exit 0 (accept current state)")
@@ -102,6 +117,15 @@ func runAnalyze() {
 
 	if flag.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: bakicli [flags] <file.txt|folder|->")
+		os.Exit(2)
+	}
+
+	// -policy short-circuits before the baseline ratchet logic, so combining it
+	// with -baseline/-update-baseline silently drops the baseline behavior (no
+	// file written, no drift gate). Reject the combination up front so an
+	// operator's intent isn't quietly ignored — run them as separate steps.
+	if *policyFlag != "" && (*baselineFlag != "" || *updateBaseline != "") {
+		fmt.Fprintln(os.Stderr, "bakicli: -policy cannot be combined with -baseline or -update-baseline (the policy gate short-circuits the baseline ratchet); run them as separate invocations")
 		os.Exit(2)
 	}
 
@@ -124,6 +148,9 @@ func runAnalyze() {
 			}
 			if !setFlags["rules"] && cfg.Rules != "" {
 				*rulesFlag = cfg.Rules
+			}
+			if !setFlags["custom-rules"] && cfg.CustomRules != "" {
+				*customRulesFlag = cfg.CustomRules
 			}
 			if !setFlags["policy"] && cfg.Policy != "" {
 				*policyFlag = cfg.Policy
@@ -155,7 +182,7 @@ func runAnalyze() {
 		os.Exit(2)
 	}
 
-	rules := selectRules(*rulesFlag)
+	rules := selectRules(*rulesFlag, *customRulesFlag)
 	settings := buildSettingsFromConfig(loadedCfg)
 	report := analyzer.RunAnalysis(doc, rules, settings, nil)
 
@@ -314,8 +341,16 @@ func load(target string) (*models.FlowDocument, error) {
 	return parser.ParseText(string(data), filepath.Base(target), info.Size())
 }
 
-func selectRules(rulesFlag string) []analyzer.Rule {
+func selectRules(rulesFlag, customRulesPath string) []analyzer.Rule {
 	all := analyzer.AllRules()
+	if customRulesPath != "" {
+		custom, err := analyzer.LoadCustomRules(customRulesPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: -custom-rules: %v\n", err)
+			os.Exit(2)
+		}
+		all = append(all, custom...)
+	}
 	if rulesFlag == "" {
 		return all
 	}
@@ -352,6 +387,132 @@ func shouldFail(findings []models.Finding, threshold string) bool {
 		}
 	}
 	return false
+}
+
+// ---- bakicli watch ----
+
+// runWatch re-analyzes a flow (file or folder) every time it changes on disk —
+// a tight feedback loop for an author editing in the PAD designer who wants the
+// gate to re-run on every save. Uses an mtime-polling watcher (no fsnotify
+// dependency; cross-platform; a single watcher on a CLI is cheap) with a short
+// debounce so the multiple mtime bumps of one save fire one analysis.
+//
+// Exits 0 on Ctrl-C (SIGINT/SIGTERM). Per-run exit code is NOT used (watch mode
+// is informational); each run prints a findings summary and, unless -quiet, the
+// finding list.
+func runWatch(args []string) {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	failOn := fs.String("fail-on", "error", "minimum severity flagged in each run's summary: error, warning, info")
+	rulesFlag := fs.String("rules", "", "comma-separated rule IDs to run (empty = all)")
+	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
+	interval := fs.Duration("interval", 500*time.Millisecond, "poll interval for file changes")
+	quiet := fs.Bool("quiet", false, "suppress per-run output; only print when findings change")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: bakicli watch [flags] <file.txt|folder>")
+		fmt.Fprintln(os.Stderr, "  re-analyze on every save (Ctrl-C to stop)")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	target := fs.Arg(0)
+
+	validSeverities := map[string]bool{"error": true, "warning": true, "info": true}
+	if !validSeverities[*failOn] {
+		fmt.Fprintf(os.Stderr, "bakicli watch: unknown -fail-on value %q (must be error, warning, or info)\n", *failOn)
+		os.Exit(2)
+	}
+
+	rules := selectRules(*rulesFlag, *customRulesFlag)
+	files, err := expandFixTargets(target)
+	if err != nil || len(files) == 0 {
+		fmt.Fprintf(os.Stderr, "bakicli watch: %s: no .txt/.pad files to watch\n", target)
+		os.Exit(2)
+	}
+
+	// SIGINT/SIGTERM → clean exit (exit 0; watch is informational).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Fprintf(os.Stderr, "bakicli watch: %s (%d file(s); poll %s; Ctrl-C to stop)\n", target, len(files), *interval)
+	analyzeOnce := func() {
+		doc, err := load(target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli watch: parse error: %v\n", err)
+			return
+		}
+		report := analyzer.RunAnalysis(doc, rules, models.DefaultSettings(), nil)
+		if !*quiet {
+			fmt.Println(separator())
+			printText(report, false)
+		}
+		if shouldFail(report.Findings, *failOn) {
+			fmt.Fprintf(os.Stderr, "  → gate FAIL (≥%s)\n", *failOn)
+		} else {
+			fmt.Fprintf(os.Stderr, "  → gate PASS\n")
+		}
+	}
+
+	// Initial run immediately.
+	analyzeOnce()
+
+	// Snapshot mtimes; loop until a change or signal.
+	mtimes := snapshotMt(files)
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+	var debounce *time.Timer
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(os.Stderr, "\nbakicli watch: stopped")
+			return
+		case <-ticker.C:
+			cur := snapshotMt(files)
+			if !mtimesChanged(mtimes, cur) {
+				continue
+			}
+			mtimes = cur
+			// Debounce: a single save can bump mtime several times; wait one
+			// poll interval for the write to settle, then run once.
+			if debounce != nil {
+				debounce.Stop()
+			}
+			r := analyzeOnce
+			debounce = time.AfterFunc(*interval, r)
+		}
+	}
+}
+
+// snapshotMt records the current modtime of each file (zero on a missing file
+// so a delete+recreate is detected as a change).
+func snapshotMt(files []string) map[string]time.Time {
+	out := make(map[string]time.Time, len(files))
+	for _, f := range files {
+		if info, err := os.Stat(f); err == nil {
+			out[f] = info.ModTime()
+		} else {
+			out[f] = time.Time{}
+		}
+	}
+	return out
+}
+
+func mtimesChanged(a, b map[string]time.Time) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	for k, v := range b {
+		if av, ok := a[k]; !ok || !av.Equal(v) {
+			return true
+		}
+	}
+	return false
+}
+
+func separator() string {
+	return strings.Repeat("-", 60)
 }
 
 // loadBaseline reads a baseline JSON file (a `[]string` of content-stable
@@ -551,13 +712,54 @@ func fixOneFile(file string, apply bool, ruleFilter map[string]bool, limit int, 
 		return 0, err
 	}
 	if apply {
-		if err := os.WriteFile(file, []byte(source), 0o600); err != nil {
+		if err := atomicWriteFile(file, []byte(source)); err != nil {
 			return 0, err
 		}
 	} else {
 		fmt.Print(source)
 	}
 	return fixed, nil
+}
+
+// atomicWriteFile writes data to path atomically: it writes to a temp file in
+// the same directory, then renames it over path. An interrupted write (crash,
+// Ctrl-C, disk full) therefore leaves the ORIGINAL file intact instead of a
+// half-written, truncated flow — `fix --apply` must never corrupt the user's
+// automation source, which (unlike a regenerable baseline/config) can't be
+// recovered. The original file's permission mode is preserved: a plain
+// os.WriteFile over an existing file keeps its mode, so the temp+rename path
+// must restore it explicitly (a fresh temp defaults to 0600).
+func atomicWriteFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	mode := os.FileMode(0o600) // default for a not-yet-existing target
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(dir, ".baki-fix-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename temp file over %s: %w", path, err)
+	}
+	return nil
 }
 
 // printFixSummary emits the fix-run summary (to stderr so it doesn't mix with
@@ -903,15 +1105,152 @@ func runInit(args []string) {
 	fmt.Printf("wrote %s (%d rules)\n", *out, len(config.Rules))
 }
 
+// ---- bakicli migrate ----
+
+// maxDefaultDownSteps caps how many steps a single `migrate down` may roll back
+// without the operator raising --max-steps. A safety net against a fat-fingered
+// target version silently destroying many migrations' worth of schema/data.
+const maxDefaultDownSteps = 3
+
+// runMigrate implements `bakicli migrate down <version>`: an operator-only,
+// never-on-boot, never-over-HTTP schema rollback. It is the reverse of the
+// server's boot-time forward migrate().
+//
+// Guards (per the security review of this feature):
+//   - --max-steps (default 3): refuse to roll back more steps than this in one go.
+//   - interactive confirm requiring the operator to type the target version,
+//     unless --force skips it (non-interactive / scripted).
+//   - reversibility pre-check: every step in the path must have a downSQL; an
+//     irreversible step (the baseline) aborts before any destructive work.
+//   - a loud boot-reapply warning: a newer server binary re-applies the rolled-
+//     back steps on its next boot, so the rollback only sticks if the binary is
+//     rolled back too (or the step is removed from the binary).
+func runMigrate(args []string) {
+	if len(args) == 0 || args[0] != "down" {
+		printMigrateUsage()
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("migrate down", flag.ExitOnError)
+	dsnFlag := fs.String("dsn", "", "Postgres DSN (default: $PAD_DATABASE_URL)")
+	force := fs.Bool("force", false, "skip the interactive confirm prompt")
+	maxSteps := fs.Int("max-steps", maxDefaultDownSteps, "refuse to roll back more than this many steps in one invocation")
+	fs.Usage = printMigrateUsage
+	_ = fs.Parse(args[1:])
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	target, err := strconv.Atoi(fs.Arg(0))
+	if err != nil || target < 0 {
+		fmt.Fprintf(os.Stderr, "bakicli migrate down: target version must be a non-negative integer, got %q\n", fs.Arg(0))
+		os.Exit(2)
+	}
+
+	dsn := *dsnFlag
+	if dsn == "" {
+		dsn = os.Getenv("PAD_DATABASE_URL")
+	}
+	if dsn == "" {
+		fmt.Fprintln(os.Stderr, "bakicli migrate down: no database DSN (set --dsn or PAD_DATABASE_URL)")
+		os.Exit(2)
+	}
+
+	// Connect. database.New runs the forward migrate (idempotent — a no-op when
+	// already current) so schema_migrations exists and the step set is loaded.
+	b, err := database.New(context.Background(), database.DefaultConfig(dsn))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate down: connect: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = b.Close() }()
+
+	ctx := context.Background()
+	current, err := b.CurrentSchemaVersion(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate down: read version: %v\n", err)
+		os.Exit(1)
+	}
+	if target >= current {
+		fmt.Printf("schema already at v%d (target v%d); nothing to roll back.\n", current, target)
+		return
+	}
+
+	// Build + validate the plan from the binary's step list (no DB writes yet).
+	steps := database.MigrationSteps()
+	stepCount := current - target
+	if stepCount > *maxSteps {
+		fmt.Fprintf(os.Stderr, "bakicli migrate down: refusing to roll back %d steps (max %d); pass --max-steps to raise the cap\n", stepCount, *maxSteps)
+		os.Exit(2)
+	}
+	fmt.Printf("Rollback plan: v%d → v%d (%d step(s))\n", current, target, stepCount)
+	for v := current; v > target; v-- {
+		var name string
+		reversible := false
+		for _, s := range steps {
+			if s.Version == v {
+				name, reversible = s.Name, s.Reversible
+				break
+			}
+		}
+		mark := "ok"
+		if !reversible {
+			mark = "NOT REVERSIBLE"
+		}
+		fmt.Printf("  v%d %s [%s]\n", v, name, mark)
+		if !reversible {
+			fmt.Fprintf(os.Stderr, "bakicli migrate down: v%d %q has no down-migration; cannot roll back past it. Restore from backup instead.\n", v, name)
+			os.Exit(2)
+		}
+	}
+
+	// Boot-reapply warning: the rollback is undone by a newer binary on next boot.
+	fmt.Println("\nWARNING: a newer server binary will RE-APPLY these steps on its next")
+	fmt.Println("boot (the forward migrate() runs at startup). For the rollback to stick,")
+	fmt.Println("deploy a binary that no longer contains these steps, or keep the server stopped.")
+
+	if !*force {
+		fmt.Printf("\nThis is DESTRUCTIVE and drops data. To proceed, type the target version (%d): ", target)
+		var resp string
+		if _, err := fmt.Fscanln(os.Stdin, &resp); err != nil {
+			fmt.Fprintln(os.Stderr, "bakicli migrate down: no confirmation received; aborting")
+			os.Exit(1)
+		}
+		if resp != strconv.Itoa(target) {
+			fmt.Fprintln(os.Stderr, "bakicli migrate down: confirmation did not match target version; aborting")
+			os.Exit(1)
+		}
+	}
+
+	rolled, err := b.MigrateDown(ctx, target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate down: FAILED after %d step(s): %v\n", len(rolled), err)
+		if len(rolled) > 0 {
+			fmt.Fprintf(os.Stderr, "  rolled back: %v\n", rolled)
+		}
+		os.Exit(1)
+	}
+	fmt.Printf("Rolled back %d step(s): %v\n", len(rolled), rolled)
+}
+
+func printMigrateUsage() {
+	fmt.Fprintln(os.Stderr, "usage: bakicli migrate down [flags] <target-version>")
+	fmt.Fprintln(os.Stderr, "  roll the DB schema back to <target-version> (operator-only; never runs on boot)")
+	fmt.Fprintln(os.Stderr, "flags:")
+	fmt.Fprintln(os.Stderr, "  -dsn string       Postgres DSN (default: $PAD_DATABASE_URL)")
+	fmt.Fprintln(os.Stderr, "  -force            skip the interactive confirm prompt")
+	fmt.Fprintln(os.Stderr, "  -max-steps int    refuse to roll back more than this many steps (default 3)")
+}
+
 // bakiConfig is the .bakirc.json schema. All fields optional — missing fields
 // fall back to defaults (same as running without a config).
 type bakiConfig struct {
-	FailOn  string                  `json:"failOn,omitempty"`
-	Format  string                  `json:"format,omitempty"`
-	Rules   string                  `json:"rules,omitempty"`
-	Policy  string                  `json:"policy,omitempty"`
-	Verbose *bool                   `json:"verbose,omitempty"`
-	RuleCfg map[string]bakiRuleConf `json:"ruleConfig,omitempty"`
+	FailOn      string                  `json:"failOn,omitempty"`
+	Format      string                  `json:"format,omitempty"`
+	Rules       string                  `json:"rules,omitempty"`
+	CustomRules string                  `json:"customRules,omitempty"`
+	Policy      string                  `json:"policy,omitempty"`
+	Verbose     *bool                   `json:"verbose,omitempty"`
+	RuleCfg     map[string]bakiRuleConf `json:"ruleConfig,omitempty"`
 }
 
 type bakiRuleConf struct {

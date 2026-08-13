@@ -52,7 +52,7 @@ describe('api/client', () => {
       const fetchSpy = mockFetch({result: 'ok'})
       const {request} = await getClient()
 
-      await request('/api/test', {some: 'body'})
+      await request('/api/test', {body: {some: 'body'}})
 
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(init.method).toBe('POST')
@@ -62,7 +62,7 @@ describe('api/client', () => {
       const fetchSpy = mockFetch([])
       const {request} = await getClient()
 
-      await request('/api/list', undefined, 'GET')
+      await request('/api/list', {method: 'GET'})
 
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(init.method).toBe('GET')
@@ -73,7 +73,7 @@ describe('api/client', () => {
       const fetchSpy = mockFetch({created: true})
       const {request} = await getClient()
 
-      await request('/api/create', {name: 'Test'})
+      await request('/api/create', {body: {name: 'Test'}})
 
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(init.body).toBe(JSON.stringify({name: 'Test'}))
@@ -191,7 +191,7 @@ describe('api/client', () => {
       })
       const {request} = await getClient()
 
-      const out = await request('/api/x', undefined, 'GET')
+      const out = await request('/api/x', {method: 'GET'})
 
       expect(out).toEqual({ok: true})
       expect(calls).toBe(2)
@@ -205,7 +205,7 @@ describe('api/client', () => {
       })
       const {request} = await getClient()
 
-      await expect(request('/api/x', {a: 1}, 'POST')).rejects.toThrow('boom')
+      await expect(request('/api/x', {body: {a: 1}, method: 'POST'})).rejects.toThrow('boom')
       expect(calls).toBe(1)
     })
   })

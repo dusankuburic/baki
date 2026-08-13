@@ -91,28 +91,28 @@ export const libraryApi = {
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset) params.set('offset', String(filter.offset))
     const qs = params.toString()
-    return request(`/api/library${qs ? '?' + qs : ''}`, undefined, 'GET')
+    return request(`/api/library${qs ? '?' + qs : ''}`, {method: 'GET'})
   },
 
   // Org-wide governance portfolio, ranked worst-health-first.
   portfolio: (orgId?: string): Promise<Portfolio> => {
     const qs = orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''
-    return request(`/api/library/portfolio${qs}`, undefined, 'GET')
+    return request(`/api/library/portfolio${qs}`, {method: 'GET'})
   },
 
-  get: (id: string): Promise<LibraryFlow> => request(`/api/library/${id}`, undefined, 'GET'),
+  get: (id: string): Promise<LibraryFlow> => request(`/api/library/${id}`, {method: 'GET'}),
 
-  getContent: (id: string): Promise<FlowDocument> => request(`/api/library/${id}/content`, undefined, 'GET'),
+  getContent: (id: string): Promise<FlowDocument> => request(`/api/library/${id}/content`, {method: 'GET'}),
 
   versions: (id: string, limit?: number): Promise<LibraryFlowVersion[]> => {
     const qs = limit ? `?limit=${limit}` : ''
-    return request(`/api/library/${id}/versions${qs}`, undefined, 'GET')
+    return request(`/api/library/${id}/versions${qs}`, {method: 'GET'})
   },
 
-  create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> => request('/api/library', req),
+  create: (req: CreateLibraryFlowRequest): Promise<LibraryFlow> => request('/api/library', {body: req}),
 
   update: (id: string, req: UpdateLibraryFlowRequest): Promise<LibraryFlow> =>
-    request(`/api/library/${id}`, req, 'PUT'),
+    request(`/api/library/${id}`, {body: req, method: 'PUT'}),
 
-  delete: (id: string): Promise<void> => request(`/api/library/${id}`, undefined, 'DELETE'),
+  delete: (id: string): Promise<void> => request(`/api/library/${id}`, {method: 'DELETE'}),
 }

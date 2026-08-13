@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"pad-analyzer/internal/auth"
 )
@@ -190,6 +191,81 @@ func TestPPAuth_NonAdmin_Forbidden(t *testing.T) {
 	bearer := "Bearer " + pair.AccessToken
 
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/powerplatform/start", bearer, nil)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for non-admin, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestScannerScan_Unconfigured_Returns503 verifies the nil-gate: when the
+// scanner isn't cloud-configured (nil ScanNowFunc) the manual trigger reports
+// 503, matching the PadCloud-auth pattern.
+func TestScannerScan_Unconfigured_Returns503(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/scanner/scan", bearer, nil)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when scanner unconfigured, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestIngesterIngest_Unconfigured_Returns503 mirrors the above for the ingest
+// trigger.
+func TestIngesterIngest_Unconfigured_Returns503(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/ingester/ingest", bearer, nil)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when ingester unconfigured, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestScannerScan_Configured_TriggersAndReturnsStarted verifies that when a
+// ScanNowFunc is wired, the endpoint returns {started: true} and actually
+// invokes the function (on a detached goroutine). The test router wires nil by
+// default; we mutate the Admin handler's field directly (in-package) — the
+// registered route reads it at call time off the same *AdminHandler pointer.
+func TestScannerScan_Configured_TriggersAndReturnsStarted(t *testing.T) {
+	triggered := make(chan struct{}, 1)
+	rt := newJWTTestRouter(t)
+	rt.handlers.Admin.scanNow = func(context.Context) {
+		triggered <- struct{}{}
+	}
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/scanner/scan", bearer, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	decodeJSON(t, rr, &resp)
+	if resp["started"] != true {
+		t.Errorf("expected started=true, got %v", resp["started"])
+	}
+	select {
+	case <-triggered:
+		// the wired func ran
+	case <-time.After(2 * time.Second):
+		t.Fatal("ScanNowFunc was not invoked")
+	}
+}
+
+// TestScannerScan_NonAdmin_Forbidden proves the admin gate applies.
+func TestScannerScan_NonAdmin_Forbidden(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	seedUserWithRole(t, rt, "member-1", "member@example.com", auth.RoleMember)
+	pair, err := rt.security.AuthMgr.Issue("member-1", "member@example.com", auth.RoleMember)
+	if err != nil {
+		t.Fatalf("issue member jwt: %v", err)
+	}
+	bearer := "Bearer " + pair.AccessToken
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/scanner/scan", bearer, nil)
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for non-admin, got %d (body: %s)", rr.Code, rr.Body.String())
 	}

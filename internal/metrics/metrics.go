@@ -160,6 +160,18 @@ var (
 		},
 		[]string{"reason"},
 	)
+	auditSpilledTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pad_audit_spilled_total",
+		Help: "Audit events diverted to the on-disk spill queue because the in-memory pool was full. A reaper drains these back into the DB pool when capacity returns.",
+	})
+	auditSpillReplayedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pad_audit_spill_replayed_total",
+		Help: "Audit events drained from the on-disk spill queue and re-enqueued to the DB pool.",
+	})
+	auditSpillDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pad_audit_spill_dropped_total",
+		Help: "Audit events dropped because the on-disk spill queue was at its size cap — only happens under sustained overload beyond the spill capacity.",
+	})
 	panicRecoveredTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_panics_total",
@@ -188,6 +200,26 @@ var (
 		},
 		[]string{"provider", "model"},
 	)
+	// Per-tenant observability: who is driving AI spend? Labelled by user+org so
+	// on-call can see which tenant dominates cost/load — the deep-dive's biggest
+	// observability gap (every other metric was per-instance or global).
+	aiUsageCostTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_ai_usage_estimated_cost_total",
+			Help: "Estimated USD cost of AI usage attributed to the calling user/org. Lets on-call see which tenant drives spend without querying the usage_metrics table.",
+		},
+		[]string{"user_id", "org_id"},
+	)
+	// Queue depths: surface backlog growth (bulk import, audit overflow) so it's
+	// visible before it becomes a problem. Gauges (Set on each change/tick).
+	blobCleanerPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "pad_blob_cleaner_pending",
+		Help: "Deferred blob-cleanup jobs waiting in the cleaner's pending heap. Sustained growth under bulk import/migration signals the worker pool can't keep up.",
+	})
+	auditSpillDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "pad_audit_spill_depth",
+		Help: "Audit events currently on the on-disk spill queue (overflow past the in-memory pool). Non-zero means the DB sink fell behind; pair with pad_audit_spill_replayed_total to confirm recovery.",
+	})
 )
 
 // registry is process-local. Tests are hermetic (no leftover series between
@@ -218,10 +250,16 @@ var registry = func() *prometheus.Registry {
 		blobOpDuration,
 		blobContentMissing,
 		auditDroppedTotal,
+		auditSpilledTotal,
+		auditSpillReplayedTotal,
+		auditSpillDroppedTotal,
 		panicRecoveredTotal,
 		errorsReportedTotal,
 		usageDroppedTotal,
 		aiPricingFallbackTotal,
+		aiUsageCostTotal,
+		blobCleanerPending,
+		auditSpillDepth,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -380,6 +418,80 @@ func AuditDroppedCount(reason string) float64 {
 		return 0
 	}
 	return m.Counter.GetValue()
+}
+
+// RecordAuditSpilled bumps pad_audit_spilled_total — an event went to the
+// on-disk spill queue because the in-memory pool was full.
+func RecordAuditSpilled() {
+	auditSpilledTotal.Inc()
+}
+
+// RecordAuditSpillReplayed bumps pad_audit_spill_replayed_total — a spilled
+// event was drained back into the DB pool.
+func RecordAuditSpillReplayed() {
+	auditSpillReplayedTotal.Inc()
+}
+
+// RecordAuditSpillDropped bumps pad_audit_spill_dropped_total — the spill
+// queue was at capacity and could not absorb the event.
+func RecordAuditSpillDropped() {
+	auditSpillDroppedTotal.Inc()
+}
+
+// AuditSpillDroppedCount returns the current pad_audit_spill_dropped_total
+// value. Exposed for tests; safe for production use.
+func AuditSpillDroppedCount() float64 {
+	m := &dto.Metric{}
+	if err := auditSpillDroppedTotal.Write(m); err != nil {
+		return 0
+	}
+	if m.Counter == nil {
+		return 0
+	}
+	return m.Counter.GetValue()
+}
+
+// AuditSpilledCount returns the current pad_audit_spilled_total value.
+// Exposed for tests; safe for production use.
+func AuditSpilledCount() float64 {
+	m := &dto.Metric{}
+	if err := auditSpilledTotal.Write(m); err != nil {
+		return 0
+	}
+	if m.Counter == nil {
+		return 0
+	}
+	return m.Counter.GetValue()
+}
+
+// RecordAIUsageCost attributes estimated AI spend (USD) to the calling user/org
+// so on-call can see per-tenant cost without querying the usage_metrics table.
+// Empty user/org is allowed (local/unauth) — it aggregates under the empty label.
+func RecordAIUsageCost(userID, orgID string, cost float64) {
+	aiUsageCostTotal.WithLabelValues(userID, orgID).Add(cost)
+}
+
+// SetBlobCleanerPending sets the blob-cleaner pending-heap depth gauge.
+func SetBlobCleanerPending(n int) {
+	blobCleanerPending.Set(float64(n))
+}
+
+// SetAuditSpillDepth sets the on-disk audit spill queue depth gauge.
+func SetAuditSpillDepth(n int) {
+	auditSpillDepth.Set(float64(n))
+}
+
+// AuditSpillDepthCount returns the current pad_audit_spill_depth value.
+// Exposed for tests; safe for production use.
+func AuditSpillDepthCount() float64 {
+	m := &dto.Metric{}
+	if err := auditSpillDepth.Write(m); err != nil {
+		return 0
+	}
+	if m.Gauge == nil {
+		return 0
+	}
+	return m.Gauge.GetValue()
 }
 
 // RecordPanic bumps the panics_total counter for a recovered panic at the given

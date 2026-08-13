@@ -141,4 +141,48 @@ func TestSqlInjectionRiskRule(t *testing.T) {
 			t.Fatalf("expected 1 finding for PascalCase Sql key, got %d", len(got))
 		}
 	})
+
+	// An internal counter chain (SET X TO %Counter% + 1, Counter internal) must
+	// NOT escalate to Error — only variables tracing to an untrusted source do.
+	// The old varTaintedByUntrusted treated any %ref% in a SET as tainted.
+	t.Run("internal counter variable stays at Warning", func(t *testing.T) {
+		counter := makeBlock("c1", "Set counter", models.BlockTypeAction, "SetVariable.Set", 0)
+		counter.SubflowID = "sf1"
+		counter.Properties = map[string]string{"_output": "Counter", "_value": "0"}
+		setX := makeBlock("c2", "Set X", models.BlockTypeAction, "SetVariable.Set", 1)
+		setX.SubflowID = "sf1"
+		setX.Properties = map[string]string{"_output": "X", "_value": "%Counter% + 1"}
+		sql := makeBlock("c3", "Execute query", models.BlockTypeAction, "Database.ExecuteSql", 2)
+		sql.SubflowID = "sf1"
+		sql.Properties = map[string]string{"sql": `SELECT * FROM t WHERE id = %X%`}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*counter, *setX, *sql}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(sql, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding, got %d", len(got))
+		}
+		if got[0].Severity == models.SeverityError {
+			t.Errorf("internal counter variable escalated to Error (should stay Warning); finding: %+v", got[0])
+		}
+	})
+
+	// A variable written by an HTTP action IS untrusted → the SQL finding
+	// escalates to Error (confirmed taint path).
+	t.Run("HTTP-sourced variable escalates to Error", func(t *testing.T) {
+		http := makeBlock("h1", "Invoke service", models.BlockTypeAction, "HTTPClient.InvokeService", 0)
+		http.SubflowID = "sf1"
+		http.Properties = map[string]string{"_output": "ReqData"}
+		sql := makeBlock("h2", "Execute query", models.BlockTypeAction, "Database.ExecuteSql", 1)
+		sql.SubflowID = "sf1"
+		sql.Properties = map[string]string{"sql": `SELECT * FROM t WHERE name = '%ReqData%'`}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*http, *sql}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(sql, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 finding, got %d", len(got))
+		}
+		if got[0].Severity != models.SeverityError {
+			t.Errorf("HTTP-sourced variable should escalate to Error, got %v; finding: %+v", got[0].Severity, got[0])
+		}
+	})
 }

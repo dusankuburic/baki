@@ -5,6 +5,7 @@ import {useEditorStore} from './editorStore'
 import {useSearchStore} from './searchStore'
 import {useAnalysisStore} from './analysisStore'
 import {useChatStore} from './chatStore'
+import {usePresenceStore} from './presenceStore'
 import {findBlockInDoc, findSubflowIdByBlock, findAncestorIds, findLabelBlock} from '@/lib/tree'
 import {toggleSetMember} from '@/lib/collections'
 
@@ -167,8 +168,17 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   selectBlock: (blockId, skipHistory = false) => {
     const state = get()
-    if (!blockId || !state.document) {
+    if (!state.document) {
       set({selectedBlockId: blockId})
+      return // no flow loaded → no collaboration to broadcast
+    }
+    if (!blockId) {
+      // Deselect with a flow loaded: broadcast so collaborators stop seeing us
+      // on the previous block. This previously fell through the combined
+      // `!blockId || !document` early return and never reached the broadcast,
+      // so a deselect never propagated — others kept showing our stale selection.
+      set({selectedBlockId: null})
+      usePresenceStore.getState().updateSelectedBlock('')
       return
     }
     const subflowId = findSubflowIdByBlock(state.document, blockId)
@@ -207,6 +217,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       expandedBlockIds: nextExpanded,
     })
 
+    usePresenceStore.getState().updateSelectedBlock(blockId)
     useEditorStore.getState().openInGroup(subflowId)
   },
 

@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +19,61 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// login posts to /api/auth/login and returns the decoded response body.
+// TestRegister_DisabledSignUp_Returns403 verifies the PAD_FEATURE_DISABLE_SIGNUP
+// flag blocks self-registration with a clear 403 while existing users still log
+// in normally. The flag is flipped on the test router's SecurityConfig directly.
+func TestRegister_DisabledSignUp_Returns403(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	rt.security.Features.DisableSignUp = true
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email":    "newuser@example.com",
+		"password": "StrongPass123!",
+	})
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 when signup disabled, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRegister_EnabledByDefault_Returns200 verifies registration works when the
+// flag is off (the default) — a regression guard against accidentally inverting
+// the gate.
+func TestRegister_EnabledByDefault_Returns200Or409(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	// Default: DisableSignUp == false.
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
+		"email":    "fresh@example.com",
+		"password": "StrongPass123!",
+	})
+	if rr.Code != http.StatusOK && rr.Code != http.StatusConflict {
+		t.Errorf("expected 200 (or 409 if already exists), got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestFeaturesEndpoint_ReflectsFlag verifies the public /api/system/features
+// endpoint returns the active flag state so the login page can hide register.
+func TestFeaturesEndpoint_ReflectsFlag(t *testing.T) {
+	rt := newJWTTestRouter(t)
+
+	// Default: disableSignUp false.
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/system/features", "", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var flags map[string]bool
+	decodeJSON(t, rr, &flags)
+	if flags["disableSignUp"] != false {
+		t.Errorf("expected disableSignUp=false by default, got %v", flags["disableSignUp"])
+	}
+
+	// Flip the flag and re-query.
+	rt.security.Features.DisableSignUp = true
+	rr2 := doRequestWithAuth(t, rt, http.MethodGet, "/api/system/features", "", nil)
+	decodeJSON(t, rr2, &flags)
+	if flags["disableSignUp"] != true {
+		t.Errorf("expected disableSignUp=true after flip, got %v", flags["disableSignUp"])
+	}
+}
 func login(t *testing.T, rt *Router, email, password string) map[string]any {
 	t.Helper()
 
@@ -222,6 +279,25 @@ func TestHandleAuthRefresh_InvalidToken_Returns401(t *testing.T) {
 	checkStatus(t, rr, http.StatusUnauthorized)
 }
 
+// TestHandleAuthRefresh_NilTokenStoreInJWTMode_FailsClosed verifies that when
+// JWT is enabled but no refresh-token store is wired (a misconfiguration — e.g.
+// a backend that doesn't implement RefreshTokenStore), refresh is rejected
+// rather than silently skipping replay/rotation protection. A stolen refresh
+// token must NOT be replayable indefinitely in that state.
+func TestHandleAuthRefresh_NilTokenStoreInJWTMode_FailsClosed(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	resp := login(t, rt, "user1@example.com", "Password123!")
+	refreshToken, _ := resp["refreshToken"].(string)
+	// Simulate the misconfiguration AFTER login (so the token was issued), by
+	// dropping the store the handler consults for replay detection.
+	rt.handlers.Auth.tokenStore = nil
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/refresh", "", map[string]any{
+		"refreshToken": refreshToken,
+	})
+	checkStatus(t, rr, http.StatusUnauthorized)
+}
+
 func TestHandleAuthMe_ValidJWT_ReturnsClaims(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	resp := login(t, rt, "alice@example.com", "Password123!")
@@ -409,5 +485,58 @@ func TestLocalStorage_SaveFlow_VersionConflict(t *testing.T) {
 	err := rt.security.Backend.SaveFlow(context.Background(), stale)
 	if !errors.Is(err, interfaces.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict for stale version, got %v", err)
+	}
+}
+
+// TestAuthRefreshCookie_SetOnLoginAndReadOnRefresh verifies the HttpOnly refresh
+// cookie infrastructure (phase 1 of removing the refresh token from XSS-readable
+// localStorage): login sets the pad_refresh cookie, and refresh accepts it
+// (cookie-first) even with an empty body, rotating to a fresh cookie.
+func TestAuthRefreshCookie_SetOnLoginAndReadOnRefresh(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	login(t, rt, "cookie@example.com", "Password123!") // register + verify + seed
+
+	// Raw login POST to capture the Set-Cookie header (the login() helper only
+	// returns the decoded body).
+	body, _ := json.Marshal(map[string]string{"email": "cookie@example.com", "password": "Password123!"})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+	checkStatus(t, rr, http.StatusOK)
+
+	var refreshCookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == refreshCookieName {
+			refreshCookie = c
+		}
+	}
+	if refreshCookie == nil || refreshCookie.Value == "" {
+		t.Fatal("login did not set the pad_refresh cookie")
+	}
+	if !refreshCookie.HttpOnly {
+		t.Error("pad_refresh cookie must be HttpOnly (XSS must not read it)")
+	}
+
+	// Refresh using ONLY the cookie (empty body) — the cookie-first path.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", bytes.NewReader([]byte(`{}`)))
+	req2.AddCookie(refreshCookie)
+	rr2 := httptest.NewRecorder()
+	rt.ServeHTTP(rr2, req2)
+	checkStatus(t, rr2, http.StatusOK)
+	var refreshed map[string]any
+	decodeJSON(t, rr2, &refreshed)
+	if refreshed["accessToken"] == nil {
+		t.Error("expected accessToken from cookie-based refresh, got none")
+	}
+
+	// The rotated cookie is set on the refresh response too.
+	var rotated *http.Cookie
+	for _, c := range rr2.Result().Cookies() {
+		if c.Name == refreshCookieName {
+			rotated = c
+		}
+	}
+	if rotated == nil || rotated.Value == "" {
+		t.Error("refresh did not rotate the pad_refresh cookie")
 	}
 }

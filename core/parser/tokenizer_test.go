@@ -47,6 +47,40 @@ func TestTokenize_SingleSubflow(t *testing.T) {
 	}
 }
 
+// TestTokenize_SpacedRegionSyntax verifies the spaced region form
+// (`# Region "..."` / `# EndRegion`) is classified as a subflow boundary, not a
+// comment. reComment's "#\s+.*" alternative matches these lines, so without the
+// region guard in classifyComment the subflow start/end is stolen and the block
+// tree is corrupted with spurious unclosed-block errors.
+func TestTokenize_SpacedRegionSyntax(t *testing.T) {
+	input := `# Region "Main"
+    Display.ShowMessageBox Message: 'hi'
+# EndRegion`
+
+	tokens := Tokenize(input)
+
+	expected := []struct {
+		kind    TokenKind
+		rawType string
+	}{
+		{TokSubflowStart, "Region"},
+		{TokAction, "Display.ShowMessageBox"},
+		{TokSubflowEnd, "EndRegion"},
+	}
+
+	if len(tokens) != len(expected) {
+		t.Fatalf("expected %d tokens, got %d (%+v)", len(expected), len(tokens), tokens)
+	}
+	for i, exp := range expected {
+		if tokens[i].Kind != exp.kind {
+			t.Errorf("token %d: expected kind %d, got %d (rawType %q)", i, exp.kind, tokens[i].Kind, tokens[i].RawType)
+		}
+		if tokens[i].RawType != exp.rawType {
+			t.Errorf("token %d: expected rawType %q, got %q", i, exp.rawType, tokens[i].RawType)
+		}
+	}
+}
+
 func TestTokenize_Loops(t *testing.T) {
 	input := `#Region "Main"
     LOOP FOREACH Item IN %List%

@@ -151,6 +151,10 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 		EstimatedCost:    inputCost + outputCost,
 		CreatedAt:        time.Now(),
 	}
+	// Attribute the spend to the caller's user+org so on-call can see per-tenant
+	// cost without querying the usage_metrics table (the deep-dive's biggest
+	// observability gap — every other metric was per-instance or global).
+	metrics.RecordAIUsageCost(p.scope, orgID, inputCost+outputCost)
 
 	// Asynchronously record the usage so it doesn't block the caller.
 	//

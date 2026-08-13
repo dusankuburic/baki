@@ -61,7 +61,10 @@ func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("policy name is required"), http.StatusBadRequest)
 		return
 	}
-	if !requireOrgMember(w, r, h.security, p.OrgID) {
+	// Saving a policy is a WRITE to the org-wide CI gate (SavePolicy upserts on
+	// id+org_id), so it must require admin — a viewer/guest must not be able to
+	// rewrite or overwrite the org's governance rules.
+	if !requireOrgAdmin(w, r, h.security, p.OrgID) {
 		return
 	}
 	if err := h.backend.SavePolicy(r.Context(), &p); err != nil {
@@ -126,7 +129,9 @@ func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Requ
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if !requireOrgMember(w, r, h.security, req.OrgID) {
+	// Deleting a policy removes an org-wide CI gate; restrict to admins so a
+	// low-privileged member can't disable the org's governance gate.
+	if !requireOrgAdmin(w, r, h.security, req.OrgID) {
 		return
 	}
 	if err := h.backend.DeletePolicy(r.Context(), req.OrgID, req.ID); err != nil {

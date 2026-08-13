@@ -68,6 +68,16 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		}
 		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl)
 
+		// Per-user write throttle: a single bucket per authenticated user capping
+		// their total write volume across endpoints (Track 5). Cloud mode only —
+		// local mode is single-user, so it would self-DoS (all traffic → one
+		// "local" identity). Stored on the Router so the post-jwtAuth chi
+		// middleware reads it at request time; appended to rateLimiters so its
+		// Stop() runs on shutdown alongside the per-IP limiters.
+		perUserRl := newRL(cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst).SetGroup("peruser")
+		router.perUserLimiter = perUserRl
+		rateLimiters = append(rateLimiters, perUserRl)
+
 		// rateLimitersByGroup maps the rateLimitGroup classifier to its limiter
 		// so the per-request dispatch is a single lookup.
 		rateLimitersByGroup := map[string]*middleware.RateLimiter{

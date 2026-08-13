@@ -245,3 +245,31 @@ func TestCloudConverter_ExtractsSubscriptedAndDottedVariables(t *testing.T) {
 		}
 	}
 }
+
+// TestCloudConverter_DeepNestingDoesNotOverflow verifies toBlock's depth cap: a
+// cloud action tree nested beyond maxConvertDepth must truncate instead of
+// recursing until the goroutine stack overflows. A hostile ~50k-level Dataverse
+// response is only ~3 MB but overflows a 1 GB stack via unbounded recursion,
+// which (before the per-flow recover) took down the whole ingest sweep.
+func TestCloudConverter_DeepNestingDoesNotOverflow(t *testing.T) {
+	depth := maxConvertDepth + 200
+	node := cloudAction{Type: "Display.ShowMessageBox"}
+	for i := 0; i < depth; i++ {
+		node = cloudAction{Type: "Group", Actions: []cloudAction{node}}
+	}
+	def := cloudDefinition{Name: "Deep", Actions: []cloudAction{node}}
+	raw, err := json.Marshal(def)
+	if err != nil {
+		t.Fatalf("marshal deep tree: %v", err)
+	}
+
+	c := NewCloudConverter()
+	// Must not panic / overflow; the tree is truncated at the depth cap.
+	doc, err := c.Convert("Deep.txt", raw)
+	if err != nil {
+		t.Fatalf("convert deep tree: %v", err)
+	}
+	if doc == nil {
+		t.Fatal("expected a document, got nil")
+	}
+}

@@ -27,6 +27,19 @@ func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBa
 	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security, email: email}
 }
 
+// knowledgeBackendAvailable gates the Knowledge Base routes on a real storage
+// backend. In local/desktop mode the backend is nil (the feature is cloud-only),
+// and the filesystem backend's knowledge methods are unreachable stubs — so
+// without this guard the handlers nil-panic on h.backend. Returns 503 (mirrors
+// the policy handlers' policyAvailable) rather than crashing the request.
+func (h *OrgHandler) knowledgeBackendAvailable(w http.ResponseWriter) bool {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("knowledge base requires a storage backend (cloud mode)"), http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
 // requireMember verifies the caller is a member of the org identified by the
 // "id" URL parameter. On success it returns the org; on failure it writes the
 // appropriate error response and returns nil (the caller must bail out).
@@ -78,6 +91,9 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
 		return
 	}
+	if !h.knowledgeBackendAvailable(w) {
+		return
+	}
 	if h.requireMember(w, r) == nil {
 		return
 	}
@@ -99,6 +115,9 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
 	if h.knowledge == nil {
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
+		return
+	}
+	if !h.knowledgeBackendAvailable(w) {
 		return
 	}
 	if h.requireAdmin(w, r) == nil {
@@ -126,6 +145,13 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
+	if h.knowledge == nil {
+		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
+		return
+	}
+	if !h.knowledgeBackendAvailable(w) {
+		return
+	}
 	docID := chi.URLParam(r, "docId")
 	if h.requireAdmin(w, r) == nil {
 		return

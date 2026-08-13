@@ -50,13 +50,17 @@ func TestChunkText_SplitsLongParagraphsAtSentences(t *testing.T) {
 
 func TestChunkText_SplitsByRunesNotBytes(t *testing.T) {
 	in := strings.Repeat("☃", 25)
-	chunks := chunkText(in, 10)
+	size := 10
+	chunks := chunkText(in, size)
 	if len(chunks) < 2 {
 		t.Errorf("want multiple chunks for 25 snowmen with size 10, got %d", len(chunks))
 	}
+	// Overlap (15% of size) + space delimiter can push a chunk slightly past
+	// the target size. Allow size + overlap + 1 (delimiter).
+	maxAllowed := size + size*15/100 + 1
 	for i, c := range chunks {
-		if n := len([]rune(c)); n > 10 {
-			t.Errorf("chunk %d exceeds size in runes: %d", i, n)
+		if n := len([]rune(c)); n > maxAllowed {
+			t.Errorf("chunk %d exceeds max allowed (%d): %d", i, maxAllowed, n)
 		}
 	}
 }

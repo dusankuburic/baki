@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState, lazy, Suspense} from 'react'
 import {ErrorBoundary, ToastProvider, ConfirmProvider, useToast} from './components/shared'
+import SyncDropNotifier from './components/shared/SyncDropNotifier'
 import OfflineIndicator from './components/shared/OfflineIndicator'
 import CommandPalette from './components/search/CommandPalette'
 import GlobalSearchOverlay from './components/search/GlobalSearchOverlay'
@@ -13,6 +14,7 @@ import {useAuthStore} from './stores/authStore'
 import {useFlowStore} from './stores/flowStore'
 import {useSearchStore} from './stores/searchStore'
 import {usePresenceStore} from './stores/presenceStore'
+import {startGovernancePolling, stopGovernancePolling} from './stores/governanceStore'
 import {useTheme} from './hooks/useTheme'
 import {useTauriMenuEvents} from './hooks/useTauriMenuEvents'
 import {useAutoAnalyze} from './hooks/useAutoAnalyze'
@@ -30,6 +32,7 @@ import TitleBar from './components/layout/TitleBar'
 import Sidebar from './components/layout/Sidebar'
 import MainPane from './components/layout/MainPane'
 import InspectorPanel from './components/layout/InspectorPanel'
+import MobileDrawer from './components/layout/MobileDrawer'
 import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
 import WelcomeModal from './components/onboarding/WelcomeModal'
@@ -111,6 +114,17 @@ function AppInner() {
   useSettingsPersistence(isAuthenticated)
   useGlobalErrorHandler()
   useFlowChangeSync()
+
+  // Governance-alerts bell: poll the unread count while authenticated, stop on
+  // logout (the store reset also stops polling as a safety net).
+  useEffect(() => {
+    if (!isAuthenticated) {
+      stopGovernancePolling()
+      return
+    }
+    startGovernancePolling()
+    return () => stopGovernancePolling()
+  }, [isAuthenticated])
 
   useAppEvents({openDocument})
 
@@ -210,25 +224,19 @@ function AppInner() {
         </div>
         {/* Mobile sidebar drawer (overlay) */}
         {!isDesktop && !sidebarCollapsed && (
-          <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-label="Sidebar">
-            <button className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-sm" onClick={toggleSidebar} aria-label="Close sidebar" />
-            <div className="relative w-72 max-w-[80vw] bg-surface-1 border-r border-border-subtle overflow-hidden" role="navigation">
-              <ErrorBoundary fallbackMessage="Sidebar error">
-                <Sidebar />
-              </ErrorBoundary>
-            </div>
-          </div>
+          <MobileDrawer side="left" label="Sidebar" onClose={toggleSidebar}>
+            <ErrorBoundary fallbackMessage="Sidebar error">
+              <Sidebar />
+            </ErrorBoundary>
+          </MobileDrawer>
         )}
         {/* Mobile inspector drawer (overlay, right-aligned) */}
         {!isDesktop && !inspectorCollapsed && (
-          <div className="fixed inset-0 z-50 flex justify-end md:hidden" role="dialog" aria-label="Inspector">
-            <button className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-sm" onClick={toggleInspector} aria-label="Close inspector" />
-            <div className="relative w-80 max-w-[80vw] bg-surface-1 border-l border-border-subtle overflow-hidden" role="complementary">
-              <ErrorBoundary fallbackMessage="Inspector error">
-                <InspectorPanel />
-              </ErrorBoundary>
-            </div>
-          </div>
+          <MobileDrawer side="right" label="Inspector" onClose={toggleInspector}>
+            <ErrorBoundary fallbackMessage="Inspector error">
+              <InspectorPanel />
+            </ErrorBoundary>
+          </MobileDrawer>
         )}
         <StatusBar />
         <OfflineIndicator />
@@ -265,6 +273,7 @@ export default function App() {
       <ToastProvider>
         <ConfirmProvider>
           <AppInner />
+          <SyncDropNotifier />
         </ConfirmProvider>
       </ToastProvider>
     </ErrorBoundary>

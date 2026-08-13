@@ -126,8 +126,12 @@ func (r *statusRecorder) WriteHeader(code int) {
 	if !r.wroteHeader {
 		r.status = code
 		r.wroteHeader = true
+		r.ResponseWriter.WriteHeader(code)
 	}
-	r.ResponseWriter.WriteHeader(code)
+	// A duplicate WriteHeader is silently dropped: net/http would only log a
+	// "superfluous response.WriteHeader call" and the second status never reaches
+	// the client anyway. Freezing on the first status also keeps the RLS
+	// commit/rollback decision based on the status the client actually received.
 }
 
 func (r *statusRecorder) Write(b []byte) (int, error) {

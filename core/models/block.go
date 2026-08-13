@@ -27,18 +27,23 @@ type BlockToken struct {
 }
 
 type Block struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Type       BlockType         `json:"type"`
-	RawType    string            `json:"rawType"`
-	Indent     int               `json:"indent"`
-	LineNumber int               `json:"lineNumber"`
-	Children   []Block           `json:"children"`
-	Properties map[string]string `json:"properties"`
-	Variables  []string          `json:"variables"`
-	Tokens     []BlockToken      `json:"tokens,omitempty"`
-	ParentID   string            `json:"parentId,omitempty"`
-	SubflowID  string            `json:"subflowId"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Type       BlockType `json:"type"`
+	RawType    string    `json:"rawType"`
+	Indent     int       `json:"indent"`
+	LineNumber int       `json:"lineNumber"`
+	// EndLineNumber is the last physical line the block spans (0 = same as
+	// LineNumber). Non-zero only for leaf actions whose value is a multi-line
+	// triple-quoted literal. Autofixers consult it via blockEndLine to place
+	// append/wrap/remove patches after the literal rather than inside it.
+	EndLineNumber int               `json:"endLineNumber,omitempty"`
+	Children      []Block           `json:"children"`
+	Properties    map[string]string `json:"properties"`
+	Variables     []string          `json:"variables"`
+	Tokens        []BlockToken      `json:"tokens,omitempty"`
+	ParentID      string            `json:"parentId,omitempty"`
+	SubflowID     string            `json:"subflowId"`
 
 	ChildPtrs []*Block `json:"-"`
 }

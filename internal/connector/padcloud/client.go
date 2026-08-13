@@ -78,7 +78,12 @@ func retryAfter(resp *http.Response, attempt int) time.Duration {
 	}
 	// Exponential backoff with full jitter: 1s, 2s, 4s (capped at 30s).
 	base := time.Second << attempt
-	if base > 30*time.Second {
+	// Cap at 30s AND guard against overflow: time.Second<<attempt wraps to a
+	// negative Duration for attempt >= 63 (int64 nanoseconds), which the
+	// upper-bound check alone misses — rand.Int63n then panics on a non-positive
+	// argument. Unreachable while maxRetries is small, but defensive against a
+	// future larger/configurable cap.
+	if base > 30*time.Second || base <= 0 {
 		base = 30 * time.Second
 	}
 	return time.Duration(rand.Int63n(int64(base) + 1)) // #nosec G404 -- backoff jitter, not security-sensitive

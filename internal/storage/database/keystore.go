@@ -29,6 +29,16 @@ const keystoreTimeout = 5 * time.Second
 // rotating either then no longer affects the other. Rotating the encryption key
 // renders previously stored ciphertext undecryptable (Get reports the key as not
 // found, and the provider must be re-authenticated).
+//
+// RLS note: provider_keys has NO row-level-security policies, deliberately. Like
+// the other auth-infra tables (refresh_tokens, token_blacklist, api_tokens), it
+// is keyed by user_id and every query here carries an explicit `WHERE user_id =
+// $1`, so access is bounded by the query itself rather than the session var. The
+// AES-GCM associated data (keyAAD) additionally binds each ciphertext to its
+// (scope, provider) row, so a row-swap confused-deputy can't reuse a stolen
+// ciphertext under a different identity. If RLS is ever added to provider_keys,
+// these methods must switch to BeginRLS (and the background retention purge in
+// postgres_retention.go would need a non-request principal).
 type EncryptedKeyStore struct {
 	db   *sql.DB
 	aead cipher.AEAD

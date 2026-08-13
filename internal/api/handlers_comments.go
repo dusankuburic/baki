@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,8 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/analyzer"
+	"pad-core/logger"
 )
 
 // ── Finding Comments ──────────────────────────────────────────────
@@ -81,7 +84,96 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+
+	// Best-effort comment notification: if the finding has an assignee who is
+	// NOT the commenter, email them so they discover the comment asynchronously.
+	// Detached so the response isn't delayed by SMTP.
+	go h.notifyFindingComment(req.FlowID, req.FindingKey, userID, req.Body)
+
 	render.JSON(w, comment)
+}
+
+// notifyFindingComment emails the finding's assignee when someone else comments.
+// Best-effort: any error (no assignee, user not found, SMTP down) is logged and
+// swallowed — the comment write already succeeded.
+func (h *AnalysisHandler) notifyFindingComment(flowID, findingKey, commenterID, body string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("finding-comment notification panicked", "err", r)
+		}
+	}()
+	if h.email == nil || h.backend == nil {
+		return
+	}
+	// Bound the detached work so a slow DB/SMTP can't keep the process (or a DB
+	// connection) alive indefinitely on shutdown. Mirrors the context.WithTimeout
+	// pattern used by the other detached background handlers (audit, providers).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Find the assignee for this finding.
+	assigneeID := ""
+	if statuses, err := h.backend.ListFindingStatuses(ctx, flowID); err == nil {
+		for _, st := range statuses {
+			if st.FindingKey == findingKey {
+				assigneeID = st.AssigneeID
+				break
+			}
+		}
+	}
+	if assigneeID == "" || assigneeID == commenterID {
+		return // no assignee, or the commenter IS the assignee
+	}
+
+	assignee, err := h.backend.LoadUserByID(ctx, assigneeID)
+	if err != nil || assignee == nil || assignee.Email == "" {
+		return
+	}
+	assigneeName := assignee.DisplayName
+	if assigneeName == "" {
+		assigneeName = assignee.Email
+	}
+
+	commenterName := "A reviewer"
+	if u, err := h.backend.LoadUserByID(ctx, commenterID); err == nil && u != nil {
+		if u.DisplayName != "" {
+			commenterName = u.DisplayName
+		} else if u.Email != "" {
+			commenterName = u.Email
+		}
+	}
+
+	// Use the rule name (extracted from the findingKey prefix) as the title.
+	findingTitle := findingKey
+	ruleID := findingKey
+	if idx := indexByte(findingKey, ':'); idx > 0 {
+		ruleID = findingKey[:idx]
+	}
+	for _, rule := range analyzer.AllRules() {
+		if rule.ID() == ruleID {
+			findingTitle = rule.Name()
+			break
+		}
+	}
+
+	flowName := ""
+	if doc, err := h.flowSvc.GetAuthorized(ctx, flowID, assigneeID, "viewer"); err == nil && doc != nil {
+		flowName = doc.Name
+	}
+
+	if err := h.email.SendFindingComment(ctx, assignee.Email, assigneeName, commenterName, flowName, findingTitle, body); err != nil {
+		logger.Warn("failed to send finding-comment notification", "assignee", assigneeID, "error", err)
+	}
+}
+
+// indexByte returns the index of the first occurrence of b in s, or -1.
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +274,11 @@ func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer"); err != nil {
+	// Require editor (not viewer): share-token metadata (IDs, creator, expiry)
+	// is need-to-know for owners/editors managing links, not for read-only
+	// collaborators. create/revoke already require editor — list must too, so a
+	// viewer can't enumerate active share links on a flow.
+	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}

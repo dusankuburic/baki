@@ -1,4 +1,4 @@
-import {useState, useCallback, useRef} from 'react'
+import {useState, useCallback, useRef, useEffect} from 'react'
 import {writeClipboard} from '@/lib/clipboard'
 
 /**
@@ -11,6 +11,14 @@ export function useCopy(timeout = 2000): {
 } {
   const [copied, setCopied] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clear the feedback timer on unmount so setCopied(false) can't fire on a
+  // gone component (React 18 ignores it, but this keeps the cleanup contract).
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
 
   const copy = useCallback(
     (text: string) => {

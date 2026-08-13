@@ -2,9 +2,10 @@ import {useState, useCallback, useRef, useEffect} from 'react'
 import clsx from 'clsx'
 import {Search, X, ChevronRight, FileCode} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
-import {flowApi} from '@/api'
+import {flowApi, libraryApi} from '@/api'
 import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
 import {useListNavigation} from '@/hooks/useListNavigation'
+import {useDialogFocus} from '@/hooks/useDialogFocus'
 import {toggleSetMember} from '@/lib/collections'
 import {logger} from '@/lib/logger'
 import type {SearchResult, BlockType} from '@/types'
@@ -13,6 +14,8 @@ type GlobalSearchOverlayProps = {
   isOpen: boolean
   onClose: () => void
 }
+
+type Scope = 'this-flow' | 'all-flows'
 
 const FILTER_TYPES: {type: BlockType; label: string}[] = [
   {type: 'ACTION', label: 'Action'},
@@ -29,19 +32,34 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
   const [results, setResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [activeTypes, setActiveTypes] = useState<Set<BlockType>>(new Set())
+  const [scope, setScope] = useState<Scope>('this-flow')
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  useDialogFocus({isOpen, onClose, closeOnEsc: false, containerRef: overlayRef})
   const document = useFlowStore(s => s.document)
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
+  const setDocument = useFlowStore(s => s.setDocument)
 
   const handleSelect = useCallback(
-    (result: SearchResult) => {
+    async (result: SearchResult) => {
+      // Cross-flow: load the result's flow before selecting the block. The
+      // all-flows search stamps each hit with its source flowId; when it differs
+      // from the open document we fetch + open it so the block selection lands.
+      if (scope === 'all-flows' && result.flowId && result.flowId !== document?.id) {
+        try {
+          const doc = await libraryApi.getContent(result.flowId)
+          if (doc) setDocument(doc)
+        } catch (err) {
+          logger.warn('Cross-flow search: could not load flow', err)
+        }
+      }
       selectBlock(result.blockId)
       selectSubflow(result.subflowId)
       onClose()
     },
-    [selectBlock, selectSubflow, onClose],
+    [scope, document, setDocument, selectBlock, selectSubflow, onClose],
   )
 
   const {activeIndex, setActiveIndex, handleKeyDown} = useListNavigation({
@@ -58,6 +76,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
       setResults([])
       setActiveIndex(0)
       setActiveTypes(new Set())
+      setScope('this-flow')
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [isOpen, setActiveIndex])
@@ -69,19 +88,25 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
   const searchReqIdRef = useRef(0)
   const handleSearch = useCallback(
     async (q: string, types: Set<BlockType>) => {
-      if (!document || !q) {
+      if (!q) {
+        setResults([])
+        return
+      }
+      // "This flow" needs an open document; "all flows" searches the library.
+      if (scope === 'this-flow' && !document) {
         setResults([])
         return
       }
       const reqId = ++searchReqIdRef.current
       setIsSearching(true)
       try {
-        const res = await flowApi.searchFlow(document.id, {
+        const query = {
           text: q,
           fuzzy: true,
           maxResults: 50,
           blockTypes: types.size > 0 ? Array.from(types) : undefined,
-        })
+        }
+        const res = scope === 'all-flows' ? await flowApi.searchLibrary(query) : await flowApi.searchFlow(document!.id, query)
         if (reqId !== searchReqIdRef.current) return
         setResults(res.results as SearchResult[])
         setActiveIndex(0)
@@ -92,7 +117,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         if (reqId === searchReqIdRef.current) setIsSearching(false)
       }
     },
-    [document, setActiveIndex],
+    [scope, document, setActiveIndex],
   )
 
   const {search: debouncedSearch} = useDebouncedSearch({
@@ -116,6 +141,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
     <div className="fixed inset-0 z-modal flex items-start justify-center pt-[15vh]" onClick={onClose}>
       <div className="absolute inset-0 bg-surface-overlay backdrop-blur-sm" />
       <div
+        ref={overlayRef}
         className="relative w-full max-w-[720px] bg-surface-1 border border-border-default rounded-xl shadow-2xl overflow-hidden animate-palette flex flex-col max-h-[70vh]"
         onClick={e => e.stopPropagation()}
       >
@@ -146,8 +172,27 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           </button>
         </div>
 
-        {/* Type filter chips */}
+        {/* Scope toggle + type filter chips */}
         <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border-subtle bg-surface-1 flex-wrap">
+          <div className="flex items-center rounded-lg border border-border-default overflow-hidden flex-shrink-0">
+            {(['this-flow', 'all-flows'] as Scope[]).map(s => (
+              <button
+                key={s}
+                onClick={() => {
+                  setScope(s)
+                  // Re-run the search against the new scope immediately so the
+                  // toggle feels responsive (don't wait for the next keystroke).
+                  if (query) handleSearch(query, activeTypes)
+                }}
+                className={clsx(
+                  'text-2xs font-semibold px-2.5 py-1 transition-colors',
+                  scope === s ? 'bg-brand-500 text-brand-foreground' : 'bg-transparent text-text-tertiary hover:text-text-secondary',
+                )}
+              >
+                {s === 'this-flow' ? 'This Flow' : 'All Flows'}
+              </button>
+            ))}
+          </div>
           <span className="text-2xs text-text-disabled uppercase tracking-wider mr-1 flex-shrink-0">Filter:</span>
           {FILTER_TYPES.map(({type, label}) => {
             const active = activeTypes.has(type)
@@ -182,29 +227,41 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
             <div className="space-y-0.5">
               {results.map((res, idx) => {
                 const subflow = document?.subflows.find(s => s.id === res.subflowId)
+                const prev = idx > 0 ? results[idx - 1] : undefined
+                // In all-flows mode, render a flow-name header when the source
+                // flow changes. SearchLibrary returns hits grouped consecutively
+                // by flow, so a flowId change marks a group boundary.
+                const showFlowHeader = scope === 'all-flows' && res.flowId && res.flowId !== prev?.flowId
                 return (
-                  <div
-                    key={`${res.blockId}-${idx}`}
-                    role="option"
-                    aria-selected={idx === activeIndex}
-                    data-active={idx === activeIndex}
-                    className={clsx(
-                      'group flex flex-col px-4 py-3 cursor-pointer rounded-lg transition-colors duration-fast border border-transparent',
-                      idx === activeIndex ? 'bg-surface-3 border-brand-500/20 shadow-sm' : 'hover:bg-surface-2',
+                  <div key={`${res.flowId ?? ''}-${res.blockId}-${idx}`}>
+                    {showFlowHeader && (
+                      <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 text-2xs font-bold uppercase tracking-wider text-brand-400">
+                        <FileCode size={11} />
+                        {res.flowName || res.flowId}
+                      </div>
                     )}
-                    onClick={() => handleSelect(res)}
-                    onMouseEnter={() => setActiveIndex(idx)}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <FileCode size={14} className="text-brand-400" />
-                      <span className="text-xs font-semibold text-text-secondary uppercase tracking-tight">
-                        {subflow?.name || 'Unknown Subflow'}
-                      </span>
-                      <ChevronRight size={12} className="text-text-disabled" />
-                      <span className="text-xs text-text-tertiary">{res.matchedField}</span>
-                    </div>
-                    <div className="text-sm text-text-primary font-medium mb-1">
-                      {highlightText(res.matchedText, res.highlights)}
+                    <div
+                      role="option"
+                      aria-selected={idx === activeIndex}
+                      data-active={idx === activeIndex}
+                      className={clsx(
+                        'group flex flex-col px-4 py-3 cursor-pointer rounded-lg transition-colors duration-fast border border-transparent',
+                        idx === activeIndex ? 'bg-surface-3 border-brand-500/20 shadow-sm' : 'hover:bg-surface-2',
+                      )}
+                      onClick={() => handleSelect(res)}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <FileCode size={14} className="text-brand-400" />
+                        <span className="text-xs font-semibold text-text-secondary uppercase tracking-tight">
+                          {subflow?.name || 'Unknown Subflow'}
+                        </span>
+                        <ChevronRight size={12} className="text-text-disabled" />
+                        <span className="text-xs text-text-tertiary">{res.matchedField}</span>
+                      </div>
+                      <div className="text-sm text-text-primary font-medium mb-1">
+                        {highlightText(res.matchedText, res.highlights)}
+                      </div>
                     </div>
                   </div>
                 )
@@ -213,12 +270,14 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           ) : query.length > 0 && !isSearching ? (
             <div className="py-12 text-center">
               <div className="text-sm text-text-tertiary">
-                No matches found for "{query}"{activeTypes.size > 0 && ' in selected types'}
+                No matches found for &quot;{query}&quot;{activeTypes.size > 0 && ' in selected types'}
               </div>
             </div>
           ) : (
             <div className="py-12 text-center text-text-disabled">
-              <div className="text-sm">Type to search across the entire flow...</div>
+              <div className="text-sm">
+                {scope === 'all-flows' ? 'Type to search across all your flows...' : 'Type to search across the entire flow...'}
+              </div>
               <div className="text-xs mt-1">Search properties, variables, and comments</div>
             </div>
           )}

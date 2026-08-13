@@ -195,7 +195,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         </div>
 
         {(error || ssoError || formError) && (
-          <div className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
+          <div role="alert" className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
             {error || ssoError || formError}
           </div>
         )}

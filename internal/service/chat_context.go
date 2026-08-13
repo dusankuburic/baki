@@ -112,6 +112,10 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 	}
 	genCache := s.chatCtxGenCache()
 	ctx := context.Background()
+	// Serialize the read-modify-write so two concurrent invalidations can't
+	// both read gen=N and both write N+1 (losing an increment → stale context).
+	s.chatCtxGenMu.Lock()
+	defer s.chatCtxGenMu.Unlock()
 	gen := uint64(0)
 	if v, ok := genCache.Get(ctx, flowID); ok {
 		gen = v.(uint64)
@@ -233,9 +237,21 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 		scrubbedDoc = doc
 	}
 
+	// Read the per-provider context token budget from settings instead of
+	// hardcoding 4000. Falls back to 4000 if unset/zero (the default in
+	// DefaultSettings matches, so this is backward-compatible).
+	tokenBudget := 4000
+	if s.settings != nil {
+		if appSettings := s.settings.Get(); appSettings != nil {
+			if pc, ok := appSettings.AI.Providers[provider.ID()]; ok && pc.ContextTokenBudget > 0 {
+				tokenBudget = pc.ContextTokenBudget
+			}
+		}
+	}
+
 	ctxReq := ai.ContextRequest{
 		Flow:               scrubbedDoc,
-		TokenBudget:        4000,
+		TokenBudget:        tokenBudget,
 		Provider:           provider,
 		SystemPromptSuffix: req.SystemPrompt,
 	}

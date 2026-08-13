@@ -29,8 +29,9 @@ const maxAnalysisReports = 50
 // The analysis methods operate on an explicitly supplied *models.FlowDocument
 // (resolved + authorized by the caller), so the service holds no global
 // "current document". Reports are cached per flow id so the execution graph can
-// reuse the matching report. lastReport tracks the most recent analysis purely
-// to enrich chat context (which is not yet per-flow in cloud mode).
+// reuse the matching report. CurrentReport exposes the cached report for a flow
+// so chat context can be grounded per-flow (StreamChatMessage resolves it when
+// the handler passes nil) without re-analyzing on every chat turn.
 // reportPair tracks the two most recent distinct analysis reports for a flow
 // so /api/analysis/diff can compare runs (previously it diffed against an
 // empty report, so everything was always "added").
@@ -50,9 +51,10 @@ func analysisHistoryKey(doc *models.FlowDocument) string {
 }
 
 type AnalysisService struct {
-	notifier EventNotifier
-	settings SettingsProvider
-	history  *analyzer.HistoryStore
+	notifier    EventNotifier
+	settings    SettingsProvider
+	history     *analyzer.HistoryStore
+	customRules []analyzer.Rule
 
 	mu      sync.Mutex
 	reports *lru.Cache[string, *reportPair]
@@ -74,6 +76,24 @@ func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, histo
 	}, nil
 }
 
+// LoadCustomRules loads user-defined rules from a JSON file (see
+// core/analyzer/custom_rules.go for the format). Called once at construction;
+// custom rules are folded into every subsequent analysis run alongside the
+// built-in rules. Invalid rules in the file are silently skipped (by
+// LoadCustomRules); a missing file is a no-op.
+func (s *AnalysisService) LoadCustomRules(path string) {
+	if path == "" {
+		return
+	}
+	custom, err := analyzer.LoadCustomRules(path)
+	if err != nil {
+		// Don't fail boot — log and continue with built-in rules only.
+		fmt.Printf("analysis service: custom rules load failed: %v\n", err)
+		return
+	}
+	s.customRules = custom
+}
+
 func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
 
@@ -93,6 +113,9 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 
 	settings := s.settings.Get()
 	rules := analyzer.AllRules()
+	if len(s.customRules) > 0 {
+		rules = append(rules, s.customRules...)
+	}
 
 	// Extract userID for per-user event delivery (prevents cross-tenant leaks).
 	userID := ""
@@ -100,17 +123,27 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 		userID = claims.UserID
 	}
 
-	result := analyzer.CachedAnalysis(doc, rules, settings, func(current, total int, ruleName string) {
+	result := analyzer.CachedAnalysisCtx(ctx, doc, rules, settings, func(current, total int, ruleName string) {
 		s.notifier.EmitTo(userID, "analysis:progress", map[string]any{
 			"current":  current,
 			"total":    total,
 			"ruleName": ruleName,
 		})
 	})
+	// CachedAnalysis never returns nil today, but a future hash-miss / edge case
+	// could; fail gracefully instead of letting a nil result panic the API
+	// process when the downstream code dereferences it (span attrs, history,
+	// logging). Resolves the inconsistency where result was nil-checked on the
+	// skipped-rules line but unconditionally dereferenced everywhere else.
+	if result == nil {
+		err = fmt.Errorf("analysis produced no result for flow %q", doc.ID)
+		span.RecordError(err)
+		return nil, err
+	}
 
 	// Surface skipped rules (safeCheck panic recovery) on a Prometheus counter
 	// so ops can alert when a rule silently produces no findings for a flow.
-	if result != nil && result.Stats.RulesSkipped > 0 {
+	if result.Stats.RulesSkipped > 0 {
 		metrics.RecordRulesSkipped(result.Stats.RulesSkipped)
 	}
 
@@ -159,6 +192,9 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 // current one for the flow, or (nil, false) when only zero or one distinct
 // runs have happened.
 func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
+	if s == nil || s.reports == nil {
+		return nil, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pair, _ := s.reports.Get(analysisHistoryKey(doc))
@@ -169,8 +205,13 @@ func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.Anal
 }
 
 // CurrentReport returns the most recent analysis report for the flow, or
-// (nil, false) when no analysis has been run yet.
+// (nil, false) when no analysis has been run yet. Nil-safe on an unconfigured
+// service (a bare struct literal with no LRU, as some tests construct) so
+// callers like the chat fallback can call it without a separate nil-cache guard.
 func (s *AnalysisService) CurrentReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
+	if s == nil || s.reports == nil {
+		return nil, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pair, _ := s.reports.Get(analysisHistoryKey(doc))
@@ -237,6 +278,9 @@ func (s *AnalysisService) AnalyzeBatch(docs []*models.FlowDocument) (batch *mode
 
 	settings := s.settings.Get()
 	rules := analyzer.AllRules()
+	if len(s.customRules) > 0 {
+		rules = append(rules, s.customRules...)
+	}
 	return analyzer.RunBatchAnalysis(docs, rules, settings), nil
 }
 
@@ -304,6 +348,9 @@ func (s *AnalysisService) GetRules() (result []models.Rule) {
 	}
 
 	rules := analyzer.AllRules()
+	if len(s.customRules) > 0 {
+		rules = append(rules, s.customRules...)
+	}
 	result = make([]models.Rule, len(rules))
 	for i, r := range rules {
 		result[i] = models.Rule{

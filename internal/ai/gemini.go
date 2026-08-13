@@ -14,6 +14,10 @@ import (
 type GeminiProvider struct {
 	apiKey string
 	client *http.Client
+	// embeddingModel overrides the Gemini embedding model; empty falls back to
+	// gemini-embedding-001. Satisfies embedModelSetter so ForEmbedding can apply
+	// a deployer-chosen model.
+	embeddingModel string
 }
 
 func NewGeminiProvider(apiKey string) *GeminiProvider {
@@ -22,6 +26,13 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 		client: sharedHTTPClient,
 	}
 }
+
+// setEmbeddingModel satisfies embedModelSetter (promoted by the factory).
+func (g *GeminiProvider) setEmbeddingModel(model string) { g.embeddingModel = model }
+
+// geminiEmbedModelDefault is the shipped Gemini embedding model used when no
+// override is configured.
+const geminiEmbedModelDefault = "gemini-embedding-001"
 
 func (g *GeminiProvider) SupportsTools() bool { return true }
 
@@ -63,7 +74,10 @@ func (g *GeminiProvider) embedBatch(ctx context.Context, texts []string) ([][]fl
 	// batchEmbedContents POST carries an array of requests, each wrapping the
 	// text in a content.parts[].text object. taskType RETRIEVAL_DOCUMENT is the
 	// recommended setting for documents that will be stored and searched.
-	const embedModel = "gemini-embedding-001"
+	embedModel := geminiEmbedModelDefault
+	if g.embeddingModel != "" {
+		embedModel = g.embeddingModel
+	}
 	fullModel := "models/" + embedModel
 
 	type embedRequest struct {

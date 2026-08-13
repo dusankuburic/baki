@@ -216,11 +216,20 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 }
 
 func (b *PostgresStorageBackend) TransferFlowOwner(ctx context.Context, flowID, newOwnerID, newOrgID string) error {
-	_, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE flows SET owner_id = $1, org_id = $2, updated_at = $3 WHERE id = $4`,
+	// Bump version on transfer: SaveFlow's OCC contract keys off flows.version,
+	// and owner_id/org_id are security-sensitive fields (the interface doc notes
+	// this is the ONLY way to reassign ownership). Without a version bump a
+	// client that read the flow before the transfer can still save afterward
+	// (the WHERE flows.version = $11 check passes), silently reverting the new
+	// ownership — and the version-keyed flow.changed broadcast wouldn't fire.
+	res, err := b.query(ctx).ExecContext(ctx,
+		`UPDATE flows SET owner_id = $1, org_id = $2, updated_at = $3, version = version + 1 WHERE id = $4`,
 		newOwnerID, newOrgID, time.Now().UTC(), flowID)
 	if err != nil {
 		return fmt.Errorf("transfer flow owner: %w", err)
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return interfaces.ErrNotFound
 	}
 	return nil
 }
@@ -827,6 +836,12 @@ func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) (
 			metrics.RecordBlobOp("download", "not_found", time.Since(start))
 			return nil, nil
 		}
+		// Defensively close an error response body if the SDK returned one
+		// alongside the error (it generally closes them itself, but this is
+		// robust against SDK version changes that could leak the connection).
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		metrics.RecordBlobOp("download", blobErrStatus(err), time.Since(start))
 		return nil, fmt.Errorf("download blob %s: %w", key, err)
 	}
@@ -1025,23 +1040,23 @@ func (b *PostgresStorageBackend) SaveFlowVersion(ctx context.Context, v *interfa
 	return b.saveFlowVersionTx(ctx, v)
 }
 
+// versionBlobKey is the content-blob storage key for a flow version, derived
+// from the row id (unique per version) so it is stable and knowable BEFORE the
+// version number is allocated — which lets SaveFlowVersion upload ahead of the
+// parent flow's FOR UPDATE lock.
+func versionBlobKey(flowID, versionID string) string {
+	return fmt.Sprintf("flows/%s/versions/%s.json", flowID, versionID)
+}
+
+// versionBlobKeyLegacy is the pre-migration key derived from the version number.
+// Used as a read/cleanup fallback for rows written before the blob_key column
+// existed (blob_key == "").
+func versionBlobKeyLegacy(flowID string, version int) string {
+	return fmt.Sprintf("flows/%s/versions/%d/content.json", flowID, version)
+}
+
 func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *interfaces.FlowVersion) error {
 	q := b.query(ctx)
-
-	// Lock the parent flow row to serialize concurrent version saves. Without
-	// this, two callers can read the same max(version) and race on INSERT.
-	var dummy int
-	if err := q.QueryRowContext(ctx, `SELECT 1 FROM flows WHERE id = $1 FOR UPDATE`, v.FlowID).Scan(&dummy); err != nil {
-		return fmt.Errorf("lock flow for versioning: %w", err)
-	}
-
-	// Atomically compute the next version (overrides the caller's value).
-	if err := q.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(version), 0) + 1 FROM flow_versions WHERE flow_id = $1`,
-		v.FlowID,
-	).Scan(&v.Version); err != nil {
-		return fmt.Errorf("compute next version: %w", err)
-	}
 
 	meta, err := json.Marshal(v.Metadata)
 	if err != nil {
@@ -1052,22 +1067,50 @@ func (b *PostgresStorageBackend) saveFlowVersionTx(ctx context.Context, v *inter
 		content = json.RawMessage("{}")
 	}
 
-	// Upload blob before the DB insert so a blob failure doesn't leave a
-	// row pointing at a missing blob. The FOR UPDATE above serializes
-	// concurrent callers, so the blob key is unique per version.
+	// Upload the content blob BEFORE taking the parent flow's FOR UPDATE lock,
+	// so the lock is never held across the (network) upload. The blob key is
+	// derived from the row id (v.ID) rather than the version number, so it is
+	// unique without needing the version — which lets the upload happen ahead of
+	// the lock. Uploading before the INSERT also keeps the invariant that a row
+	// never points at a missing blob.
 	var blobKey string
 	if b.blobClient != nil {
-		blobKey = fmt.Sprintf("flows/%s/versions/%d/content.json", v.FlowID, v.Version)
+		blobKey = versionBlobKey(v.FlowID, v.ID)
 		if err := b.uploadBlob(ctx, blobKey, content); err != nil {
 			return err
 		}
 		content = json.RawMessage("{}")
 	}
 
+	// Lock the parent flow row to serialize concurrent version saves. Without
+	// this, two callers can read the same max(version) and race on INSERT.
+	var dummy int
+	if err := q.QueryRowContext(ctx, `SELECT 1 FROM flows WHERE id = $1 FOR UPDATE`, v.FlowID).Scan(&dummy); err != nil {
+		if blobKey != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), blobOpTimeout)
+			b.deleteSingleBlob(cleanupCtx, v.FlowID, blobKey)
+			cancel()
+		}
+		return fmt.Errorf("lock flow for versioning: %w", err)
+	}
+
+	// Atomically compute the next version (overrides the caller's value).
+	if err := q.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(version), 0) + 1 FROM flow_versions WHERE flow_id = $1`,
+		v.FlowID,
+	).Scan(&v.Version); err != nil {
+		if blobKey != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), blobOpTimeout)
+			b.deleteSingleBlob(cleanupCtx, v.FlowID, blobKey)
+			cancel()
+		}
+		return fmt.Errorf("compute next version: %w", err)
+	}
+
 	_, err = q.ExecContext(ctx,
-		`INSERT INTO flow_versions (id, flow_id, version, comment, content, metadata, created_by, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		v.ID, v.FlowID, v.Version, v.Comment, content, meta, v.CreatedBy, v.CreatedAt,
+		`INSERT INTO flow_versions (id, flow_id, version, comment, content, metadata, created_by, created_at, blob_key)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		v.ID, v.FlowID, v.Version, v.Comment, content, meta, v.CreatedBy, v.CreatedAt, blobKey,
 	)
 	if err != nil {
 		// The INSERT failed (constraint, transient DB error, …): the row this
@@ -1108,27 +1151,30 @@ func (b *PostgresStorageBackend) pruneFlowVersions(ctx context.Context, q DBTX, 
 			SELECT version FROM flow_versions WHERE flow_id = $1
 			ORDER BY version DESC LIMIT $2
 		)
-		RETURNING version`, flowID, maxFlowVersionSnapshots)
+		RETURNING version, blob_key`, flowID, maxFlowVersionSnapshots)
 	if err != nil {
 		return fmt.Errorf("prune flow versions: %w", err)
 	}
 	defer rows.Close()
-	var pruned []int
+	var prunedKeys []string
 	for rows.Next() {
 		var ver int
-		if err := rows.Scan(&ver); err != nil {
+		var blobKey string
+		if err := rows.Scan(&ver, &blobKey); err != nil {
 			return fmt.Errorf("scan pruned version: %w", err)
 		}
-		pruned = append(pruned, ver)
+		// Prefer the stored key; fall back to the legacy version-derived key for
+		// rows written before the blob_key column existed.
+		if blobKey == "" {
+			blobKey = versionBlobKeyLegacy(flowID, ver)
+		}
+		prunedKeys = append(prunedKeys, blobKey)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("prune flow versions: %w", err)
 	}
-	if b.blobClient != nil && len(pruned) > 0 && hasPostCommit(ctx) {
-		keys := make([]string, len(pruned))
-		for i, ver := range pruned {
-			keys[i] = fmt.Sprintf("flows/%s/versions/%d/content.json", flowID, ver)
-		}
+	if b.blobClient != nil && len(prunedKeys) > 0 && hasPostCommit(ctx) {
+		keys := prunedKeys
 		RegisterPostCommit(ctx, func() {
 			// Although the pruned rows are gone after commit, an in-flight reader
 			// may have already SELECTed the row (under its own snapshot) and be
@@ -1184,11 +1230,12 @@ func (b *PostgresStorageBackend) ListFlowVersions(ctx context.Context, flowID st
 func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID string, version int) (*interfaces.FlowVersion, error) {
 	v := &interfaces.FlowVersion{}
 	var metaRaw []byte
+	var blobKey string
 	err := b.query(ctx).QueryRowContext(ctx,
-		`SELECT id, flow_id, version, comment, content, metadata, created_by, created_at
+		`SELECT id, flow_id, version, comment, content, metadata, created_by, created_at, blob_key
 		 FROM flow_versions WHERE flow_id = $1 AND version = $2`,
 		flowID, version,
-	).Scan(&v.ID, &v.FlowID, &v.Version, &v.Comment, &v.Content, &metaRaw, &v.CreatedBy, &v.CreatedAt)
+	).Scan(&v.ID, &v.FlowID, &v.Version, &v.Comment, &v.Content, &metaRaw, &v.CreatedBy, &v.CreatedAt, &blobKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, interfaces.ErrNotFound
 	}
@@ -1203,7 +1250,11 @@ func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID str
 
 	// Download from Blob Storage if configured and DB content is placeholder.
 	if b.blobClient != nil && (len(v.Content) == 0 || string(v.Content) == "{}" || string(v.Content) == "null") {
-		blobKey := fmt.Sprintf("flows/%s/versions/%d/content.json", v.FlowID, v.Version)
+		// Prefer the stored key; fall back to the legacy version-derived key for
+		// rows written before the blob_key column existed.
+		if blobKey == "" {
+			blobKey = versionBlobKeyLegacy(v.FlowID, v.Version)
+		}
 		content, err := b.downloadBlob(ctx, blobKey)
 		if err != nil {
 			return nil, fmt.Errorf("load flow version %s/%d: content unavailable in blob storage: %w", v.FlowID, v.Version, err)

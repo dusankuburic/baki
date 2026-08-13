@@ -1,10 +1,12 @@
 package analyzer
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"pad-core/models"
+	"pad-core/parser"
 )
 
 func makeBlock(id, name string, bt models.BlockType, rawType string, indent int) *models.Block {
@@ -252,11 +254,11 @@ func TestComputeStats(t *testing.T) {
 // aborting the whole run silently.
 type panickingRule struct{}
 
-func (panickingRule) ID() string                   { return "panicking-test-rule" }
-func (panickingRule) Name() string                 { return "Panicking test rule" }
-func (panickingRule) Description() string          { return "Always panics; for RulesSkipped surfacing" }
+func (panickingRule) ID() string                       { return "panicking-test-rule" }
+func (panickingRule) Name() string                     { return "Panicking test rule" }
+func (panickingRule) Description() string              { return "Always panics; for RulesSkipped surfacing" }
 func (panickingRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (panickingRule) Category() string             { return "test" }
+func (panickingRule) Category() string                 { return "test" }
 func (panickingRule) Check(_ *models.Block, _ *RuleContext) []models.Finding {
 	panic("intentional test panic")
 }
@@ -265,11 +267,11 @@ func (panickingRule) Check(_ *models.Block, _ *RuleContext) []models.Finding {
 // prove the rest of the run still completes after a panic in another rule.
 type safeRule struct{}
 
-func (safeRule) ID() string                   { return "safe-test-rule" }
-func (safeRule) Name() string                 { return "Safe test rule" }
-func (safeRule) Description() string          { return "Emits one finding; for RulesSkipped surfacing" }
+func (safeRule) ID() string                       { return "safe-test-rule" }
+func (safeRule) Name() string                     { return "Safe test rule" }
+func (safeRule) Description() string              { return "Emits one finding; for RulesSkipped surfacing" }
 func (safeRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
-func (safeRule) Category() string             { return "test" }
+func (safeRule) Category() string                 { return "test" }
 func (safeRule) Check(block *models.Block, _ *RuleContext) []models.Finding {
 	return []models.Finding{{RuleID: "safe-test-rule", BlockID: block.ID, Severity: models.SeverityWarning}}
 }
@@ -303,3 +305,26 @@ func TestRunAnalysis_RulesSkippedSurfaced(t *testing.T) {
 	}
 }
 
+// TestRunAnalysisCtx_RespectsCancellation verifies the walk honours a cancelled
+// context: rule work is skipped for remaining blocks, bounding the CPU a single
+// pathological payload can burn on the raw-analyze endpoint (whose per-request
+// deadline cancels the context).
+func TestRunAnalysisCtx_RespectsCancellation(t *testing.T) {
+	src := "#Region \"Main\"\nSET X TO %X%\n#EndRegion\n"
+	doc, err := parser.ParseText(src, "Main.txt", int64(len(src)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	baseline := RunAnalysis(doc, AllRules(), nil, nil)
+	if len(baseline.Findings) == 0 {
+		t.Fatal("baseline: expected findings, got 0")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cancelled := RunAnalysisCtx(ctx, doc, AllRules(), nil, nil)
+	if len(cancelled.Findings) != 0 {
+		t.Errorf("expected 0 findings with a pre-cancelled ctx (rule work skipped), got %d", len(cancelled.Findings))
+	}
+}

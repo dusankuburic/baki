@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
+	"pad-core/logger"
 )
 
 // Persistent, team-shared finding triage & baselines. These endpoints back the
@@ -89,9 +91,22 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 	}
 
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor")
+	if err != nil {
 		render.Error(w, err, 0)
 		return
+	}
+
+	// Fetch the prior assignee so we only notify on an actual assignment change
+	// (not on every status tweak that re-sends the same assignee).
+	priorAssignee := ""
+	if statuses, listErr := h.backend.ListFindingStatuses(r.Context(), req.FlowID); listErr == nil {
+		for _, ps := range statuses {
+			if ps.FindingKey == req.FindingKey {
+				priorAssignee = ps.AssigneeID
+				break
+			}
+		}
 	}
 
 	st := &storageif.FindingStatus{
@@ -109,7 +124,62 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFindingTriage, "flow", req.FlowID,
 		map[string]string{"findingKey": req.FindingKey, "status": req.Status})
+
+	// Best-effort assignment notification: email the new assignee when the
+	// assignment actually changed (not on every save). Detached so the response
+	// isn't delayed by SMTP; the email service is nil-safe (log-only when SMTP
+	// isn't configured).
+	if req.AssigneeID != "" && req.AssigneeID != priorAssignee {
+		flowName := ""
+		if doc != nil {
+			flowName = doc.Name
+		}
+		go h.notifyFindingAssignment(req.AssigneeID, userID, flowName, req.RuleID)
+	}
+
 	render.JSON(w, st)
+}
+
+// notifyFindingAssignment emails the assignee that a finding was assigned to
+// them. Best-effort: any error (user not found, SMTP down) is logged and
+// swallowed — the triage write already succeeded and the response was sent.
+func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowName, ruleID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("finding-assignment notification panicked", "err", r)
+		}
+	}()
+	if h.email == nil || h.backend == nil {
+		return
+	}
+	ctx := context.Background()
+	assignee, err := h.backend.LoadUserByID(ctx, assigneeID)
+	if err != nil || assignee == nil || assignee.Email == "" {
+		return
+	}
+	assigneeName := assignee.DisplayName
+	if assigneeName == "" {
+		assigneeName = assignee.Email
+	}
+	assignerName := "A reviewer"
+	if u, err := h.backend.LoadUserByID(ctx, assignerID); err == nil && u != nil {
+		if u.DisplayName != "" {
+			assignerName = u.DisplayName
+		} else if u.Email != "" {
+			assignerName = u.Email
+		}
+	}
+	// Use the rule's human-readable name as the finding title when available.
+	findingTitle := ruleID
+	for _, rule := range analyzer.AllRules() {
+		if rule.ID() == ruleID {
+			findingTitle = rule.Name()
+			break
+		}
+	}
+	if err := h.email.SendFindingAssigned(ctx, assignee.Email, assigneeName, assignerName, flowName, findingTitle, ""); err != nil {
+		logger.Warn("failed to send finding-assignment notification", "assignee", assigneeID, "error", err)
+	}
 }
 
 // handleBatchSetFindingStatus applies the same lifecycle update to many findings

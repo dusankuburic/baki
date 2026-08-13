@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"pad-analyzer/internal/auth"
 )
 
 // ---- Persistent Policy CRUD handler tests ----
@@ -36,6 +38,43 @@ func TestPolicySave_NonMemberForbidden(t *testing.T) {
 		"id":    "pol-1",
 		"orgId": orgID,
 		"name":  "Test",
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+// TestPolicySave_NonAdminMemberForbidden is the regression test for the
+// broken-access-control fix: saving a policy is a WRITE to the org-wide CI gate
+// (SavePolicy upserts on id+org_id), so a non-admin member (here a plain
+// member; a viewer/guest behaves the same) must be rejected. Before the fix this
+// path gated on requireOrgMember and returned 200, letting any member silently
+// overwrite the org's governance rules.
+func TestPolicySave_NonAdminMemberForbidden(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	orgID := seedOrg(t, rt, "Acme", "alice") // alice is the admin owner
+	addOrgMember(t, rt, orgID, "mallory", auth.RoleMember)
+	bearer := jwtBearer(t, rt, "mallory", "mallory@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/policy/save", bearer, map[string]any{
+		"id":           "pol-1",
+		"orgId":        orgID,
+		"name":         "Overwritten",
+		"gateSeverity": "info",
+	})
+	checkStatus(t, rr, http.StatusForbidden)
+}
+
+// TestPolicyDelete_NonAdminMemberForbidden is the regression test for the delete
+// side of the same fix: a non-admin member must not be able to remove the org's
+// CI gate. Before the fix this gated on requireOrgMember and returned 200.
+func TestPolicyDelete_NonAdminMemberForbidden(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	orgID := seedOrg(t, rt, "Acme", "alice")
+	addOrgMember(t, rt, orgID, "mallory", auth.RoleViewer)
+	bearer := jwtBearer(t, rt, "mallory", "mallory@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/policy/delete", bearer, map[string]any{
+		"orgId": orgID,
+		"id":    "pol-1",
 	})
 	checkStatus(t, rr, http.StatusForbidden)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"pad-analyzer/internal/connector/padcloud"
 	"pad-analyzer/internal/di"
 	"pad-analyzer/internal/errreport"
+	"pad-analyzer/internal/mail"
 	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/notify"
@@ -43,6 +45,16 @@ var (
 )
 
 func main() {
+	// `baki-backend healthcheck` is an in-image liveness/readiness probe for
+	// non-ACA deployments (docker-compose, bare `docker run`). It GETs the
+	// server's own /readyz and exits 0 on 200, 1 otherwise. The prod target
+	// (ACA) uses platform httpGet probes instead, so the Dockerfile ships no
+	// HEALTHCHECK directive; this subcommand lets opt-in callers (compose) probe
+	// without a shell/wget — which the distroless image doesn't have.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	fx.New(
 		// fx.Run() handles both SIGINT and SIGTERM. The default StopTimeout is
 		// 15s; raise to 25s so we stay under Azure Container Apps' 30s pod
@@ -62,6 +74,8 @@ func main() {
 			provideMigrationRunner,
 			provideIngester,
 			providePadCloudAuth,
+			provideScanNowFunc,
+			provideIngestNowFunc,
 			provideKeyStore,
 		),
 		di.ServiceModule,
@@ -129,10 +143,36 @@ func provideShutdownCh() chan struct{} {
 // A non-HTTPS alert URL is a configuration error (governance payloads carry
 // internal flow details and must not be sent in plaintext) — fail startup so
 // the operator fixes the URL rather than silently leaking alerts.
-func provideNotifier(cfg *config.Config) (*notify.Dispatcher, error) {
+func provideNotifier(cfg *config.Config, mailer *mail.Service) (*notify.Dispatcher, error) {
+	// Backward compatibility: the legacy PAD_WEBHOOK_URL (read directly by the
+	// old service.WebhookNotifier) sent Slack-format payloads. Map it onto the
+	// new Slack channel when PAD_NOTIFY_SLACK_URL isn't set, so existing
+	// deployments keep posting to Slack without a config change.
+	slackURL := cfg.Governance.NotifySlackURL
+	slackSecret := cfg.Governance.NotifySlackSecret
+	if slackURL == "" {
+		slackURL = os.Getenv("PAD_WEBHOOK_URL")
+		slackSecret = os.Getenv("PAD_WEBHOOK_SECRET")
+	}
+	// The email channel only fires when both a real SMTP sender and a recipient
+	// are configured. mailer is always non-nil (log-only fallback), so gate on
+	// its Enabled() + the recipient address.
+	var emailSender notify.EmailSender
+	if mailer != nil && cfg.Governance.NotifyEmailTo != "" {
+		emailSender = mailSvcAdapter{svc: mailer}
+	}
 	d, err := notify.New(notify.Config{
-		WebhookURL: cfg.Governance.NotifyWebhookURL,
-		TeamsURL:   cfg.Governance.NotifyTeamsURL,
+		WebhookURL:    cfg.Governance.NotifyWebhookURL,
+		WebhookSecret: cfg.Governance.NotifyWebhookSecret,
+		TeamsURL:      cfg.Governance.NotifyTeamsURL,
+		SlackURL:      slackURL,
+		SlackSecret:   slackSecret,
+		EmailSender:   emailSender,
+		EmailTo:       cfg.Governance.NotifyEmailTo,
+		JiraURL:       cfg.Governance.NotifyJiraBaseURL,
+		JiraEmail:     cfg.Governance.NotifyJiraEmail,
+		JiraToken:     cfg.Governance.NotifyJiraAPIToken,
+		JiraProject:   cfg.Governance.NotifyJiraProject,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("notify: %w", err)
@@ -140,14 +180,30 @@ func provideNotifier(cfg *config.Config) (*notify.Dispatcher, error) {
 	return d, nil
 }
 
+// mailSvcAdapter bridges *mail.Service to notify.EmailSender. It hides the
+// concrete mail type from the notify package and honours Enabled() (the log-only
+// mailer reports disabled, so the channel is skipped without SMTP).
+type mailSvcAdapter struct{ svc *mail.Service }
+
+func (a mailSvcAdapter) Enabled() bool { return a.svc != nil && a.svc.Enabled() }
+
+func (a mailSvcAdapter) SendAlert(ctx context.Context, to, subject, plainBody, htmlBody string) error {
+	return a.svc.SendAlert(ctx, to, subject, plainBody, htmlBody)
+}
+
 // provideScanner wires the periodic flow scanner. A zero/invalid interval or a
 // missing backend/channel leaves it disabled, so it is opt-in and cloud-only.
-func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher) *scanner.Scanner {
+func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager) *scanner.Scanner {
 	var analyze scanner.AnalyzeFunc
 	if analysisSvc != nil {
 		analyze = analysisSvc.AnalyzeFlow
 	}
-	return scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval))
+	s := scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval))
+	// Real-time SSE push: a newly-detected alert pings connected clients who
+	// can see the flow so the bell updates instantly. EventManager is always
+	// non-nil in the fx graph; safe even in local mode (no scanner runs there).
+	s.SetEventNotifier(eventMgr)
+	return s
 }
 
 // scanInterval parses the configured scan interval; an empty or invalid value
@@ -223,7 +279,14 @@ func providePadCloudAuth(cfg *config.Config, backend storageif.StorageBackend) *
 		if encKey == "" {
 			encKey = cfg.Auth.Secret
 		}
-		store = padcloud.NewDBTokenStore(sqlBackend.DB(), []byte(encKey))
+		s, err := padcloud.NewDBTokenStore(sqlBackend.DB(), []byte(encKey))
+		if err != nil {
+			// Refuse to persist tokens in plaintext — run the authenticator
+			// in-memory only (no cross-restart persistence) instead.
+			slog.Warn("padcloud: disabling token persistence — using in-memory auth", "error", err)
+		} else {
+			store = s
+		}
 	}
 	return padcloud.NewAuthenticator(pc.TenantID, pc.ClientID, pc.Scope, nil, store)
 }
@@ -275,6 +338,40 @@ func initIngester(lc fx.Lifecycle, ing *padcloud.Ingester, auth *padcloud.Authen
 		},
 		OnStop: func(context.Context) error { ing.Stop(); return nil },
 	})
+}
+
+// provideScanNowFunc wires the admin "scan now" action to the scanner. The
+// scanner is always constructed, but a manual trigger is only meaningful in
+// cloud mode (governance is a cloud feature); in local mode it returns nil so
+// the admin endpoint reports 503.
+func provideScanNowFunc(s *scanner.Scanner, cfg *config.Config) api.ScanNowFunc {
+	if s == nil || cfg.Mode != config.ModeCloud {
+		return nil
+	}
+	return s.ScanOnce
+}
+
+// provideIngestNowFunc wires the admin "ingest now" action to the PAD-cloud
+// ingester. Nil (→ 503) when the connector isn't configured. The wrapper logs
+// per-pass errors so an async trigger is still observable.
+func provideIngestNowFunc(ing *padcloud.Ingester) api.IngestNowFunc {
+	if ing == nil {
+		return nil
+	}
+	return func(ctx context.Context) {
+		res, err := ing.Ingest(ctx)
+		if err != nil {
+			logger.Error("padcloud: manual ingest failed", "error", err)
+			return
+		}
+		if res.Failed > 0 {
+			logger.Warn("padcloud: manual ingest completed with failures",
+				"ingested", res.Ingested, "failed", res.Failed, "skipped", res.Skipped)
+		} else {
+			logger.Info("padcloud: manual ingest completed",
+				"ingested", res.Ingested, "skipped", res.Skipped)
+		}
+	}
 }
 
 // parseGovernanceDuration parses an optional duration string, returning 0
@@ -485,6 +582,9 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 		dbCfg.AzureStorageContainer = cfg.Storage.AzureStorageContainer
 		dbCfg.AzureBlobConnectionString = cfg.Storage.AzureBlobConnectionString
 	}
+	// Knowledge-base embedding dimension. Gates which chunks are pgvector-
+	// searchable (default 1536 applied in the storage layer when 0).
+	dbCfg.EmbeddingDim = cfg.Storage.EmbeddingDim
 
 	pgBackend, err := storagedb.New(context.Background(), dbCfg)
 	if err != nil {
@@ -556,7 +656,14 @@ func provideKeyStore(cfg *config.Config, backend storageif.StorageBackend) (serv
 	return ks, nil
 }
 
-func initAuditPool(lc fx.Lifecycle, backend storageif.StorageBackend) {
+func initAuditPool(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
+	// Enable the on-disk spill queue unless explicitly disabled. Lets a burst
+	// that overflows the in-memory pool be replayed instead of diverted to logs.
+	if cfg.Governance.AuditSpillDir != "off" {
+		if err := api.SetAuditSpillConfig(cfg.Governance.AuditSpillDir, 0); err != nil {
+			slog.Warn("audit spill queue disabled (using log fallback only)", "error", err)
+		}
+	}
 	api.InitAuditPool(backend)
 	lc.Append(fx.Hook{
 		OnStop: func(ctx context.Context) error {
@@ -732,4 +839,25 @@ func writeSessionSecret(secret string) (string, error) {
 		return "", fmt.Errorf("rename session key: %w", err)
 	}
 	return path, nil
+}
+
+// runHealthcheck implements the `baki-backend healthcheck` subcommand: GET the
+// server's own /readyz and return 0 on 200, 1 otherwise. Used by docker-compose
+// (and bare-docker operators) because the distroless image has no shell/wget.
+// Bounded by a short timeout so a hung server is reported unhealthy, not hung.
+func runHealthcheck() int {
+	port := os.Getenv("PAD_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://localhost:" + port + "/readyz") // #nosec G114 -- short-timeout local probe of a known endpoint
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return 0
+	}
+	return 1
 }

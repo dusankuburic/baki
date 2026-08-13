@@ -17,17 +17,35 @@ import (
 )
 
 type Parser struct {
-	text     string
-	fileName string
-	fileSize int64
+	text       string
+	fileName   string
+	fileSize   int64
+	onProgress ProgressCallback
 }
 
-func NewParser(text, fileName string, fileSize int64) *Parser {
-	return &Parser{
+// ParserOption configures a Parser. Options are applied left-to-right.
+type ParserOption func(*Parser)
+
+// WithProgress installs a ProgressCallback that receives percent-done updates
+// during Parse. When set, Parse emits the same checkpoint sequence
+// (10 "Tokenized" → per-token "Parsing..." → 95 "Finalizing..." → 100 "Done")
+// that ParseTextWithProgress historically emitted, so callers that want
+// progress feed a callback here instead of using the duplicated legacy path.
+// A nil callback keeps the hot path branch-free (no per-token accounting).
+func WithProgress(cb ProgressCallback) ParserOption {
+	return func(p *Parser) { p.onProgress = cb }
+}
+
+func NewParser(text, fileName string, fileSize int64, opts ...ParserOption) *Parser {
+	p := &Parser{
 		text:     text,
 		fileName: fileName,
 		fileSize: fileSize,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func (p *Parser) Parse() (*models.FlowDocument, error) {
@@ -45,21 +63,58 @@ func (p *Parser) Parse() (*models.FlowDocument, error) {
 		tokens = wrapImplicitSubflow(tokens, p.fileName)
 	}
 
+	cb := p.onProgress
+	if cb != nil {
+		cb(10, "Tokenized")
+	}
+
 	state := newParseState()
-	for _, tok := range tokens {
-		state.processToken(tok)
+	if cb == nil {
+		for _, tok := range tokens {
+			state.processToken(tok)
+		}
+	} else {
+		totalTokens := 0
+		for _, tok := range tokens {
+			if tok.Kind != TokEmpty {
+				totalTokens++
+			}
+		}
+		processed := 0
+		lastReported := 10
+		for _, tok := range tokens {
+			if tok.Kind == TokEmpty {
+				continue
+			}
+			processed++
+			pct := 10 + (processed * 85 / max(totalTokens, 1))
+			if pct >= lastReported+5 {
+				cb(pct, "Parsing...")
+				lastReported = pct
+			}
+			state.processToken(tok)
+		}
 	}
 	// Flush closable blocks still open at EOF. recordUnclosedBlocks is otherwise
 	// only called at subflow boundaries (handleSubflowStart/handleSubflowEnd),
 	// so a file that ends abruptly — open LOOP/IF/BLOCK with no END and no
 	// trailing #EndRegion in the final subflow — would have those unclosed
-	// blocks silently dropped from ParseErrors.
+	// blocks silently dropped from ParseErrors. This flush runs in BOTH the
+	// progress and non-progress paths, which is what unifies them: the legacy
+	// progress copy used to miss it.
 	if state.current != nil {
 		state.recordUnclosedBlocks()
 	}
 
+	if cb != nil {
+		cb(95, "Finalizing...")
+	}
 	subflows, totalBlocks, maxDepth := finalizeSubflows(state.built)
-	return buildDocument(p.text, p.fileName, p.fileSize, subflows, state.parseErrors, totalBlocks, maxDepth), nil
+	doc := buildDocument(p.text, p.fileName, p.fileSize, subflows, state.parseErrors, totalBlocks, maxDepth)
+	if cb != nil {
+		cb(100, "Done")
+	}
+	return doc, nil
 }
 
 // MaxParseTextSize is the maximum source-text size the parser will accept.

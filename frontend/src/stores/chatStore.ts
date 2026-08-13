@@ -59,7 +59,7 @@ interface ChatState {
   // tab. Session-only (never persisted to the backend conversation payload).
   drafts: Record<string, string>
 
-  getMessages: (threadId: string) => ChatMessage[]
+  getMessages: (threadId: string) => readonly ChatMessage[]
   appendMessage: (threadId: string, message: ChatMessage) => void
   removeMessage: (threadId: string, messageId: string) => void
   clearThreadMessages: (threadId: string) => void
@@ -94,7 +94,7 @@ interface ChatState {
   setDraft: (threadId: string, text: string) => void
 }
 
-const EMPTY_ARRAY: ChatMessage[] = []
+const EMPTY_ARRAY: readonly ChatMessage[] = Object.freeze([] as ChatMessage[])
 
 export const useChatStore = create<ChatState>((set, get) => ({
   threads: [],
@@ -107,7 +107,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   drafts: {},
 
   getMessages: threadId => {
-    return get().conversations.get(threadId) ?? EMPTY_ARRAY
+    // Defensive copy: without this, callers receive the live internal array
+    // reference and an accidental in-place mutation (push/splice) would
+    // corrupt the store's state without triggering reactivity. EMPTY_ARRAY
+    // is already immutable so it's returned as-is for missing threads.
+    const msgs = get().conversations.get(threadId)
+    return msgs ? [...msgs] : EMPTY_ARRAY
   },
 
   appendMessage: (threadId, message) =>

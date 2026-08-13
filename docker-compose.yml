@@ -15,7 +15,9 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:${PAD_PORT:-8080}/readyz"]
+      # The distroless image has no shell/wget, so probe via the binary's own
+      # healthcheck subcommand (GETs /readyz, exits 0/1).
+      test: ["CMD", "./baki-backend", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 10s

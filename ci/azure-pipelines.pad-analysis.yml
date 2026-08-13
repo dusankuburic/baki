@@ -95,8 +95,6 @@ steps:
       fi
     condition: always()
     displayName: 'Analysis summary'
-    bash:
-      targetType: 'inline'
 
   - task: PublishBuildArtifact@1
     condition: always()

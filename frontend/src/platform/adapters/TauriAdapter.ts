@@ -10,6 +10,12 @@ import {open as shellOpen} from '@tauri-apps/plugin-shell'
 import {logger} from '@/lib/logger'
 import type {PlatformAdapter, BackendConfig, FileOpenOptions, FileSaveOptions, NotificationOptions} from '../types'
 
+// SIDEKICK_READY_DEADLINE_MS bounds how long getBackendConfig waits for the Go
+// sidecar to come up before giving up. Without it a sidecar that never starts
+// (crash, misconfig) leaves the app retrying forever on a blank screen. 60s
+// covers slow machines + cold starts; a healthy sidecar is ready in <2s.
+const SIDEKICK_READY_DEADLINE_MS = 60_000
+
 /**
  * Tauri adapter for desktop-specific operations
  */
@@ -32,17 +38,41 @@ export class TauriAdapter implements PlatformAdapter {
       // Sidecar not ready yet. Use BOTH a listener for the 'backend-ready'
       // event AND periodic invoke retries, because listen() is async and the
       // event may fire before the listener is attached.
-      return new Promise(resolve => {
+      //
+      // The whole wait is bounded by SIDEKICK_READY_DEADLINE_MS: if the sidecar
+      // hasn't become ready by then (it crashed, misconfigured, or died), we
+      // stop retrying and reject. Without this deadline the setInterval retried
+      // forever and getBackendConfig() never settled, so the app hung on a
+      // blank screen with no signal — and the 'backend-ready' listener leaked.
+      return new Promise((resolve, reject) => {
         let resolved = false
         let unlisten: (() => void) | null = null
         let retryTimer: ReturnType<typeof setInterval> | null = null
+        let deadlineTimer: ReturnType<typeof setTimeout> | null = null
 
         const finish = (cfg: BackendConfig) => {
           if (resolved) return
           resolved = true
           if (unlisten) unlisten()
           if (retryTimer) clearInterval(retryTimer)
+          if (deadlineTimer) clearTimeout(deadlineTimer)
           resolve(cfg)
+        }
+
+        const fail = () => {
+          if (resolved) return
+          resolved = true
+          if (unlisten) unlisten()
+          if (retryTimer) clearInterval(retryTimer)
+          logger.error(
+            `Backend sidecar did not become ready within ${SIDEKICK_READY_DEADLINE_MS / 1000}s — ` +
+              'check the sidecar logs/config; the app cannot start without it.',
+          )
+          reject(
+            new Error(
+              `backend sidecar did not become ready within ${SIDEKICK_READY_DEADLINE_MS / 1000}s`,
+            ),
+          )
         }
 
         // Listen for the event
@@ -60,6 +90,10 @@ export class TauriAdapter implements PlatformAdapter {
             .then(raw => finish(toConfig(raw)))
             .catch(() => {})
         }, 500)
+
+        // Hard deadline so a dead sidecar surfaces as a failure instead of an
+        // infinite spin. Generous: covers slow machines + cold sidecar starts.
+        deadlineTimer = setTimeout(fail, SIDEKICK_READY_DEADLINE_MS)
       })
     }
   }

@@ -49,6 +49,16 @@ type PostgresStorageBackend struct {
 	// directly (some tests) leave it nil; scheduleBlobCleanup falls back to a
 	// detached goroutine in that case.
 	cleaner *blobCleaner
+
+	// embeddingDim is the configured vector dimension for knowledge-base
+	// embeddings. Chunks whose embedding width differs are kept (JSONB) but
+	// excluded from the pgvector index so similarity search stays well-defined.
+	// 0 ⇒ 1536 (the constructor applies the default).
+	embeddingDim int
+	// hasPgvector is true when the `vector` extension is installed AND the
+	// knowledge_chunks.embedding_vec column exists — i.e. SearchKnowledge can
+	// push similarity ordering into the database. Detected once after migrate.
+	hasPgvector bool
 }
 
 // Config holds the connection settings for the PostgreSQL backend.
@@ -69,6 +79,11 @@ type Config struct {
 	// AzureBlobConnectionString, when set, builds the blob client from a
 	// connection string (emulator / non-MI) instead of account + Managed Identity.
 	AzureBlobConnectionString string
+
+	// EmbeddingDim is the configured knowledge-base embedding dimension. 0 ⇒
+	// default 1536 (OpenAI text-embedding-3-small). Chunks whose embedding width
+	// differs are excluded from the pgvector index (see PostgresStorageBackend).
+	EmbeddingDim int
 }
 
 func DefaultConfig(dsn string) Config {
@@ -198,6 +213,19 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
+	// Apply the embedding-dimension contract (default 1536). Chunks whose width
+	// differs are kept but excluded from the pgvector index.
+	b.embeddingDim = cfg.EmbeddingDim
+	if b.embeddingDim <= 0 {
+		b.embeddingDim = 1536
+	}
+
+	// Detect whether pgvector is available so SearchKnowledge can push the
+	// similarity ordering into the database. Falls back to Go-side ranking
+	// (rankKnowledgeChunks) when the extension or column is absent — local mode
+	// and any deployment without the vector extension keep working unchanged.
+	b.hasPgvector = detectPgvector(ctx, db)
+
 	return b, nil
 }
 
@@ -230,3 +258,39 @@ func (b *PostgresStorageBackend) Close() error {
 // of the StorageBackend interface — only the concrete Postgres backend
 // has a pool to observe.
 func (b *PostgresStorageBackend) DB() *sql.DB { return b.db }
+
+// HasPgvector reports whether server-side vector similarity search is active
+// (the vector extension + embedding_vec column are present). Exposed for
+// observability/health and integration tests; SearchKnowledge falls back to
+// the in-Go ranker when this is false.
+func (b *PostgresStorageBackend) HasPgvector() bool { return b.hasPgvector }
+
+// EmbeddingDim returns the configured knowledge-base embedding dimension.
+func (b *PostgresStorageBackend) EmbeddingDim() int { return b.embeddingDim }
+
+// detectPgvector reports whether the `vector` extension is installed AND the
+// knowledge_chunks.embedding_vec column exists — the two prerequisites for
+// pushing similarity search into the database. A failure or absence returns
+// false (logged at info, not warn: absence is the normal local-mode /
+// no-extension case, not an error condition).
+func detectPgvector(ctx context.Context, db *sql.DB) bool {
+	var ok bool
+	// pg_vector is a query that only succeeds when both the extension is loaded
+	// and the typed column is present; checking both in one round-trip.
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')
+		 AND EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding_vec'
+		 )`).Scan(&ok)
+	if err != nil {
+		slog.Info("pgvector not detected; knowledge search stays Go-side", "error", err)
+		return false
+	}
+	if ok {
+		slog.Info("pgvector detected; knowledge search uses server-side similarity")
+	} else {
+		slog.Info("pgvector not detected; knowledge search stays Go-side")
+	}
+	return ok
+}

@@ -13,6 +13,7 @@ const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDa
 const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
 const LibraryWorkspace = lazy(() => import('@/components/library/LibraryWorkspace'))
 const PortfolioView = lazy(() => import('@/components/dashboard/PortfolioView'))
+const FlowComparisonView = lazy(() => import('@/components/flow/FlowComparisonView'))
 const RuleDependencyView = lazy(() => import('@/components/analyzer/RuleDependencyView'))
 const RuleReference = lazy(() => import('@/components/analyzer/RuleReference'))
 const AdminDashboard = lazy(() => import('@/components/admin/AdminDashboard').then(m => ({default: m.AdminDashboard})))
@@ -87,6 +88,17 @@ export function SystemViewRouter({view}: {view: string}) {
           </div>
         </div>
       )
+    case 'flow-compare':
+      return (
+        <div className="flex flex-col h-full bg-surface-1">
+          <MainPaneToolbar />
+          <div className="flex-1 overflow-auto">
+            <Suspense fallback={<Spinner />}>
+              <FlowComparisonView />
+            </Suspense>
+          </div>
+        </div>
+      )
     case 'deps':
       return (
         <div className="flex flex-col h-full bg-surface-1">
@@ -125,6 +137,7 @@ export function isSystemView(view: string): boolean {
     view === 'home' ||
     view === 'library' ||
     view === 'portfolio' ||
+    view === 'flow-compare' ||
     view === 'deps' ||
     view === 'rules'
   )

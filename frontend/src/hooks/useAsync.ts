@@ -4,7 +4,11 @@ interface UseAsyncResult<T> {
   data: T | null
   isLoading: boolean
   error: string | null
-  setData: (data: T | null) => void
+  // Exposed as the full setState dispatch so callers can apply functional
+  // updaters (prev => next) — needed when two rapid mutations would otherwise
+  // both close over the same stale snapshot (e.g. two session revokes before a
+  // re-render). Plain value updates still work.
+  setData: React.Dispatch<React.SetStateAction<T | null>>
   refetch: () => void
 }
 

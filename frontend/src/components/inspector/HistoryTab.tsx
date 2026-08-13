@@ -178,6 +178,7 @@ export const HistoryTab: React.FC = () => {
                     <button
                       type="button"
                       title={`Compare v${v.version} with current`}
+                      aria-label={`Compare v${v.version} with current`}
                       disabled={busy}
                       onClick={() => handleCompare(v)}
                       className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-0 disabled:opacity-40 transition-colors"
@@ -187,6 +188,7 @@ export const HistoryTab: React.FC = () => {
                     <button
                       type="button"
                       title={`Restore flow to v${v.version}`}
+                      aria-label={`Restore flow to v${v.version}`}
                       disabled={busy}
                       onClick={() => handleRestore(v)}
                       className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-0 disabled:opacity-40 transition-colors"

@@ -46,19 +46,56 @@ func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFa
 	return &KnowledgeService{store: store, factory: factory, settings: settings}
 }
 
+// embedder resolves the embedding provider in the caller's scope. It honours
+// the configured EmbeddingProvider (default openai) AND the optional
+// EmbeddingModel override (so a deployer can pick e.g. text-embedding-3-large).
+//
+// Fallback: if the configured embedding provider has no key configured (common
+// on a Claude- or Gemini-only deploy that never set EmbeddingProvider), the
+// service scans the settings' enabled providers for the first one that supports
+// embeddings. This keeps RAG working on any deployment with at least one
+// embedding-capable provider instead of hard-failing on the openai default.
 func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
 	if s.factory == nil {
 		return nil, fmt.Errorf("embedding provider not configured")
 	}
 
-	providerID := "openai" // fallback
+	providerID := ""
+	embeddingModel := ""
 	if s.settings != nil {
-		if settings := s.settings.Get(); settings != nil && settings.AI.EmbeddingProvider != "" {
+		if settings := s.settings.Get(); settings != nil {
 			providerID = settings.AI.EmbeddingProvider
+			embeddingModel = settings.AI.EmbeddingModel
 		}
 	}
 
-	return s.factory.For(scope, providerID)
+	// Try the configured (or default openai) embedding provider first.
+	if providerID == "" {
+		providerID = "openai"
+	}
+	p, err := s.factory.ForEmbedding(scope, providerID, embeddingModel)
+	if err == nil {
+		return p, nil
+	}
+
+	// Fallback: scan enabled providers for one that can embed. A provider that
+	// can't embed returns "not supported" from Embed; we can't know without a key
+	// whether it supports embeddings, so we try each configured provider and let
+	// the Embed call (later) reject ones that don't. The scan here just needs a
+	// constructed provider — i.e. one with a key configured.
+	if settings := s.settings; settings != nil {
+		if cfg := settings.Get(); cfg != nil {
+			for pid, pc := range cfg.AI.Providers {
+				if !pc.Enabled || pid == providerID {
+					continue
+				}
+				if p2, err2 := s.factory.ForEmbedding(scope, pid, embeddingModel); err2 == nil {
+					return p2, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("embedding provider unavailable (configured %q: %w; no fallback had a key)", providerID, err)
 }
 
 // AddDocument chunks content, generates embeddings in the caller's scope, then
@@ -73,6 +110,14 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	provider, err := s.embedder(scope)
 	if err != nil {
 		return fmt.Errorf("embedding provider unavailable: %w", err)
+	}
+
+	// Defense-in-depth: a service constructed without a store (nil backend,
+	// local mode) must fail cleanly here rather than nil-panic at the store
+	// dereference below. Placed after input/provider validation so the
+	// cheaper checks surface first.
+	if s.store == nil {
+		return fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
 	}
 
 	chunks := chunkText(content, 1000) // ~1000 runes per chunk
@@ -128,6 +173,14 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 		return "", err
 	}
 
+	// Defense-in-depth: nil store (local mode) → return an empty augmentation
+	// rather than nil-panic at the store dereference. Chat still works, just
+	// without org-guideline context. After the embedder check so the cheaper
+	// validation surfaces first.
+	if s.store == nil {
+		return "", nil
+	}
+
 	// Truncate the query before embedding: an oversized message (up to the 10
 	// MiB body limit) would otherwise become a multi-million-token embedding
 	// request — billed per token and above every provider's per-request cap.
@@ -140,7 +193,11 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 		return "", err
 	}
 
-	chunks, err := s.store.SearchKnowledge(ctx, orgID, emb[0], 3)
+	// Top-k retrieval: 5 chunks (was hardcoded 3). More context improves
+	// answer grounding without a significant token cost (each chunk is ~250
+	// tokens). The pgvector query applies a distance threshold to exclude
+	// irrelevant chunks.
+	chunks, err := s.store.SearchKnowledge(ctx, orgID, emb[0], 5)
 	if err != nil {
 		return "", err
 	}
@@ -168,13 +225,29 @@ func chunkText(text string, size int) []string {
 		return []string{text}
 	}
 
+	overlapRunes := size * 15 / 100 // 15% overlap preserves context across boundaries
+
 	paragraphs := strings.Split(text, "\n\n")
 	var chunks []string
 	var current strings.Builder
 	currentRunes := 0
 
 	flush := func() {
-		chunks = append(chunks, current.String())
+		content := current.String()
+		chunks = append(chunks, content)
+
+		// Carry the tail of this chunk into the next as overlap so a topic
+		// straddling the boundary is retrievable from both chunks.
+		if overlapRunes > 0 {
+			runes := []rune(content)
+			if len(runes) > overlapRunes {
+				tail := string(runes[len(runes)-overlapRunes:])
+				current.Reset()
+				current.WriteString(tail)
+				currentRunes = overlapRunes
+				return
+			}
+		}
 		current.Reset()
 		currentRunes = 0
 	}

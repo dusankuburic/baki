@@ -124,8 +124,12 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       try {
         // Subscribe the listener + wait for the SSE connection to be 'open'
         // BEFORE creating the stream, so no chunk is lost when the backend emits.
-        await registerStream(sid, /*begin*/ false)
-        if (!isCurrentGen(threadId, myGen)) {
+        // registerStream returns false if the hook was unmounted mid-registration
+        // (e.g. the user closed the AI tab during the open-wait window) — in that
+        // case do NOT create the backend stream: it would emit over SSE to a dead
+        // listener and burn provider spend with no UI feedback.
+        const registered = await registerStream(sid, /*begin*/ false)
+        if (!registered || !isCurrentGen(threadId, myGen)) {
           dropAcc(sid)
           cancelStream(sid)
           endStream(threadId)
@@ -171,11 +175,19 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
           toast.warning('Chats are busy', {
             description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
           })
-        } else {
+        } else if (/budget/i.test(errMsg)) {
+          // Daily AI budget hit: surface a dedicated, actionable message instead
+          // of a raw "Error: daily AI budget exceeded ($X / $Y)" bubble — the
+          // user needs to know it resets at midnight, not that something broke.
+          const amounts = errMsg.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
+          const detail = amounts ? ` (${amounts[0]})` : ''
+          toast.warning("You've reached today's AI budget" + detail, {
+            description: 'AI requests are capped per day per organization. The budget resets at midnight UTC; contact an admin to raise it.',
+          })
           appendMessage(threadId, {
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: '*Error: ' + errMsg + '*',
+            content: `🛑 **Daily AI budget reached${detail}.** It resets at midnight UTC. Contact an admin to adjust the limit.`,
             timestamp: new Date().toISOString(),
             provider,
             model: selectedModel,

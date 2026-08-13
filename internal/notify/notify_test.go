@@ -69,17 +69,129 @@ func TestTeamsNotifier_PostsMessageCard(t *testing.T) {
 	defer srv.Close()
 
 	n := &TeamsNotifier{URL: srv.URL, Client: srv.Client()}
-	if err := n.Notify(context.Background(), sampleEvent()); err != nil {
+	ev := sampleEvent()
+	if err := n.Notify(context.Background(), ev); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
 	if card["@type"] != "MessageCard" {
 		t.Errorf("@type = %v, want MessageCard", card["@type"])
 	}
-	if card["summary"] != "New findings in Invoice Bot" {
-		t.Errorf("summary = %v", card["summary"])
+	if card["summary"] != ev.Title {
+		t.Errorf("summary = %v, want %q", card["summary"], ev.Title)
 	}
 	if _, ok := card["sections"].([]any); !ok {
 		t.Errorf("expected a sections array, got %T", card["sections"])
+	}
+}
+
+func TestSlackNotifier_PostsAttachment(t *testing.T) {
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("payload is not valid JSON: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := &SlackNotifier{URL: srv.URL, Client: srv.Client()}
+	ev := sampleEvent()
+	if err := n.Notify(context.Background(), ev); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if payload["text"] != ev.Title {
+		t.Errorf("text = %v, want %q", payload["text"], ev.Title)
+	}
+	attachments, ok := payload["attachments"].([]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("expected one attachment, got %T", payload["attachments"])
+	}
+	att := attachments[0].(map[string]any)
+	// Drift with errors → "danger" stripe.
+	if att["color"] != "danger" {
+		t.Errorf("color = %v, want danger for an event with errors", att["color"])
+	}
+	if att["footer"] != "Baki PAD Flow Analyzer" {
+		t.Errorf("footer = %v", att["footer"])
+	}
+}
+
+func TestSlackNotifier_AnalysisCompleteColorBySeverity(t *testing.T) {
+	cases := []struct {
+		name      string
+		ev        Event
+		wantColor string
+	}{
+		{"errors → danger", Event{Type: EventAnalysisComplete, Analysis: &AnalysisSummary{Errors: 1}}, "danger"},
+		{"warnings → warning", Event{Type: EventAnalysisComplete, Analysis: &AnalysisSummary{Warnings: 2}}, "warning"},
+		{"clean → good", Event{Type: EventAnalysisComplete, Analysis: &AnalysisSummary{}}, "good"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := slackColor(c.ev); got != c.wantColor {
+				t.Errorf("slackColor = %q, want %q", got, c.wantColor)
+			}
+		})
+	}
+}
+
+func TestSlackNotifier_IncludesAnalysisFields(t *testing.T) {
+	ev := Event{
+		Type:     EventAnalysisComplete,
+		FlowName: "Onboarding",
+		Analysis: &AnalysisSummary{Errors: 3, Warnings: 5, Info: 9, HealthScore: 42},
+	}
+	fields := slackFields(ev)
+	// Expect Flow + Errors + Warnings + Info + Health = 5 short fields.
+	if len(fields) != 5 {
+		t.Fatalf("expected 5 fields for an analysis event, got %d (%+v)", len(fields), fields)
+	}
+	// First field is always Flow.
+	if fields[0]["title"] != "Flow" || fields[0]["value"] != "Onboarding" {
+		t.Errorf("first field = %+v, want Flow/Onboarding", fields[0])
+	}
+}
+
+func TestSlackNotifier_HMACHeaderWhenSecretSet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sig := r.Header.Get("X-Baki-Signature"); sig == "" {
+			t.Error("expected X-Baki-Signature header when Secret is set")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := &SlackNotifier{URL: srv.URL, Client: srv.Client(), Secret: "topsecret"}
+	if err := n.Notify(context.Background(), sampleEvent()); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+}
+
+func TestDispatcher_FansOutIncludingSlack(t *testing.T) {
+	var webhookHits, slackHits atomic.Int32
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		webhookHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer webhook.Close()
+	slack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slackHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slack.Close()
+
+	d, err := New(Config{WebhookURL: webhook.URL, SlackURL: slack.URL})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d.Dispatch(context.Background(), sampleEvent())
+
+	if webhookHits.Load() != 1 {
+		t.Errorf("webhook hit %d times, want 1", webhookHits.Load())
+	}
+	if slackHits.Load() != 1 {
+		t.Errorf("slack hit %d times, want 1", slackHits.Load())
 	}
 }
 

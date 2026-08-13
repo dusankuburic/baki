@@ -116,3 +116,54 @@ func TestAnalyzeRaw_GarbageIsGraceful(t *testing.T) {
 		}
 	}
 }
+
+// TestAnalyzeRaw_TooManyFilesRejected verifies the file-count guard: an
+// oversized request is rejected before parsing so a single call can't burn
+// seconds of CPU on the shared backend (CPU-DoS mitigation).
+func TestAnalyzeRaw_TooManyFilesRejected(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	files := make(map[string]string, 51)
+	for i := 0; i < 51; i++ {
+		files["f"+itoa(i)+".txt"] = "#Region \"Main\"\n#EndRegion\n"
+	}
+	rr := doRequest(t, rt, http.MethodPost, "/api/analysis/analyze-raw", map[string]any{
+		"files": files,
+	})
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for too many files, got %d", rr.Code)
+	}
+}
+
+// TestAnalyzeRaw_OversizedPayloadRejected verifies the total-size guard: a
+// single large file beyond the KB cap is rejected before parsing.
+func TestAnalyzeRaw_OversizedPayloadRejected(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	// ~3 MB of padding in one file — over the 2 MB total cap.
+	big := "#Region \"Main\"\n" + strings.Repeat("x", 3*1024*1024) + "\n#EndRegion\n"
+	rr := doRequest(t, rt, http.MethodPost, "/api/analysis/analyze-raw", map[string]any{
+		"files": map[string]string{"Big.txt": big},
+	})
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for oversized payload, got %d", rr.Code)
+	}
+}
+
+// itoa avoids pulling strconv into a small test just for integer formatting.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	if neg {
+		b = append([]byte{'-'}, b...)
+	}
+	return string(b)
+}

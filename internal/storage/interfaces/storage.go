@@ -377,6 +377,7 @@ type StorageBackend interface {
 	APITokenStore
 	UserTokenStore
 	PolicyStore
+	GovernanceAlertStore
 }
 
 // PolicyStore covers org-scoped governance policies (named rule sets with a
@@ -387,6 +388,38 @@ type PolicyStore interface {
 	GetPolicy(ctx context.Context, orgID, id string) (*models.Policy, error)
 	ListPolicies(ctx context.Context, orgID string) ([]*models.Policy, error)
 	DeletePolicy(ctx context.Context, orgID, id string) error
+}
+
+// GovernanceAlertStore is the in-app inbox for governance signals (baseline
+// drift, health regressions) detected by the continuous-governance scanner.
+// Alerts are team-shared: anyone who can see a flow can see and acknowledge its
+// alerts (mirroring the finding_status/comment visibility model). The scanner
+// writes alerts (system context, no RLS principal); users read/ack/dismiss them
+// through the API (RLS-scoped to flows they can see).
+type GovernanceAlertStore interface {
+	// RecordGovernanceAlert persists a new alert. The ID and CreatedAt are
+	// stamped by the caller (the scanner); the store treats ID as the primary
+	// key. A duplicate ID is a no-op (the scanner is de-duplicated upstream, but
+	// this keeps a retry safe).
+	RecordGovernanceAlert(ctx context.Context, a *GovernanceAlert) error
+	// ListGovernanceAlerts returns alerts visible to the caller, newest first,
+	// respecting the filter's pagination + include-dismissed flag. Implementations
+	// return a non-nil (possibly empty) slice.
+	ListGovernanceAlerts(ctx context.Context, filter GovernanceAlertFilter) ([]*GovernanceAlert, error)
+	// UnreadGovernanceAlertCount returns the number of visible alerts that have
+	// not yet been acknowledged (read_at IS NULL and not dismissed).
+	UnreadGovernanceAlertCount(ctx context.Context) (int, error)
+	// MarkGovernanceAlertRead stamps read_at = NOW() on one alert. Idempotent.
+	MarkGovernanceAlertRead(ctx context.Context, alertID string) error
+	// MarkAllGovernanceAlertsRead stamps read_at = NOW() on every visible unread
+	// alert (the "open the panel → clear the badge" action). Idempotent.
+	MarkAllGovernanceAlertsRead(ctx context.Context) error
+	// DismissGovernanceAlert stamps dismissed_at = NOW() on one alert. A dismissed
+	// alert is hidden from the default list view but not deleted. Idempotent.
+	DismissGovernanceAlert(ctx context.Context, alertID string) error
+	// ClearGovernanceAlerts permanently deletes the caller's visible alerts that
+	// have been dismissed. Non-dismissed alerts are retained.
+	ClearGovernanceAlerts(ctx context.Context) error
 }
 
 // UserToken purposes.
@@ -789,8 +822,11 @@ type AIPromptsConfig struct {
 }
 
 type AISettings struct {
-	ActiveProvider          string                      `json:"activeProvider"`
-	EmbeddingProvider       string                      `json:"embeddingProvider"`
+	ActiveProvider    string `json:"activeProvider"`
+	EmbeddingProvider string `json:"embeddingProvider"`
+	// EmbeddingModel mirrors models.AISettings.EmbeddingModel — keep the JSON tags
+	// in parity or the settings round-trip drops the value silently.
+	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
 	DemoMode                DemoModeSettings            `json:"demoMode"`
 	ShowCostEstimates       bool                        `json:"showCostEstimates"`
@@ -889,6 +925,39 @@ type FindingStatus struct {
 	AssigneeID    string    `json:"assigneeId,omitempty"`
 	UpdatedBy     string    `json:"updatedBy,omitempty"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// GovernanceAlert is one in-app governance signal (baseline drift or health
+// regression) for a flow, written by the continuous-governance scanner and
+// surfaced in the notifications bell. Alerts are team-shared: visible to anyone
+// who can see the flow (RLS inherits flow visibility, same as finding_status).
+// The read/dismiss timestamps are team-global — acknowledging an alert clears
+// the badge for the whole team (governance/incident-ack semantics).
+type GovernanceAlert struct {
+	ID          string     `json:"id"`
+	FlowID      string     `json:"flowId"`
+	FlowName    string     `json:"flowName,omitempty"`
+	OrgID       string     `json:"orgId,omitempty"`
+	Type        string     `json:"type"` // "drift" | "health_regression"
+	Title       string     `json:"title"`
+	Message     string     `json:"message,omitempty"`
+	Severity    string     `json:"severity"` // "error" | "warning"
+	NewErrors   int        `json:"newErrors,omitempty"`
+	NewWarnings int        `json:"newWarnings,omitempty"`
+	HealthScore int        `json:"healthScore,omitempty"`
+	PrevHealth  int        `json:"prevHealth,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ReadAt      *time.Time `json:"readAt,omitempty"`
+	DismissedAt *time.Time `json:"dismissedAt,omitempty"`
+}
+
+// GovernanceAlertFilter narrows a ListGovernanceAlerts query. Limit/Offset
+// paginate (Limit <= 0 ⇒ a sensible default cap). IncludeDismissed controls
+// whether dismissed alerts appear (default false hides them).
+type GovernanceAlertFilter struct {
+	Limit            int
+	Offset           int
+	IncludeDismissed bool
 }
 
 // APIToken is a scoped, revocable machine credential (personal access token)

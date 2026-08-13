@@ -1,94 +1,72 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"os"
-	"strings"
-	"time"
 
+	"pad-analyzer/internal/notify"
 	"pad-core/models"
 )
 
-// WebhookNotifier posts analysis summaries to a Slack-compatible incoming
-// webhook URL when configured via the PAD_WEBHOOK_URL env var. If the env var
-// is unset, all methods are no-ops. The payload format matches Slack's incoming
-// webhook API, which is also compatible with Discord, Mattermost, and Microsoft
-// Teams (via the Slack-compatible webhook connector).
+// WebhookNotifier posts analysis summaries to chat channels (Slack/Discord/
+// Mattermost/Teams-via-Slack-connector) and the generic webhook/Teams
+// channels. It is a thin facade over notify.Dispatcher: rather than duplicating
+// the HTTP/retry/HMAC delivery logic, it translates an analysis report into a
+// notify.Event and hands it to the shared dispatcher. This consolidates the two
+// historically-separate notification paths (governance alerts from the scanner
+// and analysis-complete summaries from this handler) onto one delivery stack.
+//
+// The dispatcher is nil-safe: when no channel is configured, Enabled() is false
+// and NotifyAnalysis is a no-op.
 type WebhookNotifier struct {
-	url    string
-	client *http.Client
+	dispatcher *notify.Dispatcher
 }
 
-// NewWebhookNotifier reads the webhook URL from PAD_WEBHOOK_URL. Returns a
-// no-op notifier if the env var is unset.
-func NewWebhookNotifier() *WebhookNotifier {
-	url := strings.TrimSpace(os.Getenv("PAD_WEBHOOK_URL"))
-	if url == "" {
-		return &WebhookNotifier{}
-	}
-	return &WebhookNotifier{
-		url:    url,
-		client: &http.Client{Timeout: 10 * time.Second},
-	}
+// NewWebhookNotifier wraps a notify.Dispatcher. The dispatcher is provided by
+// main.go's provideNotifier and already knows about every configured channel.
+func NewWebhookNotifier(dispatcher *notify.Dispatcher) *WebhookNotifier {
+	return &WebhookNotifier{dispatcher: dispatcher}
 }
 
-func (w *WebhookNotifier) Enabled() bool { return w.url != "" }
+func (w *WebhookNotifier) Enabled() bool { return w.dispatcher != nil && w.dispatcher.Enabled() }
 
-// NotifyAnalysis posts a summary of the analysis report to the webhook. It's
-// non-blocking (runs in a goroutine) and best-effort (failures are silently
-// dropped — a notification failure must never break analysis).
+// NotifyAnalysis posts a summary of the analysis report to every configured
+// channel. It's non-blocking (dispatches on a goroutine) and best-effort
+// (per-channel failures are logged inside the dispatcher, never propagated — a
+// notification failure must never break analysis).
 func (w *WebhookNotifier) NotifyAnalysis(flowName string, report *models.AnalysisReport) {
 	if !w.Enabled() || report == nil {
 		return
 	}
 
-	color := "good"
-	if report.Stats.Errors > 0 {
-		color = "danger"
-	} else if report.Stats.Warnings > 0 {
-		color = "warning"
+	summary := &notify.AnalysisSummary{
+		Errors:   report.Stats.Errors,
+		Warnings: report.Stats.Warnings,
+		Info:     report.Stats.Info,
 	}
-
-	healthStr := "n/a"
 	if report.Metrics != nil {
-		healthStr = fmt.Sprintf("%d/100", report.Metrics.HealthScore)
+		summary.HealthScore = report.Metrics.HealthScore
 	}
 
-	payload := map[string]interface{}{
-		"text": fmt.Sprintf("PAD Flow Analysis: *%s*", flowName),
-		"attachments": []map[string]interface{}{{
-			"color": color,
-			"fields": []map[string]interface{}{
-				{"title": "Errors", "value": fmt.Sprintf("%d", report.Stats.Errors), "short": true},
-				{"title": "Warnings", "value": fmt.Sprintf("%d", report.Stats.Warnings), "short": true},
-				{"title": "Info", "value": fmt.Sprintf("%d", report.Stats.Info), "short": true},
-				{"title": "Health", "value": healthStr, "short": true},
-			},
-			"footer": "Baki PAD Flow Analyzer",
-			"ts":     time.Now().Unix(),
-		}},
+	severity := "clean"
+	switch {
+	case report.Stats.Errors > 0:
+		severity = "errors"
+	case report.Stats.Warnings > 0:
+		severity = "warnings"
 	}
 
-	go w.post(payload)
-}
+	ev := notify.Event{
+		Type:     notify.EventAnalysisComplete,
+		FlowName: flowName,
+		Title:    fmt.Sprintf("PAD Flow Analysis: %s (%s)", flowName, severity),
+		Message: fmt.Sprintf("%d error(s), %d warning(s), %d info finding(s)",
+			report.Stats.Errors, report.Stats.Warnings, report.Stats.Info),
+		Analysis: summary,
+	}
 
-func (w *WebhookNotifier) post(payload map[string]interface{}) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, w.url, bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return
-	}
-	_ = resp.Body.Close()
+	// Dispatch on a detached context — the analysis HTTP request may return (and
+	// its ctx cancel) before delivery completes. The dispatcher applies its own
+	// per-channel timeout.
+	go w.dispatcher.Dispatch(context.Background(), ev)
 }

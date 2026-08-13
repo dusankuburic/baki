@@ -23,17 +23,18 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X main.GitCommit=${GIT_COMMIT} -X main.Version=${VERSION} -X pad-analyzer/internal/service.Version=${VERSION}" \
     -o baki-backend main.go
 
-# Stage 3: Final lean image
-FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
-RUN apk add --no-cache ca-certificates wget
-
-RUN addgroup -g 1000 -S pad && adduser -u 1000 -S pad -G pad \
-    && mkdir -p /home/pad \
-    && chown pad:pad /home/pad
+# Stage 3: Final lean image — distroless (no shell/package-manager) for a
+# smaller attack surface. The Go binary is CGO_ENABLED=0 (static), so the
+# distroless static-debian12 variant is directly compatible. :nonroot ships
+# uid 65532, consistent with the ACA securityContext runAsNonRoot in
+# infra/main.bicep. Pinned by digest (Dependabot's docker ecosystem keeps it
+# current) — a floating tag would regress the pinning discipline applied to the
+# other base images.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 
 WORKDIR /app
-COPY --from=backend-builder --chown=pad:pad /app/baki-backend .
-COPY --from=frontend-builder --chown=pad:pad /app/frontend/dist ./frontend/dist
+COPY --from=backend-builder --chown=nonroot:nonroot /app/baki-backend .
+COPY --from=frontend-builder --chown=nonroot:nonroot /app/frontend/dist ./frontend/dist
 
 ENV PAD_MODE=cloud
 ENV PAD_HOST=0.0.0.0
@@ -43,10 +44,13 @@ ENV PAD_STORAGE=database
 ENV PAD_AUTH_ENABLED=true
 ENV PAD_BEHIND_PROXY=true
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- "http://localhost:${PAD_PORT}/readyz" >/dev/null || exit 1
+# No Dockerfile HEALTHCHECK: there is no shell/wget in distroless, and under the
+# prod target (Azure Container Apps) liveness/readiness are served by the
+# platform httpGet probes in infra/main.bicep (/healthz, /readyz). docker-
+# compose.{yml,prod.yml} carry their own healthcheck. A bare `docker run` loses
+# the in-image liveness signal — operators using it should add --health-cmd.
 
-USER pad:pad
+USER nonroot:nonroot
 
 EXPOSE 8080
 

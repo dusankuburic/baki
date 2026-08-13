@@ -38,6 +38,10 @@ inputs:
     description: 'Upload the SARIF report to GitHub code scanning (requires security-events: write).'
     required: false
     default: 'true'
+  comment-on-pr:
+    description: 'Post a summary comment on the pull request (requires pull-requests: write, only fires on pull_request events).'
+    required: false
+    default: 'true'
 
 outputs:
   sarif-file:
@@ -138,3 +142,43 @@ runs:
           echo "::error::PAD analysis gate failed (fail-on=${{ inputs.fail-on }}, policy=${{ inputs.policy }})."
           exit "$code"
         fi
+
+    - name: Comment on pull request
+      if: ${{ always() && github.event_name == 'pull_request' && inputs.comment-on-pr == 'true' }}
+      uses: actions/github-script@d7906e4ad0b1822423a8e9a043a9c665e3ae5c4a  # v7
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const fs = require('fs');
+          const reportPath = `${{ runner.temp }}/pad-report.json`;
+          let body = '## PAD Flow Analysis\n\n';
+          try {
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+            const s = report.stats || {};
+            const m = report.metrics || {};
+            const icon = s.errors > 0 ? '🔴' : s.warnings > 0 ? '🟠' : '✅';
+            body += `${icon} **${s.errors}** error(s) · **${s.warnings}** warning(s) · **${s.info}** info\n`;
+            body += `Health: **${m.healthScore ?? 'n/a'}/100** · Blocks: ${s.blocksAnalyzed}\n`;
+            if (s.suppressed > 0) body += ` (${s.suppressed} suppressed inline)`;
+          } catch {
+            body += '_No report produced._';
+          }
+          // Use update-or-create so re-pushes update the existing comment instead of stacking.
+          const {data: comments} = await github.rest.issues.listComments({
+            ...context.repo,
+            issue_number: context.issue.number,
+          });
+          const existing = comments.find(c => c.user.type === 'Bot' && c.body.startsWith('## PAD Flow Analysis'));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              ...context.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }

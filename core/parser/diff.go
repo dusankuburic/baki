@@ -74,12 +74,33 @@ func wrapBlocksAsDiff(blocks []models.Block, change models.ChangeType) []models.
 	return res
 }
 
+// Diff size caps. The LCS matrix is O(m×n) memory and backtrack recurses O(m+n)
+// deep, so a pathologically large subflow (thousands of blocks) could exhaust
+// memory or overflow the stack. Above these bounds we fall back to a coarse,
+// linear diff instead of the exact LCS.
+const (
+	maxDiffBlocksPerSide = 5000
+	maxDiffCells         = 4_000_000
+)
+
+// diffTooLarge reports whether an m×n LCS would exceed the memory/recursion
+// budget. The cell-count check is only reached when both sides are already
+// within maxDiffBlocksPerSide, so m*n cannot overflow.
+func diffTooLarge(m, n int) bool {
+	return m > maxDiffBlocksPerSide || n > maxDiffBlocksPerSide || m*n > maxDiffCells
+}
+
 func diffSubflow(oldSf, newSf *models.Subflow) models.SubflowDiff {
 	oldBlocks := flattenBlocks(oldSf.Blocks)
 	newBlocks := flattenBlocks(newSf.Blocks)
 
-	matrix := lcs(oldBlocks, newBlocks)
-	blocks := backtrack(matrix, oldBlocks, newBlocks, len(oldBlocks), len(newBlocks))
+	var blocks []models.BlockDiff
+	if diffTooLarge(len(oldBlocks), len(newBlocks)) {
+		blocks = coarseBlockDiff(oldBlocks, newBlocks)
+	} else {
+		matrix := lcs(oldBlocks, newBlocks)
+		blocks = backtrack(matrix, oldBlocks, newBlocks, len(oldBlocks), len(newBlocks))
+	}
 
 	change := models.ChangeNone
 	for _, b := range blocks {
@@ -152,6 +173,38 @@ func backtrack(matrix [][]int, a, b []models.Block, i, j int) []models.BlockDiff
 		})
 	}
 	return []models.BlockDiff{}
+}
+
+// coarseBlockDiff is the linear fallback used when an exact LCS would exceed the
+// size caps (see diffTooLarge). It cannot detect moves/insertions the way LCS
+// does, but it is O(m+n) time and memory with no recursion. A fast path handles
+// the common "large subflow, nothing changed" case exactly; otherwise every old
+// block is reported removed and every new block added.
+func coarseBlockDiff(oldBlocks, newBlocks []models.Block) []models.BlockDiff {
+	if len(oldBlocks) == len(newBlocks) {
+		identical := true
+		for i := range oldBlocks {
+			if !blocksEqual(&oldBlocks[i], &newBlocks[i]) {
+				identical = false
+				break
+			}
+		}
+		if identical {
+			out := make([]models.BlockDiff, len(newBlocks))
+			for i := range newBlocks {
+				out[i] = models.BlockDiff{Change: models.ChangeNone, Old: &oldBlocks[i], New: &newBlocks[i]}
+			}
+			return out
+		}
+	}
+	out := make([]models.BlockDiff, 0, len(oldBlocks)+len(newBlocks))
+	for i := range oldBlocks {
+		out = append(out, models.BlockDiff{Change: models.ChangeRemoved, Old: &oldBlocks[i]})
+	}
+	for i := range newBlocks {
+		out = append(out, models.BlockDiff{Change: models.ChangeAdded, New: &newBlocks[i]})
+	}
+	return out
 }
 
 func blocksEqual(a, b *models.Block) bool {

@@ -115,6 +115,7 @@ func (cb *CircuitBreakerProvider) Chat(ctx context.Context, req Request) (*Respo
 	if err := cb.check(); err != nil {
 		return nil, err
 	}
+	defer cb.recordPanic()
 	resp, err := cb.Provider.Chat(ctx, req)
 	cb.record(err)
 	return resp, err
@@ -124,9 +125,25 @@ func (cb *CircuitBreakerProvider) Embed(ctx context.Context, text []string) ([][
 	if err := cb.check(); err != nil {
 		return nil, err
 	}
+	defer cb.recordPanic()
 	res, err := cb.Provider.Embed(ctx, text)
 	cb.record(err)
 	return res, err
+}
+
+// recordPanic resolves the circuit when the wrapped provider panics. Without it,
+// a panic skips the record() call in each method, so a half-open PROBE is never
+// resolved — check() then rejects every subsequent caller to that provider
+// forever (wedged until process restart). It records a failure (reopening a
+// half-open probe / counting toward the threshold) and re-panics so the original
+// crash still propagates to the caller's recover for logging. On the normal
+// (no-panic) path recover() returns nil and this is a no-op — the explicit
+// record() above already ran, so there is no double-record.
+func (cb *CircuitBreakerProvider) recordPanic() {
+	if r := recover(); r != nil {
+		cb.record(ErrProviderDown)
+		panic(r)
+	}
 }
 
 // Stream counts mid-stream failures too: the SSE parsers surface an upstream
@@ -138,6 +155,7 @@ func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChu
 	if err := cb.check(); err != nil {
 		return err
 	}
+	defer cb.recordPanic()
 	var chunkErr error
 	err := cb.Provider.Stream(ctx, req, func(c Chunk) {
 		if c.Error != nil {

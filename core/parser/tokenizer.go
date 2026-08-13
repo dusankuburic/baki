@@ -87,6 +87,10 @@ func Tokenize(text string) []Token {
 				indent2 := computeIndent(trimmed2)
 				content2 := strings.TrimLeft(trimmed2, " \t")
 				tok := classifyLine(tripleStartLine, indent2, combined, content2)
+				// The token spans from tripleStartLine through this closing
+				// line; record the physical end so block fixers append/wrap/
+				// remove past the literal rather than inside it.
+				tok.EndLine = lineNum
 				tokens = append(tokens, tok)
 			}
 			continue
@@ -224,6 +228,14 @@ type tokenBase struct {
 // Tokenize already consumed).
 func classifyComment(b tokenBase) (Token, bool) {
 	content := b.content
+	// Region directives (#Region/#EndRegion AND the spaced "# Region"/
+	// "# EndRegion" variants) are structural, not comments — defer to
+	// classifyRegion. Without this, reComment's "#\s+.*" alternative steals the
+	// spaced forms (which it matches) and the subflow boundary is misclassified
+	// as a comment, corrupting the block tree with spurious unclosed-block errors.
+	if reRegionStart.MatchString(content) || reRegionEnd.MatchString(content) {
+		return Token{}, false
+	}
 	upper := strings.ToUpper(strings.TrimSpace(content))
 
 	if reComment.MatchString(content) {

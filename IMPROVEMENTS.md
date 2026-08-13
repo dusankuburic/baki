@@ -44,13 +44,13 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 - [~] **H8** Filesystem silent-success stubs (`local_storage.go:774,798`). **Deferred** — stubs are documented intentional no-ops and internally consistent (save=no-op, load=empty/not-found); converting to errors risks breaking local-mode dashboard/refresh paths that call them. Interface split (Phase 3-deferred) is the durable fix.
 - [x] **M6-index** Missing `(org_id, created_at)` index on `usage_metrics` (hot budget path). **Fix:** migration 7 `usage_metrics_org_created_idx`.
 - [~] **M3-RLS** `BeginTx` paths bypass RLS undocumented (`postgres_orgs.go`, `SaveFlowVersion`, `SaveKnowledgeChunks`). **Partial fix:** `SaveFlowVersion` and `SaveKnowledgeChunks` now route via `BeginRLS`/`hasRLSTx` (the latter in Phase 3A); `SaveOrg`/`MutateOrg` still use raw `b.db.BeginTx` — `organisations`/`org_members` have no RLS policies so the security impact is nil, but the independent-commit footgun remains (a handler that errors after SaveOrg cannot roll back the org mutation).
-- [ ] **M9** Migration system has no checksum. **Fix:** sha256 column in `schema_migrations`; fail boot on mismatch. *(deferred)*
+- [x] **M9** Migration system has no checksum. **Fix:** added a `checksum TEXT` column to `schema_migrations` (additive `ADD COLUMN IF NOT EXISTS`), recorded as `sha256(step.sql)` in `applyMigration`. On every boot `verifyChecksums` (called from `migrate` right after reading the current version) re-hashes each already-applied step and **fails boot with a "schema migration drift detected" error** on any mismatch — i.e. an edited shipped migration. Pre-checksum deployments (empty checksum) are gracefully backfilled with the running binary's value rather than flagged as drift. +`TestMigrationChecksum_Deterministic` (no DB) and Postgres integration tests `TestMigrate_RecordsChecksums`, `TestMigrate_ChecksumDriftFailsBoot`, `TestMigrate_BackfillsEmptyChecksum` (podman harness).
 
 ---
 
 ## Phase 4 — Frontend reliability
 
-- [ ] **H9** `FindingCard.tsx` (459 lines, 6 concerns, zero tests). **Deferred** — large refactor; tracked separately. *(deferred to avoid churn risk)*
+- [x] **H9** `FindingCard.tsx` (was 459 lines, 6 concerns, zero tests). **Largely addressed** — extracted to 226 lines with `useRelatedFindings`/`useFindingComments`/`useFindingFix` hooks + a 210-line test file. Residual: still mixes render + several action surfaces, but the "untested + tangled" concern is closed.
 - [x] **H1-fe** `focusedFindingKey` not cleared on reset/flow switch (`analysisStore.ts`). **Fix:** clear in `reset()` + `clearAnalysisState`.
 - [x] **H2-fe** `presenceStore` module-level `setInterval` never cancelled (`presenceStore.ts:151`). **Fix:** early-return when `flowId == null` (no churn when disconnected/logged out).
 - [x] **L8-fe** `flowStore.visibleTypes` not in `reset()`. **Fix:** reset to `new Set(ALL_TYPES)`.
@@ -60,8 +60,8 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 - [x] **L4-fe** `requestBlob` duplicates refresh logic. **Fix:** extracted shared `fetchWithRefresh` used by request + requestBlob + retry.
 - [x] **M10** `tsconfig` legacy `moduleResolution: "Node"`. **Fix:** `"Bundler"` (both tsconfig + tsconfig.node).
 - [x] **M11** Shallow code-splitting. **Fix:** lazy-loaded `AdminDashboard` (heavy routes were already lazy; admin kept out of non-admin bundle).
-- [ ] **M5-fe** settingsStore persist queue untestable. **Deferred.**
-- [ ] **L7-fe** `useChatStreamEngine` has no tests. **Deferred.**
+- [x] **M5-fe** settingsStore persist queue untestable. **Fix:** the three module-level queue vars (timer / resolveSuperseded / inflight) are now one `persistQueue` state object with a test-only `__resetPersistQueueForTest()` reset; `beforeEach`/`afterEach` clear it so cases don't leak. +3 Vitest cases (debounce coalesce, supersede-resolves-immediately, in-flight guard queues behind).
+- [x] **L7-fe** `useChatStreamEngine` has no tests. **Fixed previously** (332-line test suite).
 
 ---
 
@@ -70,13 +70,13 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 ### Analyzer (Medium/Low)
 - [x] M2 `patch.go:41-42` doc says "first occurrence" but code does `ReplaceAll` — update doc. **Fix:** doc updated to "all occurrences"; in-code comment was already correct.
 - [x] M3 `ReportToMarkdown` panics on nil doc (`markdown.go:16`) — mirror SARIF nil-check. *(previously fixed)*
-- [ ] M4 `DiffFlows` O(m×n) memory + recursion risk — add size cap / Myers diff.
+- [x] M4 `DiffFlows` O(m×n) memory + recursion risk — add size cap / Myers diff. **Fix:** `diffSubflow` now guards with `diffTooLarge(m,n)` (per-side block cap 5000, cell cap 4M); above it, `coarseBlockDiff` does an O(m+n) linear fallback (all-removed + all-added) with a fast path that keeps a large *unchanged* subflow exactly unchanged — no giant LCS matrix, no deep `backtrack` recursion. Below the cap the exact LCS is unchanged. +`TestDiffTooLarge`, `TestDiffSubflow_OverCap_CoarseFallback`, `TestDiffSubflow_OverCap_IdenticalIsUnchanged`.
 - [x] M5 `blocksEqual` ignores property values (`diff.go:155`) — fold property hash. **Fix:** `blocksEqual` now also requires `maps.Equal(a.Properties, b.Properties)`, so a config-only edit (changed `Url:`/`Timeout:`/etc.) surfaces as remove-old + add-new instead of `ChangeNone`. +`TestBlocksEqual_DifferentPropertyValue`, `TestBlocksEqual_SameProperties` (order-independent), and end-to-end `TestDiffFlows_PropertyOnlyEdit`.
 - [x] M6 SARIF `driver.version` never set. *(previously fixed)*
 - [x] M7 SARIF per-rule level from first finding — track max severity. **Fix:** track `ruleMaxRank` per rule; bump `DefaultConfiguration.Level` when a higher-severity finding arrives.
 - [x] M8 `report.Groups` order non-deterministic (`dedup.go:64`) — sort. **Fix:** `slices.SortFunc` by BlockID then Primary.Title; +25-iter determinism regression test.
-- [~] M9 `detectCycles` malformed cycle reports — Tarjan SCC. **Tests added** (`TestDetectCycles_ReportsCycle`, `TestDetectCycles_AcyclicGraphReturnsNone`) lock the "a cycle IS detected" contract. The duplicate-leading-element output imperfection is still present; a future Tarjan SCC swap (deferred) will tighten the format.
-- [ ] M10 `progress.go` duplicates parse pipeline — unify.
+- [x] M9 `detectCycles` malformed cycle reports — Tarjan SCC. **Fix:** swapped the DFS-with-colors reconstruction for Tarjan's SCC algorithm. Each cyclic SCC is now reported as its node set in canonical (sorted) order — no more duplicate leading element — and the list is deterministic across runs. A singleton SCC counts as a cycle only on a self-loop. +`TestDetectCycles_CanonicalOrder` (25-iter determinism), `TestDetectCycles_SelfLoop`, and the existing reports-cycle test now also asserts no duplicate node within a cycle.
+- [x] M10 `progress.go` duplicates parse pipeline — unify. **Fix:** `Parser` gains a `WithProgress` option; `Parse()` runs the single tokenize→wrap→state-loop→finalize pipeline and emits percent callbacks only when a callback is wired (the no-callback hot path stays branch-free). `ParseTextWithProgress` now delegates instead of duplicating. This also fixed a latent bug: the progress copy was missing the canonical path's EOF unclosed-block flush, so an abruptly-terminated LOOP silently dropped its ParseError under the progress path. +`TestParseTextWithProgress_UnclosedBlock_MatchesParseText`.
 - [~] M11 `safeCheck` swallows panics silently — add `RulesSkipped` surfacing. **Fix:** `AnalysisStats.RulesSkipped int` added; `safeCheck` returns `(findings, skipped)`; counter summed in `runAnalysisCore` and stamped on the report. +`TestRunAnalysis_RulesSkippedSurfaced` proves a panicking rule doesn't abort the run AND is observable on the report.
 - [x] L1 Reinvent `max` builtin (`progress.go:61`, `diff.go:161`) — use builtin. **Fix:** deleted both; Go 1.25 builtin.
 - [x] L2 `fnvHasher.write` operates on runes not bytes. **Fix:** iterate bytes (`for i := 0; i < len(s); i++`); +`TestFnvHasher_ByteSemantics` cross-checks canonical FNV-1a of UTF-8 bytes.
@@ -96,30 +96,30 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 
 ### Storage (Medium/Low)
 - [x] M1 `SaveAuditEvents` no 65535-param cap guard. **Fix:** the single multi-row INSERT (`len(events)*9` bind params) overflowed Postgres' 65535-param wire limit at >~7281 events. Now chunked into ≤5000-row batches (`chunkAuditEvents`/`buildAuditInsert`) run inside one `BeginTx` so the write stays all-or-nothing. +pure unit tests (`TestChunkAuditEvents_RespectsParamCeiling`, `TestBuildAuditInsert_ParamCount`) and a Postgres integration test (`TestSaveAuditEvents_LargeBatch`, 8000 rows) behind the `DATABASE_URL` podman harness — verified the pre-fix single statement fails with "extended protocol limited to 65535 parameters".
-- M2 `SaveOrg`/`MutateOrg` delete-all-reinsert members.
-- M4 `SaveFlowVersion` uploads blob inside `FOR UPDATE` lock.
-- M5 `FlowSortBlocksDesc` ORDER BY casts JSONB — add expression index.
-- M7 `LoadUsersByIDs` IN-list vs `ANY($1)` inconsistency.
+- [x] M2 `SaveOrg`/`MutateOrg` delete-all-reinsert members. **Fix:** both call sites now share one `syncOrgMembers(ctx, tx, org, now)` helper that upserts present members (`ON CONFLICT (org_id,user_id) DO UPDATE SET role` — preserving `joined_at`) and deletes only removed members via `DELETE ... WHERE org_id=$1 AND NOT (user_id = ANY($2))`. No more churn/`joined_at` rewrites on a no-op mutation. +Postgres integration test `TestSaveOrg_MemberSyncPreservesJoinedAt` (B's join time survives an A→C membership change; role change still applies).
+- [x] M4 `SaveFlowVersion` uploads blob inside `FOR UPDATE` lock. **Fix:** the content blob is now keyed on the version **row id** (`versionBlobKey(flowID, v.ID)`) instead of the version number, so it's knowable before the version is allocated — the upload moves **ahead of** the `SELECT … FOR UPDATE`, so the parent-flow lock is no longer held across network I/O. New `blob_key` column (migration v10) stores the key; read/prune fall back to the legacy derived key (`versionBlobKeyLegacy`) for pre-migration rows. On lock/version-alloc failure the pre-uploaded blob is reclaimed. +`TestSaveLoadFlowVersion_DBPath` and the updated Azurite e2e `TestE2E_A5_…` (probes the id-keyed blob); legacy fallback covered by `TestE2E_A2_LegacyKeyFallback`.
+- [x] M5 `FlowSortBlocksDesc` ORDER BY casts JSONB — add expression index. **Fix:** migration v9 adds `flows_blockcount_updated_idx` on `((COALESCE((metadata->>'BlockCount')::int, 0)) DESC, updated_at DESC)`, matching the sort expression exactly so that mode no longer full-scans + in-memory-sorts. Cast is safe (BlockCount is always a JSON number or absent→NULL→0). +`TestListFlows_SortByBlocksDesc` (asserts order 50,5,1 and the index's existence).
+- [x] M7 `LoadUsersByIDs` IN-list vs `ANY($1)` inconsistency. **Fix:** replaced the hand-built `IN ($1,$2,…)` placeholder list (and its `#nosec G202` + latent >65535-param cap) with `WHERE id = ANY($1)`, passing the deduped `[]string` directly (pgx array encoding — same pattern as `postgres_dashboard.go:91`). +`TestLoadUsersByIDs_LargeN` (200 ids, with a dup + a missing id) alongside the existing contract test.
 - L1 `IsRefreshTokenValid` redundant given atomic verify-and-revoke.
-- L6 `SearchKnowledge` loads 500 chunks into Go — pgvector TODO.
+- [x] L6 `SearchKnowledge` loads 500 chunks into Go — pgvector pushdown. **Fix:** migration v11 `pgvector_knowledge` installs the `vector` extension (best-effort — no-ops if the role can't), adds a dimensionless `embedding_vec vector` column, backfills it from the existing JSONB embedding array, and builds an HNSW cosine index. `SearchKnowledge` now `ORDER BY embedding_vec <=> $query LIMIT n` server-side when pgvector is detected (boot-time probe); mismatched-dimension chunks are excluded from the index at insert time so similarity stays well-defined. Dimension is a deploy-time contract (`PAD_EMBEDDING_DIM`, default 1536). The Go-side `rankKnowledgeChunks` ranker remains as the portability fallback (local mode / no extension / dim mismatch). +`FormatVector` unit tests, dispatch-predicate tests, a config-loader test, and a `DATABASE_URL`-gated integration test.
 
 ### Frontend (Medium/Low)
-- M3-fe `request()` param ordering — options-bag.
-- M4-fe `listShares` returns `unknown[]` — type it.
-- M6-fe `ChatInput` history `useMemo` stale after sending.
-- M7-fe `CommandPalette` render-order side-effect counter.
-- M8-fe `WebAdapter` file-dialog 5-min fallback timer.
-- M9-fe Icon-only buttons rely on `title` only.
-- L1-fe `resetAllStores` swallows errors silently.
-- L2-fe `logger.error` prod / `logger.warn` dev-only asymmetry.
-- L5-fe `useSettingsPersistence` unused dep.
-- L6-fe `getMessages` returns live array reference.
-- L9-fe `TauriAdapter` retry loop unbounded.
+- [x] M3-fe `request()` param ordering — options-bag. **Fix:** `request`/`requestValidated`/`requestBlob` now take a `RequestOptions` bag (`{body, method, timeoutMs}`); body-less GETs read `request('/x', {method:'GET'})` instead of `request('/x', undefined, 'GET')`. All ~56 call sites + tests migrated; `tsc`/`eslint`/Vitest green.
+- [x] M4-fe `listShares` returns `unknown[]` — type it. **Fix:** returns `ShareInfo[]` (new typed interface in `flow.ts`).
+- [x] M6-fe `ChatInput` history `useMemo` stale after sending. **Fixed previously** (reactive `userMsgCount` dep).
+- [x] M7-fe `CommandPalette` render-order side-effect counter. **Fix:** the flat index is now precomputed into `indexById` in a `useMemo` (decoupled from render); the render body reads `indexById.get(cmd.id)` instead of mutating a `let itemIndex` counter, so the render is pure regardless of any future grouping/sort divergence.
+- [x] M8-fe `WebAdapter` file-dialog 5-min fallback timer. **Fix:** added `window.focus`-based dismissal to both web file dialogs — when the dialog closes without a selection (some browsers don't fire `oncancel` on Esc), the promise now resolves null promptly instead of leaving the caller dead for 5 minutes. A `gotChange` flag set synchronously in `onchange` prevents a false cancel while the async folder-read is in flight; the long fallback stays as a backstop.
+- [x] M9-fe Icon-only buttons rely on `title` only. **Fix:** added `aria-label` to the remaining icon-only buttons (`HistoryTab` compare/restore, `OrganizationsPanel` delete-org/remove-member); text+icon buttons (StatusBar admin/profile) already get an accessible name from their visible label.
+- [x] L1-fe `resetAllStores` swallows errors silently. **Fix:** the per-handler catch now `logger.error`s the failure (with index) instead of `() => {}`, so a logout-time error (e.g. presence failing to re-persist its sync queue) is visible. Isolation preserved. +test (throwing handler doesn't abort others + is logged).
+- [x] L2-fe `logger.error` prod / `logger.warn` dev-only asymmetry. **Not a bug (verified):** the asymmetry is intentional — `warn` is dev-noise suppression (keeps prod logs clean), `error` always surfaces. Non-issue; left as-is.
+- [x] L5-fe `useSettingsPersistence` unused dep. **Not a bug (verified):** both effect deps are meaningful — `isAuthenticated` gates the backend load (re-triggers on login, avoids a doomed unauthenticated fetch; the guard is documented in-code), and `updateLayout` is the persisted writer. No dead dependency.
+- [x] L6-fe `getMessages` returns live array reference. **Fix:** `chatStore.getMessages` returns a defensive copy (`[...msgs]`) so an accidental in-place mutation by a caller can't corrupt the store's internal array or bypass reactivity. `EMPTY_ARRAY` (already immutable) is returned as-is for missing threads.
+- [x] L9-fe `TauriAdapter` retry loop unbounded. **Fix:** `getBackendConfig`'s sidecar-ready retry path now has a 60s hard deadline (`SIDEKICK_READY_DEADLINE_MS`) — a sidecar that never starts (crash/misconfig) now rejects with a clear error instead of retrying forever on a blank screen (and leaking the `backend-ready` listener). +tests (rejects after deadline; resolves when a retry invoke succeeds).
 
 ### Security/Infra (Low)
-- L1 keystore bypasses RLS tx.
-- L4 account-export temp file mode not explicit.
-- L6 weak-secret blocklist only 7 entries.
+- [x] L1 keystore bypasses RLS tx. **Clarified (not a real gap):** `provider_keys` has no RLS policies by design (auth-infra table like refresh_tokens/api_tokens); every query carries `WHERE user_id = $1` and AES-GCM AAD binds each ciphertext to its row. Added guard comments on the table DDL + the `EncryptedKeyStore` type doc so a future RLS addition remembers to switch to BeginRLS + give the retention purge a principal.
+- [x] L4 account-export temp file mode not explicit. **Fix:** explicit `os.Chmod(tmp.Name(), 0o600)` after `os.CreateTemp` (which already opens 0600) so the owner-only mode is visible at the call site and survives a future API swap.
+- [x] L6 weak-secret blocklist only 7 entries. **Fix:** expanded `knownWeakSecrets` with common ≥32-char documented placeholders (tutorials/READMEs/jwt.io/boilerplate) that slip past the length floor, plus a new `isLowEntropy` check catching long-but-pathological secrets (all-identical chars, 2–4-byte tiles repeated) — no realistic false-positive risk. +`TestIsWeakSecret_BlocklistAndEntropy`.
 - L8 Tauri CSP broad localhost connect-src.
 - I4 No SBOM generation in CI.
 - I5 Dockerfile HEALTHCHECK redundant under ACA.
@@ -161,11 +161,26 @@ Living tracker of findings from the codebase deep-dive. Status: `[ ]` pending, `
 
 ## New issues (discovered in 2026-07-19 deep-dive, not yet fixed)
 
-- **AGENTS.md doc drift** — claims "29 rules + 11 auto-fixers"; actual is **41 rules + 16 fixers** (`rg -c 'registerRule\(&' core/analyzer/*.go` = 41; `ruleAutoFix` switch arms = 16). Update AGENTS.md `## Project Structure` section.
+- [x] **AGENTS.md doc drift** — already accurate (Project Structure now reads "41 rules + 17 auto-fixers").
 - **Logger antipattern persists** in `internal/service/chat_context.go:232` and `internal/ai/tokens.go:25` — both pass `map[string]interface{}{"error": err}` to `slog` instead of variadic kv. **Fixed** in both files (now `logger.Error("...", "error", err)`).
-- **`AnalyticsDashboard.tsx` (436 lines)** — new god-component candidate (largest in the codebase after `api/client.ts` and `analysisStore.ts`). Consider extraction if it grows further.
-- **`presenceStore` module-level `setInterval`** (`stores/presenceStore.ts:153`) — H2-fe was "fixed" with an early-return guard but the 60s timer itself is never cancelled, so the closure lives for the page's lifetime even when logged out.
-- **No root-level `ErrorBoundary`** in `App.tsx`/`main.tsx` — a crash in the provider layer (ToastProvider/ConfirmProvider/OfflineIndicator) above the pane boundaries still white-screens. Add a top-level boundary as the outermost wrapper.
+- [x] **`AnalyticsDashboard.tsx` (436 lines)** — was a god-component candidate; **decomposed** into a thin shell wiring two hooks (`useDashboardStats`, `useBatchAnalysis`) to five presentational tiles (`StatCard`, `SeverityChips`, `RuleBarChart`, `TopProblemFlows`, `BatchResultsTable`). +`useDashboardStats.test.tsx` covering the reqId race guard + background-refresh-failure-toasts-instead-of-wiping contract.
+- [x] **`presenceStore` module-level `setInterval`** (`stores/presenceStore.ts:153`) — H2-fe was "fixed" with an early-return guard but the 60s timer itself is never cancelled, so the closure lives for the page's lifetime even when logged out. **Fix:** the sweep is now lifecycle-managed — `startPresenceSweep()` (called in `connectToFlow`) creates the interval, `stopPresenceSweep()` (called in `disconnect`, which already runs on logout via `registerStoreReset`) clears it. The timer exists only while a flow is connected. +3 fake-timer Vitest cases (sweeps while connected, clears on disconnect, no double-start).
+- [x] **No root-level `ErrorBoundary`** in `App.tsx`/`main.tsx` — already added: `<ErrorBoundary>` wraps the provider layer in `App.tsx`.
+
+---
+
+## Phase 5 — pgvector pushdown + audit durability + frontend reliability (2026-08-01)
+
+A deep-dive-driven pass closing the highest-impact open items (the verified-open subset of the IMPROVEMENTS/PRODUCTION_READINESS trackers).
+
+- [x] **A** `SearchKnowledge` pgvector pushdown (was L6). **Fix:** migration v11 + server-side cosine ranking + `PAD_EMBEDDING_DIM` + Go-side fallback. *(detailed note at the L6 line above)*
+- [x] **B** `AnalyticsDashboard.tsx` decomposition. **Fix:** 436-line god-component → thin shell + 2 hooks + 5 tiles + a hook test for the race/background-refresh contract. *(detailed note in "New issues" above)*
+- [x] **C** `progress.go` pipeline unification (was M10) + latent EOF unclosed-block bug fix. *(detailed note at the M10 line above)*
+- [x] **E** Audit durable sink (PROD item 5). **Fix:** on-disk spill queue (`auditSpillStore`) + a 500 ms-tick reaper (`auditSpillReaper`→`replaySpilled`) that drains overflow back into the pool while it has headroom (< half full, so fresh events aren't starved). Size-capped (default 10 MB; newest-at-cap degrades to the existing log fallback, metered via `pad_audit_spill_dropped_total`). New metrics `pad_audit_spilled_total` / `pad_audit_spill_replayed_total` / `pad_audit_spill_dropped_total`. `PAD_AUDIT_SPILL_DIR` (empty=temp dir, "off"=disabled). +5 tests (FIFO, size-cap drop, reSpill no double-count, replay-into-pool, yields-at-half-full).
+- [x] **F** Frontend type-safety sweep: `request()`/`requestValidated`/`requestBlob` → `RequestOptions` bag (+56 call sites migrated); `listShares` → `ShareInfo[]`; `settingsStore` persist queue testable (`__resetPersistQueueForTest`); icon-only button `aria-label`s.
+- [x] **D** Reconciled stale tracking docs (this section + the inline `[x]` updates).
+
+**Still genuinely open** after this pass: `detectCycles` cosmetic format (M9 — **done**, Tarjan SCC), filesystem silent-success stubs (H8 — interface split, deferred as large/risky), and the lower-priority items (~~M7-fe CommandPalette render-order~~ **done** (precomputed `indexById`), ~~L5-fe useSettingsPersistence unused dep~~ **verified non-issue**, ~~L6-fe getMessages live array ref~~ **done** (defensive copy); Security/Infra L8 Tauri CSP / I4 SBOM / I5 redundant HEALTHCHECK; PROD items 19 container hardening / 20b CSP unsafe-inline; ~~20c RuntimeConfig retry/circuit-breaker unused~~ **done** (wired in `factory.go`)).
 
 ---
 

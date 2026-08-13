@@ -35,9 +35,13 @@ func NewGlobalNotifier() *GlobalNotifier {
 }
 
 func (n *GlobalNotifier) Emit(name string, data any) {
+	// Snapshot subscribers under the lock, then invoke outside it: a slow or
+	// re-entrant subscriber (one that calls Emit/Subscribe) would otherwise
+	// stall every other emitter holding the RLock.
 	n.mu.RLock()
-	defer n.mu.RUnlock()
-	for _, s := range n.subscribers {
+	subs := append([]func(string, any){}, n.subscribers...)
+	n.mu.RUnlock()
+	for _, s := range subs {
 		s(name, data)
 	}
 }

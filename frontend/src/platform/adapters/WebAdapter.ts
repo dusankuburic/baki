@@ -61,8 +61,13 @@ export class WebAdapter implements PlatformAdapter {
       }
 
       let settled = false
+      // gotChange is set synchronously at the top of onchange so the focus
+      // listener can tell "dialog closed with a selection" (change fires before
+      // focus) from "dialog dismissed without choosing" — see onFocus below.
+      let gotChange = false
       const cleanup = () => {
         if (input.parentNode) document.body.removeChild(input)
+        window.removeEventListener('focus', onFocus)
       }
       const done = (val: string | string[] | null) => {
         if (settled) return
@@ -74,8 +79,19 @@ export class WebAdapter implements PlatformAdapter {
       // Fallback: if neither onchange nor oncancel fires (some browsers don't
       // fire oncancel when the user dismisses via Esc), resolve after 5 minutes.
       const fallbackTimer = setTimeout(() => done(null), 300_000)
+      // Dialog-dismissal detection: when the window regains focus (dialog just
+      // closed) and no selection started, resolve null promptly instead of
+      // leaving the caller hanging on the 5-minute fallback. The 100ms delay
+      // lets a selection's onchange mark gotChange first.
+      const onFocus = () => {
+        setTimeout(() => {
+          if (!settled && !gotChange) done(null)
+        }, 100)
+      }
+      window.addEventListener('focus', onFocus)
 
       input.onchange = e => {
+        gotChange = true
         const files = (e.target as HTMLInputElement).files
         if (!files || files.length === 0) {
           done(null)
@@ -125,8 +141,13 @@ export class WebAdapter implements PlatformAdapter {
       input.style.display = 'none'
 
       let settled = false
+      // gotChange is set synchronously at the top of onchange (which is async
+      // here — it reads many files) so the focus listener can distinguish
+      // "selection in progress" from "dismissed without choosing".
+      let gotChange = false
       const cleanup = () => {
         if (input.parentNode) document.body.removeChild(input)
+        window.removeEventListener('focus', onFocus)
       }
       const done = (val: string | null) => {
         if (settled) return
@@ -136,8 +157,17 @@ export class WebAdapter implements PlatformAdapter {
         resolve(val)
       }
       const fallbackTimer = setTimeout(() => done(null), 300_000)
+      // Dismissal detection: resolve null promptly when the window regains
+      // focus without a selection having started, instead of waiting 5 min.
+      const onFocus = () => {
+        setTimeout(() => {
+          if (!settled && !gotChange) done(null)
+        }, 100)
+      }
+      window.addEventListener('focus', onFocus)
 
       input.onchange = async e => {
+        gotChange = true
         const files = (e.target as HTMLInputElement).files
         if (!files || files.length === 0) {
           done(null)

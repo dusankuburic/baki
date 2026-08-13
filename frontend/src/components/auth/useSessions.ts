@@ -27,14 +27,17 @@ export function useSessions() {
       setActionError(null)
       try {
         await authApi.revokeSession(id)
-        setSessions(sessions.filter(s => s.id !== id))
+        // Functional updater so two rapid revokes don't both close over the
+        // same stale snapshot (the second would re-add the first's just-removed
+        // session until the next refetch).
+        setSessions(prev => (prev ?? []).filter(s => s.id !== id))
       } catch (err) {
         setActionError(err instanceof Error ? err.message : 'Failed to revoke session')
       } finally {
         setRevokingId(null)
       }
     },
-    [sessions, setSessions],
+    [setSessions],
   )
 
   // revokeOthers signs out every session except the current one. There's no
@@ -51,7 +54,7 @@ export function useSessions() {
     setActionError(null)
     const results = await Promise.allSettled(others.map(s => authApi.revokeSession(s.id)))
     const revokedIds = new Set(others.filter((_, i) => results[i].status === 'fulfilled').map(s => s.id))
-    setSessions(sessions.filter(s => !revokedIds.has(s.id)))
+    setSessions(prev => (prev ?? []).filter(s => !revokedIds.has(s.id)))
     if (revokedIds.size < others.length) {
       setActionError('Some sessions could not be signed out — try again.')
     }

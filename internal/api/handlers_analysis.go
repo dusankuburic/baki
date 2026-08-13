@@ -1,14 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
@@ -23,12 +26,18 @@ type AnalysisHandler struct {
 	dashboard   *service.DashboardService
 	security    *SecurityConfig
 	backend     storageif.StorageBackend
+	// email sends finding-assignment notifications to the assignee. Nil-safe
+	// (the log-only mailer is always non-nil even without SMTP).
+	email *mailer.Service
 	// webhook is best-effort / async / env-configured via PAD_WEBHOOK_URL;
 	// no-op when unset. Injected for testability (was a package-global var).
 	webhook *service.WebhookNotifier
+	// ciSecret is the HMAC key for the inbound CI webhook (PAD_CI_WEBHOOK_SECRET).
+	// Empty disables the endpoint (503). Auth is via X-Baki-Signature, not JWT.
+	ciSecret CIWebhookSecret
 }
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
@@ -36,6 +45,8 @@ func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.F
 		security:    security,
 		backend:     backend,
 		webhook:     webhook,
+		email:       email,
+		ciSecret:    ciSecret,
 	}
 }
 
@@ -99,13 +110,40 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Bound the CPU surface of this unauthenticated-ish endpoint: a 10 MB body
+	// of pathological PAD source (deeply nested blocks) can burn seconds in
+	// parse+analyze. A per-request deadline bounds the HTTP layer (the analysis
+	// engine itself runs to completion today; full enforcement needs ctx checks
+	// inside RunAnalysis). Rejecting oversized payloads up front is the primary
+	// guard against a single request degrading the shared backend.
+	const (
+		maxRawFiles   = 50
+		maxRawTotalKB = 2048
+		rawAnalyzeTTL = 30 * time.Second
+	)
+	if len(req.Files) > maxRawFiles {
+		render.Error(w, fmt.Errorf("too many files (%d > %d)", len(req.Files), maxRawFiles), http.StatusRequestEntityTooLarge)
+		return
+	}
+	var totalKB int
+	for _, src := range req.Files {
+		totalKB += (len(src) + 1023) / 1024
+	}
+	if totalKB > maxRawTotalKB {
+		render.Error(w, fmt.Errorf("payload too large (%d KB > %d KB)", totalKB, maxRawTotalKB), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), rawAnalyzeTTL)
+	defer cancel()
+
 	// Parse purely (no docProvider side effect — this is stateless).
 	doc, err := parser.ParseFiles(req.Files, req.Name)
 	if err != nil {
 		render.Error(w, fmt.Errorf("parse failed: %w", err), http.StatusBadRequest)
 		return
 	}
-	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
+	report, err := h.analysisSvc.AnalyzeFlow(ctx, doc)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

@@ -74,8 +74,10 @@ var ServiceModule = fx.Options(
 		// so services depend on the interface, not the concrete filesystem
 		// implementation.
 		func(s *storage.SettingsStore) service.SettingsProvider { return s },
-		// WebhookNotifier reads PAD_WEBHOOK_URL once at construction; a single
-		// shared instance is fine (the HTTP client is reused across requests).
+		// WebhookNotifier is a thin facade over the shared notify.Dispatcher,
+		// consolidating analysis-complete alerts onto the same delivery stack as
+		// governance (scanner) alerts. The dispatcher is provided by
+		// main.go's provideNotifier.
 		service.NewWebhookNotifier,
 		// service.KeyStore itself comes from main.go's provideKeyStore (a
 		// plain fx provider, not a global) — no adapter needed here.
@@ -92,6 +94,12 @@ var ServiceModule = fx.Options(
 		service.NewAuthzService,
 		service.NewFlowService,
 		service.NewAnalysisService,
+		func(cfg *config.Config, svc *service.AnalysisService) *service.AnalysisService {
+			if cfg.Server.CustomRulesPath != "" {
+				svc.LoadCustomRules(cfg.Server.CustomRulesPath)
+			}
+			return svc
+		},
 		// Adapter: fx only provides the full storageif.StorageBackend, but
 		// DashboardService's constructor takes the narrower DashboardStore it
 		// actually uses — Go allows the wider interface value through at this

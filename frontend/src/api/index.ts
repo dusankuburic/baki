@@ -12,3 +12,5 @@ export type {AuditEvent, AuditFilter, FlowVersion, MigrationStatus, MigrationRes
 export {PermissionDeniedError, VersionConflictError} from './client'
 export type {LibraryFlow, LibraryFilter, CreateLibraryFlowRequest, UpdateLibraryFlowRequest} from './library'
 export {libraryApi} from './library'
+export {governanceApi} from './governance'
+export type {GovernanceAlert, GovernanceAlertFilter} from './governance'

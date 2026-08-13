@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -46,6 +47,7 @@ var ruleConfidence = map[string]models.Confidence{
 	"hardcoded-filepath":          models.ConfidenceLow,
 	"hardcoded-ip":                models.ConfidenceLow,
 	"circular-subflow-dependency": models.ConfidenceHigh,
+	"tainted-sink":                models.ConfidenceMedium,
 	"parse-error":                 models.ConfidenceHigh,
 }
 
@@ -87,6 +89,12 @@ var ruleAutoFix = map[string]string{
 	// insert-delay-in-loop: insert WAIT inside a tight loop body.
 	"slow-pattern":       "insert-delay-in-loop",
 	"sql-injection-risk": "parameterize-sql",
+	// upgrade-to-https: replace cleartext http:// with https://.
+	"insecure-http-url": "upgrade-to-https",
+	// replace-with-variable: parameterize a hardcoded literal as %input_<key>%.
+	"hardcoded-ui-coordinates": "replace-with-variable",
+	// sanitize-command-vars: strip %VarName% from system-command properties.
+	"command-injection-risk": "sanitize-command-vars",
 }
 
 // RuleConfidence returns the built-in default certainty for a rule's findings
@@ -499,10 +507,18 @@ func safeCheck(rule Rule, block *models.Block, ctx *RuleContext) (findings []mod
 // which on some platforms are syscalls.
 func RunAnalysis(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
 	onProgress func(current, total int, ruleName string)) *models.AnalysisReport {
-	return runAnalysisCore(flow, rules, settings, onProgress, true)
+	return RunAnalysisCtx(context.Background(), flow, rules, settings, onProgress)
 }
 
-func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
+// RunAnalysisCtx is the context-aware variant of RunAnalysis: the walk skips
+// rule work once gctx is cancelled, bounding CPU for callers that pass a
+// deadline (e.g. the raw-analyze endpoint's per-request timeout).
+func RunAnalysisCtx(gctx context.Context, flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
+	onProgress func(current, total int, ruleName string)) *models.AnalysisReport {
+	return runAnalysisCore(gctx, flow, rules, settings, onProgress, true)
+}
+
+func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Rule, settings *models.AppSettings,
 	onProgress func(current, total int, ruleName string), profile bool) *models.AnalysisReport {
 
 	start := time.Now()
@@ -545,6 +561,14 @@ func runAnalysisCore(flow *models.FlowDocument, rules []Rule, settings *models.A
 
 	walkBlocks(flow, func(block *models.Block) {
 		if block.Type == models.BlockTypeEnd {
+			return
+		}
+		// Respect request cancellation: a pathological payload on the raw-analyze
+		// endpoint can keep the analyzer walking long after the client
+		// disconnected (or the per-request deadline elapsed). Skip the rule work
+		// for remaining blocks so the CPU burn stops; the partial report is
+		// discarded upstream (the cancelled response is never written).
+		if gctx != nil && gctx.Err() != nil {
 			return
 		}
 		for i, rule := range enabledRules {

@@ -417,6 +417,64 @@ func (s *FlowService) searchIndexFor(doc *models.FlowDocument) *search.SearchInd
 	return idx
 }
 
+// maxLibrarySearchFlows bounds how many stored flows a cross-library search will
+// load + index. Each flow is a ResolveDoc (DB read) + index build, so capping
+// keeps a single search cheap; the idxCache LRU makes repeat searches on the
+// same library near-free. 50 covers a typical personal library comfortably.
+const maxLibrarySearchFlows = 50
+
+// SearchLibrary runs a query across every flow the caller can access (RLS-scoped
+// by UserID at the storage layer), merging per-flow hits into one result set with
+// each hit stamped by its source FlowID/FlowName so the UI can group them. A
+// cross-flow search is an enumerate→load→index loop; there is no storage-level
+// "search across flows" primitive. Per-flow MaxResults is clamped so one huge
+// flow doesn't monopolise the result, then a global cap is applied.
+func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query models.SearchQuery) (*models.SearchResults, error) {
+	if s.storage == nil || s.docProvider == nil {
+		// Local/no storage: nothing stored to search across.
+		return &models.SearchResults{Query: query, Results: []models.SearchResult{}}, nil
+	}
+	flows, err := s.storage.ListFlows(ctx, storageif.FlowFilter{UserID: userID, Limit: maxLibrarySearchFlows})
+	if err != nil {
+		return nil, fmt.Errorf("list flows for search: %w", err)
+	}
+	// Clamp per-flow hits so no single flow drowns out the others.
+	perFlow := query.MaxResults
+	if perFlow <= 0 || perFlow > 10 {
+		perFlow = 10
+	}
+	merged := make([]models.SearchResult, 0)
+	for _, f := range flows {
+		if ctx.Err() != nil {
+			break
+		}
+		doc, err := s.docProvider.ResolveDoc(ctx, f.ID)
+		if err != nil || doc == nil {
+			continue
+		}
+		q := query
+		q.MaxResults = perFlow
+		res, err := s.SearchFlow(doc, q)
+		if err != nil || res == nil {
+			continue
+		}
+		for i := range res.Results {
+			res.Results[i].FlowID = f.ID
+			res.Results[i].FlowName = f.Name
+		}
+		merged = append(merged, res.Results...)
+	}
+	// Global cap (default 50 when unset).
+	globalCap := query.MaxResults
+	if globalCap <= 0 {
+		globalCap = 50
+	}
+	if len(merged) > globalCap {
+		merged = merged[:globalCap]
+	}
+	return &models.SearchResults{Query: query, Results: merged, TotalCount: len(merged)}, nil
+}
+
 func (s *FlowService) GetSourceFiles(doc *models.FlowDocument) (result []models.SourceFileInfo, err error) {
 	defer logger.Guard("App.GetSourceFiles", &err)
 

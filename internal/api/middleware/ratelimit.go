@@ -139,6 +139,30 @@ func (rl *RateLimiter) Limit(h http.Handler) http.Handler {
 	})
 }
 
+// LimitByKey returns middleware that enforces the rate limit keyed by an
+// arbitrary caller-derived string (e.g. a per-user bucket). When keyFn returns
+// "", the request is allowed through unchecked — callers use this to skip
+// routes/methods that should not be subject to this limiter (e.g. reads for a
+// per-user write-only limiter). The key is used verbatim as the bucket
+// identifier, so the caller is responsible for any hashing/namespace prefix.
+func (rl *RateLimiter) LimitByKey(h http.Handler, keyFn func(*http.Request) string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := keyFn(r)
+		if key == "" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		if !rl.store.Allow(r.Context(), key, rl.rate, rl.capacity) {
+			RecordRateLimitExceeded(rl.group)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // key namespaces the bucket by group so different limiters sharing one Redis
 // instance (the multi-replica case) never collide. For the per-instance
 // in-memory store the prefix is harmless.

@@ -4,6 +4,7 @@ import {useEditorStore} from './editorStore'
 import {useSearchStore} from './searchStore'
 import {useAnalysisStore} from './analysisStore'
 import {useChatStore} from './chatStore'
+import {usePresenceStore} from './presenceStore'
 import type {Block, FlowDocument, Subflow} from '@/types'
 
 // ---- helpers ----
@@ -165,6 +166,29 @@ describe('navigation history', () => {
     const {navigationHistory, historyIndex} = useFlowStore.getState()
     expect(historyIndex).toBe(1)
     expect(navigationHistory[1].blockId).toBe('b1')
+  })
+
+  it('selectBlock(null) broadcasts the deselect so collaborators clear the stale selection', () => {
+    const doc = makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1')]))
+    useFlowStore.getState().setDocument(doc)
+
+    // Spy on the presence broadcast (syncManager.enqueue is the vehicle).
+    const enqueued: string[] = []
+    const orig = usePresenceStore.getState().updateSelectedBlock
+    usePresenceStore.getState().updateSelectedBlock = (blockId: string) => {
+      enqueued.push(blockId)
+    }
+
+    try {
+      useFlowStore.getState().selectBlock('b1') // select a real block
+      useFlowStore.getState().selectBlock(null) // deselect
+    } finally {
+      usePresenceStore.getState().updateSelectedBlock = orig
+    }
+
+    // The select broadcasts 'b1' and the deselect broadcasts '' (clear).
+    expect(enqueued).toContain('b1')
+    expect(enqueued).toContain('')
   })
 
   it('goBack navigates to previous entry', () => {

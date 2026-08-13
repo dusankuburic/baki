@@ -21,9 +21,11 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useSearchStore} from '@/stores/searchStore'
+import type {PresenceUser} from '@/stores/presenceStore'
 import {stageBlockPrompt} from '@/lib/fixWithAI'
 import type {Block} from '@/types'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
+import Avatar from '@/components/shared/Avatar'
 import {useToast} from '@/components/shared'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
@@ -35,6 +37,8 @@ type BlockCardProps = {
   hasFindings?: boolean
   findingCount?: number
   findingSeverity?: 'error' | 'warning' | 'info'
+  // Remote collaborators currently viewing this block (live selection sync).
+  remoteOccupants?: PresenceUser[]
   onClick?: () => void
   onDoubleClick?: () => void
 }
@@ -46,6 +50,7 @@ export default React.memo(function BlockCard({
   hasFindings = false,
   findingCount = 0,
   findingSeverity = 'error',
+  remoteOccupants,
   onClick,
   onDoubleClick,
 }: BlockCardProps) {
@@ -227,6 +232,32 @@ export default React.memo(function BlockCard({
           borderBottomLeftRadius: '0.5rem',
         }}
       />
+
+      {/* Remote-collaborator occupancy: a stacked avatar indicator shows when
+          one or more teammates are viewing this block. Rendered above the card
+          so it isn't clipped by the card's overflow-hidden padding. */}
+      {remoteOccupants && remoteOccupants.length > 0 && (
+        <div
+          className="absolute -bottom-1.5 left-3 flex items-center -space-x-1.5 z-10"
+          title={remoteOccupants.map(u => u.displayName).join(', ')}
+        >
+          {remoteOccupants.slice(0, 3).map(u => (
+            <Avatar
+              key={u.userId}
+              name={u.displayName}
+              colorSeed={u.userId}
+              avatarUrl={u.avatarUrl}
+              size="sm"
+              className="w-4 h-4 text-3xs ring-2 ring-surface-2"
+            />
+          ))}
+          {remoteOccupants.length > 3 && (
+            <span className="w-4 h-4 rounded-full bg-surface-3 ring-2 ring-surface-2 flex items-center justify-center text-3xs text-text-tertiary">
+              +{remoteOccupants.length - 3}
+            </span>
+          )}
+        </div>
+      )}
 
       {findingCount > 0 && (
         <div

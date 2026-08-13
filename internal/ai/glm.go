@@ -15,11 +15,12 @@ type GLMProvider struct {
 func NewGLMProvider(apiKey string) *GLMProvider {
 	return &GLMProvider{
 		openaiBase: openaiBase{
-			apiKey:         apiKey,
-			client:         sharedHTTPClient,
-			baseURL:        &glmBaseURL,
-			providerLabel:  "glm",
-			embeddingModel: "embedding-3",
+			apiKey:                apiKey,
+			client:                sharedHTTPClient,
+			baseURL:               &glmBaseURL,
+			providerLabel:         "glm",
+			embeddingModel:        "embedding-3",
+			embeddingModelDefault: "embedding-3",
 			handle429: func(_ *http.Response, apiErr openAIErrorResp) error {
 				if isGLMBalanceError(apiErr.Error.Message, apiErr.Error.Code) {
 					return ErrInsufficientBalance

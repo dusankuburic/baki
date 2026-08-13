@@ -30,7 +30,7 @@ core/export/       SARIF 2.1.0 + report serializers
 internal/api/      HTTP handlers (chi router), 170+ endpoints
 internal/service/  Business logic (FlowService, AnalysisService, ChatService)
 internal/storage/  StorageBackend interface + Postgres + filesystem implementations
-internal/connector/padcloud/  PAD-cloud ingestion (auth + client + ingester; Converter TBD)
+internal/connector/padcloud/  PAD-cloud ingestion (auth + client + ingester + cloud-format Converter)
 cmd/bakicli/       CLI with -format sarif/json/text, -baseline, -policy gates
 frontend/src/      React 18 + TypeScript + Zustand + Tailwind + Tauri
 ci/                Azure DevOps + GitLab CI templates

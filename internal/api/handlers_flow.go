@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
@@ -85,6 +86,7 @@ type FlowHandler struct {
 	backend       storageif.StorageBackend
 	security      *SecurityConfig
 	uploadLimiter *uploadLimiter
+	notifier      FlowNotifier
 }
 
 func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentProvider, backend storageif.StorageBackend, security *SecurityConfig) *FlowHandler {
@@ -95,6 +97,13 @@ func NewFlowHandler(flowSvc *service.FlowService, docProvider service.DocumentPr
 		security:      security,
 		uploadLimiter: newUploadLimiter(),
 	}
+}
+
+// SetFlowNotifier wires the WebSocket hub so that apply-fix, save-source, and
+// suppress-in-source broadcast a flow-changed event to connected collaborators
+// (triggering useFlowChangeSync to reload content on other viewers).
+func (h *FlowHandler) SetFlowNotifier(n FlowNotifier) {
+	h.notifier = n
 }
 
 func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
@@ -340,6 +349,9 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(doc.ID, int(time.Now().UnixMilli()))
+	}
 	render.JSON(w, updated)
 }
 
@@ -376,6 +388,9 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, updated)
 }
@@ -452,6 +467,9 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
 	render.JSON(w, map[string]any{"document": updated, "applied": applied})
 }
 
@@ -499,6 +517,9 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
 	render.JSON(w, updated)
 }
 
@@ -517,6 +538,25 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.flowSvc.SearchFlow(doc, req.Query)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, res)
+}
+
+// handleSearchLibrary runs a query across every flow the caller can access
+// (cross-flow / org-wide search), merging per-flow hits into one result set.
+// Each hit is stamped with its source flowId/flowName so the UI can group them.
+func (h *FlowHandler) handleSearchLibrary(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Query models.SearchQuery `json:"query"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	userID := h.security.CallerID(r)
+	res, err := h.flowSvc.SearchLibrary(r.Context(), userID, req.Query)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

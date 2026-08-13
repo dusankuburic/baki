@@ -162,5 +162,17 @@ export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
         'border-width': 3,
       },
     },
+    {
+      // Remote-collaborator selection: a dashed brand border distinguishes "a
+      // teammate is viewing this node" from the local selection (solid brand).
+      selector: 'node.remote-selected',
+      style: {
+        'border-color': t.brand500,
+        'border-width': 3,
+        'border-style': 'dashed',
+        'overlay-color': t.brand500,
+        'overlay-opacity': 0.06,
+      },
+    },
   ]
 }

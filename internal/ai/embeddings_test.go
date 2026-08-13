@@ -233,3 +233,73 @@ func TestEmbed_Gemini_EmptyInput(t *testing.T) {
 		t.Errorf("empty Embed returned %d vectors, want 0", len(vecs))
 	}
 }
+
+// TestSetEmbeddingModel_OverrideChangesRequestModel proves the override reaches
+// the actual /embeddings request — the core of the "decouple embedding model
+// from provider" feature (a deployer picks e.g. text-embedding-3-large without
+// code changes).
+func TestSetEmbeddingModel_OverrideChangesRequestModel(t *testing.T) {
+	srv, got := embedTestServer(t, "") // no static assertion — we make two calls with different models
+	defer srv.Close()
+	base := srv.URL + "/chat/completions"
+	p := &OpenAIProvider{openaiBase: openaiBase{
+		apiKey: "sk-test", client: srv.Client(), baseURL: &base,
+		providerLabel: "openai", embeddingModel: "text-embedding-3-small",
+		embeddingModelDefault: "text-embedding-3-small",
+	}}
+
+	p.setEmbeddingModel("text-embedding-3-large")
+	runEmbed(t, p, []string{"x"})
+	if (*got)["model"] != "text-embedding-3-large" {
+		t.Errorf("override did not take effect: model = %v", (*got)["model"])
+	}
+
+	// An empty model restores the default.
+	p.setEmbeddingModel("")
+	runEmbed(t, p, []string{"y"})
+	if (*got)["model"] != "text-embedding-3-small" {
+		t.Errorf("empty override should restore default: model = %v", (*got)["model"])
+	}
+}
+
+// TestForEmbedding_AppliesOverride proves the factory threads the override
+// through the wrap chain to the underlying provider.
+func TestForEmbedding_AppliesOverride(t *testing.T) {
+	srv, got := embedTestServer(t, "custom-embed-model")
+	defer srv.Close()
+
+	// Point the OpenAI base URL at the test server for this test.
+	orig := openAIBaseURL
+	openAIBaseURL = srv.URL + "/chat/completions"
+	defer func() { openAIBaseURL = orig }()
+
+	f := NewProviderFactory(func(scope, provider string) (string, error) { return "sk-test", nil }, nil, nil, nil)
+	p, err := f.ForEmbedding("", "openai", "custom-embed-model")
+	if err != nil {
+		t.Fatalf("ForEmbedding: %v", err)
+	}
+	runEmbed(t, p, []string{"hello"})
+	if (*got)["model"] != "custom-embed-model" {
+		t.Errorf("ForEmbedding override did not reach the request: model = %v", (*got)["model"])
+	}
+}
+
+// TestForEmbedding_NoOverrideUsesDefault proves an empty override leaves the
+// provider on its shipped default model.
+func TestForEmbedding_NoOverrideUsesDefault(t *testing.T) {
+	srv, got := embedTestServer(t, "")
+	defer srv.Close()
+	orig := openAIBaseURL
+	openAIBaseURL = srv.URL + "/chat/completions"
+	defer func() { openAIBaseURL = orig }()
+
+	f := NewProviderFactory(func(scope, provider string) (string, error) { return "sk-test", nil }, nil, nil, nil)
+	p, err := f.ForEmbedding("", "openai", "")
+	if err != nil {
+		t.Fatalf("ForEmbedding: %v", err)
+	}
+	runEmbed(t, p, []string{"hello"})
+	if (*got)["model"] != "text-embedding-3-small" {
+		t.Errorf("expected default model, got %v", (*got)["model"])
+	}
+}

@@ -14,6 +14,8 @@
 // before that queue is discarded — lives inside that store's own handler, kept
 // sequential there rather than relying on ordering across handlers.
 
+import {logger} from '@/lib/logger'
+
 type ResetHandler = () => void | Promise<void>
 
 const handlers = new Set<ResetHandler>()
@@ -23,9 +25,16 @@ export function registerStoreReset(handler: ResetHandler): void {
 }
 
 export async function resetAllStores(): Promise<void> {
-  const run = (fn: ResetHandler) =>
-    Promise.resolve()
-      .then(fn)
-      .catch(() => {})
-  await Promise.all([...handlers].map(run))
+  // Each handler is isolated so one failure can't abort the others, but the
+  // error is LOGGED rather than silently swallowed — a logout-time failure
+  // (e.g. presence failing to re-persist its sync queue) was previously
+  // invisible, masking data-loss-adjacent bugs.
+  const run = async (fn: ResetHandler, i: number) => {
+    try {
+      await fn()
+    } catch (err) {
+      logger.error('store reset handler failed during logout (index', i, '):', err)
+    }
+  }
+  await Promise.all([...handlers].map((fn, i) => run(fn, i)))
 }

@@ -9,6 +9,7 @@ import {
 } from '@/services/collaboration/CollaborationService'
 import {syncManager} from '@/services/sync/SyncManager'
 import {getBackendConfig, getWsTicket} from '@/api/client'
+import {notifyIfBackground} from '@/hooks/usePlatform'
 
 export interface PresenceUser {
   userId: string
@@ -44,6 +45,12 @@ function teardown(): void {
   generation++
   cleanupHandlers.forEach(fn => fn())
   cleanupHandlers = []
+  // Clear flow-change listeners too: on logout the only subscriber
+  // (useFlowChangeSync) unmounts and unsubs itself, but clearing here is the
+  // symmetric, defensive choice — a subscriber that survives logout (e.g. a
+  // portal outside ProtectedRoute) would otherwise accumulate stale listeners
+  // across sessions on a shared device.
+  flowChangeListeners = []
 }
 
 export const usePresenceStore = create<PresenceState>(set => ({
@@ -64,6 +71,7 @@ export const usePresenceStore = create<PresenceState>(set => ({
 
     collaborationService.connect(flowId, cfg.apiUrl, getWsTicket)
     syncManager.start(flowId)
+    startPresenceSweep()
 
     cleanupHandlers.push(
       collaborationService.onStatusChange(status => {
@@ -81,6 +89,7 @@ export const usePresenceStore = create<PresenceState>(set => ({
 
   disconnect: () => {
     teardown()
+    stopPresenceSweep()
     collaborationService.disconnect()
     syncManager.stop()
     set({users: {}, status: 'disconnected', flowId: null, remoteVersion: 0})
@@ -97,6 +106,7 @@ export const usePresenceStore = create<PresenceState>(set => ({
 function handleEnvelope(env: Envelope): void {
   if (env.type === 'presence.join') {
     const p = env.payload as PresencePayload
+    const wasAlreadyPresent = Boolean(usePresenceStore.getState().users[p.userId])
     usePresenceStore.setState(s => ({
       users: {
         ...s.users,
@@ -109,6 +119,13 @@ function handleEnvelope(env: Envelope): void {
         },
       },
     }))
+    // Notify the user that a collaborator joined — but only for a genuinely
+    // new arrival (not a reconnect re-announce) and only when the app is in
+    // the background, so it never interrupts an active session.
+    if (!wasAlreadyPresent) {
+      const name = p.displayName ?? p.userId
+      void notifyIfBackground({title: 'Collaborator joined', body: `${name} joined the flow.`})
+    }
   } else if (env.type === 'presence.leave') {
     if (!env.userId) return
     usePresenceStore.setState(s => {
@@ -147,20 +164,35 @@ registerStoreReset(() => {
 // Periodic sweep of stale presence entries. A lost presence.leave event
 // (server-side drop, brief restart) would otherwise leave a "ghost" user in
 // the list for the entire session. Entries unseen for 2 minutes are removed.
-// The sweep no-ops when no flow is connected so it doesn't churn state or burn
-// cycles after logout / between sessions.
+//
+// The sweep is tied to the connection lifecycle (started in connectToFlow,
+// stopped in disconnect) rather than a module-level setInterval, so the timer
+// only runs while a flow is connected and is properly cleared on flow-close and
+// logout — no leaked closure living for the page's lifetime.
 const PRESENCE_STALE_MS = 120_000
-setInterval(() => {
-  const state = usePresenceStore.getState()
-  if (state.flowId == null) return
-  const now = Date.now()
-  let changed = false
-  const users = {...state.users}
-  for (const [id, user] of Object.entries(users)) {
-    if (now - (user.lastSeen ?? 0) > PRESENCE_STALE_MS) {
-      delete users[id]
-      changed = true
+let sweepTimer: ReturnType<typeof setInterval> | null = null
+
+function startPresenceSweep() {
+  if (sweepTimer != null) return
+  sweepTimer = setInterval(() => {
+    const state = usePresenceStore.getState()
+    if (state.flowId == null) return
+    const now = Date.now()
+    let changed = false
+    const users = {...state.users}
+    for (const [id, user] of Object.entries(users)) {
+      if (now - (user.lastSeen ?? 0) > PRESENCE_STALE_MS) {
+        delete users[id]
+        changed = true
+      }
     }
+    if (changed) usePresenceStore.setState({users})
+  }, 60_000)
+}
+
+function stopPresenceSweep() {
+  if (sweepTimer != null) {
+    clearInterval(sweepTimer)
+    sweepTimer = null
   }
-  if (changed) usePresenceStore.setState({users})
-}, 60_000)
+}

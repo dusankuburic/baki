@@ -229,3 +229,116 @@ func TestScanOnce_PrunesDedupEntriesForDeletedFlows(t *testing.T) {
 		t.Errorf("lastSig = %v, want empty after the deleted flow's entry is pruned", s.lastSig)
 	}
 }
+
+// TestScanOnce_PersistsAlertToInbox verifies the scanner writes a governance
+// event to the in-app alert store (the notifications bell's backing data) in
+// addition to dispatching to the external webhook. The alert ID is derived from
+// (flow|type|signature) so a re-alert for the same regression reuses the row.
+func TestScanOnce_PersistsAlertToInbox(t *testing.T) {
+	b := newBackend()
+	seedFlow(t, b, "f1")
+	if err := b.SetFlowBaseline(context.Background(), &storageif.FlowBaseline{FlowID: "f1", Keys: []string{}}); err != nil {
+		t.Fatalf("set baseline: %v", err)
+	}
+	reports := map[string]*models.AnalysisReport{
+		"f1": {FlowID: "f1", Findings: []models.Finding{{RuleID: "r2", BlockID: "b2", Severity: models.SeverityError}}},
+	}
+
+	cap := newCapture(t)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s.ScanOnce(context.Background())
+
+	// One external dispatch AND one persisted inbox row.
+	if got := cap.all(); len(got) != 1 {
+		t.Fatalf("expected 1 webhook dispatch, got %d", len(got))
+	}
+	alerts, err := b.ListGovernanceAlerts(context.Background(), storageif.GovernanceAlertFilter{})
+	if err != nil {
+		t.Fatalf("ListGovernanceAlerts: %v", err)
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("expected 1 inbox alert, got %d", len(alerts))
+	}
+	a := alerts[0]
+	if a.FlowID != "f1" || a.Type != "drift" || a.Severity != "error" || a.NewErrors != 1 {
+		t.Errorf("unexpected persisted alert: %+v", a)
+	}
+	if a.ReadAt != nil {
+		t.Errorf("fresh inbox alert should be unread, got readAt=%v", a.ReadAt)
+	}
+
+	// A second identical scan is de-duplicated upstream (shouldAlert), so no new
+	// inbox row is written (the existing one is reused via ON CONFLICT DO NOTHING).
+	s.ScanOnce(context.Background())
+	alerts, _ = b.ListGovernanceAlerts(context.Background(), storageif.GovernanceAlertFilter{})
+	if len(alerts) != 1 {
+		t.Errorf("expected 1 inbox alert after a re-scan (deduped), got %d", len(alerts))
+	}
+}
+
+// fakeSSE captures EmitTo calls so a test can assert the scanner pushed a
+// real-time event. It implements scanner.SSENotifier.
+type fakeSSE struct {
+	mu      sync.Mutex
+	pushed  []sseCall
+	seenUID map[string]bool
+}
+
+type sseCall struct {
+	userID string
+	name   string
+	data   any
+}
+
+func (f *fakeSSE) EmitTo(userID, name string, data any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushed = append(f.pushed, sseCall{userID, name, data})
+	if f.seenUID == nil {
+		f.seenUID = map[string]bool{}
+	}
+	f.seenUID[userID] = true
+}
+
+func (f *fakeSSE) calls() []sseCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]sseCall(nil), f.pushed...)
+}
+
+// TestScanOnce_PushesAlertOverSSE verifies the scanner emits a governance:alert
+// SSE event to the flow owner (and org members / collaborators) so the bell
+// updates in real time. The flow owner is the recipient exercised here.
+func TestScanOnce_PushesAlertOverSSE(t *testing.T) {
+	b := newBackend()
+	// Seed the flow with an explicit owner so the SSE recipient is resolvable.
+	if err := b.SaveFlow(context.Background(), &storageif.FlowDocument{
+		ID: "f1", Name: "f1", OwnerID: "owner-1",
+		Content: json.RawMessage(`{"id":"f1","subflows":[]}`),
+	}); err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
+	if err := b.SetFlowBaseline(context.Background(), &storageif.FlowBaseline{FlowID: "f1", Keys: []string{}}); err != nil {
+		t.Fatalf("set baseline: %v", err)
+	}
+	reports := map[string]*models.AnalysisReport{
+		"f1": {FlowID: "f1", Findings: []models.Finding{{RuleID: "r2", BlockID: "b2", Severity: models.SeverityError}}},
+	}
+
+	cap := newCapture(t)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	sse := &fakeSSE{}
+	s.SetEventNotifier(sse)
+	s.ScanOnce(context.Background())
+
+	calls := sse.calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 SSE push, got %d (%+v)", len(calls), calls)
+	}
+	if calls[0].name != "governance:alert" {
+		t.Errorf("expected event name governance:alert, got %q", calls[0].name)
+	}
+	if calls[0].userID != "owner-1" {
+		t.Errorf("expected push to owner-1, got %q", calls[0].userID)
+	}
+}

@@ -248,7 +248,7 @@ func TestExportSARIF(t *testing.T) {
 // ── Webhook Notifier ──────────────────────────────────────────────
 
 func TestWebhookNotifier_DisabledByDefault(t *testing.T) {
-	wn := service.NewWebhookNotifier()
+	wn := service.NewWebhookNotifier(nil)
 	if wn.Enabled() {
 		t.Error("expected webhook notifier to be disabled when PAD_WEBHOOK_URL is unset")
 	}

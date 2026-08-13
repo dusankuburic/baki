@@ -276,7 +276,22 @@ func (a *Authenticator) AccessToken() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := a.refresh(ctx); err != nil {
-		return "" // refresh failed — need manual re-auth
+		// Multi-replica rotation race: MSAL rotates the refresh token on each
+		// use, so in a multi-replica deploy another replica may have already
+		// refreshed (and persisted) the token, leaving this replica's in-memory
+		// copy stale → invalid_grant. Reload the latest token from the shared
+		// store and retry once before giving up — without this self-heal, a
+		// replica stays broken (every API call fails) until it is restarted or
+		// an admin re-runs the device flow.
+		if a.store == nil {
+			return "" // no store to recover from — need manual re-auth
+		}
+		if reloadErr := a.LoadCachedToken(ctx); reloadErr != nil {
+			return ""
+		}
+		if err := a.refresh(ctx); err != nil {
+			return "" // refresh still failing after reload — need manual re-auth
+		}
 	}
 	a.mu.Lock()
 	tok := a.token.accessToken

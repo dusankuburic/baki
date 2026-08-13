@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
@@ -137,6 +138,15 @@ func (h *SystemHandler) handleAppInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render.JSON(w, info)
+}
+
+// handleFeatures returns the active product feature flags. Public (pre-auth) so
+// the login page can hide the register button when DisableSignUp is set without
+// needing a session first.
+func (h *SystemHandler) handleFeatures(w http.ResponseWriter, r *http.Request) {
+	render.JSON(w, map[string]bool{
+		"disableSignUp": h.security.Features.DisableSignUp,
+	})
 }
 
 func (h *SystemHandler) handleLogError(w http.ResponseWriter, r *http.Request) {
@@ -280,6 +290,89 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 // blob storage simply don't implement it and the readiness check is skipped.
 type blobHealthChecker interface {
 	CheckBlob(ctx context.Context) error
+}
+
+// componentStatus is one subsystem's health verdict in the admin breakdown.
+// "skipped" means the component isn't configured (e.g. no Redis, no blob).
+type componentStatus struct {
+	Status string `json:"status"`          // "ok" | "error" | "skipped"
+	Error  string `json:"error,omitempty"` // present only when Status == "error"
+}
+
+// adminHealthResponse is the structured payload for GET /api/admin/system/health.
+// Unlike /readyz (a single 200/503 verdict for the orchestrator), this returns a
+// per-subsystem breakdown so an admin can see WHICH dependency is degraded
+// without grepping logs.
+type adminHealthResponse struct {
+	Database componentStatus `json:"database"`
+	Blob     componentStatus `json:"blob"`
+	Redis    componentStatus `json:"redis"`
+	Overall  string          `json:"overall"` // "ok" | "degraded" | "down"
+}
+
+// handleAdminSystemHealth returns a structured per-subsystem health breakdown.
+// Admin-only (the public /readyz is the orchestrator-facing verdict). Reuses the
+// same probes as readiness but reports each independently rather than collapsing
+// to one pass/fail, and does NOT apply the consecutive-failure smoothing — an
+// admin querying health wants the live picture, not a flap-dampened one.
+func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	resp := adminHealthResponse{Overall: "ok"}
+
+	if h.backend == nil {
+		// Local/filesystem mode: no DB, no blob, no Redis.
+		resp.Database = componentStatus{Status: "skipped"}
+		resp.Blob = componentStatus{Status: "skipped"}
+		resp.Redis = componentStatus{Status: "skipped"}
+		resp.Overall = "ok"
+		render.JSON(w, resp)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	// Database
+	if err := h.backend.Ping(ctx); err != nil {
+		resp.Database = componentStatus{Status: "error", Error: err.Error()}
+		resp.Overall = "down"
+	} else {
+		resp.Database = componentStatus{Status: "ok"}
+	}
+
+	// Blob (optional)
+	if bc, ok := h.backend.(blobHealthChecker); ok {
+		if err := h.checkBlobCached(ctx, bc); err != nil {
+			resp.Blob = componentStatus{Status: "error", Error: err.Error()}
+			if resp.Overall == "ok" {
+				resp.Overall = "degraded"
+			}
+		} else {
+			resp.Blob = componentStatus{Status: "ok"}
+		}
+	} else {
+		resp.Blob = componentStatus{Status: "skipped"}
+	}
+
+	// Redis (optional)
+	if h.redisPinger != nil {
+		redisCtx, redisCancel := context.WithTimeout(r.Context(), 2*time.Second)
+		if err := h.redisPinger.Ping(redisCtx); err != nil {
+			resp.Redis = componentStatus{Status: "error", Error: err.Error()}
+			if resp.Overall == "ok" {
+				resp.Overall = "degraded"
+			}
+		} else {
+			resp.Redis = componentStatus{Status: "ok"}
+		}
+		redisCancel()
+	} else {
+		resp.Redis = componentStatus{Status: "skipped"}
+	}
+
+	render.JSON(w, resp)
 }
 
 // checkBlobCached returns the blob reachability status, reusing a successful

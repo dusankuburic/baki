@@ -270,6 +270,15 @@ func (h *AuthHandler) resolveSSOUser(ctx context.Context, ident *sso.Identity) (
 				logger.Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
 			}
 			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "userID", existing.ID, "email", redactEmail(ident.Email))
+		} else {
+			// The existing account is ALREADY verified. Do NOT auto-link a new
+			// IdP identity to it: an attacker who controls an IdP that asserts
+			// the victim's email as verified could otherwise SSO straight into
+			// the victim's account (OIDC pre-account takeover via email
+			// linking). We only got here because no link exists yet for this
+			// (provider, subject); the legitimate owner must add the provider
+			// from account settings, where they authenticate as that owner.
+			return nil, fmt.Errorf("an account with this email already exists — link %s from your account settings", provider)
 		}
 
 		if err := h.identityStore.SaveIdentityLink(ctx, newLink); err != nil {

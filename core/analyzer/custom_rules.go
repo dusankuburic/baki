@@ -155,7 +155,8 @@ func isValidFixType(fixType string) bool {
 		"insert-delay-in-loop", "insert-handler-log", "init-variable",
 		"insert-error-log", "replace-with-variable", "wrap-in-retry",
 		"insert-exit-condition", "remove-block", "parameterize-sql",
-		"append-output", "mask-sensitive-variable", "insert-default", "suppress":
+		"append-output", "mask-sensitive-variable", "insert-default",
+		"upgrade-to-https", "sanitize-command-vars", "suppress":
 		return true
 	default:
 		return false

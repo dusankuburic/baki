@@ -21,7 +21,7 @@ interface UseChatStreamEngineOptions {
   doc: FlowDocument | null
   provider: ProviderID
   selectedModel: string
-  getMessages: (threadId: string) => ChatMessage[]
+  getMessages: (threadId: string) => readonly ChatMessage[]
 }
 
 // useChatStreamEngine owns the per-stream text accumulator, the SSE handler
@@ -161,6 +161,12 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   // (onDone) and the user-stop path (stopAndCommit) so an interrupted answer
   // is kept, not discarded. Persisted messages are filtered of the transient
   // error bubbles so reloaded history isn't littered with them.
+  //
+  // The conversation is saved under the thread's own flowId — NOT the doc ref.
+  // A stream's done event can land after the user has switched documents; in
+  // that window docRef.current points at the new flow, and saving with it would
+  // persist this thread's messages under the wrong flow. flowId is immutable per
+  // thread, so it is the correct source of truth.
   const commitAssistantMessage = useCallback(
     (
       threadId: string,
@@ -168,7 +174,8 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       content: string,
       opts: {tokensIn?: number; tokensOut?: number; finishReason: ChatMessage['finishReason']},
     ) => {
-      const curDoc = docRef.current
+      const thread = useChatStore.getState().threads.find(t => t.id === threadId)
+      if (!thread) return
       const msg: ChatMessage = {
         id: messageId || crypto.randomUUID(),
         role: 'assistant',
@@ -180,12 +187,9 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
         tokensOut: opts.tokensOut,
         finishReason: opts.finishReason,
       }
-      if (!curDoc) return
       appendMessage(threadId, msg)
-      const thread = useChatStore.getState().threads.find(t => t.id === threadId)
-      if (!thread) return
       const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
-      chatApi.saveConversation(curDoc.id, thread.contextBlockId || 'flow', persistable).catch(err => {
+      chatApi.saveConversation(thread.flowId, thread.contextBlockId || 'flow', persistable).catch(err => {
         logger.warn('Failed to save conversation', err)
       })
       if (opts.tokensIn != null || opts.tokensOut != null) {

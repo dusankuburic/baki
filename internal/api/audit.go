@@ -73,7 +73,29 @@ var (
 	auditWg     sync.WaitGroup
 	auditOnce   sync.Once
 	auditClosed atomic.Bool // guards against send-on-closed-channel panic
+
+	// auditSpiller is the optional on-disk overflow sink for events that don't
+	// fit the in-memory pool. Configured via SetAuditSpillConfig before
+	// InitAuditPool; nil keeps the legacy "divert to log fallback" behaviour.
+	auditSpiller *auditSpillStore
+	// spillStopCh signals auditSpillReaper to exit; spillReaperWg waits for it.
+	spillStopCh   chan struct{}
+	spillReaperWg sync.WaitGroup
 )
+
+// SetAuditSpillConfig enables the on-disk spill queue for audit events that
+// overflow the in-memory pool. dir "" → temp dir; maxBytes <=0 → 10 MB. Must be
+// called before InitAuditPool. When the pool later has capacity, a reaper
+// drains spilled events back into the pool so a transient overload no longer
+// drops events (only sustained overload beyond the spill cap degrades).
+func SetAuditSpillConfig(dir string, maxBytes int64) error {
+	s, err := newAuditSpiller(dir, maxBytes)
+	if err != nil {
+		return err
+	}
+	auditSpiller = s
+	return nil
+}
 
 func InitAuditPool(backend storageif.StorageBackend) {
 	if backend == nil {
@@ -85,6 +107,14 @@ func InitAuditPool(backend storageif.StorageBackend) {
 		for i := 0; i < auditWorkers; i++ {
 			go auditWorker(backend)
 		}
+		// If a spill store is configured, drain it back into the pool whenever
+		// capacity returns. This recovers events a burst pushed past the
+		// in-memory buffer (and any left from a previous boot).
+		if auditSpiller != nil {
+			spillStopCh = make(chan struct{})
+			spillReaperWg.Add(1)
+			go auditSpillReaper()
+		}
 	})
 }
 
@@ -95,6 +125,12 @@ func ShutdownAuditPool() {
 	auditClosed.Store(true)
 	close(auditCh)
 	auditWg.Wait()
+	// Stop the reaper AFTER the workers have drained, so a final sweep can push
+	// any remaining spill into the closing channel (no-op if nothing's left).
+	if spillStopCh != nil {
+		close(spillStopCh)
+		spillReaperWg.Wait()
+	}
 }
 
 // auditEnqueue attempts to deliver event to the audit worker pool. Returns
@@ -194,6 +230,60 @@ func auditWorker(backend storageif.StorageBackend) {
 			}
 		case <-timerC:
 			flush()
+		}
+	}
+}
+
+// auditSpillReaper drains the on-disk spill queue back into the in-memory pool
+// whenever there is capacity. It runs on a 500 ms tick: cheap enough that
+// replay latency stays sub-second under recovery, infrequent enough to avoid
+// contending with the hot write path. It stops on spillStopCh (closed by
+// ShutdownAuditPool).
+func auditSpillReaper() {
+	defer spillReaperWg.Done()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-spillStopCh:
+			return
+		case <-ticker.C:
+			replaySpilled()
+		}
+	}
+}
+
+// replaySpilled moves drained spill events into the pool. It only runs while the
+// pool has ample room (< half full) so replay never starves fresh events: a
+// fresh auditEnqueue always finds capacity ahead of a backlog replay. Within one
+// tick it drains batches until the pool fills past half or the spill empties; a
+// partial-batch failure (pool filled mid-batch) re-spills the unconsumed
+// remainder (without double-counting the spilled metric) and yields.
+func replaySpilled() {
+	if auditSpiller == nil {
+		return
+	}
+	for {
+		if len(auditCh) >= auditQueueSize/2 {
+			return // leave headroom for fresh events
+		}
+		batch := auditSpiller.Drain(auditFlushSize)
+		if len(batch) == 0 {
+			return
+		}
+		var failed []*storageif.AuditEvent
+		for _, e := range batch {
+			if sent, _ := auditEnqueue(e); !sent {
+				failed = append(failed, e)
+			} else {
+				metrics.RecordAuditSpillReplayed()
+			}
+		}
+		if len(failed) > 0 {
+			// Pool filled/closed mid-batch — put the unconsumed remainder back
+			// (reSpill doesn't bump the spilled metric) and yield this tick.
+			auditSpiller.reSpill(failed)
+			return
 		}
 	}
 }
@@ -368,10 +458,15 @@ func logAudit(ctx context.Context, backend storageif.StorageBackend, r *http.Req
 	}
 	if auditCh != nil {
 		if _, reason := auditEnqueue(event); reason != "" {
-			// "closed" (shutting down) or "full" (pool saturated under load):
-			// divert the event to structured logs so it isn't silently dropped
-			// (the DB sink is the system of record, container logs are the
-			// durable fallback).
+			// "closed" (shutting down) or "full" (pool saturated under load).
+			// On "full", spill to the durable on-disk queue first so a transient
+			// overload can be replayed rather than lost to logs; only divert to
+			// the log fallback if there's no spill store or it rejected the
+			// event (at cap). "closed" always goes to the fallback (the reaper
+			// is shutting down too, so spilling would never drain).
+			if reason == "full" && auditSpiller != nil && auditSpiller.Spill(event) {
+				return
+			}
 			auditFallback(reason, event)
 		}
 		return

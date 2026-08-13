@@ -72,6 +72,8 @@ export interface AIPromptsConfig {
 export interface AISettings {
   activeProvider: ProviderID
   embeddingProvider: ProviderID
+  /** Override the embedding model name; empty keeps the provider default. */
+  embeddingModel?: string
   providers: Record<ProviderID, AIProviderConfig>
   demoMode: DemoModeSettings
   showCostEstimates: boolean

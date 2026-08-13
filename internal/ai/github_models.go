@@ -16,11 +16,12 @@ type GitHubModelsProvider struct {
 func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	return &GitHubModelsProvider{
 		openaiBase: openaiBase{
-			apiKey:         token,
-			client:         sharedHTTPClient,
-			baseURL:        &githubModelsBaseURL,
-			providerLabel:  "github models",
-			embeddingModel: "text-embedding-3-small",
+			apiKey:                token,
+			client:                sharedHTTPClient,
+			baseURL:               &githubModelsBaseURL,
+			providerLabel:         "github models",
+			embeddingModel:        "text-embedding-3-small",
+			embeddingModelDefault: "text-embedding-3-small",
 			extraHeaders: func(req *http.Request, model string) {
 				req.Header.Set("x-ms-model-mesh-model-id", model)
 			},

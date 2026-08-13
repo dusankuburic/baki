@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -58,6 +59,6 @@ func BenchmarkRunAnalysisLarge(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = runAnalysisCore(flow, rules, nil, nil, false)
+		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
 	}
 }

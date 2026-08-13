@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -254,6 +255,14 @@ func settingsDigest(settings *models.AppSettings) string {
 }
 
 func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
+	return CachedAnalysisCtx(context.Background(), doc, rules, settings, onProgress)
+}
+
+// CachedAnalysisCtx is the context-aware variant of CachedAnalysis: the
+// underlying analysis walk honours gctx cancellation so a caller with a
+// per-request deadline (raw-analyze endpoint) stops burning CPU once it elapses.
+// Cache lookup/put are unaffected (they're cheap relative to the walk).
+func CachedAnalysisCtx(gctx context.Context, doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
 	hash := analyzerVersion + ":" + FlowHash(doc) + ":" + settingsDigest(settings)
 	id := StableFlowID(doc)
 	if cached := DefaultCache.Get(id, hash); cached != nil {
@@ -262,7 +271,7 @@ func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.App
 
 	// Skip per-rule timing on the cached hot path; RuleProfiles durations are a
 	// dev diagnostic and not worth two time.Now() calls per (block, rule) here.
-	report := runAnalysisCore(doc, rules, settings, onProgress, false)
+	report := runAnalysisCore(gctx, doc, rules, settings, onProgress, false)
 	DefaultCache.PutWithPath(id, doc.FilePath, hash, report)
 	return report
 }

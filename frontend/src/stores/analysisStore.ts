@@ -13,6 +13,7 @@ import {toggleSetMember} from '@/lib/collections'
 import {analysisApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {logger} from '@/lib/logger'
+import {notifyIfBackground} from '@/hooks/usePlatform'
 import {useFlowStore} from './flowStore'
 
 export type FindingCategory = 'Security' | 'Reliability' | 'Performance' | 'Style' | 'Logic'
@@ -102,6 +103,7 @@ interface AnalysisState {
   isSuppressed: (finding: Finding) => boolean
   loadSuppressions: (flowId: string) => Promise<void>
   setFindingTriage: (finding: Finding, status: TriageStatus) => void
+  assignFinding: (finding: Finding, assigneeId: string | null) => void
   loadBaseline: (flowId: string) => Promise<void>
   handleSetBaseline: () => Promise<void>
   handleClearBaseline: () => Promise<void>
@@ -142,7 +144,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setFocusedFinding: key => set({focusedFindingKey: key}),
 
-  setReport: (flowId, report) =>
+  setReport: (flowId, report) => {
     set(state => {
       const next = new Map(state.reports)
       next.set(flowId, report)
@@ -171,7 +173,17 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         if (!evicted) break
       }
       return {reports: next, findingsByBlock: nextIndex}
-    }),
+    })
+    // Best-effort notification when the user has tabbed away from the app.
+    // notifyIfBackground is a no-op while the document is visible, so this
+    // never disturbs an active session.
+    const count = report.findings?.length ?? 0
+    const noun = count === 1 ? 'finding' : 'findings'
+    void notifyIfBackground({
+      title: 'Analysis complete',
+      body: count === 0 ? 'No findings — flow looks clean.' : `${count} ${noun} found.`,
+    })
+  },
 
   setAnalyzing: b => set({isAnalyzing: b}),
 
@@ -324,6 +336,9 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setFindingTriage: (finding, status) => {
     const key = findingKey(finding)
+    // Preserve any existing assignee across a status change so triaging a
+    // finding (e.g. open → in_progress) doesn't silently drop its owner.
+    const preservedAssignee = get().triageMap.get(key)?.assigneeId
     set(state => {
       const triageMap = new Map(state.triageMap)
       if (status === 'open') {
@@ -334,6 +349,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           findingKey: key,
           ruleId: finding.ruleId,
           status,
+          assigneeId: preservedAssignee,
           updatedAt: new Date().toISOString(),
         })
       }
@@ -368,8 +384,39 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
     if (!isTauri()) {
       analysisApi
-        .setFindingStatus({findingKey: key, ruleId: finding.ruleId, status})
+        .setFindingStatus({findingKey: key, ruleId: finding.ruleId, status, assigneeId: preservedAssignee})
         .catch(err => logger.warn('Failed to persist triage status', err))
+    }
+  },
+
+  // Assign (or unassign) a finding without changing its triage status. The
+  // backend persists assigneeId alongside the status, so we re-send the current
+  // status with the new owner. Cloud-only (desktop triage is in-memory).
+  assignFinding: (finding, assigneeId) => {
+    const key = findingKey(finding)
+    const status: TriageStatus = get().triageMap.get(key)?.status ?? 'open'
+    set(state => {
+      const triageMap = new Map(state.triageMap)
+      if (status === 'open' && !assigneeId) {
+        // Unassigning a finding that was never triaged: nothing to persist.
+        if (!triageMap.has(key)) return state
+        triageMap.delete(key)
+        return {triageMap}
+      }
+      triageMap.set(key, {
+        flowId: useFlowStore.getState().document?.id ?? '',
+        findingKey: key,
+        ruleId: finding.ruleId,
+        status,
+        assigneeId: assigneeId ?? undefined,
+        updatedAt: new Date().toISOString(),
+      })
+      return {triageMap}
+    })
+    if (!isTauri()) {
+      analysisApi
+        .setFindingStatus({findingKey: key, ruleId: finding.ruleId, status, assigneeId: assigneeId ?? undefined})
+        .catch(err => logger.warn('Failed to persist assignee', err))
     }
   },
 

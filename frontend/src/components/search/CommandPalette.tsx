@@ -2,6 +2,7 @@ import {useState, useMemo, useRef, useEffect} from 'react'
 import clsx from 'clsx'
 import {Kbd} from '@/components/shared'
 import {useListNavigation} from '@/hooks/useListNavigation'
+import {useDialogFocus} from '@/hooks/useDialogFocus'
 
 type Command = {
   id: string
@@ -21,6 +22,10 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const paletteRef = useRef<HTMLDivElement>(null)
+  // Tab focus trap + focus restoration to the trigger on close. Esc is left to
+  // useListNavigation's onClose (closeOnEsc:false here avoids a double-close).
+  useDialogFocus({isOpen, onClose, closeOnEsc: false, containerRef: paletteRef})
 
   const grouped = useMemo(() => {
     const lower = query.toLowerCase()
@@ -35,12 +40,18 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
     return groups
   }, [commands, query])
 
-  const flatItems = useMemo(() => {
+  const {flatItems, indexById} = useMemo(() => {
     const items: Command[] = []
     for (const cmds of Object.values(grouped)) {
       items.push(...cmds)
     }
-    return items
+    // Precompute the flat index per command id so the render below is pure
+    // (previously a `let itemIndex = -1` counter was mutated during render,
+    // relying on Object.values/Object.entries iterating in the same order —
+    // correct today but fragile under any future grouping/sort divergence).
+    const idxById = new Map<string, number>()
+    items.forEach((c, i) => idxById.set(c.id, i))
+    return {flatItems: items, indexById: idxById}
   }, [grouped])
 
   const {activeIndex, setActiveIndex, handleKeyDown} = useListNavigation({
@@ -71,12 +82,11 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
 
   if (!isOpen) return null
 
-  let itemIndex = -1
-
   return (
     <div className="fixed inset-0 z-modal flex items-start justify-center pt-[20vh]" onClick={onClose}>
       <div className="absolute inset-0 bg-surface-overlay backdrop-blur-sm" />
       <div
+        ref={paletteRef}
         className="relative w-full max-w-[640px] bg-surface-1 border border-border-default rounded-xl shadow-xl overflow-hidden animate-palette"
         onClick={e => e.stopPropagation()}
       >
@@ -100,8 +110,7 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
                   {section}
                 </div>
                 {cmds.map(cmd => {
-                  itemIndex++
-                  const idx = itemIndex
+                  const idx = indexById.get(cmd.id) ?? -1
                   return (
                     <div
                       key={cmd.id}

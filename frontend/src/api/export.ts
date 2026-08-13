@@ -18,7 +18,7 @@ export const exportApi = {
       path = p
     }
 
-    const res: {data: string} = await request('/api/export/pdf', {path}, 'POST', EXPORT_TIMEOUT_MS)
+    const res: {data: string} = await request('/api/export/pdf', {body: {path}, method: 'POST', timeoutMs: EXPORT_TIMEOUT_MS})
 
     if (!getPlatformCapabilities().nativeDialogs && res.data) {
       const link = document.createElement('a')
@@ -41,7 +41,7 @@ export const exportApi = {
       path = p
     }
 
-    const res: {data: string} = await request('/api/export/markdown', {path}, 'POST', EXPORT_TIMEOUT_MS)
+    const res: {data: string} = await request('/api/export/markdown', {body: {path}, method: 'POST', timeoutMs: EXPORT_TIMEOUT_MS})
 
     if (!getPlatformCapabilities().nativeDialogs && res.data) {
       const link = document.createElement('a')
@@ -54,7 +54,7 @@ export const exportApi = {
     return path
   },
 
-  compareCurrentWith: (path: string): Promise<FlowDiff> => request('/api/export/compare', {path}),
+  compareCurrentWith: (path: string): Promise<FlowDiff> => request('/api/export/compare', {body: {path}}),
 
   pickFile: async (filter: string): Promise<string | null> => {
     const extensions = filter ? filter.split(',') : undefined

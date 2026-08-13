@@ -54,6 +54,66 @@ type credentials struct {
 	Password string `json:"password"`
 }
 
+// refreshCookieName is the HttpOnly cookie that carries the refresh token.
+// Phase 1 of moving the refresh token out of JS-accessible storage (localStorage
+// is XSS-readable): the cookie is SET on login/refresh and READ (cookie-first,
+// body-fallback) on refresh/logout, so the browser auto-sends it on same-origin
+// /api/auth POSTs. HttpOnly means document.cookie/XSS can't read it; SameSite=Lax
+// blocks cross-site CSRF POSTs against /refresh; Path=/api/auth confines it to
+// the auth endpoints. The body refreshToken field is still returned and accepted
+// for backward compatibility during the frontend cutover (phase 2 stops writing
+// localStorage; the sessions-UI's JS-read of the jti moves to a backend-provided
+// field — see getCurrentSessionId in authStore.ts).
+const refreshCookieName = "pad_refresh"
+
+// isHTTPS reports whether the request reached the server over TLS (directly or
+// via a trusted proxy's X-Forwarded-Proto). The refresh cookie is a long-lived
+// credential, so Secure is set only when transport is actually encrypted —
+// otherwise localhost/dev over http could never set or send it.
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if xfp := r.Header.Get("X-Forwarded-Proto"); xfp != "" {
+		return xfp == "https"
+	}
+	return false
+}
+
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    token,
+		Path:     "/api/auth",
+		Expires:  expires,
+		HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     "/api/auth",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// refreshTokenFromRequest returns the refresh token from the HttpOnly cookie
+// (preferred) or, for backward compatibility, the JSON body field. Returns ""
+// when neither is present.
+func (h *AuthHandler) refreshTokenFromRequest(r *http.Request, bodyToken string) string {
+	if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return bodyToken
+}
+
 // decodeCredentials reads the request body and returns the normalized email
 // (lowercased/trimmed via validateEmail) together with the raw password.
 //
@@ -75,6 +135,13 @@ func decodeCredentials(r *http.Request) (email, password string, emailErr error,
 func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("registration not available in local mode"), http.StatusForbidden)
+		return
+	}
+	if h.security.Features.DisableSignUp {
+		// 403, not 404, so a closed deployment clearly signals "signups disabled"
+		// rather than "endpoint moved". The frontend hides the form via
+		// GET /api/system/features, so this only fires if a runner hits the API directly.
+		render.Error(w, fmt.Errorf("account registration is disabled on this instance"), http.StatusForbidden)
 		return
 	}
 	metrics.RecordAuthOp("register")
@@ -183,6 +250,11 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Set the HttpOnly refresh cookie (phase 1 of removing the refresh token
+	// from JS-readable localStorage). The body field is still returned below
+	// for backward compatibility with existing clients.
+	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
+
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", user.ID, nil)
 	render.JSON(w, pair)
 }
@@ -196,13 +268,30 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	claims, err := h.security.AuthMgr.VerifyRefresh(req.RefreshToken)
+	// Prefer the HttpOnly cookie over the body field (phase 1 of the
+	// localStorage removal). The body fallback keeps existing clients working.
+	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
+
+	claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
 	if err != nil {
 		render.Error(w, err, http.StatusUnauthorized)
 		return
 	}
 
-	if h.tokenStore != nil {
+	if h.tokenStore == nil {
+		// In JWT mode a nil token store is a misconfiguration: the replay/
+		// rotation safeguards (single-use enforcement, cross-user mismatch
+		// check, replay-triggered session revocation) all depend on it. Fail
+		// closed rather than silently skipping them — otherwise a stolen
+		// refresh token can be replayed indefinitely. Local (non-JWT) mode
+		// has no token store by design and refreshes statelessly.
+		if h.security.JWTEnabled {
+			logger.Error("refresh requested in JWT mode without a token store (misconfiguration); rejecting",
+				"user_id", claims.UserID, "token_id", claims.ID)
+			render.Error(w, fmt.Errorf("session management unavailable — please contact an administrator"), http.StatusUnauthorized)
+			return
+		}
+	} else {
 		// Use the atomic verify-and-revoke to eliminate the race window
 		// between separate VerifyRefresh and RevokeRefreshToken calls.
 		// Two concurrent requests with the same jti: only one succeeds
@@ -268,6 +357,9 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+
+	// Rotate the HttpOnly cookie to the newly-issued refresh token.
+	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
 
 	render.JSON(w, pair)
 }
@@ -458,6 +550,10 @@ func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Reque
 		render.Error(w, fmt.Errorf("export: create temp file: %w", err), http.StatusInternalServerError)
 		return false
 	}
+	// os.CreateTemp already opens 0600; assert it explicitly so the data-subject
+	// export's owner-only mode is visible at the call site and survives a future
+	// swap to an API with a different default umask.
+	_ = os.Chmod(tmp.Name(), 0o600)
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	defer func() { _ = tmp.Close() }()
 
@@ -548,14 +644,19 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("logout: failed to decode body, proceeding without refresh token revocation", "error", err)
 	}
 
-	if req.RefreshToken != "" && h.tokenStore != nil {
-		claims, err := h.security.AuthMgr.VerifyRefresh(req.RefreshToken)
+	// Prefer the HttpOnly cookie (phase 1); fall back to the body for compat.
+	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
+	if refreshTok != "" && h.tokenStore != nil {
+		claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
 		if err == nil {
 			if err := h.tokenStore.RevokeRefreshToken(r.Context(), claims.ID); err != nil {
 				logger.Error("failed to revoke refresh token during logout", "error", err, "tokenID", claims.ID)
 			}
 		}
 	}
+
+	// Clear the HttpOnly refresh cookie.
+	clearRefreshCookie(w, r)
 
 	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
 		if claims, err := h.security.AuthMgr.VerifyIgnoreExpiry(tokenStr); err == nil && claims.ID != "" {

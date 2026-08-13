@@ -333,10 +333,13 @@ export function useStreamingMessage(handler: StreamHandler) {
       sub.unsub = unsub
 
       // If the hook unmounted while the async subscription was in flight,
-      // immediately unsubscribe to prevent a leak.
+      // immediately unsubscribe to prevent a leak. Returning false signals the
+      // caller (executeSend) NOT to proceed with creating the backend stream —
+      // otherwise the stream emits over SSE to a dead listener, burning provider
+      // spend with no UI.
       if (isCanceledRef.current) {
         unsub()
-        return
+        return false
       }
       subsRef.current.set(streamId, sub)
       // Watch from registration: a backend that never emits anything (worker
@@ -386,9 +389,11 @@ export function useStreamingMessage(handler: StreamHandler) {
         })
       }
 
-      if (isCanceledRef.current) return
+      // Canceled during the open-wait: signal the caller not to create the
+      // backend stream (see the cancel-after-subscribe note above).
+      if (isCanceledRef.current) return false
 
-      if (!begin) return
+      if (!begin) return true
 
       // If beginStream fails the backend goroutine blocks on awaitStart() until
       // its stream-cap timeout fires — with no event emitted afterward. Propagate
@@ -400,7 +405,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       // before our SSE subscription existed, so no event will ever arrive.
       // /begin returns that buffered state — deliver it directly.
       if (res?.status === 'finished') {
-        if (isCanceledRef.current || !subsRef.current.has(streamId)) return
+        if (isCanceledRef.current || !subsRef.current.has(streamId)) return false
         if (res.text) {
           handlerRef.current.onReplace(res.text, streamId)
         }
@@ -410,6 +415,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId)
         }
       }
+      return true
     },
     [resumeInto, armStall, teardownStream],
   )

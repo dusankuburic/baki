@@ -273,3 +273,34 @@ export interface RuleConfig {
   severity: Severity
   options?: Record<string, unknown>
 }
+
+// --- Policy Gates ---
+
+export interface PolicyRule {
+  ruleId: string
+  enabled: boolean
+  severity?: Severity
+}
+
+export interface Policy {
+  id: string
+  orgId?: string
+  name: string
+  description?: string
+  rules: PolicyRule[]
+  /** Lowest severity that fails evaluation: 'error' | 'warning' | 'info'. Empty = report-only. */
+  gateSeverity?: Severity
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface PolicyResult {
+  policyId: string
+  policyName: string
+  passed: boolean
+  violations: Finding[]
+  errors: number
+  warnings: number
+  info: number
+  evaluated: number
+}

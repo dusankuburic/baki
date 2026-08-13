@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -357,6 +358,30 @@ func TestApplyEnvVars_GoodNumericAndDurationAccepted(t *testing.T) {
 	}
 }
 
+// TestApplyEnvVars_EmbeddingDim confirms PAD_EMBEDDING_DIM is wired into the
+// storage config (it gates which knowledge chunks are pgvector-searchable).
+func TestApplyEnvVars_EmbeddingDim(t *testing.T) {
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("PAD_EMBEDDING_DIM", "3072")
+		cfg := Default()
+		if err := applyEnvVars(cfg); err != nil {
+			t.Fatalf("applyEnvVars: %v", err)
+		}
+		if cfg.Storage.EmbeddingDim != 3072 {
+			t.Errorf("EmbeddingDim = %d, want 3072", cfg.Storage.EmbeddingDim)
+		}
+	})
+	t.Run("unset leaves zero (storage layer applies the 1536 default)", func(t *testing.T) {
+		cfg := Default()
+		if err := applyEnvVars(cfg); err != nil {
+			t.Fatalf("applyEnvVars: %v", err)
+		}
+		if cfg.Storage.EmbeddingDim != 0 {
+			t.Errorf("EmbeddingDim = %d, want 0 (default applied downstream)", cfg.Storage.EmbeddingDim)
+		}
+	})
+}
+
 // TestValidate_CloudEncryptionKeyStrength confirms the dedicated encryption key
 // gets the same strength gate as the JWT secret in cloud mode (prevents
 // PAD_ENCRYPTION_KEY="x" from protecting stored provider credentials).
@@ -382,4 +407,45 @@ func TestValidate_CloudEncryptionKeyStrength(t *testing.T) {
 			t.Fatalf("expected empty encryption key to pass (fallback), got %v", err)
 		}
 	})
+}
+
+// TestIsWeakSecret_BlocklistAndEntropy locks the expanded weak-secret gate
+// (L6): the longer documented placeholders that pass the 32-char floor are
+// rejected, and long-but-pathological low-entropy secrets (repeated chars /
+// tiles) are caught even though they aren't on the literal blocklist.
+func TestIsWeakSecret_BlocklistAndEntropy(t *testing.T) {
+	// Long placeholders that previously slipped past the length floor alone.
+	for _, s := range []string{
+		"please-change-this-secret-in-production",
+		"your-super-secret-jwt-key-change-me",
+		"your-256-bit-secret-here-replace-it",
+		strings.Repeat("x", 36),
+	} {
+		if !isWeakSecret(s) {
+			t.Errorf("isWeakSecret(%q) = false, want true (known placeholder)", s)
+		}
+	}
+
+	// Low-entropy: long enough but obviously non-random.
+	weak := []string{
+		strings.Repeat("a", 64),             // all identical
+		strings.Repeat("0", 40),             // all identical digits
+		"ab" + strings.Repeat("ab", 20),     // 2-byte tile (42 chars)
+		"abc" + strings.Repeat("abc", 14),   // 3-byte tile (45 chars)
+		"abcd" + strings.Repeat("abcd", 10), // 4-byte tile (44 chars)
+	}
+	for _, s := range weak {
+		if !isLowEntropy(s) {
+			t.Errorf("isLowEntropy(%q) = false, want true", s)
+		}
+		if !isWeakSecret(s) {
+			t.Errorf("isWeakSecret(%q) = false, want true (low entropy)", s)
+		}
+	}
+
+	// A genuinely long, varied secret must NOT be flagged.
+	good := "x9K2mP7qR4vN8wL3jH6tB1yY5cZ0dF4aEsUgT"
+	if isWeakSecret(good) {
+		t.Errorf("isWeakSecret(good secret) = true, want false (false positive)")
+	}
 }

@@ -14,33 +14,34 @@ export interface BeginStreamResult {
 }
 
 export const chatApi = {
-  streamChatMessage: (req: ChatRequest): Promise<string> => request('/api/chat/stream', req),
+  streamChatMessage: (req: ChatRequest): Promise<string> => request('/api/chat/stream', {body: req}),
 
-  beginStream: (id: string): Promise<BeginStreamResult> => request('/api/chat/begin', {id}),
+  beginStream: (id: string): Promise<BeginStreamResult> => request('/api/chat/begin', {body: {id}}),
 
-  cancelStream: (id: string): Promise<void> => request('/api/chat/cancel', {id}),
+  cancelStream: (id: string): Promise<void> => request('/api/chat/cancel', {body: {id}}),
 
   resumeStream: (
     id: string,
     from = 0,
   ): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
-    request('/api/chat/resume', {id, from}),
+    request('/api/chat/resume', {body: {id, from}}),
 
   getConversation: (flowId: string, provider: string): Promise<ConversationFile> =>
-    request('/api/chat/get', {flowId, provider}),
+    request('/api/chat/get', {body: {flowId, provider}}),
 
   saveConversation: (flowId: string, provider: string, messages: ChatMessage[]): Promise<void> =>
-    request('/api/chat/save', {flowId, provider, messages}),
+    request('/api/chat/save', {body: {flowId, provider, messages}}),
 
   clearConversation: (flowId: string, provider: string): Promise<void> =>
-    request('/api/chat/clear', {flowId, provider}),
+    request('/api/chat/clear', {body: {flowId, provider}}),
 
   getSuggestedPrompts: (hasBlock: boolean, hasFindings?: boolean): Promise<string[]> =>
-    request('/api/chat/suggested-prompts', {hasBlock, hasFindings: hasFindings ?? false}),
+    request('/api/chat/suggested-prompts', {body: {hasBlock, hasFindings: hasFindings ?? false}}),
 
-  getDemoRemaining: (): Promise<number> => request('/api/chat/demo-remaining', undefined, 'GET'),
+  getDemoRemaining: (): Promise<number> => request('/api/chat/demo-remaining', {method: 'GET'}),
 
-  previewContext: (req: ChatRequest): Promise<ContextPreview> => request('/api/chat/preview-context', req),
+  previewContext: (req: ChatRequest): Promise<ContextPreview> => request('/api/chat/preview-context', {body: req}),
 
-  readSourceFiles: (files: string[]): Promise<Record<string, string>> => request('/api/flow/read-sources', {files}),
+  readSourceFiles: (files: string[]): Promise<Record<string, string>> =>
+    request('/api/flow/read-sources', {body: {files}}),
 }

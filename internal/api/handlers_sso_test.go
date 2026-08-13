@@ -192,6 +192,40 @@ func TestSSOCallback_LinksExistingUserByVerifiedEmail(t *testing.T) {
 	}
 }
 
+// TestSSOCallback_RefusesAutoLinkToVerifiedAccount verifies the pre-account-
+// takeover fix: a verified IdP identity whose email matches an ALREADY-VERIFIED
+// local account must NOT auto-link/login. Otherwise an attacker controlling an
+// IdP that asserts the victim's email could SSO straight into the victim's
+// account. The seeded user here is verified (unlike seedUserWithRole), so the
+// link is refused and the login surfaces an error.
+func TestSSOCallback_RefusesAutoLinkToVerifiedAccount(t *testing.T) {
+	rt, client, ids := newSSOTestRig(t)
+	// Seed a VERIFIED local account owned by the victim.
+	victim := &storageif.User{
+		ID:            "u-victim",
+		Email:         "victim@example.com",
+		Password:      "hash",
+		Role:          "member",
+		EmailVerified: true,
+	}
+	if err := rt.security.Backend.SaveUser(context.Background(), victim); err != nil {
+		t.Fatalf("seed verified victim: %v", err)
+	}
+	client.identities["code-link"] = &sso.Identity{
+		Subject: "sub-attacker", Email: "victim@example.com", EmailVerified: true,
+	}
+
+	cookie, state := startSSOFlow(t, rt)
+	rr := completeCallback(t, rt, cookie, state, "code-link")
+	checkStatus(t, rr, http.StatusFound)
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "ssoError=") {
+		t.Errorf("expected an error redirect (auto-link to verified account refused), got %q", loc)
+	}
+	if _, err := ids.LoadIdentityLink(context.Background(), "fake-idp", "sub-attacker"); err == nil {
+		t.Error("no identity link must be created when refusing auto-link to a verified account")
+	}
+}
+
 func TestSSOCallback_UnverifiedEmailRefused(t *testing.T) {
 	rt, client, ids := newSSOTestRig(t)
 	seedUserWithRole(t, rt, "u-victim", "victim@example.com", "member")

@@ -234,6 +234,14 @@ export default function MainPaneToolbar() {
                 window.dispatchEvent(new Event('graph:fit'))
               }}
             />
+            <IconButton
+              icon={Download}
+              size="sm"
+              label="Export graph as PNG"
+              onClick={() => {
+                window.dispatchEvent(new Event('graph:export-png'))
+              }}
+            />
           </>
         )}
         {mainPaneView === 'diff' && <IconButton icon={Plus} size="sm" label="New Comparison" onClick={handleCompare} />}

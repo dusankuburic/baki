@@ -11,22 +11,32 @@ import {isLoopControl} from '@/lib/blocks'
 import {useFlowStore} from '@/stores/flowStore'
 import BlockSearchBar from './BlockSearchBar'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {usePresenceStore, type PresenceUser} from '@/stores/presenceStore'
 import {EmptyState} from '@/components/shared'
 import {useFlattenedBlocks, type FlatBlock} from '@/hooks/useFlattenedBlocks'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import type {Severity, BlockType, Block} from '@/types'
 
+// Block → occupants (remote users currently viewing it). Built once per
+// presence change in BlockView and compared by reference in the item memo, so a
+// presence update re-renders visible items the same way a findings-map change
+// does.
+type RemoteSelection = Map<string, PresenceUser[]>
+
 function BlockItemWrapperComponent({
   item,
   findingCounts,
   findingSeverities,
+  remoteSelection,
 }: {
   item: FlatBlock
   findingCounts: Map<string, number>
   findingSeverities: Map<string, Severity>
+  remoteSelection: RemoteSelection
 }) {
   const {block, depth, isLast, collapsed} = item
   const selected = useFlowStore(s => s.selectedBlockId === block.id)
+  const occupants = remoteSelection.get(block.id)
 
   const content = useMemo(() => {
     if (block.type === 'ELSE') {
@@ -59,13 +69,14 @@ function BlockItemWrapperComponent({
           hasFindings={(findingCounts.get(block.id) ?? 0) > 0}
           findingCount={findingCounts.get(block.id) ?? 0}
           findingSeverity={findingSeverities.get(block.id) ?? 'info'}
+          remoteOccupants={occupants}
           onClick={() => useFlowStore.getState().selectBlock(block.id)}
         />
         {!isLast && !isContainerType(block.type) && <BlockConnector isActive={selected} />}
         {isContainerType(block.type) && collapsed && !isLast && <BlockConnector isActive={selected} />}
       </>
     )
-  }, [block, selected, findingCounts, findingSeverities, collapsed, isLast])
+  }, [block, selected, findingCounts, findingSeverities, collapsed, isLast, occupants])
 
   return (
     <div className="flex flex-col items-center w-full" style={{paddingLeft: depth * 20}}>
@@ -75,12 +86,23 @@ function BlockItemWrapperComponent({
 }
 
 function areEqual(
-  prev: {item: FlatBlock; findingCounts: Map<string, number>; findingSeverities: Map<string, Severity>},
-  next: {item: FlatBlock; findingCounts: Map<string, number>; findingSeverities: Map<string, Severity>},
+  prev: {
+    item: FlatBlock
+    findingCounts: Map<string, number>
+    findingSeverities: Map<string, Severity>
+    remoteSelection: RemoteSelection
+  },
+  next: {
+    item: FlatBlock
+    findingCounts: Map<string, number>
+    findingSeverities: Map<string, Severity>
+    remoteSelection: RemoteSelection
+  },
 ) {
   if (!prev.item || !next.item) return false
   if (prev.findingCounts !== next.findingCounts) return false
   if (prev.findingSeverities !== next.findingSeverities) return false
+  if (prev.remoteSelection !== next.remoteSelection) return false
   if (prev.item.block?.id !== next.item.block?.id) return false
   if (prev.item.depth !== next.item.depth) return false
   if (prev.item.isLast !== next.item.isLast) return false
@@ -99,6 +121,8 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   const [searchActive, setSearchActive] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIdx, setSearchMatchIdx] = useState(0)
+  // Subscribe to live presence so remote block selections render in the canvas.
+  const presenceUsers = usePresenceStore(s => s.users)
 
   const displayedFlattened = useMemo(() => {
     if (!searchActive || !searchQuery.trim()) return flattened
@@ -134,6 +158,20 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     }
     return {findingCounts: counts, findingSeverities: sevs}
   }, [report])
+
+  // Build block → occupants once per presence change. The map identity changes
+  // whenever a collaborator's selection changes, which is what the item memo
+  // compares — mirroring the findings-map pattern.
+  const remoteSelection = useMemo<RemoteSelection>(() => {
+    const map: RemoteSelection = new Map()
+    for (const u of Object.values(presenceUsers)) {
+      if (!u.selectedBlockId) continue
+      const arr = map.get(u.selectedBlockId)
+      if (arr) arr.push(u)
+      else map.set(u.selectedBlockId, [u])
+    }
+    return map
+  }, [presenceUsers])
 
   useEffect(() => {
     if (!selectedBlockId || !flattened.length) return
@@ -314,6 +352,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
                 item={item}
                 findingCounts={findingCounts}
                 findingSeverities={findingSeverities}
+                remoteSelection={remoteSelection}
               />
             </div>
           )}

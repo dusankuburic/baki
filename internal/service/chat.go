@@ -69,6 +69,19 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) er
 	if usage >= settings.AI.DailyBudget {
 		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f)", usage, settings.AI.DailyBudget)
 	}
+
+	// When org-scoped, also enforce a per-user sub-limit so one member can't
+	// exhaust the entire org's daily quota. scope is the caller's user ID in
+	// cloud mode; passing "" as orgID queries that user's personal-only total.
+	if orgID != "" && settings.AI.PerUserDailyBudget > 0 {
+		userUsage, err := s.dailyUsage(ctx, scope, "")
+		if err != nil {
+			return fmt.Errorf("per-user AI budget check unavailable: %w", err)
+		}
+		if userUsage >= settings.AI.PerUserDailyBudget {
+			return fmt.Errorf("per-user daily AI budget exceeded ($%.2f / $%.2f)", userUsage, settings.AI.PerUserDailyBudget)
+		}
+	}
 	return nil
 }
 
@@ -84,6 +97,27 @@ var errStreamIDInUse = errors.New("clientStreamId already in use")
 func (s *ChatService) convMutexFor(flowID, convKey string) *sync.Mutex {
 	v, _ := s.convMu.LoadOrStore(flowID+"\x00"+convKey, &sync.Mutex{})
 	return v.(*sync.Mutex)
+}
+
+// reconstructAndPersistUserTurn runs the reconstruct-history + persist-user-turn
+// critical section under the per-conversation mutex, holding it across both so
+// two concurrent streams on the same (flowID, convKey) can't read the same
+// history and then clobber each other's persist (a lost user turn — persist does
+// a full-file replace).
+//
+// The defer-unlock is essential, not stylistic: both calls do storage I/O and
+// can panic. The stream goroutine's top-level recover() swallows the panic but
+// does NOT release a manually-unlocked mutex, and this mutex lives in the
+// persistent convMu map (via convMutexFor) — so a manual Lock/Unlock without
+// defer would leave it held forever on panic, deadlocking every future stream on
+// this conversation. req is taken by pointer so the reconstructed history
+// propagates back to the caller.
+func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) {
+	mu := s.convMutexFor(doc.ID, convKey)
+	mu.Lock()
+	defer mu.Unlock()
+	req.Messages = s.reconstructHistory(ctx, doc, *req)
+	s.persistInitialUserTurn(ctx, doc, *req)
 }
 
 // tryStartStream atomically checks the per-caller concurrency cap AND reserves
@@ -112,7 +146,8 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 		if v.(*streamCtl).ownerID == scope {
 			active++
 		}
-		return active < maxConcurrentStreamsPerScope
+		return true // count every entry — an early-out here under-counts and
+		// lets the cap be exceeded by one (the just-stored entry).
 	})
 	// The just-stored entry counts toward the cap; if storing it pushed the
 	// caller over, undo the reservation and reject as cap-exceeded (not
@@ -185,6 +220,12 @@ type ChatService struct {
 	chatCtxCache   cache.Cache
 	chatCtxGen     cache.Cache
 	chatCtxGenOnce sync.Once
+	// chatCtxGenMu serializes the read-modify-write of the per-flow generation
+	// counter in InvalidateChatContext. The LRU get/set are individually
+	// thread-safe but the increment is not atomic: without this lock two
+	// concurrent invalidations both read gen=N and both write N+1, losing an
+	// increment and serving a stale scrubbed-context cache entry to a chat turn.
+	chatCtxGenMu sync.Mutex
 }
 
 func NewChatService(
@@ -265,6 +306,20 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 		ragCtx, ragCancel := context.WithTimeout(ctx, ragGuidelinesDeadline)
 		go func() {
 			defer ragCancel()
+			defer func() {
+				if r := recover(); r != nil {
+					// A panic in the embedding/KB path (nil provider, malformed
+					// vector, pgvector decode bug) must not crash the process.
+					// Deliver an empty result so the awaiting turn consumer
+					// doesn't block until ctx.Done() — the turn proceeds
+					// without RAG guidelines.
+					logger.Error("rag guidelines lookup panicked", "scope", scope, "panic", r)
+					select {
+					case ragDone <- "":
+					default:
+					}
+				}
+			}()
 			ragDone <- s.ragGuidelines(ragCtx, scope, doc, req.UserMessage)
 		}()
 	}
@@ -399,6 +454,17 @@ func (s *ChatService) resolveStreamID(req models.ChatRequest) (streamID string, 
 func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (streamID string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
 
+	// Per-flow chat context: when the handler didn't supply a report (it passes
+	// nil because it doesn't hold AnalysisService), resolve the flow's cached
+	// analysis here so the chat is grounded in the flow's latest findings
+	// WITHOUT re-analyzing on every turn. Falls through to nil (no grounding)
+	// when no analysis has been run yet — the agentic tool loop still works.
+	if report == nil && s.analysisCache != nil && doc != nil {
+		if cached, ok := s.analysisCache.CurrentReport(doc); ok {
+			report = cached
+		}
+	}
+
 	streamID, clientProvided, err := s.resolveStreamID(req)
 	if err != nil {
 		return "", err
@@ -523,11 +589,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			if convKey == "" {
 				convKey = "flow"
 			}
-			mu := s.convMutexFor(doc.ID, convKey)
-			mu.Lock()
-			req.Messages = s.reconstructHistory(ctx, doc, req)
-			s.persistInitialUserTurn(ctx, doc, req)
-			mu.Unlock()
+			s.reconstructAndPersistUserTurn(ctx, doc, &req, convKey)
 		}
 
 		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, req)
@@ -540,12 +602,18 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			return // ctx cancelled while waiting on RAG
 		}
 
-		// When the caller opted into tools and the provider supports them, run the
-		// read-only agentic tool loop (streamed turns + tool status events). It is
-		// fully self-contained — emits chunk/tool/done/error and updates ctl — so the
-		// normal streaming path below is skipped entirely (zero regression when off).
-		if req.UseTools && ts.provider.SupportsTools() {
-			s.runToolLoop(ctx, ts.provider, aiReq, scrubbedDoc, ctl, awaitStart, emit, coalesce.flushAndCount)
+		// When the caller opted into tools, run the read-only agentic loop. Native
+		// function-calling providers use runToolLoop; providers without it
+		// (notably GitHub Copilot) fall back to runPromptToolLoop, which teaches
+		// the model a <tool_call> marker format via the system prompt. Both are
+		// self-contained (emit chunk/tool/done/error + update ctl), so the normal
+		// streaming path below is skipped entirely.
+		if req.UseTools {
+			if ts.provider.SupportsTools() {
+				s.runToolLoop(ctx, ts.provider, aiReq, scrubbedDoc, ctl, awaitStart, emit, coalesce.flushAndCount)
+			} else {
+				s.runPromptToolLoop(ctx, ts.provider, aiReq, scrubbedDoc, ctl, awaitStart, emit, coalesce.flushAndCount)
+			}
 			return
 		}
 
@@ -720,6 +788,136 @@ func (s *ChatService) runToolLoop(
 			emit("tool", map[string]interface{}{"name": tc.Name, "label": ai.ToolLabel(tc.Name)})
 			result := ai.ExecuteTool(tc.Name, tc.Input, tctx)
 			msgs = append(msgs, ai.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+		}
+	}
+
+	fail(fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
+}
+
+// runPromptToolLoop is the prompt-based fallback for providers that don't
+// support native function-calling (e.g. GitHub Copilot): the tool schemas are
+// described in the system prompt and the model emits <tool_call> blocks in its
+// text to invoke a tool. This mirrors runToolLoop's structure but parses tool
+// calls from the streamed text instead of from native ToolCall fields.
+//
+// Because the markers arrive inline, the turn text is buffered whole (not
+// streamed incrementally) so the raw tool JSON can be stripped before the client
+// sees it. Copilot tool turns are therefore non-streaming; the final answer turn
+// still emits normally once no tool_call is present.
+func (s *ChatService) runPromptToolLoop(
+	ctx context.Context,
+	provider ai.Provider,
+	base ai.Request,
+	doc *models.FlowDocument,
+	ctl *streamCtl,
+	awaitStart func() bool,
+	emit func(string, map[string]interface{}),
+	doneChunks func() int,
+) {
+	msgs := base.Messages
+	// Inject tool instructions into the system prompt so the model knows the
+	// marker format and the available tools.
+	toolInstr := ai.ToolPromptInstructions()
+	if len(msgs) > 0 && msgs[0].Role == "system" {
+		msgs = append([]ai.Message{{Role: "system", Content: msgs[0].Content + "\n\n" + toolInstr}}, msgs[1:]...)
+	} else {
+		msgs = append([]ai.Message{{Role: "system", Content: toolInstr}}, msgs...)
+	}
+	tctx := ai.ToolContext{Ctx: ctx, Doc: doc, Analysis: s.analysisCache}
+
+	started := false
+	ensureStarted := func() bool {
+		if !started && awaitStart() {
+			started = true
+		}
+		return started
+	}
+	fail := func(msg string) {
+		ctl.setError(msg)
+		if ensureStarted() {
+			emit("error", map[string]interface{}{"message": msg})
+		}
+	}
+
+	var totalIn, totalOut int
+	out := newScrubbedEmitter(ctl, emit)
+	for i := 0; i < maxToolIterations; i++ {
+		turn := base
+		turn.Messages = msgs
+		if err := truncateForContextWindow(provider, &turn, provider.ContextLimit()); err != nil {
+			fail("conversation is too long for this model's context window — too many tool results, try a simpler question")
+			return
+		}
+		msgs = turn.Messages
+
+		// Buffer the full turn: the <tool_call> markers must be parsed + stripped
+		// before anything reaches the client, so we can't forward text as it
+		// streams.
+		var (
+			turnText strings.Builder
+			turnIn   int
+			turnOut  int
+			chunkErr error
+		)
+		streamErr := provider.Stream(ctx, turn, func(c ai.Chunk) {
+			ctl.touch()
+			switch {
+			case c.Error != nil:
+				chunkErr = c.Error
+			case c.Done:
+				turnIn = c.TokensIn
+				turnOut = c.TokensOut
+			case c.Text != "":
+				turnText.WriteString(c.Text)
+			}
+		})
+		if started {
+			out.flush()
+		}
+		if streamErr != nil {
+			fail(ctl.failureMessage(ctx, streamErr))
+			return
+		}
+		if chunkErr != nil {
+			fail(chunkErr.Error())
+			return
+		}
+		totalIn += turnIn
+		totalOut += turnOut
+
+		full := turnText.String()
+		calls := ai.ParsePromptToolCalls(full)
+		cleanText := ai.StripPromptToolCalls(full)
+
+		// No tool calls → this turn is the final answer. Emit the cleaned text
+		// (preamble the model wrote around the absent marker) and finish.
+		if len(calls) == 0 {
+			if !ensureStarted() {
+				return
+			}
+			if cleanText != "" {
+				out.text(cleanText)
+				out.flush()
+			}
+			ctl.markDone(totalIn, totalOut)
+			emit("done", map[string]interface{}{"tokensIn": totalIn, "tokensOut": totalOut, "chunks": doneChunks()})
+			return
+		}
+
+		// Emit the non-marker preamble (e.g. "Let me search for…"), then run each
+		// tool and append its result for the next turn.
+		if ensureStarted() && cleanText != "" {
+			out.text(cleanText)
+			out.flush()
+		}
+		msgs = append(msgs, ai.Message{Role: "assistant", Content: full})
+		for _, tc := range calls {
+			if !ensureStarted() {
+				return
+			}
+			emit("tool", map[string]interface{}{"name": tc.Name, "label": ai.ToolLabel(tc.Name)})
+			result := ai.ExecuteTool(tc.Name, tc.Input, tctx)
+			msgs = append(msgs, ai.Message{Role: "tool", Content: result})
 		}
 	}
 

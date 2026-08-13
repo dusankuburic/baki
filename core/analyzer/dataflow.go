@@ -206,19 +206,30 @@ func computeTaintPaths(doc *models.FlowDocument, ctx *RuleContext) []models.Tain
 	}
 
 	var paths []models.TaintPath
+
+	// Pre-index sink blocks once (O(blocks)) instead of scanning all blocks
+	// per source (O(sources × blocks)). This converts the inner loop from
+	// O(sources × blocks) to O(sources × sinks).
+	type sinkEntry struct {
+		block *models.Block
+		styp  string
+	}
+	var sinks []sinkEntry
+	for _, b := range ctx.AllBlocks {
+		if st := findSink(b.RawType); st != "" {
+			sinks = append(sinks, sinkEntry{block: b, styp: st})
+		}
+	}
+
 	for _, source := range sources {
-		for _, b := range ctx.AllBlocks {
-			sink := findSink(b.RawType)
-			if sink == "" {
-				continue
-			}
-			for _, v := range b.Variables {
+		for _, s := range sinks {
+			for _, v := range s.block.Variables {
 				if v == source {
 					paths = append(paths, models.TaintPath{
 						SourceVar: source,
-						SinkBlock: b.ID,
-						SinkType:  sink,
-						Path:      []string{source, b.ID},
+						SinkBlock: s.block.ID,
+						SinkType:  s.styp,
+						Path:      []string{source, s.block.ID},
 					})
 					break
 				}

@@ -9,7 +9,7 @@ interface UseChatRequestBuilderOptions {
   provider: ProviderID
   selectedModel: string
   aiSettings: AISettings
-  getMessages: (threadId: string) => ChatMessage[]
+  getMessages: (threadId: string) => readonly ChatMessage[]
 }
 
 // useChatRequestBuilder assembles the chat request payload. Extracted from

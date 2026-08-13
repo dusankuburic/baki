@@ -1,10 +1,10 @@
-import {useState, useCallback} from 'react'
+import {useState, useCallback, useEffect} from 'react'
 import {FlaskConical, Search, Wrench, Download, ChevronRight, X} from 'lucide-react'
 import Modal from '@/components/shared/Modal'
-import {Spinner} from '@/components/shared'
+import {Spinner, useToast} from '@/components/shared'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useFlowStore} from '@/stores/flowStore'
-import {flowApi} from '@/api'
+import {flowApi, analysisApi} from '@/api'
 import {SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES} from '@/data/sampleFlow'
 
 interface WelcomeModalProps {
@@ -12,36 +12,70 @@ interface WelcomeModalProps {
   onClose: () => void
 }
 
-const STEPS = [
+// The analysis-step copy needs the live rule count. It's built lazily from the
+// fetched count so the onboarding never shows a stale hard-coded number again
+// (the previous copy said "29" while the engine ships 41).
+interface StepDef {
+  icon: typeof FlaskConical
+  title: string
+  body: (ruleCount: number | null) => string
+}
+
+const STEPS: StepDef[] = [
   {
     icon: FlaskConical,
     title: 'Open a flow',
-    body: 'Drag a PAD text export onto the window, pick one from the sidebar, or start with the bundled sample flow.',
+    body: () =>
+      'Drag a PAD text export onto the window, pick one from the sidebar, or start with the bundled sample flow.',
   },
   {
     icon: Search,
     title: 'Run analysis',
-    body: 'One click runs 29 static-analysis rules covering security, reliability, and style. Findings appear grouped by rule.',
+    body: count => {
+      const n = count != null ? `${count}` : 'dozens of'
+      return `One click runs ${n} static-analysis rules covering security, reliability, and style. Findings appear grouped by rule.`
+    },
   },
   {
     icon: Wrench,
     title: 'Apply fixes',
-    body: '17 rule findings have a deterministic one-click auto-fix (preview the diff first). Select multiple to bulk-fix.',
+    body: () =>
+      'Many rule findings have a deterministic one-click auto-fix (preview the diff first). Select multiple to bulk-fix.',
   },
   {
     icon: Download,
     title: 'Export',
-    body: 'Export findings as SARIF for CI, or a PDF/Markdown report. The CLI (bakicli) gates CI on severity.',
+    body: () =>
+      'Export findings as SARIF for CI, or a PDF/Markdown report. The CLI (bakicli) gates CI on severity.',
   },
 ]
 
 export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   const [step, setStep] = useState(0)
   const [loadingSample, setLoadingSample] = useState(false)
+  const [ruleCount, setRuleCount] = useState<number | null>(null)
   const setDocument = useFlowStore(s => s.setDocument)
   const updateGeneral = useSettingsStore(s => s.updateGeneral)
+  const {error: toastError} = useToast()
   const current = STEPS[step]
   const isLast = step === STEPS.length - 1
+
+  // Fetch the live rule count so the copy never drifts from the engine again.
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    analysisApi
+      .getRules()
+      .then(rules => {
+        if (!cancelled && Array.isArray(rules)) setRuleCount(rules.length)
+      })
+      .catch(() => {
+        // Non-fatal — the copy falls back to "dozens of".
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen])
 
   const complete = useCallback(() => {
     updateGeneral({firstRunCompleted: true})
@@ -54,13 +88,16 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
     try {
       const doc = await flowApi.uploadFlow(SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES)
       if (doc) setDocument(doc)
-    } catch {
-      // Sample failed — still complete onboarding so the user isn't stuck.
+    } catch (e) {
+      // Sample failed — still complete onboarding so the user isn't stuck, but
+      // surface WHY (backend down, disk full, etc.) instead of dropping them on
+      // an empty MainPane with no explanation.
+      toastError('Could not load the sample flow', {description: String(e)})
     } finally {
       setLoadingSample(false)
     }
     complete()
-  }, [setDocument, complete])
+  }, [setDocument, complete, toastError])
 
   const handleSkip = useCallback(() => {
     setStep(STEPS.length - 1)
@@ -87,7 +124,7 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
         </button>
       </div>
 
-      <p className="text-sm text-text-secondary leading-relaxed mb-6 min-h-[3rem]">{current.body}</p>
+      <p className="text-sm text-text-secondary leading-relaxed mb-6 min-h-[3rem]">{current.body(ruleCount)}</p>
 
       {/* Progress dots */}
       <div className="flex gap-1.5 mb-6">

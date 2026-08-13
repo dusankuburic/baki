@@ -56,7 +56,7 @@ export const useOrgStore = create<OrgState>()(
         if (get().isLoading) return
         set({isLoading: true, error: null})
         try {
-          const orgs = await request<Organisation[]>('/api/orgs', undefined, 'GET')
+          const orgs = await request<Organisation[]>('/api/orgs', {method: 'GET'})
           set(s => ({
             organisations: orgs ?? [],
             isLoading: false,
@@ -87,7 +87,7 @@ export const useOrgStore = create<OrgState>()(
         if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
         set({isBusy: true, error: null})
         try {
-          const org = await request<Organisation>('/api/orgs', {name})
+          const org = await request<Organisation>('/api/orgs', {body: {name}})
           set(s => ({organisations: [...s.organisations, org], isBusy: false}))
           return org
         } catch (err) {
@@ -103,7 +103,7 @@ export const useOrgStore = create<OrgState>()(
           // Create a token invite — the backend emails the invitee a link they
           // accept via acceptInvite (POST /api/invites/{token}/accept). The member
           // list only changes once they accept, so no loadOrgs() here.
-          await request(`/api/orgs/${orgId}/invites`, {email, role})
+          await request(`/api/orgs/${orgId}/invites`, {body: {email, role}})
           set({isBusy: false})
         } catch (err) {
           set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to send invite'})
@@ -129,7 +129,7 @@ export const useOrgStore = create<OrgState>()(
         if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
         set({isBusy: true, error: null})
         try {
-          await request(`/api/orgs/${orgId}/members/${userId}`, undefined, 'DELETE')
+          await request(`/api/orgs/${orgId}/members/${userId}`, {method: 'DELETE'})
           await get().loadOrgs()
           set({isBusy: false})
         } catch (err) {
@@ -142,7 +142,7 @@ export const useOrgStore = create<OrgState>()(
         if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
         set({isBusy: true, error: null})
         try {
-          await request(`/api/orgs/${orgId}/members/${userId}/role`, {role}, 'PUT')
+          await request(`/api/orgs/${orgId}/members/${userId}/role`, {body: {role}, method: 'PUT'})
           await get().loadOrgs()
           set({isBusy: false})
         } catch (err) {
@@ -155,7 +155,7 @@ export const useOrgStore = create<OrgState>()(
         if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
         set({isBusy: true, error: null})
         try {
-          await request(`/api/orgs/${orgId}`, undefined, 'DELETE')
+          await request(`/api/orgs/${orgId}`, {method: 'DELETE'})
           set(s => ({
             organisations: s.organisations.filter(o => o.id !== orgId),
             activeOrgId: s.activeOrgId === orgId ? null : s.activeOrgId,

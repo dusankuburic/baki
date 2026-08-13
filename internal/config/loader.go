@@ -207,6 +207,7 @@ var envBindings = []envBinding{
 	strEnv("PAD_HOST", func(c *Config, v string) { c.Server.Host = v }),
 	strEnv("PAD_STATIC_DIR", func(c *Config, v string) { c.Server.StaticDir = v }),
 	strEnv("PAD_KEYVAULT_URL", func(c *Config, v string) { c.Server.KeyVaultURL = v }),
+	strEnv("PAD_CUSTOM_RULES", func(c *Config, v string) { c.Server.CustomRulesPath = v }),
 	intEnv("PAD_PORT", func(c *Config, n int) { c.Server.Port = n }),
 	strEnv("PAD_METRICS_TOKEN", func(c *Config, v string) { c.Server.MetricsToken = v }),
 	strEnv("PAD_TLS_CERT", func(c *Config, v string) { c.Server.TLSCert = v }),
@@ -216,7 +217,16 @@ var envBindings = []envBinding{
 	// Governance
 	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d string) { c.Governance.ScanInterval = d }),
 	strEnv("PAD_NOTIFY_WEBHOOK_URL", func(c *Config, v string) { c.Governance.NotifyWebhookURL = v }),
+	strEnv("PAD_NOTIFY_WEBHOOK_SECRET", func(c *Config, v string) { c.Governance.NotifyWebhookSecret = v }),
 	strEnv("PAD_NOTIFY_TEAMS_URL", func(c *Config, v string) { c.Governance.NotifyTeamsURL = v }),
+	strEnv("PAD_NOTIFY_SLACK_URL", func(c *Config, v string) { c.Governance.NotifySlackURL = v }),
+	strEnv("PAD_NOTIFY_SLACK_SECRET", func(c *Config, v string) { c.Governance.NotifySlackSecret = v }),
+	strEnv("PAD_CI_WEBHOOK_SECRET", func(c *Config, v string) { c.Governance.InboundWebhookSecret = v }),
+	strEnv("PAD_NOTIFY_EMAIL_TO", func(c *Config, v string) { c.Governance.NotifyEmailTo = v }),
+	strEnv("PAD_NOTIFY_JIRA_BASE_URL", func(c *Config, v string) { c.Governance.NotifyJiraBaseURL = v }),
+	strEnv("PAD_NOTIFY_JIRA_EMAIL", func(c *Config, v string) { c.Governance.NotifyJiraEmail = v }),
+	strEnv("PAD_NOTIFY_JIRA_API_TOKEN", func(c *Config, v string) { c.Governance.NotifyJiraAPIToken = v }),
+	strEnv("PAD_NOTIFY_JIRA_PROJECT", func(c *Config, v string) { c.Governance.NotifyJiraProject = v }),
 	durEnv("PAD_RETENTION_PURGE_INTERVAL", func(c *Config, d string) { c.Governance.RetentionPurgeInterval = d }),
 
 	// Email
@@ -229,6 +239,8 @@ var envBindings = []envBinding{
 
 	// Redis
 	strEnv("PAD_REDIS_URL", func(c *Config, v string) { c.Redis.URL = v }),
+	intEnv("PAD_REDIS_POOL_SIZE", func(c *Config, v int) { c.Redis.PoolSize = v }),
+	intEnv("PAD_REDIS_MIN_IDLE_CONNS", func(c *Config, v int) { c.Redis.MinIdleConns = v }),
 
 	// Storage
 	strEnv("PAD_DATA_DIR", func(c *Config, v string) { c.Storage.DataDir = v }),
@@ -243,6 +255,12 @@ var envBindings = []envBinding{
 	intEnv("PAD_DB_MAX_IDLE_CONNS", func(c *Config, n int) { c.Storage.DBMaxIdleConns = n }),
 	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d string) { c.Storage.DBConnMaxLifetime = d }),
 	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d string) { c.Storage.DBConnMaxIdleTime = d }),
+	// Knowledge-base embedding dimension. Sets the contract for which chunks are
+	// pgvector-searchable; mismatched embeddings are excluded from the vector
+	// index rather than corrupting similarity search.
+	intEnv("PAD_EMBEDDING_DIM", func(c *Config, n int) { c.Storage.EmbeddingDim = n }),
+	// Audit overflow spill queue. Empty → temp dir (zero-config); "off" disables.
+	strEnv("PAD_AUDIT_SPILL_DIR", func(c *Config, v string) { c.Governance.AuditSpillDir = v }),
 
 	// Auth / SSO
 	boolEnv("PAD_AUTH_ENABLED", func(c *Config, b bool) { c.Auth.Enabled = b }),
@@ -268,6 +286,8 @@ var envBindings = []envBinding{
 	floatEnv("PAD_RATE_LIMIT_CHAT_BURST", func(c *Config, f float64) { c.Runtime.RateLimitChatBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_UPLOAD_RPS", func(c *Config, f float64) { c.Runtime.RateLimitUploadRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_UPLOAD_BURST", func(c *Config, f float64) { c.Runtime.RateLimitUploadBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_PER_USER_RPS", func(c *Config, f float64) { c.Runtime.RateLimitPerUserRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_PER_USER_BURST", func(c *Config, f float64) { c.Runtime.RateLimitPerUserBurst = f }),
 
 	// Runtime tuning — resilience / observability
 	intEnv("PAD_CB_FAILURES", func(c *Config, n int) { c.Runtime.CircuitBreakerFailures = n }),
@@ -276,6 +296,9 @@ var envBindings = []envBinding{
 	durEnv("PAD_RETRY_BASE_DELAY", func(c *Config, d string) { c.Runtime.RetryBaseDelay = d }),
 	strEnv("PAD_OTLP_ENDPOINT", func(c *Config, v string) { c.Runtime.OTLPEndpoint = v }),
 	durEnv("PAD_REQUEST_TIMEOUT", func(c *Config, d string) { c.Runtime.RequestTimeout = d }),
+
+	// Feature flags — env-sourced, read-only product gates.
+	boolEnv("PAD_FEATURE_DISABLE_SIGNUP", func(c *Config, b bool) { c.Features.DisableSignUp = b }),
 }
 
 // applyEnvVars reads PAD_* environment variables into cfg.
@@ -388,8 +411,12 @@ func applyPowerPlatformEnv(cfg *Config) error {
 const minSecretLength = 32
 
 // knownWeakSecrets are placeholder/example values that must never be used as a
-// real signing secret in cloud mode.
+// real signing secret in cloud mode. Most are caught by the length floor
+// (minSecretLength), but several common documented placeholders are ≥32 chars
+// (copy-pasted from tutorials, READMEs, jwt.io, boilerplate) and would slip
+// past length alone — the blocklist rejects them explicitly.
 var knownWeakSecrets = map[string]bool{
+	// Generic placeholders / boilerplate.
 	"change-me-in-production":           true,
 	"change-me":                         true,
 	"change-me-to-a-long-random-secret": true,
@@ -397,15 +424,75 @@ var knownWeakSecrets = map[string]bool{
 	"secret":                            true,
 	"password":                          true,
 	"test":                              true,
+	// Long (≥32-char) placeholders that pass the length floor — the highest-
+	// risk category because they look "configured" to a casual reviewer.
+	"please-change-this-secret-in-production":   true,
+	"your-super-secret-jwt-key-change-me":       true,
+	"do-not-use-this-secret-in-production":      true,
+	"this-is-a-placeholder-secret-replace-it":   true,
+	"replace-with-a-real-secret-key-please":     true,
+	"your-256-bit-secret-here-replace-it":       true,
+	"test-secret-key-for-development-only":      true,
+	"dev-secret-not-for-production-use-please":  true,
+	"super-secret-key-please-change-before-use": true,
+	// Repeated-character defaults emitted by some generators/scripts.
+	strings.Repeat("x", 36): true,
+	strings.Repeat("0", 36): true,
+	strings.Repeat("a", 36): true,
 }
 
-// isWeakSecret reports whether a secret is too short or a known placeholder.
+// isLowEntropy catches pathologically weak secrets that are long enough to pass
+// the length floor but have near-zero actual entropy — a single repeated byte
+// ("aaaa…", "0000…") or a short tile (2–4 bytes) repeated to fill the string
+// ("ababab…", "abcdabcd…"). A genuinely random secret is astronomically
+// unlikely to match either shape, so this has no realistic false-positive risk.
+func isLowEntropy(s string) bool {
+	if len(s) < minSecretLength {
+		return false
+	}
+	allSame := true
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		return true
+	}
+	for tile := 2; tile <= 4; tile++ {
+		if isTiled(s, tile) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTiled reports whether s is exactly the n-byte prefix repeated.
+func isTiled(s string, n int) bool {
+	if len(s) < minSecretLength || len(s)%n != 0 {
+		return false
+	}
+	tile := s[:n]
+	for i := n; i < len(s); i += n {
+		if s[i:i+n] != tile {
+			return false
+		}
+	}
+	return true
+}
+
+// isWeakSecret reports whether a secret is too short, a known placeholder, or
+// low-entropy (repeated-character / tiled).
 func isWeakSecret(s string) bool {
 	s = strings.TrimSpace(s)
 	if len(s) < minSecretLength {
 		return true
 	}
-	return knownWeakSecrets[strings.ToLower(s)]
+	if knownWeakSecrets[strings.ToLower(s)] {
+		return true
+	}
+	return isLowEntropy(s)
 }
 
 // Validate checks that the configuration is internally consistent.

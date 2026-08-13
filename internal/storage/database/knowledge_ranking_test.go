@@ -12,7 +12,7 @@ func chunk(id string, emb ...float32) interfaces.KnowledgeChunk {
 
 func TestRankKnowledgeChunks_OrdersByCosineSimilarity(t *testing.T) {
 	chunks := []interfaces.KnowledgeChunk{
-		chunk("far", 0, 1),     // orthogonal to query → sim 0
+		chunk("far", 0, 1),     // orthogonal to query → sim 0 → filtered by threshold
 		chunk("near", 1, 0.1),  // close to query direction → high sim
 		chunk("mid", 0.7, 0.7), // 45° → mid sim
 	}
@@ -20,11 +20,13 @@ func TestRankKnowledgeChunks_OrdersByCosineSimilarity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d chunks, want 3", len(got))
+	// "far" has cosine similarity 0 (orthogonal) and is filtered by the
+	// 0.5 relevance threshold — only near and mid survive.
+	if len(got) != 2 {
+		t.Fatalf("got %d chunks, want 2 (orthogonal chunk filtered by threshold)", len(got))
 	}
-	if got[0].ID != "near" || got[2].ID != "far" {
-		t.Errorf("ranking = [%s %s %s], want near…far", got[0].ID, got[1].ID, got[2].ID)
+	if got[0].ID != "near" || got[1].ID != "mid" {
+		t.Errorf("ranking = [%s %s], want [near mid]", got[0].ID, got[1].ID)
 	}
 }
 

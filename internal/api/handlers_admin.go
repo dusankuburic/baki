@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
@@ -23,15 +24,47 @@ type PadCloudAuth interface {
 	AccessToken() string
 }
 
+// ScanNowFunc triggers an out-of-band governance sweep (a manual run of the
+// scanner's periodic pass). Nil when scanning isn't available (non-cloud); the
+// admin endpoint reports 503 in that case. The run is async — the func returns
+// once the sweep completes, but the HTTP handler does not block on it.
+type ScanNowFunc func(ctx context.Context)
+
+// IngestNowFunc triggers an out-of-band PAD-cloud ingest pass. Nil when the
+// connector isn't configured; the admin endpoint reports 503 in that case.
+type IngestNowFunc func(ctx context.Context)
+
+// manualRunTimeout caps an admin-triggered background scan/ingest so a stalled
+// sweep can't leak a goroutine forever. Generous by design — a full library
+// sweep over thousands of flows can take many minutes, and each flow is itself
+// bounded internally (perFlowScanTimeout / sweepTimeout).
+const manualRunTimeout = 30 * time.Minute
+
 type AdminHandler struct {
-	backend  storageif.StorageBackend
-	security *SecurityConfig
-	runner   *MigrationRunner
-	ppAuth   PadCloudAuth
+	backend   storageif.StorageBackend
+	security  *SecurityConfig
+	runner    *MigrationRunner
+	ppAuth    PadCloudAuth
+	scanNow   ScanNowFunc
+	ingestNow IngestNowFunc
 }
 
-func NewAdminHandler(backend storageif.StorageBackend, security *SecurityConfig, runner *MigrationRunner, ppAuth PadCloudAuth) *AdminHandler {
-	return &AdminHandler{backend: backend, security: security, runner: runner, ppAuth: ppAuth}
+func NewAdminHandler(
+	backend storageif.StorageBackend,
+	security *SecurityConfig,
+	runner *MigrationRunner,
+	ppAuth PadCloudAuth,
+	scanNow ScanNowFunc,
+	ingestNow IngestNowFunc,
+) *AdminHandler {
+	return &AdminHandler{
+		backend:   backend,
+		security:  security,
+		runner:    runner,
+		ppAuth:    ppAuth,
+		scanNow:   scanNow,
+		ingestNow: ingestNow,
+	}
 }
 
 func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
@@ -248,4 +281,51 @@ func (h *AdminHandler) handlePPStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	connected := h.ppAuth != nil && h.ppAuth.AccessToken() != ""
 	render.JSON(w, map[string]bool{"connected": connected})
+}
+
+// --- Background-loop manual triggers ---
+//
+// The scanner and ingester normally run on their own periodic loops (gated by
+// PAD_SCAN_INTERVAL / PAD_PP_INGEST_INTERVAL). These endpoints let an admin
+// demand an immediate run — useful after a policy change, a known upstream
+// update, or when the loop is configured with a long interval. Both are
+// fire-and-forget: a full sweep can take minutes, so the handler acknowledges
+// with {started: true} and runs the work on a detached, bounded context.
+
+func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	if h.scanNow == nil {
+		render.Error(w, fmt.Errorf("governance scanner not configured: set PAD_SCAN_INTERVAL"), http.StatusServiceUnavailable)
+		return
+	}
+	run := h.scanNow
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), manualRunTimeout)
+		defer cancel()
+		slog.Info("admin: manual governance scan triggered")
+		run(ctx)
+		slog.Info("admin: manual governance scan completed")
+	}()
+	render.JSON(w, map[string]bool{"started": true})
+}
+
+func (h *AdminHandler) handleIngesterIngest(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	if h.ingestNow == nil {
+		render.Error(w, fmt.Errorf("PAD-cloud connector not configured: set PAD_PP_TENANT_ID, PAD_PP_CLIENT_ID, PAD_PP_DATAVERSE_URL, PAD_PP_INGEST_INTERVAL"), http.StatusServiceUnavailable)
+		return
+	}
+	run := h.ingestNow
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), manualRunTimeout)
+		defer cancel()
+		slog.Info("admin: manual PAD-cloud ingest triggered")
+		run(ctx)
+		slog.Info("admin: manual PAD-cloud ingest completed")
+	}()
+	render.JSON(w, map[string]bool{"started": true})
 }

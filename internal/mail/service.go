@@ -41,6 +41,16 @@ func (s *Service) link(hashParam, token string) string {
 	return fmt.Sprintf("%s/#%s=%s", s.baseURL, hashParam, token)
 }
 
+// SendAlert delivers a generic governance alert email (the body is provided by
+// the notify package). It satisfies notify.EmailSender so the notify package can
+// route events to email without depending on mail directly.
+func (s *Service) SendAlert(ctx context.Context, to, subject, plainBody, htmlBody string) error {
+	if s == nil {
+		return nil
+	}
+	return s.mailer.Send(ctx, to, subject, plainBody, htmlBody)
+}
+
 func (s *Service) SendPasswordReset(ctx context.Context, to, rawToken string) error {
 	url := s.link("resetPassword", rawToken)
 	text := fmt.Sprintf(
@@ -73,4 +83,49 @@ func (s *Service) SendOrgInvite(ctx context.Context, to, orgName, rawToken strin
 		"<p>You've been invited to join the <strong>%s</strong> organization on PAD Analyzer.</p>"+
 			"<p><a href=\"%s\">Accept the invitation</a>.</p>", html.EscapeString(orgName), url)
 	return s.mailer.Send(ctx, to, "You've been invited to PAD Analyzer", text, htmlBody)
+}
+
+// SendFindingAssigned notifies a user that a finding was assigned to them.
+// findingTitle/flowName are user/content-controlled and HTML-escaped; flowURL is
+// a deep link into the flow's findings tab (or empty when no base URL is set,
+// in which case the link is omitted).
+func (s *Service) SendFindingAssigned(ctx context.Context, to, assigneeName, assignerName, flowName, findingTitle, flowURL string) error {
+	if s == nil {
+		return nil
+	}
+	text := fmt.Sprintf(
+		"Hi %s,\n\n%s assigned a finding to you on the flow %q:\n\n  %s\n",
+		assigneeName, assignerName, flowName, findingTitle)
+	if flowURL != "" {
+		text += fmt.Sprintf("\nView it:\n%s\n", flowURL)
+	}
+	htmlBody := fmt.Sprintf(
+		"<p>Hi %s,</p><p><strong>%s</strong> assigned a finding to you on the flow <strong>%s</strong>:</p>"+
+			"<blockquote>%s</blockquote>",
+		html.EscapeString(assigneeName), html.EscapeString(assignerName), html.EscapeString(flowName), html.EscapeString(findingTitle))
+	if flowURL != "" {
+		htmlBody += fmt.Sprintf("<p><a href=\"%s\">View the finding</a>.</p>", flowURL)
+	}
+	return s.mailer.Send(ctx, to, "A finding was assigned to you", text, htmlBody)
+}
+
+// SendFindingComment notifies the assignee that someone commented on their
+// assigned finding. commentBody is user-controlled and HTML-escaped; long bodies
+// are truncated to a 300-char preview.
+func (s *Service) SendFindingComment(ctx context.Context, to, recipientName, commenterName, flowName, findingTitle, commentBody string) error {
+	if s == nil {
+		return nil
+	}
+	preview := commentBody
+	if len(preview) > 300 {
+		preview = preview[:300] + "…"
+	}
+	text := fmt.Sprintf(
+		"Hi %s,\n\n%s commented on a finding assigned to you on the flow %q:\n\n  %s\n",
+		recipientName, commenterName, flowName, preview)
+	htmlBody := fmt.Sprintf(
+		"<p>Hi %s,</p><p><strong>%s</strong> commented on a finding assigned to you on the flow <strong>%s</strong>:</p>"+
+			"<blockquote>%s</blockquote>",
+		html.EscapeString(recipientName), html.EscapeString(commenterName), html.EscapeString(flowName), html.EscapeString(preview))
+	return s.mailer.Send(ctx, to, "New comment on your assigned finding", text, htmlBody)
 }

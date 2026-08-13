@@ -44,7 +44,7 @@ export function useCommandList(deps: {
   toggleInspector: () => void
   toggleSettings: () => void
   setMainPaneView: (
-    v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'portfolio' | 'rules',
+    v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'portfolio' | 'flow-compare' | 'rules',
   ) => void
   requestSearchFocus: () => void
   recentFiles: RecentFile[]
@@ -278,6 +278,12 @@ export function useCommandList(deps: {
         label: 'Flow Portfolio',
         section: 'Analysis',
         onSelect: () => setMainPaneView('portfolio'),
+      })
+      cmds.push({
+        id: 'view.flow-compare',
+        label: 'Compare Two Flows',
+        section: 'Analysis',
+        onSelect: () => setMainPaneView('flow-compare'),
       })
     }
 

@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 
 vi.mock('@/services/collaboration/CollaborationService', () => ({
   collaborationService: {
@@ -200,6 +200,51 @@ describe('envelope handling', () => {
       payload: {selectedBlockId: 'block-5'},
     })
     expect(usePresenceStore.getState().users).toEqual({})
+  })
+})
+
+// ---- presence sweep timer (lifecycle-managed, no module-level leak) ----
+
+describe('presence sweep timer', () => {
+  beforeEach(() => {
+    // Clear any sweep a prior test left running, then switch to fake timers.
+    usePresenceStore.getState().disconnect()
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    usePresenceStore.getState().disconnect()
+    vi.useRealTimers()
+  })
+
+  it('sweeps stale users while connected', async () => {
+    await usePresenceStore.getState().connectToFlow('flow-1')
+    // A user with no lastSeen is treated as stale immediately.
+    usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}})
+
+    vi.advanceTimersByTime(60_000) // one sweep tick
+    expect(usePresenceStore.getState().users['u1']).toBeUndefined()
+  })
+
+  it('clears the interval and stops sweeping after disconnect', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval')
+    await usePresenceStore.getState().connectToFlow('flow-1')
+
+    usePresenceStore.getState().disconnect()
+    expect(clearSpy).toHaveBeenCalled()
+
+    // With the timer stopped, a later stale user is NOT swept.
+    usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}, flowId: 'flow-1'})
+    vi.advanceTimersByTime(120_000)
+    expect(usePresenceStore.getState().users['u1']).toBeDefined()
+  })
+
+  it('does not start a second interval when already connected', async () => {
+    const setSpy = vi.spyOn(globalThis, 'setInterval')
+    await usePresenceStore.getState().connectToFlow('flow-1')
+    await usePresenceStore.getState().connectToFlow('flow-2')
+    // startPresenceSweep is guarded, so only one interval is ever created.
+    const sweepStarts = setSpy.mock.calls.filter(([, ms]) => ms === 60_000)
+    expect(sweepStarts.length).toBe(1)
   })
 })
 

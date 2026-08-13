@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -114,28 +115,35 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Skip("backend has existing users; cannot exercise first-admin promotion")
 		}
 
-		first := &interfaces.User{
+		// The bootstrap-admin rule is opt-in via context (set by the registration
+		// path). Without the flag the first user must NOT be promoted — this is
+		// the SSO-JIT path, which must not let whoever reaches SSO first claim
+		// admin on a fresh deployment.
+		noBootstrap := &interfaces.User{
+			ID:       "contract-user-0-" + runID,
+			Email:    "contract-0-" + runID + "@example.com",
+			Password: "hash",
+		}
+		if err := b.CreateUser(ctx, noBootstrap); err != nil {
+			t.Fatalf("CreateUser (no bootstrap flag): %v", err)
+		}
+		if string(noBootstrap.Role) == "admin" {
+			t.Errorf("first user without bootstrap flag: expected non-admin, got admin (SSO-path must not auto-promote)")
+		}
+
+		// With the flag (registration path) but a NON-empty table, the rule
+		// correctly does NOT fire either — confirms gating on BOTH flag AND
+		// empty-table.
+		flagged := &interfaces.User{
 			ID:       "contract-user-1-" + runID,
 			Email:    "contract-1-" + runID + "@example.com",
 			Password: "hash",
 		}
-		if err := b.CreateUser(ctx, first); err != nil {
-			t.Fatalf("CreateUser first: %v", err)
+		if err := b.CreateUser(auth.WithAllowBootstrap(ctx, true), flagged); err != nil {
+			t.Fatalf("CreateUser (with bootstrap flag, non-empty table): %v", err)
 		}
-		if string(first.Role) != "admin" {
-			t.Errorf("first user: expected role=admin, got %q", first.Role)
-		}
-
-		second := &interfaces.User{
-			ID:       "contract-user-2-" + runID,
-			Email:    "contract-2-" + runID + "@example.com",
-			Password: "hash",
-		}
-		if err := b.CreateUser(ctx, second); err != nil {
-			t.Fatalf("CreateUser second: %v", err)
-		}
-		if string(second.Role) == "admin" {
-			t.Errorf("second user: expected non-admin role, got admin")
+		if string(flagged.Role) == "admin" {
+			t.Errorf("non-first user: expected non-admin, got admin (table was not empty)")
 		}
 	})
 
@@ -620,6 +628,126 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		// Clear is idempotent.
 		if err := b.ClearFlowBaseline(ctx, flowID); err != nil {
 			t.Errorf("ClearFlowBaseline (idempotent): %v", err)
+		}
+	})
+
+	// Governance alerts inbox: record → list (newest-first) → unread count →
+	// mark-read → dismiss → clear. Mirrors the notifications-bell lifecycle.
+	t.Run("GovernanceAlerts_record_list_read_dismiss_clear", func(t *testing.T) {
+		owner := "contract-gov-owner-" + runID
+		flowID := "contract-flow-gov-" + runID
+		if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
+			ID: flowID, Name: "Gov Flow", Content: json.RawMessage(`{}`), OwnerID: owner,
+		}); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+
+		// Empty list returns a non-nil slice, never nil.
+		got, err := b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{})
+		if err != nil {
+			t.Fatalf("ListGovernanceAlerts empty: %v", err)
+		}
+		if got == nil {
+			t.Fatal("empty list: expected non-nil empty slice, got nil")
+		}
+		if len(got) != 0 {
+			t.Errorf("expected 0 alerts, got %d", len(got))
+		}
+
+		n, err := b.UnreadGovernanceAlertCount(ctx)
+		if err != nil {
+			t.Fatalf("UnreadGovernanceAlertCount empty: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("expected 0 unread, got %d", n)
+		}
+
+		// Record two alerts (drift + regression). Timestamps ensure stable
+		// newest-first ordering even if both run within the same millisecond.
+		a1 := &interfaces.GovernanceAlert{
+			ID: flowID + "|drift|e1w0", FlowID: flowID, FlowName: "Gov Flow",
+			Type: "drift", Title: "New findings in Gov Flow", Severity: "error",
+			NewErrors: 1, CreatedAt: time.Now().Add(-1 * time.Minute).UTC(),
+		}
+		a2 := &interfaces.GovernanceAlert{
+			ID: flowID + "|health_regression|h80<90", FlowID: flowID, FlowName: "Gov Flow",
+			Type: "health_regression", Title: "Health regressed in Gov Flow", Severity: "error",
+			HealthScore: 80, PrevHealth: 90, CreatedAt: time.Now().UTC(),
+		}
+		if err := b.RecordGovernanceAlert(ctx, a1); err != nil {
+			t.Fatalf("RecordGovernanceAlert a1: %v", err)
+		}
+		// Duplicate ID is a no-op (scanner retry safety).
+		if err := b.RecordGovernanceAlert(ctx, a1); err != nil {
+			t.Fatalf("RecordGovernanceAlert dup: %v", err)
+		}
+		if err := b.RecordGovernanceAlert(ctx, a2); err != nil {
+			t.Fatalf("RecordGovernanceAlert a2: %v", err)
+		}
+
+		got, err = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{})
+		if err != nil {
+			t.Fatalf("ListGovernanceAlerts: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 alerts, got %d", len(got))
+		}
+		// Newest-first: a2 (health, later timestamp) before a1 (drift).
+		if got[0].ID != a2.ID {
+			t.Errorf("expected newest-first (a2), got %q first", got[0].ID)
+		}
+		n, _ = b.UnreadGovernanceAlertCount(ctx)
+		if n != 2 {
+			t.Errorf("expected 2 unread, got %d", n)
+		}
+
+		// Mark one read → unread drops to 1.
+		if err := b.MarkGovernanceAlertRead(ctx, a1.ID); err != nil {
+			t.Fatalf("MarkGovernanceAlertRead: %v", err)
+		}
+		// Idempotent.
+		if err := b.MarkGovernanceAlertRead(ctx, a1.ID); err != nil {
+			t.Errorf("MarkGovernanceAlertRead (idempotent): %v", err)
+		}
+		n, _ = b.UnreadGovernanceAlertCount(ctx)
+		if n != 1 {
+			t.Errorf("expected 1 unread after read, got %d", n)
+		}
+
+		// Dismiss a2 → it's hidden from the default list, unread drops to 0.
+		if err := b.DismissGovernanceAlert(ctx, a2.ID); err != nil {
+			t.Fatalf("DismissGovernanceAlert: %v", err)
+		}
+		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{})
+		if len(got) != 1 || got[0].ID != a1.ID {
+			t.Errorf("expected only the non-dismissed a1, got %+v", got)
+		}
+		// includeDismissed surfaces it again.
+		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{IncludeDismissed: true})
+		if len(got) != 2 {
+			t.Errorf("expected 2 alerts including dismissed, got %d", len(got))
+		}
+		n, _ = b.UnreadGovernanceAlertCount(ctx)
+		if n != 0 {
+			t.Errorf("expected 0 unread after dismiss, got %d", n)
+		}
+
+		// Clear removes dismissed alerts permanently.
+		if err := b.ClearGovernanceAlerts(ctx); err != nil {
+			t.Fatalf("ClearGovernanceAlerts: %v", err)
+		}
+		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{IncludeDismissed: true})
+		if len(got) != 1 || got[0].ID != a1.ID {
+			t.Errorf("expected only a1 after clear, got %+v", got)
+		}
+
+		// Mark-all-read clears remaining unread badge.
+		if err := b.MarkAllGovernanceAlertsRead(ctx); err != nil {
+			t.Fatalf("MarkAllGovernanceAlertsRead: %v", err)
+		}
+		n, _ = b.UnreadGovernanceAlertCount(ctx)
+		if n != 0 {
+			t.Errorf("expected 0 unread after mark-all, got %d", n)
 		}
 	})
 }

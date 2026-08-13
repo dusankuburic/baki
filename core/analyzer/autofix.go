@@ -152,8 +152,16 @@ func applyWrap(lines []string, op models.PatchOp) []string {
 		reportOutOfRangePatchOp("wrap", op.StartLine, len(lines))
 		return lines
 	}
-	start := op.StartLine - 1
-	end := min(max(op.EndLine, start), len(lines))
+	start := op.StartLine - 1 // 0-based inclusive
+	// EndLine is 1-based inclusive; as a 0-based EXCLUSIVE slice bound it equals
+	// op.EndLine. Guard against an inverted range (EndLine < StartLine) so the
+	// wrap doesn't silently emit a header+footer with an empty body, and clamp
+	// to EOF so a range may legitimately span to the last line.
+	end := op.EndLine
+	if end < start {
+		end = start
+	}
+	end = min(end, len(lines))
 	pad := ""
 	if op.IndentDelta > 0 {
 		pad = strings.Repeat("    ", op.IndentDelta)
@@ -199,6 +207,13 @@ func applyRemove(lines []string, op models.PatchOp) []string {
 // hardcoded credential literal for a %Variable% reference — if the same
 // secret value appears in multiple properties on the same line, all should be
 // replaced.
+//
+// When Old is multi-line (a triple-quoted property value that spans source
+// lines), it can't occur verbatim on one line, so a naive single-line replace
+// is a silent no-op. The secret/credential starts the value and lives on the
+// block's first source line, so we substitute Old's first line there — that
+// removes the credential from the source and resolves the finding instead of
+// leaving it untouched.
 func applyReplace(lines []string, op models.PatchOp) []string {
 	idx := op.StartLine - 1
 	if idx < 0 || idx >= len(lines) {
@@ -208,7 +223,14 @@ func applyReplace(lines []string, op models.PatchOp) []string {
 	if op.Old == "" {
 		return lines
 	}
-	lines[idx] = strings.ReplaceAll(lines[idx], op.Old, op.New)
+	old := op.Old
+	if nl := strings.IndexByte(old, '\n'); nl >= 0 {
+		old = old[:nl]
+		if old == "" {
+			return lines
+		}
+	}
+	lines[idx] = strings.ReplaceAll(lines[idx], old, op.New)
 	return lines
 }
 
@@ -228,11 +250,16 @@ func applyAppend(lines []string, op models.PatchOp) []string {
 }
 
 // blockEndLine returns the last line number occupied by a block (itself plus
-// any descendants). A leaf action occupies just its own LineNumber; a compound
-// block (IF/LOOP/error handler) spans to its last child's line. Used by
-// WrapInErrorHandlerPatch to size the wrapped range.
+// any descendants). A leaf action occupies just its own LineNumber — unless its
+// value is a multi-line triple-quoted literal, in which case EndLineNumber holds
+// the closing ”' line and is preferred. A compound block (IF/LOOP/error
+// handler) spans to its last child's line. Used by append/wrap/remove fixers to
+// place patches after the block's content rather than inside a literal.
 func blockEndLine(block *models.Block) int {
 	end := block.LineNumber
+	if block.EndLineNumber > end {
+		end = block.EndLineNumber
+	}
 	for i := range block.Children {
 		if e := blockEndLine(&block.Children[i]); e > end {
 			end = e
@@ -604,4 +631,46 @@ func MaskSensitiveVariablePatch(block *models.Block, varName string) models.Patc
 		Old:       "%" + varName + "%",
 		New:       "'*** MASKED ***'",
 	}}}
+}
+
+// UpgradeToHttpsPatch builds a Patch that replaces a cleartext http:// prefix
+// with https:// in the block's source line, resolving insecure-http-url. After
+// apply the property value starts with https:// so the rule's HasPrefix("http://")
+// check no longer matches.
+func UpgradeToHttpsPatch(block *models.Block) models.Patch {
+	return models.Patch{Ops: []models.PatchOp{{
+		Kind:      "replace",
+		StartLine: block.LineNumber,
+		Old:       "http://",
+		New:       "https://",
+	}}}
+}
+
+// SanitizeCommandVarsPatch builds a Patch that strips %VarName% references from
+// a system-command block's source line, resolving command-injection-risk. Each
+// %VarName% is replaced with an empty string literal — a "stop the bleed" that
+// removes the injection vector. The user must follow up with proper argument
+// passing (the finding's Suggestion explains how). After apply the properties
+// no longer contain %, so the rule's strings.Contains(val, "%") check fails.
+func SanitizeCommandVarsPatch(block *models.Block) models.Patch {
+	seen := make(map[string]bool)
+	var ops []models.PatchOp
+	for _, val := range block.Properties {
+		for _, m := range sqlVarRef.FindAllString(val, -1) {
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			ops = append(ops, models.PatchOp{
+				Kind:      "replace",
+				StartLine: block.LineNumber,
+				Old:       m,
+				New:       "",
+			})
+		}
+	}
+	if len(ops) == 0 {
+		return models.Patch{}
+	}
+	return models.Patch{Ops: ops}
 }

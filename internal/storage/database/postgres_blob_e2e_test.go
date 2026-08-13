@@ -251,6 +251,10 @@ func TestE2E_A5_VersionSnapshotCapPrunesRowsAndBlobs(t *testing.T) {
 	if err := b.SaveFlow(ctx, flow); err != nil {
 		t.Fatalf("SaveFlow: %v", err)
 	}
+	// Capture each version row's id: the content blob is now keyed on the id
+	// (versionBlobKey), not the version number, so the prune-blob probe below
+	// must look it up by id. Version N is the N-th save (allocated 1..5).
+	idByVersion := map[int]string{}
 	for i := range 5 {
 		fv := &interfaces.FlowVersion{
 			ID: uuid.NewString(), FlowID: flow.ID,
@@ -260,6 +264,7 @@ func TestE2E_A5_VersionSnapshotCapPrunesRowsAndBlobs(t *testing.T) {
 		if err := b.SaveFlowVersion(ctx, fv); err != nil {
 			t.Fatalf("SaveFlowVersion %d: %v", i, err)
 		}
+		idByVersion[fv.Version] = fv.ID
 	}
 
 	// Only the newest 3 snapshots (versions 3, 4, 5) survive.
@@ -281,7 +286,7 @@ func TestE2E_A5_VersionSnapshotCapPrunesRowsAndBlobs(t *testing.T) {
 	// Pruned snapshots' blobs are removed by detached post-commit goroutines.
 	deadline := time.Now().Add(15 * time.Second)
 	for _, ver := range []int{1, 2} {
-		key := fmt.Sprintf("flows/%s/versions/%d/content.json", flow.ID, ver)
+		key := versionBlobKey(flow.ID, idByVersion[ver])
 		for {
 			content, err := b.downloadBlob(ctx, key)
 			if err != nil {

@@ -14,6 +14,9 @@ export interface SearchResult {
   matchedText: string
   score: number
   highlights: Highlight[]
+  /** Present only on cross-library search hits (the flow each result came from). */
+  flowId?: string
+  flowName?: string
 }
 
 export interface SearchResults {

@@ -3,6 +3,9 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"pad-analyzer/internal/config"
+	mailer "pad-analyzer/internal/mail"
 )
 
 // --- Bad-body 400 tests ---
@@ -75,5 +78,16 @@ func TestHandleGetRulesSummary_ReturnsRollup(t *testing.T) {
 	}
 	if len(got.ByConfidence) == 0 {
 		t.Error("expected non-empty ByConfidence")
+	}
+}
+
+// TestNewAnalysisHandler_EmailWired is a regression test for a bug where the
+// email field was accepted as a parameter but never assigned to the struct,
+// silently disabling all finding-assignment/comment email notifications.
+func TestNewAnalysisHandler_EmailWired(t *testing.T) {
+	svc := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
+	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, "")
+	if h.email == nil {
+		t.Fatal("email field is nil — notifications are dead code; assign email in the constructor")
 	}
 }

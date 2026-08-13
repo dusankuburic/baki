@@ -4,11 +4,25 @@ import (
 	"context"
 	"math"
 	"sort"
+	"sync"
+	"time"
 
+	"golang.org/x/sync/singleflight"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
 )
+
+// dashboardCacheTTL bounds how long a stale dashboard result is served. The
+// landing page triggers ~16 sequential DB queries (FlowDashboardData +
+// FlowDashboardAdvanced); a 30s TTL collapses rapid re-loads and concurrent
+// opens into one pair of queries without making data noticeably stale.
+const dashboardCacheTTL = 30 * time.Second
+
+type dashCacheEntry struct {
+	data      *models.DashboardHomeData
+	fetchedAt time.Time
+}
 
 // DashboardService assembles the welcome ("home") dashboard payload and persists
 // per-flow analysis summaries that back it.
@@ -23,10 +37,22 @@ type DashboardService struct {
 	backend  storageif.DashboardStore
 	analysis *AnalysisService
 	flowSvc  *FlowService
+
+	dashMu    sync.Mutex
+	dashCache map[string]*dashCacheEntry
+	// dashSF collapses concurrent cold-cache builds for the same user so a cache
+	// miss under load runs buildCloud once (not N×), avoiding a thundering herd
+	// of ~16 sequential DB queries per concurrent caller.
+	dashSF singleflight.Group
 }
 
 func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService) *DashboardService {
-	return &DashboardService{backend: backend, analysis: analysis, flowSvc: flowSvc}
+	return &DashboardService{
+		backend:   backend,
+		analysis:  analysis,
+		flowSvc:   flowSvc,
+		dashCache: make(map[string]*dashCacheEntry),
+	}
 }
 
 const dashboardTokenDays = 14
@@ -129,9 +155,50 @@ func (s *DashboardService) BuildHome(ctx context.Context, userID string) *models
 		out.IsCloud = false
 		return out
 	}
-	out := s.buildCloud(ctx, userID)
-	out.IsCloud = true
-	return out
+
+	// Check TTL cache before hitting the database (16 queries → 0 on hit).
+	s.dashMu.Lock()
+	if entry, ok := s.dashCache[userID]; ok && time.Since(entry.fetchedAt) < dashboardCacheTTL {
+		s.dashMu.Unlock()
+		// Do NOT mutate entry.data here: it is a shared pointer handed to every
+		// concurrent caller for this user, and writing to it after releasing the
+		// lock races the other callers' JSON marshal of the same struct. The
+		// cached value was already stored with IsCloud=true (set on `out` below
+		// before it is cached), so no write is needed on the hit path.
+		return entry.data
+	}
+	s.dashMu.Unlock()
+
+	// Single-flight the cold build: concurrent cold-cache requests for the same
+	// user share one buildCloud run instead of each issuing ~16 DB queries.
+	res, _, _ := s.dashSF.Do("home:"+userID, func() (any, error) {
+		out := s.buildCloud(ctx, userID)
+		out.IsCloud = true
+		// Store in cache (even on partial failure — the emptyHome stub is cheap
+		// to serve for 30s and avoids hammering the DB on a transient error).
+		s.dashMu.Lock()
+		s.dashCache[userID] = &dashCacheEntry{data: out, fetchedAt: time.Now()}
+		s.dashMu.Unlock()
+		return out, nil
+	})
+	if res != nil {
+		return res.(*models.DashboardHomeData)
+	}
+	// Single-flight returned nil (panic/error path); fall back to a valid shape.
+	return emptyHome()
+}
+
+// InvalidateDashboardCache clears the cached dashboard data for a user (or all
+// users when userID is empty). Called after settings changes or flow uploads
+// that materially change what the dashboard should show.
+func (s *DashboardService) InvalidateDashboardCache(userID string) {
+	s.dashMu.Lock()
+	defer s.dashMu.Unlock()
+	if userID == "" {
+		s.dashCache = make(map[string]*dashCacheEntry)
+	} else {
+		delete(s.dashCache, userID)
+	}
 }
 
 func (s *DashboardService) buildCloud(ctx context.Context, userID string) *models.DashboardHomeData {

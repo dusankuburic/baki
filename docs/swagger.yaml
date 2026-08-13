@@ -259,8 +259,7 @@ definitions:
       old:
         allOf:
         - $ref: '#/definitions/models.Block'
-        description: For Modified, we might have both. For Added only New. For Removed
-          only Old.
+        description: For Modified, we might have both. For Added only New. For Removed only Old.
     type: object
   models.BlockToken:
     properties:
@@ -790,28 +789,27 @@ info:
   contact: {}
   description: This is the API for the Pad Analyzer project.
   title: Pad Analyzer API
-  version: "1.0"
+  version: '1.0'
 paths:
   /api/admin/migration/start:
     post:
-      description: Kicks off the local→database flow migration (admin only, cloud
-        mode). Idempotent and non-blocking.
+      description: "Kicks off the local\u2192database flow migration (admin only, cloud mode). Idempotent and non-blocking."
       produces:
       - application/json
       responses:
-        "202":
+        '202':
           description: Accepted
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "409":
+        '409':
           description: Conflict
           schema:
             additionalProperties:
@@ -822,17 +820,16 @@ paths:
       - admin
   /api/admin/migration/status:
     get:
-      description: Returns the status/result of the most recent data migration (admin
-        only).
+      description: Returns the status/result of the most recent data migration (admin only).
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
@@ -841,12 +838,44 @@ paths:
       summary: Data migration status
       tags:
       - admin
+  /api/admin/users/list:
+    get:
+      description: Returns a list of all registered users. Only available to system admins.
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/interfaces.User'
+            type: array
+        '401':
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        '403':
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        '500':
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List all users
+      tags:
+      - admin
   /api/admin/users/{userId}/role:
-    post:
+    put:
       consumes:
       - application/json
-      description: Updates the system role for a specific user. Only available to
-        system admins.
+      description: Updates the system role for a specific user. Only available to system admins.
       parameters:
       - description: User ID
         in: path
@@ -865,37 +894,37 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -904,51 +933,17 @@ paths:
       summary: Set user role
       tags:
       - admin
-  /api/admin/users/list:
-    get:
-      description: Returns a list of all registered users. Only available to system
-        admins.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            items:
-              $ref: '#/definitions/interfaces.User'
-            type: array
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "403":
-          description: Forbidden
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: List all users
-      tags:
-      - admin
   /api/analysis/analyze:
     post:
       description: Runs all enabled analysis rules on the current flow document.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.AnalysisReport'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -957,17 +952,188 @@ paths:
       summary: Analyze current flow
       tags:
       - analysis
+  /api/analysis/baseline/clear:
+    post:
+      consumes:
+      - application/json
+      description: Clear the baseline for a flow
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Clear the baseline for a flow
+      tags:
+      - baseline
+  /api/analysis/baseline/drift:
+    post:
+      consumes:
+      - application/json
+      description: Compare current analysis against the baseline
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Compare current analysis against the baseline
+      tags:
+      - baseline
+  /api/analysis/baseline/get:
+    post:
+      consumes:
+      - application/json
+      description: Get the baseline snapshot for a flow
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Get the baseline snapshot for a flow
+      tags:
+      - baseline
+  /api/analysis/baseline/set:
+    post:
+      consumes:
+      - application/json
+      description: Set the current analysis as the baseline
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Set the current analysis as the baseline
+      tags:
+      - baseline
+  /api/analysis/comments/add:
+    post:
+      consumes:
+      - application/json
+      description: Add a comment to a finding
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Add a comment to a finding
+      tags:
+      - comments
+  /api/analysis/comments/delete:
+    post:
+      consumes:
+      - application/json
+      description: Delete a comment
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Delete a comment
+      tags:
+      - comments
+  /api/analysis/comments/list:
+    post:
+      consumes:
+      - application/json
+      description: List comments for a finding
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: List comments for a finding
+      tags:
+      - comments
+  /api/analysis/export/csv:
+    post:
+      consumes:
+      - application/json
+      description: Export findings as CSV
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Export findings as CSV
+      tags:
+      - export
+  /api/analysis/export/junit:
+    post:
+      consumes:
+      - application/json
+      description: Export analysis results as JUnit XML
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Export analysis results as JUnit XML
+      tags:
+      - export
   /api/analysis/graph:
-    get:
+    post:
       description: Returns a graph representation of the flow's execution path.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.GraphData'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -980,8 +1146,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Returns the history and dependencies of a specific variable within
-        the flow.
+      description: Returns the history and dependencies of a specific variable within the flow.
       parameters:
       - description: Variable Lineage Request
         in: body
@@ -995,17 +1160,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.VariableHistory'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1014,6 +1179,120 @@ paths:
       summary: Get variable lineage
       tags:
       - analysis
+  /api/analysis/policy/delete:
+    post:
+      consumes:
+      - application/json
+      description: Delete a policy
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Delete a policy
+      tags:
+      - policy
+  /api/analysis/policy/evaluate:
+    post:
+      consumes:
+      - application/json
+      description: Evaluate a flow against an inline policy
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Evaluate a flow against an inline policy
+      tags:
+      - policy
+  /api/analysis/policy/evaluate-by-id:
+    post:
+      consumes:
+      - application/json
+      description: Evaluate a flow against a persisted policy
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Evaluate a flow against a persisted policy
+      tags:
+      - policy
+  /api/analysis/policy/get:
+    post:
+      consumes:
+      - application/json
+      description: Get a single policy by ID
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Get a single policy by ID
+      tags:
+      - policy
+  /api/analysis/policy/list:
+    post:
+      consumes:
+      - application/json
+      description: List policies for an organization
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: List policies for an organization
+      tags:
+      - policy
+  /api/analysis/policy/save:
+    post:
+      consumes:
+      - application/json
+      description: Save a named policy for an organization
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Save a named policy for an organization
+      tags:
+      - policy
   /api/analysis/rule/config:
     post:
       consumes:
@@ -1034,19 +1313,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1075,19 +1354,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1102,7 +1381,7 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
@@ -1111,6 +1390,82 @@ paths:
       summary: List analysis rules
       tags:
       - analysis
+  /api/analysis/triage/clear:
+    post:
+      consumes:
+      - application/json
+      description: Clear triage status for a finding
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Clear triage status for a finding
+      tags:
+      - triage
+  /api/analysis/triage/list:
+    post:
+      consumes:
+      - application/json
+      description: List finding triage statuses for a flow
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: List finding triage statuses for a flow
+      tags:
+      - triage
+  /api/analysis/triage/set:
+    post:
+      consumes:
+      - application/json
+      description: Set triage status for a finding
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Set triage status for a finding
+      tags:
+      - triage
+  /api/analysis/triage/set-batch:
+    post:
+      consumes:
+      - application/json
+      description: Batch-set triage statuses for multiple findings
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Batch-set triage statuses for multiple findings
+      tags:
+      - triage
   /api/auth/change-password:
     post:
       consumes:
@@ -1131,25 +1486,25 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1178,24 +1533,24 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1206,12 +1561,11 @@ paths:
       - auth
   /api/auth/logout:
     post:
-      description: Logs out the current user. In stateless JWT mode, this is primarily
-        a client-side operation.
+      description: Logs out the current user. In stateless JWT mode, this is primarily a client-side operation.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
@@ -1226,12 +1580,12 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
@@ -1258,24 +1612,24 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1304,24 +1658,24 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "409":
+        '409':
           description: Conflict
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1330,12 +1684,67 @@ paths:
       summary: Register a new user
       tags:
       - auth
+  /api/auth/sessions:
+    get:
+      description: List active sessions for the current user
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+      summary: List active sessions for the current user
+      tags:
+      - auth
+  /api/auth/sessions/{jti}:
+    delete:
+      description: Revoke a session by JTI
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      summary: Revoke a session by JTI
+      tags:
+      - auth
+  /api/auth/tokens:
+    get:
+      description: List API tokens for the current user
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+      summary: List API tokens for the current user
+      tags:
+      - auth
+  /api/auth/tokens/{tokenId}:
+    delete:
+      description: Revoke an API token
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      summary: Revoke an API token
+      tags:
+      - auth
   /api/chat/begin:
     post:
       consumes:
       - application/json
-      description: Signals the backend to start sending events for the specified stream
-        ID.
+      description: Signals the backend to start sending events for the specified stream ID.
       parameters:
       - description: Begin Stream Request
         in: body
@@ -1349,13 +1758,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
@@ -1382,13 +1791,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
@@ -1417,19 +1826,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1440,16 +1849,15 @@ paths:
       - chat
   /api/chat/demo-remaining:
     get:
-      description: Returns the number of demo AI requests remaining for the current
-        session.
+      description: Returns the number of demo AI requests remaining for the current session.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             type: integer
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1480,19 +1888,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1521,19 +1929,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               $ref: '#/definitions/models.ChatMessage'
             type: array
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1557,18 +1965,18 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1601,19 +2009,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1637,17 +2045,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: Stream ID
           schema:
             type: string
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1676,19 +2084,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               type: string
             type: array
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1697,12 +2105,25 @@ paths:
       summary: Get suggested prompts
       tags:
       - chat
+  /api/dashboard/home:
+    get:
+      description: Aggregated dashboard data for the home view
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+      summary: Aggregated dashboard data for the home view
+      tags:
+      - dashboard
   /api/export/compare:
     post:
       consumes:
       - application/json
-      description: Returns a diff between the currently loaded flow and a flow at
-        the specified path. Only available in local mode.
+      description: Returns a diff between the currently loaded flow and a flow at the specified path. Only available in local
+        mode.
       parameters:
       - description: Compare Flow Request
         in: body
@@ -1716,17 +2137,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.FlowDiff'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1739,8 +2160,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Exports the specified flow to a Markdown file. Returns base64 encoded
-        data. Only available in local mode.
+      description: Exports the specified flow to a Markdown file. Returns base64 encoded data. Only available in local mode.
       parameters:
       - description: Export Markdown Request
         in: body
@@ -1754,18 +2174,18 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1778,8 +2198,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Exports the specified flow to a PDF file. Returns base64 encoded
-        data. Only available in local mode.
+      description: Exports the specified flow to a PDF file. Returns base64 encoded data. Only available in local mode.
       parameters:
       - description: Export PDF Request
         in: body
@@ -1793,18 +2212,18 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1819,13 +2238,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1838,8 +2257,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Loads a flow document from the specified local folder path. Only
-        available in local mode.
+      description: Loads a flow document from the specified local folder path. Only available in local mode.
       parameters:
       - description: Load Flow Folder Request
         in: body
@@ -1853,23 +2271,23 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.FlowDocument'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1882,8 +2300,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Loads a flow document from the specified local file path. Only
-        available in local mode.
+      description: Loads a flow document from the specified local file path. Only available in local mode.
       parameters:
       - description: Load Flow Request
         in: body
@@ -1897,17 +2314,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.FlowDocument'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1920,8 +2337,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Notifies the application that a file was opened via the operating
-        system.
+      description: Notifies the application that a file was opened via the operating system.
       parameters:
       - description: File Open Request
         in: body
@@ -1935,13 +2351,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
@@ -1970,19 +2386,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -1997,13 +2413,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               $ref: '#/definitions/models.RecentFile'
             type: array
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2030,19 +2446,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2055,8 +2471,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Opens the system file manager at the specified path. Only available
-        in local mode.
+      description: Opens the system file manager at the specified path. Only available in local mode.
       parameters:
       - description: Reveal Path Request
         in: body
@@ -2070,25 +2485,25 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2117,17 +2532,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.SearchResults'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2136,19 +2551,76 @@ paths:
       summary: Search within flow
       tags:
       - flow
+  /api/flow/share/create:
+    post:
+      consumes:
+      - application/json
+      description: Create a public share link for a flow
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Create a public share link for a flow
+      tags:
+      - sharing
+  /api/flow/share/list:
+    post:
+      consumes:
+      - application/json
+      description: List active share links for a flow
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: List active share links for a flow
+      tags:
+      - sharing
+  /api/flow/share/revoke:
+    post:
+      consumes:
+      - application/json
+      description: Revoke a share link
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '503':
+          description: Service Unavailable (cloud mode required)
+      summary: Revoke a share link
+      tags:
+      - sharing
   /api/flow/source-files:
     get:
       description: Returns a list of source files related to the current flow.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               type: string
             type: array
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2159,8 +2631,7 @@ paths:
       - flow
   /api/flows/{flowId}/collaborators:
     get:
-      description: Returns a list of users who have access to the specified flow.
-        Only the flow owner can view collaborators.
+      description: Returns a list of users who have access to the specified flow. Only the flow owner can view collaborators.
       parameters:
       - description: Flow ID
         in: path
@@ -2170,31 +2641,31 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               $ref: '#/definitions/interfaces.Collaborator'
             type: array
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2206,8 +2677,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Grants access to a flow to another user. Only the flow owner can
-        add collaborators.
+      description: Grants access to a flow to another user. Only the flow owner can add collaborators.
       parameters:
       - description: Flow ID
         in: path
@@ -2230,35 +2700,35 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/interfaces.Collaborator'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2269,8 +2739,7 @@ paths:
       - sharing
   /api/flows/{flowId}/collaborators/{userId}:
     delete:
-      description: Revokes a user's access to a specific flow. Only the flow owner
-        can remove collaborators.
+      description: Revokes a user's access to a specific flow. Only the flow owner can remove collaborators.
       parameters:
       - description: Flow ID
         in: path
@@ -2285,31 +2754,31 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2321,8 +2790,7 @@ paths:
     put:
       consumes:
       - application/json
-      description: Updates the permission level for an existing flow collaborator.
-        Only the flow owner can update permissions.
+      description: Updates the permission level for an existing flow collaborator. Only the flow owner can update permissions.
       parameters:
       - description: Flow ID
         in: path
@@ -2346,35 +2814,35 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/interfaces.Collaborator'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2401,19 +2869,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2440,17 +2908,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             type: boolean
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2479,19 +2947,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2502,8 +2970,8 @@ paths:
       - keys
   /api/library:
     get:
-      description: Returns a list of flow documents stored in the library, with optional
-        filtering by organization and search query.
+      description: Returns a list of flow documents stored in the library, with optional filtering by organization and search
+        query.
       parameters:
       - description: Organization ID
         in: query
@@ -2524,13 +2992,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               $ref: '#/definitions/api.libraryFlow'
             type: array
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2565,23 +3033,23 @@ paths:
       produces:
       - application/json
       responses:
-        "201":
+        '201':
           description: Created
           schema:
             $ref: '#/definitions/api.libraryFlow'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2592,8 +3060,7 @@ paths:
       - library
   /api/library/{id}:
     delete:
-      description: Deletes a specific flow document from the library. Only the owner
-        can delete.
+      description: Deletes a specific flow document from the library. Only the owner can delete.
       parameters:
       - description: Flow ID
         in: path
@@ -2603,25 +3070,25 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2641,23 +3108,23 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/api.libraryFlow'
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2669,8 +3136,7 @@ paths:
     put:
       consumes:
       - application/json
-      description: Updates the name, description, or content of a specific library
-        flow. Only the owner can update.
+      description: Updates the name, description, or content of a specific library flow. Only the owner can update.
       parameters:
       - description: Flow ID
         in: path
@@ -2696,29 +3162,29 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/api.libraryFlow'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2739,24 +3205,24 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2767,18 +3233,17 @@ paths:
       - library
   /api/local-config:
     get:
-      description: Returns the pre-shared token in local (non-JWT) mode so a web client
-        can self-configure. 404 in cloud mode.
+      description: Returns the pre-shared token in local (non-JWT) mode so a web client can self-configure. 404 in cloud mode.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
@@ -2789,18 +3254,17 @@ paths:
       - system
   /api/orgs:
     get:
-      description: Returns a list of organizations the currently authenticated user
-        belongs to.
+      description: Returns a list of organizations the currently authenticated user belongs to.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               $ref: '#/definitions/interfaces.Organisation'
             type: array
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2826,17 +3290,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/interfaces.Organisation'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
@@ -2847,8 +3311,7 @@ paths:
       - organization
   /api/orgs/{id}:
     delete:
-      description: Deletes an existing organization. Only organization admins can
-        delete.
+      description: Deletes an existing organization. Only organization admins can delete.
       parameters:
       - description: Organization ID
         in: path
@@ -2858,25 +3321,25 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2885,12 +3348,39 @@ paths:
       summary: Delete organization
       tags:
       - organization
+  /api/orgs/{id}/invites:
+    get:
+      description: List pending invites for an organization
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+      summary: List pending invites for an organization
+      tags:
+      - orgs
+  /api/orgs/{id}/invites/{inviteId}:
+    delete:
+      description: Revoke a pending invite
+      produces:
+      - application/json
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      summary: Revoke a pending invite
+      tags:
+      - orgs
   /api/orgs/{id}/members:
     post:
       consumes:
       - application/json
-      description: Adds a user to an organization with a specific role. Only organization
-        admins can add members.
+      description: Adds a user to an organization with a specific role. Only organization admins can add members.
       parameters:
       - description: Organization ID
         in: path
@@ -2913,37 +3403,37 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "409":
+        '409':
           description: Conflict
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -2954,8 +3444,7 @@ paths:
       - organization
   /api/orgs/{id}/members/{userId}:
     delete:
-      description: Removes a user from an organization. Only organization admins can
-        remove members.
+      description: Removes a user from an organization. Only organization admins can remove members.
       parameters:
       - description: Organization ID
         in: path
@@ -2970,31 +3459,31 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "409":
+        '409':
           description: Conflict
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3007,8 +3496,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Updates the role of a user within an organization. Only organization
-        admins can set roles.
+      description: Updates the role of a user within an organization. Only organization admins can set roles.
       parameters:
       - description: Organization ID
         in: path
@@ -3032,37 +3520,37 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "403":
+        '403':
           description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-        "404":
+        '404':
           description: Not Found
           schema:
             additionalProperties:
               type: string
             type: object
-        "409":
+        '409':
           description: Conflict
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3089,17 +3577,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/ai.GitHubAuthResult'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3114,13 +3602,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3135,11 +3623,11 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/ai.DeviceAuthResponse'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3154,11 +3642,11 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/ai.GitHubUser'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3185,17 +3673,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/ai.GitHubAuthResult'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3210,13 +3698,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3231,11 +3719,11 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/ai.DeviceAuthResponse'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3250,11 +3738,11 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/ai.GitHubUser'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3269,13 +3757,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             items:
               $ref: '#/definitions/models.ProviderInfo'
             type: array
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3302,17 +3790,17 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.ProviderTestResult'
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3327,12 +3815,12 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3356,13 +3844,13 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
@@ -3377,11 +3865,11 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             $ref: '#/definitions/models.AppSettings'
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3404,19 +3892,19 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "400":
+        '400':
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3427,23 +3915,23 @@ paths:
       - system
   /api/ws-ticket:
     post:
-      description: Returns a short-lived, single-use ticket the client exchanges for
-        a WebSocket connection, keeping the access token out of the WS URL.
+      description: Returns a short-lived, single-use ticket the client exchanges for a WebSocket connection, keeping the access
+        token out of the WS URL.
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties: true
             type: object
-        "401":
+        '401':
           description: Unauthorized
           schema:
             additionalProperties:
               type: string
             type: object
-        "500":
+        '500':
           description: Internal Server Error
           schema:
             additionalProperties:
@@ -3458,7 +3946,7 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
+        '200':
           description: OK
           schema:
             additionalProperties:
@@ -3467,20 +3955,32 @@ paths:
       summary: Liveness probe
       tags:
       - system
-  /readyz:
+  /metrics:
     get:
-      description: Returns 200 when downstream dependencies (DB) are reachable, 503
-        otherwise.
+      description: Prometheus metrics endpoint
       produces:
       - application/json
       responses:
-        "200":
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+      summary: Prometheus metrics endpoint
+      tags:
+      - ops
+  /readyz:
+    get:
+      description: Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise.
+      produces:
+      - application/json
+      responses:
+        '200':
           description: OK
           schema:
             additionalProperties:
               type: string
             type: object
-        "503":
+        '503':
           description: Service Unavailable
           schema:
             additionalProperties:
@@ -3489,4 +3989,4 @@ paths:
       summary: Readiness probe
       tags:
       - system
-swagger: "2.0"
+swagger: '2.0'

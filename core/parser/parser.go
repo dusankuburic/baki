@@ -501,15 +501,16 @@ func indexBlockInDoc(doc *models.FlowDocument, sf *models.Subflow, b *models.Blo
 
 func newBlock(tok Token, subflowID string, blockType models.BlockType) *models.Block {
 	blk := &models.Block{
-		ID:         uuid.NewString(),
-		Name:       tok.Name,
-		Type:       blockType,
-		RawType:    tok.RawType,
-		Indent:     tok.Indent,
-		LineNumber: tok.Line,
-		SubflowID:  subflowID,
-		Properties: parseProperties(tok.Raw),
-		Variables:  extractVariables(tok.Raw),
+		ID:            uuid.NewString(),
+		Name:          tok.Name,
+		Type:          blockType,
+		RawType:       tok.RawType,
+		Indent:        tok.Indent,
+		LineNumber:    tok.Line,
+		EndLineNumber: tok.EndLine,
+		SubflowID:     subflowID,
+		Properties:    parseProperties(tok.Raw),
+		Variables:     extractVariables(tok.Raw),
 	}
 
 	// For SET x TO expr, inject structured properties that parseProperties cannot

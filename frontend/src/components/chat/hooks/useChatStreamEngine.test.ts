@@ -42,6 +42,7 @@ vi.mock('@/platform/adapters', () => ({
 }))
 
 import {useChatStreamEngine} from './useChatStreamEngine'
+import {chatApi} from '@/api'
 import type {FlowDocument} from '@/types'
 
 const mockDoc = {id: 'flow-1', name: 'Test', subflows: []} as unknown as FlowDocument
@@ -327,6 +328,75 @@ describe('useChatStreamEngine', () => {
       expect(msgs).toHaveLength(1)
       expect(msgs![0].content).toBe('hello world')
       expect(msgs![0].finishReason).toBe('interrupted')
+    })
+  })
+
+  // Regression: a stream's done event can land after the user has switched to a
+  // different flow. The conversation must be persisted under the thread's own
+  // flowId (immutable), NOT docRef.current (which now points at the new flow) —
+  // otherwise flow A's AI conversation is saved under flow B.
+  describe('commitAssistantMessage doc-switch safety', () => {
+    it('saves under the thread flowId, not the switched-to doc', () => {
+      const docA = {id: 'flow-A', name: 'A', subflows: []} as unknown as FlowDocument
+      const docB = {id: 'flow-B', name: 'B', subflows: []} as unknown as FlowDocument
+
+      const {result, rerender} = renderHook(
+        ({doc}: {doc: FlowDocument}) =>
+          useChatStreamEngine({
+            doc,
+            provider: 'claude' as never,
+            selectedModel: 'claude-sonnet-4',
+            getMessages: (threadId: string) => useChatStore.getState().conversations.get(threadId) ?? [],
+          }),
+        {initialProps: {doc: docA}},
+      )
+
+      act(() => {
+        useChatStore.setState({
+          threads: [
+            {
+              id: 'threadA',
+              flowId: 'flow-A',
+              title: 'T',
+              createdAt: '2024',
+              contextBlockId: 'block1',
+              selectedSourceFiles: [],
+              tokensIn: 0,
+              tokensOut: 0,
+            },
+          ],
+          conversations: new Map([['threadA', []]]),
+          streams: {
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
+          },
+        })
+        result.current.beginAcc('streamA', 'threadA')
+        capturedHandler!.onChunk('hello from A', 'streamA')
+      })
+
+      // User switches to doc B mid-stream. docRef.current updates to flow-B via
+      // the post-render effect.
+      act(() => {
+        rerender({doc: docB})
+      })
+
+      // Stream for threadA (flow-A) completes after the switch. The save must
+      // target flow-A, not the now-current flow-B.
+      act(() => {
+        capturedHandler!.onDone(5, 10, 'streamA')
+      })
+
+      expect(chatApi.saveConversation).toHaveBeenCalledWith(
+        'flow-A',
+        'block1',
+        expect.arrayContaining([expect.objectContaining({role: 'assistant', content: 'hello from A'})]),
+      )
+      // Must NOT have saved under the switched-to doc.
+      expect(chatApi.saveConversation).not.toHaveBeenCalledWith(
+        'flow-B',
+        expect.anything(),
+        expect.anything(),
+      )
     })
   })
 })

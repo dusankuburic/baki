@@ -29,7 +29,19 @@ type Config struct {
 	Email         EmailConfig
 	Redis         RedisConfig
 	PowerPlatform PowerPlatformConfig
+	Features      FeatureFlags
 	Log           models.LogConfig
+}
+
+// FeatureFlags gates optional product behaviour at runtime. Flags are env-sourced
+// (PAD_FEATURE_*) and read-only — an operator sets them at deploy time to lock
+// down a tenant (e.g. DisableSignUp for a closed deployment). Exposed publicly
+// via GET /api/system/features so the frontend can hide disabled affordances.
+type FeatureFlags struct {
+	// DisableSignUp blocks new account self-registration. Existing users can
+	// still log in; admins provision accounts out-of-band. Useful for
+	// single-tenant / enterprise deployments that don't allow open signup.
+	DisableSignUp bool `json:"disableSignUp"`
 }
 
 // PowerPlatformConfig configures the optional connector that ingests desktop
@@ -69,6 +81,10 @@ type RedisConfig struct {
 	// URL is a redis://[user:pass@]host:port/[db] connection string. Empty =
 	// backplane disabled (in-memory, single-replica).
 	URL string
+	// PoolSize overrides go-redis's default (10 × GOMAXPROCS). 0 = default.
+	PoolSize int
+	// MinIdleConns sets the minimum number of idle connections. 0 = default.
+	MinIdleConns int
 }
 
 // EmailConfig configures transactional email (password reset, email
@@ -100,8 +116,35 @@ type GovernanceConfig struct {
 	ScanInterval string
 	// NotifyWebhookURL receives raw JSON alert events (generic webhook).
 	NotifyWebhookURL string
+	// NotifyWebhookSecret is the HMAC-SHA256 key for webhook payload signing
+	// (X-Baki-Signature header). Empty = no signature.
+	NotifyWebhookSecret string
 	// NotifyTeamsURL is a Microsoft Teams incoming-webhook URL (MessageCard).
 	NotifyTeamsURL string
+	// NotifySlackURL is a Slack incoming-webhook URL. The Slack payload format
+	// is also compatible with Discord, Mattermost, and Teams (Slack-compatible
+	// connector). For backward compatibility, PAD_WEBHOOK_URL is treated as an
+	// alias for this channel when NotifySlackURL is unset.
+	NotifySlackURL string
+	// NotifySlackSecret is an optional HMAC key for Slack payload signing.
+	NotifySlackSecret string
+	// InboundWebhookSecret is the HMAC key used to verify inbound CI webhooks
+	// (POST /api/integrations/ci). The CI runner signs the request body with
+	// HMAC-SHA256 and sends X-Baki-Signature: sha256=<hex>. Empty disables the
+	// endpoint (it returns 503). Separate from the outbound signing secrets so
+	// rotating one doesn't break the other.
+	InboundWebhookSecret string
+	// NotifyEmailTo is the recipient address for governance alert emails (an ops
+	// alias or team list). Empty disables the email channel even with SMTP set.
+	NotifyEmailTo string
+	// Jira: when all four are set, a Jira Cloud issue is created per alert.
+	// JiraBaseURL is the cloud base (e.g. https://acme.atlassian.net).
+	NotifyJiraBaseURL string
+	// JiraEmail + JiraAPIToken form the Basic-auth credential (API token).
+	NotifyJiraEmail    string
+	NotifyJiraAPIToken string
+	// JiraProject is the target project key (e.g. "PAD").
+	NotifyJiraProject string
 	// RetentionPurgeInterval is how often to purge expired tokens/invites and
 	// aged-out audit rows (a duration string like "24h"; empty or non-positive
 	// disables the periodic purge). Cloud mode only — the purge needs a DB.
@@ -110,6 +153,11 @@ type GovernanceConfig struct {
 	// deletes them (0 = keep audit history indefinitely; only expired tokens
 	// and invites are purged).
 	AuditRetentionDays int
+	// AuditSpillDir is the directory for the audit-event on-disk spill queue
+	// used when the in-memory pool overflows. Empty → os.TempDir() (zero-config,
+	// but a pod restart loses in-flight spilled events). Set to a mounted volume
+	// for cross-restart durability. "off" disables the spill queue entirely.
+	AuditSpillDir string
 }
 
 // ServerConfig holds HTTP server settings
@@ -137,6 +185,10 @@ type ServerConfig struct {
 	// it (and without TLSCert/TLSKey), a cloud-mode deployment with auth
 	// enabled refuses to start, to prevent accidental plaintext credentials.
 	BehindProxy bool
+	// CustomRulesPath is the path to a JSON file of user-defined analyzer
+	// rules (see core/analyzer/custom_rules.go). Empty = no custom rules.
+	// Set via PAD_CUSTOM_RULES.
+	CustomRulesPath string
 }
 
 // StorageConfig holds storage backend settings
@@ -164,6 +216,14 @@ type StorageConfig struct {
 	// deployment mode is known.
 	DBRequireSSL string
 
+	// EmbeddingDim is the vector dimension the knowledge-base embeddings use.
+	// It gates which chunks are eligible for pgvector server-side search: a
+	// chunk whose embedding width differs from this is kept in the JSONB
+	// fallback column but skipped for the vector index (and ranked Go-side when
+	// pgvector is unavailable), mirroring the "re-index after changing the
+	// embedding provider" contract. 0 ⇒ default 1536 (OpenAI text-embedding-3-small).
+	EmbeddingDim int
+
 	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
 	AzureStorageAccount   string
 	AzureStorageContainer string
@@ -185,12 +245,20 @@ type RuntimeConfig struct {
 	RateLimitChatBurst      float64
 	RateLimitUploadRPS      float64
 	RateLimitUploadBurst    float64
-	CircuitBreakerFailures  int
-	CircuitBreakerOpenDur   string
-	RetryMaxAttempts        int
-	RetryBaseDelay          string
-	OTLPEndpoint            string
-	RequestTimeout          string
+	// RateLimitPerUser caps one authenticated user's total WRITE throughput
+	// (POST/PUT/PATCH/DELETE) across all endpoints — an additional ceiling on
+	// top of the per-group per-IP buckets, so a single account can't rotate
+	// across endpoints to evade a per-group cap. Reads (GET) bypass it (the
+	// per-IP limiter still covers them). Cloud mode only; local mode is
+	// single-user so it would self-DoS.
+	RateLimitPerUserRPS    float64
+	RateLimitPerUserBurst  float64
+	CircuitBreakerFailures int
+	CircuitBreakerOpenDur  string
+	RetryMaxAttempts       int
+	RetryBaseDelay         string
+	OTLPEndpoint           string
+	RequestTimeout         string
 }
 
 func DefaultRuntimeConfig() RuntimeConfig {
@@ -205,12 +273,17 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		RateLimitChatBurst:      10,
 		RateLimitUploadRPS:      1,
 		RateLimitUploadBurst:    3,
-		CircuitBreakerFailures:  5,
-		CircuitBreakerOpenDur:   "30s",
-		RetryMaxAttempts:        3,
-		RetryBaseDelay:          "500ms",
-		OTLPEndpoint:            "",
-		RequestTimeout:          "30s",
+		// Per-user default: generous enough that a legit user doing one thing at
+		// a time (already bounded by the tighter per-group per-IP caps) never
+		// hits it, but caps a runaway account's total write volume.
+		RateLimitPerUserRPS:    10,
+		RateLimitPerUserBurst:  20,
+		CircuitBreakerFailures: 5,
+		CircuitBreakerOpenDur:  "30s",
+		RetryMaxAttempts:       3,
+		RetryBaseDelay:         "500ms",
+		OTLPEndpoint:           "",
+		RequestTimeout:         "30s",
 	}
 }
 

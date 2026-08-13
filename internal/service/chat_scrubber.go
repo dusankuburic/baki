@@ -61,17 +61,32 @@ func (e *scrubbedEmitter) push(t string) {
 //     pass through, so chunks always precede the terminal event in order.
 //   - flush is goroutine-safe: the batch timer fires from time.AfterFunc's
 //     goroutine while the worker thread drives flush via non-chunk events.
+//   - Every emit is serialized through emitMu, so a chunk flushed by the timer
+//     goroutine cannot be overtaken by a terminal (done/error) event emitted by
+//     the worker. Without this, flush() releases the batch mutex before emitting
+//     (see below), so a concurrent timer flush could deliver its chunk AFTER the
+//     worker's done/error — reordering the terminal event before the last chunk.
 //
 // The emitted-chunk count (count) replaces scrubbedEmitter.chunks in the done
 // event's dropped-chunk field so the client's received-vs-expected check stays
 // meaningful (it now counts EMITTED events, which is what the client observes).
 type chunkCoalescer struct {
-	emit  func(string, map[string]interface{}) // raw notifier emit (NOT the wrapped one)
-	mu    sync.Mutex
-	buf   strings.Builder
-	timer *time.Timer
-	first bool
-	count int // emitted chunk events (for done's dropped-chunk detection)
+	emit func(string, map[string]interface{}) // raw notifier emit (NOT the wrapped one)
+	// mu guards the batch state (buf, timer, first, count). It is deliberately
+	// NOT held across emit — c.emit reaches EventManager.deliver (clientsMu +
+	// per-client iteration), and coupling the batch critical section to every
+	// client would let a slow delivery stall buffering.
+	mu sync.Mutex
+	// emitMu serializes the actual emits so their ORDER is preserved across the
+	// worker and the timer goroutines. It is a lightweight ordering gate (only
+	// the coalescer's own emit paths contend on it), so the worker can keep
+	// buffering deltas via add() while an emit is in flight. Lock order is always
+	// emitMu → mu (flushLocked); no path takes mu then blocks on emitMu.
+	emitMu sync.Mutex
+	buf    strings.Builder
+	timer  *time.Timer
+	first  bool
+	count  int // emitted chunk events (for done's dropped-chunk detection)
 }
 
 func newChunkCoalescer(emit func(string, map[string]interface{})) *chunkCoalescer {
@@ -84,8 +99,13 @@ func newChunkCoalescer(emit func(string, map[string]interface{})) *chunkCoalesce
 func (c *chunkCoalescer) wrap() func(string, map[string]interface{}) {
 	return func(eventType string, data map[string]interface{}) {
 		if eventType != "chunk" {
-			c.flush()
+			// Flush pending chunks and emit the terminal/non-chunk event as one
+			// atomic unit under emitMu, so a concurrent timer flush cannot slip a
+			// chunk out AFTER this done/error/tool event.
+			c.emitMu.Lock()
+			c.flushLocked()
 			c.emit(eventType, data)
+			c.emitMu.Unlock()
 			return
 		}
 		content, _ := data["content"].(string)
@@ -104,13 +124,14 @@ func (c *chunkCoalescer) add(content string) {
 		c.first = false
 		c.count++
 		c.mu.Unlock()
-		// Emit OUTSIDE the lock: c.emit reaches EventManager.deliver which
-		// takes clientsMu and iterates every connected SSE client. Holding
-		// chunkCoalescer.mu across it couples the batch critical section to
-		// every client and is a latency hazard (no deadlock today only because
-		// nothing takes clientsMu then reaches this mutex). content is a Go
-		// string (immutable), so it's safe to use after unlocking.
+		// Emit under emitMu (the emit-ordering gate) but NOT mu: c.emit reaches
+		// EventManager.deliver which takes clientsMu and iterates every connected
+		// SSE client. Holding the batch mutex across it would couple the batch
+		// critical section to every client (a latency hazard). content is a Go
+		// string (immutable), so it's safe to use after unlocking mu.
+		c.emitMu.Lock()
 		c.emit("chunk", map[string]interface{}{"content": content})
+		c.emitMu.Unlock()
 		return
 	}
 	c.buf.WriteString(content)
@@ -120,9 +141,19 @@ func (c *chunkCoalescer) add(content string) {
 	c.mu.Unlock()
 }
 
-// flush emits any pending batch. Safe for concurrent use (timer goroutine +
-// worker). A no-op when nothing is pending.
+// flush emits any pending batch, serialized against other emits via emitMu.
+// Used by the batch timer goroutine. A no-op when nothing is pending.
 func (c *chunkCoalescer) flush() {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+	c.flushLocked()
+}
+
+// flushLocked emits any pending batch as a single chunk. The caller MUST hold
+// emitMu (so the emit is ordered against every other emit); flushLocked manages
+// the batch mutex (mu) itself and releases it before emitting. A no-op when
+// nothing is pending.
+func (c *chunkCoalescer) flushLocked() {
 	c.mu.Lock()
 	if c.timer != nil {
 		c.timer.Stop()
@@ -132,7 +163,8 @@ func (c *chunkCoalescer) flush() {
 		c.mu.Unlock()
 		return
 	}
-	// Snapshot the content under the lock, then emit outside it (see add).
+	// Snapshot the content under mu, then emit outside it (see add) while still
+	// holding emitMu so the emit keeps its place in the terminal-event ordering.
 	content := c.buf.String()
 	c.buf.Reset()
 	c.count++

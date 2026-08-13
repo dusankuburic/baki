@@ -119,6 +119,85 @@ func TestDiffFlows_PropertyOnlyEdit(t *testing.T) {
 	}
 }
 
+// ---- M4: size cap / coarse fallback -----------------------------------------
+
+func TestDiffTooLarge(t *testing.T) {
+	cases := []struct {
+		m, n int
+		want bool
+	}{
+		{10, 10, false},
+		{maxDiffBlocksPerSide, maxDiffBlocksPerSide, true}, // within block cap but m*n = 25M > 4M cell cap
+		{maxDiffBlocksPerSide + 1, 1, true},                // block cap breached
+		{1, maxDiffBlocksPerSide + 1, true},                // block cap breached (other side)
+		{3000, 3000, true},                                 // cell cap breached (9M > 4M)
+		{2000, 2000, false},                                // 4M == cap, not over
+	}
+	for _, tc := range cases {
+		if got := diffTooLarge(tc.m, tc.n); got != tc.want {
+			t.Errorf("diffTooLarge(%d,%d) = %v, want %v", tc.m, tc.n, got, tc.want)
+		}
+	}
+}
+
+// A large, differing subflow must fall back to the coarse linear diff without
+// allocating a huge matrix or recursing thousands deep.
+func TestDiffSubflow_OverCap_CoarseFallback(t *testing.T) {
+	const n = maxDiffBlocksPerSide + 100 // over the per-side block cap
+	oldBlocks := make([]models.Block, n)
+	newBlocks := make([]models.Block, n)
+	for i := 0; i < n; i++ {
+		oldBlocks[i] = makeBlock("ACTION", "old", 0)
+		newBlocks[i] = makeBlock("ACTION", "new", 0)
+	}
+	sfOld := makeSubflow("Big", oldBlocks...)
+	sfNew := makeSubflow("Big", newBlocks...)
+
+	result := diffSubflow(&sfOld, &sfNew)
+
+	if result.Change != models.ChangeModified {
+		t.Errorf("over-cap differing subflow: Change = %q, want %q", result.Change, models.ChangeModified)
+	}
+	// Coarse fallback: all old removed + all new added.
+	var added, removed int
+	for _, bd := range result.Blocks {
+		switch bd.Change {
+		case models.ChangeAdded:
+			added++
+		case models.ChangeRemoved:
+			removed++
+		}
+	}
+	if added != n || removed != n {
+		t.Errorf("coarse fallback: got %d added / %d removed, want %d / %d", added, removed, n, n)
+	}
+}
+
+// A large but *unchanged* subflow must still report all blocks unchanged via the
+// coarse fast path (not a spurious full replace).
+func TestDiffSubflow_OverCap_IdenticalIsUnchanged(t *testing.T) {
+	const n = maxDiffBlocksPerSide + 100
+	blocks := make([]models.Block, n)
+	for i := 0; i < n; i++ {
+		blocks[i] = makeBlock("ACTION", "same", 0)
+	}
+	sf := makeSubflow("Big", blocks...)
+
+	result := diffSubflow(&sf, &sf)
+
+	if result.Change != models.ChangeNone {
+		t.Errorf("over-cap identical subflow: Change = %q, want %q", result.Change, models.ChangeNone)
+	}
+	for _, bd := range result.Blocks {
+		if bd.Change != models.ChangeNone {
+			t.Fatalf("over-cap identical subflow produced a %q block", bd.Change)
+		}
+	}
+	if len(result.Blocks) != n {
+		t.Errorf("expected %d unchanged blocks, got %d", n, len(result.Blocks))
+	}
+}
+
 // ---- max (local) ------------------------------------------------------------
 
 func TestMax(t *testing.T) {

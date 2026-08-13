@@ -52,7 +52,7 @@ export default function ChatToolbar({
           )}
           onClick={onToggleTools}
           aria-pressed={!!useTools}
-          title="Let the assistant look up flow details on demand (Claude, OpenAI, xAI, GLM, GitHub Models). Off = single-pass answer."
+          title="Let the assistant look up flow details on demand (Claude, OpenAI, Gemini, xAI, GLM, GitHub Models). Off = single-pass answer."
         >
           <Wrench size={12} />
           <span>Tools{useTools ? ' on' : ''}</span>

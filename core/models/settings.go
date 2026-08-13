@@ -71,15 +71,26 @@ type AIPromptsConfig struct {
 }
 
 type AISettings struct {
-	ActiveProvider          string                      `json:"activeProvider"`
-	EmbeddingProvider       string                      `json:"embeddingProvider"`
+	ActiveProvider    string `json:"activeProvider"`
+	EmbeddingProvider string `json:"embeddingProvider"`
+	// EmbeddingModel overrides the embedding model name the provider would
+	// otherwise use as its hardcoded default (e.g. OpenAI's text-embedding-3-small).
+	// Empty keeps the provider default. Lets a deployer pick a different embedding
+	// model (e.g. text-embedding-3-large, or a self-hosted model on a compatible
+	// endpoint) without code changes. The pgvector index is dimensionless so a
+	// model swap doesn't require a re-index (mismatched dims are excluded at insert).
+	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
 	DemoMode                DemoModeSettings            `json:"demoMode"`
 	ShowCostEstimates       bool                        `json:"showCostEstimates"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
 	DailyBudget             float64                     `json:"dailyBudget"`
-	Prompts                 AIPromptsConfig             `json:"prompts"`
+	// PerUserDailyBudget caps an individual user's AI spend within an org,
+	// preventing one user from exhausting the org's DailyBudget alone. 0 =
+	// no per-user limit (only the org-level budget applies).
+	PerUserDailyBudget float64         `json:"perUserDailyBudget,omitempty"`
+	Prompts            AIPromptsConfig `json:"prompts"`
 }
 
 type AIProviderConfig struct {
@@ -269,6 +280,11 @@ func DefaultSettings() *AppSettings {
 				"dead-data":                   {Enabled: true, Severity: "info"},
 				"hardcoded-filepath":          {Enabled: true, Severity: "info"},
 				"sql-injection-risk":          {Enabled: true, Severity: "warning"},
+				"hardcoded-ui-coordinates":    {Enabled: true, Severity: "warning"},
+				"command-injection-risk":      {Enabled: true, Severity: "error"},
+				"insecure-http-url":           {Enabled: true, Severity: "warning"},
+				"path-traversal-risk":         {Enabled: true, Severity: "warning"},
+				"tainted-sink":                {Enabled: true, Severity: "error"},
 				"hardcoded-url":               {Enabled: true, Severity: "info"},
 				"large-subflow":               {Enabled: true, Severity: "info", Options: map[string]interface{}{"maxBlocks": 50}},
 				"disabled-block":              {Enabled: true, Severity: "info"},

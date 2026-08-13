@@ -127,14 +127,18 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Flow:      NewFlowHandler(flowSvc, docProv, backend, security),
 		Library:   NewLibraryHandler(libSvc, backend, security),
 		Chat:      NewChatHandler(chatSvc, flowSvc, security),
-		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier()),
+		Analysis:  NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), ""),
 		Dashboard: NewDashboardHandler(dashboardSvc, security),
 		Export:    NewExportHandler(exportSvc, flowSvc, analysisSvc, security),
-		Auth:      NewAuthHandler(nil, backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
-		Admin:     NewAdminHandler(backend, security, NewMigrationRunner(nil), nil),
-		Provider:  NewProviderHandler(providerSvc, security),
-		Org:       NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
-		Sharing:   NewSharingHandler(backend, flowSvc, security),
+		// Cloud/JWT mode always runs with a refresh-token store in production
+		// (main.go wires one whenever auth is enabled); mirror that here so the
+		// refresh handler's replay/rotation path is exercised, and a nil store
+		// (which the handler now rejects as a misconfiguration) isn't relied on.
+		Auth:     NewAuthHandler(newMockTokenStore(), backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
+		Admin:    NewAdminHandler(backend, security, NewMigrationRunner(nil), nil, nil, nil),
+		Provider: NewProviderHandler(providerSvc, security),
+		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
+		Sharing:  NewSharingHandler(backend, flowSvc, security),
 	}
 
 	return NewRouter(noopLifecycle{}, security, eventManager, handlers, cfg, make(chan struct{}), nil, nil)

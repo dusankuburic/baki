@@ -28,8 +28,25 @@ type openaiBase struct {
 	// endpoint. Empty means this provider does not expose embeddings and embed()
 	// returns a "not supported" error (no /embeddings call is attempted).
 	embeddingModel string
-	extraHeaders   func(req *http.Request, model string)
-	handle429      func(resp *http.Response, apiErr openAIErrorResp) error
+	// embeddingModelDefault is the provider's shipped default, preserved so an
+	// empty override can restore it (and so setEmbeddingModel knows whether the
+	// provider supports embeddings at all — an empty default means "no embeddings").
+	embeddingModelDefault string
+	extraHeaders          func(req *http.Request, model string)
+	handle429             func(resp *http.Response, apiErr openAIErrorResp) error
+}
+
+// setEmbeddingModel overrides the model name sent to the /embeddings endpoint.
+// An empty model resets to the provider's shipped default. The method is
+// promoted to every provider that embeds openaiBase, satisfying
+// embedModelSetter so ProviderFactory.ForEmbedding can apply a deployer-chosen
+// model without changing each provider's constructor.
+func (b *openaiBase) setEmbeddingModel(model string) {
+	if model == "" {
+		b.embeddingModel = b.embeddingModelDefault
+		return
+	}
+	b.embeddingModel = model
 }
 
 // resolveToken returns the bearer token for a request: tokenFn when set

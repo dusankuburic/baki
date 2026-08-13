@@ -470,6 +470,55 @@ Database.Connect ConnectionString: 'AKIA1234567890ABCDEF'
 	}
 }
 
+// TestReplaceWithVariablePatch_MultiLineValue_RoundTrip verifies the fixer
+// resolves a hardcoded credential that starts a multi-line triple-quoted value.
+// The stripped property value spans source lines, so a naive single-line
+// replace is a silent no-op — the credential on the first line must be replaced.
+func TestReplaceWithVariablePatch_MultiLineValue_RoundTrip(t *testing.T) {
+	const source = `#Region "Main"
+Database.Connect ConnectionString: '''AKIA1234567890ABCDEF
+extra data'''
+#EndRegion
+`
+	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
+	if err != nil {
+		t.Fatalf("initial parse: %v", err)
+	}
+	report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
+	var credFinding *models.Finding
+	for i := range report.Findings {
+		if report.Findings[i].RuleID == "hardcoded-credential" {
+			credFinding = &report.Findings[i]
+			break
+		}
+	}
+	if credFinding == nil {
+		t.Fatalf("expected a hardcoded-credential finding, got: %+v", ruleIDs(report.Findings))
+	}
+	block := doc.BlocksByID[credFinding.BlockID]
+	propKey, _ := credFinding.Metadata["property"].(string)
+	if propKey == "" {
+		t.Fatalf("finding metadata has no property key: %+v", credFinding.Metadata)
+	}
+
+	patched := ApplyPatch(source, ReplaceWithVariablePatch(block, propKey))
+	// The credential must be gone from the patched source (the old code left it
+	// in place — a silent no-op on multi-line values).
+	if strings.Contains(patched, "AKIA1234567890ABCDEF") {
+		t.Errorf("credential not removed from multi-line value:\n%s", patched)
+	}
+	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
+	if err != nil {
+		t.Fatalf("re-parse after multi-line replace failed (not faithful): %v\npatched:\n%s", err, patched)
+	}
+	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
+	for _, f := range report2.Findings {
+		if f.RuleID == "hardcoded-credential" {
+			t.Errorf("hardcoded-credential still present after multi-line replace; finding: %+v\npatched:\n%s", f, patched)
+		}
+	}
+}
+
 // TestWrapInRetryPatch_RoundTripResolvesFinding verifies the wrap-in-retry
 // apply-fix for missing-retry: wrapping a transient action in a retry loop
 // (LOOP WHILE %RetryCount% < 3) must (a) re-parse cleanly and (b) resolve the
@@ -509,6 +558,16 @@ HTTPClient.InvokeService Method: 'GET' Url: 'https://api.example.com/data'
 	for _, f := range report2.Findings {
 		if f.RuleID == "missing-retry" {
 			t.Errorf("missing-retry still present after wrap-in-retry; finding: %+v\npatched:\n%s", f, patched)
+		}
+	}
+	// The retry loop is bounded (LOOP WHILE %RetryCount% < 3 with
+	// SET RetryCount TO %RetryCount% + 1 in the body). It must NOT introduce an
+	// infinite-loop-risk finding — otherwise the fixer trades one finding for
+	// another (regression covered by hasExitCondition's counter-modification
+	// recognition).
+	for _, f := range report2.Findings {
+		if f.RuleID == "infinite-loop-risk" {
+			t.Errorf("wrap-in-retry introduced an infinite-loop-risk finding on the bounded retry loop; finding: %+v\npatched:\n%s", f, patched)
 		}
 	}
 }
@@ -698,17 +757,143 @@ END
 	}
 }
 
-// TestSetTimeoutPatch_MultiLineValue verifies the blockEndLine fix: appending
-// Timeout to the LAST line of a multi-line action (not the first) so it
-// appears after the closing triple-quote, not inside the string literal.
-//
-// KNOWN LIMITATION: The parser treats multi-line triple-quoted values as part
-// of a single logical line (no EndLineNumber on Block), so blockEndLine returns
-// the start line. The timeout is appended to the start line, inside the string.
-// This test documents the limitation — the fix works for single-line actions
-// (the vast majority) but not for multi-line triple-quoted values.
+// TestSetTimeoutPatch_MultiLineValue verifies the blockEndLine fix: for a
+// multi-line triple-quoted action, appending ` Timeout: 30` must land on the
+// CLOSING line (after `”'`), not the opening line (inside the string literal).
+// Previously blockEndLine returned the start line for a leaf action, corrupting
+// the literal; threading EndLineNumber through Token→Block fixes the 7 fixers
+// that call blockEndLine.
 func TestSetTimeoutPatch_MultiLineValue(t *testing.T) {
-	t.Skip("known limitation: parser doesn't track physical end line for multi-line values")
+	// The HTTP action's URL is a multi-line triple-quoted literal spanning
+	// lines 2–4. It has no Timeout → missing-timeout fires.
+	const source = `#Region "Main"
+HTTPClient.InvokeService Method: 'GET' Url: $'''https://example.com/api
+second body line
+end of body'''
+Display.ShowMessageBox Message: 'done'
+#EndRegion
+`
+	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
+	if err != nil {
+		t.Fatalf("initial parse: %v", err)
+	}
+	report := RunAnalysis(doc, AllRules(), models.DefaultSettings(), nil)
+	var timeoutFinding *models.Finding
+	for i := range report.Findings {
+		if report.Findings[i].RuleID == "missing-timeout" {
+			timeoutFinding = &report.Findings[i]
+			break
+		}
+	}
+	if timeoutFinding == nil {
+		t.Fatalf("expected a missing-timeout finding, got: %+v", ruleIDs(report.Findings))
+	}
+	block := doc.BlocksByID[timeoutFinding.BlockID]
+	if block == nil {
+		t.Fatalf("finding block %s not in doc", timeoutFinding.BlockID)
+	}
+
+	// The plumbing under test: a multi-line triple-quoted action must carry an
+	// EndLineNumber past its opening LineNumber.
+	if block.EndLineNumber <= block.LineNumber {
+		t.Fatalf("multi-line action EndLineNumber=%d must exceed LineNumber=%d (EndLine not threaded)",
+			block.EndLineNumber, block.LineNumber)
+	}
+
+	patched := ApplyPatch(source, SetTimeoutPatch(block))
+
+	// The Timeout must be appended to the closing ''' line, not the opening
+	// line. Assert it is NOT on the action's first line (which would put it
+	// inside the literal) and IS on the closing line.
+	patchLines := splitLines(patched)
+	if len(patchLines) < block.EndLineNumber {
+		t.Fatalf("patched source shorter than expected: %d lines", len(patchLines))
+	}
+	openLine := patchLines[block.LineNumber-1]
+	closingLine := patchLines[block.EndLineNumber-1]
+	if strings.Contains(openLine, "Timeout: 30") {
+		t.Errorf("Timeout appended to the OPENING line (inside the literal): %q", openLine)
+	}
+	if !strings.Contains(closingLine, "Timeout: 30") {
+		t.Errorf("Timeout not on the closing line: %q", closingLine)
+	}
+
+	// Faithful: re-parse must succeed (Timeout is outside the literal now).
+	doc2, err := parser.ParseText(patched, "Main.txt", int64(len(patched)))
+	if err != nil {
+		t.Fatalf("re-parse after set-timeout failed (not faithful): %v\npatched:\n%s", err, patched)
+	}
+	// Effective: the missing-timeout finding must be resolved.
+	report2 := RunAnalysis(doc2, AllRules(), models.DefaultSettings(), nil)
+	for _, f := range report2.Findings {
+		if f.RuleID == "missing-timeout" {
+			t.Errorf("missing-timeout still present after set-timeout; finding: %+v\npatched:\n%s", f, patched)
+		}
+	}
+}
+
+// TestWrapInErrorHandlerPatch_MultiLineValue is a second consumer of the
+// blockEndLine fix: wrapping a multi-line action must size the wrapped range to
+// the closing ”' line so nothing is left outside the ON BLOCK ERROR … END.
+func TestWrapInErrorHandlerPatch_MultiLineValue(t *testing.T) {
+	const source = `#Region "Main"
+HTTPClient.InvokeService Method: 'GET' Url: $'''https://example.com/api
+second body line
+end of body'''
+Display.ShowMessageBox Message: 'done'
+#EndRegion
+`
+	doc, err := parser.ParseText(source, "Main.txt", int64(len(source)))
+	if err != nil {
+		t.Fatalf("initial parse: %v", err)
+	}
+	// Pick the HTTP action block.
+	var target *models.Block
+	for _, sf := range doc.Subflows {
+		for i := range sf.Blocks {
+			if strings.HasPrefix(sf.Blocks[i].RawType, "HTTPClient") {
+				target = &sf.Blocks[i]
+				break
+			}
+		}
+	}
+	if target == nil {
+		t.Fatalf("no HTTPClient block found")
+	}
+	if target.EndLineNumber <= target.LineNumber {
+		t.Fatalf("multi-line action EndLineNumber=%d must exceed LineNumber=%d",
+			target.EndLineNumber, target.LineNumber)
+	}
+
+	patched := ApplyPatch(source, WrapInErrorHandlerPatch(target))
+	// Faithful round-trip: the wrapped source re-parses cleanly (the whole
+	// multi-line action is inside the handler, nothing orphaned).
+	if _, err := parser.ParseText(patched, "Main.txt", int64(len(patched))); err != nil {
+		t.Fatalf("re-parse after wrap-in-error-handler failed (not faithful): %v\npatched:\n%s", err, patched)
+	}
+	// The ON BLOCK ERROR line must precede the action, and END must come after
+	// the closing ''' line.
+	patchLines := splitLines(patched)
+	var hasHandlerOpen, hasHandlerEnd bool
+	for i, ln := range patchLines {
+		_ = i
+		if strings.Contains(ln, "ON BLOCK ERROR") || strings.Contains(ln, "On Block Error") {
+			hasHandlerOpen = true
+		}
+		if strings.Contains(ln, "END") || strings.Contains(ln, "End") {
+			if hasHandlerOpen {
+				hasHandlerEnd = true
+			}
+		}
+	}
+	if !hasHandlerOpen || !hasHandlerEnd {
+		t.Errorf("wrap did not produce an ON BLOCK ERROR … END envelope\npatched:\n%s", patched)
+	}
+}
+
+// splitLines splits on \n without a trailing-empty-entry quirk.
+func splitLines(s string) []string {
+	return strings.Split(s, "\n")
 }
 
 // TestInsertClosePatch_NilProperties returns empty patch when Properties is nil.

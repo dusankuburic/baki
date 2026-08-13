@@ -9,6 +9,12 @@ export function useSettingsPersistence(isAuthenticated: boolean) {
   const updateLayout = useSettingsStore(s => s.updateLayout)
 
   useEffect(() => {
+    // Settings live server-side; nothing to load until the user is
+    // authenticated. Guarded explicitly so the `isAuthenticated` dependency
+    // is meaningful (it re-triggers the load on login) rather than a no-op
+    // extra dep, and we avoid a doomed backend fetch on the unauthenticated
+    // initial mount.
+    if (!isAuthenticated) return
     const unsub = onSettingsLoaded(s => {
       if (s.layout?.lastViewMode) useUIStore.getState().setMainPaneView(s.layout.lastViewMode)
       if (s.layout?.lastActiveInspectorTab) useUIStore.getState().setInspectorTab(s.layout.lastActiveInspectorTab)

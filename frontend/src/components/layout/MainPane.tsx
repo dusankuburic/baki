@@ -234,7 +234,9 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
                   : group.activeTabId &&
                     (mainPaneView === 'block' ? (
                       <div key={group.activeTabId} className="flex-1 overflow-y-auto">
-                        <BlockView subflowId={group.activeTabId} />
+                        <ErrorBoundary>
+                          <BlockView subflowId={group.activeTabId} />
+                        </ErrorBoundary>
                       </div>
                     ) : mainPaneView === 'graph' ? (
                       <ErrorBoundary>

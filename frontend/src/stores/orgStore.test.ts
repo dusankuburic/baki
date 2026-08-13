@@ -189,7 +189,7 @@ describe('inviteMember', () => {
 
     await useOrgStore.getState().inviteMember('org-1', 'new@example.com', 'member')
 
-    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/invites', {email: 'new@example.com', role: 'member'})
+    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/invites', {body: {email: 'new@example.com', role: 'member'}})
   })
 })
 
@@ -225,7 +225,7 @@ describe('setMemberRole', () => {
 
     await useOrgStore.getState().setMemberRole('org-1', 'u2', 'admin')
 
-    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/members/u2/role', {role: 'admin'}, 'PUT')
+    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/members/u2/role', {body: {role: 'admin'}, method: 'PUT'})
   })
 })
 

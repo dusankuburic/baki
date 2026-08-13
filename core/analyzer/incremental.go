@@ -49,47 +49,91 @@ func AnalyzeRuleDependencies() *models.DependencyAnalysis {
 	}
 }
 
+// detectCycles returns the cyclic strongly-connected components of the rule
+// dependency graph. Each cycle is the set of rules forming an SCC, sorted for
+// determinism (rotations are equivalent, so a canonical order avoids the
+// "which node leads?" ambiguity the prior DFS-with-colors reconstruction had —
+// it emitted a duplicate leading element in some rotations).
+//
+// An SCC is reported as a cycle iff it has more than one node, or a single node
+// with a self-loop. Tarjan's algorithm finds SCCs in O(V+E); the rule graph is
+// tiny (≤ ~41 nodes) so the textbook recursive form is safe here (unbounded
+// user-input graphs elsewhere get recursion guards — this graph is fixed/
+// internal).
 func detectCycles(adj map[string][]string, nodes map[string]bool) [][]string {
-	const (
-		white = 0
-		gray  = 1
-		black = 2
-	)
+	index := make(map[string]int)
+	lowlink := make(map[string]int)
+	onStack := make(map[string]bool)
+	var stack []string
+	idx := 0
+	var sccs [][]string
 
-	color := make(map[string]int)
-	parent := make(map[string]string)
-	var cycles [][]string
+	var strongconnect func(v string)
+	strongconnect = func(v string) {
+		index[v] = idx
+		lowlink[v] = idx
+		idx++
+		stack = append(stack, v)
+		onStack[v] = true
 
-	var dfs func(node string)
-	dfs = func(node string) {
-		color[node] = gray
-		for _, next := range adj[node] {
-			switch color[next] {
-			case gray:
-				cycle := []string{next}
-				cur := node
-				for cur != next && cur != "" {
-					cycle = append([]string{cur}, cycle...)
-					cur = parent[cur]
+		for _, w := range adj[v] {
+			if _, seen := index[w]; !seen {
+				strongconnect(w)
+				if lowlink[w] < lowlink[v] {
+					lowlink[v] = lowlink[w]
 				}
-				if cur == next {
-					cycle = append([]string{next}, cycle...)
+			} else if onStack[w] {
+				if index[w] < lowlink[v] {
+					lowlink[v] = index[w]
 				}
-				cycles = append(cycles, cycle)
-			case white:
-				parent[next] = node
-				dfs(next)
 			}
 		}
-		color[node] = black
-	}
 
-	for node := range nodes {
-		if color[node] == white {
-			dfs(node)
+		// v roots an SCC when its lowlink equals its index.
+		if lowlink[v] == index[v] {
+			var scc []string
+			for {
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				onStack[w] = false
+				scc = append(scc, w)
+				if w == v {
+					break
+				}
+			}
+			sccs = append(sccs, scc)
 		}
 	}
 
+	// Visit in a deterministic order so the emitted cycle list is stable.
+	nodeList := make([]string, 0, len(nodes))
+	for n := range nodes {
+		nodeList = append(nodeList, n)
+	}
+	sort.Strings(nodeList)
+	for _, v := range nodeList {
+		if _, seen := index[v]; !seen {
+			strongconnect(v)
+		}
+	}
+
+	var cycles [][]string
+	for _, scc := range sccs {
+		switch {
+		case len(scc) > 1:
+			sort.Strings(scc) // canonical order — no duplicate/leading-element quirks
+			cycles = append(cycles, scc)
+		case len(scc) == 1:
+			// A singleton is only cyclic if it has a self-loop.
+			v := scc[0]
+			for _, w := range adj[v] {
+				if w == v {
+					cycles = append(cycles, scc)
+					break
+				}
+			}
+		}
+	}
 	if cycles == nil {
 		cycles = [][]string{}
 	}

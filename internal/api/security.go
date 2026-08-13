@@ -14,11 +14,19 @@ type SecurityConfig struct {
 	JWTEnabled     bool
 	LocalUserID    string
 	LocalName      string
-	Token          string
+	Token          string // local-mode shared bearer
 	AuthMgr        *auth.Manager
 	Backend        storageif.StorageBackend
 	OrgSvc         *collaboration.OrgService
 	TrustedProxies []string
+	// Features gates optional product behaviour (read-only, env-sourced).
+	Features FeatureFlags
+}
+
+// FeatureFlags mirrors config.FeatureFlags for the API layer so handlers can
+// gate on flags without importing config.
+type FeatureFlags struct {
+	DisableSignUp bool
 }
 
 func (c *SecurityConfig) CallerID(r *http.Request) string {

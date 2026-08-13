@@ -101,7 +101,7 @@ describe('registerStream open-wait timeout', () => {
     const p = result.current.registerStream('s1', false)
     await vi.advanceTimersByTimeAsync(1_000)
     setConnState('open')
-    await expect(p).resolves.toBeUndefined()
+    await expect(p).resolves.toBe(true)
     expect(capturedCb).not.toBeNull()
   })
 })

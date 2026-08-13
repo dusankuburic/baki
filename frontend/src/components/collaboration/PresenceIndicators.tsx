@@ -41,14 +41,19 @@ export default function PresenceIndicators({className, maxVisible = 5}: Presence
 }
 
 function UserAvatar({user}: {user: PresenceUser}) {
+  const label = user.selectedBlockId
+    ? `${user.displayName ?? user.userId} · viewing block`
+    : user.displayName ?? user.userId
   return (
-    <Tooltip content={user.displayName ?? user.userId}>
+    <Tooltip content={label}>
       <Avatar
         name={user.displayName ?? user.userId}
         colorSeed={user.userId}
         avatarUrl={user.avatarUrl}
         size="sm"
-        className="border-2 border-surface-2 z-0 hover:z-10 transition-transform duration-fast hover:scale-110 cursor-default"
+        className={`border-2 border-surface-2 z-0 hover:z-10 transition-transform duration-fast hover:scale-110 cursor-default ${
+          user.selectedBlockId ? 'ring-2 ring-brand-500/50' : ''
+        }`}
       />
     </Tooltip>
   )

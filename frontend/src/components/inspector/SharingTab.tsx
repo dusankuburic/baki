@@ -1,6 +1,7 @@
-import React, {useState, useRef} from 'react'
-import {Users, UserPlus, Trash2, Shield, Eye, Edit3} from 'lucide-react'
+import React, {useState, useRef, useEffect} from 'react'
+import {Users, UserPlus, Trash2, Shield, Eye, Edit3, Link2, Clock} from 'lucide-react'
 import {sharingApi, type Collaborator, type Permission} from '@/api/sharing'
+import {flowApi, type ShareInfo} from '@/api/flow'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAuthStore} from '@/stores/authStore'
 import {EmptyState, Spinner, useToast} from '@/components/shared'
@@ -17,6 +18,14 @@ export const SharingTab: React.FC = () => {
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
   const removeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const {error: toastError} = useToast()
+
+  // Clear the pending-remove confirm timer on unmount so setPendingRemoveId
+  // can't fire on a gone component if the inspector closes mid-confirm.
+  useEffect(() => {
+    return () => {
+      if (removeTimerRef.current) clearTimeout(removeTimerRef.current)
+    }
+  }, [])
 
   const {
     data,
@@ -221,6 +230,110 @@ export const SharingTab: React.FC = () => {
           />
         )}
       </div>
+
+      {canManage && <ShareLinksSection flowId={document.id} />}
+    </div>
+  )
+}
+
+function ShareLinksSection({flowId}: {flowId: string}) {
+  const {error: toastError, success: toastSuccess} = useToast()
+
+  const {
+    data: shares,
+    isLoading,
+    refetch,
+  } = useAsync<ShareInfo[]>(() => flowApi.listShares(flowId).catch(() => []), [flowId])
+  const shareList = shares ?? []
+  const [revokingId, setRevokingId] = useState<string | null>(null)
+
+  const handleCreate = async () => {
+    try {
+      await flowApi.createShare(flowId)
+      toastSuccess('Share link created')
+      refetch()
+    } catch (err) {
+      toastError('Failed to create share link: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    }
+  }
+
+  const handleRevoke = async (tokenId: string) => {
+    setRevokingId(tokenId)
+    try {
+      await flowApi.revokeShare(flowId, tokenId)
+      toastSuccess('Share link revoked')
+      refetch()
+    } catch (err) {
+      toastError('Failed to revoke: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setRevokingId(null)
+    }
+  }
+
+  const formatDate = (iso?: string) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'})
+  }
+
+  return (
+    <div className="p-4 border-t border-border-subtle bg-surface-2/50">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-text-tertiary flex items-center gap-1.5">
+          <Link2 size={14} />
+          Public Share Links
+        </h3>
+        <button
+          onClick={handleCreate}
+          className="text-2xs text-brand-500 hover:text-brand-400 font-medium transition-colors"
+        >
+          + New Link
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-4">
+          <Spinner size={16} />
+        </div>
+      ) : shareList.length > 0 ? (
+        <div className="space-y-2">
+          {shareList.map(s => {
+            const expired = s.expiresAt && new Date(s.expiresAt) < new Date()
+            return (
+              <div
+                key={s.id}
+                className="flex items-center justify-between p-2 rounded-lg bg-surface-1 border border-border-subtle/50 group"
+              >
+                <div className="flex flex-col min-w-0">
+                  <span className="text-2xs font-mono text-text-secondary truncate">
+                    {s.token ? s.token.slice(0, 12) + '…' : s.id}
+                  </span>
+                  <span className="text-2xs text-text-tertiary flex items-center gap-1">
+                    <Clock size={10} />
+                    {expired ? (
+                      <span className="text-red-400">Expired {formatDate(s.expiresAt)}</span>
+                    ) : s.expiresAt ? (
+                      <>Expires {formatDate(s.expiresAt)}</>
+                    ) : (
+                      <>Created {formatDate(s.createdAt)}</>
+                    )}
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleRevoke(s.id)}
+                  disabled={revokingId === s.id}
+                  className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-30"
+                  title="Revoke share link"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="text-2xs text-text-tertiary italic">No active share links. Create one to share a read-only report.</p>
+      )}
     </div>
   )
 }

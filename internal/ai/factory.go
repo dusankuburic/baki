@@ -103,6 +103,48 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 	return f.wrapChain(ctor(key), scope, providerID), nil
 }
 
+// embedModelSetter is implemented by providers whose embedding model name can be
+// overridden at construction (the OpenAI-compatible family via openaiBase, plus
+// Gemini). The factory's ForEmbedding applies a deployer-chosen model so RAG can
+// use a different embedding model than the provider's hardcoded default without
+// a code change.
+type embedModelSetter interface {
+	setEmbeddingModel(model string)
+}
+
+// ForEmbedding is like For but applies an embedding-model override to the
+// constructed provider. Providers that don't support an override (copilot, demo)
+// ignore the model and behave as For. The override is applied BEFORE wrapping
+// (circuit breaker / retry / tracing / audit) so the inner provider carries it.
+func (f *ProviderFactory) ForEmbedding(scope, providerID, embeddingModel string) (Provider, error) {
+	if providerID == "demo" {
+		return f.For(scope, providerID)
+	}
+	if providerID == "copilot" {
+		// Copilot has no embeddings; the override is meaningless. Use the normal
+		// path so dual-auth still resolves correctly.
+		return f.For(scope, providerID)
+	}
+	ctor, ok := providerCtors[providerID]
+	if !ok {
+		return nil, fmt.Errorf("unknown provider: %s", providerID)
+	}
+	key, err := f.getKey(scope, storageKey(providerID))
+	if err != nil {
+		return nil, fmt.Errorf("get %s key: %w", providerID, err)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("%s: %w", providerID, ErrKeyNotConfigured)
+	}
+	p := ctor(key)
+	if embeddingModel != "" {
+		if setter, ok := p.(embedModelSetter); ok {
+			setter.setEmbeddingModel(embeddingModel)
+		}
+	}
+	return f.wrapChain(p, scope, providerID), nil
+}
+
 // GetMetadataProvider returns a MetadataProvider suitable for reading provider
 // information (models, pricing, context limits) without requiring a valid API key.
 // The returned value intentionally omits Chat and Stream — use ProviderFactory.For

@@ -10,6 +10,7 @@ import {
   AppearancePanel,
   ParserPanel,
   RulesPanel,
+  PolicyGatePanel,
   OrganizationsPanel,
   KnowledgeBasePanel,
   ApiTokensPanel,
@@ -26,6 +27,7 @@ type SettingsSection =
   | 'prompts'
   | 'appearance'
   | 'analysis'
+  | 'policies'
   | 'orgs'
   | 'knowledge'
   | 'tokens'
@@ -47,6 +49,7 @@ const sections: {id: SettingsSection; label: string}[] = [
   {id: 'analysis', label: 'Analysis'},
   ...(isCloud
     ? [
+        {id: 'policies' as const, label: 'Policy Gates'},
         {id: 'orgs' as const, label: 'Organizations'},
         {id: 'knowledge' as const, label: 'Knowledge Base'},
         {id: 'tokens' as const, label: 'API Tokens'},
@@ -92,6 +95,7 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
           {activeSection === 'prompts' && <AIPromptsPanel />}
           {activeSection === 'appearance' && <AppearancePanel />}
           {activeSection === 'analysis' && <RulesPanel />}
+          {activeSection === 'policies' && isCloud && <PolicyGatePanel />}
           {activeSection === 'orgs' && isCloud && <OrganizationsPanel />}
           {activeSection === 'knowledge' && isCloud && <KnowledgeBasePanel />}
           {activeSection === 'tokens' && isCloud && <ApiTokensPanel />}

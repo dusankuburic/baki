@@ -52,6 +52,9 @@ type FakeBackend struct {
 	UsageErr   error
 	// ShareTokens is keyed by token hash; lazily initialized.
 	ShareTokens map[string]*interfaces.ShareToken
+	// GovernanceAlerts backs the governance-alert inbox methods (id -> alert).
+	// Lazily initialized; the methods are in-memory mirrors of the real store.
+	GovernanceAlerts map[string]*interfaces.GovernanceAlert
 }
 
 func NewFakeBackend() *FakeBackend {
@@ -594,3 +597,91 @@ func (m *FakeBackend) ListPolicies(_ context.Context, _ string) ([]*models.Polic
 	return []*models.Policy{}, nil
 }
 func (m *FakeBackend) DeletePolicy(_ context.Context, _, _ string) error { return nil }
+
+// Governance alerts — in-memory mirror of the real store (id -> alert).
+func (m *FakeBackend) govAlerts() map[string]*interfaces.GovernanceAlert {
+	if m.GovernanceAlerts == nil {
+		m.GovernanceAlerts = make(map[string]*interfaces.GovernanceAlert)
+	}
+	return m.GovernanceAlerts
+}
+
+func (m *FakeBackend) RecordGovernanceAlert(_ context.Context, a *interfaces.GovernanceAlert) error {
+	if a == nil || a.ID == "" {
+		return fmt.Errorf("governance alert requires an id")
+	}
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = time.Now().UTC()
+	}
+	cp := *a
+	m.govAlerts()[a.ID] = &cp
+	return nil
+}
+
+func (m *FakeBackend) ListGovernanceAlerts(_ context.Context, filter interfaces.GovernanceAlertFilter) ([]*interfaces.GovernanceAlert, error) {
+	out := make([]*interfaces.GovernanceAlert, 0, len(m.GovernanceAlerts))
+	for _, a := range m.govAlerts() {
+		if !filter.IncludeDismissed && a.DismissedAt != nil {
+			continue
+		}
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if filter.Offset >= len(out) {
+		return out[:0], nil
+	}
+	out = out[filter.Offset:]
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *FakeBackend) UnreadGovernanceAlertCount(_ context.Context) (int, error) {
+	n := 0
+	for _, a := range m.govAlerts() {
+		if a.ReadAt == nil && a.DismissedAt == nil {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *FakeBackend) MarkGovernanceAlertRead(_ context.Context, alertID string) error {
+	now := time.Now().UTC()
+	if a, ok := m.govAlerts()[alertID]; ok && a.ReadAt == nil {
+		a.ReadAt = &now
+	}
+	return nil
+}
+
+func (m *FakeBackend) MarkAllGovernanceAlertsRead(_ context.Context) error {
+	now := time.Now().UTC()
+	for _, a := range m.govAlerts() {
+		if a.ReadAt == nil && a.DismissedAt == nil {
+			a.ReadAt = &now
+		}
+	}
+	return nil
+}
+
+func (m *FakeBackend) DismissGovernanceAlert(_ context.Context, alertID string) error {
+	now := time.Now().UTC()
+	if a, ok := m.govAlerts()[alertID]; ok && a.DismissedAt == nil {
+		a.DismissedAt = &now
+	}
+	return nil
+}
+
+func (m *FakeBackend) ClearGovernanceAlerts(_ context.Context) error {
+	for id, a := range m.govAlerts() {
+		if a.DismissedAt != nil {
+			delete(m.GovernanceAlerts, id)
+		}
+	}
+	return nil
+}

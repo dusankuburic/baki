@@ -53,6 +53,12 @@ type Router struct {
 	hub            *wshub.Hub
 	flowChecker    wshub.FlowAccessChecker
 
+	// perUserLimiter caps one authenticated user's total write throughput.
+	// Constructed in BuildHandler (cloud mode only); nil in local mode, in which
+	// case perUserRateLimit is a pass-through. Set after NewRouter but before
+	// any request, so the middleware reads it at request time.
+	perUserLimiter *middleware.RateLimiter
+
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
 
@@ -97,9 +103,13 @@ func NewRouter(
 	lc.Append(fx.Hook{OnStop: func(context.Context) error { rt.hub.Close(); return nil }})
 
 	// Wire the WebSocket hub as a flow-change notifier so that library
-	// saves broadcast to all connected viewers.
+	// saves and apply-fix / save-source / suppress edits broadcast to all
+	// connected viewers (triggering useFlowChangeSync to reload content).
 	if handlers.Library != nil {
 		handlers.Library.SetFlowNotifier(rt.hub)
+	}
+	if handlers.Flow != nil {
+		handlers.Flow.SetFlowNotifier(rt.hub)
 	}
 
 	// Wire the CORS allowlist into the SSE EventManager so it respects
@@ -442,7 +452,9 @@ var publicRoutes = map[string]bool{
 	"/api/auth/sso/callback": true,
 	"/api/auth/sso/exchange": true,
 	"/api/local-config":      true,
+	"/api/system/features":   true, // pre-auth: login page reads flags to hide the register button
 	"/api/shared":            true, // unauthenticated share-link viewer (?token=...)
+	"/api/integrations/ci":   true, // HMAC-authenticated inbound CI webhook (X-Baki-Signature)
 	"/healthz":               true,
 	"/readyz":                true,
 	"/api/health":            true,

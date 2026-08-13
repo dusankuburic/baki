@@ -35,9 +35,16 @@ type EventManager struct {
 	clientsMu    sync.Mutex
 	sseConnCount map[string]int // per-client SSE connection counter (keyed by clientKey)
 	shutdownCh   <-chan struct{}
-	allowOrigin  func(string) bool          // injected by Router; nil = deny all cross-origin
-	clientKey    func(*http.Request) string // injected by Router; nil = fall back to remote IP
-	isRevoked    func(string) bool          // injected by Router; nil = skip blacklist re-check
+	// allowOrigin/clientKey/isRevoked are injected by the Router. Concurrency
+	// invariant: the Set* writers are called ONLY from NewRouter, which
+	// completes before http.Serve (so there's a happens-before edge over the
+	// reads from handler goroutines). They are plain fields rather than
+	// atomic.Pointer because no post-startup setter exists; if one is ever
+	// added (e.g. hot-reloading the CORS allowlist), these MUST become
+	// atomic.Pointer[func] to avoid a data race flagged by -race.
+	allowOrigin func(string) bool          // injected by Router; nil = deny all cross-origin
+	clientKey   func(*http.Request) string // injected by Router; nil = fall back to remote IP
+	isRevoked   func(string) bool          // injected by Router; nil = skip blacklist re-check
 
 	heartbeatInterval time.Duration // test override; 0 ⇒ sseHeartbeatInterval
 }

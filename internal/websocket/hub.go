@@ -18,6 +18,11 @@ import (
 // exhausting memory/goroutines for the whole process. Mirrors the SSE cap in
 // events.go (10) so the two real-time channels enforce the same per-user
 // ceiling.
+//
+// NOTE: this cap is enforced per-process, not globally. With the Redis backplane
+// and N replicas, a single account can hold up to 10×N live sockets (10 per
+// replica). The per-user DoS ceiling therefore scales linearly with replica
+// count; a coordinated global cap would require a shared counter in Redis.
 const maxConnsPerUser = 10
 
 // Hub manages all active WebSocket rooms.

@@ -28,6 +28,7 @@ type LocalStorageBackend struct {
 	userTokenMu  sync.Mutex   // guards one-shot user tokens
 	commentsMu   sync.Mutex   // guards finding-comment read-modify-write
 	shareTokenMu sync.Mutex   // guards share-token read-modify-write
+	govAlertMu   sync.Mutex   // guards governance-alerts read-modify-write
 	users        map[string]*interfaces.User
 	orgs         map[string]*interfaces.Organisation
 	sharing      map[string][]*interfaces.Collaborator
@@ -726,7 +727,7 @@ func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces
 	}
 
 	role := user.Role
-	if len(lsb.users) == 0 {
+	if len(lsb.users) == 0 && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
 	}
 	user.Role = role

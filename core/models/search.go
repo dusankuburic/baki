@@ -14,6 +14,11 @@ type SearchResult struct {
 	MatchedText  string      `json:"matchedText"`
 	Score        int         `json:"score"`
 	Highlights   []Highlight `json:"highlights"`
+	// FlowID/FlowName are stamped only by the cross-library search
+	// (SearchLibrary) so the UI can group hits by flow. Empty for the
+	// single-flow search (the flow is implicit).
+	FlowID   string `json:"flowId,omitempty"`
+	FlowName string `json:"flowName,omitempty"`
 }
 
 type Highlight struct {

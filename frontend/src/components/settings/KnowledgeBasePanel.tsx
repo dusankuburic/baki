@@ -62,15 +62,28 @@ export default function KnowledgeBasePanel() {
     try {
       const content = await selectedFile.text()
       await request(`/api/orgs/${activeOrgId}/knowledge/upload`, {
-        filename: selectedFile.name,
-        content,
+        body: {
+          filename: selectedFile.name,
+          content,
+        },
       })
       setSelectedFile(null)
       toastSuccess('Document added')
       loadDocs()
     } catch (e) {
-      setUploadError('Upload failed: ' + e)
-      toastError('Upload failed')
+      // The most common failure is a missing/unconfigured embedding-provider
+      // key (only OpenAI/Gemini/GLM/GitHub Models support embeddings; a
+      // Claude-only setup can't index). Surface that root cause with clear
+      // guidance instead of a generic "Upload failed".
+      const msg = String(e)
+      if (/embedding provider/i.test(msg)) {
+        setUploadError(
+          'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models). Configure one under AI Behavior → Embedding Assistant.',
+        )
+      } else {
+        setUploadError('Upload failed: ' + msg)
+        toastError('Upload failed')
+      }
     } finally {
       setUploading(false)
     }
@@ -87,7 +100,7 @@ export default function KnowledgeBasePanel() {
     })
     if (!ok) return
     try {
-      await request(`/api/orgs/${activeOrgId}/knowledge/${docId}`, {}, 'DELETE')
+      await request(`/api/orgs/${activeOrgId}/knowledge/${docId}`, {body: {}, method: 'DELETE'})
       toastSuccess('Document deleted')
       loadDocs()
     } catch (e) {
@@ -113,6 +126,12 @@ export default function KnowledgeBasePanel() {
         Upload organizational guidelines, SOPs, or coding standards. The AI will use these to contextualize its
         analysis.
       </p>
+
+      <div className="bg-brand-500/5 border border-brand-500/20 rounded-lg p-3 mb-6 text-xs text-text-secondary">
+        <strong className="text-text-primary">Requires an embedding provider.</strong> Indexing needs a configured
+        OpenAI, Gemini, GLM, or GitHub Models key (set under <em>AI Behavior → Embedding Assistant</em>). Claude,
+        Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.
+      </div>
 
       {canManage && (
         <div className="bg-surface-2 rounded-lg border border-border-default p-4 mb-8">

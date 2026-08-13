@@ -12,6 +12,7 @@ export interface Shortcut {
 
 export const shortcuts: Shortcut[] = [
   {id: 'file.open', keys: 'mod+o', description: 'Open flow file', category: 'File', scope: 'global'},
+  {id: 'file.open.folder', keys: 'mod+shift+o', description: 'Open flow folder', category: 'File', scope: 'global'},
   {id: 'file.export.pdf', keys: 'mod+e', description: 'Export findings as PDF', category: 'File', scope: 'global'},
   {id: 'file.export.md', keys: 'mod+shift+e', description: 'Export as Markdown', category: 'File', scope: 'global'},
   {id: 'file.close.tab', keys: 'mod+w', description: 'Close active tab', category: 'File', scope: 'global'},
@@ -117,7 +118,6 @@ export const shortcuts: Shortcut[] = [
     allowInInputs: true,
   },
   {id: 'ai.clear.chat', keys: 'mod+l', description: 'Clear chat', category: 'AI', scope: 'chat'},
-  {id: 'ai.ask.selection', keys: 'mod+shift+a', description: 'Ask AI about selection', category: 'AI', scope: 'global'},
   {id: 'ai.next.suggestion', keys: 'tab', description: 'Next suggested prompt', category: 'AI', scope: 'chat'},
   {
     id: 'ai.cancel.stream',
@@ -179,16 +179,8 @@ export const shortcuts: Shortcut[] = [
     category: 'Analysis',
     scope: 'global',
   },
-  {
-    id: 'analysis.tab.metrics',
-    keys: 'mod+4',
-    description: 'Inspector → Metrics',
-    category: 'Analysis',
-    scope: 'global',
-  },
 
   {id: 'window.reload', keys: 'mod+r', description: 'Reload app', category: 'Window', scope: 'global'},
-  {id: 'window.devtools', keys: 'mod+alt+i', description: 'Open dev tools', category: 'Window', scope: 'global'},
   {id: 'window.quit', keys: 'mod+q', description: 'Quit app', category: 'Window', scope: 'global'},
 
   {id: 'help.shortcuts', keys: '?', description: 'Show shortcuts help', category: 'Help', scope: 'global'},

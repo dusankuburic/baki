@@ -29,6 +29,15 @@ func Provide(lc fx.Lifecycle, cfg *config.Config) (*redis.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("redis: parse PAD_REDIS_URL: %w", err)
 	}
+	// Apply pool overrides when configured (defaults: go-redis uses 10×GOMAXPROCS
+	// for PoolSize and 0 for MinIdleConns). Operators tune via PAD_REDIS_POOL_SIZE
+	// and PAD_REDIS_MIN_IDLE_CONNS.
+	if cfg.Redis.PoolSize > 0 {
+		opts.PoolSize = cfg.Redis.PoolSize
+	}
+	if cfg.Redis.MinIdleConns > 0 {
+		opts.MinIdleConns = cfg.Redis.MinIdleConns
+	}
 	client := redis.NewClient(opts)
 
 	// Ping with a short deadline so a bad URL/endpoint fails fast at boot

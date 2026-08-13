@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,41 @@ import (
 	"pad-core/analyzer"
 	"pad-core/models"
 )
+
+// TestDashboardService_BuildHome_ConcurrentCacheHitRaceFree is the regression
+// test for the dashboard cache data race. On a cache hit BuildHome returns a
+// pointer that is shared across every concurrent caller for the same user.
+// Previously the hit path also wrote entry.data.IsCloud AFTER releasing dashMu,
+// racing the other callers' reads of the same struct. This test primes the cache
+// then drives many concurrent cache hits while reading the returned struct, so
+// `go test -race` flags any recurrence of the post-unlock write.
+func TestDashboardService_BuildHome_ConcurrentCacheHitRaceFree(t *testing.T) {
+	backend := &stubDashBackend{
+		FakeBackend: testutil.NewFakeBackend(),
+		data:        &storageif.DashboardData{ByCategory: map[string]int{}},
+	}
+	svc := NewDashboardService(backend, &AnalysisService{}, nil)
+
+	// Prime the per-user cache so subsequent calls take the cache-hit path.
+	if !svc.BuildHome(context.Background(), "user-1").IsCloud {
+		t.Fatal("cloud dashboard must report IsCloud=true")
+	}
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			home := svc.BuildHome(context.Background(), "user-1")
+			// Reading a field of the shared, cached struct is exactly the read
+			// that raced the old post-unlock write.
+			if !home.IsCloud {
+				t.Error("cloud dashboard must report IsCloud=true")
+			}
+		}()
+	}
+	wg.Wait()
+}
 
 // stubDashBackend embeds FakeBackend (to satisfy the large StorageBackend
 // interface) and overrides only FlowDashboardData so we can exercise the

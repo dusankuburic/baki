@@ -210,3 +210,51 @@ describe('reset()', () => {
     expect(localStorage.getItem('unrelated-key')).toBe('keep-me')
   })
 })
+
+// ---- A4: drop notification (TTL expiry + overflow are surfaced, not silent) ----
+describe('drop notification', () => {
+  it('fires onDroppedOps(expired) when stale ops are dropped on load', () => {
+    const flowId = 'flow-drop-expire'
+    // Subscribe BEFORE loading so the load-time TTL drop is observed.
+    const drops: Array<{count: number; reason: string}> = []
+    const unsub = syncManager.onDroppedOps((count, reason) => drops.push({count, reason}))
+
+    const fresh = {id: 'op-fresh', env: {type: 'block.update'}, queuedAt: Date.now()}
+    const stale = {id: 'op-stale', env: {type: 'cursor.move'}, queuedAt: Date.now() - 120_000}
+    localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({queue: [fresh, stale], counter: 2}))
+    syncManager.start(flowId) // load drops 'stale', fires notifyDropped('expired', 1)
+
+    expect(drops).toContainEqual({count: 1, reason: 'expired'})
+    expect(syncManager.getQueue()).toHaveLength(1) // only fresh remains
+    unsub()
+  })
+
+  it('fires onDroppedOps(overflow) when enqueue exceeds the cap', () => {
+    const flowId = 'flow-drop-overflow'
+    syncManager.start(flowId)
+    const drops: Array<{count: number; reason: string}> = []
+    const unsub = syncManager.onDroppedOps((count, reason) => drops.push({count, reason}))
+
+    // Enqueue well past MAX_QUEUE_SIZE; the overflow handler must fire.
+    mockStatus.value = 'disconnected'
+    for (let i = 0; i < 205; i++) syncManager.enqueue({type: 'block.update'})
+
+    expect(drops.some(d => d.reason === 'overflow' && d.count >= 1)).toBe(true)
+    // Queue is capped at MAX_QUEUE_SIZE (200).
+    expect(syncManager.getQueue().length).toBeLessThanOrEqual(200)
+    unsub()
+  })
+
+  it('onDroppedOps unsubscribe stops further callbacks', () => {
+    const flowId = 'flow-drop-unsub'
+    syncManager.start(flowId)
+    const calls: number[] = []
+    const unsub = syncManager.onDroppedOps(count => calls.push(count))
+    unsub()
+
+    // Force an overflow; the unsubscribed handler must not fire.
+    mockStatus.value = 'disconnected'
+    for (let i = 0; i < 205; i++) syncManager.enqueue({type: 'block.update'})
+    expect(calls).toHaveLength(0)
+  })
+})

@@ -5,6 +5,7 @@ import dagre from 'cytoscape-dagre'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {usePresenceStore} from '@/stores/presenceStore'
 import {blocksToElements, countSubflowNodes} from './graphElements'
 import {resolveGraphTokens, buildGraphStyle} from './graphStyle'
 import type {GraphTokenColors} from './graphStyle'
@@ -32,6 +33,7 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
   const setGraphZoom = useUIStore(s => s.setGraphZoom)
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
   const selectedVariable = useUIStore(s => s.selectedVariable)
+  const presenceUsers = usePresenceStore(s => s.users)
 
   const subflowId = subflowIdProp ?? selectedSubflowId
   const subflow = flowDoc?.subflows.find(s => s.id === subflowId) ?? flowDoc?.subflows[0]
@@ -154,6 +156,26 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     return () => window.removeEventListener('graph:fit', handleFit)
   }, [setGraphZoom])
 
+  // Export-to-PNG event dispatched by the toolbar's Download button. Cytoscape's
+  // png() renders the current viewport (full:true = all elements, scale:2 = 2x
+  // for crisp output) to a base64 data URI, then a transient <a download> saves
+  // it. Mirrors the graph:fit event pattern so the toolbar stays decoupled from
+  // the Cytoscape instance (which is local to this component).
+  useEffect(() => {
+    const handleExportPNG = () => {
+      if (!cyRef.current) return
+      const flowName = flowDoc?.name ?? 'flow'
+      const safe = flowName.replace(/[^a-z0-9-_]+/gi, '_').slice(0, 40)
+      const dataUrl = cyRef.current.png({full: true, scale: 2, output: 'base64'})
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = `${safe}-graph.png`
+      a.click()
+    }
+    window.addEventListener('graph:export-png', handleExportPNG)
+    return () => window.removeEventListener('graph:export-png', handleExportPNG)
+  }, [flowDoc])
+
   // Highlight blocks containing the globally selected variable
   useEffect(() => {
     if (!cyRef.current) return
@@ -186,6 +208,27 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       })
     })
   }, [selectedVariable, subflow?.id])
+
+  // Reflect remote collaborators' block selections: nodes a teammate is viewing
+  // get a dashed brand border so the local user can see where others are without
+  // confusing it with their own (solid) selection.
+  useEffect(() => {
+    if (!cyRef.current) return
+    const cy = cyRef.current
+    const selectedBlockIds = new Set<string>()
+    for (const u of Object.values(presenceUsers)) {
+      if (u.selectedBlockId) selectedBlockIds.add(u.selectedBlockId)
+    }
+    cy.batch(() => {
+      cy.nodes().forEach(node => {
+        if (selectedBlockIds.has(node.id())) {
+          node.addClass('remote-selected')
+        } else {
+          node.removeClass('remote-selected')
+        }
+      })
+    })
+  }, [presenceUsers])
 
   const report = useAnalysisStore(s => (flowDoc ? s.reports.get(flowDoc.id) : undefined))
   useEffect(() => {

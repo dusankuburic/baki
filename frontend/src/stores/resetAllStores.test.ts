@@ -1,4 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {registerStoreReset} from './storeRegistry'
 
 // api/client (imported transitively by authStore) pulls in the platform adapter;
 // stub it so importing the stores doesn't try to invoke Tauri.
@@ -6,6 +7,12 @@ vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 't'}),
   }),
+}))
+
+// Capture logger.error so the "reset handler failed" log is observable in tests.
+const errorSpy = vi.fn()
+vi.mock('@/lib/logger', () => ({
+  logger: {warn: vi.fn(), error: (...a: unknown[]) => errorSpy(...a)},
 }))
 
 // jsdom's storage is incomplete in vitest — stub it (mirrors authStore.test.ts).
@@ -147,5 +154,24 @@ describe('resetAllStores', () => {
     expect(useUIStore.getState().commandPaletteOpen).toBe(false)
     expect(useUIStore.getState().globalSearchOpen).toBe(false)
     expect(useUIStore.getState().settingsOpen).toBe(false)
+  })
+
+  // L1-fe: a throwing handler must NOT abort the others, and its failure must
+  // be logged (previously silently swallowed — a logout-time error masking
+  // data-loss-adjacent bugs was invisible).
+  it('isolates a failing handler and logs the error instead of swallowing it', async () => {
+    const okBefore = errorSpy.mock.calls.length
+    const throwing = vi.fn(() => {
+      throw new Error('boom')
+    })
+    const after = vi.fn(() => {})
+    registerStoreReset(throwing)
+    registerStoreReset(after)
+
+    await resetAllStores()
+
+    expect(throwing).toHaveBeenCalled()
+    expect(after).toHaveBeenCalled() // isolated — not aborted by the throw
+    expect(errorSpy.mock.calls.length).toBeGreaterThan(okBefore) // logged, not swallowed
   })
 })

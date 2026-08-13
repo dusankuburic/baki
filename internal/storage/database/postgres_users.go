@@ -84,13 +84,13 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
 		return fmt.Errorf("count users: %w", err)
 	}
-	// Bootstrap: the very first user in an empty deployment becomes admin.
-	// Note this also applies to SSO JIT provisioning (handlers_sso.go calls
-	// CreateUser), so on a fresh deployment whoever authenticates first —
-	// including via the IdP — claims the admin role. Deploy ordering matters:
-	// register the intended admin before opening SSO to users.
+	// Bootstrap: the very first user in an empty deployment becomes admin —
+	// but ONLY when the caller opted in via auth.WithAllowBootstrap (the
+	// registration path). SSO JIT provisioning (which calls CreateUser without
+	// the flag) must not claim admin, otherwise on a fresh deployment whoever
+	// reaches the SSO start URL first wins admin (privilege escalation).
 	role := user.Role
-	if count == 0 {
+	if count == 0 && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
 	}
 
@@ -157,27 +157,24 @@ func (b *PostgresStorageBackend) LoadUsersByIDs(ctx context.Context, ids []strin
 	if len(ids) == 0 {
 		return out, nil
 	}
-	// De-duplicate and build an IN ($1,$2,...) placeholder list (driver-agnostic;
-	// avoids depending on a Postgres array codec).
+	// De-duplicate and query with `= ANY($1)` (pgx encodes the []string as a
+	// Postgres array — same pattern as postgres_dashboard.go). This avoids the
+	// hand-built placeholder list and its latent >65535-parameter cap.
 	seen := make(map[string]bool, len(ids))
-	placeholders := make([]string, 0, len(ids))
-	args := make([]any, 0, len(ids))
+	unique := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		args = append(args, id)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		unique = append(unique, id)
 	}
-	if len(args) == 0 {
+	if len(unique) == 0 {
 		return out, nil
 	}
-	// #nosec G202 -- placeholders contains only generated "$N" tokens, never user
-	// input; all id values are passed as parameterized args below.
-	q := `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE id IN (` +
-		strings.Join(placeholders, ",") + `)`
-	rows, err := b.db.QueryContext(ctx, q, args...)
+	rows, err := b.db.QueryContext(ctx,
+		`SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users WHERE id = ANY($1)`,
+		unique)
 	if err != nil {
 		return nil, fmt.Errorf("load users by ids: %w", err)
 	}

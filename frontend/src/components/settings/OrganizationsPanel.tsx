@@ -1,9 +1,12 @@
 import {useEffect, useState, useMemo} from 'react'
-import {Building2, Plus, Trash2, UserPlus, X, AlertCircle} from 'lucide-react'
+import {Building2, Plus, Trash2, UserPlus, X, AlertCircle, Clock, Mail} from 'lucide-react'
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useConfirm} from '@/components/shared'
+import {useAsync} from '@/hooks/useAsync'
+import {request} from '@/api/client'
+import {useToast} from '@/components/shared/Toast'
 
 const ROLES: OrgRole[] = ['admin', 'member', 'viewer', 'guest']
 
@@ -136,7 +139,7 @@ export default function OrganizationsPanel() {
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-semantic-error/10 border border-semantic-error/30 text-semantic-error">
+        <div role="alert" className="flex items-start gap-2 p-3 rounded-lg bg-semantic-error/10 border border-semantic-error/30 text-semantic-error">
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span className="text-sm flex-1">{error}</span>
           <button onClick={clearError} className="text-xs hover:opacity-80">
@@ -228,6 +231,7 @@ export default function OrganizationsPanel() {
                       }}
                       className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors"
                       title="Delete organization"
+                      aria-label="Delete organization"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -285,6 +289,7 @@ export default function OrganizationsPanel() {
                                   disabled={m.userId === org.ownerId}
                                   className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
                                   title={m.userId === org.ownerId ? 'Owner cannot be removed' : 'Remove member'}
+                                  aria-label={m.userId === org.ownerId ? 'Owner cannot be removed' : 'Remove member'}
                                 >
                                   <X size={14} />
                                 </button>
@@ -329,6 +334,8 @@ export default function OrganizationsPanel() {
                             {inviteBusy ? 'Inviting…' : 'Invite'}
                           </button>
                         </div>
+
+                        <PendingInvites orgId={org.id} onInviteSent={handleInvite} />
                       </div>
                     )}
                   </div>
@@ -338,6 +345,102 @@ export default function OrganizationsPanel() {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+interface OrgInvite {
+  id: string
+  orgId: string
+  email: string
+  role: string
+  invitedBy: string
+  expiresAt: string
+  acceptedAt?: string
+  createdAt: string
+}
+
+function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<void>}) {
+  const {error: toastError, success: toastSuccess} = useToast()
+  const {confirm} = useConfirm()
+
+  const {
+    data: invites,
+    refetch,
+  } = useAsync<OrgInvite[]>(
+    () => request<OrgInvite[]>(`/api/orgs/${orgId}/invites`, {method: 'GET'}).catch(() => []),
+    [orgId],
+  )
+  const inviteList = invites ?? []
+  const pending = inviteList.filter(i => !i.acceptedAt)
+  const [revokingId, setRevokingId] = useState<string | null>(null)
+
+  const handleRevoke = async (inviteId: string, email: string) => {
+    const ok = await confirm({
+      title: 'Revoke invite',
+      message: `Revoke the pending invite for ${email}? They will no longer be able to accept it.`,
+      danger: true,
+      confirmLabel: 'Revoke',
+    })
+    if (!ok) return
+    setRevokingId(inviteId)
+    try {
+      await request(`/api/orgs/${orgId}/invites/${inviteId}`, {method: 'DELETE'})
+      toastSuccess('Invite revoked')
+      refetch()
+    } catch (err) {
+      toastError('Failed to revoke invite: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setRevokingId(null)
+    }
+  }
+
+  if (pending.length === 0) return null
+
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+
+  return (
+    <div className="mt-3">
+      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Pending Invites</h4>
+      <div className="border border-border-subtle rounded-lg overflow-hidden">
+        {pending.map((inv, j) => {
+          const expired = new Date(inv.expiresAt) < new Date()
+          return (
+            <div
+              key={inv.id}
+              className={clsx(
+                'flex items-center gap-3 p-2.5',
+                j !== pending.length - 1 && 'border-b border-border-subtle',
+              )}
+            >
+              <Mail size={14} className="shrink-0 text-text-tertiary" />
+              <div className="flex-1 min-w-0">
+                <p title={inv.email} className="text-sm text-text-primary truncate">{inv.email}</p>
+                <p className="text-xs text-text-tertiary flex items-center gap-1">
+                  <Clock size={10} />
+                  <span className="capitalize">{inv.role}</span>
+                  {' · '}
+                  {expired ? (
+                    <span className="text-red-400">Expired {formatDate(inv.expiresAt)}</span>
+                  ) : (
+                    <>Expires {formatDate(inv.expiresAt)}</>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => void handleRevoke(inv.id, inv.email)}
+                disabled={revokingId === inv.id}
+                className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30"
+                title="Revoke invite"
+                aria-label="Revoke invite"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {useSettingsStore} from './settingsStore'
+import {useSettingsStore, __resetPersistQueueForTest} from './settingsStore'
 
 // Stub out the API layer so tests don't need a real backend
 vi.mock('@/api', () => ({
@@ -23,6 +23,9 @@ beforeEach(() => {
   vi.useFakeTimers()
   // Full replacement so no settings bleed from previous test
   useSettingsStore.setState(initialState, true)
+  // Clear any debounce timer / in-flight promise a previous case left behind —
+  // without this the module-level persist queue leaks across cases.
+  __resetPersistQueueForTest()
   // Reset mock call history AND implementation back to defaults
   vi.resetAllMocks()
   mockGet.mockResolvedValue(null)
@@ -30,6 +33,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Belt-and-braces: ensure no queue state escapes this case even if an
+  // assertion threw before the timer fired.
+  __resetPersistQueueForTest()
   vi.useRealTimers()
 })
 
@@ -184,5 +190,70 @@ describe('resetToDefaults', () => {
     await flushPersist()
     await p
     expect(mockUpdate).toHaveBeenCalledOnce()
+  })
+})
+
+// ---- persist queue semantics (debounce / supersede / in-flight guard) ----
+//
+// These were previously impossible to test because the debounce timer,
+// supersede resolver, and in-flight promise lived in unresettable module-level
+// vars. __resetPersistQueueForTest now clears them between cases, so the queue
+// contract is lockable.
+
+describe('persist queue', () => {
+  it('coalesces rapid updates into one backend write (debounce)', async () => {
+    const store = useSettingsStore.getState()
+    const p1 = store.updateAppearance({theme: 'nord'})
+    const p2 = store.updateAppearance({theme: 'dracula'})
+    const p3 = store.updateAppearance({theme: 'tokyo-night'})
+
+    await flushPersist()
+    await Promise.all([p1, p2, p3])
+
+    // One debounced flush → one network write, carrying the latest value.
+    expect(mockUpdate).toHaveBeenCalledOnce()
+    expect(useSettingsStore.getState().settings.appearance.theme).toBe('tokyo-night')
+  })
+
+  it('resolves a superseded persist immediately rather than hanging', async () => {
+    const store = useSettingsStore.getState()
+    const superseded = store.updateAppearance({theme: 'nord'})
+
+    // A second update supersedes the first; the first must settle (not hang).
+    const winner = store.updateAppearance({theme: 'dracula'})
+
+    await flushPersist()
+    await Promise.all([superseded, winner])
+
+    // Both settled without throwing — the supersede path resolved the first.
+    expect(useSettingsStore.getState().settings.appearance.theme).toBe('dracula')
+  })
+
+  it('queues a follow-up write behind an in-flight one', async () => {
+    // Make the first write slow so a second persist arrives while it's airborne.
+    let releaseFirst: () => void = () => {}
+    mockUpdate.mockImplementationOnce(
+      () => new Promise<void>(resolve => {
+        releaseFirst = resolve
+      }),
+    )
+
+    const store = useSettingsStore.getState()
+    const first = store.updateAppearance({theme: 'nord'})
+    await flushPersist() // fires the debounced first write (now pending)
+
+    // While the first is in flight, issue a second update.
+    const second = store.updateAppearance({theme: 'dracula'})
+    await flushPersist() // queues behind the in-flight guard
+
+    // Nothing new has been written yet — the in-flight guard holds it.
+    expect(mockUpdate).toHaveBeenCalledTimes(1)
+
+    releaseFirst()
+    await first
+    await flushPersist() // second write now flushes
+    await second
+
+    expect(mockUpdate).toHaveBeenCalledTimes(2)
   })
 })

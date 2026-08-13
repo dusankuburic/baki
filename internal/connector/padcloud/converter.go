@@ -12,6 +12,14 @@ import (
 	"pad-core/parser"
 )
 
+// maxConvertDepth caps how deep toBlock recurses into the cloud action tree.
+// A hostile or malformed Dataverse response with ~50k nesting levels is only
+// ~3 MB of JSON but overflows the goroutine stack (1 GB) via unbounded
+// recursion, killing the whole ingest sweep. Real flows are tens of levels
+// deep at most, so 1000 is a generous bound that stops a pathological tree
+// without affecting legitimate input.
+const maxConvertDepth = 1000
+
 // CloudConverter is the concrete Converter implementation: it turns a PAD cloud
 // flow definition (the JSON action tree returned by the Power Platform /
 // Dataverse exportworkflowdefinition endpoint) into the parser's
@@ -173,8 +181,15 @@ func (c *CloudConverter) toBlock(a cloudAction, subflowID, parentID string, dept
 	}
 	blk.Variables = extractVariables(blk.Properties, a.Comment, a.Name)
 
-	for _, child := range mergeChildren(a.Actions, a.Rpa, a.Nested, a.Sub, a.Kids) {
-		blk.Children = append(blk.Children, c.toBlock(child, subflowID, blk.ID, depth+1, line, blockCount, maxDepth))
+	// Stop descending past the depth cap: keep this block but drop its children,
+	// so a pathologically deep cloud definition truncates instead of overflowing
+	// the goroutine stack and crashing the process. Combined with the per-flow
+	// recover in Ingester.Ingest, a hostile definition is recorded as a failure
+	// rather than taking down ingestion for the whole tenant.
+	if depth < maxConvertDepth {
+		for _, child := range mergeChildren(a.Actions, a.Rpa, a.Nested, a.Sub, a.Kids) {
+			blk.Children = append(blk.Children, c.toBlock(child, subflowID, blk.ID, depth+1, line, blockCount, maxDepth))
+		}
 	}
 	return blk
 }

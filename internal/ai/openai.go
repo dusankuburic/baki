@@ -14,11 +14,12 @@ type OpenAIProvider struct {
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{
 		openaiBase: openaiBase{
-			apiKey:         apiKey,
-			client:         sharedHTTPClient,
-			baseURL:        &openAIBaseURL,
-			providerLabel:  "openai",
-			embeddingModel: "text-embedding-3-small",
+			apiKey:                apiKey,
+			client:                sharedHTTPClient,
+			baseURL:               &openAIBaseURL,
+			providerLabel:         "openai",
+			embeddingModel:        "text-embedding-3-small",
+			embeddingModelDefault: "text-embedding-3-small",
 		},
 	}
 }

@@ -14,6 +14,7 @@ export type MainPaneView =
   | 'dashboard'
   | 'library'
   | 'portfolio'
+  | 'flow-compare'
   | 'deps'
   | 'rules'
 export type ResolvedTheme =
@@ -50,6 +51,7 @@ const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set([
   'admin',
   'library',
   'portfolio',
+  'flow-compare',
 ])
 export const isSystemView = (v: MainPaneView): boolean => SYSTEM_VIEWS.has(v)
 

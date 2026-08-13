@@ -26,8 +26,18 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Gate the entire deploy pipeline on CI passing. Without this, a push to
+  # main could deploy with broken tests — deploy.yml and ci.yml trigger on the
+  # same event but were independent pipelines. The reusable-workflow call
+  # executes all CI jobs (go-test, frontend, e2e, lint, vulncheck) and fails
+  # here if any of them fail, blocking the deploy.
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
   build-and-push:
     name: Build & Push
+    needs: ci
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
@@ -83,9 +93,30 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+  sbom:
+    # I4 (IMPROVEMENTS.md): generate a Software Bill of Materials for supply-
+    # chain attestation. Produces a CycloneDX SBOM from the pushed image and
+    # uploads it as a workflow artifact (retrievable per-run for audit). This is
+    # additive to the Trivy scan above — Trivy gates on known CVEs, the SBOM is
+    # the inventory of every package/dependency in the image.
+    name: Generate SBOM
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # v0.18.0
+        with:
+          image: ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
+          format: cyclonedx-json
+          artifact-name: sbom.cdx.json
+
   deploy:
     name: Deploy to ${{ github.event.inputs.environment || 'staging' }}
-    needs: [build-and-push, scan]
+    needs: [ci, build-and-push, scan, sbom]
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'staging' }}
     steps:
@@ -117,13 +148,18 @@ jobs:
       - name: Smoke test
         shell: bash
         run: |
+          # Probe /readyz (not /healthz): /healthz is an unconditional 200
+          # liveness marker, so it would pass even with the DB or blob
+          # unreachable. /readyz gates on backend + Redis reachability, so a
+          # deploy with a broken DB/blob connection fails this gate instead of
+          # silently accepting traffic.
           for i in $(seq 1 10); do
-            if curl -sf "https://${{ secrets.AZURE_CONTAINER_APP_FQDN }}/healthz" > /dev/null 2>&1; then
-              echo "Health check passed on attempt $i"
+            if curl -sf "https://${{ secrets.AZURE_CONTAINER_APP_FQDN }}/readyz" > /dev/null 2>&1; then
+              echo "Readiness check passed on attempt $i"
               exit 0
             fi
             echo "Attempt $i failed, waiting 5s..."
             sleep 5
           done
-          echo "Health check failed after 10 attempts"
+          echo "Readiness check failed after 10 attempts"
           exit 1

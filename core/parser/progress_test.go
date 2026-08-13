@@ -105,3 +105,38 @@ SET X TO 'done'
 		t.Errorf("expected ≥2 subflows, got %d", doc.Metadata.SubflowCount)
 	}
 }
+
+// TestParseTextWithProgress_UnclosedBlock_MatchesParseText locks in the fix
+// for the drift that motivated unifying the pipeline: the legacy progress copy
+// never flushed closable blocks left open at EOF, so it silently dropped the
+// "unclosed block" ParseError that the canonical path reports. Both paths now
+// run one Parser.Parse, so an abruptly-terminated LOOP must surface the same
+// error count regardless of progress reporting.
+func TestParseTextWithProgress_UnclosedBlock_MatchesParseText(t *testing.T) {
+	// A LOOP opened with no matching END, wrapped in an implicit subflow.
+	text := "LOOP WHILE %true%\n  SET X TO '1'\n"
+
+	docDirect, err := ParseText(text, "test.txt", int64(len(text)))
+	if err != nil {
+		t.Fatalf("ParseText: %v", err)
+	}
+
+	docProgress, err := ParseTextWithProgress(text, "test.txt", 2_000_000, func(int, string) {})
+	if err != nil {
+		t.Fatalf("ParseTextWithProgress: %v", err)
+	}
+
+	if len(docProgress.ParseErrors) != len(docDirect.ParseErrors) {
+		t.Fatalf("ParseErrors: progress=%d direct=%d (progress path dropped the EOF unclosed-block flush)",
+			len(docProgress.ParseErrors), len(docDirect.ParseErrors))
+	}
+	if len(docDirect.ParseErrors) == 0 {
+		t.Fatal("expected at least one unclosed-block ParseError on the canonical path")
+	}
+	for i := range docDirect.ParseErrors {
+		if docProgress.ParseErrors[i].Message != docDirect.ParseErrors[i].Message {
+			t.Errorf("ParseError[%d].Message: progress=%q direct=%q",
+				i, docProgress.ParseErrors[i].Message, docDirect.ParseErrors[i].Message)
+		}
+	}
+}

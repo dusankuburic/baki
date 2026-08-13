@@ -244,12 +244,22 @@ function jitter(attempt: number): number {
   return base + Math.floor(Math.random() * base * 0.5)
 }
 
-export async function request<T>(
-  path: string,
-  body?: unknown,
-  method: string = 'POST',
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<T> {
+// RequestOptions is the options bag for request()/requestValidated().
+// Passing an explicit method/timeoutMs no longer requires positional
+// `undefined` placeholders for the args you don't care about (the old
+// request(path, body?, method?, timeoutMs?) signature forced every body-less
+// GET to read `request('/x', undefined, 'GET')`).
+export interface RequestOptions {
+  /** JSON-serialized request body. Omit for bodyless requests (GET/DELETE). */
+  body?: unknown
+  /** HTTP method. Defaults to 'POST'. */
+  method?: string
+  /** Abort/timeout in ms. Defaults to DEFAULT_TIMEOUT_MS (30s). */
+  timeoutMs?: number
+}
+
+export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const {body, method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS} = opts
   // Proactively refresh an already-expired access token so we don't make a
   // doomed first request (and log a 401) before the retry below.
   await ensureFreshToken(path)
@@ -283,11 +293,9 @@ export async function request<T>(
 export async function requestValidated<T>(
   path: string,
   schema: z.ZodType<T>,
-  body?: unknown,
-  method: string = 'POST',
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  opts: RequestOptions = {},
 ): Promise<T> {
-  const raw = await request<unknown>(path, body, method, timeoutMs)
+  const raw = await request<unknown>(path, opts)
   const result = schema.safeParse(raw)
   if (!result.success) {
     throw new ResponseValidationError(path, result.error)
@@ -301,9 +309,9 @@ export async function requestValidated<T>(
 // fetchWithRetry so transient 5xx/network failures on GET downloads also retry.
 export async function requestBlob(
   path: string,
-  method: string = 'GET',
-  timeoutMs: number = DEFAULT_BLOB_TIMEOUT_MS,
+  opts: {method?: string; timeoutMs?: number} = {},
 ): Promise<Blob> {
+  const {method = 'GET', timeoutMs = DEFAULT_BLOB_TIMEOUT_MS} = opts
   await ensureFreshToken(path)
   const response = await fetchWithRetry(path, undefined, method, timeoutMs)
   if (!response.ok) {

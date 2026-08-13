@@ -13,13 +13,26 @@ interface PersistedQueue {
 
 type QueueChangeHandler = (queue: readonly PendingOp[]) => void
 
+/** SyncDropReason explains why queued ops were discarded. */
+export type SyncDropReason = 'expired' | 'overflow'
+type DropHandler = (count: number, reason: SyncDropReason) => void
+
 const MAX_AGE_MS = 60_000
 const STORAGE_PREFIX = 'baki-sync-queue-'
 const MAX_QUEUE_SIZE = 200
 
+// The collaboration sync queue is a STATE-sync stream (presence, block/cursor
+// positions): a newer op for the same element supersedes the older one. So
+// under overflow we drop the OLDEST ops (keep current state) and past MAX_AGE_MS
+// we discard stale positions — both correct for superseding state.
+// What was a bug was doing this SILENTLY: the user saw "N queued" then it became
+// 0 with no indication the stale ops were discarded vs delivered. The drop
+// handlers below let the UI toast the user when ops are dropped (a true
+// end-to-end delivery guarantee would need a deferred backend ack).
 class SyncManager {
   private queue: PendingOp[] = []
   private changeHandlers = new Set<QueueChangeHandler>()
+  private dropHandlers = new Set<DropHandler>()
   private unsubscribeStatus: (() => void) | null = null
   private counter = 0
   private flowId: string | null = null
@@ -31,6 +44,14 @@ class SyncManager {
       this.flowId = flowId
       this.loadFromStorage()
     }
+    // Drop any prior status subscription before re-subscribing. Switching flows
+    // routes through start() WITHOUT an intervening stop() (presenceStore.connectToFlow
+    // calls teardown()+start(), never syncManager.stop()), so without this the
+    // previous subscription's unsubscribe handle is overwritten and lost. It's
+    // currently harmless only because collaborationService dedups the (stable)
+    // handler ref in a Set; unsubscribing here makes this store's cleanup
+    // self-contained rather than depending on that external detail.
+    this.unsubscribeStatus?.()
     this.unsubscribeStatus = collaborationService.onStatusChange(this.handleStatusChange)
   }
 
@@ -70,7 +91,9 @@ class SyncManager {
     // closing between the status check and the actual ws.send).
     this.queue.push({id, env, queuedAt: Date.now()})
     if (this.queue.length > MAX_QUEUE_SIZE) {
+      const overflow = this.queue.length - MAX_QUEUE_SIZE
       this.queue = this.queue.slice(-MAX_QUEUE_SIZE)
+      this.notifyDropped(overflow, 'overflow')
     }
     this.saveToStorage()
     this.notifyChange()
@@ -92,6 +115,16 @@ class SyncManager {
     return () => this.changeHandlers.delete(handler)
   }
 
+  /** Subscribe to drop events (ops discarded on TTL expiry or queue overflow). */
+  onDroppedOps(handler: DropHandler): () => void {
+    this.dropHandlers.add(handler)
+    return () => this.dropHandlers.delete(handler)
+  }
+
+  private notifyDropped(count: number, reason: SyncDropReason): void {
+    if (count > 0) this.dropHandlers.forEach(h => h(count, reason))
+  }
+
   private handleStatusChange = (status: ConnectionStatus): void => {
     if (status === 'connected') this.flush()
   }
@@ -99,15 +132,20 @@ class SyncManager {
   private flush(): void {
     if (!this.queue.length) return
     const now = Date.now()
+    let expired = 0
     const remaining: PendingOp[] = []
     for (const op of this.queue) {
-      if (now - op.queuedAt >= MAX_AGE_MS) continue // expired
+      if (now - op.queuedAt >= MAX_AGE_MS) {
+        expired++ // stale state op, superseded by a newer one
+        continue
+      }
       if (collaborationService.send(op.env)) {
         // delivered — drop from queue
       } else {
         remaining.push(op) // socket not open — keep for retry
       }
     }
+    this.notifyDropped(expired, 'expired')
     this.queue = remaining
     if (remaining.length === 0) {
       this.clearStorage()
@@ -142,8 +180,10 @@ class SyncManager {
       if (!raw) return
       const data = JSON.parse(raw) as PersistedQueue
       const now = Date.now()
-      this.queue = data.queue.filter(op => now - op.queuedAt < MAX_AGE_MS)
+      const fresh = data.queue.filter(op => now - op.queuedAt < MAX_AGE_MS)
+      this.queue = fresh
       this.counter = data.counter
+      this.notifyDropped(data.queue.length - fresh.length, 'expired')
       this.notifyChange()
     } catch {
       // Corrupt data — start fresh

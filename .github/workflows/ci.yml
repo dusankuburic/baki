@@ -5,6 +5,7 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  workflow_call:  # allows deploy.yml to gate deploys on CI passing
 
 permissions:
   contents: read
@@ -259,3 +260,35 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri
+
+  swagger-sync:
+    name: Swagger Spec Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-python@39cd14951b084f0666df65f1f0f12f4f3d006d64  # v5
+        with:
+          python-version: '3.12'
+      - name: Verify swagger.json and swagger.yaml are in sync
+        run: |
+          python3 - <<'SCRIPT'
+          import json, yaml, sys
+          with open('docs/swagger.json') as f:
+              j = json.load(f)
+          with open('docs/swagger.yaml') as f:
+              y = yaml.safe_load(f)
+          j_paths = set(j.get('paths', {}).keys())
+          y_paths = set(y.get('paths', {}).keys())
+          if j_paths != y_paths:
+              print(f"Path mismatch! JSON-only: {j_paths - y_paths}")
+              print(f"YAML-only: {y_paths - j_paths}")
+              sys.exit(1)
+          # Check methods match per path
+          for path in j_paths:
+              j_methods = set(j['paths'][path].keys())
+              y_methods = set(y['paths'][path].keys())
+              if j_methods != y_methods:
+                  print(f"Method mismatch on {path}! JSON: {j_methods}, YAML: {y_methods}")
+                  sys.exit(1)
+          print(f"OK: {len(j_paths)} paths in sync")
+          SCRIPT

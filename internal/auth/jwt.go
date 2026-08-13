@@ -195,7 +195,7 @@ func (m *Manager) IssueWSTicket(userID, email string, role Role, accessJTI strin
 // place. Single-use enforcement (replay prevention) is the caller's job.
 func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
-		jwt.WithAudience(wsTicketAudience))
+		jwt.WithAudience(wsTicketAudience), jwt.WithIssuer(m.issuer))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify ws ticket: %w", err)
 	}
@@ -212,7 +212,7 @@ func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 // is equivalent to the previous process-local map.
 func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
-		jwt.WithAudience(wsTicketAudience))
+		jwt.WithAudience(wsTicketAudience), jwt.WithIssuer(m.issuer))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify ws ticket: %w", err)
 	}
@@ -272,7 +272,7 @@ func (m *Manager) IssueSSOTicket(userID, email string, role Role) (string, error
 // the same ticket fails.
 func (m *Manager) ConsumeSSOTicket(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
-		jwt.WithAudience(ssoTicketAudience))
+		jwt.WithAudience(ssoTicketAudience), jwt.WithIssuer(m.issuer))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify sso ticket: %w", err)
 	}
@@ -301,7 +301,7 @@ func (m *Manager) ConsumeSSOTicket(tokenStr string) (*Claims, error) {
 // access token for ordinary API calls.
 func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
-		jwt.WithAudience(m.audience))
+		jwt.WithAudience(m.audience), jwt.WithIssuer(m.issuer))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify token: %w", err)
 	}
@@ -323,7 +323,7 @@ func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 // and the audience.
 func (m *Manager) VerifyIgnoreExpiry(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
-		jwt.WithAudience(m.audience))
+		jwt.WithAudience(m.audience), jwt.WithIssuer(m.issuer))
 
 	if err != nil && !errors.Is(err, jwt.ErrTokenExpired) {
 		return nil, fmt.Errorf("auth: verify token signature: %w", err)
@@ -406,7 +406,7 @@ func (m *Manager) IsRevoked(jti string) bool {
 // refresh token cannot be presented as an access token to Verify).
 func (m *Manager) VerifyRefresh(tokenStr string) (*RefreshClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &RefreshClaims{}, m.keyFunc,
-		jwt.WithAudience(refreshAudience))
+		jwt.WithAudience(refreshAudience), jwt.WithIssuer(m.issuer))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify refresh token: %w", err)
 	}

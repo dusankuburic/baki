@@ -63,6 +63,15 @@ local/desktop path. The gaps below are the genuine remainder.
 5. **Audit log is best-effort and drops events when the queue is full**
    (`internal/api/audit.go:129-132`, 256-buffer `default:` drop). Not usable as a compliance/
    forensic system of record under load → bounded backpressure or a durable sink.
+   ✅ **Addressed:** a bounded on-disk spill queue (`auditSpillStore`, `internal/api/audit_spill.go`)
+   now absorbs events that overflow the in-memory pool, and a 500 ms-tick reaper drains them back
+   into the pool while it has headroom (leaving half the buffer free so fresh events aren't starved).
+   The spill is size-capped (default 10 MB; `PAD_AUDIT_SPILL_DIR`, empty=temp dir, "off"=disabled);
+   beyond the cap the newest event degrades to the existing metered log fallback. New metrics
+   `pad_audit_spilled_total` / `pad_audit_spill_replayed_total` / `pad_audit_spill_dropped_total`
+   make overflow + recovery observable. A *sustained* overload beyond the spill cap can still drop
+   events (by design — unbounded storage isn't viable), so this is burst absorption, not a true WAL;
+   for compliance-grade cross-restart durability point `PAD_AUDIT_SPILL_DIR` at a mounted volume.
 6. **AI budget enforcement fails open** (`internal/service/chat.go`): if `GetDailyUsage`
    errors it's treated as 0 → unlimited spend during a DB hiccup. Cost-control risk.
 7. **Unbounded search-index cache** (`internal/service/flow.go` `idxCache`): a per-flow
@@ -133,9 +142,12 @@ local/desktop path. The gaps below are the genuine remainder.
     fields are unused — the AI client uses package-level constants instead.
 21. **First-user-becomes-admin includes SSO JIT provisioning**
     (`postgres_users.go tryCreateUser`): on a fresh deployment with an empty `users` table,
-    the first identity to authenticate — including via SSO — is silently promoted to admin.
-    Operational note: register/provision the intended admin **before** exposing the
-    deployment or enabling SSO for end users.
+    the first identity to authenticate — including via SSO — was silently promoted to admin.
+    ✅ **Addressed:** the bootstrap-admin rule is now opt-in via a context flag
+    (`auth.WithAllowBootstrap`), set ONLY by the password-registration path. SSO JIT
+    provisioning (`handlers_sso.go resolveSSOUser`) calls `CreateUser` without the flag, so on
+    a fresh deployment whoever reaches the SSO start URL first can no longer claim admin. The
+    contract suite covers both the no-flag (no promotion) and flag+non-empty-table cases.
 22. **`share_tokens` has no RLS backstop** (deliberate — the public `/api/shared` viewer
     resolves tokens with no authenticated user). All authenticated `share_tokens` queries
     rely solely on handler-level flow authz; a guard comment now sits on the table DDL in
@@ -186,10 +198,12 @@ A later working-tree pass closed most of the list. Verified present in code:
 - **Item 17** — Dockerfile stages digest-pinned (`@sha256`).
 - **Item 20a** — `sslmode` enforced (`RequireSSL` refuses insecure DSN, `postgres_storage.go`).
 
-Plus items **1, 2, 3, 18** above (see the ✅ notes). Genuinely still open: **item 5** (audit
-queue still drops on a full buffer, though now logged + metered) and the lower-priority
-hardening items (9–11, 19, 20b–c). The **autonomous migration service**
-(`handlers_admin.go handleMigrationStart`) remains a 501 stub.
+Plus items **1, 2, 3, 5, 18** above (see the ✅ notes — item 5 now has a spill queue + reaper).
+Genuinely still open: the lower-priority hardening items (**9** scanner per-flow timeout — **addressed** via `perFlowScanTimeout` bounding each flow within a tick; **10** — readiness now has a 3-consecutive-failure threshold via the Redis readiness work; **11** — migrations are now versioned
+with a checksum drift gate, but still forward-only with no tested down path; **19**, **20b**).
+**20c** (`RuntimeConfig` retry/circuit-breaker unused) — **addressed**: `ProviderFactory` now derives the circuit-breaker threshold/open-duration and retry attempts/base-delay from `RuntimeConfig` (`factory.go`), wired from `PAD_CB_*` / `PAD_RETRY_*` env vars.
+The autonomous migration service (`handlers_admin.go handleMigrationStart`) is now a real
+`MigrationRunner` (cross-replica advisory lock + 1 h run bound), no longer a stub.
 
 ## Scope / how to use this
 

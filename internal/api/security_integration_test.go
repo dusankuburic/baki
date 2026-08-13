@@ -179,17 +179,22 @@ func TestAcceptInvite_RejectsNonexistentToken(t *testing.T) {
 // mockTokenStore implements RefreshTokenStore for testing replay detection.
 type mockTokenStore struct {
 	mu               sync.Mutex
-	validTokens      map[string]bool // jti → valid
+	validTokens      map[string]bool   // jti → valid
+	userIDs          map[string]string // jti → userID (for VerifyAndRevokeRefreshToken)
 	revokedAllCalled bool
 }
 
 func newMockTokenStore() *mockTokenStore {
-	return &mockTokenStore{validTokens: make(map[string]bool)}
+	return &mockTokenStore{
+		validTokens: make(map[string]bool),
+		userIDs:     make(map[string]string),
+	}
 }
 
 func (m *mockTokenStore) StoreRefreshToken(_ context.Context, jti, userID string, expiresAt time.Time, _, _ string) error {
 	m.mu.Lock()
 	m.validTokens[jti] = true
+	m.userIDs[jti] = userID
 	m.mu.Unlock()
 	return nil
 }
@@ -208,6 +213,19 @@ func (m *mockTokenStore) RevokeRefreshToken(_ context.Context, jti string) error
 	}
 	m.validTokens[jti] = false
 	return nil
+}
+
+// VerifyAndRevokeRefreshToken mirrors the production atomic verify-and-revoke:
+// a valid token is revoked and its info returned; an already-revoked/unknown
+// token yields ErrTokenAlreadyRevoked (which the handler treats as replay).
+func (m *mockTokenStore) VerifyAndRevokeRefreshToken(_ context.Context, jti string) (*interfaces.RefreshTokenInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.validTokens[jti] {
+		return nil, interfaces.ErrTokenAlreadyRevoked
+	}
+	m.validTokens[jti] = false
+	return &interfaces.RefreshTokenInfo{ID: jti, UserID: m.userIDs[jti]}, nil
 }
 
 func (m *mockTokenStore) RevokeUserRefreshTokens(_ context.Context, userID string) error {

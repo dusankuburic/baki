@@ -34,25 +34,23 @@ type dbTokenStore struct {
 // into another encrypted column and still authenticate.
 var tokenAAD = []byte("padcloud_token\x00v1")
 
-// NewDBTokenStore builds a DB-backed TokenStore. encryptionKey is used to derive
-// the AES-256-GCM key that protects the stored tokens; pass nil/empty only for
-// legacy/plaintext behaviour (a warning is logged). The table is created lazily
-// (CREATE TABLE IF NOT EXISTS) so no migration is needed.
-func NewDBTokenStore(db *sql.DB, encryptionKey []byte) TokenStore {
-	s := &dbTokenStore{db: db}
-	if len(encryptionKey) > 0 {
-		aead, err := newTokenAEAD(encryptionKey)
-		if err != nil {
-			// Fall back to plaintext rather than disabling persistence entirely;
-			// the operator is warned so they can supply a valid key.
-			slog.Warn("padcloud: token encryption key invalid — persisting tokens in plaintext", "error", err)
-		} else {
-			s.aead = aead
-		}
-	} else {
-		slog.Warn("padcloud: no encryption key configured — persisting OAuth tokens in plaintext")
+// NewDBTokenStore builds a DB-backed TokenStore. encryptionKey derives the
+// AES-256-GCM key that protects the stored tokens. An empty/invalid key is
+// treated as a hard misconfiguration and returns an error — a Power Platform
+// refresh token grants tenant-wide API access, so persisting it in plaintext
+// (the previous warn-and-continue behaviour) is unacceptable. Callers should
+// fall back to an in-memory-only authenticator (nil store) on error, which
+// disables persistence across restarts but never stores the credential
+// unencrypted. The table is created lazily (CREATE TABLE IF NOT EXISTS).
+func NewDBTokenStore(db *sql.DB, encryptionKey []byte) (TokenStore, error) {
+	if len(encryptionKey) == 0 {
+		return nil, fmt.Errorf("padcloud: token encryption key is empty — refusing to persist OAuth tokens in plaintext (set PAD_ENCRYPTION_KEY)")
 	}
-	return s
+	aead, err := newTokenAEAD(encryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("padcloud: token encryption key invalid: %w", err)
+	}
+	return &dbTokenStore{db: db, aead: aead}, nil
 }
 
 // newTokenAEAD derives an AES-256-GCM AEAD from the deployment encryption key.

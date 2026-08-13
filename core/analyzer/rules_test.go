@@ -124,6 +124,63 @@ func TestInfiniteLoopRiskRule(t *testing.T) {
 			t.Fatalf("expected 0 findings, got %d", len(got))
 		}
 	})
+
+	t.Run("nested loop exit does not satisfy outer loop", func(t *testing.T) {
+		// EXIT LOOP only exits the innermost enclosing loop, so an exit inside a
+		// nested loop must NOT count as an exit for the outer loop. The old
+		// full-subtree walk let it through, leaving an infinite outer loop
+		// unflagged (regression).
+		exit := makeBlock("b3", "Exit loop", models.BlockTypeAction, "ExitLoop.Exit", 8)
+		inner := makeBlock("b2", "Inner loop", models.BlockTypeLoop, "Loop.ForEach", 4)
+		inner.Children = []models.Block{*exit}
+		outer := makeBlock("b1", "Outer loop", models.BlockTypeLoop, "Loop.ForEach", 0)
+		outer.SubflowID = "sf1"
+		outer.Children = []models.Block{*inner}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*outer}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(outer, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected the outer loop flagged (nested-loop exit must not satisfy it), got %d findings", len(got))
+		}
+	})
+
+	t.Run("non-progressing condition var write still flagged", func(t *testing.T) {
+		// A loop whose condition references a variable that is SET inside the
+		// body must STILL be flagged when the write doesn't progress toward the
+		// bound: a constant reset (`SET Found TO FALSE`) or a self-no-op
+		// (`SET X TO %X%`) keeps the loop running forever. loopConditionVarModified
+		// must not treat these as bounded (regression: the broad version
+		// suppressed real infinite loops).
+		reset := makeBlock("b2", "Set Found", models.BlockTypeAction, "SetVariable.Set", 4)
+		reset.Properties = map[string]string{"_output": "Found", "_value": "FALSE"}
+		loop := makeBlock("b1", "Loop", models.BlockTypeLoop, "Loop.While", 0)
+		loop.SubflowID = "sf1"
+		loop.Variables = []string{"Found"} // condition references %Found%
+		loop.Children = []models.Block{*reset}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*loop}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(loop, ctx)
+		if len(got) != 1 {
+			t.Fatalf("expected the non-progressing-write loop flagged, got %d findings", len(got))
+		}
+	})
+
+	t.Run("progressing counter write not flagged", func(t *testing.T) {
+		// A loop whose condition variable is genuinely advanced (`SET I TO %I% + 1`)
+		// is bounded and must NOT be flagged.
+		inc := makeBlock("b2", "Increment", models.BlockTypeAction, "SetVariable.Set", 4)
+		inc.Properties = map[string]string{"_output": "I", "_value": "%I% + 1"}
+		loop := makeBlock("b1", "Loop", models.BlockTypeLoop, "Loop.While", 0)
+		loop.SubflowID = "sf1"
+		loop.Variables = []string{"I"}
+		loop.Children = []models.Block{*inc}
+		flow := &models.FlowDocument{ID: "test", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: []models.Block{*loop}}}}
+		ctx := buildContext(flow, nil)
+		got := rule.Check(loop, ctx)
+		if len(got) != 0 {
+			t.Fatalf("expected the progressing-counter loop NOT flagged, got %d findings", len(got))
+		}
+	})
 }
 
 func TestDeepNestingRule(t *testing.T) {

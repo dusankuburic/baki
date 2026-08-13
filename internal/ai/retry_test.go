@@ -261,3 +261,41 @@ func TestBackoff_HonorsRetryAfterFloor(t *testing.T) {
 		t.Errorf("expected wait >= 600ms from Retry-After, got %v", elapsed)
 	}
 }
+
+// TestCappedBackoff_NoOverflowAndBounded is the regression test for the backoff
+// overflow: retryMaxAttempts is operator-configurable with no upper bound, and a
+// naive `baseDelay << attempt` overflows int64 into a NEGATIVE duration at a high
+// attempt count, which would panic rand.Int63n in backoff and crash the request
+// goroutine. cappedBackoff must instead stay positive and never exceed the
+// ceiling for any attempt count.
+func TestCappedBackoff_NoOverflowAndBounded(t *testing.T) {
+	// Low attempts grow exponentially from the base.
+	if got := cappedBackoff(0, retryBaseDelay); got != retryBaseDelay {
+		t.Errorf("attempt 0: got %v, want %v", got, retryBaseDelay)
+	}
+	if got := cappedBackoff(1, retryBaseDelay); got != 2*retryBaseDelay {
+		t.Errorf("attempt 1: got %v, want %v", got, 2*retryBaseDelay)
+	}
+	// High / overflow-triggering attempts stay positive and capped at the ceiling.
+	for _, attempt := range []int{34, 40, 62, 100, 1000} {
+		got := cappedBackoff(attempt, retryBaseDelay)
+		if got <= 0 {
+			t.Errorf("attempt %d: delay must stay positive, got %v (overflow)", attempt, got)
+		}
+		if got > retryMaxDelay {
+			t.Errorf("attempt %d: delay %v exceeds ceiling %v", attempt, got, retryMaxDelay)
+		}
+	}
+}
+
+// TestBackoff_LargeAttemptDoesNotPanic exercises the full backoff() (including
+// the rand.Int63n jitter that the old overflow crashed) at a high attempt count.
+// A pre-cancelled context returns the moment the bounded delay is computed, so
+// the test is fast; the point is that it completes without panicking.
+func TestBackoff_LargeAttemptDoesNotPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, attempt := range []int{34, 40, 62, 100, 1000} {
+		_ = backoff(ctx, attempt, nil, retryBaseDelay)
+	}
+}

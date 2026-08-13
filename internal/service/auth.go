@@ -84,7 +84,9 @@ func NewAuthService(backend authStore, email *mailer.Service) *AuthService {
 }
 
 // Register hashes the password and creates the account. CreateUser atomically
-// promotes the very first user in the system to RoleAdmin.
+// promotes the very first user in the system to RoleAdmin (this path opts into
+// the bootstrap-admin rule via auth.WithAllowBootstrap; SSO JIT does not, so a
+// fresh deployment's admin is the first *registered* user, not whoever hits SSO).
 func (s *AuthService) Register(ctx context.Context, email, password string) (*storageif.User, error) {
 	hashed, err := auth.HashPassword(password)
 	if err != nil {
@@ -96,7 +98,7 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*st
 		Password: hashed,
 		Role:     auth.RoleMember,
 	}
-	if err := s.backend.CreateUser(ctx, user); err != nil {
+	if err := s.backend.CreateUser(auth.WithAllowBootstrap(ctx, true), user); err != nil {
 		return nil, err
 	}
 	return user, nil

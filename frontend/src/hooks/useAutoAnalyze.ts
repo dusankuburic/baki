@@ -18,6 +18,12 @@ export function useAutoAnalyze(): void {
   const docId = useFlowStore(s => s.document?.id ?? null)
   const autoAnalyze = useSettingsStore(s => s.settings.analysis.autoAnalyzeOnOpen)
   const settingsLoaded = useSettingsStore(s => s.isLoaded)
+  // Subscribe to isAnalyzing so the effect re-runs when an in-flight analysis
+  // finishes. Without this, a rapid doc switch (docA analyzing → open docB)
+  // leaves docB's auto-analysis never triggered: the effect early-returned on
+  // isAnalyzing=true and no dependency changed when it later cleared, so docB
+  // sat unanalyzed until the user manually triggered it.
+  const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
   // Guards against the effect re-firing for the same doc id while the
   // network call is still pending (React StrictMode double-invokes effects).
   const inflightRef = useRef<string | null>(null)
@@ -48,5 +54,5 @@ export function useAutoAnalyze(): void {
         }
         if (inflightRef.current === docId) inflightRef.current = null
       })
-  }, [docId, autoAnalyze, settingsLoaded])
+  }, [docId, autoAnalyze, settingsLoaded, isAnalyzing])
 }

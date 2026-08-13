@@ -1,72 +1,24 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import clsx from 'clsx'
-import {
-  BarChart3,
-  RefreshCw,
-  FolderSearch,
-  Download,
-  AlertTriangle,
-  ShieldAlert,
-  Activity,
-  FileWarning,
-  ArrowLeft,
-  Workflow,
-} from 'lucide-react'
-import {analysisApi} from '@/api'
-import {logger} from '@/lib/logger'
-import {createAdapter} from '@/platform/adapters'
+import {useMemo} from 'react'
+import {BarChart3, RefreshCw, FolderSearch, AlertTriangle, Activity, ArrowLeft, Workflow} from 'lucide-react'
 import {useSystemStore} from '@/stores/systemStore'
-import {useToast} from '@/components/shared'
-import {csvCell, downloadBlob} from '@/lib/csv'
-import {formatCount} from '@/lib/format'
-import {scoreColor} from '@/lib/scoring'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
-import type {BatchAnalysis, DashboardStats} from '@/types'
+import {formatCount} from '@/lib/format'
+import {scoreColor} from '@/lib/scoring'
+import {StatCard} from './StatCard'
+import {SeverityChips} from './SeverityChips'
+import {RuleBarChart} from './RuleBarChart'
+import {TopProblemFlows} from './TopProblemFlows'
+import {BatchResultsTable} from './BatchResultsTable'
+import {useDashboardStats} from './hooks/useDashboardStats'
+import {useBatchAnalysis} from './hooks/useBatchAnalysis'
 
-function StatCard({label, value, accent}: {label: string; value: string | number; accent?: string}) {
-  return (
-    <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-      <div className="text-sm text-text-tertiary uppercase tracking-widest mb-1">{label}</div>
-      <div className={clsx('text-2xl font-black font-mono tabular-nums', accent ?? 'text-text-primary')}>{value}</div>
-    </div>
-  )
-}
-
-const sevChip: Record<string, string> = {
-  error: 'text-red-400 bg-red-500/10',
-  warning: 'text-amber-400 bg-amber-500/10',
-  info: 'text-blue-400 bg-blue-500/10',
-}
-
-const catChip: Record<string, string> = {
-  Security: 'text-red-400 bg-red-500/10',
-  Reliability: 'text-amber-400 bg-amber-500/10',
-  Performance: 'text-orange-400 bg-orange-500/10',
-  Style: 'text-purple-400 bg-purple-500/10',
-  Logic: 'text-cyan-400 bg-cyan-500/10',
-}
-
-function exportBatchCSV(batch: BatchAnalysis) {
-  const rows = [['Flow', 'Errors', 'Warnings', 'Info', 'Health', 'Load Error']]
-  for (const r of batch.results) {
-    rows.push([
-      csvCell(r.flowName),
-      String(r.report?.stats.errors ?? ''),
-      String(r.report?.stats.warnings ?? ''),
-      String(r.report?.stats.info ?? ''),
-      String(r.report?.metrics?.healthScore ?? ''),
-      r.error ? csvCell(r.error) : '',
-    ])
-  }
-  const csv = rows.map(r => r.join(',')).join('\n')
-  downloadBlob(csv, 'text/csv;charset=utf-8;', `batch-analysis-${new Date().toISOString().slice(0, 10)}.csv`)
-}
-
-// AnalyticsDashboard surfaces the session-wide analysis aggregates plus
-// folder-level batch analysis with per-file error rows.
+// AnalyticsDashboard is now a thin shell: it gates on the session-analytics
+// capability, wires the stats + batch hooks, and renders the presentational
+// tiles. All fetch/state-machine logic lives in the hooks; all rendering lives
+// in the tile components (StatCard / SeverityChips / RuleBarChart /
+// TopProblemFlows / BatchResultsTable).
 export default function AnalyticsDashboard() {
-  const toast = useToast()
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const sessionAnalyticsEnabled = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
   const isLoaded = useSystemStore(s => s.isLoaded)
@@ -75,85 +27,9 @@ export default function AnalyticsDashboard() {
   // folder clears the server-side cache); re-fetch when the open document
   // changes so the view reflects the latest state either way.
   const docId = useFlowStore(s => s.document?.id ?? null)
-  const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [batch, setBatch] = useState<BatchAnalysis | null>(null)
-  const [batchRunning, setBatchRunning] = useState(false)
-  const reqIdRef = useRef(0)
-  const hasStatsRef = useRef(false)
-  const toastRef = useRef(toast)
-  toastRef.current = toast
-
-  const refresh = useCallback(
-    (background = false) => {
-      // Session analytics aggregate the app's in-process analyzer cache and read
-      // server-local folders. In cloud/JWT mode the backend returns 403 (data
-      // would otherwise span tenants), so we check the capability flag provided
-      // by the backend. The Home dashboard is the cloud view. Wait for the
-      // capability to load before fetching so we don't fire a doomed 403 in
-      // cloud mode; the effect re-runs once isLoaded flips true.
-      if (!isLoaded || !sessionAnalyticsEnabled) return
-
-      reqIdRef.current++
-      const myReq = reqIdRef.current
-      if (!background) {
-        setLoading(true)
-        setError(null)
-      }
-      analysisApi
-        .getDashboard()
-        .then(s => {
-          if (myReq !== reqIdRef.current) return
-          setStats(s)
-          hasStatsRef.current = true
-          setError(null)
-        })
-        .catch(err => {
-          if (myReq !== reqIdRef.current) return
-          logger.warn('Failed to load dashboard stats', err)
-          if (hasStatsRef.current) {
-            toastRef.current.error('Dashboard refresh failed', {
-              description: err instanceof Error ? err.message : 'Unknown error',
-            })
-          } else {
-            setError(err instanceof Error ? err.message : 'Failed to load')
-          }
-        })
-        .finally(() => {
-          if (myReq === reqIdRef.current) setLoading(false)
-        })
-    },
-    [sessionAnalyticsEnabled, isLoaded],
-  )
-
-  useEffect(() => {
-    refresh()
-    return () => {
-      reqIdRef.current++
-    }
-  }, [refresh, docId])
-
-  const handleBatch = useCallback(async () => {
-    const adapter = createAdapter()
-    const result = await adapter.fileOpenDirectory()
-    if (!result) return
-    if (typeof result !== 'string' || result.trim().startsWith('{')) {
-      toast.error('Batch analysis requires a local file system')
-      return
-    }
-    setBatchRunning(true)
-    try {
-      const b = await analysisApi.batchAnalyze(result)
-      setBatch(b)
-      setError(null)
-      refresh(true)
-    } catch (err) {
-      toast.error('Batch analysis failed: ' + (err as Error).message)
-    } finally {
-      setBatchRunning(false)
-    }
-  }, [toast, refresh])
+  const {stats, loading, error, refresh} = useDashboardStats(sessionAnalyticsEnabled, isLoaded, docId)
+  // Refresh aggregates after a successful batch so the new runs are reflected.
+  const {batch, batchRunning, sortedResults, runBatch, exportCSV} = useBatchAnalysis(() => refresh(true))
 
   const ruleEntries = useMemo(
     () =>
@@ -166,13 +42,6 @@ export default function AnalyticsDashboard() {
   )
   const maxRuleCount = ruleEntries[0]?.[1] ?? 1
   const isEmpty = !stats || stats.totalFlowsAnalyzed === 0
-  const sortedBatchResults = useMemo(
-    () =>
-      batch
-        ? [...batch.results].sort((a, b) => (b.report?.findings.length ?? -1) - (a.report?.findings.length ?? -1))
-        : [],
-    [batch],
-  )
 
   // Gated view: session analytics + folder batch are only available when the
   // backend supports them (e.g. local mode). Show a notice and point to Home.
@@ -226,7 +95,7 @@ export default function AnalyticsDashboard() {
           Rule Graph
         </button>
         <button
-          onClick={handleBatch}
+          onClick={runBatch}
           disabled={batchRunning}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium hover:bg-brand-600 transition-colors disabled:opacity-50"
         >
@@ -268,7 +137,7 @@ export default function AnalyticsDashboard() {
             Run an analysis or batch-analyze a folder to populate the dashboard
           </span>
           <button
-            onClick={handleBatch}
+            onClick={runBatch}
             disabled={batchRunning}
             className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-brand-foreground text-sm font-medium transition-colors"
           >
@@ -280,157 +149,22 @@ export default function AnalyticsDashboard() {
         stats &&
         !isEmpty && (
           <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <StatCard label="Flows Analyzed" value={formatCount(stats.totalFlowsAnalyzed)} />
               <StatCard label="Total Findings" value={formatCount(stats.totalFindings)} />
-              <StatCard
-                label="Avg Health"
-                value={stats.avgHealthScore.toFixed(0)}
-                accent={scoreColor(stats.avgHealthScore)}
-              />
+              <StatCard label="Avg Health" value={stats.avgHealthScore.toFixed(0)} accent={scoreColor(stats.avgHealthScore)} />
             </div>
 
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(stats.findingsBySeverity).map(([sev, n]) => (
-                <span
-                  key={sev}
-                  className={clsx(
-                    'text-sm font-bold px-2 py-0.5 rounded-full',
-                    sevChip[sev] ?? 'text-text-tertiary bg-surface-3',
-                  )}
-                >
-                  {n} {sev}
-                </span>
-              ))}
-              {Object.entries(stats.findingsByCategory).map(([cat, n]) => (
-                <span
-                  key={cat}
-                  className={clsx(
-                    'text-sm font-bold px-2 py-0.5 rounded-full',
-                    catChip[cat] ?? 'text-text-tertiary bg-surface-3',
-                  )}
-                >
-                  {n} {cat}
-                </span>
-              ))}
-            </div>
+            <SeverityChips bySeverity={stats.findingsBySeverity} byCategory={stats.findingsByCategory} />
 
-            {ruleEntries.length > 0 && (
-              <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
-                  <ShieldAlert size={14} />
-                  Findings by Rule
-                </h3>
-                <div className="space-y-1.5">
-                  {ruleEntries.map(([rule, count]) => (
-                    <div key={rule} className="flex items-center gap-2">
-                      <span className="text-sm text-text-secondary font-mono w-44 truncate shrink-0">{rule}</span>
-                      <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-brand-500/70"
-                          style={{width: `${(count / maxRuleCount) * 100}%`}}
-                        />
-                      </div>
-                      <span className="text-sm text-text-tertiary tabular-nums w-8 text-right shrink-0">{count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <RuleBarChart entries={ruleEntries} maxCount={maxRuleCount} />
 
-            {stats.topProblemFlows?.length > 0 && (
-              <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-text-tertiary mb-2 flex items-center gap-1.5">
-                  <FileWarning size={14} />
-                  Top Problem Flows
-                </h3>
-                <div className="space-y-1">
-                  {stats.topProblemFlows.map(p => (
-                    <div
-                      key={p.flowId}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded border border-border-subtle bg-surface-1"
-                    >
-                      <span className="text-sm text-text-primary flex-1 truncate">
-                        {p.flowName || p.flowId.slice(0, 8)}
-                      </span>
-                      <span className="text-sm text-text-tertiary tabular-nums">
-                        {formatCount(p.findingCount)} findings
-                      </span>
-                      <span className={clsx('text-sm font-bold font-mono tabular-nums', scoreColor(p.healthScore))}>
-                        {p.healthScore}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <TopProblemFlows flows={stats.topProblemFlows ?? []} />
           </>
         )
       )}
 
-      {batch && (
-        <div className="p-3 rounded-xl border border-border-subtle bg-surface-0">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-text-tertiary flex items-center gap-1.5">
-              <FolderSearch size={14} />
-              Batch Results
-            </h3>
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-text-tertiary tabular-nums">
-                {formatCount(batch.totalFlows)} flows ·{' '}
-                <span className="text-red-400">{formatCount(batch.totalErrors)}E</span>{' '}
-                <span className="text-amber-400">{formatCount(batch.totalWarnings)}W</span>{' '}
-                <span className="text-blue-400">{formatCount(batch.totalInfo)}I</span> · avg health{' '}
-                <span className={scoreColor(batch.avgHealthScore)}>{batch.avgHealthScore.toFixed(0)}</span>
-              </span>
-              <button
-                onClick={() => {
-                  exportBatchCSV(batch)
-                  toast.success('Batch results exported')
-                }}
-                title="Export batch results as CSV"
-                aria-label="Export batch results as CSV"
-                className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-surface-3 transition-colors"
-              >
-                <Download size={12} />
-              </button>
-            </div>
-          </div>
-          <div className="space-y-1">
-            {sortedBatchResults.map((r, i) => (
-              <div
-                key={`${r.flowName}-${i}`}
-                className={clsx(
-                  'flex items-center gap-2 px-2 py-1.5 rounded border',
-                  r.error ? 'border-red-500/20 bg-red-500/5' : 'border-border-subtle bg-surface-1',
-                )}
-              >
-                {r.error && <AlertTriangle size={11} className="text-red-400 shrink-0" />}
-                <span className="text-sm text-text-primary flex-1 truncate">{r.flowName}</span>
-                {r.error ? (
-                  <span className="text-sm text-red-400/90 truncate max-w-[50%]">{r.error}</span>
-                ) : (
-                  <>
-                    <span className="text-sm tabular-nums">
-                      <span className="text-red-400">{r.report?.stats.errors ?? 0}E</span>{' '}
-                      <span className="text-amber-400">{r.report?.stats.warnings ?? 0}W</span>{' '}
-                      <span className="text-blue-400">{r.report?.stats.info ?? 0}I</span>
-                    </span>
-                    <span
-                      className={clsx(
-                        'text-sm font-bold font-mono tabular-nums w-7 text-right',
-                        scoreColor(r.report?.metrics?.healthScore ?? 0),
-                      )}
-                    >
-                      {r.report?.metrics?.healthScore ?? '—'}
-                    </span>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {batch && <BatchResultsTable batch={batch} sortedResults={sortedResults} onExport={exportCSV} />}
     </div>
   )
 }

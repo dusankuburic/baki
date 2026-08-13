@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -41,26 +43,43 @@ func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Or
 		return fmt.Errorf("upsert org: %w", err)
 	}
 
-	// Simple member sync: delete all and re-insert
-	_, err = tx.ExecContext(ctx, `DELETE FROM org_members WHERE org_id = $1`, org.ID)
-	if err != nil {
-		return fmt.Errorf("clear members: %w", err)
-	}
-
-	for _, m := range org.Members {
-		if m.JoinedAt.IsZero() {
-			m.JoinedAt = now
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO org_members (org_id, user_id, role, joined_at)
-			VALUES ($1, $2, $3, $4)`,
-			org.ID, m.UserID, string(m.Role), m.JoinedAt)
-		if err != nil {
-			return fmt.Errorf("insert member: %w", err)
-		}
+	if err := syncOrgMembers(ctx, tx, org, now); err != nil {
+		return err
 	}
 
 	return tx.Commit()
+}
+
+// syncOrgMembers reconciles org_members to exactly org.Members without the
+// churn of delete-all-then-reinsert: present members are upserted (their
+// joined_at is preserved on conflict) and only members no longer in the set are
+// deleted. now is the fallback joined_at for members without one. Shared by
+// SaveOrg and saveOrgInTx.
+func syncOrgMembers(ctx context.Context, tx *sql.Tx, org *interfaces.Organisation, now time.Time) error {
+	userIDs := make([]string, 0, len(org.Members))
+	for _, m := range org.Members {
+		joined := m.JoinedAt
+		if joined.IsZero() {
+			joined = now
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO org_members (org_id, user_id, role, joined_at)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+			org.ID, m.UserID, string(m.Role), joined); err != nil {
+			return fmt.Errorf("upsert member: %w", err)
+		}
+		userIDs = append(userIDs, m.UserID)
+	}
+	// Delete members no longer present. An empty userIDs slice makes
+	// `user_id = ANY('{}')` always false, so NOT(...) deletes every row —
+	// matching the old delete-all behavior when the set is emptied.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM org_members WHERE org_id = $1 AND NOT (user_id = ANY($2))`,
+		org.ID, userIDs); err != nil {
+		return fmt.Errorf("prune removed members: %w", err)
+	}
+	return nil
 }
 
 func (b *PostgresStorageBackend) LoadOrg(ctx context.Context, id string) (*interfaces.Organisation, error) {
@@ -187,18 +206,7 @@ func (b *PostgresStorageBackend) saveOrgInTx(ctx context.Context, tx *sql.Tx, or
 	if err != nil {
 		return fmt.Errorf("update org in tx: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM org_members WHERE org_id = $1`, org.ID)
-	if err != nil {
-		return fmt.Errorf("clear org members in tx: %w", err)
-	}
-	for _, m := range org.Members {
-		_, err := tx.ExecContext(ctx, `INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES ($1, $2, $3, $4)`,
-			org.ID, m.UserID, string(m.Role), m.JoinedAt)
-		if err != nil {
-			return fmt.Errorf("insert org member in tx: %w", err)
-		}
-	}
-	return nil
+	return syncOrgMembers(ctx, tx, org, time.Now().UTC())
 }
 
 // ---- Knowledge base operations ----
@@ -245,6 +253,28 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 	}
 
 	runInserts := func(tx DBTX) error {
+		// embedding (JSONB) is always written for portability + as the pgvector
+		// backfill source. embedding_vec is written only when pgvector is active
+		// AND the chunk's embedding dimension matches the configured contract —
+		// mismatched-dimension chunks stay NULL in the vector column so the
+		// HNSW index search never sees a vector it can't compare to a query.
+		if b.hasPgvector {
+			const stmt = `INSERT INTO knowledge_chunks (id, doc_id, content, embedding, embedding_vec) VALUES ($1, $2, $3, $4, $5::vector)`
+			for _, c := range chunks {
+				embJSON, _ := json.Marshal(c.Embedding)
+				var vec any
+				if len(c.Embedding) == b.embeddingDim {
+					vec = FormatVector(c.Embedding)
+				} else if len(c.Embedding) > 0 {
+					logger.Warn("knowledge chunk embedding dimension differs from configured; excluded from vector index",
+						"chunk_id", c.ID, "got_dim", len(c.Embedding), "configured_dim", b.embeddingDim)
+				}
+				if _, err := tx.ExecContext(ctx, stmt, c.ID, c.DocID, c.Content, embJSON, vec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		const stmt = `INSERT INTO knowledge_chunks (id, doc_id, content, embedding) VALUES ($1, $2, $3, $4)`
 		for _, c := range chunks {
 			embJSON, _ := json.Marshal(c.Embedding)
@@ -282,13 +312,66 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 }
 
 func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+	// pgvector path: push the similarity ordering + LIMIT into the database so
+	// we don't load hundreds of embeddings into Go. Only same-dimension chunks
+	// are indexed (mismatched dims are NULL in embedding_vec and excluded by the
+	// WHERE). <=> is cosine distance (0 = identical, 2 = opposite); ORDER BY it
+	// ASC returns the most similar chunks.
+	if b.hasPgvector && len(queryEmbedding) == b.embeddingDim {
+		return b.searchKnowledgeVector(ctx, orgID, queryEmbedding, limit)
+	}
+	// Go-side fallback: pgvector isn't installed, or the query dimension doesn't
+	// match the configured index dimension (e.g. the embedding provider changed
+	// and the base hasn't been re-indexed). Loads a deterministic capped sample
+	// and ranks in-process for portability.
+	return b.searchKnowledgeGo(ctx, orgID, queryEmbedding, limit)
+}
+
+// searchKnowledgeVector runs the server-side similarity search. A cosine
+// distance threshold of 1.0 (max distance = 2.0) excludes irrelevant chunks
+// — a query with no genuinely-relevant docs returns empty instead of noise.
+func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT c.id, c.doc_id, c.content, c.embedding
+		FROM knowledge_chunks c
+		JOIN knowledge_documents d ON c.doc_id = d.id
+		WHERE d.org_id = $1
+		  AND c.embedding_vec IS NOT NULL
+		  AND c.embedding_vec <=> $2::vector < 1.0
+		ORDER BY c.embedding_vec <=> $2::vector
+		LIMIT $3`, orgID, FormatVector(queryEmbedding), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []interfaces.KnowledgeChunk
+	for rows.Next() {
+		var c interfaces.KnowledgeChunk
+		var embJSON []byte
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(embJSON, &c.Embedding); err != nil {
+			logger.Warn("corrupt embedding JSON", "chunk_id", c.ID, "error", err)
+		}
+		chunks = append(chunks, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate knowledge chunks: %w", err)
+	}
+	return chunks, nil
+}
+
+// searchKnowledgeGo is the portability fallback: load a deterministic capped
+// sample and rank in-process via cosine similarity.
+func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	// Cap the number of chunks loaded from DB to avoid OOM on large
 	// knowledge bases. The cosine similarity sort and final truncation
 	// still happens in Go for portability (no pgvector dependency).
 	// ORDER BY doc_id, id makes the 500-chunk sample deterministic (same
 	// chunks on repeated calls) — without it, Postgres returns an arbitrary
 	// set of rows depending on physical layout / vacuum state.
-	// TODO: migrate to pgvector for server-side similarity search.
 	const maxChunks = 500
 	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT c.id, c.doc_id, c.content, c.embedding
@@ -359,6 +442,14 @@ func rankKnowledgeChunks(orgID string, chunks []interfaces.KnowledgeChunk, query
 		return scoredChunks[i].sim > scoredChunks[j].sim
 	})
 
+	// Filter by minimum similarity (0.5 cosine = 1.0 cosine distance, matching
+	// the pgvector path's threshold). Chunks below this are noise.
+	cutoff := 0
+	for cutoff < len(scoredChunks) && scoredChunks[cutoff].sim >= 0.5 {
+		cutoff++
+	}
+	scoredChunks = scoredChunks[:cutoff]
+
 	if len(scoredChunks) > limit {
 		scoredChunks = scoredChunks[:limit]
 	}
@@ -383,4 +474,21 @@ func cosineSimilarity(a, b []float32) float32 {
 		return 0
 	}
 	return dot / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
+}
+
+// FormatVector renders a float32 embedding as the pgvector text literal
+// (`'[0.1,0.2,…]'`) that the vector type's input function accepts. Used for
+// both INSERT (embedding_vec) and the <=> query operand. A nil/empty slice
+// yields '[]' which pgvector rejects — callers must guard non-empty inputs.
+func FormatVector(v []float32) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, f := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatFloat(float64(f), 'f', -1, 32))
+	}
+	b.WriteByte(']')
+	return b.String()
 }

@@ -70,7 +70,17 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	content, err := h.exportSvc.ExportMarkdown(doc, report, req.Path)
+	// The server-side file write (path != "") is a desktop-only feature: a
+	// multi-tenant cloud user must NOT be able to choose an arbitrary path on
+	// the server's filesystem (arbitrary file write — cron injection,
+	// authorized_keys, overwriting source). Drop the path in cloud/JWT mode so
+	// only the base64 response is produced; the frontend download path uses that
+	// base64 via a data URL, never a server path.
+	exportPath := req.Path
+	if h.security.JWTEnabled {
+		exportPath = ""
+	}
+	content, err := h.exportSvc.ExportMarkdown(doc, report, exportPath)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -105,7 +115,12 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	content, err := h.exportSvc.ExportPDF(doc, report, req.Path)
+	// See handleExportMarkdown: the server-side file write is desktop-only.
+	exportPath := req.Path
+	if h.security.JWTEnabled {
+		exportPath = ""
+	}
+	content, err := h.exportSvc.ExportPDF(doc, report, exportPath)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

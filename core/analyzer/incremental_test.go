@@ -46,14 +46,11 @@ func TestAnalyzeRuleDependencies(t *testing.T) {
 	})
 }
 
-// TestDetectCycles_ReportsCycle guards M9's behavioral contract: when the
-// dependency graph contains a cycle, detectCycles must report at least one
-// cycle containing every node on the cyclic path. The exact reconstruction
-// format (length, leading/trailing duplicates) is intentionally NOT asserted
-// — the current DFS-with-colors reconstruction produces a duplicate leading
-// element in some rotations, and a future Tarjan SCC swap (tracked in
-// IMPROVEMENTS.md M9) will tighten the format. What must not regress is the
-// "a cycle IS detected" property.
+// TestDetectCycles_ReportsCycle guards detectCycles' behavioral contract: when
+// the dependency graph contains a cycle, detectCycles must report a cycle
+// covering every node on the cyclic path. Since the Tarjan SCC swap (was M9),
+// each reported cycle is the SCC's node set in a canonical (sorted) order — no
+// duplicate leading element — so we additionally assert no entry repeats.
 func TestDetectCycles_ReportsCycle(t *testing.T) {
 	// 3-cycle: a → b → c → a, plus an unrelated acyclic node d → (nothing).
 	adj := map[string][]string{
@@ -72,27 +69,82 @@ func TestDetectCycles_ReportsCycle(t *testing.T) {
 	want := map[string]bool{"a": true, "b": true, "c": true}
 	var found bool
 	for _, cyc := range cycles {
-		got := map[string]bool{}
+		// Clean-format invariant: no node repeats within a reported cycle.
+		seen := map[string]bool{}
 		for _, n := range cyc {
-			got[n] = true
+			if seen[n] {
+				t.Errorf("reported cycle has a duplicate node %q: %v", n, cyc)
+			}
+			seen[n] = true
 		}
-		if len(got) == len(want) {
+		if len(seen) == len(want) {
 			match := true
 			for k := range want {
-				if !got[k] {
+				if !seen[k] {
 					match = false
 					break
 				}
 			}
 			if match {
 				found = true
-				break
 			}
 		}
 	}
 	if !found {
 		t.Errorf("no reported cycle covered all of {a,b,c}; cycles=%v", cycles)
 	}
+}
+
+// TestDetectCycles_CanonicalOrder locks the post-Tarjan determinism: the same
+// graph always yields the same cycle node set in sorted order, regardless of
+// which rotation the back-edge closes on.
+func TestDetectCycles_CanonicalOrder(t *testing.T) {
+	build := func() map[string][]string {
+		return map[string][]string{
+			"x": {"y"},
+			"y": {"z"},
+			"z": {"x"},
+		}
+	}
+	nodes := map[string]bool{"x": true, "y": true, "z": true}
+
+	// Run several times — the SCC node set + sort must be identical every time.
+	first := detectCycles(build(), nodes)
+	if len(first) != 1 {
+		t.Fatalf("expected exactly 1 cycle, got %d: %v", len(first), first)
+	}
+	want := []string{"x", "y", "z"}
+	if !equalStringSlice(first[0], want) {
+		t.Errorf("cycle = %v, want canonical sorted %v", first[0], want)
+	}
+	for i := 0; i < 25; i++ {
+		got := detectCycles(build(), nodes)
+		if len(got) != 1 || !equalStringSlice(got[0], first[0]) {
+			t.Fatalf("iter %d: cycle drifted to %v (want %v)", i, got, first)
+		}
+	}
+}
+
+// TestDetectCycles_SelfLoop reports a single-node SCC with a self-edge as a cycle.
+func TestDetectCycles_SelfLoop(t *testing.T) {
+	adj := map[string][]string{"s": {"s"}}
+	nodes := map[string]bool{"s": true}
+	cycles := detectCycles(adj, nodes)
+	if len(cycles) != 1 || len(cycles[0]) != 1 || cycles[0][0] != "s" {
+		t.Errorf("expected single self-loop cycle [[s]], got %v", cycles)
+	}
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestDetectCycles_AcyclicGraphReturnsNone is the negative control: a DAG must

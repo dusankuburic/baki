@@ -28,11 +28,15 @@ export default function InspectorPanel() {
     <div className="flex flex-col h-full bg-surface-1">
       <InspectorTabs />
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-        {tab === 'details' && <DetailsTab />}
+        {tab === 'details' && (
+          <ErrorBoundary fallbackMessage="Details tab error">
+            <DetailsTab />
+          </ErrorBoundary>
+        )}
         {(tab === 'ai' || aiVisited) && (
           <div className={tab === 'ai' ? 'flex flex-col flex-1 min-h-0 overflow-hidden' : 'hidden'}>
             <ResizableChatPanel>
-              <ErrorBoundary>
+              <ErrorBoundary fallbackMessage="AI assistant error">
                 <Suspense
                   fallback={
                     <div className="flex-1 flex items-center justify-center">
@@ -46,20 +50,34 @@ export default function InspectorPanel() {
             </ResizableChatPanel>
           </div>
         )}
-        {tab === 'findings' && <FindingsTab />}
-        {tab === 'metrics' && (
-          <Suspense
-            fallback={
-              <div className="flex-1 flex items-center justify-center">
-                <Spinner />
-              </div>
-            }
-          >
-            <MetricsTab />
-          </Suspense>
+        {tab === 'findings' && (
+          <ErrorBoundary fallbackMessage="Findings tab error">
+            <FindingsTab />
+          </ErrorBoundary>
         )}
-        {tab === 'sharing' && <SharingTab />}
-        {tab === 'history' && <HistoryTab />}
+        {tab === 'metrics' && (
+          <ErrorBoundary fallbackMessage="Metrics tab error">
+            <Suspense
+              fallback={
+                <div className="flex-1 flex items-center justify-center">
+                  <Spinner />
+                </div>
+              }
+            >
+              <MetricsTab />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+        {tab === 'sharing' && (
+          <ErrorBoundary fallbackMessage="Sharing tab error">
+            <SharingTab />
+          </ErrorBoundary>
+        )}
+        {tab === 'history' && (
+          <ErrorBoundary fallbackMessage="History tab error">
+            <HistoryTab />
+          </ErrorBoundary>
+        )}
       </div>
     </div>
   )

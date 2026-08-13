@@ -96,3 +96,35 @@ func TestApplyFixesToSource_NoFixableFindings(t *testing.T) {
 		t.Errorf("source changed despite no fixes:\nbefore: %q\nafter:  %q", original, source)
 	}
 }
+
+// TestApplyFixesToSource_DeclinedFixerDoesNotBlockOthers verifies that when a
+// fixer declines (returns an empty patch) for one finding, the loop records it
+// as skipped and continues to fix OTHER independent findings in the same run —
+// rather than aborting the whole loop on the first decline.
+//
+// command-injection-risk fires on '100%% done' (the rule matches any '%'), but
+// SanitizeCommandVarsPatch declines: its %VarName% regex doesn't match the
+// literal '%%' escape, so it emits zero ops. command-injection registers before
+// redundant-action (alphabetical init order), so its finding is picked first.
+// With the old break-on-decline behavior this would abort the loop and leave the
+// redundant-action finding (SET X TO %X%) unfixed.
+func TestApplyFixesToSource_DeclinedFixerDoesNotBlockOthers(t *testing.T) {
+	source := "#Region \"Main\"\n" +
+		"System.RunDOSCommand Command: 'echo 100%% done'\n" +
+		"SET X TO %X%\n" +
+		"#EndRegion\n"
+
+	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", nil, 50, nil)
+	if err != nil {
+		t.Fatalf("ApplyFixesToSource: %v", err)
+	}
+	if fixed == 0 {
+		t.Fatal("expected the redundant-action fix to land despite the declined command-injection fixer, got 0 fixes")
+	}
+	// The redundant-action finding must be resolved even though the
+	// command-injection finding (picked first in report order) could not be
+	// auto-fixed.
+	if strings.Contains(source, "SET X TO %X%") {
+		t.Errorf("redundant-action was not fixed (declined fixer blocked the loop):\n%s", source)
+	}
+}

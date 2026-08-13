@@ -13,6 +13,14 @@ const retryMaxAttempts = 3
 // retryBaseDelay is the first backoff interval; it doubles each attempt.
 const retryBaseDelay = 500 * time.Millisecond
 
+// retryMaxDelay caps a single backoff wait. The ceiling is essential, not just
+// cosmetic: retryMaxAttempts is operator-configurable (PAD_RETRY_MAX_ATTEMPTS)
+// with no upper bound, and a naive `baseDelay << attempt` overflows int64 at
+// ~34 attempts into a NEGATIVE duration — which then panics rand.Int63n and
+// crashes the request goroutine. Growing the delay by guarded doubling up to
+// this ceiling keeps it positive and bounded for any attempt count.
+const retryMaxDelay = 30 * time.Second
+
 // isRetryable reports whether an error is a transient provider condition worth
 // retrying. Rate-limit and provider-down are safe to retry; auth/balance/
 // context-limit errors are permanent and must surface immediately.
@@ -25,8 +33,29 @@ func isRetryable(err error) bool {
 // increasing, jittered interval; if the previous error carried a server
 // Retry-After hint, the wait is raised to at least that hint so we respect the
 // provider's guidance instead of hammering it on a fixed schedule.
+// cappedBackoff returns the pre-jitter exponential backoff delay for attempt,
+// grown by guarded doubling up to a ceiling. Doubling-with-guard (rather than
+// `baseDelay << attempt`) is essential: retryMaxAttempts is operator-configurable
+// (PAD_RETRY_MAX_ATTEMPTS) with no upper bound, and the shift overflows int64
+// into a NEGATIVE duration at ~34 attempts — which then panics rand.Int63n in
+// backoff. A base delay already above the ceiling is honored but not grown.
+func cappedBackoff(attempt int, baseDelay time.Duration) time.Duration {
+	if baseDelay <= 0 {
+		baseDelay = retryBaseDelay
+	}
+	ceiling := max(retryMaxDelay, baseDelay)
+	d := baseDelay
+	for i := 0; i < attempt && d < ceiling; i++ {
+		d <<= 1
+	}
+	if d > ceiling {
+		d = ceiling
+	}
+	return d
+}
+
 func backoff(ctx context.Context, attempt int, lastErr error, baseDelay time.Duration) error {
-	d := baseDelay << attempt // 500ms, 1s, 2s, …
+	d := cappedBackoff(attempt, baseDelay)
 	// Full jitter: random in [0, d] to avoid thundering-herd alignment.
 	d = time.Duration(rand.Int63n(int64(d) + 1)) // #nosec G404 -- jitter only, not security-sensitive
 	if hint := retryAfterFrom(lastErr); hint > d {

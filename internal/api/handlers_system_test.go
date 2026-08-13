@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -120,5 +121,51 @@ func TestReadinessProbe_NilRedisPingerSkipsCheck(t *testing.T) {
 	h.handleReadiness(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 when Redis pinger is nil, got %d", w.Code)
+	}
+}
+
+// TestAdminSystemHealth_AdminGetsBreakdown verifies the admin health endpoint
+// returns a structured per-subsystem payload. The JWT test router uses a
+// filesystem backend, so DB=ok, blob=skipped (filesystem has no blob backend),
+// Redis=skipped (nil pinger), overall=ok.
+func TestAdminSystemHealth_AdminGetsBreakdown(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/system/health", bearer, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	var resp adminHealthResponse
+	decodeJSON(t, rr, &resp)
+	if resp.Database.Status != "ok" {
+		t.Errorf("database status = %q, want ok", resp.Database.Status)
+	}
+	if resp.Blob.Status != "skipped" {
+		t.Errorf("blob status = %q, want skipped (filesystem has no blob)", resp.Blob.Status)
+	}
+	if resp.Redis.Status != "skipped" {
+		t.Errorf("redis status = %q, want skipped (no pinger wired)", resp.Redis.Status)
+	}
+	if resp.Overall != "ok" {
+		t.Errorf("overall = %q, want ok", resp.Overall)
+	}
+}
+
+// TestAdminSystemHealth_NonAdmin_Forbidden proves the admin gate applies.
+func TestAdminSystemHealth_NonAdmin_Forbidden(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	seedUserWithRole(t, rt, "member-1", "member@example.com", auth.RoleMember)
+	pair, err := rt.security.AuthMgr.Issue("member-1", "member@example.com", auth.RoleMember)
+	if err != nil {
+		t.Fatalf("issue member jwt: %v", err)
+	}
+	bearer := "Bearer " + pair.AccessToken
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/system/health", bearer, nil)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for non-admin, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 }

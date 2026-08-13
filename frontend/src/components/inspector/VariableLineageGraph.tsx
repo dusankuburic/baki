@@ -1,40 +1,142 @@
-import {useMemo} from 'react'
+import {useEffect, useRef, useMemo} from 'react'
+import cytoscape from 'cytoscape'
+// @ts-expect-error cytoscape-dagre has no types
+import dagre from 'cytoscape-dagre'
 import type {VariableEvent} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
 import {Info} from 'lucide-react'
 
+cytoscape.use(dagre)
+
+// EVENT_COLOR maps an event type to a node accent color. The color matches the
+// timeline chips in VariableLineageInInspector so the graph + list agree.
 const EVENT_COLOR: Record<VariableEvent['type'], string> = {
-  init: 'var(--success)',
-  mutate: 'var(--warning)',
-  read: 'var(--info)',
+  init: '#22c55e', // green
+  mutate: '#f59e0b', // amber
+  read: '#3b82f6', // blue
 }
 
-const EVENT_PATH: Record<VariableEvent['type'], string> = {
-  // pencil icon
-  init: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
-  // arrow icon
-  mutate: 'M5 12h14M12 5l7 7-7 7',
-  // eye icon
-  read: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+// dominantType picks the strongest event type on a block that hosts several
+// events (init beats mutate beats read — an init is the defining touch).
+function dominantType(types: Set<VariableEvent['type']>): VariableEvent['type'] {
+  if (types.has('init')) return 'init'
+  if (types.has('mutate')) return 'mutate'
+  return 'read'
 }
 
 type Props = {
   events: VariableEvent[]
 }
 
+/**
+ * Variable lineage rendered as a Cytoscape DAG. Each node is a distinct block
+ * the variable passes through (collapsing repeated events on the same block),
+ * colored by the dominant event type (init/mutate/read). Edges follow event
+ * order, so the variable's journey across blocks/subflows reads left-to-right.
+ *
+ * Replaces the earlier linear SVG: that view laid every event in one row, so a
+ * variable touched many times on a few blocks produced a long redundant strip
+ * with no cross-subflow structure. This Cytoscape view mirrors GraphView's
+ * mount/destroy lifecycle and supports pan/zoom + click-to-navigate.
+ */
 export default function VariableLineageGraph({events}: Props) {
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const cyRef = useRef<cytoscape.Core | null>(null)
 
-  const nodes = useMemo(() => {
-    return events.map((e, i) => ({
-      ...e,
-      id: `v-${i}`,
-      x: i * 80 + 40,
-      y: 40,
+  // Build Cytoscape elements: one node per distinct blockId, edges in event
+  // order (skipping self-loops where consecutive events hit the same block).
+  const elements = useMemo(() => {
+    if (events.length === 0) return []
+    const byBlock = new Map<string, {types: Set<VariableEvent['type']>; line: number; subflowId: string}>()
+    for (const e of events) {
+      let entry = byBlock.get(e.blockId)
+      if (!entry) {
+        entry = {types: new Set(), line: e.line, subflowId: e.subflowId}
+        byBlock.set(e.blockId, entry)
+      }
+      entry.types.add(e.type)
+    }
+    const nodes = [...byBlock.entries()].map(([blockId, info]) => ({
+      group: 'nodes' as const,
+      data: {
+        id: blockId,
+        blockId,
+        line: info.line,
+        subflowId: info.subflowId,
+        color: EVENT_COLOR[dominantType(info.types)],
+        label: `L${info.line}`,
+      },
     }))
+    // Edges: connect event[i].blockId → event[i+1].blockId, deduped + no self.
+    const edges = []
+    const seen = new Set<string>()
+    let edgeIdx = 0
+    for (let i = 1; i < events.length; i++) {
+      const src = events[i - 1].blockId
+      const tgt = events[i].blockId
+      if (src === tgt) continue
+      const key = `${src}->${tgt}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      edges.push({group: 'edges' as const, data: {id: `e${edgeIdx++}`, source: src, target: tgt}})
+    }
+    return [...nodes, ...edges]
   }, [events])
 
-  if (nodes.length === 0) {
+  useEffect(() => {
+    if (!containerRef.current || elements.length === 0) return
+
+    const instance = cytoscape({
+      container: containerRef.current,
+      elements,
+      minZoom: 0.3,
+      maxZoom: 3,
+      style: [
+        {
+          selector: 'node',
+          style: {
+            'background-color': 'data(color)',
+            label: 'data(label)',
+            color: '#9ca3af',
+            'font-size': 9,
+            'text-valign': 'bottom',
+            'text-margin-y': 4,
+            width: 22,
+            height: 22,
+            'border-width': 2,
+            'border-color': '#ffffff22',
+          },
+        },
+        {
+          selector: 'edge',
+          style: {
+            'curve-style': 'bezier',
+            'target-arrow-shape': 'triangle',
+            'line-color': '#6b728055',
+            'target-arrow-color': '#6b728055',
+            width: 1.5,
+          },
+        },
+      ],
+    })
+
+    instance.on('tap', 'node', evt => {
+      const blockId = evt.target.data('blockId')
+      if (blockId) navigateToBlock(blockId)
+    })
+
+    instance.layout({name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 50, animate: false} as cytoscape.LayoutOptions).run()
+    instance.fit(undefined, 30)
+
+    cyRef.current = instance
+    return () => {
+      instance.destroy()
+      cyRef.current = null
+    }
+  }, [elements, navigateToBlock])
+
+  if (events.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-6 opacity-40">
         <Info size={20} className="mb-1.5" />
@@ -43,68 +145,5 @@ export default function VariableLineageGraph({events}: Props) {
     )
   }
 
-  const width = nodes.length * 80 + 80
-
-  return (
-    <div className="w-full overflow-x-auto custom-scrollbar pb-4">
-      <svg width={width} height={100} className="mx-auto">
-        <defs>
-          <marker id="vl-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="currentColor" className="text-border-default" />
-          </marker>
-        </defs>
-
-        {/* Edges */}
-        {nodes.slice(1).map((node, i) => (
-          <line
-            key={`edge-${i}`}
-            x1={nodes[i].x + 14}
-            y1={nodes[i].y}
-            x2={node.x - 14}
-            y2={node.y}
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeDasharray={node.type === 'read' ? '4 2' : undefined}
-            className="text-border-subtle"
-            markerEnd="url(#vl-arrow)"
-          />
-        ))}
-
-        {/* Nodes */}
-        {nodes.map(node => {
-          const color = EVENT_COLOR[node.type]
-          return (
-            <g key={node.id} className="cursor-pointer" onClick={() => navigateToBlock(node.blockId)}>
-              <circle
-                cx={node.x}
-                cy={node.y}
-                r="16"
-                strokeWidth="2"
-                // CSS var() does not resolve in SVG presentation
-                // attributes — apply theme colors via `style`.
-                style={{fill: 'var(--surface-2)', stroke: color}}
-              />
-              {/* Icon via SVG path — avoids foreignObject overhead */}
-              <g
-                transform={`translate(${node.x - 6}, ${node.y - 6})`}
-                fill="none"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                viewBox="0 0 24 24"
-                style={{stroke: color}}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24">
-                  <path d={EVENT_PATH[node.type]} />
-                </svg>
-              </g>
-              <text x={node.x} y={node.y + 28} textAnchor="middle" className="text-2xs fill-text-tertiary font-mono">
-                L{node.line}
-              </text>
-            </g>
-          )
-        })}
-      </svg>
-    </div>
-  )
+  return <div ref={containerRef} className="w-full h-44 rounded-lg border border-border-subtle bg-surface-1" />
 }

@@ -4,7 +4,6 @@ import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
-import {isTauri} from '@/platform/guards'
 import type {ProviderID, AIProviderConfig} from '@/types'
 
 export default function AIBehaviorPanel() {
@@ -35,20 +34,36 @@ export default function AIBehaviorPanel() {
           </p>
         </div>
 
-        {!isTauri() && (
-          <div>
-            <label className="text-sm font-medium text-text-primary block mb-3">Embedding Assistant</label>
-            <SegmentedControl
-              value={ai.embeddingProvider}
-              onChange={v => updateAI({embeddingProvider: v as ProviderID})}
-              options={[
-                {value: 'openai', label: 'OpenAI'},
-                {value: 'gemini', label: 'Gemini'},
-              ]}
-            />
-            <p className="text-xs text-text-tertiary mt-2">Provider used to index and search your Knowledge Base.</p>
-          </div>
-        )}
+        <div>
+          <label className="text-sm font-medium text-text-primary block mb-3">Embedding Assistant</label>
+          <SegmentedControl
+            value={ai.embeddingProvider}
+            onChange={v => updateAI({embeddingProvider: v as ProviderID})}
+            options={[
+              {value: 'openai', label: 'OpenAI'},
+              {value: 'gemini', label: 'Gemini'},
+              {value: 'glm', label: 'GLM'},
+              {value: 'github-models', label: 'GitHub Models'},
+            ]}
+          />
+          <p className="text-xs text-text-tertiary mt-2">
+            Provider used to index and search your Knowledge Base. Only these providers support embeddings; a Claude-only setup can't use the Knowledge Base.
+          </p>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium text-text-primary block mb-3">Embedding Model</label>
+          <Input
+            value={ai.embeddingModel ?? ''}
+            onChange={e => updateAI({embeddingModel: e.target.value})}
+            placeholder="Provider default"
+          />
+          <p className="text-xs text-text-tertiary mt-2">
+            Override the embedding model name (e.g. <code className="text-text-secondary">text-embedding-3-large</code>).
+            Leave blank to use the provider&apos;s default. The pgvector index tolerates a model swap; mismatched-dimension
+            chunks are excluded at insert.
+          </p>
+        </div>
 
         <div className="space-y-4 pt-2">
           <label className="text-sm font-medium text-text-primary block">History & Costs</label>
