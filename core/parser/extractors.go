@@ -16,25 +16,36 @@ func parseProperties(raw string) map[string]string {
 	cleaned := reOutputVar.ReplaceAllString(raw, "")
 	cleaned = strings.TrimSpace(cleaned)
 
+	// No colon anywhere ⇒ no key: value pair can exist; skip the scan (most
+	// action lines have no properties at all).
+	if !strings.Contains(cleaned, ":") {
+		return props
+	}
+
 	props = extractKeyValuePairs(cleaned, props)
 
 	return props
 }
 
+// The scanners below are byte-wise on purpose: every delimiter (quotes,
+// colon, whitespace) and every key char is ASCII, and UTF-8 continuation
+// bytes (≥0x80) fail isKeyChar just like the multibyte runes they form — so
+// byte positions behave identically to rune positions for what is found,
+// without the 4-bytes-per-char allocation the []rune conversion cost.
+
 func extractKeyValuePairs(text string, props map[string]string) map[string]string {
 	pos := 0
-	runes := []rune(text)
 
-	for pos < len(runes) {
-		key, keyEnd := findNextKey(runes, pos)
+	for pos < len(text) {
+		key, keyEnd := findNextKey(text, pos)
 		if key == "" {
 			break
 		}
 
 		valStart := keyEnd
-		valEnd, nextPos := findValueEnd(runes, valStart)
+		valEnd, nextPos := findValueEnd(text, valStart)
 
-		value := strings.TrimSpace(string(runes[valStart:valEnd]))
+		value := strings.TrimSpace(text[valStart:valEnd])
 		value = stripQuotes(value)
 		props[key] = value
 
@@ -44,27 +55,27 @@ func extractKeyValuePairs(text string, props map[string]string) map[string]strin
 	return props
 }
 
-func findNextKey(runes []rune, start int) (string, int) {
+func findNextKey(text string, start int) (string, int) {
 	pos := start
-	for pos < len(runes) {
-		if !isKeyChar(runes[pos]) {
+	for pos < len(text) {
+		if !isKeyChar(text[pos]) {
 			pos++
 			continue
 		}
 
 		keyStart := pos
-		for pos < len(runes) && isKeyChar(runes[pos]) {
+		for pos < len(text) && isKeyChar(text[pos]) {
 			pos++
 		}
 
-		if pos >= len(runes) || runes[pos] != ':' {
+		if pos >= len(text) || text[pos] != ':' {
 			pos = keyStart + 1
 			continue
 		}
 		pos++
 
-		if pos >= len(runes) || runes[pos] == ' ' || runes[pos] == '\t' {
-			return string(runes[keyStart : pos-1]), pos
+		if pos >= len(text) || text[pos] == ' ' || text[pos] == '\t' {
+			return text[keyStart : pos-1], pos
 		}
 
 		pos = keyStart + 1
@@ -72,34 +83,34 @@ func findNextKey(runes []rune, start int) (string, int) {
 	return "", pos
 }
 
-func findValueEnd(runes []rune, start int) (int, int) {
+func findValueEnd(text string, start int) (int, int) {
 	pos := start
 
-	for pos < len(runes) {
-		if runes[pos] == ' ' || runes[pos] == '\t' {
+	for pos < len(text) {
+		if text[pos] == ' ' || text[pos] == '\t' {
 			pos++
 			continue
 		}
 		break
 	}
 
-	for pos < len(runes) {
-		ch := runes[pos]
+	for pos < len(text) {
+		ch := text[pos]
 
-		if ch == '$' && pos+3 < len(runes) && runes[pos+1] == '\'' && runes[pos+2] == '\'' && runes[pos+3] == '\'' {
-			end := findTripleQuoteEnd(runes, pos+4)
+		if ch == '$' && pos+3 < len(text) && text[pos+1] == '\'' && text[pos+2] == '\'' && text[pos+3] == '\'' {
+			end := findTripleQuoteEnd(text, pos+4)
 			if end == -1 {
-				pos = len(runes)
+				pos = len(text)
 			} else {
 				pos = end
 			}
 			continue
 		}
 
-		if ch == '\'' && pos+2 < len(runes) && runes[pos+1] == '\'' && runes[pos+2] == '\'' {
-			end := findTripleQuoteEnd(runes, pos+3)
+		if ch == '\'' && pos+2 < len(text) && text[pos+1] == '\'' && text[pos+2] == '\'' {
+			end := findTripleQuoteEnd(text, pos+3)
 			if end == -1 {
-				pos = len(runes)
+				pos = len(text)
 			} else {
 				pos = end
 			}
@@ -108,12 +119,12 @@ func findValueEnd(runes []rune, start int) (int, int) {
 
 		if isKeyChar(ch) {
 			peek := pos + 1
-			for peek < len(runes) && isKeyChar(runes[peek]) {
+			for peek < len(text) && isKeyChar(text[peek]) {
 				peek++
 			}
-			if peek < len(runes) && runes[peek] == ':' {
+			if peek < len(text) && text[peek] == ':' {
 				nextAfterColon := peek + 1
-				if nextAfterColon >= len(runes) || runes[nextAfterColon] == ' ' || runes[nextAfterColon] == '\t' {
+				if nextAfterColon >= len(text) || text[nextAfterColon] == ' ' || text[nextAfterColon] == '\t' {
 					return pos, pos
 				}
 			}
@@ -125,16 +136,16 @@ func findValueEnd(runes []rune, start int) (int, int) {
 	return pos, pos
 }
 
-func findTripleQuoteEnd(runes []rune, start int) int {
-	for i := start; i+2 < len(runes); i++ {
-		if runes[i] == '\'' && runes[i+1] == '\'' && runes[i+2] == '\'' {
+func findTripleQuoteEnd(text string, start int) int {
+	for i := start; i+2 < len(text); i++ {
+		if text[i] == '\'' && text[i+1] == '\'' && text[i+2] == '\'' {
 			return i + 3
 		}
 	}
 	return -1
 }
 
-func isKeyChar(ch rune) bool {
+func isKeyChar(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.'
 }
 
@@ -171,11 +182,9 @@ func extractVariables(raw string) []string {
 		// because Go's regexp doesn't support lookarounds.
 		//
 		// Every index below is read from — and applied back onto — masked, never
-		// expression. maskStrings round-trips its input through []rune, so on
-		// malformed UTF-8 (a single invalid byte decodes to the 3-byte U+FFFD
-		// replacement rune) masked's byte length can differ from expression's;
-		// slicing expression with an offset computed against masked then panics
-		// with "slice bounds out of range". reIdentifier only matches ASCII word
+		// expression: maskStrings collapses each literal to a single space, so
+		// masked's length differs from expression's and offsets computed against
+		// one must never slice the other. reIdentifier only matches ASCII word
 		// characters, which maskStrings never alters outside a literal, so
 		// masked[start:end] holds the identical identifier text expression[start:end]
 		// would have — with no risk of an offset computed against one string

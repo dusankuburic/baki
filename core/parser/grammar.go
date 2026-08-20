@@ -1,6 +1,9 @@
 package parser
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var (
 	reRegionStart  = regexp.MustCompile(`^#\s*Region\s+"([^"]+)"`)
@@ -63,52 +66,63 @@ var (
 	reExitLoop = regexp.MustCompile(`(?i)^EXIT\s+LOOP$`)
 )
 
+// hasPrefixFold reports whether s starts with prefix, case-insensitively,
+// without allocating (unlike ToUpper+HasPrefix).
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// maskStrings blanks out string-literal content so downstream %var% regexes
+// only match outside literals. Byte-wise on purpose: the delimiters (' " $)
+// are ASCII, and UTF-8 continuation bytes (≥0x80) can never collide with
+// them, so byte comparisons are exact and allocation-free — the previous
+// rune-slice version allocated a fresh string per rune-window comparison.
+// The masked text is only used for regex MATCHING (positions never map back
+// to the original), so replacing each literal with a single space is fine.
 func maskStrings(s string) string {
-	runes := []rune(s)
-	n := len(runes)
-	for i := 0; i < n; i++ {
-		// Handle $'''...''' and '''...'''
-		if (i+3 < n && string(runes[i:i+4]) == "$'''") || (i+2 < n && string(runes[i:i+3]) == "'''") {
-			start := i
-			isInterpolated := runes[i] == '$'
-			if isInterpolated {
-				i += 4
-			} else {
-				i += 3
-			}
-
-			// Find end '''
-			for i+2 < n {
-				if string(runes[i:i+3]) == "'''" {
-					i += 2
-					break
-				}
-				runes[i] = ' '
-				i++
-			}
-			// Mask the markers too if we want full isolation, but here we just mask content
-			for j := start; j <= i && j < n; j++ {
-				runes[j] = ' '
-			}
+	out := make([]byte, 0, len(s))
+	i, n := 0, len(s)
+	for i < n {
+		c := s[i]
+		// $'''...''' (interpolated) or '''...''' literal.
+		if c == '$' && i+3 < n && s[i+1] == '\'' && s[i+2] == '\'' && s[i+3] == '\'' {
+			end := indexTripleQuote(s, i+4)
+			out = append(out, ' ')
+			i = end
 			continue
 		}
-
-		// Handle '...' and "..."
-		r := runes[i]
-		if r == '\'' || r == '"' {
-			start := i
-			quoteChar := r
-			i++
-			for i < n && runes[i] != quoteChar {
-				runes[i] = ' '
-				i++
-			}
-			// Mask quotes
-			for j := start; j <= i && j < n; j++ {
-				runes[j] = ' '
-			}
+		if c == '\'' && i+2 < n && s[i+1] == '\'' && s[i+2] == '\'' {
+			end := indexTripleQuote(s, i+3)
+			out = append(out, ' ')
+			i = end
 			continue
 		}
+		// '...' or "..." literal.
+		if c == '\'' || c == '"' {
+			j := i + 1
+			for j < n && s[j] != c {
+				j++
+			}
+			out = append(out, ' ')
+			i = j + 1 // past the closing quote (or n if unterminated)
+			continue
+		}
+		out = append(out, c)
+		i++
 	}
-	return string(runes)
+	return string(out)
+}
+
+// indexTripleQuote returns the index just past the next ''' at or after
+// from, or len(s) when the literal is unterminated.
+func indexTripleQuote(s string, from int) int {
+	i := from
+	n := len(s)
+	for i+2 < n {
+		if s[i] == '\'' && s[i+1] == '\'' && s[i+2] == '\'' {
+			return i + 3
+		}
+		i++
+	}
+	return n
 }

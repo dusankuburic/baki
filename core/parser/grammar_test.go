@@ -75,11 +75,15 @@ func TestMaskStrings_MultipleStrings(t *testing.T) {
 	}
 }
 
-func TestMaskStrings_MaskLength_Preserved(t *testing.T) {
+// TestMaskStrings_LiteralsCollapseToSpace pins the masking contract: each
+// literal collapses to a single space (the masked text is only ever used for
+// regex matching — offsets never map back — so preserving literal length is
+// not required, and collapsing avoids per-rune allocations).
+func TestMaskStrings_LiteralsCollapseToSpace(t *testing.T) {
 	input := "X 'abc' Y"
 	got := maskStrings(input)
-	if len([]rune(got)) != len([]rune(input)) {
-		t.Errorf("masking must preserve rune length: input %d, got %d", len([]rune(input)), len([]rune(got)))
+	if got != "X   Y" {
+		t.Errorf("maskStrings(%q) = %q, want %q", input, got, "X   Y")
 	}
 }
 
@@ -93,11 +97,13 @@ func TestMaskStrings_EmptyQuotedString(t *testing.T) {
 }
 
 func TestMaskStrings_UnclosedSingleQuote(t *testing.T) {
-	// Unclosed quote: should not panic.
+	// Unclosed quote: masks to end of input without panicking.
 	input := "SET X TO 'unclosed"
 	got := maskStrings(input)
-	// Just verify it doesn't panic and returns a string of equal rune length.
-	if len([]rune(got)) != len([]rune(input)) {
-		t.Errorf("rune length changed: input %d, got %d", len([]rune(input)), len([]rune(got)))
+	if strings.Contains(got, "unclosed") {
+		t.Errorf("unclosed literal content should be masked; got %q", got)
+	}
+	if !strings.HasPrefix(got, "SET X TO") {
+		t.Errorf("prefix should survive; got %q", got)
 	}
 }

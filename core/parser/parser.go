@@ -773,11 +773,10 @@ func tokenizeVariables(text string) []models.BlockToken {
 		masked := maskStrings(expression)
 		target := ""
 		// Every index below is read from — and applied back onto — masked, never
-		// expression: maskStrings round-trips through []rune, so on malformed
-		// UTF-8 masked's byte length can diverge from expression's, and slicing
-		// expression with a masked-derived offset then panics ("slice bounds out
-		// of range"). See the identical comment on extractVariables in
-		// extractors.go for the full explanation.
+		// expression: maskStrings collapses each literal to a single space, so
+		// the two strings' lengths diverge and an offset computed against one
+		// must never slice the other. See the identical comment on
+		// extractVariables in extractors.go for the full explanation.
 		ids := reIdentifier.FindAllStringSubmatchIndex(masked, -1)
 		for _, idMatch := range ids {
 			start, end := idMatch[0], idMatch[1]

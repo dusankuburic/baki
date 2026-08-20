@@ -236,11 +236,11 @@ func classifyComment(b tokenBase) (Token, bool) {
 	if reRegionStart.MatchString(content) || reRegionEnd.MatchString(content) {
 		return Token{}, false
 	}
-	upper := strings.ToUpper(strings.TrimSpace(content))
-
 	if reComment.MatchString(content) {
 		name := content
-		if strings.HasPrefix(upper, "COMMENT") {
+		// Allocation-free case-insensitive prefix checks (ToUpper allocated
+		// a fresh string per line even for non-matching lines).
+		if hasPrefixFold(content, "COMMENT") {
 			name = strings.TrimSpace(content[len("COMMENT"):])
 		} else if strings.HasPrefix(content, "#") && !reRegionStart.MatchString(content) {
 			name = strings.TrimSpace(content[1:])
@@ -352,9 +352,9 @@ func classifyRegion(b tokenBase) (Token, bool) {
 // (`BLOCK 'name'`), SWITCH, CASE, and DEFAULT.
 func classifyBlockControl(b tokenBase) (Token, bool) {
 	content := b.content
-	upper := strings.ToUpper(strings.TrimSpace(content))
+	trimmed := strings.TrimSpace(content)
 
-	if upper == "END" || upper == "END SUBFLOW" {
+	if strings.EqualFold(trimmed, "END") || strings.EqualFold(trimmed, "END SUBFLOW") {
 		return Token{
 			Kind:    TokEnd,
 			Line:    b.lineNum,
@@ -490,7 +490,9 @@ func classifyCondition(b tokenBase) (Token, bool) {
 			rawType = m[1]
 		}
 		// Strip trailing THEN keyword: "IF %x% > 0 THEN" → "IF %x% > 0"
-		if upper := strings.ToUpper(strings.TrimSpace(name)); strings.HasSuffix(upper, " THEN") {
+		// (case-insensitive suffix check, allocation-free).
+		trimmed := strings.TrimSpace(name)
+		if len(trimmed) >= 5 && strings.EqualFold(trimmed[len(trimmed)-5:], " THEN") {
 			name = strings.TrimSpace(name[:len(name)-5])
 		}
 		return Token{
