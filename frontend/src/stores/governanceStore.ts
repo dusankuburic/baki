@@ -104,14 +104,22 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
   },
 
   markAllRead: async () => {
-    set(state => ({
-      alerts: state.alerts.map(a => (a.readAt ? a : {...a, readAt: new Date().toISOString()})),
+    const prev = get()
+    // Optimistic: stamp every unread row and zero the badge. On failure,
+    // restore the previous alerts + unreadCount (mirroring markRead/dismiss)
+    // so the bell doesn't claim 0 unread while the server disagrees.
+    set({
+      alerts: prev.alerts.map(a => (a.readAt ? a : {...a, readAt: new Date().toISOString()})),
       unreadCount: 0,
-    }))
+    })
     try {
       await governanceApi.markAllRead()
     } catch (err) {
-      logger.warn('governance: mark-all-read failed', err)
+      set({
+        alerts: prev.alerts,
+        unreadCount: prev.unreadCount,
+        lastError: err instanceof Error ? err.message : 'Failed to mark all alerts read',
+      })
     }
   },
 

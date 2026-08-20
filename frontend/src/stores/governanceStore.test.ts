@@ -92,6 +92,21 @@ describe('governanceStore', () => {
     expect(useGovernanceStore.getState().alerts[0].readAt).toBeUndefined()
   })
 
+  it('markAllRead rolls back alerts and badge on API error', async () => {
+    useGovernanceStore.setState({
+      alerts: [baseAlert({id: 'a1', readAt: undefined}), baseAlert({id: 'a2', readAt: undefined})],
+      unreadCount: 2,
+    })
+    mockMarkAllRead.mockRejectedValue(new Error('fail'))
+    await useGovernanceStore.getState().markAllRead()
+    const st = useGovernanceStore.getState()
+    // The optimistic "all read" must be undone — otherwise the badge claims 0
+    // unread while the server still holds them unread.
+    expect(st.unreadCount).toBe(2)
+    expect(st.alerts.every(a => a.readAt === undefined)).toBe(true)
+    expect(st.lastError).toBeTruthy()
+  })
+
   it('dismiss hides the alert (stamps dismissedAt) and calls the API', async () => {
     useGovernanceStore.setState({alerts: [baseAlert({id: 'a1'})]})
     await useGovernanceStore.getState().dismiss('a1')

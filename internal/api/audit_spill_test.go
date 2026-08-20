@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"pad-analyzer/internal/metrics"
@@ -192,5 +194,45 @@ func TestAuditSpiller_DepthGauge(t *testing.T) {
 	}
 	if got := metrics.AuditSpillDepthCount(); got != 1 {
 		t.Errorf("pad_audit_spill_depth after drain = %v, want 1", got)
+	}
+}
+
+// TestAuditSpiller_DrainRewriteFailureKeepsFileIntact is the regression gate
+// for the drain-rewrite swallow: Drain previously ignored the rewrite error,
+// so a failed rewrite returned events that were still on disk — the reaper
+// replayed them (duplicate audit events) while the depth gauge had already
+// excluded them. With the atomic temp+rename rewrite, a failure leaves the
+// original file fully intact and Drain reports nothing drained.
+func TestAuditSpiller_DrainRewriteFailureKeepsFileIntact(t *testing.T) {
+	srcPath := filepath.Join(t.TempDir(), auditSpillFileName)
+	if err := os.WriteFile(srcPath, []byte("{\"id\":\"a\"}\n{\"id\":\"b\"}\n"), 0o600); err != nil {
+		t.Fatalf("seed spill file: %v", err)
+	}
+	st := &auditSpillStore{path: srcPath, maxBytes: 1 << 20, depth: 2}
+
+	// Deterministic failure injection: pre-create the temp-rewrite path as a
+	// directory so WriteFile(tmp) fails with EISDIR. The original file must
+	// remain intact, nothing drained, depth unchanged.
+	if err := os.Mkdir(srcPath+".drain.tmp", 0o700); err != nil {
+		t.Fatalf("block temp write: %v", err)
+	}
+	if got := st.Drain(10); len(got) != 0 {
+		t.Fatalf("expected no events drained on rewrite failure, got %v", ids(got))
+	}
+	if st.depth != 2 {
+		t.Errorf("depth must be unchanged on failed drain, got %d", st.depth)
+	}
+
+	// Recovery: unblock, then drain returns both events exactly once — no
+	// duplicates, no loss.
+	if err := os.Remove(srcPath + ".drain.tmp"); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+	got := st.Drain(10)
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("recovery drain = %v, want [a b]", ids(got))
+	}
+	if st.Drain(10) != nil || st.HasItems() {
+		t.Error("file must be empty after recovery drain")
 	}
 }

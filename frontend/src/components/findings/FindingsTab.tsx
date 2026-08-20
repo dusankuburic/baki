@@ -5,6 +5,7 @@ import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analy
 import {useFlowStore} from '@/stores/flowStore'
 import {EmptyState, useToast} from '@/components/shared'
 import {stageFindingFix} from '@/lib/fixWithAI'
+import {writeClipboard} from '@/lib/clipboard'
 import FindingsSummary from './FindingsSummary'
 import FindingsList from './FindingsList'
 import FindingsToolbar from './FindingsToolbar'
@@ -12,9 +13,11 @@ import AnalysisRunner from './AnalysisRunner'
 import AnalysisDiffView from './AnalysisDiffView'
 import {exportFindingsCSV, exportFindingsHTML, exportFindingsSARIF} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
+import {useTranslation} from 'react-i18next'
 import type {AnalysisDiff, Finding, AnalysisReport} from '@/types'
 
 export default function FindingsTab() {
+  const {t} = useTranslation('findings')
   const doc = useFlowStore(s => s.document)
   const report = useAnalysisStore(s => (doc ? s.reports.get(doc.id) : undefined))
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
@@ -25,6 +28,19 @@ export default function FindingsTab() {
   const setProgress = useAnalysisStore(s => s.setProgress)
   const findingSearch = useAnalysisStore(s => s.findingSearch)
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
+  // Local input state keeps the field responsive; the store write (which
+  // drives the filter + regroup + reflatten of the whole report) is debounced
+  // so fast typing doesn't re-run the pipeline per keystroke. Mirrors the
+  // debouncedQuery pattern in LibraryWorkspace.
+  const [searchInput, setSearchInput] = useState(findingSearch)
+  useEffect(() => {
+    setSearchInput(findingSearch)
+  }, [findingSearch])
+  useEffect(() => {
+    if (searchInput === findingSearch) return
+    const t = setTimeout(() => setFindingSearch(searchInput), 150)
+    return () => clearTimeout(t)
+  }, [searchInput, findingSearch, setFindingSearch])
   const severityFilter = useAnalysisStore(s => s.severityFilter)
   const categoryFilter = useAnalysisStore(s => s.categoryFilter)
   const suppressedKeys = useAnalysisStore(s => s.suppressedKeys)
@@ -180,7 +196,7 @@ export default function FindingsTab() {
     try {
       const result = await flowApi.createShare(doc.id)
       const url = `${window.location.origin}/shared?token=${result.token}`
-      await navigator.clipboard.writeText(url)
+      await writeClipboard(url)
       const expires = result.expiresAt ? ` · expires ${new Date(result.expiresAt).toLocaleDateString()}` : ''
       toast.success('Share link copied to clipboard', {description: `${url}${expires}`})
     } catch (err) {
@@ -265,9 +281,9 @@ export default function FindingsTab() {
                 <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-disabled" />
                 <input
                   type="text"
-                  value={findingSearch}
-                  onChange={e => setFindingSearch(e.target.value)}
-                  placeholder="Search findings..."
+                  value={searchInput}
+                  onChange={e => setSearchInput(e.target.value)}
+                  placeholder={t('search.placeholder')}
                   className="w-full bg-surface-2 border border-border-subtle rounded-md pl-7 pr-2 py-1 text-2xs text-text-primary placeholder:text-text-disabled focus:outline-none focus:border-brand-500/50"
                 />
               </div>
@@ -276,12 +292,12 @@ export default function FindingsTab() {
           {findings.length === 0 ? (
             report.findings.length === 0 ? (
               <EmptyState
-                title="No findings"
-                description="The analysis didn't detect any issues. Your flow looks good!"
+                title={t('empty.noneTitle')}
+                description={t('empty.noneDescription')}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
-                No matching findings
+                {t('empty.noMatch')}
               </div>
             )
           ) : (

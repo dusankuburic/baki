@@ -9,6 +9,7 @@ import (
 
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-core/logger"
 )
 
 const (
@@ -123,8 +124,24 @@ func (s *auditSpillStore) Drain(max int) []*interfaces.AuditEvent {
 			out = append(out, &e)
 		}
 	}
-	// Rewrite the file with the unconsumed tail.
-	_ = os.WriteFile(s.path, remaining, 0o600)
+	// Rewrite the file with the unconsumed tail ATOMICALLY (temp + rename):
+	// a plain WriteFile truncates first, so a mid-write failure would lose the
+	// unconsumed tail. With rename semantics, any failure leaves the ORIGINAL
+	// file (including the events counted in `out`) fully intact — we report
+	// nothing drained and let the reaper retry, rather than risk replaying
+	// duplicates or corrupting the queue.
+	tmp := s.path + ".drain.tmp"
+	if err := os.WriteFile(tmp, remaining, 0o600); err != nil {
+		logger.Warn("audit spill: drain rewrite failed; leaving spill file intact",
+			"path", s.path, "err", err)
+		return nil
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		logger.Warn("audit spill: drain rename failed; leaving spill file intact",
+			"path", s.path, "err", err)
+		_ = os.Remove(tmp)
+		return nil
+	}
 	s.depth -= len(out)
 	if s.depth < 0 {
 		s.depth = 0 // defensive: file was mutated out-of-band
