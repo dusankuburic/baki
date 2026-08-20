@@ -747,8 +747,18 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 	// doc with errors embedded rather than a Go error), so we compare the
 	// error-severity parse-error counts: writing first would silently replace
 	// valid source with degraded source the user can't undo. Reject only when
-	// the patch makes things worse, so fixes on already-imperfect files still land.
-	if parseErrorCount(patched, filepath.Base(targetPath)) > parseErrorCount(string(data), filepath.Base(targetPath)) {
+	// the patch makes things worse, so fixes on already-imperfect files still
+	// land. Two parses total: the before-count parses the bytes JUST READ from
+	// disk (authoritative even if the doc in hand predates an external edit),
+	// and the after-parse doubles as the returned document below.
+	fileName := filepath.Base(targetPath)
+	beforeDoc, beforeErr := parser.ParseText(string(data), fileName, int64(len(data)))
+	before := 1 << 30
+	if beforeErr == nil && beforeDoc != nil {
+		before = analyzer.CountParseErrors(beforeDoc)
+	}
+	afterDoc, afterErr := parser.ParseText(patched, fileName, int64(len(patched)))
+	if afterErr != nil || analyzer.CountParseErrors(afterDoc) > before {
 		return nil, fmt.Errorf("patch would introduce parse errors (file left unchanged)")
 	}
 
@@ -757,11 +767,23 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 		return nil, fmt.Errorf("write source file: %w", writeErr)
 	}
 
-	// Re-parse the whole flow so cross-subflow indexes/state are consistent.
+	// Folder flows must re-parse the whole folder (cross-subflow indexes);
+	// single-file flows reuse the gate's after-parse — it is the parse of
+	// exactly the bytes just written, so a reload would only repeat it.
 	if info.IsDir() {
 		return s.LoadFlowFolder(doc.FilePath)
 	}
-	return s.LoadFlowFromPath(doc.FilePath)
+	afterDoc.FilePath = doc.FilePath
+	if s.astCache != nil {
+		hash := sha256.Sum256([]byte(patched))
+		s.astCache.Set(context.Background(), "ast:"+hex.EncodeToString(hash[:]), afterDoc, 24*time.Hour)
+	}
+	if s.settings != nil {
+		_ = s.settings.AddRecentFile(doc.FilePath, int64(len(patched)))
+	}
+	s.notifier.Emit("flow:loaded", afterDoc)
+	s.docProvider.SetCurrentDoc(afterDoc)
+	return afterDoc, nil
 }
 
 // SuppressFindingInSource writes a `# pad-ignore[ruleID]` directive into the
