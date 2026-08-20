@@ -59,30 +59,33 @@ func (r *UninitializedVariableRule) Check(block *models.Block, ctx *RuleContext)
 	return findings
 }
 
+// systemVarSet is the set of PAD built-in system variables (lowercased).
+// Package-level: the per-call map literal allocated ~35 entries on every
+// referenced-variable check.
+var systemVarSet = map[string]struct{}{
+	// Date/time
+	"currentdatetime": {}, "yesterday": {}, "tomorrow": {},
+	// Loop iteration
+	"loopindex": {}, "currentitem": {},
+	// UI interactions
+	"buttonpressed": {}, "selectedbutton": {},
+	// Windows user/machine identity
+	"username": {}, "currentuser": {}, "windowsusername": {}, "windowsuserdomainname": {},
+	"computername": {}, "machinename": {}, "hostname": {},
+	// File system paths
+	"userprofile": {}, "desktopdirectory": {}, "programfiles": {},
+	"programfilesx86": {}, "systemroot": {}, "windir": {}, "temp": {}, "tmp": {},
+	// PAD primitive constants
+	"newline": {}, "tab": {}, "true": {}, "false": {}, "blank": {},
+	// Browser automation
+	"pageurl": {}, "browserdata": {},
+	// Error handling built-ins
+	"lasterror": {}, "lasterrortext": {}, "errormessage": {}, "errortext": {},
+	"errordescription": {}, "erroroccurred": {},
+}
+
 func isSystemVariable(vname string) bool {
-	v := strings.ToLower(vname)
-	systemVars := map[string]struct{}{
-		// Date/time
-		"currentdatetime": {}, "yesterday": {}, "tomorrow": {},
-		// Loop iteration
-		"loopindex": {}, "currentitem": {},
-		// UI interactions
-		"buttonpressed": {}, "selectedbutton": {},
-		// Windows user/machine identity
-		"username": {}, "currentuser": {}, "windowsusername": {}, "windowsuserdomainname": {},
-		"computername": {}, "machinename": {}, "hostname": {},
-		// File system paths
-		"userprofile": {}, "desktopdirectory": {}, "programfiles": {},
-		"programfilesx86": {}, "systemroot": {}, "windir": {}, "temp": {}, "tmp": {},
-		// PAD primitive constants
-		"newline": {}, "tab": {}, "true": {}, "false": {}, "blank": {},
-		// Browser automation
-		"pageurl": {}, "browserdata": {},
-		// Error handling built-ins
-		"lasterror": {}, "lasterrortext": {}, "errormessage": {}, "errortext": {},
-		"errordescription": {}, "erroroccurred": {},
-	}
-	_, found := systemVars[v]
+	_, found := systemVarSet[strings.ToLower(vname)]
 	return found
 }
 

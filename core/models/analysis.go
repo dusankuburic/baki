@@ -67,7 +67,10 @@ type Finding struct {
 // document* (the cloud server stores the parsed doc and re-analyzes it in
 // place) but NOT across independent re-parses of the source text. Fingerprint
 // covers the cross-parse case.
-func (f Finding) Key() string {
+// Pointer receiver: Finding is ~200 bytes; every call site holds an
+// addressable value (slice element or variable), so the value copy per call
+// was pure overhead on hot paths (triage keys, fix-loop signatures, diff).
+func (f *Finding) Key() string {
 	return f.RuleID + ":" + f.BlockID
 }
 

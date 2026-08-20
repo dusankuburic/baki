@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"runtime"
+	"sync"
 	"time"
 
 	"pad-core/models"
@@ -9,13 +11,50 @@ import (
 func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *models.AppSettings) *models.BatchAnalysis {
 	start := time.Now()
 
+	// Each doc's analysis is CPU-bound and independent; a bounded worker pool
+	// parallelizes them (previously strictly sequential — a folder scan used
+	// one core). Results land in a pre-sized slice by index so the output
+	// order is identical to the sequential version. DefaultCache is
+	// mutex-guarded, so concurrent CachedAnalysis calls are safe.
+	workers := runtime.NumCPU()
+	if workers > 8 {
+		workers = 8 // bound: huge hosts add scheduling overhead, not throughput, for parse-sized work
+	}
+	if workers > len(docs) {
+		workers = len(docs)
+	}
+
+	reports := make([]*models.AnalysisReport, len(docs))
+	if workers <= 1 || len(docs) <= 1 {
+		for i, doc := range docs {
+			reports[i] = CachedAnalysis(doc, rules, settings, nil)
+		}
+	} else {
+		idx := make(chan int)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range idx {
+					reports[i] = CachedAnalysis(docs[i], rules, settings, nil)
+				}
+			}()
+		}
+		for i := range docs {
+			idx <- i
+		}
+		close(idx)
+		wg.Wait()
+	}
+
 	results := make([]models.BatchResult, 0, len(docs))
 	var totalFindings, totalErrors, totalWarnings, totalInfo int
 	var healthSum float64
 	healthCount := 0
 
-	for _, doc := range docs {
-		report := CachedAnalysis(doc, rules, settings, nil)
+	for i, doc := range docs {
+		report := reports[i]
 		result := models.BatchResult{
 			FlowID:   doc.ID,
 			FlowName: doc.Name,
@@ -23,6 +62,9 @@ func RunBatchAnalysis(docs []*models.FlowDocument, rules []Rule, settings *model
 		}
 		results = append(results, result)
 
+		if report == nil {
+			continue
+		}
 		totalFindings += len(report.Findings)
 		totalErrors += report.Stats.Errors
 		totalWarnings += report.Stats.Warnings

@@ -18,8 +18,8 @@ func (r *EmptyHandlerRule) Check(block *models.Block, ctx *RuleContext) []models
 	}
 
 	hasRealChildren := false
-	for _, child := range block.Children {
-		if child.Type != models.BlockTypeEnd {
+	for ci := range block.Children {
+		if block.Children[ci].Type != models.BlockTypeEnd {
 			hasRealChildren = true
 			break
 		}

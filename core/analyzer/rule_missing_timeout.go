@@ -18,6 +18,17 @@ var timeoutRequiredPrefixes = []string{
 	"OneDrive.",
 }
 
+// timeoutRequiredPrefixesLower mirrors timeoutRequiredPrefixes lowercased
+// once at package init, so requiresTimeout does zero allocations per block
+// (it previously ToLower'd every prefix on every action).
+var timeoutRequiredPrefixesLower = func() []string {
+	out := make([]string, len(timeoutRequiredPrefixes))
+	for i, p := range timeoutRequiredPrefixes {
+		out[i] = strings.ToLower(p)
+	}
+	return out
+}()
+
 type MissingTimeoutRule struct{}
 
 func (r *MissingTimeoutRule) ID() string   { return "missing-timeout" }
@@ -55,8 +66,8 @@ func (r *MissingTimeoutRule) Check(block *models.Block, ctx *RuleContext) []mode
 
 func requiresTimeout(rawType string) bool {
 	rt := strings.ToLower(rawType)
-	for _, prefix := range timeoutRequiredPrefixes {
-		if strings.HasPrefix(rt, strings.ToLower(prefix)) {
+	for _, prefix := range timeoutRequiredPrefixesLower {
+		if strings.HasPrefix(rt, prefix) {
 			return true
 		}
 	}

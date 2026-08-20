@@ -115,7 +115,8 @@ func computeSubflowMetrics(sf *models.Subflow, callGraph map[string]map[string]b
 				case models.BlockTypeCondition:
 					cyclo++
 					cog += depth + 1
-					for _, child := range b.Children {
+					for ci := range b.Children {
+						child := &b.Children[ci]
 						if child.Type == models.BlockTypeElse {
 							cyclo++
 							cog += depth + 1
@@ -125,7 +126,8 @@ func computeSubflowMetrics(sf *models.Subflow, callGraph map[string]map[string]b
 					cyclo++
 					cog += depth + 1
 				case models.BlockTypeSwitch:
-					for _, child := range b.Children {
+					for ci := range b.Children {
+						child := &b.Children[ci]
 						if child.Type == models.BlockTypeCase || child.Type == models.BlockTypeDefault {
 							cyclo++
 							cog += depth + 1

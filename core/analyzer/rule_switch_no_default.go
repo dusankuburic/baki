@@ -18,8 +18,8 @@ func (r *SwitchNoDefaultRule) Check(block *models.Block, ctx *RuleContext) []mod
 	if block.Type != models.BlockTypeSwitch {
 		return nil
 	}
-	for _, child := range block.Children {
-		if child.Type == models.BlockTypeDefault {
+	for ci := range block.Children {
+		if block.Children[ci].Type == models.BlockTypeDefault {
 			return nil
 		}
 	}

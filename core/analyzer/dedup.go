@@ -51,18 +51,22 @@ func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []Finding
 		subject string
 	}
 	seen := make(map[key]int)
-	var deduped []models.Finding
+	deduped := make([]models.Finding, 0, len(findings))
 	groups := make(map[string][]models.Finding)
 
-	for _, f := range findings {
-		k := key{blockID: f.BlockID, title: f.Title, subject: findingDiscriminator(f)}
-		groups[f.BlockID] = append(groups[f.BlockID], f)
+	// Index-based iteration: Finding is a large struct (~200 B); the value
+	// copy per element on `for _, f := range` doubled the pass's memory
+	// traffic on finding-dense reports.
+	for i := range findings {
+		f := &findings[i]
+		k := key{blockID: f.BlockID, title: f.Title, subject: findingDiscriminator(*f)}
+		groups[f.BlockID] = append(groups[f.BlockID], *f)
 
 		if _, exists := seen[k]; exists {
 			continue
 		}
 		seen[k] = len(deduped)
-		deduped = append(deduped, f)
+		deduped = append(deduped, *f)
 	}
 
 	var resultGroups []FindingGroup
@@ -70,8 +74,9 @@ func DeduplicateFindings(findings []models.Finding) ([]models.Finding, []Finding
 		primary := blockFindings[0]
 		dups := 0
 		titleSet := make(map[string]bool)
-		for _, f := range blockFindings {
-			tk := f.Title + "\x00" + findingDiscriminator(f)
+		for i := range blockFindings {
+			f := &blockFindings[i]
+			tk := f.Title + "\x00" + findingDiscriminator(*f)
 			if titleSet[tk] {
 				dups++
 			}
