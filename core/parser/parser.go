@@ -89,7 +89,7 @@ func (s *parseState) requireSubflow(tok Token, kind string) bool {
 		return true
 	}
 	s.parseErrors = append(s.parseErrors, models.ParseError{
-		Line: tok.Line, Message: kind + " outside subflow",
+		Line: tok.Line, Column: tok.Column, Message: kind + " outside subflow",
 		Severity: "warning", Snippet: truncate(tok.Raw, 200),
 	})
 	return false
@@ -120,7 +120,7 @@ func (s *parseState) requireDepth(tok Token) bool {
 		return true
 	}
 	s.parseErrors = append(s.parseErrors, models.ParseError{
-		Line: tok.Line, Message: fmt.Sprintf("nesting depth exceeds %d", maxNestingDepth),
+		Line: tok.Line, Column: tok.Column, Message: fmt.Sprintf("nesting depth exceeds %d", maxNestingDepth),
 		Severity: "error", Snippet: truncate(tok.Raw, 200),
 	})
 	return false
@@ -128,7 +128,7 @@ func (s *parseState) requireDepth(tok Token) bool {
 
 func (s *parseState) recordMalformedLine(tok Token) {
 	s.parseErrors = append(s.parseErrors, models.ParseError{
-		Line: tok.Line, Message: "malformed line",
+		Line: tok.Line, Column: tok.Column, Message: "malformed line",
 		Severity: "warning", Snippet: truncate(tok.Raw, 200),
 	})
 }
@@ -219,7 +219,7 @@ func (s *parseState) handleCase(tok Token) {
 	}
 	if !s.stackHas(models.BlockTypeSwitch) {
 		s.parseErrors = append(s.parseErrors, models.ParseError{
-			Line: tok.Line, Message: "CASE outside SWITCH",
+			Line: tok.Line, Column: tok.Column, Message: "CASE outside SWITCH",
 			Severity: "warning", Snippet: truncate(tok.Raw, 200),
 		})
 		return
@@ -240,7 +240,7 @@ func (s *parseState) handleDefault(tok Token) {
 	}
 	if !s.stackHas(models.BlockTypeSwitch) {
 		s.parseErrors = append(s.parseErrors, models.ParseError{
-			Line: tok.Line, Message: "DEFAULT outside SWITCH",
+			Line: tok.Line, Column: tok.Column, Message: "DEFAULT outside SWITCH",
 			Severity: "warning", Snippet: truncate(tok.Raw, 200),
 		})
 		return
@@ -354,7 +354,7 @@ func (s *parseState) handleConditionElse(tok Token) {
 	}
 	if !s.stackHas(models.BlockTypeCondition) {
 		s.parseErrors = append(s.parseErrors, models.ParseError{
-			Line: tok.Line, Message: "ELSE outside IF",
+			Line: tok.Line, Column: tok.Column, Message: "ELSE outside IF",
 			Severity: "warning", Snippet: truncate(tok.Raw, 200),
 		})
 		return

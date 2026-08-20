@@ -20,23 +20,23 @@ var (
 	// reOnErrorInlineParams captures the retry count, wait interval, and optional extended params.
 	reOnErrorInlineParams = regexp.MustCompile(`(?i)^ON\s+ERROR\s+REPEAT\s+(\d+)\s+TIMES\s+WAIT\s+(\S+)(?:\s+RetryType:\s+(\S+))?(?:\s+MinInterval:\s+(\S+))?(?:\s+MaxInterval:\s+(\S+))?`)
 	reComment             = regexp.MustCompile(`^(?i)(COMMENT\s+.*|#\s+.*|//\s+.*)`)
-	reBlockComment        = regexp.MustCompile(`^/#`)
-	reBlockCommentEnd     = regexp.MustCompile(`#/$`)
-	reBlockStart          = regexp.MustCompile(`^(?i)BLOCK(\s+.+)?$`)
-	reSwitchStart         = regexp.MustCompile(`^(?i)SWITCH\s+(.*)`)
-	reCase                = regexp.MustCompile(`^(?i)CASE\s+(.*)`)
-	reDefault             = regexp.MustCompile(`^(?i)DEFAULT\s*$`)
-	reDisableCall         = regexp.MustCompile(`^(?i)DISABLE\s+CALL\s+(\S+)`)
-	reCall                = regexp.MustCompile(`^(?i)CALL\s+(\S+)`)
-	reGoto                = regexp.MustCompile(`^(?i)GOTO\s+'?([^'\s]+)'?`)
-	reLabel               = regexp.MustCompile(`^(?i)LABEL\s+'?([^'\s]+)'?`)
-	reExit                = regexp.MustCompile(`^(?i)EXIT(\s+FUNCTION|\s+LOOP|\s+Code:.*)?\s*$`)
-	reErrorCapture        = regexp.MustCompile(`^(?i)ERROR\s+=>\s*(\w+)`)
-	reSetVariable         = regexp.MustCompile(`^(?i)SET\s+(\S+)\s+TO\s+(.*)`)
-	reWait                = regexp.MustCompile(`^(?i)WAIT\s+(\d+)`)
-	reWaitExpression      = regexp.MustCompile(`^(?i)WAIT\s+\(`)
-	reDottedAction        = regexp.MustCompile(`^([A-Z][a-zA-Z0-9]*(?:\.[A-Z][a-zA-Z0-9]*)+)\s+(.*)`)
-	reOutputVar           = regexp.MustCompile(`=>\s*(\w+)\s*$`)
+	// Block comments (/# ... #/) are detected with literal HasPrefix/HasSuffix
+	// checks in tokenizer.go — the ^/# and #/$ patterns don't need a regex.
+	reBlockStart     = regexp.MustCompile(`^(?i)BLOCK(\s+.+)?$`)
+	reSwitchStart    = regexp.MustCompile(`^(?i)SWITCH\s+(.*)`)
+	reCase           = regexp.MustCompile(`^(?i)CASE\s+(.*)`)
+	reDefault        = regexp.MustCompile(`^(?i)DEFAULT\s*$`)
+	reDisableCall    = regexp.MustCompile(`^(?i)DISABLE\s+CALL\s+(\S+)`)
+	reCall           = regexp.MustCompile(`^(?i)CALL\s+(\S+)`)
+	reGoto           = regexp.MustCompile(`^(?i)GOTO\s+'?([^'\s]+)'?`)
+	reLabel          = regexp.MustCompile(`^(?i)LABEL\s+'?([^'\s]+)'?`)
+	reExit           = regexp.MustCompile(`^(?i)EXIT(\s+FUNCTION|\s+LOOP|\s+Code:.*)?\s*$`)
+	reErrorCapture   = regexp.MustCompile(`^(?i)ERROR\s+=>\s*(\w+)`)
+	reSetVariable    = regexp.MustCompile(`^(?i)SET\s+(\S+)\s+TO\s+(.*)`)
+	reWait           = regexp.MustCompile(`^(?i)WAIT\s+(\d+)`)
+	reWaitExpression = regexp.MustCompile(`^(?i)WAIT\s+\(`)
+	reDottedAction   = regexp.MustCompile(`^([A-Z][a-zA-Z0-9]*(?:\.[A-Z][a-zA-Z0-9]*)+)\s+(.*)`)
+	reOutputVar      = regexp.MustCompile(`=>\s*(\w+)\s*$`)
 	// Captures anything between % signs as an expression.
 	reVariableRef = regexp.MustCompile(`%([^%]+)%`)
 	// Captures PAD string literals: $'''...''', '''...''', '...', or "..."
@@ -126,7 +126,7 @@ func maskStrings(s string) string {
 	return string(out)
 }
 
-// indexTripleQuote returns the index just past the next ''' at or after
+// indexTripleQuote returns the index just past the next ”' at or after
 // from, or len(s) when the literal is unterminated.
 func indexTripleQuote(s string, from int) int {
 	i := from

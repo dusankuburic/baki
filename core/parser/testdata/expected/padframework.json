@@ -2820,6 +2820,7 @@
   "parseErrors": [
     {
       "line": 24,
+      "column": 1,
       "message": "ELSE outside IF",
       "severity": "warning",
       "snippet": "ELSE"

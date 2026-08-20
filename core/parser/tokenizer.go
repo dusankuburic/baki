@@ -60,6 +60,10 @@ func Tokenize(text string) []Token {
 		trimmed := strings.TrimRight(raw, " \t\r")
 		indent := computeIndent(trimmed)
 		content := strings.TrimLeft(trimmed, " \t")
+		// Column of the first non-indent byte, 1-based. indent counts a tab
+		// as 4 columns (computeIndent's convention), which matches how PAD
+		// exports visually lay out the line.
+		column := indent + 1
 
 		if inBlockComment {
 			commentRaw.WriteString(raw)
@@ -91,7 +95,7 @@ func Tokenize(text string) []Token {
 				trimmed2 := strings.TrimRight(combined, " \t\r")
 				indent2 := computeIndent(trimmed2)
 				content2 := strings.TrimLeft(trimmed2, " \t")
-				tok := classifyLine(tripleStartLine, indent2, combined, content2)
+				tok := classifyLine(tripleStartLine, indent2, indent2+1, combined, content2)
 				// The token spans from tripleStartLine through this closing
 				// line; record the physical end so block fixers append/wrap/
 				// remove past the literal rather than inside it.
@@ -112,26 +116,26 @@ func Tokenize(text string) []Token {
 			continue
 		}
 
-	// Single-line block comment: /#...#/ entirely on one line. The patterns
-	// are literal prefix/suffix tests (^/#, #/$) — HasPrefix/HasSuffix avoids
-	// regex-NFA setup per line, and the start test is computed once for both
-	// branches below.
-	blockStart := strings.HasPrefix(content, "/#")
-	blockEnd := strings.HasSuffix(content, "#/")
-	if blockStart && blockEnd {
-		tokens = append(tokens, Token{
-			Kind:    TokComment,
-			Line:    lineNum,
-			Indent:  indent,
-			Raw:     raw,
-			Content: content,
-			Name:    strings.TrimSpace(content),
-			RawType: "COMMENT",
-		})
-		continue
-	}
+		// Single-line block comment: /#...#/ entirely on one line. The patterns
+		// are literal prefix/suffix tests (^/#, #/$) — HasPrefix/HasSuffix avoids
+		// regex-NFA setup per line, and the start test is computed once for both
+		// branches below.
+		blockStart := strings.HasPrefix(content, "/#")
+		blockEnd := strings.HasSuffix(content, "#/")
+		if blockStart && blockEnd {
+			tokens = append(tokens, Token{
+				Kind:    TokComment,
+				Line:    lineNum,
+				Indent:  indent,
+				Raw:     raw,
+				Content: content,
+				Name:    strings.TrimSpace(content),
+				RawType: "COMMENT",
+			})
+			continue
+		}
 
-	if blockStart && !blockEnd {
+		if blockStart && !blockEnd {
 			inBlockComment = true
 			commentStartLine = lineNum
 			commentIndent = indent
@@ -141,7 +145,7 @@ func Tokenize(text string) []Token {
 			continue
 		}
 
-		tok := classifyLine(lineNum, indent, raw, content)
+		tok := classifyLine(lineNum, indent, column, raw, content)
 
 		// Triple-quoted string literals ($'''...''') only appear inside ACTION
 		// lines. Running this check on every line type silently swallowed the
@@ -199,11 +203,14 @@ var classifiers = [...]func(tokenBase) (Token, bool){
 	classifyGenericAction,
 }
 
-func classifyLine(lineNum, indent int, raw, content string) Token {
-	base := tokenBase{lineNum: lineNum, indent: indent, raw: raw, content: content}
+func classifyLine(lineNum, indent, column int, raw, content string) Token {
+	base := tokenBase{lineNum: lineNum, indent: indent, column: column, raw: raw, content: content}
 
 	for _, classify := range classifiers {
 		if tok, ok := classify(base); ok {
+			// Column is stamped centrally (classifiers don't set it): the
+			// 1-based column of the line's first non-indent byte.
+			tok.Column = base.column
 			return tok
 		}
 	}
@@ -223,8 +230,8 @@ func classifyLine(lineNum, indent int, raw, content string) Token {
 // as "given this line, is it an X?" without repeating the same four-argument
 // list classifyLine itself takes.
 type tokenBase struct {
-	lineNum, indent int
-	raw, content    string
+	lineNum, indent, column int
+	raw, content            string
 }
 
 // classifyComment matches `#`/`//`/`COMMENT` line comments and a same-line
