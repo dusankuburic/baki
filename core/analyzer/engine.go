@@ -251,6 +251,15 @@ type RuleContext struct {
 	// once in the flow. Precomputed once so the duplicate-subflow-name rule
 	// does an O(1) lookup per subflow.
 	DuplicateSubflowNames map[string]bool
+
+	// Graph/metrics artifacts kept from buildContext so the report's metrics
+	// phase reuses them instead of rebuilding the call graph, its fan-in
+	// inversion, the cycle DFS, and the per-subflow complexity walk a second
+	// time (ComputeFlowMetrics used to redo all four).
+	callGraph      map[string]map[string]bool
+	fanInByID      map[string]int
+	circularDeps   []string
+	subflowMetrics []models.SubflowMetrics
 }
 
 // blockSig returns the memoized content signature for b, computing it once.
@@ -348,27 +357,31 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 	// Precompute circular subflow dependencies (DFS on the call graph) so the
 	// circular-subflow-dependency rule does an O(1) set lookup per subflow.
 	ctx.CircularSubflows = make(map[string]bool)
-	callGraph := buildCallGraph(flow)
-	for _, sfID := range detectCircularDeps(flow, callGraph) {
+	ctx.callGraph = buildCallGraph(flow)
+	ctx.circularDeps = detectCircularDeps(flow, ctx.callGraph)
+	for _, sfID := range ctx.circularDeps {
 		ctx.CircularSubflows[sfID] = true
 	}
 
 	// Precompute per-subflow cyclomatic complexity and fan-in (mirror the call
 	// graph inversion in ComputeFlowMetrics) so the high-cyclomatic and
 	// uncalled-subflow rules do O(1) lookups.
-	fanInByID := make(map[string]int, len(callGraph))
-	for src, targets := range callGraph {
+	fanInByID := make(map[string]int, len(ctx.callGraph))
+	for src, targets := range ctx.callGraph {
 		for tgt := range targets {
 			if tgt != src {
 				fanInByID[tgt]++
 			}
 		}
 	}
+	ctx.fanInByID = fanInByID
+	ctx.subflowMetrics = make([]models.SubflowMetrics, 0, len(flow.Subflows))
 	ctx.SubflowCyclo = make(map[string]int, len(flow.Subflows))
 	ctx.SubflowFanIn = make(map[string]int, len(flow.Subflows))
 	for i := range flow.Subflows {
 		sf := &flow.Subflows[i]
-		m := computeSubflowMetrics(sf, callGraph, fanInByID)
+		m := computeSubflowMetrics(sf, ctx.callGraph, fanInByID)
+		ctx.subflowMetrics = append(ctx.subflowMetrics, m)
 		ctx.SubflowCyclo[sf.ID] = m.CyclomaticComplexity
 		ctx.SubflowFanIn[sf.ID] = m.FanIn
 	}
@@ -751,7 +764,7 @@ func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Ru
 		}
 	}
 
-	report.Metrics = ComputeFlowMetrics(flow, report)
+	report.Metrics = ComputeFlowMetricsFromCtx(ctx, report)
 
 	profiles := make([]models.RuleProfile, len(enabledRules))
 	for i, rule := range enabledRules {

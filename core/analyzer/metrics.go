@@ -24,16 +24,31 @@ func ComputeFlowMetrics(doc *models.FlowDocument, report *models.AnalysisReport)
 			}
 		}
 	}
+	for i := range doc.Subflows {
+		sf := &doc.Subflows[i]
+		subflowMetrics = append(subflowMetrics, computeSubflowMetrics(sf, callGraph, fanInByID))
+	}
+	circular := detectCircularDeps(doc, callGraph)
+	return assembleFlowMetrics(subflowMetrics, len(doc.Subflows), circular, report)
+}
 
+// ComputeFlowMetricsFromCtx assembles the report metrics from the artifacts
+// buildContext already computed (call graph, fan-in, cycles, per-subflow
+// complexity) — the analysis path calls this so the graph/metrics phase runs
+// once per analysis instead of twice.
+func ComputeFlowMetricsFromCtx(ctx *RuleContext, report *models.AnalysisReport) *models.FlowMetrics {
+	return assembleFlowMetrics(ctx.subflowMetrics, len(ctx.Flow.Subflows), ctx.circularDeps, report)
+}
+
+// assembleFlowMetrics reduces per-subflow metrics (already computed) into the
+// aggregate FlowMetrics. Shared by the from-scratch and from-ctx paths so the
+// two can never drift.
+func assembleFlowMetrics(subflowMetrics []models.SubflowMetrics, subflowCount int, circular []string, report *models.AnalysisReport) *models.FlowMetrics {
 	var totalBlocks, totalVars int
 	var maxCyclo, maxCog int
 	var sumCyclo, sumCog float64
 
-	for i := range doc.Subflows {
-		sf := &doc.Subflows[i]
-		m := computeSubflowMetrics(sf, callGraph, fanInByID)
-		subflowMetrics = append(subflowMetrics, m)
-
+	for _, m := range subflowMetrics {
 		totalBlocks += m.BlockCount
 		totalVars += m.VariableCount
 		if m.CyclomaticComplexity > maxCyclo {
@@ -46,7 +61,7 @@ func ComputeFlowMetrics(doc *models.FlowDocument, report *models.AnalysisReport)
 		sumCog += float64(m.CognitiveComplexity)
 	}
 
-	n := len(doc.Subflows)
+	n := subflowCount
 	avgCyclo := 0.0
 	avgCog := 0.0
 	if n > 0 {
@@ -58,8 +73,6 @@ func ComputeFlowMetrics(doc *models.FlowDocument, report *models.AnalysisReport)
 	if totalBlocks > 0 {
 		varDensity = float64(totalVars) / float64(totalBlocks)
 	}
-
-	circular := detectCircularDeps(doc, callGraph)
 
 	healthScore := computeHealthScore(report, maxCyclo, maxCog, circular)
 
