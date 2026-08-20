@@ -30,6 +30,7 @@ type LocalStorageBackend struct {
 	shareTokenMu sync.Mutex   // guards share-token read-modify-write
 	govAlertMu   sync.Mutex   // guards governance-alerts read-modify-write
 	users        map[string]*interfaces.User
+	usersByEmail map[string]string // lowercased email → user ID; guarded by mu
 	orgs         map[string]*interfaces.Organisation
 	sharing      map[string][]*interfaces.Collaborator
 	apiTokens    map[string]*interfaces.APIToken  // guarded by apiTokenMu
@@ -71,10 +72,11 @@ func NewLocalStorageBackend(dataDir string) (*LocalStorageBackend, error) {
 	}
 
 	return &LocalStorageBackend{
-		dataDir: dataDir,
-		users:   make(map[string]*interfaces.User),
-		orgs:    make(map[string]*interfaces.Organisation),
-		sharing: make(map[string][]*interfaces.Collaborator),
+		dataDir:      dataDir,
+		users:        make(map[string]*interfaces.User),
+		usersByEmail: make(map[string]string),
+		orgs:         make(map[string]*interfaces.Organisation),
+		sharing:      make(map[string][]*interfaces.Collaborator),
 	}, nil
 }
 
@@ -695,20 +697,28 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 }
 
 // ---- User operations ----
+//
+// Concurrency contract (mirrors apitokens.go): the maps store privately-owned
+// structs and every read returns a VALUE COPY, so a caller holding a returned
+// user can never race a concurrent UpdateUser* write. Writers store copies so
+// a caller mutating its argument after Save can't corrupt the store.
 
 func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
 	user.Email = strings.ToLower(user.Email)
+	cp := *user
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
 	// Reject an email collision with a different user ID to mirror the Postgres
-	// UNIQUE(email) constraint.
-	for id, existing := range lsb.users {
-		if existing.Email == user.Email && id != user.ID {
-			return interfaces.ErrEmailExists
-		}
+	// UNIQUE(email) constraint (O(1) via the email index).
+	if otherID, ok := lsb.usersByEmail[cp.Email]; ok && otherID != cp.ID {
+		return interfaces.ErrEmailExists
+	}
+	if existing, ok := lsb.users[cp.ID]; ok {
+		delete(lsb.usersByEmail, existing.Email)
 	}
 	// Key strictly by ID so each user is stored exactly once.
-	lsb.users[user.ID] = user
+	lsb.users[cp.ID] = &cp
+	lsb.usersByEmail[cp.Email] = cp.ID
 	return nil
 }
 
@@ -717,70 +727,75 @@ func (lsb *LocalStorageBackend) SaveUser(ctx context.Context, user *interfaces.U
 // be promoted to RoleAdmin. Returns ErrEmailExists on email collision.
 func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces.User) error {
 	user.Email = strings.ToLower(user.Email)
+	cp := *user
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
 
-	for _, existing := range lsb.users {
-		if existing.Email == user.Email {
-			return interfaces.ErrEmailExists
-		}
+	if _, ok := lsb.usersByEmail[cp.Email]; ok {
+		return interfaces.ErrEmailExists
 	}
 
-	role := user.Role
+	role := cp.Role
 	if len(lsb.users) == 0 && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
 	}
-	user.Role = role
-	lsb.users[user.ID] = user
+	cp.Role = role
+	user.Role = role // caller-visible promotion (pre-existing contract)
+	lsb.users[cp.ID] = &cp
+	lsb.usersByEmail[cp.Email] = cp.ID
 	return nil
 }
 
 func (lsb *LocalStorageBackend) LoadUserByEmail(ctx context.Context, email string) (*interfaces.User, error) {
 	email = strings.ToLower(email)
-	lsb.mu.Lock()
-	defer lsb.mu.Unlock()
-	for _, u := range lsb.users {
-		if u.Email == email {
-			return u, nil
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
+	if id, ok := lsb.usersByEmail[email]; ok {
+		if u, ok := lsb.users[id]; ok {
+			cp := *u
+			return &cp, nil
 		}
 	}
 	return nil, interfaces.ErrNotFound
 }
 
 func (lsb *LocalStorageBackend) LoadUserByID(ctx context.Context, id string) (*interfaces.User, error) {
-	lsb.mu.Lock()
-	defer lsb.mu.Unlock()
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	if u, ok := lsb.users[id]; ok {
-		return u, nil
+		cp := *u
+		return &cp, nil
 	}
 	return nil, interfaces.ErrNotFound
 }
 
 // LoadUsersByIDs resolves multiple users via the in-memory id map (O(len(ids))).
 func (lsb *LocalStorageBackend) LoadUsersByIDs(ctx context.Context, ids []string) (map[string]*interfaces.User, error) {
-	lsb.mu.Lock()
-	defer lsb.mu.Unlock()
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	out := make(map[string]*interfaces.User, len(ids))
 	for _, id := range ids {
 		if u, ok := lsb.users[id]; ok {
-			out[id] = u
+			cp := *u
+			out[id] = &cp
 		}
 	}
 	return out, nil
 }
 
 func (lsb *LocalStorageBackend) CountUsers(ctx context.Context) (int, error) {
-	lsb.mu.Lock()
-	defer lsb.mu.Unlock()
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	return len(lsb.users), nil
 }
 
 func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int) ([]*interfaces.User, error) {
-	lsb.mu.Lock()
-	defer lsb.mu.Unlock()
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	users := make([]*interfaces.User, 0, len(lsb.users))
 	for _, u := range lsb.users {
-		users = append(users, u)
+		cp := *u
+		users = append(users, &cp)
 	}
 	// Keep a stable, newest-first ordering to match the postgres backend.
 	sort.Slice(users, func(i, j int) bool {
@@ -799,12 +814,13 @@ func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int
 }
 
 func (lsb *LocalStorageBackend) ListAdmins(ctx context.Context) ([]*interfaces.User, error) {
-	lsb.mu.Lock()
-	defer lsb.mu.Unlock()
+	lsb.mu.RLock()
+	defer lsb.mu.RUnlock()
 	var admins []*interfaces.User
 	for _, u := range lsb.users {
 		if u.Role == auth.RoleAdmin {
-			admins = append(admins, u)
+			cp := *u
+			admins = append(admins, &cp)
 		}
 	}
 	return admins, nil
@@ -840,6 +856,9 @@ func (lsb *LocalStorageBackend) UpdateUserPassword(ctx context.Context, id strin
 func (lsb *LocalStorageBackend) DeleteUser(ctx context.Context, id string) error {
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
+	if existing, ok := lsb.users[id]; ok {
+		delete(lsb.usersByEmail, existing.Email)
+	}
 	delete(lsb.users, id)
 	return nil
 }
@@ -875,11 +894,16 @@ func (lsb *LocalStorageBackend) UpdateUserProfile(ctx context.Context, id string
 }
 
 // ---- Organisation operations ----
+//
+// Same copy-on-read/copy-on-write contract as the user store: readers get
+// value copies (with the Members slice cloned, since MutateOrg's callback can
+// modify elements in place), writers store copies.
 
 func (lsb *LocalStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
+	cp := cloneOrg(org)
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
-	lsb.orgs[org.ID] = org
+	lsb.orgs[cp.ID] = &cp
 	return nil
 }
 
@@ -887,7 +911,8 @@ func (lsb *LocalStorageBackend) LoadOrg(ctx context.Context, id string) (*interf
 	lsb.mu.RLock()
 	defer lsb.mu.RUnlock()
 	if o, ok := lsb.orgs[id]; ok {
-		return o, nil
+		cp := cloneOrg(o)
+		return &cp, nil
 	}
 	return nil, interfaces.ErrNotFound
 }
@@ -899,7 +924,8 @@ func (lsb *LocalStorageBackend) ListOrgsForUser(ctx context.Context, userID stri
 	for _, o := range lsb.orgs {
 		for _, m := range o.Members {
 			if m.UserID == userID {
-				result = append(result, o)
+				cp := cloneOrg(o)
+				result = append(result, &cp)
 				break
 			}
 		}
@@ -915,6 +941,15 @@ func (lsb *LocalStorageBackend) DeleteOrg(ctx context.Context, id string) error 
 		return nil
 	}
 	return interfaces.ErrNotFound
+}
+
+// cloneOrg returns a deep-enough copy for the copy-on-read/write contract:
+// the struct itself plus a fresh Members backing array (members are values,
+// and MutateOrg callbacks can modify them in place).
+func cloneOrg(o *interfaces.Organisation) interfaces.Organisation {
+	cp := *o
+	cp.Members = append([]interfaces.OrgMember(nil), o.Members...)
+	return cp
 }
 
 // ---- Dashboard ----
@@ -975,6 +1010,10 @@ func (lsb *LocalStorageBackend) RevokeRefreshTokenForUser(ctx context.Context, j
 	return nil
 }
 
+// MutateOrg applies fn to a CLONE of the stored org and, on success, stores
+// the clone — the callback's mutations never touch the instance previously
+// handed to concurrent readers (copy-on-write, matching the rest of this
+// section).
 func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
@@ -982,19 +1021,23 @@ func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn fun
 	if !ok {
 		return interfaces.ErrNotFound
 	}
-	return fn(org)
+	cp := cloneOrg(org)
+	if err := fn(&cp); err != nil {
+		return err
+	}
+	lsb.orgs[id] = &cp
+	return nil
 }
 
 // ---- Sharing operations ----
+//
+// Copy-on-read/copy-on-write like the user/org stores above: readers get
+// fresh slices of value copies; writers store copies.
 
 func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID string) ([]*interfaces.Collaborator, error) {
 	lsb.mu.RLock()
 	defer lsb.mu.RUnlock()
-	collabs := lsb.sharing[flowID]
-	if collabs == nil {
-		return []*interfaces.Collaborator{}, nil
-	}
-	return collabs, nil
+	return cloneCollabs(lsb.sharing[flowID]), nil
 }
 
 func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*interfaces.Collaborator, error) {
@@ -1003,26 +1046,39 @@ func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flow
 	result := make(map[string][]*interfaces.Collaborator, len(flowIDs))
 	for _, id := range flowIDs {
 		if collabs := lsb.sharing[id]; len(collabs) > 0 {
-			result[id] = collabs
+			result[id] = cloneCollabs(collabs)
 		}
 	}
 	return result, nil
 }
 
+// cloneCollabs returns a fresh slice of value copies (nil-safe: an empty,
+// non-nil slice for nil input, matching the interface's "empty not nil"
+// convention).
+func cloneCollabs(in []*interfaces.Collaborator) []*interfaces.Collaborator {
+	out := make([]*interfaces.Collaborator, len(in))
+	for i, c := range in {
+		cp := *c
+		out[i] = &cp
+	}
+	return out
+}
+
 func (lsb *LocalStorageBackend) AddCollaborator(ctx context.Context, flowID string, c *interfaces.Collaborator) error {
+	cp := *c
+	if cp.GrantedAt.IsZero() {
+		cp.GrantedAt = time.Now().UTC()
+	}
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
-	if c.GrantedAt.IsZero() {
-		c.GrantedAt = time.Now().UTC()
-	}
 	list := lsb.sharing[flowID]
 	for i, existing := range list {
-		if existing.UserID == c.UserID {
-			list[i] = c
+		if existing.UserID == cp.UserID {
+			list[i] = &cp
 			return nil
 		}
 	}
-	lsb.sharing[flowID] = append(list, c)
+	lsb.sharing[flowID] = append(list, &cp)
 	return nil
 }
 
@@ -1030,9 +1086,11 @@ func (lsb *LocalStorageBackend) UpdateCollaborator(ctx context.Context, flowID, 
 	lsb.mu.Lock()
 	defer lsb.mu.Unlock()
 	list := lsb.sharing[flowID]
-	for _, existing := range list {
+	for i, existing := range list {
 		if existing.UserID == userID {
-			existing.Permission = permission
+			cp := *existing
+			cp.Permission = permission
+			list[i] = &cp
 			return nil
 		}
 	}

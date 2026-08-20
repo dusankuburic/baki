@@ -23,11 +23,23 @@ func NewDashboardHandler(dashboard *service.DashboardService, security *Security
 // handleHome returns the assembled dashboard payload. BuildHome never hard-fails
 // (it degrades to a sparse, availability-flagged payload), so this always 200s
 // with valid JSON and the frontend renders empty states per-card as needed.
+// @Summary      Aggregated dashboard data for the home view
+// @Tags         dashboard
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      401 {object} object "Unauthorized"
+// @Router       /api/dashboard/home [get]
 func (h *DashboardHandler) handleHome(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
 	data := h.dashboard.BuildHome(r.Context(), userID)
-	data.Greeting = h.greeting(r)
-	render.JSON(w, data)
+	// BuildHome returns a SHARED cached pointer on a TTL-cache hit (cloud
+	// mode) — mutating it in place races every concurrent caller's JSON
+	// marshal (see dashboard.go's invariant note). Copy, then set the
+	// per-request greeting on the copy. Safe: the slices/maps inside are
+	// populated at build time and never mutated afterwards.
+	cp := *data
+	cp.Greeting = h.greeting(r)
+	render.JSON(w, &cp)
 }
 
 func (h *DashboardHandler) greeting(r *http.Request) models.DashboardGreeting {
