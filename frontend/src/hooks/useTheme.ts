@@ -79,7 +79,7 @@ export function useTheme() {
 
   const toggleTheme = useCallback(() => {
     const next: ThemeMode = resolvedTheme === 'light' ? 'dark' : 'light'
-    updateAppearance({theme: next})
+    void updateAppearance({theme: next})
   }, [resolvedTheme, updateAppearance])
 
   return {theme, resolvedTheme, toggleTheme}

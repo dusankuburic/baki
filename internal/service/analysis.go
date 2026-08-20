@@ -288,10 +288,6 @@ func (s *AnalysisService) DiffReports(old, new *models.AnalysisReport) *models.A
 	return analyzer.DiffReports(old, new)
 }
 
-func (s *AnalysisService) GenerateHTMLReport(report *models.AnalysisReport) string {
-	return analyzer.GenerateHTMLReport(report)
-}
-
 func (s *AnalysisService) GenerateBatchHTMLReport(batch *models.BatchAnalysis) string {
 	return analyzer.GenerateBatchHTMLReport(batch)
 }

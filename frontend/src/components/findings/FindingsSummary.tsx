@@ -1,7 +1,8 @@
 import type {AnalysisStats} from '@/types'
 import SeverityBadge from './SeverityBadge'
-import {scoreColor, scoreBg} from '@/lib/scoring'
+import {scoreColor, scoreBg, scoreLabel} from '@/lib/scoring'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 
 interface Props {
   stats: AnalysisStats
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function FindingsSummary({stats, durationMs, healthScore}: Props) {
+  const {t} = useTranslation('findings')
   const total = stats.errors + stats.warnings + stats.info
 
   return (
@@ -18,6 +20,9 @@ export default function FindingsSummary({stats, durationMs, healthScore}: Props)
         <div className="flex items-center gap-3">
           {healthScore !== undefined && (
             <div
+              role="img"
+              aria-label={t('summary.healthAria', {score: healthScore, label: scoreLabel(healthScore)})}
+              title={`${scoreLabel(healthScore)} health`}
               className={clsx(
                 'px-2 py-0.5 rounded-md font-mono text-sm font-bold',
                 scoreBg(healthScore),
@@ -28,7 +33,7 @@ export default function FindingsSummary({stats, durationMs, healthScore}: Props)
             </div>
           )}
           <span className="text-sm font-medium text-text-primary tabular-nums">
-            {total} finding{total !== 1 ? 's' : ''}
+            {t('summary.count', {count: total})}
           </span>
           <div className="flex items-center gap-1.5">
             {stats.errors > 0 && (

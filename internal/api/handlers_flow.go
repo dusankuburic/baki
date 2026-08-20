@@ -106,6 +106,12 @@ func (h *FlowHandler) SetFlowNotifier(n FlowNotifier) {
 	h.notifier = n
 }
 
+// @Summary      Upload flow file
+// @Tags         flow
+// @Accept       multipart/form-data
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Parsed document"
+// @Router       /api/flow/upload [post]
 func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
@@ -160,6 +166,16 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, doc)
 }
 
+// @Summary      Load flow from path
+// @Description  Loads a flow document from the specified local file path. Only available in local mode.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/load-path [post]
 func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("loading from local paths is not supported in cloud mode. use upload instead"), http.StatusForbidden)
@@ -184,6 +200,17 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, doc)
 }
 
+// @Summary      Load flow folder
+// @Description  Loads a flow document from the specified local folder path. Only available in local mode.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/load-folder [post]
 func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("loading from local folders is not supported in cloud mode. use upload instead"), http.StatusForbidden)
@@ -209,6 +236,13 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, doc)
 }
 
+// @Summary      Get recent files
+// @Description  Returns a list of recently opened flow documents.
+// @Tags         flow
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/recent [get]
 func (h *FlowHandler) handleRecentFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("recent files are not available in cloud mode"), http.StatusForbidden)
@@ -222,6 +256,16 @@ func (h *FlowHandler) handleRecentFiles(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, files)
 }
 
+// @Summary      Remove recent file
+// @Description  Removes a file from the list of recently opened flow documents.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/remove-recent [post]
 func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("recent files are not available in cloud mode"), http.StatusForbidden)
@@ -240,6 +284,13 @@ func (h *FlowHandler) handleRemoveRecentFile(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Clear recent files
+// @Description  Clears the entire list of recently opened flow documents.
+// @Tags         flow
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/clear-recent [post]
 func (h *FlowHandler) handleClearRecentFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("recent files are not available in cloud mode"), http.StatusForbidden)
@@ -252,6 +303,17 @@ func (h *FlowHandler) handleClearRecentFiles(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Reveal in file manager
+// @Description  Opens the system file manager at the specified path. Only available in local mode.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/reveal [post]
 func (h *FlowHandler) handleRevealInFileManager(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("forbidden in cloud mode"), http.StatusForbidden)
@@ -275,6 +337,16 @@ func (h *FlowHandler) handleRevealInFileManager(w http.ResponseWriter, r *http.R
 // in Power Automate Desktop can re-import + re-analyze in one click without
 // navigating the file picker. Uses doc.FilePath (the already-loaded path), so
 // there's no path-injection surface. Cloud flows have no on-disk source → 403.
+// @Summary      Re-import flow from disk
+// @Description  handleReimport re-reads the currently-loaded flow's source file (desktop), re-parses it, and returns the fresh document — so a user who fixed something in Power Automate Desktop can re-import + re-analyze in one click without navigating the file picker. Uses doc.FilePath (the already-loaded path), so there's no path-injection surface. Cloud flows have no on-disk source → 403.
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/reimport [post]
 func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("re-import is not available in cloud mode"), http.StatusForbidden)
@@ -322,6 +394,16 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 // document. Desktop/local only — cloud flows have no on-disk source. This is
 // the first end-to-end apply-fix: the suppression travels with the file (honored
 // by the analyzer, CLI gate, baselines, CI), unlike a UI-only suppression.
+// @Summary      Insert pad-ignore directive
+// @Description  handleSuppressInSource writes a `# pad-ignore[ruleId]` directive into the flow's source file before the given block, re-parses, and returns the updated document. Desktop/local only — cloud flows have no on-disk source. This is the first end-to-end apply-fix: the suppression travels with the file (honored by the analyzer, CLI gate, baselines, CI), unlike a UI-only suppression.
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/suppress-in-source [post]
 func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("source-file patching is not available in cloud mode"), http.StatusForbidden)
@@ -359,6 +441,16 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 // to a block in the flow's source file, re-parses, and returns the updated
 // document. Desktop/local only. The finding carries the available fixType in
 // its AutoFix field; the frontend shows "Apply fix" only when that is set.
+// @Summary      Apply an auto-fix
+// @Description  handleApplyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler) to a block in the flow's source file, re-parses, and returns the updated document. Desktop/local only. The finding carries the available fixType in its AutoFix field; the frontend shows "Apply fix" only when that is set.
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/apply-fix [post]
 func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID   string `json:"flowId"`
@@ -399,6 +491,16 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 // writing. The frontend renders a diff so the user can review the change
 // before committing. Works in both desktop (local source file) and cloud
 // (stored raw source) modes for single-file flows.
+// @Summary      Preview an auto-fix diff
+// @Description  handlePreviewFix returns the before/after source text for a fix WITHOUT writing. The frontend renders a diff so the user can review the change before committing. Works in both desktop (local source file) and cloud (stored raw source) modes for single-file flows.
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/preview-fix [post]
 func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID   string `json:"flowId"`
@@ -431,6 +533,16 @@ func (h *FlowHandler) handlePreviewFix(w http.ResponseWriter, r *http.Request) {
 // persisted once). The frontend's bulk-action bar derives the rule set from the
 // selected findings; the server fixes every auto-fixable finding whose rule is
 // in that set (re-parsing between fixes so line shifts don't corrupt targets).
+// @Summary      Apply fixes in bulk
+// @Description  handleApplyFixBatch applies multiple auto-fixes in one pass (iterative loop, persisted once). The frontend's bulk-action bar derives the rule set from the selected findings; the server fixes every auto-fixable finding whose rule is in that set (re-parsing between fixes so line shifts don't corrupt targets).
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/apply-fix-batch [post]
 func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string   `json:"flowId"`
@@ -475,6 +587,12 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 
 // handleGetSource returns the raw PAD source text for the flow. Desktop: reads
 // the file. Cloud: returns the stored source. Viewer access.
+// @Summary      Get raw flow source
+// @Description  handleGetSource returns the raw PAD source text for the flow. Desktop: reads the file. Cloud: returns the stored source. Viewer access.
+// @Tags         flow
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Source"
+// @Router       /api/flow/source [get]
 func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	flowID := r.URL.Query().Get("flowId")
 	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, "viewer")
@@ -491,6 +609,16 @@ func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
 
 // handleSaveSource replaces the flow's raw source text (from the in-app source
 // editor), re-parses, and returns the updated document. Editor access.
+// @Summary      Save edited flow source
+// @Description  handleSaveSource replaces the flow's raw source text (from the in-app source editor), re-parses, and returns the updated document. Editor access.
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/save-source [post]
 func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -523,6 +651,16 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, updated)
 }
 
+// @Summary      Search within flow
+// @Description  Performs a search for text or patterns within a specific flow document.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/search [post]
 func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID    string             `json:"id"`
@@ -548,6 +686,16 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 // handleSearchLibrary runs a query across every flow the caller can access
 // (cross-flow / org-wide search), merging per-flow hits into one result set.
 // Each hit is stamped with its source flowId/flowName so the UI can group them.
+// @Summary      Search cloud library
+// @Description  handleSearchLibrary runs a query across every flow the caller can access (cross-flow / org-wide search), merging per-flow hits into one result set. Each hit is stamped with its source flowId/flowName so the UI can group them.
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/flow/search-library [post]
 func (h *FlowHandler) handleSearchLibrary(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Query models.SearchQuery `json:"query"`
@@ -564,6 +712,13 @@ func (h *FlowHandler) handleSearchLibrary(w http.ResponseWriter, r *http.Request
 	render.JSON(w, res)
 }
 
+// @Summary      Get source files
+// @Description  Returns a list of source files related to the current flow.
+// @Tags         flow
+// @Produce      json
+// @Success      200 {object} []string "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/source-files [get]
 func (h *FlowHandler) handleGetSourceFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("source files are not available in cloud mode"), http.StatusForbidden)
@@ -578,6 +733,16 @@ func (h *FlowHandler) handleGetSourceFiles(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, files)
 }
 
+// @Summary      Read source files
+// @Description  Reads the content of specified source files.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flow/read-sources [post]
 func (h *FlowHandler) handleReadSourceFiles(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("source file reading is not available in cloud mode"), http.StatusForbidden)
@@ -598,6 +763,15 @@ func (h *FlowHandler) handleReadSourceFiles(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, res)
 }
 
+// @Summary      Handle file open from system
+// @Description  Notifies the application that a file was opened via the operating system.
+// @Tags         flow
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Router       /api/flow/open-from-system [post]
 func (h *FlowHandler) handleOnFileOpenFromSystem(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("opening from local paths is not supported in cloud mode"), http.StatusForbidden)

@@ -17,6 +17,7 @@ import {useConfirm} from '@/components/shared'
 import type {Severity} from '@/types'
 import clsx from 'clsx'
 import {useState} from 'react'
+import {useTranslation} from 'react-i18next'
 
 const ALL_CATEGORIES: FindingCategory[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
 
@@ -59,6 +60,7 @@ export default function FindingsToolbar({
   onCycleSortMode,
   hasFindings,
 }: FindingsToolbarProps) {
+  const {t} = useTranslation('findings')
   const severityFilter = useAnalysisStore(s => s.severityFilter)
   const categoryFilter = useAnalysisStore(s => s.categoryFilter)
   const toggleSeverityFilter = useAnalysisStore(s => s.toggleSeverityFilter)
@@ -223,7 +225,7 @@ export default function FindingsToolbar({
         onClick={onToggleDedup}
         disabled={dedupLoading}
         title={dedupActive ? 'Show all findings' : 'Group duplicate findings'}
-        aria-label="Toggle duplicate grouping"
+        aria-label={t('toolbar.toggleGrouping')}
         className={clsx(
           'text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0 disabled:opacity-50',
           dedupActive

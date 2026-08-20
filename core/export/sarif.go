@@ -112,9 +112,13 @@ func ReportToSARIF(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 		report = &models.AnalysisReport{}
 	}
 	// Findings reference blocks by ID; the lookup maps are transient and may be
-	// empty on a deserialized document. Rebuild them so locations can resolve.
+	// empty on a deserialized document. Rebuild them on a shallow copy so a
+	// SHARED doc (e.g. a cached cloud-resolved document handed to concurrent
+	// requests) is never mutated from a serializer.
 	if doc != nil && doc.BlocksByID == nil {
-		doc.RebuildIndexes()
+		cp := *doc
+		cp.RebuildIndexes()
+		doc = &cp
 	}
 
 	ruleIndex := make(map[string]int)

@@ -20,13 +20,66 @@ var rlsStreamingPrefixes = []string{
 	"/api/chat/",  // LLM streaming + conversation operations
 }
 
+// rlsHeavyExactPaths lists CPU- or blob-heavy request paths exempt from the
+// per-request RLS transaction for the same reason as the streaming routes:
+// each can burn seconds of CPU (parse + 41-rule analysis + iterative fix
+// loop) or perform many blob round-trips while holding the transaction, so a
+// handful of concurrent calls pins every pooled connection and stalls ALL
+// other requests — including health-gated writes.
+//
+// Every route here was verified to enforce Go-layer authz independently
+// (FlowService.GetAuthorized / resolveFlow with viewer/editor perms, or
+// user-scoped-only operations), so forgoing RLS removes only the
+// defense-in-depth layer, not the access control. Queries still carry their
+// explicit owner/org WHERE clauses, and RLS policies short-circuit to "allow"
+// when app.current_user_id is unset (app_rls_active()), so exempted routes
+// behave exactly like the streaming routes above.
+//
+// EXACT paths (not prefixes): the /api/analysis tree also contains cheap
+// DB-write routes (triage, baselines, policies, comments) that should keep
+// the RLS transaction's atomicity guarantees.
+var rlsHeavyExactPaths = map[string]bool{
+	// Analysis of stored flows — resolve via GetAuthorized("viewer"), then
+	// seconds of parse/analyze/export CPU on the resolved document.
+	"/api/analysis/analyze":        true,
+	"/api/analysis/lineage":        true,
+	"/api/analysis/graph":          true,
+	"/api/analysis/metrics":        true,
+	"/api/analysis/dataflow":       true,
+	"/api/analysis/diff":           true,
+	"/api/analysis/compare":        true,
+	"/api/analysis/subflow-hashes": true,
+	"/api/analysis/deduplicate":    true,
+	"/api/analysis/related":        true,
+	"/api/analysis/export/sarif":   true,
+	"/api/analysis/export/junit":   true,
+	"/api/analysis/export/csv":     true,
+	// Stateless CI payload analysis — nothing is persisted; PAT-authed and
+	// body/time bounded by the handler itself.
+	"/api/analysis/analyze-raw": true,
+	// Desktop-only folder batch (rejected in cloud mode where RLS exists).
+	"/api/analysis/batch": true,
+	// Flow patch/fix paths — resolveFlow("editor"), then iterative
+	// parse+analyze+patch loops over up to 10 MB sources.
+	"/api/flow/apply-fix":          true,
+	"/api/flow/apply-fix-batch":    true,
+	"/api/flow/preview-fix":        true,
+	"/api/flow/save-source":        true,
+	"/api/flow/suppress-in-source": true,
+	// Up to maxLibrarySearchFlows per-flow blob loads behind a user-scoped
+	// ListFlows (explicit owner WHERE clause).
+	"/api/flow/search-library": true,
+	// 10 MB multipart parse + save; role-gated (member) and per-user throttled.
+	"/api/flow/upload": true,
+}
+
 func rlsExemptPath(path string) bool {
 	for _, p := range rlsStreamingPrefixes {
 		if strings.HasPrefix(path, p) {
 			return true
 		}
 	}
-	return false
+	return rlsHeavyExactPaths[path]
 }
 
 // rlsMiddleware sets the Postgres session variable app.current_user_id for

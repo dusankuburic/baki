@@ -57,7 +57,7 @@ export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, ma
     if (pendingHeightRef.current !== null) {
       const finalHeight = pendingHeightRef.current
       setHeight(finalHeight)
-      useSettingsStore.getState().updateSettings({
+      void useSettingsStore.getState().updateSettings({
         layout: {
           ...useSettingsStore.getState().settings.layout,
           chatPanelHeight: finalHeight,
@@ -71,7 +71,7 @@ export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, ma
     if (containerRef.current) {
       containerRef.current.style.height = ''
     }
-    useSettingsStore.getState().updateSettings({
+    void useSettingsStore.getState().updateSettings({
       layout: {
         ...useSettingsStore.getState().settings.layout,
         chatPanelHeight: undefined,

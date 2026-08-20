@@ -33,7 +33,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   useEffect(() => {
     if (!document) return
     let cancelled = false
-    setLoading(true)
+    void setLoading(true)
     flowApi
       .getSource(document.id)
       .then(res => {
@@ -100,7 +100,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
-        handleSave()
+        void handleSave()
       }
     }
     window.addEventListener('keydown', handler)

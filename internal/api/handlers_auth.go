@@ -132,6 +132,17 @@ func decodeCredentials(r *http.Request) (email, password string, emailErr error,
 	return email, c.Password, emailErr, nil
 }
 
+// @Summary      Register a new user
+// @Description  Creates a new user account with email and password.
+// @Tags         auth
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      409 {object} map[string]string "Conflict"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/auth/register [post]
 func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("registration not available in local mode"), http.StatusForbidden)
@@ -186,6 +197,17 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// @Summary      Login user
+// @Description  Authenticates a user and returns access and refresh tokens.
+// @Tags         auth
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/auth/login [post]
 func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("login not available in local mode"), http.StatusForbidden)
@@ -259,6 +281,17 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, pair)
 }
 
+// @Summary      Refresh access token
+// @Description  Returns a new access token using a valid refresh token.
+// @Tags         auth
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/auth/refresh [post]
 func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 	metrics.RecordAuthOp("refresh")
 	var req struct {
@@ -364,6 +397,13 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, pair)
 }
 
+// @Summary      Get current user info
+// @Description  Returns information about the currently authenticated user.
+// @Tags         auth
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Router       /api/auth/me [get]
 func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -396,6 +436,16 @@ func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthUpdateProfile lets a user set their own display name and avatar
 // URL. Both fields are optional and may be cleared by sending an empty string.
+// @Summary      Update profile
+// @Description  handleAuthUpdateProfile lets a user set their own display name and avatar URL. Both fields are optional and may be cleared by sending an empty string.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/auth/profile [put]
 func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -456,6 +506,16 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 // against stolen-token / drive-by deletion. The caller's current access token
 // is revoked immediately so the erased account can't keep acting until its
 // short-lived JWT would have expired.
+// @Summary      Delete account (GDPR)
+// @Description  Self-service account erasure.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/auth/account [delete]
 func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -494,6 +554,12 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 
 // handleAuthExportAccount returns a data-subject access / portability bundle for
 // the caller's own account.
+// @Summary      Export account data
+// @Description  GDPR data-subject export of everything stored about the user.
+// @Tags         auth
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Account data"
+// @Router       /api/auth/account/export [get]
 func (h *AuthHandler) handleAuthExportAccount(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -584,6 +650,12 @@ func (h *AuthHandler) exportAccountStreamed(w http.ResponseWriter, r *http.Reque
 // handleAuthSessions lists the caller's active sessions (non-revoked,
 // non-expired refresh tokens). In local (non-JWT) mode, or if no token store
 // is configured, it returns an empty list.
+// @Summary      List active sessions for the current user
+// @Tags         auth
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      401 {object} object "Unauthorized"
+// @Router       /api/auth/sessions [get]
 func (h *AuthHandler) handleAuthSessions(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -609,6 +681,13 @@ func (h *AuthHandler) handleAuthSessions(w http.ResponseWriter, r *http.Request)
 
 // handleAuthSessionRevoke revokes one of the caller's own sessions (refresh
 // tokens) by ID, e.g. to sign out a lost device.
+// @Summary      Revoke a session
+// @Description  handleAuthSessionRevoke revokes one of the caller's own sessions (refresh tokens) by ID, e.g. to sign out a lost device.
+// @Tags         auth
+// @Param        id path string true "Session JTI"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Router       /api/auth/sessions/{id} [delete]
 func (h *AuthHandler) handleAuthSessionRevoke(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -635,6 +714,12 @@ func (h *AuthHandler) handleAuthSessionRevoke(w http.ResponseWriter, r *http.Req
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Logout user
+// @Description  Logs out the current user. In stateless JWT mode, this is primarily a client-side operation.
+// @Tags         auth
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Router       /api/auth/logout [post]
 func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	metrics.RecordAuthOp("logout")
 	var req struct {
@@ -668,6 +753,17 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Change password
+// @Description  Changes the password for the currently authenticated user.
+// @Tags         auth
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/auth/change-password [post]
 func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
@@ -720,6 +816,16 @@ func (h *AuthHandler) handleAuthChangePassword(w http.ResponseWriter, r *http.Re
 // handleAuthForgotPassword issues a password-reset token and emails its link.
 // It always responds 200 with the same body whether or not the email exists, so
 // the endpoint cannot be used to enumerate accounts.
+// @Summary      Request password reset
+// @Description  handleAuthForgotPassword issues a password-reset token and emails its link. It always responds 200 with the same body whether or not the email exists, so the endpoint cannot be used to enumerate accounts.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/auth/forgot-password [post]
 func (h *AuthHandler) handleAuthForgotPassword(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("password reset not available in local mode"), http.StatusForbidden)
@@ -754,6 +860,16 @@ func (h *AuthHandler) handleAuthForgotPassword(w http.ResponseWriter, r *http.Re
 
 // handleAuthResetPassword redeems a reset token and sets a new password,
 // revoking all of the user's existing sessions.
+// @Summary      Reset password with token
+// @Description  handleAuthResetPassword redeems a reset token and sets a new password, revoking all of the user's existing sessions.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/auth/reset-password [post]
 func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("password reset not available in local mode"), http.StatusForbidden)
@@ -800,6 +916,16 @@ func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Req
 
 // handleAuthVerifyEmail redeems an email-verification token and marks the user's
 // email verified.
+// @Summary      Verify email address
+// @Description  handleAuthVerifyEmail redeems an email-verification token and marks the user's email verified.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/auth/verify-email [post]
 func (h *AuthHandler) handleAuthVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	if !h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("email verification not available in local mode"), http.StatusForbidden)
@@ -882,6 +1008,14 @@ func validatePasswordStrength(pw string) error {
 	return nil
 }
 
+// @Summary      Issue a WebSocket connect ticket
+// @Description  Returns a short-lived, single-use ticket the client exchanges for a WebSocket connection, keeping the access token out of the WS URL.
+// @Tags         auth
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/ws-ticket [post]
 func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	var userID, email string

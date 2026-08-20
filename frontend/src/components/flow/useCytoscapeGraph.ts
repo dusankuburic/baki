@@ -193,7 +193,7 @@ export function useCytoscapeGraph(subflowId?: string) {
     })
 
     cyRef.current = instance
-    loadGraph()
+    void loadGraph()
 
     return () => {
       instance.destroy()
@@ -228,7 +228,7 @@ export function useCytoscapeGraph(subflowId?: string) {
 
   // Re-load when document or report changes
   useEffect(() => {
-    loadGraph()
+    void loadGraph()
   }, [flowDoc?.id, report?.generatedAt, subflowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Highlight matched nodes (and dim the rest) live as the query changes; re-runs

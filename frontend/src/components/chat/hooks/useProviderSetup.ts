@@ -65,7 +65,7 @@ export function useProviderSetup() {
             const first = list.find(p => p.configured)
             if (first) {
               setProvider(first.id as ProviderID)
-              updateAI({activeProvider: first.id as ProviderID})
+              void updateAI({activeProvider: first.id as ProviderID})
             }
           }
         } else {
@@ -89,7 +89,7 @@ export function useProviderSetup() {
 
   useEffect(() => {
     if (provider !== 'demo') {
-      setDemoRemaining(null)
+      void setDemoRemaining(null)
       return
     }
     let cancelled = false
@@ -109,7 +109,7 @@ export function useProviderSetup() {
   const handleSetProvider = useCallback(
     (p: ProviderID) => {
       setProvider(p)
-      updateAI({activeProvider: p})
+      void updateAI({activeProvider: p})
     },
     [setProvider, updateAI],
   )

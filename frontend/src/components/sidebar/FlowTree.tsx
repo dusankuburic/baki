@@ -96,7 +96,7 @@ export default function FlowTree({
   }, [])
 
   useEffect(() => {
-    setFocusedIndex(-1)
+    void setFocusedIndex(-1)
   }, [rows])
 
   useEffect(() => {
@@ -242,7 +242,7 @@ export default function FlowTree({
           <button
             className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-2 transition-colors"
             onClick={() => {
-              writeClipboard(ctxMenu.row.name)
+              void writeClipboard(ctxMenu.row.name)
               setCtxMenu(null)
             }}
           >
@@ -254,7 +254,7 @@ export default function FlowTree({
               className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-2 transition-colors"
               onClick={() => {
                 const ln = ctxMenu.row.blockData?.lineNumber
-                if (ln != null) writeClipboard(ln.toString())
+                if (ln != null) void writeClipboard(ln.toString())
                 setCtxMenu(null)
               }}
             >

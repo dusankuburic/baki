@@ -21,3 +21,19 @@ func AllRules() []Rule {
 	copy(out, registeredRules)
 	return out
 }
+
+// AutoFixableRules returns the subset of rules that can emit findings carrying
+// an AutoFix (see mayEmitAutoFix). The apply-fix loop only ever selects
+// findings with a non-empty AutoFix, so running the loop's analysis with just
+// this subset is behavior-equivalent while dispatching ~60% fewer rules per
+// iteration. Order is preserved from the input so fixable findings are picked
+// in the same sequence as with the full set.
+func AutoFixableRules(rules []Rule) []Rule {
+	out := make([]Rule, 0, len(rules)/2)
+	for _, r := range rules {
+		if mayEmitAutoFix(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}

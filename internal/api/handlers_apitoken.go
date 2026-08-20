@@ -23,6 +23,13 @@ const (
 	maxAPITokenLifetimeDays     = 365
 )
 
+// @Summary      Create API token
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Success      201 {object} map[string]interface{} "Created token"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Router       /api/auth/tokens [post]
 func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -84,6 +91,12 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// @Summary      List API tokens for the current user
+// @Tags         auth
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      401 {object} object "Unauthorized"
+// @Router       /api/auth/tokens [get]
 func (h *AuthHandler) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -107,6 +120,13 @@ func (h *AuthHandler) handleListAPITokens(w http.ResponseWriter, r *http.Request
 	render.JSON(w, tokens)
 }
 
+// @Summary      Revoke API token
+// @Tags         auth
+// @Param        id path string true "Token ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Router       /api/auth/tokens/{id} [delete]
 func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("API tokens require a storage backend (cloud mode)"), http.StatusServiceUnavailable)

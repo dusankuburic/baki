@@ -1,23 +1,28 @@
-import {useState} from 'react'
+import {useState, lazy, Suspense} from 'react'
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import Modal from '@/components/shared/Modal'
+import Spinner from '@/components/shared/Spinner'
 import {isTauri} from '@/platform/guards'
-import {
-  GeneralPanel,
-  ProvidersPanel,
-  AIBehaviorPanel,
-  AIPromptsPanel,
-  AppearancePanel,
-  ParserPanel,
-  RulesPanel,
-  PolicyGatePanel,
-  OrganizationsPanel,
-  KnowledgeBasePanel,
-  ApiTokensPanel,
-  ShortcutsPanel,
-  PrivacyPanel,
-  AboutPanel,
-} from './index'
+
+// Each panel is lazy: only one is visible at a time, so the settings chunk
+// fetches a panel on first open of that section instead of shipping all 14
+// (including ~46 kB of cloud-only panels a desktop user can never open) with
+// the modal. The barrel (./index) stays for typed external re-exports.
+const GeneralPanel = lazy(() => import('./GeneralPanel'))
+const ParserPanel = lazy(() => import('./ParserPanel'))
+const ProvidersPanel = lazy(() => import('./ProvidersPanel'))
+const AIBehaviorPanel = lazy(() => import('./AIBehaviorPanel'))
+const AIPromptsPanel = lazy(() => import('./AIPromptsPanel'))
+const AppearancePanel = lazy(() => import('./AppearancePanel'))
+const RulesPanel = lazy(() => import('./RulesPanel'))
+const PolicyGatePanel = lazy(() => import('./PolicyGatePanel'))
+const OrganizationsPanel = lazy(() => import('./OrganizationsPanel'))
+const KnowledgeBasePanel = lazy(() => import('./KnowledgeBasePanel'))
+const ApiTokensPanel = lazy(() => import('./ApiTokensPanel'))
+const ShortcutsPanel = lazy(() => import('./ShortcutsPanel'))
+const PrivacyPanel = lazy(() => import('./PrivacyPanel'))
+const AboutPanel = lazy(() => import('./AboutPanel'))
 
 type SettingsSection =
   | 'general'
@@ -39,32 +44,35 @@ type SettingsSection =
 // single-user and has no notion of orgs, so hide that entry there.
 const isCloud = !isTauri()
 
-const sections: {id: SettingsSection; label: string}[] = [
-  {id: 'general', label: 'General'},
-  {id: 'parser', label: 'Parser'},
-  {id: 'accounts', label: 'AI Accounts'},
-  {id: 'behavior', label: 'AI Behavior'},
-  {id: 'prompts', label: 'AI Prompts'},
-  {id: 'appearance', label: 'Appearance'},
-  {id: 'analysis', label: 'Analysis'},
-  ...(isCloud
-    ? [
-        {id: 'policies' as const, label: 'Policy Gates'},
-        {id: 'orgs' as const, label: 'Organizations'},
-        {id: 'knowledge' as const, label: 'Knowledge Base'},
-        {id: 'tokens' as const, label: 'API Tokens'},
-      ]
-    : []),
-  {id: 'shortcuts', label: 'Shortcuts'},
-  {id: 'privacy', label: 'Privacy'},
-  {id: 'about', label: 'About'},
-]
+// Section labels resolve at render time (not module init) so they re-resolve
+// on language change; the module-level constant only carries the ids.
+const CLOUD_SECTION_IDS = ['policies', 'orgs', 'knowledge', 'tokens'] as const
+const SECTION_IDS = [
+  'general',
+  'parser',
+  'accounts',
+  'behavior',
+  'prompts',
+  'appearance',
+  'analysis',
+  ...(isCloud ? CLOUD_SECTION_IDS : []),
+  'shortcuts',
+  'privacy',
+  'about',
+] as const
+
+function useSections(): {id: SettingsSection; label: string}[] {
+  const {t} = useTranslation('settings')
+  return SECTION_IDS.map(id => ({id, label: t(`modal.sections.${id}`)}))
+}
 
 export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClose: () => void}) {
+  const {t} = useTranslation('settings')
+  const sections = useSections()
   const [activeSection, setActiveSection] = useState<SettingsSection>('general')
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Settings" size="xl" height="tall" bodyScroll={false}>
+    <Modal isOpen={isOpen} onClose={onClose} title={t('modal.title')} size="xl" height="tall" bodyScroll={false}>
       <div className="flex h-full">
         {/* Sidebar */}
         <div className="w-48 border-r border-border-default px-4 py-3 overflow-y-auto shrink-0">
@@ -88,20 +96,28 @@ export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClo
 
         {/* Content — the single scroll region */}
         <div className="flex-1 p-6 overflow-y-auto min-h-0">
-          {activeSection === 'general' && <GeneralPanel />}
-          {activeSection === 'parser' && <ParserPanel />}
-          {activeSection === 'accounts' && <ProvidersPanel />}
-          {activeSection === 'behavior' && <AIBehaviorPanel />}
-          {activeSection === 'prompts' && <AIPromptsPanel />}
-          {activeSection === 'appearance' && <AppearancePanel />}
-          {activeSection === 'analysis' && <RulesPanel />}
-          {activeSection === 'policies' && isCloud && <PolicyGatePanel />}
-          {activeSection === 'orgs' && isCloud && <OrganizationsPanel />}
-          {activeSection === 'knowledge' && isCloud && <KnowledgeBasePanel />}
-          {activeSection === 'tokens' && isCloud && <ApiTokensPanel />}
-          {activeSection === 'shortcuts' && <ShortcutsPanel />}
-          {activeSection === 'privacy' && <PrivacyPanel />}
-          {activeSection === 'about' && <AboutPanel />}
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center py-16">
+                <Spinner size={20} />
+              </div>
+            }
+          >
+            {activeSection === 'general' && <GeneralPanel />}
+            {activeSection === 'parser' && <ParserPanel />}
+            {activeSection === 'accounts' && <ProvidersPanel />}
+            {activeSection === 'behavior' && <AIBehaviorPanel />}
+            {activeSection === 'prompts' && <AIPromptsPanel />}
+            {activeSection === 'appearance' && <AppearancePanel />}
+            {activeSection === 'analysis' && <RulesPanel />}
+            {activeSection === 'policies' && isCloud && <PolicyGatePanel />}
+            {activeSection === 'orgs' && isCloud && <OrganizationsPanel />}
+            {activeSection === 'knowledge' && isCloud && <KnowledgeBasePanel />}
+            {activeSection === 'tokens' && isCloud && <ApiTokensPanel />}
+            {activeSection === 'shortcuts' && <ShortcutsPanel />}
+            {activeSection === 'privacy' && <PrivacyPanel />}
+            {activeSection === 'about' && <AboutPanel />}
+          </Suspense>
         </div>
       </div>
     </Modal>

@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strings"
 )
@@ -32,19 +31,8 @@ func Middleware(mgr *Manager, next http.Handler) http.Handler {
 	})
 }
 
-// StaticTokenMiddleware is the legacy middleware used by the desktop app.
-// It compares the raw request token against a pre-shared static secret rather
-// than verifying a JWT.  This lets the existing sidecar flow keep working while
-// the JWT infrastructure is being rolled out.
-func StaticTokenMiddleware(token string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(ExtractToken(r)), []byte(token)) != 1 {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
+// StaticTokenMiddleware was the legacy pre-JWT middleware; removed with its
+// callers when the desktop sidecar moved to the shared token pipeline.
 
 // ExtractToken pulls the bearer token from the Authorization header. As a
 // narrow exception, it also reads ?token= from the query string, but ONLY for

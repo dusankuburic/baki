@@ -4,6 +4,8 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {useGovernanceStore} from '@/stores/governanceStore'
 import {subscribeToEvents} from '@/api/client'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
+import {FlowDocumentEnvelopeSchema} from '@/api/schemas'
+import {logger} from '@/lib/logger'
 
 export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | null) => void}) {
   const {openDocument} = deps
@@ -11,7 +13,7 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
   useEffect(() => {
     let unsub: (() => void) | null = null
     let cancelled = false
-    subscribeToEvents(ev => {
+    void subscribeToEvents(ev => {
       const d = ev.data as Record<string, unknown> | undefined
       if (ev.name === 'flow:parse-progress') {
         useFlowStore.setState({parseProgress: (d?.percent as number) ?? 0, isParsing: true})
@@ -28,15 +30,32 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
         if (eventFlowId && currentDocId && eventFlowId !== currentDocId) {
           return
         }
-        openDocument(d as unknown as DomainFlowDocument)
+        // Boundary-validate the SSE payload before it enters the editor
+        // store: a malformed event (proxy error page, truncated JSON, another
+        // event's data shape) must not hijack the editor. Top-level envelope
+        // check only — see FlowDocumentEnvelopeSchema's doc comment.
+        const parsed = FlowDocumentEnvelopeSchema.safeParse(d)
+        if (!parsed.success) {
+          logger.warn('flow:loaded event failed envelope validation, dropping', parsed.error.issues[0])
+          return
+        }
+        openDocument(parsed.data as unknown as DomainFlowDocument)
       } else if (ev.name === 'flow:load-error') {
         useFlowStore.getState().setParseError((d?.error as string) ?? 'Unknown error')
       } else if (ev.name === 'analysis:progress') {
-        useAnalysisStore.getState().setProgress({
-          current: (d?.current as number) ?? 0,
-          total: (d?.total as number) ?? 0,
-          ruleName: (d?.ruleName as string) ?? '',
-        })
+        // Quantize: only write to the store when the integer percent or rule
+        // name changes. StatusBar and FindingsTab subscribe to this object,
+        // so unquantized writes re-render them on every one of the ~41 rule
+        // events even when the visible percent didn't move.
+        const current = (d?.current as number) ?? 0
+        const total = (d?.total as number) ?? 0
+        const ruleName = (d?.ruleName as string) ?? ''
+        const prev = useAnalysisStore.getState().progress
+        const prevPct = prev && prev.total > 0 ? Math.floor((prev.current / prev.total) * 100) : -1
+        const pct = total > 0 ? Math.floor((current / total) * 100) : -1
+        if (!prev || pct !== prevPct || prev.ruleName !== ruleName) {
+          useAnalysisStore.getState().setProgress({current, total, ruleName})
+        }
       } else if (ev.name === 'governance:alert') {
         // Real-time alert push from the scanner. The payload is a hint; the
         // authoritative, RLS-scoped unread count is re-fetched via REST so no

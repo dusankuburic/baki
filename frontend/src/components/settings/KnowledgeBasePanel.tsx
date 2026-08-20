@@ -9,6 +9,7 @@ import {useConfirm, useToast, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
+import {useTranslation} from 'react-i18next'
 
 interface KnowledgeDoc {
   id: string
@@ -17,7 +18,9 @@ interface KnowledgeDoc {
 }
 
 export default function KnowledgeBasePanel() {
-  const {organisations, activeOrgId} = useOrgStore()
+  const {t} = useTranslation('settings')
+  const organisations = useOrgStore(s => s.organisations)
+  const activeOrgId = useOrgStore(s => s.activeOrgId)
   const currentUser = useAuthStore(s => s.user)
   const activeOrg = useMemo(() => organisations.find(o => o.id === activeOrgId), [organisations, activeOrgId])
   const canManage = useMemo(() => {
@@ -93,8 +96,8 @@ export default function KnowledgeBasePanel() {
     if (!activeOrgId) return
     const filename = docs.find(d => d.id === docId)?.filename
     const ok = await confirm({
-      title: 'Delete document',
-      message: filename ? `Delete "${filename}" from the knowledge base?` : 'Delete this document?',
+      title: t('knowledge.deleteTitle'),
+      message: filename ? t('knowledge.deleteNamedMessage', {filename}) : t('knowledge.deleteMessage'),
       danger: true,
       confirmLabel: 'Delete',
     })
@@ -112,14 +115,14 @@ export default function KnowledgeBasePanel() {
   if (!activeOrgId) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-text-tertiary text-center px-4">
-        <p>Please select an organization in the 'Organizations' tab first to manage its knowledge base.</p>
+        <p>{t('knowledge.selectOrgFirst')}</p>
       </div>
     )
   }
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary">Knowledge Base (RAG)</h2>
+      <h2 className="text-xl font-semibold text-text-primary">{t('knowledge.title')}</h2>
       <p className="text-sm text-text-secondary mt-1 mb-6">
         Organization: <span className="font-medium text-text-primary">{activeOrg?.name}</span>
         <br />
@@ -128,14 +131,13 @@ export default function KnowledgeBasePanel() {
       </p>
 
       <div className="bg-brand-500/5 border border-brand-500/20 rounded-lg p-3 mb-6 text-xs text-text-secondary">
-        <strong className="text-text-primary">Requires an embedding provider.</strong> Indexing needs a configured
-        OpenAI, Gemini, GLM, or GitHub Models key (set under <em>AI Behavior → Embedding Assistant</em>). Claude,
-        Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.
+        <strong className="text-text-primary">{t('knowledge.embeddingNoticePrefix')}</strong>{' '}
+        {t('knowledge.embeddingNoticeSuffix')}
       </div>
 
       {canManage && (
         <div className="bg-surface-2 rounded-lg border border-border-default p-4 mb-8">
-          <h3 className="text-sm font-medium text-text-primary mb-3">Upload SOP</h3>
+          <h3 className="text-sm font-medium text-text-primary mb-3">{t('knowledge.uploadTitle')}</h3>
           <div className="flex items-center gap-3">
             <label className="flex-1 flex items-center gap-2 px-3 py-2 bg-surface-3 border border-border-default rounded-md cursor-pointer hover:bg-surface-4 transition-colors overflow-hidden">
               <Upload className="w-4 h-4 text-text-secondary shrink-0" />
@@ -164,7 +166,7 @@ export default function KnowledgeBasePanel() {
       )}
 
       <div className="space-y-3">
-        <h3 className="text-sm font-medium text-text-primary">Indexed Documents</h3>
+        <h3 className="text-sm font-medium text-text-primary">{t('knowledge.indexedTitle')}</h3>
         {loading ? (
           <div className="flex justify-center p-8">
             <Loader2 className="w-6 h-6 animate-spin text-brand-500" />

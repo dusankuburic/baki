@@ -1,3 +1,4 @@
+import {useId} from 'react'
 import clsx from 'clsx'
 
 type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
@@ -5,10 +6,17 @@ type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   hint?: string
 }
 
-export default function Textarea({error, hint, className, ...rest}: TextareaProps) {
+// Mirrors shared/Input: error/hint linked via aria-describedby, invalid
+// fields carry aria-invalid (WCAG 3.3.1/3.3.2).
+export default function Textarea({error, hint, className, id, ...rest}: TextareaProps) {
+  const fallbackId = useId()
+  const describedBy = error || hint ? `${id ?? fallbackId}-desc` : undefined
   return (
     <div className={clsx('flex flex-col', className)}>
       <textarea
+        id={id ?? fallbackId}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
         className={clsx(
           'bg-surface-2 border rounded-md px-3 py-2 text-sm outline-none resize-y min-h-[80px] transition-colors duration-fast',
           'text-text-primary placeholder:text-text-disabled',
@@ -19,7 +27,7 @@ export default function Textarea({error, hint, className, ...rest}: TextareaProp
         {...rest}
       />
       {(hint || error) && (
-        <span className={clsx('mt-1 text-xs', error ? 'text-semantic-error' : 'text-text-tertiary')}>
+        <span id={describedBy} className={clsx('mt-1 text-xs', error ? 'text-semantic-error' : 'text-text-tertiary')}>
           {error || hint}
         </span>
       )}

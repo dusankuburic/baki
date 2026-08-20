@@ -33,13 +33,13 @@ export default function ProtectedRoute({children}: ProtectedRouteProps) {
 
   useEffect(() => {
     if (!isTauri()) {
-      loadFromStorage()
+      void loadFromStorage()
     }
   }, [loadFromStorage])
 
   useEffect(() => {
     if (!isTauri() && isAuthenticated) {
-      loadOrgs()
+      void loadOrgs()
     }
   }, [isAuthenticated, loadOrgs])
 

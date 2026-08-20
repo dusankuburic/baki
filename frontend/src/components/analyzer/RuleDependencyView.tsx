@@ -164,7 +164,7 @@ export default function RuleDependencyView() {
     if (dataRef.current) {
       renderGraph(dataRef.current)
     } else {
-      load()
+      void load()
     }
     return () => {
       instance.destroy()
@@ -223,10 +223,10 @@ export default function RuleDependencyView() {
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <div>
             <span className="font-semibold">Circular dependency detected:</span>{' '}
-            {(data!.cycles ?? []).map((c, i) => (
+            {(data?.cycles ?? []).map((c, i) => (
               <span key={i} className="font-mono">
                 {c.join(' → ')}
-                {i < data!.cycles!.length - 1 ? '; ' : ''}
+                {i < (data?.cycles?.length ?? 0) - 1 ? '; ' : ''}
               </span>
             ))}
           </div>

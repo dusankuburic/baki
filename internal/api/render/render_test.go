@@ -88,17 +88,3 @@ func TestJSON(t *testing.T) {
 		t.Fatalf("body: got %v", body)
 	}
 }
-
-func TestNoContent(t *testing.T) {
-	t.Parallel()
-
-	w := httptest.NewRecorder()
-	NoContent(w)
-
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status: got %d, want 204", w.Code)
-	}
-	if w.Body.Len() != 0 {
-		t.Fatalf("expected empty body, got %q", w.Body.String())
-	}
-}

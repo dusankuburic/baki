@@ -200,9 +200,26 @@ export default React.memo(function BlockCard({
   return (
     <div
       data-block-id={block.id}
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`${block.rawType}: ${block.name}`}
+      onKeyDown={e => {
+        // Keyboard parity with click: Enter/Space select; Enter on an
+        // already-selected card opens it (double-click equivalent).
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.key === 'Enter' && selected && onDoubleClick) {
+          onDoubleClick()
+        } else {
+          onClick?.()
+        }
+      }}
       className={clsx(
         'relative rounded-lg cursor-pointer transition-all duration-fast overflow-visible',
         'border max-w-[450px] w-full',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60',
         selected
           ? 'bg-surface-2 border-brand-500/50 shadow-glow scale-[1.01] animate-jump-pulse'
           : 'bg-surface-2 border-border-default shadow-sm',

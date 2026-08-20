@@ -4,6 +4,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import {useProviderSetup} from './hooks/useProviderSetup'
 import {useAIChat} from './hooks/useAIChat'
 import {logger} from '@/lib/logger'
+import {buildBlockLookup} from '@/lib/tree'
 import {
   MessageBubble,
   ChatMessageList,
@@ -13,13 +14,12 @@ import {
   ContextChip,
   ConnectionPanel,
   TokenCounter,
-  ContextPreviewModal,
   PromptTemplates,
   SourceFilePicker,
   ChatToolbar,
   ChatThreadBar,
 } from '.'
-import {useState, useEffect, useMemo, useCallback} from 'react'
+import {useState, useEffect, useMemo, useCallback, lazy, Suspense} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import StreamingProgress from './StreamingProgress'
@@ -29,7 +29,13 @@ import ConnectionStatus from './ConnectionStatus'
 import EmptyChatState from './EmptyChatState'
 import ChatErrorBoundary from './ChatErrorBoundary'
 import ChatSearchBar from './ChatSearchBar'
-import ChatHelpPopover from './ChatHelpPopover'
+
+// Rarely-rendered overlays load on first open: the context-preview modal only
+// appears when the user confirms a context-heavy send, and the help popover
+// only on explicit help clicks. Keeping them out of the AITab chunk shaves
+// its initial fetch.
+const ContextPreviewModal = lazy(() => import('./ContextPreviewModal'))
+const ChatHelpPopover = lazy(() => import('./ChatHelpPopover'))
 
 const WELCOME_MESSAGES: Record<string, string> = {
   copilot: 'GitHub Copilot is ready — ask about your PAD flow, request code, or analyze findings.',
@@ -44,16 +50,14 @@ export default function AITab() {
   const _selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const _document = useFlowStore(s => s.document)
   const _analysisReport = useAnalysisStore(s => (_document ? s.reports.get(_document.id) : undefined))
-  const selectedBlock = useMemo(() => {
-    if (!_document || !_selectedBlockId) return null
-    const stack = [..._document.subflows.flatMap(sf => sf.blocks)]
-    while (stack.length) {
-      const b = stack.pop()!
-      if (b.id === _selectedBlockId) return b
-      if (b.children?.length) stack.push(...b.children)
-    }
-    return null
-  }, [_document, _selectedBlockId])
+  // O(1) block-id → meta index built once per document (see FindingsTab);
+  // previously this walked the entire block tree on every selection change,
+  // which on a 10k-block flow ran a full DFS per canvas click.
+  const _blockLookup = useMemo(() => (_document ? buildBlockLookup(_document) : null), [_document])
+  const selectedBlock = useMemo(
+    () => (_blockLookup && _selectedBlockId ? _blockLookup.get(_selectedBlockId) ?? null : null),
+    [_blockLookup, _selectedBlockId],
+  )
   const aiSettings = useSettingsStore(s => s.settings.ai)
   const provider = useChatStore(s => s.selectedProvider)
 
@@ -266,24 +270,32 @@ export default function AITab() {
                 />
               </div>
             ) : (
-              <ChatMessageList isStreaming={isCurrentThreadStreaming}>
-                {displayedMessages.map((m, i) => (
+              // key = thread id: switching threads remounts the virtualized
+              // list so it opens at the new thread's bottom (initialTopMostItemIndex).
+              <ChatMessageList
+                key={activeThread.id}
+                messages={displayedMessages}
+                renderMessage={(i, m) => (
                   <MessageBubble
-                    key={m.id}
                     message={m}
                     isLastAssistant={i === lastAssistantIdx}
                     onRegenerate={i === lastAssistantIdx ? handleResend : undefined}
                     onRetry={m.finishReason === 'error' ? handleResend : undefined}
                   />
-                ))}
-                {showThinking && (
-                  <MessageBubble
-                    message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
-                    isThinking
-                  />
                 )}
-                {isCurrentThreadStreaming && <StreamingBubble />}
-              </ChatMessageList>
+                footer={
+                  <>
+                    {showThinking && (
+                      <MessageBubble
+                        message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
+                        isThinking
+                      />
+                    )}
+                    {isCurrentThreadStreaming && <StreamingBubble />}
+                  </>
+                }
+                isStreaming={isCurrentThreadStreaming}
+              />
             )
           ) : (
             <EmptyChatState hasDoc={!!doc} hasThread={!!activeThread} onCreateThread={handleCreateThread} />
@@ -321,14 +333,20 @@ export default function AITab() {
           </div>
         )}
 
-        {helpOpen && <ChatHelpPopover onClose={() => setHelpOpen(false)} />}
+        {helpOpen && (
+          <Suspense fallback={null}>
+            <ChatHelpPopover onClose={() => setHelpOpen(false)} />
+          </Suspense>
+        )}
 
         {contextPreview && pendingMessage && (
-          <ContextPreviewModal
-            preview={contextPreview}
-            onClose={clearContextPreview}
-            onConfirm={confirmContextPreview}
-          />
+          <Suspense fallback={null}>
+            <ContextPreviewModal
+              preview={contextPreview}
+              onClose={clearContextPreview}
+              onConfirm={confirmContextPreview}
+            />
+          </Suspense>
         )}
       </div>
     </ChatErrorBoundary>

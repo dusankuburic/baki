@@ -26,10 +26,26 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen}: LibraryListProps
           return (
             <li
               key={flow.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected}
+              aria-label={`Flow ${flow.name}`}
               onClick={() => onSelect(flow)}
               onDoubleClick={() => onOpen(flow)}
+              onKeyDown={e => {
+                // Keyboard parity: Enter/Space select; Enter opens when
+                // already selected (double-click equivalent).
+                if (e.key !== 'Enter' && e.key !== ' ') return
+                e.preventDefault()
+                if (e.key === 'Enter' && selected) {
+                  onOpen(flow)
+                } else {
+                  onSelect(flow)
+                }
+              }}
               className={clsx(
                 'grid grid-cols-[1fr_120px_140px_80px_80px] gap-3 px-4 py-2.5 text-sm cursor-pointer transition-colors',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500/60',
                 selected ? 'bg-brand-500/15 text-brand-300' : 'text-text-secondary hover:bg-surface-3',
               )}
             >

@@ -6,6 +6,7 @@ import {providersApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useTranslation} from 'react-i18next'
 
 interface ProviderEntry {
   id: string
@@ -15,6 +16,7 @@ interface ProviderEntry {
 }
 
 export default function ProvidersPanel() {
+  const {t} = useTranslation('settings')
   const [_providers, setProviders] = useState<ProviderEntry[]>([])
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [copilotUser, setCopilotUser] = useState<string | null>(null)
@@ -63,13 +65,13 @@ export default function ProvidersPanel() {
   const handleCopilotAuthComplete = useCallback(() => {
     refresh()
     setProvider('copilot')
-    updateAI({activeProvider: 'copilot'})
+    void updateAI({activeProvider: 'copilot'})
   }, [refresh, setProvider, updateAI])
 
   const handleGithubAuthComplete = useCallback(() => {
     refresh()
     setProvider('github-models')
-    updateAI({activeProvider: 'github-models'})
+    void updateAI({activeProvider: 'github-models'})
   }, [refresh, setProvider, updateAI])
 
   useEffect(() => {
@@ -78,28 +80,28 @@ export default function ProvidersPanel() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary">AI Providers</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">Configure API keys for AI-powered analysis and chat.</p>
+      <h2 className="text-xl font-semibold text-text-primary">{t('providers.title')}</h2>
+      <p className="text-sm text-text-secondary mt-1 mb-6">{t('providers.subtitle')}</p>
 
       <div className="space-y-8">
         <ProviderSection name="Claude" color="#d4a574">
-          <ApiKeyInput provider="claude" label="Anthropic API Key" onConfigured={refresh} />
+          <ApiKeyInput provider="claude" label={t('providers.anthropicKey')} onConfigured={refresh} />
         </ProviderSection>
 
         <ProviderSection name="OpenAI" color="#10a37f">
-          <ApiKeyInput provider="openai" label="OpenAI API Key" onConfigured={refresh} />
+          <ApiKeyInput provider="openai" label={t('providers.openaiKey')} onConfigured={refresh} />
         </ProviderSection>
 
         <ProviderSection name="Gemini" color="#4285f4">
-          <ApiKeyInput provider="gemini" label="Google AI API Key" onConfigured={refresh} />
+          <ApiKeyInput provider="gemini" label={t('providers.googleKey')} onConfigured={refresh} />
         </ProviderSection>
 
         <ProviderSection name="xAI (Grok)" color="#f43f5e">
-          <ApiKeyInput provider="xai" label="xAI API Key" onConfigured={refresh} />
+          <ApiKeyInput provider="xai" label={t('providers.xaiKey')} onConfigured={refresh} />
         </ProviderSection>
 
         <ProviderSection name="GLM (z.ai)" color="#06b6d4">
-          <ApiKeyInput provider="glm" label="z.ai API Key" onConfigured={refresh} />
+          <ApiKeyInput provider="glm" label={t('providers.zaiKey')} onConfigured={refresh} />
         </ProviderSection>
 
         <ProviderSection name="GitHub Models" color="#8b5cf6">
@@ -171,7 +173,7 @@ export default function ProvidersPanel() {
                   Or use a Personal Access Token
                 </summary>
                 <div className="mt-2">
-                  <ApiKeyInput provider="copilot" label="GitHub Token (PAT)" onConfigured={refresh} />
+                  <ApiKeyInput provider="copilot" label={t('providers.githubPat')} onConfigured={refresh} />
                 </div>
               </details>
             )}

@@ -80,6 +80,32 @@ func (s *ExportService) ExportMarkdown(doc *models.FlowDocument, report *models.
 	return content, nil
 }
 
+func (s *ExportService) ExportHTML(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
+	defer logger.Guard("App.ExportHTML", &err)
+
+	if doc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+
+	if report == nil {
+		return nil, fmt.Errorf("no analysis report available — run analysis first")
+	}
+
+	content = []byte(export.ReportToHTML(report, doc))
+
+	if path != "" {
+		if err = validateUserPath(path); err != nil {
+			return nil, err
+		}
+		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
+		if err = os.WriteFile(path, content, 0644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+	}
+
+	return content, nil
+}
+
 func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.AnalysisReport, path string) (content []byte, err error) {
 	defer logger.Guard("App.ExportPDF", &err)
 

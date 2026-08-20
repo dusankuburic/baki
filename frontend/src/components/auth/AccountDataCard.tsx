@@ -12,7 +12,8 @@ import {useToast, useConfirm} from '@/components/shared'
 // self-service account-erasure flow. Moved into the profile page so account
 // management lives in one place instead of split across two panes.
 export const AccountDataCard: React.FC = () => {
-  const {user, logout} = useAuthStore()
+  const user = useAuthStore(s => s.user)
+  const logout = useAuthStore(s => s.logout)
   const toast = useToast()
   const {confirm} = useConfirm()
   const [exporting, setExporting] = useState(false)

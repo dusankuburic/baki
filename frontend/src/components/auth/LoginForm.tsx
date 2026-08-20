@@ -5,6 +5,7 @@ import Input from '@/components/shared/Input'
 import {useAuthStore} from '@/stores/authStore'
 import {authApi, type SSOInfo} from '@/api/auth'
 import {getBackendConfig} from '@/api/client'
+import {useTranslation} from 'react-i18next'
 
 interface LoginFormProps {
   onSuccess?: () => void
@@ -26,6 +27,7 @@ function readSSOHash(): {ticket?: string; error?: string} {
 }
 
 export default function LoginForm({onSuccess}: LoginFormProps) {
+  const {t} = useTranslation('auth')
   const [isRegister, setIsRegister] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -113,7 +115,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
     setFormError(null)
 
     if (isRegister && password !== confirmPassword) {
-      setFormError('Passwords do not match')
+      setFormError(t('login.passwordsDoNotMatch'))
       return
     }
 
@@ -140,8 +142,8 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
             <h1 className="text-xl font-semibold text-text-primary">Reset your password</h1>
             <p className="text-sm text-text-muted">
               {forgotSent
-                ? 'If an account exists for that address, we’ve sent a reset link.'
-                : 'Enter your account email and we’ll send you a reset link.'}
+                ? t('login.resetSent')
+                : t('login.resetPrompt')}
             </p>
           </div>
 
@@ -150,7 +152,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
               <Input
                 id="forgot-email"
                 type="email"
-                placeholder="Email"
+                placeholder={t('login.email')}
                 icon={Mail}
                 value={email}
                 onChange={e => setEmail(e.target.value)}
@@ -188,9 +190,9 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
       >
         <div className="flex flex-col gap-1 mb-2">
-          <h1 className="text-xl font-semibold text-text-primary">{isRegister ? 'Create Account' : 'Sign in'}</h1>
+          <h1 className="text-xl font-semibold text-text-primary">{isRegister ? t('login.titleRegister') : t('login.titleSignIn')}</h1>
           <p className="text-sm text-text-muted">
-            {isRegister ? 'Join PAD Analyzer today' : 'Enter your credentials to continue'}
+            {isRegister ? t('login.subtitleRegister') : t('login.subtitleSignIn')}
           </p>
         </div>
 
@@ -203,7 +205,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         <Input
           id="email"
           type="email"
-          placeholder="Email"
+          placeholder={t('login.email')}
           icon={Mail}
           value={email}
           onChange={e => setEmail(e.target.value)}
@@ -215,7 +217,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         <Input
           id="password"
           type="password"
-          placeholder="Password"
+          placeholder={t('login.password')}
           icon={Lock}
           value={password}
           onChange={e => setPassword(e.target.value)}
@@ -227,7 +229,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           <Input
             id="confirm-password"
             type="password"
-            placeholder="Confirm Password"
+            placeholder={t('login.confirmPassword')}
             icon={Lock}
             value={confirmPassword}
             onChange={e => setConfirmPassword(e.target.value)}
@@ -268,7 +270,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           icon={isRegister ? UserPlus : LogIn}
           disabled={isLoading || !email || !password || (isRegister && !confirmPassword)}
         >
-          {isRegister ? 'Sign up' : 'Sign in'}
+          {isRegister ? t('login.submitRegister') : t('login.submitSignIn')}
         </Button>
 
         {sso?.enabled && (
@@ -292,7 +294,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         )}
 
         <div className="text-center text-sm text-text-muted">
-          {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
+          {isRegister ? t('login.hasAccount') : t('login.noAccount')}{' '}
           <button
             type="button"
             className="text-brand-500 hover:underline font-medium"
@@ -301,7 +303,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
               clearError()
             }}
           >
-            {isRegister ? 'Sign in' : 'Sign up'}
+            {isRegister ? t('login.switchToSignIn') : t('login.switchToRegister')}
           </button>
         </div>
       </form>

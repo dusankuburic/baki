@@ -54,6 +54,12 @@ func (h *AuthHandler) ssoEnabled() bool {
 }
 
 // handleSSOInfo tells the SPA whether to render the SSO login button.
+// @Summary      SSO provider info
+// @Description  handleSSOInfo tells the SPA whether to render the SSO login button.
+// @Tags         sso
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "SSO config"
+// @Router       /api/auth/sso/info [get]
 func (h *AuthHandler) handleSSOInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]any{"enabled": h.ssoEnabled()}
 	if h.ssoEnabled() {
@@ -65,6 +71,12 @@ func (h *AuthHandler) handleSSOInfo(w http.ResponseWriter, r *http.Request) {
 // handleSSOStart begins the OIDC authorization-code flow: it stores the
 // state/nonce/PKCE-verifier in an HttpOnly cookie and redirects the browser
 // to the IdP.
+// @Summary      Start SSO login
+// @Description  handleSSOStart begins the OIDC authorization-code flow: it stores the state/nonce/PKCE-verifier in an HttpOnly cookie and redirects the browser to the IdP.
+// @Tags         sso
+// @Produce      json
+// @Success      302 {string} string "Redirect"
+// @Router       /api/auth/sso/start [get]
 func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	if !h.ssoEnabled() {
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
@@ -110,6 +122,12 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 // code for a verified identity, finds or creates the local user, and bounces
 // the browser back to the SPA with a short-lived single-use exchange ticket
 // in the URL fragment (fragments are not sent to servers or logged).
+// @Summary      SSO provider callback
+// @Description  handleSSOCallback receives the IdP redirect, validates state, exchanges the code for a verified identity, finds or creates the local user, and bounces the browser back to the SPA with a short-lived single-use exchange ticket in the URL fragment (fragments are not sent to servers or logged).
+// @Tags         sso
+// @Produce      json
+// @Success      302 {string} string "Redirect"
+// @Router       /api/auth/sso/callback [get]
 func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	if !h.ssoEnabled() {
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
@@ -168,6 +186,16 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 
 // handleSSOExchange swaps a single-use SSO ticket for a regular token pair —
 // the SSO equivalent of handleAuthLogin's response.
+// @Summary      Exchange SSO ticket for JWT
+// @Description  handleSSOExchange swaps a single-use SSO ticket for a regular token pair — the SSO equivalent of handleAuthLogin's response.
+// @Tags         sso
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/auth/sso/exchange [post]
 func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) {
 	if !h.ssoEnabled() {
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)

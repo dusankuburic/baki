@@ -114,7 +114,7 @@ export default function LibraryWorkspace() {
   )
 
   useEffect(() => {
-    fetchPage(false)
+    void fetchPage(false)
     return () => abortRef.current?.abort()
   }, [fetchPage])
 

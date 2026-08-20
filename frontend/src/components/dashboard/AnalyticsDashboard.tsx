@@ -4,7 +4,7 @@ import {useSystemStore} from '@/stores/systemStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {formatCount} from '@/lib/format'
-import {scoreColor} from '@/lib/scoring'
+import {scoreColor, scoreLabel} from '@/lib/scoring'
 import {StatCard} from './StatCard'
 import {SeverityChips} from './SeverityChips'
 import {RuleBarChart} from './RuleBarChart'
@@ -152,7 +152,12 @@ export default function AnalyticsDashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <StatCard label="Flows Analyzed" value={formatCount(stats.totalFlowsAnalyzed)} />
               <StatCard label="Total Findings" value={formatCount(stats.totalFindings)} />
-              <StatCard label="Avg Health" value={stats.avgHealthScore.toFixed(0)} accent={scoreColor(stats.avgHealthScore)} />
+              <StatCard
+                label="Avg Health"
+                value={stats.avgHealthScore.toFixed(0)}
+                accent={scoreColor(stats.avgHealthScore)}
+                ariaLabel={`Average health score ${stats.avgHealthScore.toFixed(0)} of 100: ${scoreLabel(stats.avgHealthScore)}`}
+              />
             </div>
 
             <SeverityChips bySeverity={stats.findingsBySeverity} byCategory={stats.findingsByCategory} />

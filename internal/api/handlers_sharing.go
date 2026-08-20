@@ -21,6 +21,17 @@ func NewSharingHandler(backend storageif.StorageBackend, flowSvc *service.FlowSe
 	return &SharingHandler{backend: backend, flowSvc: flowSvc, security: security}
 }
 
+// @Summary      List flow collaborators
+// @Description  Returns a list of users who have access to the specified flow. Only the flow owner can view collaborators.
+// @Tags         sharing
+// @Param        flowId path string true "flowId"
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flows/{flowId}/collaborators [get]
 func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	if _, ok := resolveFlow(w, r, h.flowSvc, h.security, flowID, "viewer"); !ok {
@@ -45,6 +56,20 @@ func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.R
 	render.JSON(w, collabs)
 }
 
+// @Summary      Add flow collaborator
+// @Description  Grants access to a flow to another user. Only the flow owner can add collaborators.
+// @Tags         sharing
+// @Param        flowId path string true "flowId"
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flows/{flowId}/collaborators [post]
 func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	// Sharing is managed by anyone with the "admin" rank on the flow: the
@@ -111,6 +136,21 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 	render.JSON(w, collab)
 }
 
+// @Summary      Update flow collaborator permission
+// @Description  Updates the permission level for an existing flow collaborator. Only the flow owner can update permissions.
+// @Tags         sharing
+// @Param        flowId path string true "flowId"
+// @Param        userId path string true "userId"
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flows/{flowId}/collaborators/{userId} [put]
 func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	userID := chi.URLParam(r, "userId")
@@ -142,6 +182,18 @@ func (h *SharingHandler) handleCollaboratorUpdate(w http.ResponseWriter, r *http
 	render.JSON(w, map[string]string{"permission": req.Permission})
 }
 
+// @Summary      Remove flow collaborator
+// @Description  Revokes a user's access to a specific flow. Only the flow owner can remove collaborators.
+// @Tags         sharing
+// @Param        flowId path string true "flowId"
+// @Param        userId path string true "userId"
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/flows/{flowId}/collaborators/{userId} [delete]
 func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http.Request) {
 	flowID := chi.URLParam(r, "flowId")
 	userID := chi.URLParam(r, "userId")

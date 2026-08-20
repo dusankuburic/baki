@@ -1,8 +1,10 @@
 import {useState, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import Input from '@/components/shared/Input'
 import {shortcuts, formatShortcutParts} from '@/lib/shortcuts'
 
 export default function ShortcutsPanel() {
+  const {t} = useTranslation('settings')
   const [search, setSearch] = useState('')
 
   const grouped = useMemo(() => {
@@ -24,13 +26,14 @@ export default function ShortcutsPanel() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary">Keyboard Shortcuts</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-4">Reference of all available keyboard shortcuts.</p>
+      <h2 className="text-xl font-semibold text-text-primary">{t('shortcuts.title')}</h2>
+      <p className="text-sm text-text-secondary mt-1 mb-4">{t('shortcuts.subtitle')}</p>
 
       <Input
         value={search}
         onChange={e => setSearch((e.target as HTMLInputElement).value)}
         placeholder="Search shortcuts..."
+        aria-label="Search shortcuts"
         className="mb-4"
       />
 

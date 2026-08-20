@@ -4,7 +4,6 @@
 
 import {invoke} from '@tauri-apps/api/core'
 import {listen} from '@tauri-apps/api/event'
-import {getCurrentWindow} from '@tauri-apps/api/window'
 import {open, save} from '@tauri-apps/plugin-dialog'
 import {open as shellOpen} from '@tauri-apps/plugin-shell'
 import {logger} from '@/lib/logger'
@@ -207,15 +206,22 @@ export class TauriAdapter implements PlatformAdapter {
     await navigator.clipboard.writeText(text)
   }
 
+  // Window controls dynamically import @tauri-apps/api/window (the heaviest
+  // Tauri module — it also pulls in dpi.js). A static import would drag ~70 kB
+  // into the eagerly-loaded web bundle where these controls are never used;
+  // dynamic import matches the pattern in useAppShortcuts/useFileDrop.
   async minimizeWindow(): Promise<void> {
+    const {getCurrentWindow} = await import('@tauri-apps/api/window')
     await getCurrentWindow().minimize()
   }
 
   async toggleMaximizeWindow(): Promise<void> {
+    const {getCurrentWindow} = await import('@tauri-apps/api/window')
     await getCurrentWindow().toggleMaximize()
   }
 
   async closeWindow(): Promise<void> {
+    const {getCurrentWindow} = await import('@tauri-apps/api/window')
     await getCurrentWindow().close()
   }
 }

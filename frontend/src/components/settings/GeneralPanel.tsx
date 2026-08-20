@@ -1,12 +1,14 @@
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useTranslation} from 'react-i18next'
 
 export default function GeneralPanel() {
+  const {t} = useTranslation('settings')
   const updateGeneral = useSettingsStore(s => s.updateGeneral)
 
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">General</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">Basic application settings and behavior.</p>
+      <p className="text-sm text-text-secondary mt-1 mb-6">{t('general.subtitle')}</p>
 
       <div className="space-y-6">
         <div className="p-4 rounded-lg bg-surface-2 border border-border-default">

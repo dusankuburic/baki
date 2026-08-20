@@ -28,7 +28,7 @@ export function usePaneResize() {
 
   const handleSidebarResizeEnd = useCallback(() => {
     if (sidebarLiveWidthRef.current !== null) {
-      updateLayout({sidebarWidth: sidebarLiveWidthRef.current})
+      void updateLayout({sidebarWidth: sidebarLiveWidthRef.current})
       sidebarLiveWidthRef.current = null
       setSidebarLiveWidth(null)
     }
@@ -43,7 +43,7 @@ export function usePaneResize() {
 
   const handleInspectorResizeEnd = useCallback(() => {
     if (inspectorLiveWidthRef.current !== null) {
-      updateLayout({inspectorWidth: inspectorLiveWidthRef.current})
+      void updateLayout({inspectorWidth: inspectorLiveWidthRef.current})
       inspectorLiveWidthRef.current = null
       setInspectorLiveWidth(null)
     }

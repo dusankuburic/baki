@@ -41,6 +41,19 @@ export const RefreshResponseSchema = z.object({
 // Apply-fix button, health-score badge, per-rule timing, confidence badges, and
 // triage/suppression keying.
 
+// Envelope check for `flow:loaded` SSE payloads entering the editor store
+// (useAppEvents). Same philosophy as above: validate the top-level shape so a
+// malformed payload (HTML error page, truncated JSON, a different event's
+// data) is rejected before it can hijack the editor, while passthrough keeps
+// the deep block tree untouched.
+export const FlowDocumentEnvelopeSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string(),
+    subflows: z.array(z.object({id: z.string(), name: z.string()}).passthrough()).min(1),
+  })
+  .passthrough()
+
 export const FindingSchema = z
   .object({
     id: z.string(),

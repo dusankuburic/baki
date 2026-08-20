@@ -256,14 +256,18 @@ export class WebAdapter implements PlatformAdapter {
           icon: options.icon,
         })
       } else if (Notification.permission !== 'denied') {
-        Notification.requestPermission().then(permission => {
-          if (permission === 'granted') {
-            new Notification(options.title, {
-              body: options.body,
-              icon: options.icon,
-            })
-          }
-        })
+        // Permission request can reject on some browsers; a notification
+        // failure must never surface as an unhandled rejection.
+        Notification.requestPermission()
+          .then(permission => {
+            if (permission === 'granted') {
+              new Notification(options.title, {
+                body: options.body,
+                icon: options.icon,
+              })
+            }
+          })
+          .catch(() => {})
       }
     } else {
       logger.warn('Notifications not supported in this browser')

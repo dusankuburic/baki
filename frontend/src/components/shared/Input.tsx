@@ -1,3 +1,4 @@
+import {useId} from 'react'
 import {type LucideIcon} from 'lucide-react'
 import clsx from 'clsx'
 
@@ -9,6 +10,9 @@ type InputProps = React.InputHTMLAttributes<HTMLInputElement> & {
   hint?: string
 }
 
+// The error/hint text is programmatically linked to the field via a generated
+// id + aria-describedby, and invalid fields carry aria-invalid — screen
+// readers announce the message when the field is focused (WCAG 3.3.1/3.3.2).
 export default function Input({
   icon: Icon,
   trailingIcon: TrailingIcon,
@@ -19,6 +23,8 @@ export default function Input({
   id,
   ...rest
 }: InputProps) {
+  const fallbackId = useId()
+  const describedBy = error || hint ? `${id ?? fallbackId}-desc` : undefined
   return (
     <div className={clsx('flex flex-col', className)}>
       <div
@@ -31,7 +37,9 @@ export default function Input({
       >
         {Icon && <Icon size={14} className="text-text-tertiary mr-2 flex-shrink-0" />}
         <input
-          id={id}
+          id={id ?? fallbackId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
           className="bg-transparent text-sm w-full outline-none text-text-primary placeholder:text-text-disabled"
           {...rest}
         />
@@ -47,7 +55,7 @@ export default function Input({
         )}
       </div>
       {(hint || error) && (
-        <span className={clsx('mt-1 text-xs', error ? 'text-semantic-error' : 'text-text-tertiary')}>
+        <span id={describedBy} className={clsx('mt-1 text-xs', error ? 'text-semantic-error' : 'text-text-tertiary')}>
           {error || hint}
         </span>
       )}

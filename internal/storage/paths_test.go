@@ -18,36 +18,6 @@ func TestConfigDir_ReturnsNonEmpty(t *testing.T) {
 	}
 }
 
-func TestCacheDir_ReturnsNonEmpty(t *testing.T) {
-	dir, err := CacheDir()
-	if err != nil {
-		t.Fatalf("CacheDir() error: %v", err)
-	}
-	if dir == "" {
-		t.Error("CacheDir() returned empty string")
-	}
-	if !strings.Contains(dir, "pad-analyzer") {
-		t.Errorf("CacheDir() = %q, expected to contain 'pad-analyzer'", dir)
-	}
-}
-
-func TestLogDir_IsSubdirOfConfigDir(t *testing.T) {
-	configDir, err := ConfigDir()
-	if err != nil {
-		t.Fatalf("ConfigDir() error: %v", err)
-	}
-	logDir, err := LogDir()
-	if err != nil {
-		t.Fatalf("LogDir() error: %v", err)
-	}
-	if !strings.HasPrefix(logDir, configDir) {
-		t.Errorf("LogDir %q should be under ConfigDir %q", logDir, configDir)
-	}
-	if !strings.Contains(logDir, "logs") {
-		t.Errorf("LogDir %q should contain 'logs'", logDir)
-	}
-}
-
 func TestSettingsPath_EndsWithSettingsJSON(t *testing.T) {
 	path, err := SettingsPath()
 	if err != nil {

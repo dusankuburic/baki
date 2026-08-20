@@ -11,14 +11,19 @@ export const ChangePasswordCard: React.FC = () => {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Inline field validation (B6): a persistent, screen-reader-announced error
+  // bound to the field via the shared Input's aria-describedby wiring, instead
+  // of a vanishing toast.
+  const [confirmError, setConfirmError] = useState('')
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
       if (newPassword !== confirmPassword) {
-        toast.error('New passwords do not match')
+        setConfirmError('New passwords do not match')
         return
       }
+      setConfirmError('')
       setIsSubmitting(true)
       try {
         await authApi.changePassword(currentPassword, newPassword)
@@ -44,35 +49,60 @@ export const ChangePasswordCard: React.FC = () => {
 
       <form onSubmit={handleSubmit} className="p-5 space-y-3">
         <div>
-          <label className="text-xs font-medium text-text-secondary block mb-1.5">Current Password</label>
+          <label htmlFor="change-password-current" className="text-xs font-medium text-text-secondary block mb-1.5">
+            Current Password
+          </label>
           <Input
+            id="change-password-current"
             type="password"
             value={currentPassword}
             onChange={e => setCurrentPassword(e.target.value)}
             placeholder="Enter current password"
+            autoComplete="current-password"
             required
           />
         </div>
         <div>
-          <label className="text-xs font-medium text-text-secondary block mb-1.5">New Password</label>
+          <label htmlFor="change-password-new" className="text-xs font-medium text-text-secondary block mb-1.5">
+            New Password
+          </label>
           <Input
+            id="change-password-new"
             type="password"
             value={newPassword}
             onChange={e => setNewPassword(e.target.value)}
             placeholder="Enter new password"
+            autoComplete="new-password"
             required
           />
         </div>
         <div>
-          <label className="text-xs font-medium text-text-secondary block mb-1.5">Confirm New Password</label>
+          <label htmlFor="change-password-confirm" className="text-xs font-medium text-text-secondary block mb-1.5">
+            Confirm New Password
+          </label>
           <Input
+            id="change-password-confirm"
             type="password"
             value={confirmPassword}
-            onChange={e => setConfirmPassword(e.target.value)}
+            onChange={e => {
+              setConfirmPassword(e.target.value)
+              if (confirmError) setConfirmError('')
+            }}
+            onBlur={() => {
+              if (confirmPassword && newPassword !== confirmPassword) setConfirmError('New passwords do not match')
+            }}
+            error={confirmError || undefined}
             placeholder="Confirm new password"
+            autoComplete="new-password"
             required
           />
         </div>
+
+        {confirmError && (
+          <div role="alert" className="text-xs text-semantic-error">
+            {confirmError}
+          </div>
+        )}
 
         <Button type="submit" variant="primary" size="md" fullWidth loading={isSubmitting}>
           Update Password

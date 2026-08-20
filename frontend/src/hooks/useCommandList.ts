@@ -245,7 +245,7 @@ export function useCommandList(deps: {
         shortcut: ['mod', 'shift', 't'],
         onSelect: () => {
           const resolved = useUIStore.getState().resolvedTheme
-          useSettingsStore.getState().updateAppearance({theme: resolved === 'light' ? 'dark' : 'light'})
+          void useSettingsStore.getState().updateAppearance({theme: resolved === 'light' ? 'dark' : 'light'})
         },
       },
       {

@@ -327,37 +327,6 @@ func TestMiddleware_TokenInQuery_AcceptedOnlyOnSSEPath(t *testing.T) {
 	})
 }
 
-// ---- StaticTokenMiddleware (legacy) ----
-
-func TestStaticTokenMiddleware_CorrectToken_PassesThrough(t *testing.T) {
-	const secret = "static-secret"
-	called := false
-	handler := StaticTokenMiddleware(secret, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-	if !called {
-		t.Error("expected inner handler to be called")
-	}
-}
-
-func TestStaticTokenMiddleware_WrongToken_Returns401(t *testing.T) {
-	handler := StaticTokenMiddleware("correct", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("must not call inner handler")
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer wrong")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rr.Code)
-	}
-}
-
 // TestManager_RefreshToken_BothTokensValid tests that VerifyRefresh succeeds
 // for both the access and refresh tokens of a pair. The concurrent-race test
 // lives in the API/storage layer (security_integration_test.go) because the

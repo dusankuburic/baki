@@ -180,7 +180,6 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/batch", h.Analysis.handleBatchAnalyze)
 		r.Post("/diff", h.Analysis.handleDiff)
 		r.Post("/history", h.Analysis.handleGetHistory)
-		r.Post("/export/html", h.Analysis.handleExportHTML)
 		r.Post("/export/sarif", h.Analysis.handleExportSARIF)
 		r.Post("/export/junit", h.Analysis.handleExportJUnit)
 		r.Post("/export/csv", h.Analysis.handleExportCSV)
@@ -233,6 +232,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Route("/api/export", func(r chi.Router) {
 		r.Post("/compare", h.Export.handleCompareCurrentWith)
 		r.Post("/markdown", h.Export.handleExportMarkdown)
+		r.Post("/html", h.Export.handleExportHTML)
 		r.Post("/pdf", h.Export.handleExportPDF)
 	})
 

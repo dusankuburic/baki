@@ -1,8 +1,10 @@
 import {useEffect, useState} from 'react'
 import {systemApi} from '@/api'
 import type {AppInfo} from '@/types'
+import {useTranslation} from 'react-i18next'
 
 export default function AboutPanel() {
+  const {t} = useTranslation('settings')
   const [info, setInfo] = useState<AppInfo | null>(null)
 
   useEffect(() => {
@@ -32,8 +34,8 @@ export default function AboutPanel() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary">About PAD Analyzer</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">Power Automate Desktop flow analysis tool.</p>
+      <h2 className="text-xl font-semibold text-text-primary">{t('about.title')}</h2>
+      <p className="text-sm text-text-secondary mt-1 mb-6">{t('about.subtitle')}</p>
 
       <div className="space-y-4">
         <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
@@ -51,7 +53,7 @@ export default function AboutPanel() {
             PAD Analyzer helps you understand, analyze, and improve your Power Automate Desktop flows with static
             analysis rules and AI-powered insights.
           </p>
-          <p className="text-xs text-text-tertiary">Built with Tauri, Go, React, and TypeScript.</p>
+          <p className="text-xs text-text-tertiary">{t('about.builtWith')}</p>
         </div>
       </div>
     </div>

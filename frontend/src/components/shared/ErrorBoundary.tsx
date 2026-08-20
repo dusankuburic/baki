@@ -23,7 +23,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     logger.error('ErrorBoundary caught:', error, info)
     try {
-      systemApi.logError({
+      void systemApi.logError({
         message: error.message,
         stack: error.stack || '',
         componentStack: info.componentStack || '',

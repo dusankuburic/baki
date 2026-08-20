@@ -27,6 +27,16 @@ func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, 
 	return &ChatHandler{chatSvc: chatSvc, flowSvc: flowSvc, common: common}
 }
 
+// @Summary      Stream chat message
+// @Description  Initiates a streaming chat session with an AI provider.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} string "Stream ID"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/stream [post]
 func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxChatMessageBodyBytes)
 	var req models.ChatRequest
@@ -52,6 +62,15 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 	render.JSON(w, id)
 }
 
+// @Summary      Begin stream
+// @Description  Signals the backend to start sending events for the specified stream ID.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Router       /api/chat/begin [post]
 func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID string `json:"id"`
@@ -80,6 +99,15 @@ func (h *ChatHandler) handleBeginStream(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Cancel stream
+// @Description  Cancels an active streaming session.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Router       /api/chat/cancel [post]
 func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID string `json:"id"`
@@ -94,6 +122,16 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Resume a chat stream
+// @Description  Reconnect to an in-flight AI stream and catch up on missed chunks.
+// @Tags         chat
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/chat/resume [post]
 func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID   string `json:"id"`
@@ -133,6 +171,16 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	return true
 }
 
+// @Summary      Get conversation history
+// @Description  Retrieves the chat history for a specific flow and provider.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/get [post]
 func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID   string `json:"flowId"`
@@ -155,6 +203,16 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, conv)
 }
 
+// @Summary      Save conversation history
+// @Description  Saves the chat history for a specific flow and provider.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/save [post]
 func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Request) {
 	if !h.common.RequireRole(w, r, auth.RoleMember) {
 		return
@@ -181,6 +239,16 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Clear conversation history
+// @Description  Deletes the chat history for a specific flow and provider.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/clear [post]
 func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID   string `json:"flowId"`
@@ -202,6 +270,16 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Export conversation
+// @Description  Exports the chat history to a file. Only available in local mode.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/export [post]
 func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Request) {
 	if h.common.JWTEnabled {
 		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
@@ -228,6 +306,13 @@ func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Re
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Get remaining demo requests
+// @Description  Returns the number of demo AI requests remaining for the current session.
+// @Tags         chat
+// @Produce      json
+// @Success      200 {object} int "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/demo-remaining [get]
 func (h *ChatHandler) handleGetDemoRemaining(w http.ResponseWriter, r *http.Request) {
 	remaining, err := h.chatSvc.GetDemoRemaining()
 	if err != nil {
@@ -237,6 +322,16 @@ func (h *ChatHandler) handleGetDemoRemaining(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, remaining)
 }
 
+// @Summary      Preview AI context
+// @Description  Returns a preview of the context that will be sent to the AI provider.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/preview-context [post]
 func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Request) {
 	var req models.ChatRequest
 	if !decodeBody(w, r, &req) {
@@ -256,6 +351,16 @@ func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, res)
 }
 
+// @Summary      Get suggested prompts
+// @Description  Returns suggested prompts based on the current flow state.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} []string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/chat/suggested-prompts [post]
 func (h *ChatHandler) handleGetSuggestedPrompts(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HasBlock    bool `json:"hasBlock"`

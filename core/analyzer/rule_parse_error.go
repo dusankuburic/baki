@@ -29,9 +29,10 @@ func (r *ParseErrorRule) Check(block *models.Block, ctx *RuleContext) []models.F
 	findings := make([]models.Finding, 0, len(ctx.Flow.ParseErrors))
 	for _, pe := range ctx.Flow.ParseErrors {
 		sev := models.SeverityError
-		if pe.Severity == "warning" {
+		switch pe.Severity {
+		case "warning":
 			sev = models.SeverityWarning
-		} else if pe.Severity == "info" {
+		case "info":
 			sev = models.SeverityInfo
 		}
 		findings = append(findings, models.Finding{

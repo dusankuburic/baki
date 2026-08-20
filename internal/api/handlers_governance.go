@@ -29,6 +29,12 @@ func (h *AnalysisHandler) governanceAvailable(w http.ResponseWriter) bool {
 // handleListGovernanceAlerts — GET /api/governance/alerts
 // Returns visible alerts newest-first. ?includeDismissed=true surfaces dismissed
 // alerts too; ?limit/&offset paginate (default/cap via clampListLimit).
+// @Summary      List governance alerts
+// @Description  handleListGovernanceAlerts — GET /api/governance/alerts Returns visible alerts newest-first. ?includeDismissed=true surfaces dismissed alerts too; ?limit/&offset paginate (default/cap via clampListLimit).
+// @Tags         governance
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Alerts"
+// @Router       /api/governance/alerts [get]
 func (h *AnalysisHandler) handleListGovernanceAlerts(w http.ResponseWriter, r *http.Request) {
 	if !h.governanceAvailable(w) {
 		return
@@ -59,6 +65,12 @@ func (h *AnalysisHandler) handleListGovernanceAlerts(w http.ResponseWriter, r *h
 
 // handleUnreadGovernanceAlertCount — GET /api/governance/alerts/unread-count
 // Returns {"count": N} for the bell badge (lighter than listing).
+// @Summary      Unread alert count
+// @Description  handleUnreadGovernanceAlertCount — GET /api/governance/alerts/unread-count Returns {"count": N} for the bell badge (lighter than listing).
+// @Tags         governance
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Count"
+// @Router       /api/governance/alerts/unread-count [get]
 func (h *AnalysisHandler) handleUnreadGovernanceAlertCount(w http.ResponseWriter, r *http.Request) {
 	if !h.governanceAvailable(w) {
 		return
@@ -72,6 +84,16 @@ func (h *AnalysisHandler) handleUnreadGovernanceAlertCount(w http.ResponseWriter
 }
 
 // handleMarkGovernanceAlertRead — POST /api/governance/alerts/read  {id}
+// @Summary      Mark alert read
+// @Description  handleMarkGovernanceAlertRead — POST /api/governance/alerts/read {id}
+// @Tags         governance
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/governance/alerts/read [post]
 func (h *AnalysisHandler) handleMarkGovernanceAlertRead(w http.ResponseWriter, r *http.Request) {
 	if !h.governanceAvailable(w) {
 		return
@@ -95,6 +117,16 @@ func (h *AnalysisHandler) handleMarkGovernanceAlertRead(w http.ResponseWriter, r
 
 // handleMarkAllGovernanceAlertsRead — POST /api/governance/alerts/read-all
 // The "open the panel → clear the badge" action.
+// @Summary      Mark all alerts read
+// @Description  handleMarkAllGovernanceAlertsRead — POST /api/governance/alerts/read-all The "open the panel → clear the badge" action.
+// @Tags         governance
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/governance/alerts/read-all [post]
 func (h *AnalysisHandler) handleMarkAllGovernanceAlertsRead(w http.ResponseWriter, r *http.Request) {
 	if !h.governanceAvailable(w) {
 		return
@@ -107,6 +139,16 @@ func (h *AnalysisHandler) handleMarkAllGovernanceAlertsRead(w http.ResponseWrite
 }
 
 // handleDismissGovernanceAlert — POST /api/governance/alerts/dismiss  {id}
+// @Summary      Dismiss alert
+// @Description  handleDismissGovernanceAlert — POST /api/governance/alerts/dismiss {id}
+// @Tags         governance
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/governance/alerts/dismiss [post]
 func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r *http.Request) {
 	if !h.governanceAvailable(w) {
 		return
@@ -130,6 +172,12 @@ func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r 
 
 // handleClearGovernanceAlerts — DELETE /api/governance/alerts
 // Permanently removes the caller's visible dismissed alerts.
+// @Summary      Clear all alerts
+// @Description  handleClearGovernanceAlerts — DELETE /api/governance/alerts Permanently removes the caller's visible dismissed alerts.
+// @Tags         governance
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Cleared"
+// @Router       /api/governance/alerts [delete]
 func (h *AnalysisHandler) handleClearGovernanceAlerts(w http.ResponseWriter, r *http.Request) {
 	if !h.governanceAvailable(w) {
 		return

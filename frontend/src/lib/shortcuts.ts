@@ -255,13 +255,6 @@ function formatKeyDisplay(k: string): string {
   }
 }
 
-export function formatShortcutKeys(keys: string): string {
-  return keys
-    .split('+')
-    .map(k => formatKeyDisplay(k))
-    .join(isMac ? '' : '+')
-}
-
 export function formatShortcutParts(keys: string): {key: string; display: string}[] {
   return keys.split('+').map(k => ({key: k, display: formatKeyDisplay(k)}))
 }

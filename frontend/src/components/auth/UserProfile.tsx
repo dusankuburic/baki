@@ -51,11 +51,13 @@ function LocalModeCard() {
 }
 
 export const UserProfile: React.FC = () => {
-  const {user, logout} = useAuthStore()
-  const {organisations, loadOrgs} = useOrgStore()
+  const user = useAuthStore(s => s.user)
+  const logout = useAuthStore(s => s.logout)
+  const organisations = useOrgStore(s => s.organisations)
+  const loadOrgs = useOrgStore(s => s.loadOrgs)
 
   useEffect(() => {
-    if (user) loadOrgs()
+    if (user) void loadOrgs()
   }, [user, loadOrgs])
 
   if (!user) return isTauri() ? <LocalModeCard /> : null

@@ -4,19 +4,21 @@ import type {ThemeMode} from '@/types'
 import {DARK_THEMES, LIGHT_THEMES, SYSTEM_THEME} from '@/lib/themeRegistry'
 import {Check} from 'lucide-react'
 import clsx from 'clsx'
+import {useTranslation} from 'react-i18next'
 
 export default function AppearancePanel() {
+  const {t} = useTranslation('settings')
   const {theme, density, reduceMotion, highContrast} = useSettingsStore(s => s.settings.appearance)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
 
   return (
     <div className="pb-8">
       <h2 className="text-xl font-semibold text-text-primary">Appearance</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-8">Customize the look and feel of PAD Analyzer.</p>
+      <p className="text-sm text-text-secondary mt-1 mb-8">{t('appearance.subtitle')}</p>
 
       <div className="space-y-10">
         <div>
-          <label className="text-sm font-medium text-text-primary block mb-4">Color Theme</label>
+          <label className="text-sm font-medium text-text-primary block mb-4">{t('appearance.colorTheme')}</label>
 
           {/* System (follows OS) — full width */}
           <div className="mb-6">
@@ -28,7 +30,7 @@ export default function AppearancePanel() {
           </div>
 
           {/* Dark themes */}
-          <ThemeSection label="Dark Themes" count={DARK_THEMES.length}>
+          <ThemeSection label={t('appearance.darkThemes')} count={DARK_THEMES.length}>
             {DARK_THEMES.map(t => (
               <ThemeCard
                 key={t.id}
@@ -40,7 +42,7 @@ export default function AppearancePanel() {
           </ThemeSection>
 
           {/* Light themes */}
-          <ThemeSection label="Light Themes" count={LIGHT_THEMES.length}>
+          <ThemeSection label={t('appearance.lightThemes')} count={LIGHT_THEMES.length}>
             {LIGHT_THEMES.map(t => (
               <ThemeCard
                 key={t.id}
@@ -58,29 +60,29 @@ export default function AppearancePanel() {
             <label className="text-sm font-medium text-text-primary block mb-3">UI Density</label>
             <div className="flex gap-2">
               <DensityButton
-                label="Comfortable"
+                label={t('appearance.comfortable')}
                 isActive={density === 'comfortable'}
                 onClick={() => updateAppearance({density: 'comfortable'})}
               />
               <DensityButton
-                label="Compact"
+                label={t('appearance.compact')}
                 isActive={density === 'compact'}
                 onClick={() => updateAppearance({density: 'compact'})}
               />
             </div>
-            <p className="text-xs text-text-tertiary mt-2">Compact shows more content, comfortable adds spacing.</p>
+            <p className="text-xs text-text-tertiary mt-2">{t('appearance.densityHint')}</p>
           </div>
 
           <div className="space-y-4">
             <label className="text-sm font-medium text-text-primary block">Accessibility</label>
             <div className="space-y-3">
               <AccessibilityToggle
-                label="High Contrast"
+                label={t('appearance.highContrast')}
                 isChecked={highContrast}
                 onChange={v => updateAppearance({highContrast: v})}
               />
               <AccessibilityToggle
-                label="Reduce Motion"
+                label={t('appearance.reduceMotion')}
                 isChecked={reduceMotion}
                 onChange={v => updateAppearance({reduceMotion: v})}
               />

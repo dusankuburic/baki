@@ -8,7 +8,8 @@ import Avatar from '@/components/shared/Avatar'
 import {useToast} from '@/components/shared'
 
 export const ProfileCard: React.FC = () => {
-  const {user, updateUser} = useAuthStore()
+  const user = useAuthStore(s => s.user)
+  const updateUser = useAuthStore(s => s.updateUser)
   const toast = useToast()
 
   const [isEditing, setIsEditing] = useState(false)
@@ -72,8 +73,9 @@ export const ProfileCard: React.FC = () => {
                 size="lg"
               />
               <div className="flex-1">
-                <label className="text-xs font-medium text-text-secondary block mb-1.5">Avatar URL</label>
+                <label htmlFor="profile-avatar-url" className="text-xs font-medium text-text-secondary block mb-1.5">Avatar URL</label>
                 <Input
+                  id="profile-avatar-url"
                   type="url"
                   value={avatarUrlInput}
                   onChange={e => setAvatarUrlInput(e.target.value)}
@@ -83,8 +85,9 @@ export const ProfileCard: React.FC = () => {
               </div>
             </div>
             <div>
-              <label className="text-xs font-medium text-text-secondary block mb-1.5">Display Name</label>
+              <label htmlFor="profile-display-name" className="text-xs font-medium text-text-secondary block mb-1.5">Display Name</label>
               <Input
+                id="profile-display-name"
                 type="text"
                 value={displayNameInput}
                 onChange={e => setDisplayNameInput(e.target.value)}

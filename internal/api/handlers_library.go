@@ -38,6 +38,12 @@ func NewLibraryHandler(libSvc *service.LibraryService, backend storageif.Storage
 
 // handlePortfolio returns the org-wide governance portfolio: every flow the
 // caller can access (optionally filtered by ?orgId=), ranked worst-health-first.
+// @Summary      Flow portfolio view
+// @Description  handlePortfolio returns the org-wide governance portfolio: every flow the caller can access (optionally filtered by ?orgId=), ranked worst-health-first.
+// @Tags         library
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Portfolio"
+// @Router       /api/library/portfolio [get]
 func (h *LibraryHandler) handlePortfolio(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
 	orgID := r.URL.Query().Get("orgId")
@@ -120,6 +126,17 @@ func (h *LibraryHandler) toLibraryFlowWithPerms(doc *storageif.FlowDocument, req
 	}
 }
 
+// @Summary      List library flows
+// @Description  Returns a list of flow documents stored in the library, with optional filtering by organization and search query.
+// @Tags         library
+// @Param        orgId query string false "orgId"
+// @Param        q query string false "q"
+// @Param        limit query integer false "limit"
+// @Param        offset query integer false "offset"
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/library [get]
 func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
 
@@ -175,6 +192,17 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// @Summary      Create library flow
+// @Description  Saves a new flow document to the library.
+// @Tags         library
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      201 {object} map[string]interface{} "Created"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/library [post]
 func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
@@ -212,6 +240,16 @@ func (h *LibraryHandler) handleLibraryCreate(w http.ResponseWriter, r *http.Requ
 	render.JSONStatus(w, http.StatusCreated, h.toLibraryFlow(r.Context(), saved, userID, h.libSvc.ResolveOwnerName(r.Context(), saved.OwnerID)))
 }
 
+// @Summary      Get library flow metadata
+// @Description  Returns the metadata for a specific library flow.
+// @Tags         library
+// @Param        id path string true "id"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/library/{id} [get]
 func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
@@ -233,6 +271,16 @@ func (h *LibraryHandler) handleLibraryGet(w http.ResponseWriter, r *http.Request
 	render.JSON(w, out)
 }
 
+// @Summary      Get library flow content
+// @Description  Returns the raw JSON content of a specific library flow.
+// @Tags         library
+// @Param        id path string true "id"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/library/{id}/content [get]
 func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
@@ -252,6 +300,16 @@ func (h *LibraryHandler) handleLibraryGetContent(w http.ResponseWriter, r *http.
 	_, _ = w.Write(payload)
 }
 
+// @Summary      Delete library flow
+// @Description  Deletes a specific flow document from the library. Only the owner can delete.
+// @Tags         library
+// @Param        id path string true "id"
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/library/{id} [delete]
 func (h *LibraryHandler) handleLibraryDelete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
@@ -264,6 +322,19 @@ func (h *LibraryHandler) handleLibraryDelete(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Update library flow
+// @Description  Updates the name, description, or content of a specific library flow. Only the owner can update.
+// @Tags         library
+// @Param        id path string true "id"
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/library/{id} [put]
 func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
@@ -316,6 +387,13 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 }
 
 // handleListFlowVersions returns the version history for a library flow.
+// @Summary      List flow versions
+// @Description  handleListFlowVersions returns the version history for a library flow.
+// @Tags         library
+// @Param        id path string true "Flow ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Versions"
+// @Router       /api/library/{id}/versions [get]
 func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.JSON(w, []storageif.FlowVersion{})
@@ -343,6 +421,14 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 }
 
 // handleSaveFlowVersion snapshots the current flow content as a new version.
+// @Summary      Snapshot a flow version
+// @Description  handleSaveFlowVersion snapshots the current flow content as a new version.
+// @Tags         library
+// @Param        id path string true "Flow ID"
+// @Accept       json
+// @Produce      json
+// @Success      201 {object} map[string]interface{} "Created"
+// @Router       /api/library/{id}/versions [post]
 func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
@@ -396,6 +482,14 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 }
 
 // handleGetFlowVersion loads a specific historical version.
+// @Summary      Get a flow version
+// @Description  handleGetFlowVersion loads a specific historical version.
+// @Tags         library
+// @Param        id path string true "Flow ID"
+// @Param        vn path integer true "Version number"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Version"
+// @Router       /api/library/{id}/versions/{vn} [get]
 func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
@@ -429,6 +523,15 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 // version's content. The historical content is written as a new current
 // version (SaveFlow bumps the version atomically), so the restore is itself
 // recoverable via the version history. Requires editor access.
+// @Summary      Restore a flow version
+// @Description  handleRestoreFlowVersion reverts the current flow's content to a historical version's content. The historical content is written as a new current version (SaveFlow bumps the version atomically), so the restore is itself recoverable via the version history. Requires editor access.
+// @Tags         library
+// @Param        id path string true "Flow ID"
+// @Param        vn path integer true "Version number"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Restored"
+// @Router       /api/library/{id}/versions/{vn}/restore [post]
 func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)
@@ -480,6 +583,14 @@ func (h *LibraryHandler) handleRestoreFlowVersion(w http.ResponseWriter, r *http
 // handleDiffFlowVersion returns the structural diff between a historical
 // version and the current flow content. Read-only (viewer access). Uses
 // parser.DiffFlows on the two unmarshaled FlowDocuments.
+// @Summary      Diff version vs. current
+// @Description  handleDiffFlowVersion returns the structural diff between a historical version and the current flow content. Read-only (viewer access). Uses parser.DiffFlows on the two unmarshaled FlowDocuments.
+// @Tags         library
+// @Param        id path string true "Flow ID"
+// @Param        vn path integer true "Version number"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Diff"
+// @Router       /api/library/{id}/versions/{vn}/diff [get]
 func (h *LibraryHandler) handleDiffFlowVersion(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("versioning requires cloud storage"), http.StatusServiceUnavailable)

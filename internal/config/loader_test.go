@@ -20,8 +20,8 @@ func TestDefault(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingFile(t *testing.T) {
-	cfg, err := Load(filepath.Join(t.TempDir(), "missing.json"))
+func TestLoadRaw_MissingFile(t *testing.T) {
+	cfg, err := LoadRaw(filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil {
 		t.Fatalf("unexpected error for missing file: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestLoad_MissingFile(t *testing.T) {
 	}
 }
 
-func TestLoad_ValidFile(t *testing.T) {
+func TestLoadRaw_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
@@ -39,7 +39,7 @@ func TestLoad_ValidFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(path)
+	cfg, err := LoadRaw(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,12 +51,12 @@ func TestLoad_ValidFile(t *testing.T) {
 	}
 }
 
-func TestLoad_InvalidJSON(t *testing.T) {
+func TestLoadRaw_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
 	os.WriteFile(path, []byte("{bad json}"), 0644)
 
-	_, err := Load(path)
+	_, err := LoadRaw(path)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -84,13 +84,13 @@ func TestValidate_CloudRequiresAuth(t *testing.T) {
 	}
 }
 
-// TestLoadFromEnv_NormalizesStorageCase confirms PAD_STORAGE is case-folded so
-// "LOCAL"/"Database" typos don't fall through to an unknown backend (which in
-// cloud mode would silently run with no storage backend).
-func TestLoadFromEnv_NormalizesStorageCase(t *testing.T) {
+// TestLoadFromEnvRaw_NormalizesStorageCase confirms PAD_STORAGE is case-folded
+// so "LOCAL"/"Database" typos don't fall through to an unknown backend (which
+// in cloud mode would silently run with no storage backend).
+func TestLoadFromEnvRaw_NormalizesStorageCase(t *testing.T) {
 	t.Setenv("PAD_MODE", "local")
 	t.Setenv("PAD_STORAGE", "LOCAL") // capitalised — would be unknown without normalization
-	cfg, err := LoadFromEnv()
+	cfg, err := LoadFromEnvRaw()
 	if err != nil {
 		t.Fatalf("capitalised PAD_STORAGE should be accepted (case-folded): %v", err)
 	}
@@ -99,7 +99,7 @@ func TestLoadFromEnv_NormalizesStorageCase(t *testing.T) {
 	}
 
 	t.Setenv("PAD_STORAGE", "garbage")
-	if _, err := LoadFromEnv(); err == nil {
+	if _, err := LoadFromEnvRaw(); err == nil {
 		t.Fatal("expected error for unknown PAD_STORAGE value")
 	}
 }
@@ -114,35 +114,9 @@ func TestValidate_DatabaseURLRequired(t *testing.T) {
 	}
 }
 
-func TestSaveLoad_RoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-
-	original := Default()
-	original.Server.Port = 9000
-	original.Mode = ModeCloud
-	original.Storage.Backend = StorageDatabase
-	original.Storage.DatabaseURL = "postgres://localhost/test"
-	original.Auth.Enabled = true
-	original.Auth.Secret = "a-sufficiently-long-random-secret-value-123456"
-	original.Server.BehindProxy = true // satisfy the cloud-mode TLS posture check
-
-	if err := Save(original, path); err != nil {
-		t.Fatalf("save failed: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("load failed: %v", err)
-	}
-
-	if loaded.Server.Port != 9000 {
-		t.Errorf("port mismatch: got %d", loaded.Server.Port)
-	}
-	if loaded.Mode != ModeCloud {
-		t.Errorf("mode mismatch: got %q", loaded.Mode)
-	}
-}
+// The dead validating wrappers (Load/Save/LoadFromEnv) were removed — main
+// composes LoadRaw/LoadFromEnvRaw + Validate itself, and the round-trip save
+// path never shipped. Their behavior coverage lives in the LoadRaw tests above.
 
 func cloudCfg() *Config {
 	cfg := Default()

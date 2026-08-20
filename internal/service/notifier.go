@@ -1,7 +1,5 @@
 package service
 
-import "sync"
-
 // EventNotifier defines an interface for sending events to the frontend.
 type EventNotifier interface {
 	Emit(name string, data any)
@@ -22,42 +20,3 @@ type NilNotifier struct{}
 func (n NilNotifier) Emit(name string, data any)           {}
 func (n NilNotifier) EmitTo(userID, name string, data any) {}
 func (n NilNotifier) HasSubscriber(userID string) bool     { return true }
-
-// GlobalNotifier is a concrete implementation of EventNotifier that allows
-// multiple subscribers to listen for emitted events.
-type GlobalNotifier struct {
-	mu          sync.RWMutex
-	subscribers []func(name string, data any)
-}
-
-func NewGlobalNotifier() *GlobalNotifier {
-	return &GlobalNotifier{}
-}
-
-func (n *GlobalNotifier) Emit(name string, data any) {
-	// Snapshot subscribers under the lock, then invoke outside it: a slow or
-	// re-entrant subscriber (one that calls Emit/Subscribe) would otherwise
-	// stall every other emitter holding the RLock.
-	n.mu.RLock()
-	subs := append([]func(string, any){}, n.subscribers...)
-	n.mu.RUnlock()
-	for _, s := range subs {
-		s(name, data)
-	}
-}
-
-// EmitTo delegates to Emit — GlobalNotifier is an in-process pub/sub for
-// tests; it has no concept of per-user filtering.
-func (n *GlobalNotifier) EmitTo(userID, name string, data any) {
-	n.Emit(name, data)
-}
-
-// HasSubscriber always reports true — GlobalNotifier has no concept of client
-// liveness, and false would signal "client gone" to liveness-aware callers.
-func (n *GlobalNotifier) HasSubscriber(userID string) bool { return true }
-
-func (n *GlobalNotifier) Subscribe(s func(name string, data any)) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.subscribers = append(n.subscribers, s)
-}

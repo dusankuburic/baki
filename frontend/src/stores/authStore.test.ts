@@ -152,6 +152,29 @@ describe('logout', () => {
 
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })
+
+  // Regression: logout must ask the service worker to drop its caches so a
+  // shared device doesn't retain session artifacts in Cache Storage.
+  it('tells the service worker to purge caches', async () => {
+    const postMessage = vi.fn()
+    vi.stubGlobal('navigator', {serviceWorker: {controller: {postMessage}}})
+    useAuthStore.setState({user: fakeUser, accessToken: 'tok', isAuthenticated: true})
+
+    await useAuthStore.getState().logout()
+
+    expect(postMessage).toHaveBeenCalledWith({type: 'PURGE_CACHES'})
+    vi.unstubAllGlobals()
+  })
+
+  it('logout still succeeds with no service worker registered', async () => {
+    vi.stubGlobal('navigator', {serviceWorker: {controller: null}})
+    useAuthStore.setState({user: fakeUser, accessToken: 'tok', isAuthenticated: true})
+
+    await useAuthStore.getState().logout()
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false)
+    vi.unstubAllGlobals()
+  })
 })
 
 // ---- refresh ----

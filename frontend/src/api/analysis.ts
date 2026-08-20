@@ -88,7 +88,9 @@ export const analysisApi = {
 
   getDiff: (): Promise<AnalysisDiff> => request('/api/analysis/diff', {body: {flowId: activeFlowId()}}),
 
-  exportHTML: (): Promise<string> => request('/api/analysis/export/html', {body: {flowId: activeFlowId()}}),
+  // HTML export lives in exportApi (single dialog-aware implementation for
+  // PDF/Markdown/HTML — previously duplicated here with a divergent payload
+  // that omitted the save-dialog path).
 
   exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<unknown> =>
     request('/api/analysis/export/sarif', {body: {flowId}}),

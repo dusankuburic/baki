@@ -75,7 +75,7 @@ export default function TokenRenderer({tokens}: TokenRendererProps) {
                 isInteractive
                   ? e => {
                       e.stopPropagation()
-                      navigateToSubflowByName(token.target!)
+                      if (token.target) navigateToSubflowByName(token.target)
                     }
                   : undefined
               }

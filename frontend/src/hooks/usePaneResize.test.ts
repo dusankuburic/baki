@@ -50,10 +50,10 @@ describe('usePaneResize — sidebar', () => {
   })
 
   it('resets the sidebar to its default width', async () => {
-    useSettingsStore.getState().updateLayout({sidebarWidth: 400})
+    void useSettingsStore.getState().updateLayout({sidebarWidth: 400})
     const {result} = renderHook(() => usePaneResize())
     await act(async () => {
-      result.current.handleSidebarReset()
+      void result.current.handleSidebarReset()
       await vi.advanceTimersByTimeAsync(1000)
     })
     expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(280)

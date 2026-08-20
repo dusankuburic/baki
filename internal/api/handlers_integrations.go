@@ -101,6 +101,16 @@ type ciWebhookResponse struct {
 // in publicRoutes so jwtAuth skips it, and this handler does its own signature
 // check. The flow is loaded without per-user authz (like the public share
 // viewer), so the runner only needs the flow ID + the secret.
+// @Summary      CI webhook
+// @Description  Token-authenticated CI integration endpoint.
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/integrations/ci [post]
 func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request) {
 	if h.ciSecret == "" {
 		render.Error(w, fmt.Errorf("CI webhook not configured: set PAD_CI_WEBHOOK_SECRET"), http.StatusServiceUnavailable)

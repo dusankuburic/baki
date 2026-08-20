@@ -4,6 +4,7 @@ import Button from '@/components/shared/Button'
 import {providersApi} from '@/api'
 import type {ProviderTestResult} from '@/types'
 import {logger} from '@/lib/logger'
+import {useTranslation} from 'react-i18next'
 
 interface Props {
   provider: string
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export default function ApiKeyInput({provider, label, onConfigured}: Props) {
+  const {t} = useTranslation('settings')
   const [key, setKey] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -93,7 +95,8 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
             type={showKey ? 'text' : 'password'}
             value={key}
             onChange={e => setKey((e.target as HTMLInputElement).value)}
-            placeholder="Enter API key..."
+            placeholder={t('apiKey.placeholder')}
+            aria-label={t('apiKey.aria')}
             className="flex-1"
           />
           <Button size="sm" variant="secondary" onClick={() => setShowKey(!showKey)}>
@@ -102,7 +105,7 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
           <Button size="sm" onClick={handleSave} disabled={!key.trim() || saving}>
             {saving ? 'Saving...' : 'Save'}
           </Button>
-          {saveError && <span className="text-xs text-red-400">Failed to save</span>}
+          {saveError && <span className="text-xs text-red-400">{t('apiKey.saveFailed')}</span>}
         </div>
       )}
     </div>

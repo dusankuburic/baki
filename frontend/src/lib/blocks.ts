@@ -20,7 +20,9 @@ interface BlockConfig {
   label: string
 }
 
-export const blockConfig: Record<string, BlockConfig> = {
+// blockConfig is internal to this module (read by the helpers below); there
+// is no valid reason for components to index it directly.
+const blockConfig: Record<string, BlockConfig> = {
   ACTION: {icon: Settings2, color: 'var(--block-action)', bg: 'var(--block-action-bg)', label: 'Action'},
   LOOP: {icon: Repeat, color: 'var(--block-loop)', bg: 'var(--block-loop-bg)', label: 'Loop'},
   CONDITION: {icon: GitBranch, color: 'var(--block-condition)', bg: 'var(--block-condition-bg)', label: 'If'},

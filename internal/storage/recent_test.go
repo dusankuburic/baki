@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -145,44 +144,6 @@ func TestClearRecentFiles(t *testing.T) {
 	}
 	if len(s.Get().RecentFiles) != 0 {
 		t.Errorf("expected empty list after clear, got %d", len(s.Get().RecentFiles))
-	}
-}
-
-func TestPurgeMissingRecentFiles(t *testing.T) {
-	s := newTestStore(t)
-
-	// Create a real temp file that exists.
-	tmpFile := filepath.Join(t.TempDir(), "real.txt")
-	if err := os.WriteFile(tmpFile, []byte("flow"), 0600); err != nil {
-		t.Fatalf("create temp file: %v", err)
-	}
-
-	AddRecentFile(s, tmpFile, 0)
-	AddRecentFile(s, "/definitely/does/not/exist.txt", 0)
-
-	if err := PurgeMissingRecentFiles(s); err != nil {
-		t.Fatalf("PurgeMissingRecentFiles: %v", err)
-	}
-
-	files := s.Get().RecentFiles
-	if len(files) != 1 {
-		t.Fatalf("expected 1 surviving entry, got %d", len(files))
-	}
-	if files[0].Path != tmpFile {
-		t.Errorf("surviving entry = %q, want %q", files[0].Path, tmpFile)
-	}
-}
-
-func TestPurgeMissingRecentFiles_AllMissing(t *testing.T) {
-	s := newTestStore(t)
-	AddRecentFile(s, "/ghost/a.txt", 0)
-	AddRecentFile(s, "/ghost/b.txt", 0)
-
-	if err := PurgeMissingRecentFiles(s); err != nil {
-		t.Fatalf("PurgeMissingRecentFiles: %v", err)
-	}
-	if len(s.Get().RecentFiles) != 0 {
-		t.Error("expected empty list after purging all missing files")
 	}
 }
 

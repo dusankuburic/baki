@@ -31,7 +31,7 @@ function StatCard({
 }
 
 export const AdminDashboard: React.FC = () => {
-  const {user: currentUser} = useAuthStore()
+  const currentUser = useAuthStore(s => s.user)
   const isAdmin = currentUser?.role === 'admin'
 
   const {

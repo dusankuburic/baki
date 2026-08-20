@@ -19,6 +19,14 @@ import (
 
 // ── Finding Comments ──────────────────────────────────────────────
 
+// @Summary      List comments for a finding
+// @Tags         comments
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/comments/list [post]
 func (h *AnalysisHandler) handleListComments(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.JSON(w, []interface{}{})
@@ -52,6 +60,14 @@ func (h *AnalysisHandler) handleListComments(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, comments)
 }
 
+// @Summary      Add a comment to a finding
+// @Tags         comments
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/comments/add [post]
 func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("finding comments require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -176,6 +192,14 @@ func indexByte(s string, b byte) int {
 	return -1
 }
 
+// @Summary      Delete a comment
+// @Tags         comments
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/comments/delete [post]
 func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("finding comments require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -212,6 +236,14 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 
 // ── Share Tokens ──────────────────────────────────────────────────
 
+// @Summary      Create a public share link for a flow
+// @Tags         sharing
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/flow/share/create [post]
 func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("share links require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -261,6 +293,14 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// @Summary      List active share links for a flow
+// @Tags         sharing
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/flow/share/list [post]
 func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.JSON(w, []interface{}{})
@@ -293,6 +333,14 @@ func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, tokens)
 }
 
+// @Summary      Revoke a share link
+// @Tags         sharing
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/flow/share/revoke [post]
 func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("share links require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
@@ -321,6 +369,14 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 // can view the flow's current analysis report (read-only). The token hash is
 // looked up in the backend; if found and not expired, the flow's analysis is
 // returned. No JWT required.
+// @Summary      View shared report
+// @Description  Unauthenticated read-only report for share-link holders.
+// @Tags         share
+// @Param        token query string true "Share token"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Report"
+// @Failure      404 {object} map[string]string "Not found"
+// @Router       /api/shared [get]
 func (h *AnalysisHandler) handleViewShared(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
 		render.Error(w, fmt.Errorf("share links are not available"), http.StatusServiceUnavailable)

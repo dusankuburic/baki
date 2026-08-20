@@ -71,6 +71,9 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               </div>
             )}
 
+            <label htmlFor="new-password" className="text-xs font-medium text-text-secondary">
+              New password
+            </label>
             <Input
               id="new-password"
               type="password"
@@ -82,6 +85,9 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               autoComplete="new-password"
               autoFocus
             />
+            <label htmlFor="confirm-password" className="text-xs font-medium text-text-secondary">
+              Confirm new password
+            </label>
             <Input
               id="confirm-password"
               type="password"

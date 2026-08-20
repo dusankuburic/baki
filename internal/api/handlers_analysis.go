@@ -50,6 +50,13 @@ func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.F
 	}
 }
 
+// @Summary      Analyze current flow
+// @Description  Runs all enabled analysis rules on the current flow document.
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/analysis/analyze [post]
 func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -88,6 +95,16 @@ func (h *AnalysisHandler) handleAnalyzeFlow(w http.ResponseWriter, r *http.Reque
 // (or SARIF) back in one call — no library upload, no Go CLI install. Works in
 // both modes (auth via PAT in cloud; open in local). Body: {files, name,
 // format?} where format is "json" (default) or "sarif". Nothing is persisted.
+// @Summary      Analyze raw PAD source
+// @Description  handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring a pre-stored flow, so CI pipelines and wrappers can POST flow text and get findings JSON (or SARIF) back in one call — no library upload, no Go CLI install. Works in both modes (auth via PAT in cloud; open in local). Body: {files, name, format?} where format is "json" (default) or "sarif". Nothing is persisted.
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/analyze-raw [post]
 func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Files  map[string]string `json:"files"`
@@ -183,6 +200,16 @@ func (h *AnalysisHandler) handleAnalyzeRaw(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, report)
 }
 
+// @Summary      Get variable lineage
+// @Description  Returns the history and dependencies of a specific variable within the flow.
+// @Tags         analysis
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/analysis/lineage [post]
 func (h *AnalysisHandler) handleGetVariableLineage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID   string `json:"flowId"`
@@ -211,6 +238,13 @@ func (h *AnalysisHandler) handleGetVariableLineage(w http.ResponseWriter, r *htt
 	render.JSON(w, history)
 }
 
+// @Summary      Get execution graph
+// @Description  Returns a graph representation of the flow's execution path.
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/analysis/graph [post]
 func (h *AnalysisHandler) handleGetExecutionGraph(w http.ResponseWriter, r *http.Request) {
 	flowID := r.URL.Query().Get("flowId")
 	if flowID == "" && r.Body != nil {
@@ -239,15 +273,37 @@ func (h *AnalysisHandler) handleGetExecutionGraph(w http.ResponseWriter, r *http
 	render.JSON(w, graph)
 }
 
+// @Summary      List analysis rules
+// @Description  Returns all available analysis rules and their current configuration.
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Router       /api/analysis/rules [get]
 func (h *AnalysisHandler) handleGetRules(w http.ResponseWriter, r *http.Request) {
 	rules := h.analysisSvc.GetRules()
 	render.JSON(w, rules)
 }
 
+// @Summary      Rule catalog summary
+// @Description  All rules with severity, category, and auto-fix availability.
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Rules"
+// @Router       /api/analysis/rules/summary [get]
 func (h *AnalysisHandler) handleGetRulesSummary(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, h.analysisSvc.GetRulesSummary())
 }
 
+// @Summary      Enable/disable analysis rule
+// @Description  Enables or disables a specific analysis rule by ID.
+// @Tags         analysis
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/analysis/rule/enabled [post]
 func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
@@ -276,6 +332,16 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Update analysis rule config
+// @Description  Updates the configuration parameters for a specific analysis rule.
+// @Tags         analysis
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/analysis/rule/config [post]
 func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleMember) {
 		return
@@ -303,6 +369,16 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Flow metrics
+// @Description  Complexity/cognitive metrics and health score for the flow.
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/metrics [post]
 func (h *AnalysisHandler) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -327,6 +403,15 @@ func (h *AnalysisHandler) handleGetMetrics(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, metrics)
 }
 
+// @Summary      Dataflow analysis
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/dataflow [post]
 func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -351,6 +436,14 @@ func (h *AnalysisHandler) handleGetDataFlow(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, df)
 }
 
+// @Summary      Batch-analyze a folder
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Param        request body object true "Folder path"
+// @Success      200 {object} map[string]interface{} "Batch results"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/batch [post]
 func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Request) {
 	// Desktop-only: this reads .txt files from a server-side folder path. In cloud
 	// mode it would be an authenticated arbitrary-directory read (LFI), so gate it
@@ -399,6 +492,15 @@ func (h *AnalysisHandler) handleBatchAnalyze(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, batch)
 }
 
+// @Summary      Diff current vs. stored report
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/diff [post]
 func (h *AnalysisHandler) handleDiff(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -432,6 +534,15 @@ func (h *AnalysisHandler) handleDiff(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, diff)
 }
 
+// @Summary      Analysis snapshot history
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/history [post]
 func (h *AnalysisHandler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -455,37 +566,16 @@ func (h *AnalysisHandler) handleGetHistory(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, snapshots)
 }
 
-func (h *AnalysisHandler) handleExportHTML(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		FlowID string `json:"flowId"`
-	}
-	if err := decodeOptional(r.Body, &req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	html := h.analysisSvc.GenerateHTMLReport(report)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Disposition", "inline; filename=\"analysis-report.html\"")
-	_, _ = w.Write([]byte(html))
-}
-
 // handleExportSARIF emits a SARIF 2.1.0 report for the flow, suitable for
-// GitHub Code Scanning or any SARIF-consuming tool. Mirrors handleExportHTML
-// but uses the SARIF serializer instead of the HTML generator.
+// GitHub Code Scanning or any SARIF-consuming tool.
+// @Summary      Export SARIF report
+// @Description  SARIF 2.1.0 report for GitHub Code Scanning.
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Param        request body object true "Flow reference"
+// @Success      200 {object} map[string]interface{} "SARIF document"
+// @Router       /api/analysis/export/sarif [post]
 func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -520,6 +610,14 @@ func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Reque
 
 // handleExportJUnit emits a JUnit XML report for the flow, suitable for CI
 // pipelines (Jenkins, GitLab CI). Mirrors handleExportSARIF.
+// @Summary      Export analysis results as JUnit XML
+// @Tags         export
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/export/junit [post]
 func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -554,6 +652,14 @@ func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Reque
 
 // handleExportCSV emits a CSV report for the flow, suitable for spreadsheet
 // triage. Mirrors handleExportSARIF.
+// @Summary      Export findings as CSV
+// @Tags         export
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/export/csv [post]
 func (h *AnalysisHandler) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -586,11 +692,21 @@ func (h *AnalysisHandler) handleExportCSV(w http.ResponseWriter, r *http.Request
 	fmt.Fprintf(w, "%s", out)
 }
 
+// @Summary      Subflow dependency graph
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Dependencies"
+// @Router       /api/analysis/dependencies [get]
 func (h *AnalysisHandler) handleGetDependencies(w http.ResponseWriter, r *http.Request) {
 	result := h.analysisSvc.GetDependencyAnalysis()
 	render.JSON(w, result)
 }
 
+// @Summary      Portfolio dashboard stats
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Dashboard"
+// @Router       /api/analysis/dashboard [get]
 func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 	// Desktop-only: ComputeDashboard aggregates the process-global analyzer cache,
 	// which in cloud mode holds every tenant's analyzed flows — i.e. a cross-tenant
@@ -603,6 +719,15 @@ func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, result)
 }
 
+// @Summary      Subflow content hashes
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/subflow-hashes [post]
 func (h *AnalysisHandler) handleGetSubflowHashes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -623,6 +748,15 @@ func (h *AnalysisHandler) handleGetSubflowHashes(w http.ResponseWriter, r *http.
 	render.JSON(w, hashes)
 }
 
+// @Summary      Deduplicate findings
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/deduplicate [post]
 func (h *AnalysisHandler) handleDeduplicate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
@@ -654,6 +788,15 @@ func (h *AnalysisHandler) handleDeduplicate(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// @Summary      Related findings
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/related [post]
 func (h *AnalysisHandler) handleRelatedFindings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID  string `json:"flowId"`
@@ -680,6 +823,15 @@ func (h *AnalysisHandler) handleRelatedFindings(w http.ResponseWriter, r *http.R
 	render.JSON(w, related)
 }
 
+// @Summary      Compare two analyses
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/analysis/compare [post]
 func (h *AnalysisHandler) handleCompareFlows(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowAID string `json:"flowAId"`

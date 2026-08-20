@@ -59,16 +59,3 @@ func ClearRecentFiles(s *SettingsStore) error {
 	clone.RecentFiles = nil
 	return s.Update(clone)
 }
-
-func PurgeMissingRecentFiles(s *SettingsStore) error {
-	settings := s.Get()
-	filtered := make([]models.RecentFile, 0, len(settings.RecentFiles))
-	for _, f := range settings.RecentFiles {
-		if _, err := os.Stat(f.Path); err == nil {
-			filtered = append(filtered, f)
-		}
-	}
-	clone := *settings
-	clone.RecentFiles = filtered
-	return s.Update(clone)
-}

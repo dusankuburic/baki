@@ -1,4 +1,4 @@
-import {analysisApi} from '@/api'
+import {analysisApi, exportApi} from '@/api'
 import type {Finding} from '@/types'
 import {csvCell, downloadBlob} from '@/lib/csv'
 
@@ -25,14 +25,12 @@ export function exportFindingsCSV(findings: Finding[], docId: string) {
   downloadBlob(csv, 'text/csv;charset=utf-8;', `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.csv`)
 }
 
-// exportFindingsHTML downloads the backend-rendered HTML report.
+// exportFindingsHTML downloads the backend-rendered HTML report. In web/cloud
+// mode exportApi.exportHTML already triggers the browser anchor download; on
+// desktop it writes through the native save dialog — either way the report
+// lands with a deterministic filename derived from the flow id.
 export async function exportFindingsHTML(docId: string) {
-  const html = await analysisApi.exportHTML()
-  downloadBlob(
-    html as unknown as string,
-    'text/html;charset=utf-8;',
-    `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.html`,
-  )
+  await exportApi.exportHTML(docId)
 }
 
 // exportFindingsSARIF downloads a SARIF 2.1.0 report for GitHub Code Scanning

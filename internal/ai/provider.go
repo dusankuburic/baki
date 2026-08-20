@@ -214,21 +214,6 @@ func orDefault(val, def int) int {
 	return val
 }
 
-// ModelContextLimit returns the context limit for a specific model, falling
-// back to the provider-wide limit when the model is not in the model list.
-func ModelContextLimit(ctx context.Context, p Provider, model string) int {
-	models, err := p.Models(ctx)
-	if err != nil {
-		return p.ContextLimit()
-	}
-	for _, m := range models {
-		if m.ID == model && m.ContextLimit > 0 {
-			return m.ContextLimit
-		}
-	}
-	return p.ContextLimit()
-}
-
 // ModelMaxOutputTokens returns the maximum completion length for a specific
 // model, or 0 (unknown) when the model is absent from the catalog or its
 // MaxOutputTokens is unset. Callers treat 0 as "don't clamp".

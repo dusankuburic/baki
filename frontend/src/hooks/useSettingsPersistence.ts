@@ -23,7 +23,7 @@ export function useSettingsPersistence(isAuthenticated: boolean) {
         useUIStore.getState().setInspectorCollapsed(s.layout.inspectorCollapsed)
       if (s.ai?.activeProvider) useChatStore.getState().setProvider(s.ai.activeProvider as ProviderID)
     })
-    loadFromBackend()
+    void loadFromBackend()
     return unsub
   }, [loadFromBackend, isAuthenticated])
 
@@ -43,7 +43,7 @@ export function useSettingsPersistence(isAuthenticated: boolean) {
           ? (state.inspectorTab as 'details' | 'ai' | 'findings')
           : undefined
 
-        updateLayout({
+        void updateLayout({
           sidebarCollapsed: state.sidebarCollapsed,
           inspectorCollapsed: state.inspectorCollapsed,
           lastViewMode,

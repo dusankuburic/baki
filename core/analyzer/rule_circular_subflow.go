@@ -15,7 +15,7 @@ func (r *CircularSubflowRule) DefaultSeverity() models.Severity { return models.
 func (r *CircularSubflowRule) Category() string                 { return "Logic" }
 
 func (r *CircularSubflowRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	if ctx.CircularSubflows == nil || len(ctx.CircularSubflows) == 0 {
+	if len(ctx.CircularSubflows) == 0 {
 		return nil
 	}
 

@@ -190,6 +190,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       clearTokens()
       set({user: null, accessToken: null, isAuthenticated: false, isLoading: false, error: null})
+      // Drop the service worker's caches (shell + offline page) so nothing
+      // from this session is recoverable from Cache Storage on a shared
+      // device. API responses were never cached (no-store is honored), but
+      // the shell itself is a session artifact worth clearing.
+      try {
+        navigator.serviceWorker?.controller?.postMessage({type: 'PURGE_CACHES'})
+      } catch {
+        /* no worker or it's not ready — caches are non-sensitive shell files */
+      }
       // Reset all domain stores + tear down live connections to prevent
       // cross-session data leakage. Awaited so a caller knows teardown completed.
       await resetAllStores()

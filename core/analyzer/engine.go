@@ -117,6 +117,29 @@ func RuleAutoFix(id string) string {
 	return ruleAutoFix[id]
 }
 
+// directAutoFixRuleIDs lists rules that stamp a finding's AutoFix directly in
+// their Check instead of relying on the engine's ruleAutoFix lookup (see
+// runAnalysisCore's "if findings[i].AutoFix == ”" fill). Keep in sync with
+// rules that construct findings with a non-empty AutoFix field — a rule listed
+// here but stamping no AutoFix merely runs needlessly in the fix loop, but a
+// rule stamping AutoFix and NOT listed here would never be fixed by the loop.
+var directAutoFixRuleIDs = map[string]bool{
+	"subflow-mismatch": true, // "append-output" set in Check
+}
+
+// mayEmitAutoFix reports whether a rule can produce a finding with a non-empty
+// AutoFix: either via the engine's ruleAutoFix map, by setting it directly
+// (directAutoFixRuleIDs), or — for custom rules — via their validated config.
+func mayEmitAutoFix(r Rule) bool {
+	if ruleAutoFix[r.ID()] != "" || directAutoFixRuleIDs[r.ID()] {
+		return true
+	}
+	if cr, ok := r.(*CustomRule); ok {
+		return cr.config.AutoFix != ""
+	}
+	return false
+}
+
 // findingContentKey derives a stable identity for a finding from the block's
 // CONTENT (subflow name, rawType, name, line number) plus the rule and the
 // subject — independent of the parser-minted BlockID/SubflowID UUIDs, which
@@ -644,9 +667,10 @@ func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Ru
 				}
 				for _, pe := range flow.ParseErrors {
 					sev := models.SeverityError
-					if pe.Severity == "warning" {
+					switch pe.Severity {
+					case "warning":
 						sev = models.SeverityWarning
-					} else if pe.Severity == "info" {
+					case "info":
 						sev = models.SeverityInfo
 					}
 					findings = append(findings, models.Finding{

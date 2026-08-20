@@ -22,7 +22,7 @@ export default function LibraryFilterRail({orgs}: LibraryFilterRailProps) {
   const setSelectedOrgIds = useLibraryBrowseStore(s => s.setSelectedOrgIds)
 
   const isAllOrgs = selectedOrgIds === null
-  const isOrgChecked = (id: string) => isAllOrgs || selectedOrgIds!.has(id)
+  const isOrgChecked = (id: string) => isAllOrgs || (selectedOrgIds?.has(id) ?? false)
 
   return (
     <nav className="p-3 space-y-4">

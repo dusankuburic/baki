@@ -1,10 +1,15 @@
 import {useCallback, useEffect, useState, lazy, Suspense} from 'react'
-import {ErrorBoundary, ToastProvider, ConfirmProvider, useToast} from './components/shared'
+import {useTranslation} from 'react-i18next'
+import {ErrorBoundary, ToastProvider, ConfirmProvider, useToast, Spinner} from './components/shared'
 import SyncDropNotifier from './components/shared/SyncDropNotifier'
 import OfflineIndicator from './components/shared/OfflineIndicator'
-import CommandPalette from './components/search/CommandPalette'
-import GlobalSearchOverlay from './components/search/GlobalSearchOverlay'
 import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
+
+// Search overlays load on first open — they're modal-only surfaces, so paying
+// the chunk fetch at open time (a user gesture) keeps them out of the eager
+// bundle. Same pattern as SettingsModal below.
+const CommandPalette = lazy(() => import('./components/search/CommandPalette'))
+const GlobalSearchOverlay = lazy(() => import('./components/search/GlobalSearchOverlay'))
 
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'))
 import {useUIStore, isSystemView} from './stores/uiStore'
@@ -53,6 +58,7 @@ function AppInner() {
   const commandPaletteOpen = useUIStore(s => s.commandPaletteOpen)
   const settingsOpen = useUIStore(s => s.settingsOpen)
   const setSettingsOpen = useUIStore(s => s.setSettingsOpen)
+  const {t} = useTranslation('shell')
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const setDocument = useFlowStore(s => s.setDocument)
   const document = useFlowStore(s => s.document)
@@ -86,7 +92,7 @@ function AppInner() {
   )
 
   useEffect(() => {
-    useSystemStore.getState().loadInfo()
+    void useSystemStore.getState().loadInfo()
   }, [])
 
   useEffect(() => {
@@ -107,7 +113,7 @@ function AppInner() {
   const documentId = document?.id ?? null
   useEffect(() => {
     if (isTauri() || !documentId) return
-    usePresenceStore.getState().connectToFlow(documentId)
+    void usePresenceStore.getState().connectToFlow(documentId)
     return () => usePresenceStore.getState().disconnect()
   }, [documentId])
 
@@ -242,19 +248,31 @@ function AppInner() {
         <OfflineIndicator />
         {dragOver && (
           <div className="fixed inset-0 z-modal bg-surface-overlay flex items-center justify-center pointer-events-none">
-            <div className="text-lg font-medium text-text-primary animate-fade-in">Drop flow file to open</div>
+            <div className="text-lg font-medium text-text-primary animate-fade-in">{t('dropOverlay')}</div>
           </div>
         )}
       </div>
       <ErrorBoundary>
-        <CommandPalette isOpen={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} commands={commands} />
-      </ErrorBoundary>
-      <ErrorBoundary>
-        <GlobalSearchOverlay isOpen={globalSearchOpen} onClose={() => setGlobalSearchOpen(false)} />
+        <Suspense fallback={null}>
+          {commandPaletteOpen && (
+            <CommandPalette isOpen onClose={() => setCommandPaletteOpen(false)} commands={commands} />
+          )}
+        </Suspense>
       </ErrorBoundary>
       <ErrorBoundary>
         <Suspense fallback={null}>
-          <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+          {globalSearchOpen && <GlobalSearchOverlay isOpen onClose={() => setGlobalSearchOpen(false)} />}
+        </Suspense>
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <Spinner size={24} />
+            </div>
+          }
+        >
+          {settingsOpen && <SettingsModal isOpen onClose={() => setSettingsOpen(false)} />}
         </Suspense>
       </ErrorBoundary>
       <ErrorBoundary>

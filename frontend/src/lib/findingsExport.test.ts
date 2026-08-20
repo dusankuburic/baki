@@ -3,7 +3,10 @@ import type {Finding} from '@/types'
 
 const exportHTML = vi.fn()
 const exportSARIF = vi.fn()
-vi.mock('@/api', () => ({analysisApi: {exportHTML, exportSARIF}}))
+vi.mock('@/api', () => ({
+  analysisApi: {exportSARIF},
+  exportApi: {exportHTML},
+}))
 
 const downloadBlob = vi.fn()
 vi.mock('@/lib/csv', () => ({
@@ -53,16 +56,14 @@ describe('exportFindingsCSV', () => {
 })
 
 describe('exportFindingsHTML', () => {
-  it('fetches the rendered HTML report and downloads it', async () => {
-    exportHTML.mockResolvedValue('<html></html>')
+  it('delegates to the dialog-aware export (native save dialog or browser download)', async () => {
+    exportHTML.mockResolvedValue('')
     const {exportFindingsHTML} = await import('./findingsExport')
     await exportFindingsHTML('doc1')
 
-    expect(exportHTML).toHaveBeenCalled()
-    const [content, mime, filename] = downloadBlob.mock.calls[0]
-    expect(content).toBe('<html></html>')
-    expect(mime).toBe('text/html;charset=utf-8;')
-    expect(filename).toMatch(/^analysis-doc1-\d{4}-\d{2}-\d{2}\.html$/)
+    // exportApi.exportHTML owns the save UX (native dialog on desktop, anchor
+    // download on web); the helper just routes the doc id through.
+    expect(exportHTML).toHaveBeenCalledWith('doc1')
   })
 })
 

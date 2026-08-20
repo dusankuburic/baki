@@ -65,7 +65,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
   const {activeIndex, setActiveIndex, handleKeyDown} = useListNavigation({
     count: results.length,
     onSelect: i => {
-      if (results[i]) handleSelect(results[i])
+      if (results[i]) void handleSelect(results[i])
     },
     onClose,
   })
@@ -106,7 +106,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           maxResults: 50,
           blockTypes: types.size > 0 ? Array.from(types) : undefined,
         }
-        const res = scope === 'all-flows' ? await flowApi.searchLibrary(query) : await flowApi.searchFlow(document!.id, query)
+        const res = scope === 'all-flows' ? await flowApi.searchLibrary(query) : await flowApi.searchFlow(document?.id ?? '', query)
         if (reqId !== searchReqIdRef.current) return
         setResults(res.results as SearchResult[])
         setActiveIndex(0)
@@ -126,7 +126,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
   // Re-run search when type filters change
   useEffect(() => {
-    if (query) handleSearch(query, activeTypes)
+    if (query) void handleSearch(query, activeTypes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTypes])
 
@@ -182,7 +182,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                   setScope(s)
                   // Re-run the search against the new scope immediately so the
                   // toggle feels responsive (don't wait for the next keystroke).
-                  if (query) handleSearch(query, activeTypes)
+                  if (query) void handleSearch(query, activeTypes)
                 }}
                 className={clsx(
                   'text-2xs font-semibold px-2.5 py-1 transition-colors',

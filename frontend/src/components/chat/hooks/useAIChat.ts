@@ -229,7 +229,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       if (files.length > 0 && activeThreadId) {
         updateThread(activeThreadId, {selectedSourceFiles: files})
       }
-      executeSend(text, files.length > 0 ? files : undefined, excludeContext)
+      void executeSend(text, files.length > 0 ? files : undefined, excludeContext)
     },
     [executeSend, activeThreadId, updateThread],
   )
@@ -247,7 +247,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         setPendingMessage(text)
         setPendingExcludeContext(excludeContext)
       } catch {
-        executeSend(text, files.length > 0 ? files : undefined, excludeContext)
+        void executeSend(text, files.length > 0 ? files : undefined, excludeContext)
       }
     },
     [buildRequest, executeSend, activeThreadId, updateThread],
@@ -270,7 +270,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     removeMessage(activeThread.id, lastMsg.id)
     // Resend truncated the local history; send it explicitly so the backend
     // uses the truncated view instead of its (still-complete) stored copy.
-    if (lastUserContent) executeSend(lastUserContent, undefined, false, true)
+    if (lastUserContent) void executeSend(lastUserContent, undefined, false, true)
   }, [doc, activeThread, isCurrentThreadStreaming, getMessages, removeMessage, executeSend])
 
   const handleExport = useCallback(() => {
@@ -361,7 +361,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       setContextPreview(null)
       setPendingMessage(null)
       setPendingExcludeContext(undefined)
-      if (msg) executeSend(msg, undefined, exclude)
+      if (msg) void executeSend(msg, undefined, exclude)
     },
   }
 }

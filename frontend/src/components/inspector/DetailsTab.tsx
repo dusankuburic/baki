@@ -1,4 +1,4 @@
-import {useMemo} from 'react'
+import {useMemo, lazy, Suspense} from 'react'
 import {Box} from 'lucide-react'
 import {CollapsibleSection} from './CollapsibleSection'
 import DetailsHeader from './DetailsHeader'
@@ -6,7 +6,6 @@ import PropertiesTable from './PropertiesTable'
 import VariableChips from './VariableChips'
 import BlockMetadata from './BlockMetadata'
 import ChildrenList from './ChildrenList'
-import VariableLineageInInspector from './VariableLineageInInspector'
 import BlockFindings from './BlockFindings'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -14,9 +13,20 @@ import {analysisApi} from '@/api'
 import {findBlockInDoc} from '@/lib/tree'
 import {logger} from '@/lib/logger'
 
+// Lineage graph is lazy: it transitively imports cytoscape + cytoscape-dagre
+// (~530 kB). DetailsTab is the DEFAULT inspector tab and mounts for every
+// block selection — a static import would put the graph chunk in the eager
+// entry graph. The component null-renders without lineage data, so we gate
+// the mount on the same store value it checks internally; cytoscape is only
+// fetched once a user actually requests a variable's lineage.
+const VariableLineageInInspector = lazy(() => import('./VariableLineageInInspector'))
+
 export default function DetailsTab() {
   const document = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
+  // Lineage presence gates the lazy mount above (mirrors the component's own
+  // internal null-check on the same value).
+  const hasLineage = useAnalysisStore(s => s.variableLineage != null)
 
   // useMemo must run unconditionally on every render (Rules of Hooks) even
   // though its result is only needed once the two early returns below are
@@ -65,10 +75,15 @@ export default function DetailsTab() {
             <VariableChips variables={block.variables} onVariableClick={handleVariableClick} />
           </CollapsibleSection>
         )}
-        {/* Lineage panel is always rendered when data is available — it handles its
-                    own null-check internally. Keeping it outside the variables conditional
-                    ensures it shows even when a block only has an _output (no variables used). */}
-        <VariableLineageInInspector />
+        {/* Lineage panel mounts only when data is available (the lazy chunk
+                    containing cytoscape fetches on first lineage request). Keeping it
+                    outside the variables conditional ensures it shows even when a block
+                    only has an _output (no variables used). */}
+        {hasLineage && (
+          <Suspense fallback={null}>
+            <VariableLineageInInspector />
+          </Suspense>
+        )}
         <BlockMetadata block={block} subflowName={subflowName} />
         {block.children?.length > 0 && (
           <CollapsibleSection title={`Children (${block.children.length})`}>

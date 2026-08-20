@@ -92,7 +92,7 @@ export default function FileList({
           label: 'Copy path',
           icon: Copy,
           onClick: () => {
-            writeClipboard(ctxMenu.file.path)
+            void writeClipboard(ctxMenu.file.path)
           },
         },
         ...(onRevealFile

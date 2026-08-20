@@ -5,7 +5,7 @@ import {useUIStore} from '@/stores/uiStore'
 // buildFindingFixPrompt grounds the AI with everything the analyzer knows about
 // a finding, including its machine-generated fix hint when present. Shared by
 // every "Fix with AI" entry point so the prompt stays identical across them.
-export function buildFindingFixPrompt(finding: Finding): string {
+function buildFindingFixPrompt(finding: Finding): string {
   return [
     `Help me fix this issue: **${finding.title}**`,
     finding.description,

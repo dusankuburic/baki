@@ -18,8 +18,10 @@ import {
   Shield,
   Cloud,
   RefreshCw,
+  Code2,
 } from 'lucide-react'
 import {useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import IconButton from '@/components/shared/IconButton'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
@@ -60,6 +62,7 @@ export default function MainPaneToolbar() {
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
   const setReport = useAnalysisStore(s => s.setReport)
   const [reimporting, setReimporting] = useState(false)
+  const {t} = useTranslation('shell')
 
   const activeTabId = groups[focusedGroupIndex]?.activeTabId ?? null
   const subflow = activeTabId && document ? document.subflows.find(s => s.id === activeTabId) : document?.subflows?.[0]
@@ -70,12 +73,12 @@ export default function MainPaneToolbar() {
 
   if (isSystemView(mainPaneView)) {
     const systemOptions: {value: SystemView; label: string; icon: typeof LayoutDashboard}[] = [
-      {value: 'home', label: 'Home', icon: LayoutDashboard},
-      {value: 'dashboard', label: 'Analytics', icon: BarChart3},
-      {value: 'library', label: 'Library', icon: Cloud},
-      {value: 'profile', label: 'Profile', icon: User},
+      {value: 'home', label: t('nav.home'), icon: LayoutDashboard},
+      {value: 'dashboard', label: t('nav.analytics'), icon: BarChart3},
+      {value: 'library', label: t('nav.library'), icon: Cloud},
+      {value: 'profile', label: t('nav.profile'), icon: User},
     ]
-    if (userRole === 'admin') systemOptions.push({value: 'admin', label: 'Admin', icon: Shield})
+    if (userRole === 'admin') systemOptions.push({value: 'admin', label: t('nav.admin'), icon: Shield})
     return (
       <div className="flex items-center h-12 px-4 border-b border-border-default bg-surface-1 gap-4">
         <SegmentedControl
@@ -92,10 +95,10 @@ export default function MainPaneToolbar() {
         <IconButton
           icon={Expand}
           size="sm"
-          label="Fullscreen"
+          label={t('toolbar.fullscreen')}
           onClick={() => {
             try {
-              window.document.documentElement.requestFullscreen()
+              void window.document.documentElement.requestFullscreen()
             } catch {
               /* fullscreen not supported */
             }
@@ -105,15 +108,15 @@ export default function MainPaneToolbar() {
     )
   }
 
-  const handleExport = async (format: 'pdf' | 'markdown') => {
+  const handleExport = async (format: 'pdf' | 'markdown' | 'html') => {
     try {
-      const fn = format === 'pdf' ? exportApi.exportPDF : exportApi.exportMarkdown
+      const fn = format === 'pdf' ? exportApi.exportPDF : format === 'html' ? exportApi.exportHTML : exportApi.exportMarkdown
       const path = await fn()
       if (path) {
-        toast.success(`Exported to ${path}`)
+        toast.success(t('toasts.exportedTo', {path}))
       }
     } catch (e) {
-      toast.error('Export failed: ' + (e as Error).message)
+      toast.error(t('toasts.exportFailed', {message: (e as Error).message}))
     }
   }
 
@@ -122,15 +125,15 @@ export default function MainPaneToolbar() {
       const path = await exportApi.pickFile('Select Old Version for Comparison')
       if (!path) return
 
-      toast.info('Comparing flows...')
+      toast.info(t('toasts.comparing'))
       const diff = await exportApi.compareCurrentWith(path)
       if (diff) {
         setActiveDiff(diff as FlowDiff)
         setMainPaneView('diff')
-        toast.success('Comparison complete')
+        toast.success(t('toasts.comparisonComplete'))
       }
     } catch (e) {
-      toast.error('Comparison failed: ' + (e as Error).message)
+      toast.error(t('toasts.comparisonFailed', {message: (e as Error).message}))
     }
   }
 
@@ -147,9 +150,9 @@ export default function MainPaneToolbar() {
       setDocument(fresh)
       const r = await analysisApi.analyzeFlow()
       if (r) setReport(fresh.id, r as AnalysisReport)
-      toast.success('Flow re-imported and re-analyzed')
+      toast.success(t('toasts.reimported'))
     } catch (e) {
-      toast.error('Re-import failed: ' + (e as Error).message)
+      toast.error(t('toasts.reimportFailed', {message: (e as Error).message}))
     } finally {
       if (useAnalysisStore.getState().analyzingGen === gen) setAnalyzing(false)
       setReimporting(false)
@@ -159,11 +162,11 @@ export default function MainPaneToolbar() {
   return (
     <div className="flex items-center h-12 px-4 border-b border-border-default bg-surface-1 gap-4">
       <div className="flex items-center gap-1">
-        <IconButton icon={ChevronLeft} size="sm" label="Go Back" disabled={historyIndex <= 0} onClick={goBack} />
+        <IconButton icon={ChevronLeft} size="sm" label={t('toolbar.goBack')} disabled={historyIndex <= 0} onClick={goBack} />
         <IconButton
           icon={ChevronRight}
           size="sm"
-          label="Go Forward"
+          label={t('toolbar.goForward')}
           disabled={historyIndex >= navigationHistory.length - 1}
           onClick={goForward}
         />
@@ -211,7 +214,7 @@ export default function MainPaneToolbar() {
             <IconButton
               icon={Minus}
               size="sm"
-              label="Zoom out"
+              label={t('toolbar.zoomOut')}
               onClick={() => setGraphZoom(Math.max(0.25, graphZoom - 0.1))}
             />
             <button
@@ -223,13 +226,13 @@ export default function MainPaneToolbar() {
             <IconButton
               icon={Plus}
               size="sm"
-              label="Zoom in"
+              label={t('toolbar.zoomIn')}
               onClick={() => setGraphZoom(Math.min(3, graphZoom + 0.1))}
             />
             <IconButton
               icon={Maximize2}
               size="sm"
-              label="Fit to screen"
+              label={t('toolbar.fitToScreen')}
               onClick={() => {
                 window.dispatchEvent(new Event('graph:fit'))
               }}
@@ -237,19 +240,19 @@ export default function MainPaneToolbar() {
             <IconButton
               icon={Download}
               size="sm"
-              label="Export graph as PNG"
+              label={t('toolbar.exportGraphPng')}
               onClick={() => {
                 window.dispatchEvent(new Event('graph:export-png'))
               }}
             />
           </>
         )}
-        {mainPaneView === 'diff' && <IconButton icon={Plus} size="sm" label="New Comparison" onClick={handleCompare} />}
+        {mainPaneView === 'diff' && <IconButton icon={Plus} size="sm" label={t('toolbar.newComparison')} onClick={handleCompare} />}
         {mainPaneView === 'block' && (
           <IconButton
             icon={Flame}
             size="sm"
-            label="Complexity Map"
+            label={t('toolbar.complexityMap')}
             onClick={toggleComplexityMode}
             className={complexityMode ? 'text-semantic-warning bg-semantic-warning/10' : ''}
           />
@@ -257,23 +260,24 @@ export default function MainPaneToolbar() {
         <IconButton
           icon={RefreshCw}
           size="sm"
-          label={reimporting ? 'Re-importing…' : 'Re-import flow'}
+          label={reimporting ? t('toolbar.reimporting') : t('toolbar.reimport')}
           disabled={reimporting}
           onClick={handleReimport}
         />
         <IconButton
           icon={Expand}
           size="sm"
-          label="Fullscreen"
+          label={t('toolbar.fullscreen')}
           onClick={() => {
             try {
-              window.document.documentElement.requestFullscreen()
+              void window.document.documentElement.requestFullscreen()
             } catch {
               /* fullscreen not supported */
             }
           }}
         />
-        <IconButton icon={Download} size="sm" label="Export PDF" onClick={() => handleExport('pdf')} />
+        <IconButton icon={Download} size="sm" label={t('toolbar.exportPdf')} onClick={() => handleExport('pdf')} />
+        <IconButton icon={Code2} size="sm" label={t('toolbar.exportHtml')} onClick={() => handleExport('html')} />
       </div>
     </div>
   )

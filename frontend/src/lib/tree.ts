@@ -169,7 +169,9 @@ export function flattenTreeRows(doc: FlowDocument, options: FlattenTreeOptions):
 // flowStore, DetailsTab, FindingCard, Breadcrumbs, and BlockView.
 
 /** Find a block by id within a single block tree (recursive DFS). */
-export function findBlockInTree(blocks: Block[], id: string): Block | null {
+// Internal recursive block lookup (used by findBlockInDoc below); not
+// exported — external callers use findBlockInDoc or buildBlockLookup.
+function findBlockInTree(blocks: Block[], id: string): Block | null {
   for (const block of blocks) {
     if (block.id === id) return block
     if (block.children.length > 0) {
@@ -193,7 +195,7 @@ export function findBlockInDoc(
 }
 
 /** A blockId → {name, subflowName} index for cheap label lookups. */
-export type BlockLookup = Map<string, {name: string; subflowName: string}>
+export type BlockLookup = Map<string, {name: string; subflowName: string; rawType: string}>
 
 /**
  * Build a blockId → {name, subflowName} index for the whole document in a single
@@ -206,7 +208,7 @@ export function buildBlockLookup(doc: FlowDocument): BlockLookup {
   const map: BlockLookup = new Map()
   const walk = (blocks: Block[], subflowName: string) => {
     for (const b of blocks) {
-      map.set(b.id, {name: b.name, subflowName})
+      map.set(b.id, {name: b.name, subflowName, rawType: b.rawType})
       if (b.children.length > 0) walk(b.children, subflowName)
     }
   }

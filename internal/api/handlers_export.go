@@ -20,6 +20,16 @@ func NewExportHandler(exportSvc *service.ExportService, flowSvc *service.FlowSer
 	return &ExportHandler{exportSvc: exportSvc, flowSvc: flowSvc, analysisSvc: analysisSvc, security: security}
 }
 
+// @Summary      Compare current flow with another
+// @Description  Returns a diff between the currently loaded flow and a flow at the specified path. Only available in local mode.
+// @Tags         export
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/export/compare [post]
 func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.Request) {
 	if h.security.JWTEnabled {
 		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
@@ -48,6 +58,16 @@ func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.
 	render.JSON(w, diff)
 }
 
+// @Summary      Export flow as Markdown
+// @Description  Exports the specified flow to a Markdown file. Returns base64 encoded data. Only available in local mode.
+// @Tags         export
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/export/markdown [post]
 func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path   string `json:"path"`
@@ -93,6 +113,62 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// @Summary      Export HTML report
+// @Description  Self-contained HTML report (base64 response); server-side file write is desktop-only.
+// @Tags         export
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Base64 HTML"
+// @Failure      409 {object} map[string]string "No analysis report"
+// @Router       /api/export/html [post]
+func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path   string `json:"path"`
+		FlowID string `json:"flowId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+
+	userID := h.security.CallerID(r)
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+
+	report, _ := h.analysisSvc.CurrentReport(doc)
+	if report == nil {
+		render.Error(w, fmt.Errorf("no analysis report available — run analysis first"), http.StatusConflict)
+		return
+	}
+
+	// See handleExportMarkdown: the server-side file write is desktop-only.
+	exportPath := req.Path
+	if h.security.JWTEnabled {
+		exportPath = ""
+	}
+	content, err := h.exportSvc.ExportHTML(doc, report, exportPath)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, map[string]any{
+		"status": "ok",
+		"data":   base64.StdEncoding.EncodeToString(content),
+	})
+}
+
+// @Summary      Export flow as PDF
+// @Description  Exports the specified flow to a PDF file. Returns base64 encoded data. Only available in local mode.
+// @Tags         export
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/export/pdf [post]
 func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path   string `json:"path"`

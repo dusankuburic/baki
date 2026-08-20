@@ -294,9 +294,9 @@ describe('buildBlockLookup', () => {
     const doc = makeDoc(makeSubflow('sf1', [makeBlock('a'), loop]))
     const lookup = buildBlockLookup(doc)
     expect(lookup.size).toBe(3)
-    expect(lookup.get('a')).toEqual({name: 'Block a', subflowName: 'Subflow sf1'})
-    expect(lookup.get('loop1')).toEqual({name: 'Block loop1', subflowName: 'Subflow sf1'})
-    expect(lookup.get('child')).toEqual({name: 'Block child', subflowName: 'Subflow sf1'})
+    expect(lookup.get('a')).toEqual({name: 'Block a', subflowName: 'Subflow sf1', rawType: 'ACTION'})
+    expect(lookup.get('loop1')).toEqual({name: 'Block loop1', subflowName: 'Subflow sf1', rawType: 'LOOP'})
+    expect(lookup.get('child')).toEqual({name: 'Block child', subflowName: 'Subflow sf1', rawType: 'ACTION'})
   })
 
   it('attributes blocks to their containing subflow', () => {

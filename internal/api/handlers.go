@@ -1,7 +1,12 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"html"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -75,5 +80,62 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 
 	// #nosec G703 -- path is validated by http.Dir.Open (rejects traversal) above;
 	// any miss falls back to the constant index.html.
+	// #nosec G703 -- path is validated by http.Dir.Open (rejects traversal) above;
+	// any miss falls back to the constant index.html.
+	if isFallback && path == "/shared" {
+		// The share viewer is an SPA route, so this is always the index.html
+		// fallback. Give link unfurlers (Slack, Teams, iMessage) a real
+		// preview by injecting the flow name into <title> + og:* meta —
+		// best-effort; a bad/missing token serves the unmodified shell.
+		if rt.serveSharedShell(w, r, indexPath) {
+			return
+		}
+	}
 	http.ServeFile(w, r, servedFile)
+}
+
+// serveSharedShell serves index.html with per-share metadata injected when the
+// /shared route carries a resolvable token. Returns false when injection
+// isn't possible (no token, storage miss, read error) so the caller falls
+// through to the plain shell.
+func (rt *Router) serveSharedShell(w http.ResponseWriter, r *http.Request, indexPath string) bool {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		return false
+	}
+	analysis := rt.handlers.Analysis
+	if analysis == nil || analysis.backend == nil || analysis.flowSvc == nil {
+		return false
+	}
+	hash := sha256.Sum256([]byte(token))
+	st, err := analysis.backend.GetShareTokenByHash(r.Context(), hex.EncodeToString(hash[:]))
+	if err != nil {
+		return false
+	}
+	doc, err := analysis.flowSvc.DocProvider().ResolveDoc(r.Context(), st.FlowID)
+	if err != nil || doc == nil {
+		return false
+	}
+
+	raw, err := os.ReadFile(indexPath) // #nosec G304 -- built from the configured static dir
+	if err != nil {
+		return false
+	}
+
+	name := html.EscapeString(doc.Name)
+	shell := strings.Replace(string(raw), "<title>PAD Analyzer</title>",
+		fmt.Sprintf("<title>%s — PAD Analyzer</title>", name), 1)
+	meta := fmt.Sprintf(
+		`<meta property="og:title" content="%s"/>`+
+			`<meta property="og:description" content="Shared read-only analysis report for flow %s."/>`+
+			`<meta property="og:type" content="website"/>`+
+			`<meta name="twitter:card" content="summary"/>`,
+		name, name)
+	shell = strings.Replace(shell, "<title>", meta+"<title>", 1)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(shell)))
+	_, _ = w.Write([]byte(shell))
+	return true
 }

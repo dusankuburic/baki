@@ -434,7 +434,12 @@ func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query mo
 		// Local/no storage: nothing stored to search across.
 		return &models.SearchResults{Query: query, Results: []models.SearchResult{}}, nil
 	}
-	flows, err := s.storage.ListFlows(ctx, storageif.FlowFilter{UserID: userID, Limit: maxLibrarySearchFlows})
+	// MetadataOnly: the loop below re-resolves each flow's full document via
+	// ResolveDoc (it needs the parsed doc, not the raw stored copy); the list
+	// phase only uses ID/Name. Without this, the Postgres backend backfills
+	// full blob content for up to maxLibrarySearchFlows flows that is then
+	// discarded — a wasted blob round-trip per flow per search.
+	flows, err := s.storage.ListFlows(ctx, storageif.FlowFilter{UserID: userID, Limit: maxLibrarySearchFlows, MetadataOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("list flows for search: %w", err)
 	}
@@ -823,49 +828,17 @@ func (s *FlowService) applyPatchToCloudSource(ctx context.Context, doc *models.F
 		return nil, fmt.Errorf("source not available — cloud fix requires a single-file flow (multi-file cloud fix is not yet supported)")
 	}
 	patched := analyzer.ApplyPatch(doc.Source, patch)
-	if parseErrorCount(patched, doc.Name) > parseErrorCount(doc.Source, doc.Name) {
-		return nil, fmt.Errorf("patch would introduce parse errors (flow left unchanged)")
-	}
+	// doc.ParseErrors is the parse of doc.Source itself (Content and Source
+	// are persisted together), so it serves as the before-count without a
+	// second full parse of the unpatched source.
 	updated, err := parser.ParseText(patched, doc.Name, int64(len(patched)))
 	if err != nil {
 		return nil, fmt.Errorf("re-parse patched source: %w", err)
 	}
-	updated.ID = doc.ID
-	updated.OwnerID = doc.OwnerID
-	updated.OrganizationID = doc.OrganizationID
-	updated.Source = patched
-	updated.RebuildIndexes()
-	// Persist only when a storage backend is configured (cloud). Local mode
-	// never reaches here (doc.FilePath is set locally).
-	if s.storage != nil {
-		content, err := json.Marshal(updated)
-		if err != nil {
-			return nil, fmt.Errorf("marshal patched flow: %w", err)
-		}
-		libDoc := storageif.FlowDocument{
-			ID:             doc.ID,
-			Name:           doc.Name,
-			Content:        content,
-			Source:         updated.Source, // empty for multi-file flows
-			OwnerID:        doc.OwnerID,
-			OrganizationID: doc.OrganizationID,
-			Metadata: storageif.FlowMetadata{
-				BlockCount:   updated.Metadata.BlockCount,
-				SubflowCount: updated.Metadata.SubflowCount,
-			},
-		}
-		// OCC: load the current version so SaveFlow can detect a concurrent edit.
-		if header, hErr := s.storage.LoadFlowHeader(ctx, doc.ID); hErr == nil && header != nil {
-			libDoc.Version = header.Version
-			libDoc.Description = header.Description
-		} else if hErr != nil && !errors.Is(hErr, storageif.ErrNotFound) {
-			return nil, fmt.Errorf("check existing flow: %w", hErr)
-		}
-		if err := s.storage.SaveFlow(ctx, &libDoc); err != nil {
-			return nil, err
-		}
+	if analyzer.CountParseErrors(updated) > analyzer.CountParseErrors(doc) {
+		return nil, fmt.Errorf("patch would introduce parse errors (flow left unchanged)")
 	}
-	return updated, nil
+	return s.persistCloudDoc(ctx, doc, updated, patched)
 }
 
 // GetSource returns the raw PAD source text for a flow. Desktop: reads the
@@ -940,51 +913,62 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 		source = string(data)
 	}
 
-	beforeErrors := parseErrorCount(source, doc.Name)
-	n, err := analyzer.ApplyFixesToSource(&source, doc.Name, ruleFilter, limit, nil)
+	// One loop pass replaces four parses: the loop itself parses the original
+	// (first iteration) and the fixed source (last iteration), and reports both
+	// error counts — no separate before/after parseErrorCount calls needed.
+	res, err := analyzer.ApplyFixesToSourceDoc(&source, doc.Name, ruleFilter, limit, nil)
 	if err != nil {
-		return nil, n, err
+		return nil, res.Fixed, err
 	}
-	if n == 0 {
+	if res.Fixed == 0 {
 		return doc, 0, nil // nothing changed
 	}
 	// Same gate as PatchFlow: a batch must not leave the source worse than before.
-	if parseErrorCount(source, doc.Name) > beforeErrors {
-		return nil, n, fmt.Errorf("batch fix would introduce parse errors (flow left unchanged)")
+	if res.AfterErrors > res.BeforeErrors {
+		return nil, res.Fixed, fmt.Errorf("batch fix would introduce parse errors (flow left unchanged)")
 	}
 
 	if cloud {
-		updated, err := s.persistCloudSource(ctx, doc, source)
-		return updated, n, err
+		// res.Doc is already the parse of the patched source — persist it
+		// directly instead of re-parsing inside persistCloudSource.
+		updated, err := s.persistCloudDoc(ctx, doc, res.Doc, source)
+		return updated, res.Fixed, err
 	}
 	// Desktop: write once, then re-parse the whole flow (cross-subflow indexes).
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
-		return nil, n, fmt.Errorf("write source file: %w", err)
+		return nil, res.Fixed, fmt.Errorf("write source file: %w", err)
 	}
 	if info, _ := os.Stat(doc.FilePath); info != nil && info.IsDir() {
 		updated, err := s.LoadFlowFolder(doc.FilePath)
-		return updated, n, err
+		return updated, res.Fixed, err
+	}
+	// Seed the AST cache with the loop's parse of the exact bytes just
+	// written, so the reload below is a cache hit (read + hash) instead of
+	// another full parse of content we already parsed.
+	if s.astCache != nil {
+		hash := sha256.Sum256([]byte(source))
+		s.astCache.Set(ctx, "ast:"+hex.EncodeToString(hash[:]), res.Doc, 24*time.Hour)
 	}
 	updated, err := s.LoadFlowFromPath(doc.FilePath)
 	if err != nil {
-		return nil, n, err
+		return nil, res.Fixed, err
 	}
-	return updated, n, nil
+	return updated, res.Fixed, nil
 }
 
-// persistCloudSource re-parses the patched source and saves it (content +
-// source) via SaveFlow with an OCC version check. Shared by the single
-// apply-fix (cloud) and the batch apply-fix (cloud) paths.
-func (s *FlowService) persistCloudSource(ctx context.Context, doc *models.FlowDocument, source string) (*models.FlowDocument, error) {
-	updated, err := parser.ParseText(source, doc.Name, int64(len(source)))
-	if err != nil {
-		return nil, fmt.Errorf("re-parse patched source: %w", err)
-	}
+// persistCloudDoc stamps an ALREADY-PARSED doc with the original's cloud
+// identity and saves it (content + source) via SaveFlow with an OCC version
+// check. `updated` must be the parse of `source` — callers that have the parse
+// in hand (apply-fix paths) use this directly; everyone else uses
+// persistCloudSource, which parses first.
+func (s *FlowService) persistCloudDoc(ctx context.Context, doc *models.FlowDocument, updated *models.FlowDocument, source string) (*models.FlowDocument, error) {
 	updated.ID = doc.ID
 	updated.OwnerID = doc.OwnerID
 	updated.OrganizationID = doc.OrganizationID
 	updated.Source = source
 	updated.RebuildIndexes()
+	// Persist only when a storage backend is configured (cloud). Local mode
+	// never reaches here (doc.FilePath is set locally).
 	if s.storage != nil {
 		content, err := json.Marshal(updated)
 		if err != nil {
@@ -994,7 +978,7 @@ func (s *FlowService) persistCloudSource(ctx context.Context, doc *models.FlowDo
 			ID:             doc.ID,
 			Name:           doc.Name,
 			Content:        content,
-			Source:         source,
+			Source:         updated.Source, // empty for multi-file flows
 			OwnerID:        doc.OwnerID,
 			OrganizationID: doc.OrganizationID,
 			Metadata: storageif.FlowMetadata{
@@ -1002,6 +986,7 @@ func (s *FlowService) persistCloudSource(ctx context.Context, doc *models.FlowDo
 				SubflowCount: updated.Metadata.SubflowCount,
 			},
 		}
+		// OCC: load the current version so SaveFlow can detect a concurrent edit.
 		if header, hErr := s.storage.LoadFlowHeader(ctx, doc.ID); hErr == nil && header != nil {
 			libDoc.Version = header.Version
 			libDoc.Description = header.Description
@@ -1013,6 +998,17 @@ func (s *FlowService) persistCloudSource(ctx context.Context, doc *models.FlowDo
 		}
 	}
 	return updated, nil
+}
+
+// persistCloudSource re-parses the patched source and saves it (content +
+// source) via SaveFlow with an OCC version check. Shared by the source editor
+// save and the batch apply-fix (cloud) paths.
+func (s *FlowService) persistCloudSource(ctx context.Context, doc *models.FlowDocument, source string) (*models.FlowDocument, error) {
+	updated, err := parser.ParseText(source, doc.Name, int64(len(source)))
+	if err != nil {
+		return nil, fmt.Errorf("re-parse patched source: %w", err)
+	}
+	return s.persistCloudDoc(ctx, doc, updated, source)
 }
 
 // PatchPreviewResult holds the before/after source text for a dry-run fix
@@ -1075,11 +1071,5 @@ func parseErrorCount(source, fileName string) int {
 		// failure as "maximally broken".
 		return 1 << 30
 	}
-	n := 0
-	for _, e := range doc.ParseErrors {
-		if e.Severity == "error" {
-			n++
-		}
-	}
-	return n
+	return analyzer.CountParseErrors(doc)
 }

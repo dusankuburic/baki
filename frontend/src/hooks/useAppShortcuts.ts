@@ -113,9 +113,9 @@ export function useAppShortcuts(deps: {
         const win = getCurrentWindow()
         const isFs = await win.isFullscreen()
         if (isFs) {
-          win.setFullscreen(false)
+          void win.setFullscreen(false)
         } else {
-          win.setFullscreen(true)
+          void win.setFullscreen(true)
         }
       },
       'view.theme.toggle': () => toggleTheme(),
@@ -174,7 +174,7 @@ export function useAppShortcuts(deps: {
       },
       'window.quit': () => {
         if (!getPlatformCapabilities().nativeWindow) return
-        import('@tauri-apps/api/window').then(({getCurrentWindow}) => getCurrentWindow().close())
+        void import('@tauri-apps/api/window').then(({getCurrentWindow}) => getCurrentWindow().close())
       },
     },
   })

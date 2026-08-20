@@ -1,4 +1,5 @@
 import {useEffect, useState, useCallback} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Plus, Trash2, Shield, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight} from 'lucide-react'
 import clsx from 'clsx'
 import {analysisApi} from '@/api'
@@ -9,14 +10,17 @@ import {useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 
-const GATE_OPTIONS: {label: string; value: Severity | ''}[] = [
-  {label: 'Report only', value: ''},
-  {label: 'Info+', value: 'info'},
-  {label: 'Warning+', value: 'warning'},
-  {label: 'Error+', value: 'error'},
+// Labels resolve at render time so they follow language changes; the module
+// constant would freeze them at init.
+const GATE_VALUES: {key: 'reportOnly' | 'infoPlus' | 'warningPlus' | 'errorPlus'; value: Severity | ''}[] = [
+  {key: 'reportOnly', value: ''},
+  {key: 'infoPlus', value: 'info'},
+  {key: 'warningPlus', value: 'warning'},
+  {key: 'errorPlus', value: 'error'},
 ]
 
 export default function PolicyGatePanel() {
+  const {t} = useTranslation('settings')
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const toast = useToast()
   const {confirm} = useConfirm()
@@ -48,10 +52,10 @@ export default function PolicyGatePanel() {
 
   const handleCreate = async () => {
     if (!activeOrgId) {
-      toast.error('Select an organization first')
+      toast.error(t('policy.selectOrgFirst'))
       return
     }
-    const name = `Policy ${policies.length + 1}`
+    const name = t('policy.newPolicyName', {count: policies.length + 1})
     const policy: Policy = {
       id: '',
       orgId: activeOrgId,
@@ -66,15 +70,15 @@ export default function PolicyGatePanel() {
       setExpandedId(saved.id)
       setCreating(false)
     } catch (err) {
-      toast.error('Failed to create policy: ' + (err as Error).message)
+      toast.error(t('policy.createFailed', {message: (err as Error).message}))
     }
   }
 
   const handleDelete = async (id: string) => {
     if (!activeOrgId) return
     const ok = await confirm({
-      title: 'Delete policy',
-      message: 'This policy will be permanently deleted.',
+      title: t('policy.deleteTitle'),
+      message: t('policy.deleteMessage'),
       danger: true,
     })
     if (!ok) return
@@ -83,7 +87,7 @@ export default function PolicyGatePanel() {
       setPolicies(policies.filter(p => p.id !== id))
       if (expandedId === id) setExpandedId(null)
     } catch (err) {
-      toast.error('Failed to delete policy: ' + (err as Error).message)
+      toast.error(t('policy.deleteFailed', {message: (err as Error).message}))
     }
   }
 
@@ -92,7 +96,7 @@ export default function PolicyGatePanel() {
       const saved = await analysisApi.savePolicy(policy)
       setPolicies(policies.map(p => (p.id === saved.id ? saved : p)))
     } catch (err) {
-      toast.error('Failed to save policy: ' + (err as Error).message)
+      toast.error(t('policy.saveFailed', {message: (err as Error).message}))
     }
   }
 
@@ -104,14 +108,14 @@ export default function PolicyGatePanel() {
     } else {
       newRules = [...policy.rules, {ruleId, enabled}]
     }
-    handleUpdate({...policy, rules: newRules})
+    void handleUpdate({...policy, rules: newRules})
   }
 
   const setRuleSeverity = (policy: Policy, ruleId: string, severity: Severity) => {
     const newRules = policy.rules.map(r =>
       r.ruleId === ruleId ? {...r, severity} : r,
     )
-    handleUpdate({...policy, rules: newRules})
+    void handleUpdate({...policy, rules: newRules})
   }
 
   return (
@@ -120,10 +124,10 @@ export default function PolicyGatePanel() {
         <div>
           <h2 className="text-lg font-semibold text-text-primary flex items-center gap-2">
             <Shield className="w-5 h-5 text-brand-500" />
-            Policy Gates
+            {t('policy.title')}
           </h2>
           <p className="text-sm text-text-secondary mt-1">
-            Define quality gates that fail when findings exceed a severity threshold.
+            {t('policy.subtitle')}
           </p>
         </div>
         <button
@@ -132,23 +136,23 @@ export default function PolicyGatePanel() {
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-40 transition-colors"
         >
           <Plus className="w-4 h-4" />
-          New Policy
+          {t('policy.newPolicy')}
         </button>
       </div>
 
       {!activeOrgId && (
         <div className="text-sm text-text-secondary italic">
-          Select an organization to manage its policies.
+          {t('policy.selectOrgHint')}
         </div>
       )}
 
       {activeOrgId && loading && (
-        <div className="text-sm text-text-secondary">Loading policies…</div>
+        <div className="text-sm text-text-secondary">{t('policy.loading')}</div>
       )}
 
       {activeOrgId && !loading && policies.length === 0 && (
         <div className="text-sm text-text-secondary italic">
-          No policies yet. Create one to define a quality gate for your team.
+          {t('policy.empty')}
         </div>
       )}
 
@@ -174,7 +178,7 @@ export default function PolicyGatePanel() {
                   <GateBadge severity={policy.gateSeverity} />
                   <span className="font-medium text-text-primary">{policy.name}</span>
                   <span className="text-xs text-text-secondary">
-                    {enabledCount} rule{enabledCount !== 1 ? 's' : ''} enabled
+                    {t('policy.rulesEnabled', {count: enabledCount})}
                   </span>
                 </div>
                 <button
@@ -183,7 +187,7 @@ export default function PolicyGatePanel() {
                     void handleDelete(policy.id)
                   }}
                   className="p-1 text-text-secondary hover:text-red-500 transition-colors"
-                  aria-label="Delete policy"
+                  aria-label={t('policy.deleteTitle')}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -193,7 +197,7 @@ export default function PolicyGatePanel() {
                 <div className="px-4 py-4 border-t border-border-default space-y-4 bg-surface-1">
                   <div className="grid grid-cols-2 gap-4">
                     <label className="block">
-                      <span className="text-xs font-medium text-text-secondary">Name</span>
+                      <span className="text-xs font-medium text-text-secondary">{t('policy.nameLabel')}</span>
                       <input
                         type="text"
                         value={policy.name}
@@ -202,22 +206,22 @@ export default function PolicyGatePanel() {
                       />
                     </label>
                     <label className="block">
-                      <span className="text-xs font-medium text-text-secondary">Description</span>
+                      <span className="text-xs font-medium text-text-secondary">{t('policy.descriptionLabel')}</span>
                       <input
                         type="text"
                         value={policy.description || ''}
                         onChange={e => handleUpdate({...policy, description: e.target.value})}
-                        placeholder="Optional"
+                        placeholder={t('policy.optionalPlaceholder')}
                         className="mt-1 w-full px-3 py-1.5 text-sm rounded-md border border-border-default bg-surface-1 focus:outline-none focus:ring-1 focus:ring-brand-500"
                       />
                     </label>
                   </div>
 
                   <div>
-                    <span className="text-xs font-medium text-text-secondary">Gate severity (fail threshold)</span>
+                    <span className="text-xs font-medium text-text-secondary">{t('policy.gateSeverityLabel')}</span>
                     <div className="mt-1">
                       <SegmentedControl
-                        options={GATE_OPTIONS}
+                        options={GATE_VALUES.map(o => ({label: t(`policy.gate.${o.key}`), value: o.value}))}
                         value={policy.gateSeverity ?? ''}
                         onChange={val => handleUpdate({...policy, gateSeverity: val as Severity | undefined})}
                       />
@@ -226,7 +230,7 @@ export default function PolicyGatePanel() {
 
                   <div>
                     <span className="text-xs font-medium text-text-secondary block mb-2">
-                      Rules — toggle which rules count toward this gate
+                      {t('policy.rulesLabel')}
                     </span>
                     <div className="max-h-64 overflow-y-auto space-y-1 rounded-md border border-border-default p-2">
                       {ruleDefs.map(rule => {
@@ -242,7 +246,7 @@ export default function PolicyGatePanel() {
                               )}
                               role="switch"
                               aria-checked={isEnabled}
-                              aria-label={`Toggle ${rule.name}`}
+                              aria-label={t('policy.toggleRule', {name: rule.name})}
                             >
                               <span
                                 className={clsx(
@@ -259,7 +263,7 @@ export default function PolicyGatePanel() {
                                 onChange={e => setRuleSeverity(policy, rule.id, e.target.value as Severity)}
                                 className="text-xs px-1.5 py-0.5 rounded border border-border-default bg-surface-1 text-text-secondary shrink-0"
                               >
-                                <option value="">Default</option>
+                                <option value="">{t('policy.defaultSeverity')}</option>
                                 <option value="error">Error</option>
                                 <option value="warning">Warning</option>
                                 <option value="info">Info</option>
@@ -281,30 +285,31 @@ export default function PolicyGatePanel() {
 }
 
 function GateBadge({severity}: {severity?: Severity}) {
+  const {t} = useTranslation('settings')
   if (!severity) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-surface-3 text-text-secondary">
-        <Shield className="w-3 h-3" /> Report only
+        <Shield className="w-3 h-3" /> {t('policy.gate.reportOnly')}
       </span>
     )
   }
   if (severity === 'error') {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-500">
-        <ShieldAlert className="w-3 h-3" /> Error+
+        <ShieldAlert className="w-3 h-3" /> {t('policy.gate.errorPlus')}
       </span>
     )
   }
   if (severity === 'warning') {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500">
-        <ShieldAlert className="w-3 h-3" /> Warning+
+        <ShieldAlert className="w-3 h-3" /> {t('policy.gate.warningPlus')}
       </span>
     )
   }
   return (
     <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-500">
-      <ShieldCheck className="w-3 h-3" /> Info+
+      <ShieldCheck className="w-3 h-3" /> {t('policy.gate.infoPlus')}
     </span>
   )
 }

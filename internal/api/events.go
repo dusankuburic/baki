@@ -139,6 +139,12 @@ func (m *EventManager) deliver(ev Event) {
 }
 
 // HandleEvents is the HTTP handler for the SSE endpoint.
+// @Summary      Server-sent events stream
+// @Description  Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume.
+// @Tags         realtime
+// @Produce      text/event-stream
+// @Success      200 {string} string "Event stream"
+// @Router       /api/events [get]
 func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

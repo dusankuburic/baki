@@ -65,7 +65,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       setUserCode(resp.user_code)
       setVerificationURI(resp.verification_uri)
       setState('authorizing')
-      createAdapter().openURL(resp.verification_uri)
+      void createAdapter().openURL(resp.verification_uri)
 
       pollingRef.current = true
       const interval = (resp.interval || 5) * 1000
@@ -140,7 +140,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
             className="text-sm text-brand-400 underline break-all"
             onClick={e => {
               e.preventDefault()
-              createAdapter().openURL(verificationURI)
+              void createAdapter().openURL(verificationURI)
             }}
           >
             {verificationURI}

@@ -28,7 +28,7 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
     // functions, meaning the Promise.then pattern leaks the listener across re-runs.
     let unsub: (() => void) | null = null
     let cancelled = false
-    import('@tauri-apps/api/event')
+    void import('@tauri-apps/api/event')
       .then(({listen}) =>
         listen<string>('menu-event', async event => {
           const id = event.payload
@@ -105,7 +105,7 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
     if (!getPlatformCapabilities().nativeWindow) return
     let unsub: (() => void) | null = null
     let cancelled = false
-    import('@tauri-apps/api/event')
+    void import('@tauri-apps/api/event')
       .then(({listen}) =>
         listen<string[]>('open-file', async event => {
           const args = event.payload

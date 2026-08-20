@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {analysisApi} from '@/api'
 import type {Rule, RuleConfig, Severity} from '@/types'
 import {Switch} from '@/components/shared'
@@ -9,6 +10,7 @@ import {useAsync} from '@/hooks/useAsync'
 import clsx from 'clsx'
 
 export default function RulesPanel() {
+  const {t} = useTranslation('settings')
   const settings = useSettingsStore(s => s.settings)
   const updateSettings = useSettingsStore(s => s.updateSettings)
   const autoAnalyzeOnOpen = settings.analysis.autoAnalyzeOnOpen
@@ -29,7 +31,7 @@ export default function RulesPanel() {
       await analysisApi.setRuleEnabled(ruleId, enabled)
       setRules(rules.map(r => (r.id === ruleId ? {...r, enabled} : r)))
     } catch (err) {
-      toast.error('Failed to update rule: ' + (err as Error).message)
+      toast.error(t('rules.updateFailed', {message: (err as Error).message}))
     }
   }
 
@@ -45,11 +47,11 @@ export default function RulesPanel() {
       await analysisApi.updateRuleConfig(ruleId, config)
       setRules(rules.map(r => (r.id === ruleId ? {...r, defaultSeverity: severity} : r)))
     } catch (err) {
-      toast.error('Failed to update rule severity: ' + (err as Error).message)
+      toast.error(t('rules.severityFailed', {message: (err as Error).message}))
     }
   }
 
-  if (loading) return <div className="p-8 text-center text-text-tertiary">Loading rules...</div>
+  if (loading) return <div className="p-8 text-center text-text-tertiary">{t('rules.loading')}</div>
 
   if (loadError)
     return (
@@ -57,13 +59,13 @@ export default function RulesPanel() {
         <div>
           <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
             <Shield size={20} className="text-brand-500" />
-            Analysis Rules
+            {t('rules.title')}
           </h2>
         </div>
         <div className="p-4 flex items-start gap-3 border border-red-500/30 bg-red-500/5 rounded-xl">
           <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={18} />
           <div>
-            <p className="text-sm font-medium text-red-400">Failed to load rules</p>
+            <p className="text-sm font-medium text-red-400">{t('rules.loadFailed')}</p>
             <p className="text-xs text-text-tertiary mt-1">{loadError}</p>
           </div>
         </div>
@@ -78,7 +80,7 @@ export default function RulesPanel() {
           Analysis Rules
         </h2>
         <p className="text-sm text-text-secondary mt-1">
-          Configure which static analysis rules are active and their reporting severity.
+          {t('rules.subtitle')}
         </p>
       </div>
 
@@ -86,9 +88,9 @@ export default function RulesPanel() {
         <div className="flex items-start gap-3">
           <Zap size={18} className="text-brand-500 shrink-0 mt-0.5" />
           <div>
-            <h3 className="text-sm font-bold text-text-primary">Auto-analyze on flow open</h3>
+            <h3 className="text-sm font-bold text-text-primary">{t('rules.autoAnalyzeTitle')}</h3>
             <p className="text-xs text-text-tertiary mt-1">
-              Run all enabled rules automatically as soon as a flow finishes loading.
+              {t('rules.autoAnalyzeHint')}
             </p>
           </div>
         </div>
@@ -124,17 +126,17 @@ export default function RulesPanel() {
             {rule.enabled && (
               <div
                 className="flex items-center gap-4 animate-fade-in"
-                title="Severity changes apply to the next analysis run"
+                title={t('rules.severityTooltip')}
               >
-                <span className="text-2xs font-bold uppercase text-text-tertiary">Report as:</span>
+                <span className="text-2xs font-bold uppercase text-text-tertiary">{t('rules.reportAs')}</span>
                 <SegmentedControl
                   size="sm"
                   value={rule.defaultSeverity}
                   onChange={v => handleSeverityChange(rule.id, v as Severity)}
                   options={[
-                    {value: 'error', label: 'Error', icon: AlertCircle},
-                    {value: 'warning', label: 'Warning', icon: AlertTriangle},
-                    {value: 'info', label: 'Info', icon: Info},
+                    {value: 'error', label: t('rules.severity.error'), icon: AlertCircle},
+                    {value: 'warning', label: t('rules.severity.warning'), icon: AlertTriangle},
+                    {value: 'info', label: t('rules.severity.info'), icon: Info},
                   ]}
                   className="bg-surface-2"
                 />
@@ -147,9 +149,7 @@ export default function RulesPanel() {
       <div className="p-4 bg-brand-500/5 border border-brand-500/10 rounded-lg flex gap-3">
         <Info className="text-brand-500 shrink-0" size={18} />
         <p className="text-xs text-text-secondary leading-relaxed">
-          <strong>Tip:</strong> Elevate rules like <code className="text-brand-400">missing-delay</code> to{' '}
-          <strong>Error</strong> when debugging UI synchronization issues to make them stand out in the findings list.
-          Severity changes apply to the <strong>next</strong> analysis run.
+          {t('rules.tipPrefix')} <code className="text-brand-400">missing-delay</code> {t('rules.tipSuffix')}
         </p>
       </div>
     </div>

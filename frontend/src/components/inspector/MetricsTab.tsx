@@ -79,7 +79,11 @@ export default function MetricsTab() {
                 <Download size={12} />
               </button>
             </span>
-            <span className={clsx('text-2xl font-black font-mono tabular-nums', scoreColor(metrics.healthScore))}>
+            <span
+              className={clsx('text-2xl font-black font-mono tabular-nums', scoreColor(metrics.healthScore))}
+              role="img"
+              aria-label={`Health score ${metrics.healthScore} of 100: ${scoreLabel(metrics.healthScore)}`}
+            >
               {metrics.healthScore}
             </span>
           </div>

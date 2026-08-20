@@ -29,7 +29,7 @@ export function useRelatedFindings(finding: Finding) {
       return
     }
     setShowRelated(true)
-    if (related === null && !relatedLoading) fetchRelated()
+    if (related === null && !relatedLoading) void fetchRelated()
   }, [showRelated, related, relatedLoading, fetchRelated])
 
   return {showRelated, related, relatedLoading, relatedError, handleRelated, fetchRelated}

@@ -80,10 +80,23 @@ describe('useAppEvents', () => {
 
     await new Promise(r => setTimeout(r, 10))
 
-    const docData = {id: 'test-1', name: 'Test'}
+    const docData = {id: 'test-1', name: 'Test', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}
     capturedCallback!({name: 'flow:loaded', data: docData})
 
     expect(openDocument).toHaveBeenCalledWith(docData)
+  })
+
+  it('drops a malformed flow:loaded payload instead of hijacking the editor', async () => {
+    const openDocument = vi.fn()
+    render(<TestComponent openDocument={openDocument} />)
+
+    await new Promise(r => setTimeout(r, 10))
+
+    // Not a flow document (no subflows / no id) — e.g. a proxy error page or
+    // a different event's data shape. Must be rejected at the boundary.
+    capturedCallback!({name: 'flow:loaded', data: {html: '<html>err</html>'}})
+    capturedCallback!({name: 'flow:loaded', data: {id: '', name: 'x', subflows: []}})
+    expect(openDocument).not.toHaveBeenCalled()
   })
 
   it('forwards flow:load-error to the flow store', async () => {
@@ -125,11 +138,11 @@ describe('useAppEvents', () => {
     await new Promise(r => setTimeout(r, 10))
 
     // A flow:loaded for a DIFFERENT flow arrives — must be ignored.
-    capturedCallback!({name: 'flow:loaded', data: {id: 'stale-flow', name: 'Stale'}})
+    capturedCallback!({name: 'flow:loaded', data: {id: 'stale-flow', name: 'Stale', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}})
     expect(openDocument).not.toHaveBeenCalled()
 
     // A flow:loaded for the CURRENT flow (e.g. a collaborator re-parse) is still honored.
-    capturedCallback!({name: 'flow:loaded', data: {id: 'current-flow', name: 'Current refreshed'}})
+    capturedCallback!({name: 'flow:loaded', data: {id: 'current-flow', name: 'Current refreshed', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}})
     expect(openDocument).toHaveBeenCalledTimes(1)
     expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({id: 'current-flow'}))
   })

@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach} from 'vitest'
-import {buildFindingFixPrompt, stageFindingFix, stageBlockPrompt} from './fixWithAI'
+import {stageFindingFix, stageBlockPrompt} from './fixWithAI'
 import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
 import type {Finding} from '@/types'
@@ -27,17 +27,6 @@ beforeEach(() => {
     selectedProvider: 'claude',
     stagedPrompt: null,
     drafts: {},
-  })
-})
-
-describe('buildFindingFixPrompt', () => {
-  it('includes title, description, suggestion, and rule/severity/block', () => {
-    const p = buildFindingFixPrompt(finding({autoFixHint: 'wrap in %var%'}))
-    expect(p).toContain('Hardcoded password')
-    expect(p).toContain('A secret is inlined.')
-    expect(p).toContain('Suggestion: Use a variable.')
-    expect(p).toContain('wrap in %var%')
-    expect(p).toContain('hardcoded-credential')
   })
 })
 

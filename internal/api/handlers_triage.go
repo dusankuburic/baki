@@ -37,6 +37,14 @@ func (h *AnalysisHandler) triageAvailable(w http.ResponseWriter) bool {
 	return true
 }
 
+// @Summary      List finding triage statuses for a flow
+// @Tags         triage
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/triage/list [post]
 func (h *AnalysisHandler) handleListFindingStatuses(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -66,6 +74,14 @@ func (h *AnalysisHandler) handleListFindingStatuses(w http.ResponseWriter, r *ht
 	render.JSON(w, statuses)
 }
 
+// @Summary      Set triage status for a finding
+// @Tags         triage
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/triage/set [post]
 func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -187,6 +203,14 @@ func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowNa
 // otherwise make (e.g. bulk-suppressing a rule's findings). Authorization is
 // checked once for the flow; all items are validated up-front so a bad item
 // rejects the whole batch before any write.
+// @Summary      Batch-set triage statuses for multiple findings
+// @Tags         triage
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/triage/set-batch [post]
 func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -255,6 +279,14 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 	render.JSON(w, map[string]int{"updated": len(req.Items)})
 }
 
+// @Summary      Clear triage status for a finding
+// @Tags         triage
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/triage/clear [post]
 func (h *AnalysisHandler) handleClearFindingStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -284,6 +316,14 @@ func (h *AnalysisHandler) handleClearFindingStatus(w http.ResponseWriter, r *htt
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Get the baseline snapshot for a flow
+// @Tags         baseline
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/baseline/get [post]
 func (h *AnalysisHandler) handleGetBaseline(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -310,6 +350,14 @@ func (h *AnalysisHandler) handleGetBaseline(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, bl) // null when no baseline is set
 }
 
+// @Summary      Set the current analysis as the baseline
+// @Tags         baseline
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/baseline/set [post]
 func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -361,6 +409,14 @@ func (h *AnalysisHandler) handleSetBaseline(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, bl)
 }
 
+// @Summary      Clear the baseline for a flow
+// @Tags         baseline
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/baseline/clear [post]
 func (h *AnalysisHandler) handleClearBaseline(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return
@@ -390,6 +446,14 @@ func (h *AnalysisHandler) handleClearBaseline(w http.ResponseWriter, r *http.Req
 // handleBaselineDrift analyzes the flow and reports findings introduced since the
 // accepted baseline (the "new since baseline" ratchet). With no baseline set,
 // every finding is reported as new (HasBaseline=false).
+// @Summary      Compare current analysis against the baseline
+// @Tags         baseline
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/baseline/drift [post]
 func (h *AnalysisHandler) handleBaselineDrift(w http.ResponseWriter, r *http.Request) {
 	if !h.triageAvailable(w) {
 		return

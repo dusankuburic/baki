@@ -8,6 +8,7 @@ import {flowApi, analysisApi} from '@/api'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useToast} from '@/components/shared'
+import {useTranslation} from 'react-i18next'
 import FindingCard from './FindingCard'
 
 interface Props {
@@ -62,6 +63,7 @@ const sevColor: Record<Severity, string> = {
 }
 
 export default function FindingsList({findings, blockLookup, onFixWithAI, sortMode = 'severity'}: Props) {
+  const {t} = useTranslation('findings')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [batchFixing, setBatchFixing] = useState(false)
   const suppressMany = useAnalysisStore(s => s.suppressMany)
@@ -71,6 +73,16 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
   const clearFindingSelection = useAnalysisStore(s => s.clearFindingSelection)
   const setReport = useAnalysisStore(s => s.setReport)
   const setDocument = useFlowStore(s => s.setDocument)
+  // Subscribed (not read via getState during render) so the bulk-fix button
+  // re-evaluates when the report or selection changes — a render-time
+  // getState() could go stale if autoFix flags changed without a selection
+  // change.
+  const docId = useFlowStore(s => s.document?.id)
+  const reportFindings = useAnalysisStore(s => (docId ? s.reports.get(docId)?.findings : undefined))
+  const hasFixableSelection = useMemo(
+    () => (reportFindings ?? []).some(f => selectedFindingIds.has(f.id) && f.autoFix),
+    [reportFindings, selectedFindingIds],
+  )
   const toast = useToast()
 
   // handleBulkFix applies every auto-fixable finding among the selection in one
@@ -252,7 +264,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
               <button
                 onClick={() => toggleFindingSelection(row.finding.id)}
                 className="absolute left-2 top-2.5 z-10 text-text-disabled hover:text-text-secondary transition-colors"
-                aria-label={isSelected ? 'Deselect finding' : 'Select finding'}
+                aria-label={isSelected ? t('selection.deselect') : t('selection.select')}
               >
                 {isSelected ? (
                   <CheckSquare size={12} className="text-brand-400" />
@@ -267,25 +279,19 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
       />
       {selectedFindingIds.size > 0 && (
         <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
-          <span className="text-2xs text-text-secondary font-medium">{selectedFindingIds.size} selected</span>
+          <span className="text-2xs text-text-secondary font-medium">{t('selection.selectedCount', {count: selectedFindingIds.size})}</span>
           <div className="flex items-center gap-3">
             {/* Bulk apply-fix: shown only when at least one selected finding has an autoFix. */}
-            {(() => {
-              const docId = useFlowStore.getState().document?.id
-              const report = docId ? useAnalysisStore.getState().reports.get(docId) : undefined
-              const hasFixable = (report?.findings ?? []).some(f => selectedFindingIds.has(f.id) && f.autoFix)
-              if (!hasFixable) return null
-              return (
-                <button
-                  onClick={handleBulkFix}
-                  disabled={batchFixing}
-                  className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 transition-colors disabled:opacity-50"
-                >
-                  <Wrench size={11} />
-                  {batchFixing ? 'Fixing…' : 'Fix all'}
-                </button>
-              )
-            })()}
+            {hasFixableSelection && (
+              <button
+                onClick={handleBulkFix}
+                disabled={batchFixing}
+                className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 transition-colors disabled:opacity-50"
+              >
+                <Wrench size={11} />
+                {batchFixing ? t('selection.fixing') : t('selection.fixAll')}
+              </button>
+            )}
             <button
               onClick={() => {
                 // Suppress ALL selected findings from the full report, not
@@ -301,12 +307,12 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
               className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors"
             >
               <EyeOff size={11} />
-              Suppress
+              {t('selection.suppress')}
             </button>
             <button
               onClick={clearFindingSelection}
               className="text-text-tertiary hover:text-text-secondary p-1 rounded hover:bg-surface-3 transition-colors"
-              aria-label="Clear selection"
+              aria-label={t('selection.clear')}
             >
               <X size={12} />
             </button>

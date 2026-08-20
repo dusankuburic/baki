@@ -1,4 +1,8 @@
 import '@testing-library/jest-dom'
+// Real i18n (sync init, bundled English resources): components render the
+// same English strings tests assert on, and `useTranslation` works without
+// per-test boilerplate.
+import '../i18n'
 
 // jsdom in this environment exposes localStorage/sessionStorage as inert empty
 // objects. Stores (e.g. zustand persist in orgStore) touch storage at import

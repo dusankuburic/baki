@@ -24,7 +24,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/JetBrainsMono-Regular.ttf') format('truetype');
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
 }
 
 @font-face {
@@ -32,7 +32,7 @@
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts/JetBrainsMono-Bold.ttf') format('truetype');
+  src: url('/fonts/JetBrainsMono-Bold.woff2') format('woff2');
 }
 
 :root {
@@ -49,8 +49,12 @@
   /* === TEXT === */
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
-  --text-tertiary: #71717a;
-  --text-disabled: #52525b;
+  /* Tertiary/disabled are contrast-bumped for WCAG AA on surface-2: the old
+     #71717a/#52525b measured 3.5:1/2.2:1. Tertiary now ≥4.5:1 (small-text
+     hint/metadata style); the placeholder token lands ≥3:1 — placeholders
+     stay visually subordinate to input values by convention. */
+  --text-tertiary: #8e8e99;
+  --text-disabled: #6b6b76;
   --text-inverse: #0a0a0b;
   --text-sm: 13px;
 
@@ -2277,5 +2281,20 @@ input:-webkit-autofill:active {
   .prose-chat pre,
   tr {
     break-inside: avoid;
+  }
+}
+
+/* Reduced motion (WCAG 2.3.3): users who opt out of animation get instant
+   state transitions instead of the decorative keyframes above. Print styles
+   already neutralize most surface chrome; this covers the interactive ones
+   (modal/toast/dropdown enter-exit, pulse, shimmer, slides). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

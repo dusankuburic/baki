@@ -272,6 +272,12 @@ func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 
 // --- WebSocket handler ---
 
+// @Summary      WebSocket gateway
+// @Description  Authenticated WebSocket for collaborative presence and live updates; obtain a one-time ticket via /api/ws-ticket.
+// @Tags         realtime
+// @Produce      json
+// @Success      101 {string} string "Switching Protocols"
+// @Router       /ws [get]
 func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	ticket := r.URL.Query().Get("ticket")
 	// ConsumeWSTicket atomically verifies + marks the ticket as consumed via

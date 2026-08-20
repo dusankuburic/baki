@@ -17,7 +17,11 @@ vi.mock('@/api', () => ({
     deduplicate: (...a: unknown[]) => deduplicate(...a),
     getDiff: (...a: unknown[]) => getDiff(...a),
     exportHTML: vi.fn().mockResolvedValue(''),
+    listFindingStatuses: vi.fn().mockResolvedValue([]),
+    getBaseline: vi.fn().mockResolvedValue(null),
+    baselineDrift: vi.fn().mockResolvedValue(null),
   },
+  flowApi: {suppressFindingsBatch: vi.fn().mockResolvedValue(undefined)},
 }))
 
 // react-virtuoso renders nothing in jsdom (zero-height scroller), so stub it with
@@ -201,6 +205,41 @@ describe('FindingsTab', () => {
     await renderTab()
     await waitFor(() => {
       expect(screen.getByText(/No findings/)).toBeInTheDocument()
+    })
+  })
+
+  // The search input is debounced: typing updates the field immediately but
+  // the (expensive) store-driven filter only runs after the debounce elapses.
+  describe('search debounce', () => {
+    it('does not filter before the debounce elapses', async () => {
+      await renderTab()
+      await waitFor(() => expect(screen.getByText('Unhandled error')).toBeInTheDocument())
+
+      // Fake timers AFTER mount so waitFor's polling isn't frozen; only the
+      // debounce setTimeout should be under fake control.
+      vi.useFakeTimers()
+      const input = screen.getByPlaceholderText('Search findings...')
+      fireEvent.change(input, {target: {value: 'zzz-no-match'}})
+      // Input shows the typed value immediately...
+      expect(input).toHaveValue('zzz-no-match')
+      // ...but the store (which drives the filter) hasn't been written yet,
+      // so the non-matching list is still rendered.
+      expect(useAnalysisStore.getState().findingSearch).toBe('')
+      expect(screen.getByText('Unhandled error')).toBeInTheDocument()
+
+      vi.advanceTimersByTime(200)
+      vi.useRealTimers()
+      await waitFor(() => expect(useAnalysisStore.getState().findingSearch).toBe('zzz-no-match'))
+    })
+
+    it('applies the query after the debounce elapses', async () => {
+      await renderTab()
+      await waitFor(() => expect(screen.getByText('Unhandled error')).toBeInTheDocument())
+
+      fireEvent.change(screen.getByPlaceholderText('Search findings...'), {target: {value: 'unhandled'}})
+      await waitFor(() => expect(useAnalysisStore.getState().findingSearch).toBe('unhandled'), {timeout: 1000})
+      // Still matches; the non-matching finding is filtered out.
+      await waitFor(() => expect(screen.queryByText('Dead code')).not.toBeInTheDocument())
     })
   })
 })

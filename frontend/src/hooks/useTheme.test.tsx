@@ -54,7 +54,7 @@ describe('useTheme', () => {
   it('reflects density on data-density', async () => {
     render(<Probe />)
     act(() => {
-      useSettingsStore.getState().updateAppearance({density: 'compact'})
+      void useSettingsStore.getState().updateAppearance({density: 'compact'})
     })
     await flushPersist()
 
@@ -64,7 +64,7 @@ describe('useTheme', () => {
   it('writes the resolved theme to data-theme and localStorage', async () => {
     render(<Probe />)
     act(() => {
-      useSettingsStore.getState().updateAppearance({theme: 'dracula'})
+      void useSettingsStore.getState().updateAppearance({theme: 'dracula'})
     })
     await flushPersist()
 
@@ -75,13 +75,13 @@ describe('useTheme', () => {
   it('toggles data-reduce-motion between true and false', async () => {
     render(<Probe />)
     act(() => {
-      useSettingsStore.getState().updateAppearance({reduceMotion: true})
+      void useSettingsStore.getState().updateAppearance({reduceMotion: true})
     })
     await flushPersist()
     expect(document.documentElement.dataset.reduceMotion).toBe('true')
 
     act(() => {
-      useSettingsStore.getState().updateAppearance({reduceMotion: false})
+      void useSettingsStore.getState().updateAppearance({reduceMotion: false})
     })
     await flushPersist()
     expect(document.documentElement.dataset.reduceMotion).toBe('false')
@@ -90,13 +90,13 @@ describe('useTheme', () => {
   it('toggles data-high-contrast between true and false', async () => {
     render(<Probe />)
     act(() => {
-      useSettingsStore.getState().updateAppearance({highContrast: true})
+      void useSettingsStore.getState().updateAppearance({highContrast: true})
     })
     await flushPersist()
     expect(document.documentElement.dataset.highContrast).toBe('true')
 
     act(() => {
-      useSettingsStore.getState().updateAppearance({highContrast: false})
+      void useSettingsStore.getState().updateAppearance({highContrast: false})
     })
     await flushPersist()
     expect(document.documentElement.dataset.highContrast).toBe('false')
@@ -122,7 +122,7 @@ describe('useTheme', () => {
 
     // Switch theme → class appears (act flushes the effect synchronously)
     act(() => {
-      useSettingsStore.getState().updateAppearance({theme: 'nord'})
+      void useSettingsStore.getState().updateAppearance({theme: 'nord'})
     })
     expect(document.documentElement.classList.contains('theme-transitioning')).toBe(true)
 
@@ -143,7 +143,7 @@ describe('useTheme', () => {
 
     render(<Probe />)
     act(() => {
-      useSettingsStore.getState().updateAppearance({theme: 'system'})
+      void useSettingsStore.getState().updateAppearance({theme: 'system'})
     })
 
     // localStorage stores the user's CHOICE ('system'), not the resolved OS value

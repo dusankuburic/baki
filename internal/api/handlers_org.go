@@ -86,6 +86,12 @@ const maxKnowledgeUploadBytes = 1 << 20 // 1 MiB
 // content-length check below could return a clean 413.
 const maxKnowledgeUploadBodyBytes = 4 << 20 // 4 MiB
 
+// @Summary      List knowledge base docs
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Documents"
+// @Router       /api/orgs/{id}/knowledge [get]
 func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request) {
 	if h.knowledge == nil {
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
@@ -112,6 +118,13 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, docs)
 }
 
+// @Summary      Upload knowledge doc
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Accept       multipart/form-data
+// @Produce      json
+// @Success      201 {object} map[string]interface{} "Uploaded"
+// @Router       /api/orgs/{id}/knowledge/upload [post]
 func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
 	if h.knowledge == nil {
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
@@ -144,6 +157,13 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Delete knowledge doc
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Param        docId path string true "Document ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Deleted"
+// @Router       /api/orgs/{id}/knowledge/{docId} [delete]
 func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Request) {
 	if h.knowledge == nil {
 		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
@@ -163,6 +183,13 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      List user's organizations
+// @Description  Returns a list of organizations the currently authenticated user belongs to.
+// @Tags         organization
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/orgs [get]
 func (h *OrgHandler) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
 	orgs, err := h.orgSvc.ListForUser(r.Context(), userID)
@@ -173,6 +200,16 @@ func (h *OrgHandler) handleOrgList(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, orgs)
 }
 
+// @Summary      Create organization
+// @Description  Creates a new organization. Only available to system admins.
+// @Tags         organization
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Router       /api/orgs [post]
 func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
@@ -189,6 +226,12 @@ func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, org)
 }
 
+// @Summary      Get organization
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Organization"
+// @Router       /api/orgs/{id} [get]
 func (h *OrgHandler) handleOrgGet(w http.ResponseWriter, r *http.Request) {
 	org := h.requireMember(w, r)
 	if org == nil {
@@ -197,6 +240,13 @@ func (h *OrgHandler) handleOrgGet(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, org)
 }
 
+// @Summary      Update organization
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Updated"
+// @Router       /api/orgs/{id} [put]
 func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
@@ -216,6 +266,16 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, updated)
 }
 
+// @Summary      Delete organization
+// @Description  Deletes an existing organization. Only organization admins can delete.
+// @Tags         organization
+// @Param        id path string true "id"
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/orgs/{id} [delete]
 func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 	if h.requireAdmin(w, r) == nil {
 		return
@@ -227,6 +287,12 @@ func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      List org members
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Members"
+// @Router       /api/orgs/{id}/members [get]
 func (h *OrgHandler) handleOrgMemberList(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.requireMember(w, r) == nil {
@@ -240,6 +306,20 @@ func (h *OrgHandler) handleOrgMemberList(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, members)
 }
 
+// @Summary      Add organization member
+// @Description  Adds a user to an organization with a specific role. Only organization admins can add members.
+// @Tags         organization
+// @Param        id path string true "id"
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      409 {object} map[string]string "Conflict"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/orgs/{id}/members [post]
 func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
@@ -300,6 +380,18 @@ func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      Remove organization member
+// @Description  Removes a user from an organization. Only organization admins can remove members.
+// @Tags         organization
+// @Param        id path string true "id"
+// @Param        userId path string true "userId"
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Failure      409 {object} map[string]string "Conflict"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/orgs/{id}/members/{userId} [delete]
 func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := chi.URLParam(r, "userId")
@@ -331,6 +423,12 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 
 // handleOrgInviteList returns all pending and resolved invites for an
 // organisation. Only org admins may view the invite list.
+// @Summary      List pending invites for an organization
+// @Tags         orgs
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      401 {object} object "Unauthorized"
+// @Router       /api/orgs/{id}/invites [get]
 func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if h.requireAdmin(w, r) == nil {
@@ -349,6 +447,14 @@ func (h *OrgHandler) handleOrgInviteList(w http.ResponseWriter, r *http.Request)
 // returned exactly once in this response — only its hash is persisted, so it
 // cannot be recovered later. The caller is responsible for delivering it to
 // the invitee (e.g. via an emailed accept link).
+// @Summary      Create org invite
+// @Description  handleOrgInviteCreate creates a pending invite for an email to join the organisation. Only org admins may create invites. The raw invite token is returned exactly once in this response — only its hash is persisted, so it cannot be recovered later. The caller is responsible for delivering it to the invitee (e.g. via an emailed accept link).
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Accept       json
+// @Produce      json
+// @Success      201 {object} map[string]interface{} "Invite"
+// @Router       /api/orgs/{id}/invites [post]
 func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
@@ -406,6 +512,13 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 
 // handleOrgInviteRevoke deletes a pending invite so it can no longer be
 // accepted. Only org admins may revoke invites.
+// @Summary      Revoke a pending invite
+// @Tags         orgs
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      403 {object} object "Forbidden"
+// @Router       /api/orgs/{id}/invites/{inviteId} [delete]
 func (h *OrgHandler) handleOrgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	inviteID := chi.URLParam(r, "inviteId")
@@ -428,6 +541,14 @@ func (h *OrgHandler) handleOrgInviteRevoke(w http.ResponseWriter, r *http.Reques
 
 // handleInviteAccept redeems an invite token, adding the calling user to the
 // invite's organisation with the role specified in the invite.
+// @Summary      Accept an invite
+// @Description  handleInviteAccept redeems an invite token, adding the calling user to the invite's organisation with the role specified in the invite.
+// @Tags         org
+// @Param        token path string true "Invite token"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Accepted"
+// @Router       /api/invites/{token}/accept [post]
 func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
 	userID := h.security.CallerID(r)
@@ -465,6 +586,14 @@ func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, org)
 }
 
+// @Summary      Change member role
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Param        userId path string true "User ID"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Updated"
+// @Router       /api/orgs/{id}/members/{userId}/role [put]
 func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID := chi.URLParam(r, "userId")

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
-import {shortcuts, matchesShortcut, formatShortcutKeys, formatShortcutParts, checkCollisions} from './shortcuts'
+import {shortcuts, matchesShortcut, formatShortcutParts, checkCollisions} from './shortcuts'
 
 function keyEvent(init: Partial<KeyboardEvent> & {key: string}): KeyboardEvent {
   return {
@@ -41,16 +41,6 @@ describe('matchesShortcut (non-mac / ctrl-based)', () => {
 
   it('is case-insensitive on the letter key', () => {
     expect(matchesShortcut(keyEvent({key: 'K', ctrlKey: true}), 'mod+k')).toBe(true)
-  })
-})
-
-describe('formatShortcutKeys', () => {
-  it('renders a combo as Ctrl+Letter on non-mac', () => {
-    expect(formatShortcutKeys('mod+k')).toBe('Ctrl+K')
-  })
-
-  it('renders a single special key', () => {
-    expect(formatShortcutKeys('escape')).toBe('Esc')
   })
 })
 

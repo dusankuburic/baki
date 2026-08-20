@@ -14,6 +14,14 @@ import (
 // supplied in the request body (a named rule set + pass/fail GateSeverity),
 // returning the PolicyResult (passed + violations). This is the server-side
 // counterpart of `bakicli -policy`.
+// @Summary      Evaluate a flow against an inline policy
+// @Tags         policy
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/policy/evaluate [post]
 func (h *AnalysisHandler) handleEvaluatePolicy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string        `json:"flowId"`
@@ -49,6 +57,14 @@ func (h *AnalysisHandler) policyAvailable(w http.ResponseWriter) bool {
 	return true
 }
 
+// @Summary      Save a named policy for an organization
+// @Tags         policy
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/policy/save [post]
 func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.policyAvailable(w) {
 		return
@@ -74,6 +90,14 @@ func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, p)
 }
 
+// @Summary      List policies for an organization
+// @Tags         policy
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/policy/list [post]
 func (h *AnalysisHandler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if !h.policyAvailable(w) {
 		return
@@ -96,6 +120,14 @@ func (h *AnalysisHandler) handleListPolicies(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, policies)
 }
 
+// @Summary      Get a single policy by ID
+// @Tags         policy
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/policy/get [post]
 func (h *AnalysisHandler) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.policyAvailable(w) {
 		return
@@ -118,6 +150,14 @@ func (h *AnalysisHandler) handleGetPolicy(w http.ResponseWriter, r *http.Request
 	render.JSON(w, p)
 }
 
+// @Summary      Delete a policy
+// @Tags         policy
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/policy/delete [post]
 func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.policyAvailable(w) {
 		return
@@ -144,6 +184,14 @@ func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Requ
 // handleEvaluatePolicyByID resolves a persisted policy by org+id, then
 // evaluates it against a flow — the server-side counterpart of `bakicli
 // -policy` but using a stored policy instead of an inline one.
+// @Summary      Evaluate a flow against a persisted policy
+// @Tags         policy
+// @Produce      json
+// @Success      200 {object} object "OK"
+// @Failure      400 {object} object "Bad Request"
+// @Failure      401 {object} object "Unauthorized"
+// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
+// @Router       /api/analysis/policy/evaluate-by-id [post]
 func (h *AnalysisHandler) handleEvaluatePolicyByID(w http.ResponseWriter, r *http.Request) {
 	if !h.policyAvailable(w) {
 		return

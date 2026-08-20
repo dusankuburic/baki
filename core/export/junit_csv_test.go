@@ -146,8 +146,8 @@ func TestReportToCSV_NewlineSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invalid CSV: %v", err)
 	}
-	if !strings.Contains(rows[1][3], "line1") || !strings.Contains(rows[1][4], "") {
-		// newline should be replaced
+	if !strings.Contains(rows[1][3], "line1") {
+		t.Errorf("description lost its text: %q", rows[1][3])
 	}
 	if strings.Contains(rows[1][3], "\n") {
 		t.Errorf("description still contains newline: %q", rows[1][3])

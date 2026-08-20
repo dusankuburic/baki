@@ -67,6 +67,15 @@ func NewAdminHandler(
 	}
 }
 
+// @Summary      List all users
+// @Description  Returns a list of all registered users. Only available to system admins.
+// @Tags         admin
+// @Produce      json
+// @Success      200 {object} []map[string]interface{} "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/admin/users/list [get]
 func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -115,6 +124,16 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// @Summary      Set a user role
+// @Description  Changes the role of the user with the given ID (admin only).
+// @Tags         admin
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "User ID"
+// @Param        request body object true "Role payload"
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Router       /api/admin/users/{id}/role [put]
 func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -169,6 +188,13 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      List audit log entries
+// @Description  Returns the audit trail (logins, settings changes, admin actions).
+// @Tags         admin
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Audit entries"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Router       /api/admin/audit [get]
 func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -202,6 +228,14 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, events)
 }
 
+// @Summary      Start data migration
+// @Description  Kicks off the local→database flow migration (admin only, cloud mode). Idempotent and non-blocking.
+// @Tags         admin
+// @Produce      json
+// @Success      202 {object} map[string]string "Accepted"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      409 {object} map[string]string "Conflict"
+// @Router       /api/admin/migration/start [post]
 func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -218,6 +252,13 @@ func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Reque
 	render.JSON(w, map[string]string{"status": "started"})
 }
 
+// @Summary      Data migration status
+// @Description  Returns the status/result of the most recent data migration (admin only).
+// @Tags         admin
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Router       /api/admin/migration/status [get]
 func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -227,6 +268,16 @@ func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Requ
 
 // --- Power Platform connector auth ---
 
+// @Summary      Start Power Platform OAuth
+// @Tags         admin
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Success      202 {object} map[string]interface{} "Accepted"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/admin/powerplatform/start [post]
 func (h *AdminHandler) handlePPStartAuth(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -248,6 +299,15 @@ func (h *AdminHandler) handlePPStartAuth(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// @Summary      Poll Power Platform OAuth
+// @Tags         admin
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/admin/powerplatform/poll [post]
 func (h *AdminHandler) handlePPPollAuth(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -275,6 +335,12 @@ func (h *AdminHandler) handlePPPollAuth(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// @Summary      Power Platform connection status
+// @Tags         admin
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Status"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Router       /api/admin/powerplatform/status [get]
 func (h *AdminHandler) handlePPStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -292,6 +358,15 @@ func (h *AdminHandler) handlePPStatus(w http.ResponseWriter, r *http.Request) {
 // fire-and-forget: a full sweep can take minutes, so the handler acknowledges
 // with {started: true} and runs the work on a detached, bounded context.
 
+// @Summary      Run environment scanner
+// @Tags         admin
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/admin/scanner/scan [post]
 func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
@@ -311,6 +386,15 @@ func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]bool{"started": true})
 }
 
+// @Summary      Ingest from PAD cloud
+// @Tags         admin
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      500 {object} map[string]string "Error"
+// @Router       /api/admin/ingester/ingest [post]
 func (h *AdminHandler) handleIngesterIngest(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return

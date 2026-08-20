@@ -94,12 +94,6 @@ var ServiceModule = fx.Options(
 		service.NewAuthzService,
 		service.NewFlowService,
 		service.NewAnalysisService,
-		func(cfg *config.Config, svc *service.AnalysisService) *service.AnalysisService {
-			if cfg.Server.CustomRulesPath != "" {
-				svc.LoadCustomRules(cfg.Server.CustomRulesPath)
-			}
-			return svc
-		},
 		// Adapter: fx only provides the full storageif.StorageBackend, but
 		// DashboardService's constructor takes the narrower DashboardStore it
 		// actually uses — Go allows the wider interface value through at this
@@ -147,4 +141,14 @@ var ServiceModule = fx.Options(
 			return service.NewProviderService(auth, copilot, factory, secrets)
 		},
 	),
+	// Custom-rules loading: a DECORATOR (not a second provider of the same
+	// type — fx hard-fails that graph with "already provided"). It wraps the
+	// AnalysisService the constructor built, loading the operator's custom
+	// rules when PAD_CUSTOM_RULES is configured.
+	fx.Decorate(func(cfg *config.Config, svc *service.AnalysisService) *service.AnalysisService {
+		if cfg.Server.CustomRulesPath != "" {
+			svc.LoadCustomRules(cfg.Server.CustomRulesPath)
+		}
+		return svc
+	}),
 )

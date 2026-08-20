@@ -1,11 +1,14 @@
 // Downloading account data and deleting the account live on the Profile page
 // (AccountDataCard) now, so account management isn't split across two panes.
 // This panel stays purely informational.
+import {useTranslation} from 'react-i18next'
+
 export default function PrivacyPanel() {
+  const {t} = useTranslation('settings')
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">Privacy</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">Control how PAD Analyzer handles your data.</p>
+      <p className="text-sm text-text-secondary mt-1 mb-6">{t('privacy.subtitle')}</p>
 
       <div className="space-y-4">
         <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
@@ -17,7 +20,7 @@ export default function PrivacyPanel() {
         </div>
 
         <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-          <span className="text-sm font-medium text-text-primary">Data sent to AI providers</span>
+          <span className="text-sm font-medium text-text-primary">{t('privacy.aiDataTitle')}</span>
           <p className="text-xs text-text-tertiary mt-0.5">
             Before any flow content is sent to an AI provider, known credential fields, secret-shaped patterns (tokens,
             connection strings), and high-entropy strings are automatically redacted.

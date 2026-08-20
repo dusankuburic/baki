@@ -57,11 +57,11 @@ export function useAdminData(isAdmin: boolean) {
       await Promise.all([fetchStatus(), fetchUsers(), fetchAudit()])
       if (!cancelled) setIsLoading(false)
     }
-    run()
+    void run()
     // Only poll while a migration is actively running — avoids unnecessary
     // network traffic for the admin panel's lifetime when idle.
     const interval = setInterval(() => {
-      if (!cancelled && statusRef.current?.status === 'running') fetchStatus()
+      if (!cancelled && statusRef.current?.status === 'running') void fetchStatus()
     }, 5000)
     return () => {
       cancelled = true
@@ -113,7 +113,7 @@ export function useAdminData(isAdmin: boolean) {
     (action: string) => {
       auditActionRef.current = action
       setAuditAction(action)
-      fetchAudit(action)
+      void fetchAudit(action)
     },
     [fetchAudit],
   )

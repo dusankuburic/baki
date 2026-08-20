@@ -78,7 +78,7 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   }, [isOpen])
 
   const complete = useCallback(() => {
-    updateGeneral({firstRunCompleted: true})
+    void updateGeneral({firstRunCompleted: true})
     onClose()
   }, [updateGeneral, onClose])
 
