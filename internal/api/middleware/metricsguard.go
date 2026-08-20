@@ -2,9 +2,12 @@ package middleware
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
+
+	"pad-analyzer/internal/api/render"
 )
 
 // privateRanges lists all IPv4/IPv6 private and loopback address ranges.
@@ -67,7 +70,7 @@ func MetricsGuard(_ []string, token string) func(http.Handler) http.Handler {
 				host = r.RemoteAddr
 			}
 			if !isPrivateIP(host) {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 				return
 			}
 			if token != "" {
@@ -75,7 +78,7 @@ func MetricsGuard(_ []string, token string) func(http.Handler) http.Handler {
 				// auth.ExtractToken: a scraper sending "bearer <token>" must work.
 				got := extractBearerToken(r.Header.Get("Authorization"))
 				if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
-					http.Error(w, "forbidden", http.StatusForbidden)
+					render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
 					return
 				}
 			}

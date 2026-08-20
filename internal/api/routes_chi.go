@@ -1,12 +1,14 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/pprof"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/api/render"
 )
 
 // registerRoutes applies chi's inner middleware layer (below) and the full
@@ -54,7 +56,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		if rt.security.JWTEnabled {
 			tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if tokenStr == "" {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
 		}

@@ -258,6 +258,23 @@ export interface RequestOptions {
   timeoutMs?: number
 }
 
+/**
+ * Extract the human-readable message from an error response body. The backend
+ * emits the standard envelope `{code, message, requestId}` (render.Error);
+ * a few legacy/proxy paths may still return a bare `{error: string}` — accept
+ * both so the user sees the server's actual reason instead of a generic
+ * "Request failed".
+ */
+async function errorMessage(response: Response): Promise<string> {
+  const body = await response.json().catch(() => null)
+  if (body && typeof body === 'object') {
+    const b = body as {message?: unknown; error?: unknown}
+    if (typeof b.message === 'string' && b.message) return b.message
+    if (typeof b.error === 'string' && b.error) return b.error
+  }
+  return 'Request failed'
+}
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const {body, method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS} = opts
   // Proactively refresh an already-expired access token so we don't make a
@@ -267,8 +284,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   const response = await fetchWithRetry(path, body, method, timeoutMs)
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({error: 'Request failed'}))
-    const msg = (error as {error?: string}).error || 'Request failed'
+    const msg = await errorMessage(response)
     if (response.status === 403) {
       throw new PermissionDeniedError(msg)
     }
@@ -315,8 +331,7 @@ export async function requestBlob(
   await ensureFreshToken(path)
   const response = await fetchWithRetry(path, undefined, method, timeoutMs)
   if (!response.ok) {
-    const error = await response.json().catch(() => ({error: 'Request failed'}))
-    throw new Error((error as {error?: string}).error || 'Request failed')
+    throw new Error(await errorMessage(response))
   }
   return response.blob()
 }

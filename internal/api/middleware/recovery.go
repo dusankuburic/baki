@@ -1,10 +1,11 @@
 package middleware
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"runtime/debug"
 
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/errreport"
 )
 
@@ -17,11 +18,7 @@ func Recovery(h http.Handler) http.Handler {
 			if rec := recover(); rec != nil {
 				stack := debug.Stack()
 				errreport.CapturePanic(r.Context(), "http", rec, stack, AttrsFromRequest(r))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				if err := json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"}); err != nil {
-					_ = err // body write failed; nothing useful to do
-				}
+				render.Error(w, errors.New("internal server error"), http.StatusInternalServerError)
 			}
 		}()
 		h.ServeHTTP(w, r)

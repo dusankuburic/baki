@@ -86,6 +86,14 @@ describe('api/client', () => {
       await expect(request('/api/missing')).rejects.toThrow('Not found')
     })
 
+    it('uses the standard envelope message ({code,message}) when present', async () => {
+      // render.Error shape — the backend's primary error envelope.
+      mockFetch({code: 'BAD_REQUEST', message: 'flowId is required', requestId: 'r-1'}, 400)
+      const {request} = await getClient()
+
+      await expect(request('/api/flow/apply-fix-batch')).rejects.toThrow('flowId is required')
+    })
+
     it('falls back to "Request failed" when error body has no message', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({}), {status: 500}))
       const {request} = await getClient()

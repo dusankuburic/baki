@@ -1,9 +1,36 @@
 package auth
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 )
+
+// writeError emits the API-standard error envelope ({code,message,requestId}).
+// Duplicated in miniature from api/render because importing it from here would
+// cycle (render → service → …, api → auth). Keep the field names in sync.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"requestId,omitempty"`
+	}{Code: codeFor(status), Message: msg})
+}
+
+func codeFor(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "UNAUTHORIZED"
+	case http.StatusForbidden:
+		return "FORBIDDEN"
+	case http.StatusBadRequest:
+		return "BAD_REQUEST"
+	default:
+		return "ERROR"
+	}
+}
 
 // Middleware returns an http.Handler that validates JWT access tokens and
 // injects the parsed claims into the request context.
@@ -17,13 +44,13 @@ func Middleware(mgr *Manager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := ExtractToken(r)
 		if tokenStr == "" {
-			http.Error(w, "missing token", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "missing token")
 			return
 		}
 
 		claims, err := mgr.Verify(tokenStr)
 		if err != nil {
-			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
 

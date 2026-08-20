@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/metrics"
 	"pad-core/logger"
@@ -160,7 +161,7 @@ func (m *EventManager) deliver(ev Event) {
 func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		render.Error(w, fmt.Errorf("streaming unsupported"), http.StatusInternalServerError)
 		return
 	}
 
@@ -189,7 +190,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	m.clientsMu.Lock()
 	if m.sseConnCount[key] >= 10 {
 		m.clientsMu.Unlock()
-		http.Error(w, "Too many connections", http.StatusServiceUnavailable)
+		render.Error(w, fmt.Errorf("too many connections"), http.StatusServiceUnavailable)
 		return
 	}
 	m.sseConnCount[key]++

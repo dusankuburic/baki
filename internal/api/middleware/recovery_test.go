@@ -22,12 +22,19 @@ func TestRecovery_PanicReturns500(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("expected application/json, got %s", ct)
 	}
-	var body map[string]string
+	// Standard error envelope: {code, message} (render.Error shape).
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if body["error"] != "internal server error" {
-		t.Errorf("expected 'internal server error', got %q", body["error"])
+	if body.Code != "INTERNAL_ERROR" {
+		t.Errorf("expected code INTERNAL_ERROR, got %q", body.Code)
+	}
+	if body.Message != "internal server error" {
+		t.Errorf("expected 'internal server error', got %q", body.Message)
 	}
 }
 

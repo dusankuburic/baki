@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -169,8 +168,7 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 
 	// SARIF format short-circuits the summary envelope.
 	if format == "sarif" {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(sarifFor(report))
+		render.JSON(w, sarifFor(report))
 		return
 	}
 
@@ -189,9 +187,7 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 	}
 	// The CI gate verdict rides in the body (passed/reason), not the status —
 	// CI callers want the structured result even on a failed gate.
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	render.JSON(w, resp)
 }
 
 // gatePasses reports whether the report clears the requested severity gate.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	wshub "pad-analyzer/internal/websocket"
@@ -215,7 +217,7 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 		tokenStr := auth.ExtractToken(r)
 		if rt.security.JWTEnabled {
 			if tokenStr == "" {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
 			// Machine tokens (PATs) are verified against storage by hash; JWTs are
@@ -228,13 +230,13 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 				claims = c
 			}
 			if claims == nil {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
 			r = r.WithContext(auth.WithClaims(r.Context(), claims))
 		} else {
 			if subtle.ConstantTimeCompare([]byte(tokenStr), []byte(rt.security.Token)) != 1 {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
 		}
@@ -288,14 +290,14 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// verifies the JWT — the local consumeTicket map handles single-use.
 	claims, err := rt.security.AuthMgr.ConsumeWSTicket(ticket)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
 	// Also check the local map as a fallback for local mode (where
 	// ConsumeWSTicket doesn't enforce single-use) and as defense-in-depth
 	// in cloud mode (belt-and-suspenders alongside the shared blacklist).
 	if !rt.consumeTicket(claims.ID, claims.ExpiresAt.Time) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
 	var isRevoked func(string) bool

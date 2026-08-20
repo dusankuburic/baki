@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"pad-analyzer/internal/api/render"
 )
 
 // bucketStore is the per-IP token-bucket decision a RateLimiter delegates to.
@@ -127,12 +129,7 @@ func (rl *RateLimiter) Limit(h http.Handler) http.Handler {
 		ip := rl.getIP(r)
 		if !rl.store.Allow(r.Context(), rl.key(ip), rl.rate, rl.capacity) {
 			RecordRateLimitExceeded(rl.group)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			// Best-effort: the client likely doesn't care about the body, and
-			// since we've already written the status, we have nothing to
-			// recover. Swallow silently if it fails.
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+			render.Error(w, fmt.Errorf("rate limit exceeded"), http.StatusTooManyRequests)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -154,9 +151,7 @@ func (rl *RateLimiter) LimitByKey(h http.Handler, keyFn func(*http.Request) stri
 		}
 		if !rl.store.Allow(r.Context(), key, rl.rate, rl.capacity) {
 			RecordRateLimitExceeded(rl.group)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate limit exceeded"})
+			render.Error(w, fmt.Errorf("rate limit exceeded"), http.StatusTooManyRequests)
 			return
 		}
 		h.ServeHTTP(w, r)

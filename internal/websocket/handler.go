@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,36 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+// writeError emits the API-standard error envelope ({code,message,requestId}).
+// Miniature local copy of api/render's Error (importing it would cycle:
+// api → websocket). Keep the field names in sync.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"requestId,omitempty"`
+	}{Code: codeFor(status), Message: msg})
+}
+
+func codeFor(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "UNAUTHORIZED"
+	case http.StatusForbidden:
+		return "FORBIDDEN"
+	case http.StatusBadRequest:
+		return "BAD_REQUEST"
+	case http.StatusNotFound:
+		return "NOT_FOUND"
+	case http.StatusServiceUnavailable:
+		return "SERVICE_UNAVAILABLE"
+	default:
+		return "ERROR"
+	}
+}
 
 var flowIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
@@ -68,7 +99,7 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if userID == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		// Per-user connection cap: enforced BEFORE the upgrade so a refused
@@ -77,18 +108,18 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 		// exhaust memory/goroutines for the whole process.
 		releaseConn, ok := hub.AcquireConn(userID)
 		if !ok {
-			http.Error(w, "Too many connections", http.StatusServiceUnavailable)
+			writeError(w, http.StatusServiceUnavailable, "too many connections")
 			return
 		}
 		defer releaseConn()
 
 		flowID := r.URL.Query().Get("flowId")
 		if flowID == "" {
-			http.Error(w, "flowId query parameter is required", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "flowId query parameter is required")
 			return
 		}
 		if !flowIDPattern.MatchString(flowID) {
-			http.Error(w, "invalid flowId format", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid flowId format")
 			return
 		}
 
@@ -97,10 +128,10 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 			case err == nil:
 				// allowed
 			case errors.Is(err, ErrFlowNotFound):
-				http.Error(w, "flow not found", http.StatusNotFound)
+				writeError(w, http.StatusNotFound, "flow not found")
 				return
 			case errors.Is(err, ErrAccessDenied):
-				http.Error(w, "forbidden", http.StatusForbidden)
+				writeError(w, http.StatusForbidden, "forbidden")
 				return
 			default:
 				slog.Error("websocket: flow access check failed", "flowId", flowID, "error", err)
