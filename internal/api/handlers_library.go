@@ -403,7 +403,7 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
 
-	if _, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID); err != nil {
+	if err := h.libSvc.CheckFlowAccessForUser(r.Context(), id, userID, "viewer"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -494,7 +494,7 @@ func (h *LibraryHandler) handleGetFlowVersion(w http.ResponseWriter, r *http.Req
 	id := chi.URLParam(r, "id")
 	userID := h.security.CallerID(r)
 
-	if _, err := h.libSvc.GetLibraryFlowForUser(r.Context(), id, userID); err != nil {
+	if err := h.libSvc.CheckFlowAccessForUser(r.Context(), id, userID, "viewer"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}

@@ -58,7 +58,7 @@ func (h *AnalysisHandler) handleListFindingStatuses(w http.ResponseWriter, r *ht
 	}
 
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "viewer"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -249,7 +249,7 @@ func (h *AnalysisHandler) handleBatchSetFindingStatus(w http.ResponseWriter, r *
 	}
 
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -304,7 +304,7 @@ func (h *AnalysisHandler) handleClearFindingStatus(w http.ResponseWriter, r *htt
 	}
 
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -337,7 +337,7 @@ func (h *AnalysisHandler) handleGetBaseline(w http.ResponseWriter, r *http.Reque
 	}
 
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "viewer"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -430,7 +430,7 @@ func (h *AnalysisHandler) handleClearBaseline(w http.ResponseWriter, r *http.Req
 	}
 
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}

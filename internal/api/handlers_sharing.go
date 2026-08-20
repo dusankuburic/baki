@@ -204,7 +204,7 @@ func (h *SharingHandler) handleCollaboratorRemove(w http.ResponseWriter, r *http
 	// response (corrupting it while the row is still deleted).
 	canManage := true
 	if h.security.JWTEnabled {
-		_, err := h.flowSvc.GetAuthorized(r.Context(), flowID, h.security.CallerID(r), "admin")
+		err := h.flowSvc.CheckFlowPermission(r.Context(), flowID, h.security.CallerID(r), "admin")
 		canManage = err == nil
 	}
 	if !canManage && h.security.CallerID(r) != userID {

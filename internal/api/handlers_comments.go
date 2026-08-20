@@ -45,7 +45,7 @@ func (h *AnalysisHandler) handleListComments(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "viewer"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -86,7 +86,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -213,7 +213,7 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -223,7 +223,7 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 	// second flow-authz resolve when moderating someone else's comment.
 	err := h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, userID)
 	if errors.Is(err, storageif.ErrNotCommentAuthor) {
-		if _, adminErr := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "admin"); adminErr == nil {
+		if adminErr := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "admin"); adminErr == nil {
 			err = h.backend.DeleteFindingComment(r.Context(), req.FlowID, req.CommentID, "")
 		}
 	}
@@ -256,7 +256,7 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -318,7 +318,7 @@ func (h *FlowHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 	// is need-to-know for owners/editors managing links, not for read-only
 	// collaborators. create/revoke already require editor — list must too, so a
 	// viewer can't enumerate active share links on a flow.
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}
@@ -354,7 +354,7 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	userID := h.security.CallerID(r)
-	if _, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "editor"); err != nil {
+	if err := h.flowSvc.CheckFlowPermission(r.Context(), req.FlowID, userID, "editor"); err != nil {
 		render.Error(w, err, 0)
 		return
 	}

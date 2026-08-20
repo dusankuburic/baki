@@ -61,12 +61,13 @@ func resolveFlow(w http.ResponseWriter, r *http.Request, flowSvc *service.FlowSe
 
 // requireFlowPerm verifies the caller has at least minPerm access to the flow,
 // writing the HTTP error itself. Like resolveFlow but for handlers that don't
-// need the document. Local mode (no JWT) always passes.
+// need the document. Header-only: no flow content is downloaded for the check.
+// Local mode (no JWT) always passes.
 func requireFlowPerm(w http.ResponseWriter, r *http.Request, flowSvc *service.FlowService, security *SecurityConfig, flowID, minPerm string) bool {
 	if !security.JWTEnabled {
 		return true
 	}
-	if _, err := flowSvc.GetAuthorized(r.Context(), flowID, security.CallerID(r), minPerm); err != nil {
+	if err := flowSvc.CheckFlowPermission(r.Context(), flowID, security.CallerID(r), minPerm); err != nil {
 		render.Error(w, err, 0)
 		return false
 	}

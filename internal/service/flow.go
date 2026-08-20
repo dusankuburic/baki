@@ -87,20 +87,41 @@ func (s *FlowService) patchMutexFor(path string) *sync.Mutex {
 
 // GetAuthorized loads a flow and verifies the user has at least minPerm access.
 // minPerm is "viewer", "editor", or "admin". All policy lives in AuthzService.
+//
+// The authz decision is made HEADER-FIRST (CheckFlowAccessByID reads only the
+// flow's owner/org metadata) and the document content is resolved only after
+// the check passes — a denied caller costs one indexed header query instead
+// of a full blob download + unmarshal + index rebuild.
 func (s *FlowService) GetAuthorized(ctx context.Context, flowID, userID, minPerm string) (*models.FlowDocument, error) {
 	if s.storage == nil { // Local mode
 		return s.docProvider.ResolveDoc(ctx, flowID)
+	}
+
+	if s.authz != nil {
+		if err := s.authz.CheckFlowAccessByID(ctx, flowID, userID, minPerm); err != nil {
+			return nil, err
+		}
 	}
 
 	doc, err := s.docProvider.ResolveDoc(ctx, flowID)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := s.authz.CheckFlowAccess(ctx, flowID, doc.OwnerID, doc.OrganizationID, userID, minPerm); err != nil {
-		return nil, err
-	}
 	return doc, nil
+}
+
+// CheckFlowPermission verifies access WITHOUT resolving the document content
+// — the authorization decision needs only the flow header (owner/org), so
+// perm-only handlers (triage, comments, sharing, versions) skip the blob
+// download + unmarshal + index rebuild entirely. Local mode always allows.
+func (s *FlowService) CheckFlowPermission(ctx context.Context, flowID, userID, minPerm string) error {
+	if s.storage == nil { // Local mode
+		return nil
+	}
+	if s.authz == nil {
+		return ErrPermissionDenied
+	}
+	return s.authz.CheckFlowAccessByID(ctx, flowID, userID, minPerm)
 }
 
 func (s *FlowService) DocProvider() DocumentProvider {

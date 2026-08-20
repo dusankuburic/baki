@@ -236,6 +236,19 @@ func (s *LibraryService) FlowHealth(ctx context.Context, flowID string) (h *stor
 	return s.storage.LoadFlowHealth(ctx, flowID)
 }
 
+// CheckFlowAccessForUser verifies the user's access to a flow WITHOUT loading
+// its content — perm-only endpoints (version list/get) skip the blob download
+// the full GetLibraryFlowForUser would pay just to discard the document.
+func (s *LibraryService) CheckFlowAccessForUser(ctx context.Context, flowID, userID, minPerm string) error {
+	if s.mode == config.ModeLocal || s.storage == nil {
+		return nil
+	}
+	if s.authz == nil {
+		return ErrPermissionDenied
+	}
+	return s.authz.CheckFlowAccessByID(ctx, flowID, userID, minPerm)
+}
+
 // GetLibraryFlow loads a single flow by ID without an access check.
 //
 // Deprecated: Use GetLibraryFlowForUser instead. This method bypasses all
