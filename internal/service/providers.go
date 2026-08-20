@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
@@ -10,16 +11,64 @@ import (
 	"pad-core/models"
 )
 
+// dynamicModelTTL bounds how long a CONFIGURED provider's live model list
+// (fetched from the provider's API) is reused. Provider catalogs change
+// rarely; without a cache, opening the settings panel twice fanned out an
+// upstream HTTP call per provider per request, and a slow upstream stalled
+// the response for up to the request timeout.
+const dynamicModelTTL = 10 * time.Minute
+
 // ProviderService manages AI provider configuration, authentication, and connectivity.
 type ProviderService struct {
 	auth        *ai.GitHubAuth
 	copilotAuth *ai.CopilotAuth
 	factory     *ai.ProviderFactory
 	secrets     KeyStore
+
+	modelMu    sync.Mutex
+	modelCache map[string]modelCacheEntry // key: scope + "\x00" + providerID
+}
+
+type modelCacheEntry struct {
+	models    []ai.ModelInfo
+	expiresAt time.Time
 }
 
 func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore) *ProviderService {
-	return &ProviderService{auth: auth, copilotAuth: copilotAuth, factory: factory, secrets: secrets}
+	return &ProviderService{
+		auth:        auth,
+		copilotAuth: copilotAuth,
+		factory:     factory,
+		secrets:     secrets,
+		modelCache:  make(map[string]modelCacheEntry),
+	}
+}
+
+// dynamicModels returns the configured provider's live model list, cached for
+// dynamicModelTTL per (scope, provider). Static metadata providers are cheap
+// (no network) and are NOT cached.
+func (s *ProviderService) dynamicModels(ctx context.Context, scope, providerID string) ([]ai.ModelInfo, bool) {
+	key := scope + "\x00" + providerID
+	s.modelMu.Lock()
+	if e, ok := s.modelCache[key]; ok && time.Now().Before(e.expiresAt) {
+		s.modelMu.Unlock()
+		return e.models, true
+	}
+	s.modelMu.Unlock()
+
+	realProvider, err := s.factory.For(scope, providerID)
+	if err != nil {
+		return nil, false
+	}
+	models, err := realProvider.Models(ctx)
+	if err != nil {
+		logger.Warn("list dynamic provider models", "provider", providerID, "error", err)
+		return nil, false
+	}
+	s.modelMu.Lock()
+	s.modelCache[key] = modelCacheEntry{models: models, expiresAt: time.Now().Add(dynamicModelTTL)}
+	s.modelMu.Unlock()
+	return models, true
 }
 
 func (s *ProviderService) ListProviders(ctx context.Context, scope string) (providers []models.ProviderInfo, err error) {
@@ -52,12 +101,8 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 			logger.Warn("list provider models", "provider", meta.ID, "error", mErr)
 		}
 		if configured {
-			if realProvider, err := s.factory.For(scope, meta.ID); err == nil {
-				if dynamicModels, err := realProvider.Models(ctx); err == nil {
-					modelInfos = dynamicModels
-				} else {
-					logger.Warn("list dynamic provider models", "provider", meta.ID, "error", err)
-				}
+			if dynamicModels, ok := s.dynamicModels(ctx, scope, meta.ID); ok {
+				modelInfos = dynamicModels
 			}
 		}
 

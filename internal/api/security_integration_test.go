@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,8 +21,8 @@ import (
 func TestEventManager_EmitTo_OnlyDeliversToTargetUser(t *testing.T) {
 	em := NewEventManager(make(chan struct{}))
 
-	ch1 := make(chan Event, 8)
-	ch2 := make(chan Event, 8)
+	ch1 := make(chan []byte, 8)
+	ch2 := make(chan []byte, 8)
 
 	em.clientsMu.Lock()
 	em.clients[ch1] = "user-alice"
@@ -32,9 +33,9 @@ func TestEventManager_EmitTo_OnlyDeliversToTargetUser(t *testing.T) {
 
 	// Alice should receive it
 	select {
-	case ev := <-ch1:
-		if ev.Name != "chat:event" {
-			t.Fatalf("alice: expected chat:event, got %s", ev.Name)
+	case frame := <-ch1:
+		if !strings.Contains(string(frame), "chat:event") {
+			t.Fatalf("alice: expected chat:event frame, got %s", frame)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("alice did not receive the event")
@@ -42,8 +43,8 @@ func TestEventManager_EmitTo_OnlyDeliversToTargetUser(t *testing.T) {
 
 	// Bob should NOT receive it
 	select {
-	case ev := <-ch2:
-		t.Fatalf("bob received event meant for alice: %+v", ev)
+	case frame := <-ch2:
+		t.Fatalf("bob received event meant for alice: %s", frame)
 	case <-time.After(50 * time.Millisecond):
 		// expected — bob's channel is empty
 	}
@@ -52,8 +53,8 @@ func TestEventManager_EmitTo_OnlyDeliversToTargetUser(t *testing.T) {
 func TestEventManager_Emit_BroadcastsToAll(t *testing.T) {
 	em := NewEventManager(make(chan struct{}))
 
-	ch1 := make(chan Event, 8)
-	ch2 := make(chan Event, 8)
+	ch1 := make(chan []byte, 8)
+	ch2 := make(chan []byte, 8)
 
 	em.clientsMu.Lock()
 	em.clients[ch1] = "user-alice"
@@ -62,7 +63,7 @@ func TestEventManager_Emit_BroadcastsToAll(t *testing.T) {
 
 	em.Emit("settings:changed", "global-update")
 
-	for i, ch := range []chan Event{ch1, ch2} {
+	for i, ch := range []chan []byte{ch1, ch2} {
 		select {
 		case <-ch:
 			// expected

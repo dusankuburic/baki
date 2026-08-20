@@ -31,7 +31,7 @@ const sseHeartbeatInterval = 20 * time.Second
 // EventManager manages Server-Sent Events (SSE) clients and implements
 // service.EventNotifier to allow internal services to emit events to the frontend.
 type EventManager struct {
-	clients      map[chan Event]string // channel → userID ("" in local mode)
+	clients      map[chan []byte]string // pre-encoded SSE frame channel → userID ("" in local mode)
 	clientsMu    sync.Mutex
 	sseConnCount map[string]int // per-client SSE connection counter (keyed by clientKey)
 	shutdownCh   <-chan struct{}
@@ -60,7 +60,7 @@ func (m *EventManager) heartbeatTick() time.Duration {
 
 func NewEventManager(shutdownCh chan struct{}) *EventManager {
 	return &EventManager{
-		clients:      make(map[chan Event]string),
+		clients:      make(map[chan []byte]string),
 		sseConnCount: make(map[string]int),
 		shutdownCh:   shutdownCh,
 	}
@@ -123,6 +123,18 @@ func (m *EventManager) HasSubscriber(userID string) bool {
 }
 
 func (m *EventManager) deliver(ev Event) {
+	// Encode the SSE frame ONCE for all recipients: the same event was
+	// previously marshaled independently per connected client, multiplying
+	// encode cost (and its allocations) by the number of live SSE tabs for
+	// every chat chunk / progress event.
+	data, err := json.Marshal(ev)
+	if err != nil {
+		logger.Warn("SSE: encode event failed; dropping", "event", ev.Name, "err", err)
+		return
+	}
+	frame := append(append(make([]byte, 0, len(data)+16), "data: "...), data...)
+	frame = append(frame, '\n', '\n')
+
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
 	for ch, clientUser := range m.clients {
@@ -131,7 +143,7 @@ func (m *EventManager) deliver(ev Event) {
 			continue
 		}
 		select {
-		case ch <- ev:
+		case ch <- frame:
 		default:
 			logger.Warn("SSE client dropped event: send buffer full", "event", ev.Name)
 		}
@@ -184,7 +196,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	// Big enough to absorb bursts (e.g. analysis progress storms) without
 	// letting a slow client pin megabytes of buffered events; Emit drops
 	// events for a client whose buffer is full.
-	ch := make(chan Event, 512)
+	ch := make(chan []byte, 512)
 	m.clients[ch] = userID
 	m.clientsMu.Unlock()
 
@@ -284,9 +296,10 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case ev := <-ch:
-			data, _ := json.Marshal(ev)
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		case frame := <-ch:
+			// Frame arrives pre-encoded by deliver (one encode per event, not
+			// one per client).
+			if _, err := w.Write(frame); err != nil {
 				// Half-dead socket: stop spinning so the goroutine + 512-slot
 				// channel don't linger until the next heartbeat notices.
 				return

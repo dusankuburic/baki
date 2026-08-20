@@ -246,7 +246,9 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 // check → resolve the owning user (so a deleted/role-changed user is reflected
 // immediately). Returns nil on any failure, which the caller maps to 401. The
 // owner's *current* role is used, so revoking a token (delete) or demoting the
-// user takes effect at once.
+// user takes effect at once — deliberately NOT cached: a TTL cache would
+// weaken this revocation-immediacy contract (TestAPIToken_RevokedRejected,
+// which deletes via storage directly, as retention purges also do).
 func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 	if rt.security.Backend == nil {
 		return nil
