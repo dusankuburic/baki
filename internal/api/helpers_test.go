@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"pad-analyzer/internal/ai"
@@ -101,7 +102,13 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 
 	demo := ai.NewDemoLimiter("")
 	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil, nil)
-	chatSvc := service.NewChatService(notifier, "", flowSvc, analysisSvc, settings, factory, demo, backend, config.ModeLocal)
+	// configDir: a real temp dir (not "") so the ChatService conversation store
+	// never writes into the source tree (internal/api/conversations pollution).
+	chatDir, dirErr := os.MkdirTemp("", "baki-test-conversations")
+	if dirErr != nil {
+		panic("test conversation dir: " + dirErr.Error())
+	}
+	chatSvc := service.NewChatService(notifier, chatDir, flowSvc, analysisSvc, settings, factory, demo, backend, config.ModeLocal)
 
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()

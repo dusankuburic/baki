@@ -198,7 +198,7 @@ func TestNoopResumeStore_IsDefault(t *testing.T) {
 }
 
 func TestSetResumeBackplane_NilKeepsDefault(t *testing.T) {
-	svc := NewChatService(nil, "", nil, nil, nil, nil, nil, nil, config.ModeLocal)
+	svc := NewChatService(nil, t.TempDir(), nil, nil, nil, nil, nil, nil, config.ModeLocal)
 	svc.SetResumeBackplane(nil) // PAD_REDIS_URL unset
 	if svc.resumeBackplane().enabled() {
 		t.Fatal("nil client must keep the single-replica no-op store")

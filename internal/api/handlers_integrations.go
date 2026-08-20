@@ -187,12 +187,10 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 	if format == "report" {
 		resp.Findings = report.Findings
 	}
-	code := http.StatusOK
-	if !passed {
-		code = http.StatusOK // still 200 — the gate verdict is in the body, not the status
-	}
+	// The CI gate verdict rides in the body (passed/reason), not the status —
+	// CI callers want the structured result even on a failed gate.
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 

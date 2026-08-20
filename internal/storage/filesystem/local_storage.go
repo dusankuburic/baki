@@ -500,7 +500,8 @@ func (lsb *LocalStorageBackend) DeleteConversation(ctx context.Context, flowID, 
 	return nil
 }
 
-// Ping checks if the storage backend is accessible
+// SaveUsageMetric is a no-op: the filesystem backend does not track AI usage
+// metrics (local mode has no multi-tenant accounting).
 func (b *LocalStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
 	// Local storage does not track usage metrics
 	return nil

@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"pad-analyzer/internal/api/render"
@@ -20,6 +22,19 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// decodeOptional decodes the request body into v when one is present; an
+// empty/absent body is not an error (all-zero request). Used by endpoints that
+// accept optional JSON payloads (triage filters, toggle flags).
+func decodeOptional(r io.Reader, v any) error {
+	if r == nil {
+		return nil
+	}
+	if err := json.NewDecoder(r).Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // resolveFlow loads a flow and verifies the caller has at least minPerm access.

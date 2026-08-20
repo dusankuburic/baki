@@ -2,10 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -855,14 +852,4 @@ func (h *AnalysisHandler) handleCompareFlows(w http.ResponseWriter, r *http.Requ
 
 	result := h.analysisSvc.CompareFlows(docA, docB)
 	render.JSON(w, result)
-}
-
-func decodeOptional(r io.Reader, v any) error {
-	if r == nil {
-		return nil
-	}
-	if err := json.NewDecoder(r).Decode(v); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
 }
