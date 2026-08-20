@@ -251,6 +251,12 @@ type RuleContext struct {
 	// once in the flow. Precomputed once so the duplicate-subflow-name rule
 	// does an O(1) lookup per subflow.
 	DuplicateSubflowNames map[string]bool
+	// DescendantCount maps a block ID to the number of non-End/non-Comment
+	// blocks in its subtree, excluding itself. Precomputed post-order in
+	// collectBlocks so wide-loop answers "how large is this loop body?" in
+	// O(1) instead of re-walking the subtree per LOOP block (O(n·depth) on
+	// nested-loop chains).
+	DescendantCount map[string]int
 
 	// Graph/metrics artifacts kept from buildContext so the report's metrics
 	// phase reuses them instead of rebuilding the call graph, its fan-in
@@ -296,6 +302,7 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 		BlockDepth:      make(map[string]int),
 		WritersByVar:    make(map[string][]string),
 		ReadersByVar:    make(map[string][]string),
+		DescendantCount: make(map[string]int),
 		sigCache:        make(map[string]string),
 		Settings:        settings,
 	}
@@ -484,6 +491,24 @@ func collectBlocks(ctx *RuleContext, blocks []models.Block, parentID string, sub
 		if len(b.Children) > 0 {
 			collectBlocks(ctx, b.Children, b.ID, subflowID, depth+1)
 		}
+	}
+
+	// Post-order descendant counts (children already processed): the number
+	// of non-End/non-Comment blocks in each block's subtree, excluding the
+	// block itself. wide-loop reads this instead of re-walking its subtree
+	// per LOOP block (which made nested-loop chains O(n·depth)).
+	subtree := 0
+	for i := range blocks {
+		b := &blocks[i]
+		if b.Type != models.BlockTypeEnd && b.Type != models.BlockTypeComment {
+			subtree++
+		}
+		subtree += ctx.DescendantCount[b.ID]
+	}
+	// Attribute to the parent whose child-group this is: parentID when
+	// nested, the subflow root has no parent to credit.
+	if parentID != "" {
+		ctx.DescendantCount[parentID] = subtree
 	}
 }
 

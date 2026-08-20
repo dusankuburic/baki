@@ -24,10 +24,12 @@ func (r *SlowPatternRule) Check(block *models.Block, ctx *RuleContext) []models.
 	hasUI := false
 	hasWait := false
 
-	walkBlockTree(block, func(b *models.Block) {
-		if b.ID == block.ID {
-			return
-		}
+	// Own-body semantics (walkLoopBody skips nested-loop subtrees): a WAIT
+	// inside a nested loop only paces that inner loop's iterations, not this
+	// loop's — and the nested loop's UI actions are reported on the nested
+	// loop itself when it lacks a wait. Previously each ancestor loop re-walk
+	// its full subtree, making deeply nested chains O(n·depth).
+	walkLoopBody(block, func(b *models.Block) {
 		if strings.HasPrefix(b.RawType, "WebAutomation.") || strings.HasPrefix(b.RawType, "UIAutomation.") {
 			hasUI = true
 		}

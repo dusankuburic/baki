@@ -30,16 +30,10 @@ func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		}
 	}
 
-	count := 0
-	walkBlockTree(block, func(b *models.Block) {
-		if b.ID == block.ID {
-			return
-		}
-		if b.Type == models.BlockTypeEnd || b.Type == models.BlockTypeComment {
-			return
-		}
-		count++
-	})
+	// O(1) subtree size from the precomputed DescendantCount index (the old
+	// per-LOOP subtree walk re-visited every nested loop's body once per
+	// ancestor, O(n·depth) on deep loop chains).
+	count := ctx.DescendantCount[block.ID]
 
 	if count <= maxBlocks {
 		return nil
