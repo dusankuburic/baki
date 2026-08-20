@@ -106,3 +106,91 @@ func BenchmarkSubflowRulesLarge(b *testing.B) {
 		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
 	}
 }
+
+// buildLabelHeavyFlow builds a flow of n LABEL blocks (names drawn from a
+// small pool so most are duplicated) plus filler actions — the shape that made
+// duplicate-label O(labels × blocks): every LABEL Check scanned AllBlocks and
+// ToLower'd each scanned block's name.
+func buildLabelHeavyFlow(labels, filler int) *models.FlowDocument {
+	total := labels + filler
+	blocks := make([]models.Block, 0, total)
+	line := 0
+	for i := range labels {
+		line++
+		b := makeBlock(fmt.Sprintf("lbl%d", i), fmt.Sprintf("Label%d", i%100), models.BlockTypeAction, "LABEL", 0)
+		b.SubflowID = "sf1"
+		b.LineNumber = line
+		b.Properties = map[string]string{"_target": fmt.Sprintf("Label%d", i%100)}
+		blocks = append(blocks, *b)
+	}
+	for i := range filler {
+		line++
+		b := makeBlock(fmt.Sprintf("act%d", i), fmt.Sprintf("Click %d", i), models.BlockTypeAction, "WebAutomation.Click.Click", 0)
+		b.SubflowID = "sf1"
+		b.LineNumber = line
+		blocks = append(blocks, *b)
+	}
+	return &models.FlowDocument{ID: "labels", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: blocks}}}
+}
+
+// BenchmarkDuplicateLabelLarge guards duplicate-label against re-introducing
+// its per-LABEL full-flow scan (O(labels × blocks) + an allocation per scanned
+// block via strings.ToLower).
+func BenchmarkDuplicateLabelLarge(b *testing.B) {
+	flow := buildLabelHeavyFlow(1000, 7000)
+	rules := AllRules()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
+	}
+}
+
+// buildNestedLoopFlow builds depth-deep nested LOOPs whose bodies hold UI
+// actions and (only in the innermost loop) a WAIT, with `perLevel` actions per
+// level — the shape that makes slow-pattern/wide-loop O(n × depth) when each
+// ancestor LOOP Check re-walks its entire subtree including nested loops.
+func buildNestedLoopFlow(depth, perLevel int) *models.FlowDocument {
+	line := 0
+	var build func(indent int) []models.Block
+	build = func(indent int) []models.Block {
+		line++
+		loop := makeBlock(fmt.Sprintf("loop-%d", indent), "Loop 1 to 10", models.BlockTypeLoop, "Loop.Loop", indent)
+		loop.SubflowID = "sf1"
+		loop.LineNumber = line
+		kids := make([]models.Block, 0, perLevel+1)
+		for i := range perLevel {
+			line++
+			a := makeBlock(fmt.Sprintf("act-%d-%d", indent, i), fmt.Sprintf("Click %d", i), models.BlockTypeAction, "WebAutomation.Click.Click", indent+1)
+			a.SubflowID = "sf1"
+			a.LineNumber = line
+			kids = append(kids, *a)
+		}
+		if indent+1 < depth {
+			// Recurse one level deeper; the nested loop's blocks become this
+			// loop's subtree too — exactly the double-walk shape.
+			kids = append(kids, build(indent+1)...)
+		} else {
+			line++
+			w := makeBlock("wait-inner", "Wait 1", models.BlockTypeAction, "WAIT", indent+1)
+			w.SubflowID = "sf1"
+			w.LineNumber = line
+			kids = append(kids, *w)
+		}
+		loop.Children = kids
+		return []models.Block{*loop}
+	}
+	return &models.FlowDocument{ID: "nested", Subflows: []models.Subflow{{ID: "sf1", Name: "Main", Blocks: build(0)}}}
+}
+
+// BenchmarkNestedLoops guards slow-pattern / wide-loop / deep-nesting against
+// re-introducing per-ancestor subtree re-walks (O(n × depth)).
+func BenchmarkNestedLoops(b *testing.B) {
+	flow := buildNestedLoopFlow(50, 8)
+	rules := AllRules()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = runAnalysisCore(context.Background(), flow, rules, nil, nil, false)
+	}
+}

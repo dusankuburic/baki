@@ -39,6 +39,8 @@ func TestPatchForFix(t *testing.T) {
 		{"append-output", "append-output", leaf, "", "", "", false, "append"},
 		{"mask-sensitive-variable", "mask-sensitive-variable", &models.Block{LineNumber: 1, Properties: map[string]string{"password": "secret"}}, "", "Password", "", false, "replace"},
 		{"insert-default", "insert-default", &models.Block{LineNumber: 1, Indent: 0}, "", "", "", false, "insert"},
+		{"upgrade-to-https", "upgrade-to-https", &models.Block{LineNumber: 1, Properties: map[string]string{"url": "http://example.com/api"}}, "", "", "url", false, "replace"},
+		{"sanitize-command-vars", "sanitize-command-vars", &models.Block{LineNumber: 1, Properties: map[string]string{"command": "echo %UserInput%"}}, "", "", "command", false, "replace"},
 		{"suppress", "suppress", leaf, "missing-timeout", "", "", false, "insert"},
 		{"unknown fixType errors", "bogus", leaf, "", "", "", true, ""},
 	}

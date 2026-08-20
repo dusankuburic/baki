@@ -23,7 +23,7 @@ go test ./... && go test -race ./core/analyzer/... ./internal/api/... ./internal
 ## Project Structure
 
 ```
-core/analyzer/     41 rules + 17 auto-fixers (16 distinct Patch ops + "suppress") + patch model (5 op kinds: insert/wrap/append/replace/remove)
+core/analyzer/     41 rules + 19 auto-fixers (18 distinct Patch fixers + "suppress") + patch model (5 op kinds: insert/wrap/append/replace/remove)
 core/parser/       PAD text format parser (tokenizer → classifier → parser)
 core/models/       Domain models (Block, Finding, Patch, AnalysisReport)
 core/export/       SARIF 2.1.0 + report serializers

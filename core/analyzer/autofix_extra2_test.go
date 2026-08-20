@@ -11,9 +11,11 @@ import (
 // TestAppendOutputPatch_PatchMechanics verifies the append-output patch
 // produces the correct append op. The uncaptured-output finding only fires
 // when Subflow.Variables is populated (cloud-stored flows with declared
-// variables), so a text-based round-trip isn't possible — but the patch
-// mechanics (append ` => %Output_Result%` to the CALL line) are testable
-// in isolation.
+// variables), so the full round-trip gate lives in
+// autofix_roundtrip_gaps_test.go (it parses a real CALL source and declares
+// the output variable on the parsed subflow). The output name must be BARE
+// (PAD output-capture syntax `=> VarName`, not `%VarName%`) or the parser
+// won't set _output and the fix won't resolve its finding.
 func TestAppendOutputPatch_PatchMechanics(t *testing.T) {
 	block := &models.Block{LineNumber: 2}
 	patch := AppendOutputPatch(block)
@@ -27,12 +29,15 @@ func TestAppendOutputPatch_PatchMechanics(t *testing.T) {
 		t.Errorf("StartLine = %d, want 2", patch.Ops[0].StartLine)
 	}
 	if len(patch.Ops[0].Lines) != 1 || !strings.Contains(patch.Ops[0].Lines[0], "Output_Result") {
-		t.Errorf("Lines = %v, expected => %%Output_Result%%", patch.Ops[0].Lines)
+		t.Errorf("Lines = %v, expected => Output_Result", patch.Ops[0].Lines)
+	}
+	if strings.Contains(patch.Ops[0].Lines[0], "%") {
+		t.Errorf("output capture must be bare (no %% delimiters): %v", patch.Ops[0].Lines)
 	}
 	// Verify the patch applies correctly
 	source := "line1\nCALL Helper\nline4"
 	patched := ApplyPatch(source, patch)
-	if !strings.Contains(patched, "CALL Helper => %Output_Result%") {
+	if !strings.Contains(patched, "CALL Helper => Output_Result") {
 		t.Errorf("expected output capture appended, got: %s", patched)
 	}
 }

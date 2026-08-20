@@ -585,17 +585,21 @@ func ParameterizeSqlPatch(block *models.Block, propKey string) models.Patch {
 	return models.Patch{Ops: ops}
 }
 
-// AppendOutputPatch builds a Patch that appends ` => %Output_Result%` to the
+// AppendOutputPatch builds a Patch that appends ` => Output_Result` to the
 // CALL block's source line, resolving the uncaptured-output pattern of
-// subflow-mismatch. After apply + re-parse, the _output property is set, so
-// capturesOutput → true and the finding no longer fires. The output variable
-// name is a placeholder the user renames to match the target subflow's actual
-// output variable.
+// subflow-mismatch. The output name must be BARE (no %…% delimiters): PAD's
+// output-capture syntax is `=> VariableName`, and the parser's output
+// extractor (reOutputVar: `=>\s*(\w+)\s*$`) only recognizes that form — a
+// percent-wrapped name would not set the _output property and the finding
+// would survive the fix (caught by the round-trip gate). After apply +
+// re-parse, _output is set, so capturesOutput → true and the finding no
+// longer fires. The variable name is a placeholder the user renames to match
+// the target subflow's actual output variable.
 func AppendOutputPatch(block *models.Block) models.Patch {
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:      "append",
 		StartLine: block.LineNumber,
-		Lines:     []string{" => %Output_Result%"},
+		Lines:     []string{" => Output_Result"},
 	}}}
 }
 
