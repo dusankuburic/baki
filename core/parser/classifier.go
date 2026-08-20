@@ -178,10 +178,14 @@ func ClassifyBlockType(rawType string) models.BlockType {
 		return bt
 	}
 
-	// 2. Case-insensitive fallback for exact keywords (handles "loop", "IF", etc.).
-	upper := strings.ToUpper(rawType)
-	if bt, ok := exactMap[upper]; ok {
-		return bt
+	// Dotted raw types (e.g. "Excel.Launch" — the majority of blocks) can
+	// never hit the exact-keyword map (no key contains '.'), so skip the
+	// allocating ToUpper copy for them and go straight to the prefix scan.
+	if !strings.Contains(rawType, ".") {
+		// 2. Case-insensitive fallback for exact keywords (handles "loop", "IF", etc.).
+		if bt, ok := exactMap[strings.ToUpper(rawType)]; ok {
+			return bt
+		}
 	}
 
 	// 3. Longest-prefix match — deterministic because prefixRules is sorted.

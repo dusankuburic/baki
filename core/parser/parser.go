@@ -797,7 +797,7 @@ func tokenizeVariables(text string) []models.BlockToken {
 			if isFunc {
 				continue
 			}
-			if !reExpressionKeyword.MatchString(vname) {
+			if !isExpressionKeyword(vname) {
 				target = vname
 				break
 			}

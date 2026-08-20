@@ -215,7 +215,7 @@ func extractVariables(raw string) []string {
 			}
 
 			// Skip logical operators and constants.
-			if reExpressionKeyword.MatchString(vname) {
+			if isExpressionKeyword(vname) {
 				continue
 			}
 			if !seen[vname] {

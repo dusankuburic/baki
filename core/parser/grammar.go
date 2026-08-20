@@ -43,8 +43,9 @@ var (
 	reStringLiteral = regexp.MustCompile(`\$?'''[\s\S]*?'''|'[^']*'|"[^"]*"`)
 	// Finds potential variable identifiers.
 	reIdentifier = regexp.MustCompile(`[A-Za-z_]\w*`)
-	// Keywords to ignore when extracting variables from expressions.
-	reExpressionKeyword = regexp.MustCompile(`(?i)^(AND|OR|NOT|TRUE|FALSE|NULL|BLANK)$`)
+	// Keywords to ignore when extracting variables from expressions —
+	// matched by isExpressionKeyword (a switch, kept in sync with this list
+	// for documentation).
 	// LOOP FOREACH Item IN List — captures the iteration variable name (group 1)
 	// and the collection reference (group 2 = full form, group 3 = bare name).
 	// The collection may appear as a bare name ("List") or percent-wrapped ("%List%").
@@ -65,6 +66,18 @@ var (
 	// EXIT LOOP — PAD's break statement (exit loop early).
 	reExitLoop = regexp.MustCompile(`(?i)^EXIT\s+LOOP$`)
 )
+
+// isExpressionKeyword reports whether an identifier is one of the expression
+// keywords (AND/OR/NOT/TRUE/FALSE/NULL/BLANK), case-insensitively — a
+// 7-case switch, an order of magnitude cheaper than the regex engine call it
+// replaced (invoked per identifier inside every %expr%).
+func isExpressionKeyword(vname string) bool {
+	switch strings.ToUpper(vname) {
+	case "AND", "OR", "NOT", "TRUE", "FALSE", "NULL", "BLANK":
+		return true
+	}
+	return false
+}
 
 // hasPrefixFold reports whether s starts with prefix, case-insensitively,
 // without allocating (unlike ToUpper+HasPrefix).

@@ -1,21 +1,21 @@
 package parser
 
 import (
-	"bufio"
 	"strings"
 )
 
 func computeIndent(line string) int {
 	n := 0
-	for _, ch := range line {
-		switch ch {
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
 		case ' ':
 			n++
 		case '\t':
 			n += 4
 		default:
-			// Stop at the first non-whitespace rune: indentation is leading
-			// whitespace only. (Must return, not break — a switch `break` would
+			// Stop at the first non-whitespace byte: indentation is leading
+			// whitespace only, and any non-ASCII byte is non-whitespace by
+			// definition. (Must return, not break — a switch `break` would
 			// only exit the switch and keep counting interior whitespace.)
 			return n
 		}
@@ -29,10 +29,6 @@ func Tokenize(text string) []Token {
 	}
 
 	tokens := make([]Token, 0, 512)
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	// Support lines up to 1MB
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
 
 	inBlockComment := false
 	commentStartLine := 0
@@ -43,10 +39,19 @@ func Tokenize(text string) []Token {
 	tripleStartLine := 0
 	var tripleRaw strings.Builder
 
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		raw := scanner.Text()
+	// Zero-copy line iteration: each raw line is a substring sharing text's
+	// backing array, replacing bufio.Scanner's per-line copy (Scanner.Text()
+	// allocates a fresh string per line) and the 64 KB scanner buffer. The
+	// tokenizer never mutates its output substrings and callers treat the
+	// returned tokens as read-only for the parse's lifetime.
+	lineNum := 1
+	for rest := text; rest != ""; lineNum++ {
+		var raw string
+		if idx := strings.IndexByte(rest, '\n'); idx >= 0 {
+			raw, rest = rest[:idx], rest[idx+1:]
+		} else {
+			raw, rest = rest, ""
+		}
 
 		if lineNum == 1 && strings.HasPrefix(raw, "\xEF\xBB\xBF") {
 			raw = raw[3:]
@@ -59,7 +64,7 @@ func Tokenize(text string) []Token {
 		if inBlockComment {
 			commentRaw.WriteString(raw)
 			commentRaw.WriteByte('\n')
-			if reBlockCommentEnd.MatchString(content) {
+			if strings.HasSuffix(content, "#/") {
 				inBlockComment = false
 				fullText := commentRaw.String()
 				tokens = append(tokens, Token{
@@ -107,21 +112,26 @@ func Tokenize(text string) []Token {
 			continue
 		}
 
-		// Single-line block comment: /#...#/ entirely on one line.
-		if reBlockComment.MatchString(content) && reBlockCommentEnd.MatchString(content) {
-			tokens = append(tokens, Token{
-				Kind:    TokComment,
-				Line:    lineNum,
-				Indent:  indent,
-				Raw:     raw,
-				Content: content,
-				Name:    strings.TrimSpace(content),
-				RawType: "COMMENT",
-			})
-			continue
-		}
+	// Single-line block comment: /#...#/ entirely on one line. The patterns
+	// are literal prefix/suffix tests (^/#, #/$) — HasPrefix/HasSuffix avoids
+	// regex-NFA setup per line, and the start test is computed once for both
+	// branches below.
+	blockStart := strings.HasPrefix(content, "/#")
+	blockEnd := strings.HasSuffix(content, "#/")
+	if blockStart && blockEnd {
+		tokens = append(tokens, Token{
+			Kind:    TokComment,
+			Line:    lineNum,
+			Indent:  indent,
+			Raw:     raw,
+			Content: content,
+			Name:    strings.TrimSpace(content),
+			RawType: "COMMENT",
+		})
+		continue
+	}
 
-		if reBlockComment.MatchString(content) && !reBlockCommentEnd.MatchString(content) {
+	if blockStart && !blockEnd {
 			inBlockComment = true
 			commentStartLine = lineNum
 			commentIndent = indent
@@ -150,16 +160,6 @@ func Tokenize(text string) []Token {
 		tokens = append(tokens, tok)
 	}
 
-	if err := scanner.Err(); err != nil {
-		tokens = append(tokens, Token{
-			Kind:    TokError,
-			Line:    lineNum + 1,
-			Raw:     err.Error(),
-			Content: err.Error(),
-			Name:    err.Error(),
-		})
-	}
-
 	return tokens
 }
 
@@ -183,21 +183,25 @@ func countTripleQuotes(line string) int {
 // between them), which is what makes this decomposition safe: it is pure code
 // movement, not a behavior change. A line matching nothing falls through to
 // the generic dotted-action classifier, then finally UNKNOWN.
+// classifiers is the ordered dispatch chain classifyLine walks. FIRST match
+// wins, so this order must not change. Package-level (not per-call) so the
+// function-value slice isn't rebuilt on every line.
+var classifiers = [...]func(tokenBase) (Token, bool){
+	classifyComment,
+	classifyRegion,
+	classifyBlockControl,
+	classifyErrorHandler,
+	classifyLoopStart,
+	classifyCondition,
+	classifyCallOrLabel,
+	classifyLoopControl,
+	classifyStatement,
+	classifyGenericAction,
+}
+
 func classifyLine(lineNum, indent int, raw, content string) Token {
 	base := tokenBase{lineNum: lineNum, indent: indent, raw: raw, content: content}
 
-	classifiers := []func(tokenBase) (Token, bool){
-		classifyComment,
-		classifyRegion,
-		classifyBlockControl,
-		classifyErrorHandler,
-		classifyLoopStart,
-		classifyCondition,
-		classifyCallOrLabel,
-		classifyLoopControl,
-		classifyStatement,
-		classifyGenericAction,
-	}
 	for _, classify := range classifiers {
 		if tok, ok := classify(base); ok {
 			return tok
@@ -258,7 +262,7 @@ func classifyComment(b tokenBase) (Token, bool) {
 		}, true
 	}
 
-	if reBlockCommentEnd.MatchString(content) && strings.HasPrefix(strings.TrimSpace(content), "#/") {
+	if strings.HasSuffix(content, "#/") && strings.HasPrefix(strings.TrimSpace(content), "#/") {
 		return Token{
 			Kind:    TokComment,
 			Line:    b.lineNum,
@@ -698,22 +702,27 @@ func extractActionName(moduleAction, params string) string {
 	return moduleAction
 }
 
+// splitCamelCase inserts spaces at camel-case transitions (getText →
+// "Get Text", HTTPServer → "HTTP Server"). Byte-wise: action names are ASCII
+// CamelCase, and a single pass into a pre-grown builder replaces the
+// rune-slice + append-growth + conversion (3 allocations).
 func splitCamelCase(s string) string {
-	var result []rune
-	runes := []rune(s)
-	n := len(runes)
-	for i, r := range runes {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			prev := runes[i-1]
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	n := len(s)
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if i > 0 && c >= 'A' && c <= 'Z' {
+			prev := s[i-1]
 			// Transition: lowercase→Uppercase (getText → Get Text)
 			if prev >= 'a' && prev <= 'z' {
-				result = append(result, ' ')
-			} else if prev >= 'A' && prev <= 'Z' && i+1 < n && runes[i+1] >= 'a' && runes[i+1] <= 'z' {
+				b.WriteByte(' ')
+			} else if prev >= 'A' && prev <= 'Z' && i+1 < n && s[i+1] >= 'a' && s[i+1] <= 'z' {
 				// Transition: end of acronym (HTTPServer → HTTP Server)
-				result = append(result, ' ')
+				b.WriteByte(' ')
 			}
 		}
-		result = append(result, r)
+		b.WriteByte(c)
 	}
-	return string(result)
+	return b.String()
 }
