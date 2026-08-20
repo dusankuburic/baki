@@ -201,6 +201,12 @@ type RuleContext struct {
 	// LABEL block. Precomputed so the goto-antipattern rule resolves a jump
 	// target in O(1) instead of scanning every block per GOTO (was O(gotos·blocks)).
 	LabelByName map[string]*models.Block
+	// LabelNameCount counts LABEL blocks per lowercased name, filled in the
+	// same pass as LabelByName. Precomputed so duplicate-label answers "how
+	// many share this name?" in O(1) instead of rescanning AllBlocks per
+	// LABEL block (which made the rule O(labels·blocks) + one ToLower
+	// allocation per scanned block).
+	LabelNameCount map[string]int
 	// ClosedResourceVars maps a resource "close" action prefix to the set of
 	// variables referenced by any block performing that close. Precomputed so the
 	// resource-leak rule checks "is this handle closed anywhere?" in O(1) instead
@@ -314,6 +320,7 @@ func buildContext(flow *models.FlowDocument, settings *models.AppSettings) *Rule
 
 	// Rule-specific lookups, each built in one O(blocks) pass to replace a
 	// per-block full scan inside the corresponding rule (see field docs).
+	ctx.LabelNameCount = make(map[string]int)
 	ctx.LabelByName = buildLabelIndex(ctx)
 	ctx.ClosedResourceVars = buildClosedResourceVars(ctx)
 

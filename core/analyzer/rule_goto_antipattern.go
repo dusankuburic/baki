@@ -93,6 +93,10 @@ func buildLabelIndex(ctx *RuleContext) map[string]*models.Block {
 			if _, ok := idx[key]; !ok {
 				idx[key] = b
 			}
+			// Count per (lowercased) name in the same pass — duplicate-label
+			// reads this instead of re-scanning AllBlocks per LABEL block
+			// (which made the rule O(labels × blocks)).
+			ctx.LabelNameCount[key]++
 		}
 	})
 	return idx

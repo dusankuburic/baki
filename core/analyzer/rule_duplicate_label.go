@@ -25,15 +25,12 @@ func (r *DuplicateLabelRule) Check(block *models.Block, ctx *RuleContext) []mode
 		return nil
 	}
 
-	// Count LABEL blocks sharing this name (case-insensitive via strings.ToLower,
-	// matching the goto-antipattern resolver and buildLabelIndex exactly).
+	// Count LABEL blocks sharing this name (case-insensitive, matching the
+	// goto-antipattern resolver and buildLabelIndex exactly) from the
+	// precomputed LabelNameCount index — previously this rescanned
+	// ctx.AllBlocks per LABEL block (O(labels × blocks)).
 	lower := strings.ToLower(labelName)
-	count := 0
-	for _, b := range ctx.AllBlocks {
-		if b.RawType == "LABEL" && strings.ToLower(b.Name) == lower {
-			count++
-		}
-	}
+	count := ctx.LabelNameCount[lower]
 	if count <= 1 {
 		return nil
 	}
