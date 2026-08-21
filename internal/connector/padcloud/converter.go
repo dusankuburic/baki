@@ -126,9 +126,9 @@ func (c *CloudConverter) Convert(name string, def json.RawMessage) (*models.Flow
 		blocks  int
 		maxDpt  int
 	)
-	for _, a := range topActions {
+	for i := range topActions {
 		depth := 1
-		blk := c.toBlock(a, subflowID, "", 1, &lineNum, &blocks, &depth)
+		blk := c.toBlock(&topActions[i], subflowID, "", 1, &lineNum, &blocks, &depth)
 		if depth > maxDpt {
 			maxDpt = depth
 		}
@@ -151,8 +151,9 @@ func (c *CloudConverter) Convert(name string, def json.RawMessage) (*models.Flow
 
 // toBlock converts one cloud action node (recursively) into a models.Block. The
 // depth/line/block counters are threaded through so synthesized indent/line
-// numbers and metadata reflect the tree shape.
-func (c *CloudConverter) toBlock(a cloudAction, subflowID, parentID string, depth int, line, blockCount, maxDepth *int) models.Block {
+// numbers and metadata reflect the tree shape. `a` is a pointer: cloudAction is
+// ~200 bytes and the value copy was pure overhead on every node of every flow.
+func (c *CloudConverter) toBlock(a *cloudAction, subflowID, parentID string, depth int, line, blockCount, maxDepth *int) models.Block {
 	*blockCount++
 	*line++
 	if depth > *maxDepth {
@@ -187,8 +188,13 @@ func (c *CloudConverter) toBlock(a cloudAction, subflowID, parentID string, dept
 	// recover in Ingester.Ingest, a hostile definition is recorded as a failure
 	// rather than taking down ingestion for the whole tenant.
 	if depth < maxConvertDepth {
-		for _, child := range mergeChildren(a.Actions, a.Rpa, a.Nested, a.Sub, a.Kids) {
-			blk.Children = append(blk.Children, c.toBlock(child, subflowID, blk.ID, depth+1, line, blockCount, maxDepth))
+		if kids := mergeChildren(a.Actions, a.Rpa, a.Nested, a.Sub, a.Kids); kids != nil {
+			// Pre-size the child slice: the append-growth reallocation copied
+			// every accumulated child (~224 B each) on each growth step.
+			blk.Children = make([]models.Block, 0, len(kids))
+			for i := range kids {
+				blk.Children = append(blk.Children, c.toBlock(&kids[i], subflowID, blk.ID, depth+1, line, blockCount, maxDepth))
+			}
 		}
 	}
 	return blk
@@ -196,7 +202,7 @@ func (c *CloudConverter) toBlock(a cloudAction, subflowID, parentID string, dept
 
 // actionType resolves the action's module-qualified type string from the
 // candidate keys PAD's schema uses across versions.
-func actionType(a cloudAction) string {
+func actionType(a *cloudAction) string {
 	for _, v := range []string{a.Type, a.TypeName, a.Kind} {
 		if v != "" {
 			return v

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"pad-core/logger"
@@ -90,9 +91,18 @@ func NewIngester(client Client, converter Converter, store Store) *Ingester {
 	return &Ingester{client: client, converter: converter, store: store}
 }
 
+// ingestWorkers bounds the concurrent fetch→convert→store pipelines. Dataverse
+// throttles aggressively (429s; the client honors Retry-After), so a modest
+// pool converts latency-bound sequential I/O into a ~6× throughput gain
+// without tripping throttle walls. A large tenant's sweep previously could
+// not finish inside sweepTimeout.
+const ingestWorkers = 6
+
 // Ingest runs one full pass. A failure on a single flow (fetch/convert/store)
 // is recorded and the batch continues — so one malformed flow doesn't block the
-// rest of the environment. Returns an error only if listing itself fails.
+// rest of the environment. Flows are processed by a bounded worker pool (the
+// per-flow pipelines are independent; the incremental-skip pre-pass is serial
+// and cheap). Returns an error only if listing itself fails.
 func (i *Ingester) Ingest(ctx context.Context) (IngestResult, error) {
 	var res IngestResult
 
@@ -105,56 +115,123 @@ func (i *Ingester) Ingest(ctx context.Context) (IngestResult, error) {
 		i.lastModified = make(map[string]time.Time)
 	}
 
+	// Incremental-sync pre-pass (no network): pick the flows needing a fetch.
+	pending := make([]DesktopFlowRef, 0, len(flows))
 	for _, f := range flows {
-		if ctx.Err() != nil {
-			return res, ctx.Err()
-		}
-		// Incremental sync: skip flows whose Modified timestamp hasn't changed
-		// since the last sweep. Saves a GetFlowDefinition API call per
-		// unchanged flow (the bulk of a steady-state sweep). The first sweep
-		// (empty map) fetches all; subsequent sweeps skip unchanged ones.
+		// Skip flows whose Modified timestamp hasn't changed since the last
+		// sweep — saves a GetFlowDefinition call per unchanged flow (the bulk
+		// of a steady-state sweep). First sweep (empty map) fetches all.
 		if prev, ok := i.lastModified[f.ID]; ok && !f.Modified.IsZero() && f.Modified.Equal(prev) {
 			res.Skipped++
 			continue
 		}
+		pending = append(pending, f)
+	}
 
+	// Shared state under one mutex: the result counters, the error list, and
+	// the lastModified map (updated only on success, so a failed flow retries
+	// next sweep).
+	var mu sync.Mutex
+	record := func(fn func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		fn()
+	}
+
+	ingestOne := func(f DesktopFlowRef) {
 		// Per-flow recover: a panic in fetch/convert/store (a nil-deref in the
-		// cloud-format bridge, an unbounded-recursion stack overflow on a hostile
-		// definition, a pgvector decode bug) is recorded as a failure and the
-		// batch continues — so one malformed/hostile flow doesn't abort the whole
-		// sweep (which runSweep's top-level recover would only catch after the
-		// entire Ingest call had unwound, skipping every remaining flow).
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
+		// cloud-format bridge, an unbounded-recursion stack overflow on a
+		// hostile definition, a pgvector decode bug) is recorded as a failure
+		// and the batch continues — so one malformed/hostile flow doesn't
+		// abort the whole sweep.
+		defer func() {
+			if r := recover(); r != nil {
+				record(func() {
 					res.Failed++
 					res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): panic: %v", f.Name, f.ID, r))
-				}
-			}()
-			def, err := i.client.GetFlowDefinition(ctx, f.ID)
-			if err != nil {
+				})
+			}
+		}()
+		def, err := i.client.GetFlowDefinition(ctx, f.ID)
+		if err != nil {
+			record(func() {
 				res.Failed++
 				res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): fetch definition: %v", f.Name, f.ID, err))
-				return
-			}
-			doc, err := i.converter.Convert(f.Name, def)
-			if err != nil {
+			})
+			return
+		}
+		doc, err := i.converter.Convert(f.Name, def)
+		if err != nil {
+			record(func() {
 				res.Failed++
 				res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): convert: %v", f.Name, f.ID, err))
-				return
-			}
-			if doc == nil {
-				res.Skipped++
-				return
-			}
-			if err := i.store.UpsertFlow(ctx, doc, f.ID); err != nil {
+			})
+			return
+		}
+		if doc == nil {
+			record(func() { res.Skipped++ })
+			return
+		}
+		if err := i.store.UpsertFlow(ctx, doc, f.ID); err != nil {
+			record(func() {
 				res.Failed++
 				res.Errors = append(res.Errors, fmt.Sprintf("%s (%s): store: %v", f.Name, f.ID, err))
-				return
-			}
+			})
+			return
+		}
+		record(func() {
 			i.lastModified[f.ID] = f.Modified
 			res.Ingested++
-		}()
+		})
+	}
+
+	workers := ingestWorkers
+	if workers > len(pending) {
+		workers = len(pending)
+	}
+	if workers <= 1 {
+		for _, f := range pending {
+			if ctx.Err() != nil {
+				break
+			}
+			ingestOne(f)
+		}
+	} else {
+		idx := make(chan int)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for n := range idx {
+					if ctx.Err() != nil {
+						continue // drain without starting new work
+					}
+					ingestOne(pending[n])
+				}
+			}()
+		}
+		for n := range pending {
+			idx <- n
+		}
+		close(idx)
+		wg.Wait()
+	}
+	if err := ctx.Err(); err != nil {
+		return res, err
+	}
+
+	// Prune incremental-sync entries for flows the environment no longer
+	// returns — without this the map grew unboundedly over the process
+	// lifetime as flows were deleted/renamed upstream.
+	if len(i.lastModified) > len(flows) {
+		live := make(map[string]time.Time, len(flows))
+		for _, f := range flows {
+			if prev, ok := i.lastModified[f.ID]; ok {
+				live[f.ID] = prev
+			}
+		}
+		i.lastModified = live
 	}
 
 	logger.Info("padcloud ingest complete",
