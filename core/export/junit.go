@@ -1,9 +1,9 @@
 package export
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
-	"strings"
 	"time"
 
 	"pad-core/models"
@@ -66,13 +66,16 @@ func ReportToJUnit(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 		Suites: []junitTestsuite{suite},
 	}
 
-	var buf strings.Builder
+	// Encode straight into a bytes.Buffer: the previous strings.Builder →
+	// []byte(buf.String()) conversion copied the entire rendered document a
+	// second time (an extra multi-MB allocation at peak for 10k-finding reports).
+	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
 	enc := xml.NewEncoder(&buf)
 	if err := enc.Encode(root); err != nil {
 		return nil, fmt.Errorf("JUnit XML encode: %w", err)
 	}
-	return []byte(buf.String()), nil
+	return buf.Bytes(), nil
 }
 
 // JUnit XML types (using xml names to match the standard format).

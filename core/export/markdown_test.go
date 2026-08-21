@@ -153,17 +153,15 @@ func TestFilterBySeverity(t *testing.T) {
 		{Severity: models.SeverityError},
 		{Severity: models.SeverityInfo},
 	}
-	errors := filterBySeverity(findings, models.SeverityError)
-	if len(errors) != 2 {
-		t.Errorf("expected 2 errors, got %d", len(errors))
+	grouped := groupFindingsBySeverity(findings)
+	if got := len(grouped[models.SeverityError]); got != 2 {
+		t.Errorf("expected 2 errors, got %d", got)
 	}
-	warnings := filterBySeverity(findings, models.SeverityWarning)
-	if len(warnings) != 1 {
-		t.Errorf("expected 1 warning, got %d", len(warnings))
+	if got := len(grouped[models.SeverityWarning]); got != 1 {
+		t.Errorf("expected 1 warning, got %d", got)
 	}
-	infos := filterBySeverity(findings, models.SeverityInfo)
-	if len(infos) != 1 {
-		t.Errorf("expected 1 info, got %d", len(infos))
+	if got := len(grouped[models.SeverityInfo]); got != 1 {
+		t.Errorf("expected 1 info, got %d", got)
 	}
 }
 

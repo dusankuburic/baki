@@ -81,17 +81,19 @@ func ReportToPDF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 	pdf.Ln(10)
 
 	severityOrder := []models.Severity{models.SeverityError, models.SeverityWarning, models.SeverityInfo}
+	grouped := groupFindingsBySeverity(report.Findings)
 	for _, sev := range severityOrder {
-		findings := filterBySeverity(report.Findings, sev)
-		if len(findings) == 0 {
+		idxs := grouped[sev]
+		if len(idxs) == 0 {
 			continue
 		}
 
 		pdf.SetFont(pdfFontFamily, "B", 12)
-		pdf.Cell(0, 7, fmt.Sprintf("%s (%d)", severityTitle(sev), len(findings)))
+		pdf.Cell(0, 7, fmt.Sprintf("%s (%d)", severityTitle(sev), len(idxs)))
 		pdf.Ln(8)
 
-		for i, f := range findings {
+		for i, fi := range idxs {
+			f := &report.Findings[fi]
 			if pdf.GetY() > 260 {
 				pdf.AddPage()
 			}

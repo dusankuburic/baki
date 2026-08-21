@@ -121,14 +121,16 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
 	}
 
 	severityOrder := []models.Severity{models.SeverityError, models.SeverityWarning, models.SeverityInfo}
+	grouped := groupFindingsBySeverity(report.Findings)
 	for _, sev := range severityOrder {
-		findings := filterBySeverity(report.Findings, sev)
-		if len(findings) == 0 {
+		idxs := grouped[sev]
+		if len(idxs) == 0 {
 			continue
 		}
 		badgeClass := severityClass(sev)
-		fmt.Fprintf(&sb, "<h2>%s <span class=\"badge %s\">%d</span></h2>\n", esc(severityTitle(sev)), badgeClass, len(findings))
-		for _, f := range findings {
+		fmt.Fprintf(&sb, "<h2>%s <span class=\"badge %s\">%d</span></h2>\n", esc(severityTitle(sev)), badgeClass, len(idxs))
+		for _, fi := range idxs {
+			f := &report.Findings[fi]
 			fmt.Fprintf(&sb, "<div class=\"finding %s\">\n<h3>%s</h3>\n", badgeClass, esc(f.Title))
 			fmt.Fprintf(&sb, "<div><span class=\"badge %s\">%s</span></div>\n", badgeClass, esc(string(f.Severity)))
 			sb.WriteString("<div class=\"props\">")

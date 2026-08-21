@@ -46,15 +46,17 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 	}
 
 	severityOrder := []models.Severity{models.SeverityError, models.SeverityWarning, models.SeverityInfo}
+	grouped := groupFindingsBySeverity(report.Findings)
 	for _, sev := range severityOrder {
-		findings := filterBySeverity(report.Findings, sev)
-		if len(findings) == 0 {
+		idxs := grouped[sev]
+		if len(idxs) == 0 {
 			continue
 		}
 
-		fmt.Fprintf(&sb, "## %s (%d)\n\n", severityTitle(sev), len(findings))
+		fmt.Fprintf(&sb, "## %s (%d)\n\n", severityTitle(sev), len(idxs))
 
-		for i, f := range findings {
+		for i, fi := range idxs {
+			f := &report.Findings[fi]
 			fmt.Fprintf(&sb, "### %d. %s\n\n", i+1, f.Title)
 			fmt.Fprintf(&sb, "- **Rule:** `%s`\n", f.RuleID)
 			fmt.Fprintf(&sb, "- **Severity:** %s\n", f.Severity)
@@ -73,14 +75,16 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 	return sb.String()
 }
 
-func filterBySeverity(findings []models.Finding, sev models.Severity) []models.Finding {
-	var result []models.Finding
-	for _, f := range findings {
-		if f.Severity == sev {
-			result = append(result, f)
-		}
+// groupFindingsBySeverity buckets findings by severity in ONE pass (index
+// slices — no Finding copies). Previously every renderer ran
+// filterBySeverity once per tier: three full passes, each copying every
+// matched ~200-byte Finding into a fresh slice.
+func groupFindingsBySeverity(findings []models.Finding) map[models.Severity][]int {
+	grouped := make(map[models.Severity][]int, 3)
+	for i := range findings {
+		grouped[findings[i].Severity] = append(grouped[findings[i].Severity], i)
 	}
-	return result
+	return grouped
 }
 
 func severityTitle(sev models.Severity) string {
