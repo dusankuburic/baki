@@ -179,11 +179,12 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
             {gi > 0 && (
               <PaneDivider
                 onDrag={delta => editor.handleColumnDrag(gi - 1, delta)}
-                onResizeEnd={() => {}}
+                onResizeEnd={() => editor.handleColumnResizeEnd()}
                 onDoubleClick={editor.handleResetDivider}
               />
             )}
             <div
+              ref={editor.registerGroup(gi)}
               className={`flex flex-col overflow-hidden ${gi === focusedGroupIndex ? '' : 'opacity-90'}`}
               style={{flex: `${widths[gi]} 0 0`, minWidth: 200}}
               onMouseDown={() => {

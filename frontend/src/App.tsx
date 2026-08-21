@@ -181,6 +181,7 @@ function AppInner() {
           {isDesktop && !sidebarCollapsed && (
             <>
               <div
+                ref={pane.sidebarRef}
                 className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden"
                 style={{width: pane.sidebarWidth}}
                 role="navigation"
@@ -216,6 +217,7 @@ function AppInner() {
                 onDoubleClick={pane.handleInspectorReset}
               />
               <div
+                ref={pane.inspectorRef}
                 className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden"
                 style={{width: pane.inspectorWidth}}
                 role="complementary"
