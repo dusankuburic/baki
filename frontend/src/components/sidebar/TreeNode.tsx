@@ -24,8 +24,12 @@ type TreeNodeProps = {
   isSelected: boolean
   isExpanded: boolean
   isViewportVisible?: boolean
-  onSelect: () => void
-  onToggleExpand: () => void
+  // Row-carrying callbacks: FlowTree passes ONE stable handler per concern;
+  // per-row closures would change identity every render and defeat this
+  // component's React.memo (each of the ~30-40 visible rows re-rendering on
+  // every scroll event).
+  onSelect: (row: TreeRow) => void
+  onToggleExpand: (row: TreeRow) => void
   searchHighlight?: string
   highlights?: Highlight[]
   isSearchMatch?: boolean
@@ -113,11 +117,11 @@ function TreeNode({
       if (row.hasChildren || row.kind === 'subflow') {
         const target = e.target as HTMLElement
         if (chevronRef.current?.contains(target)) {
-          onToggleExpand()
+          onToggleExpand(row)
           return
         }
       }
-      onSelect()
+      onSelect(row)
     },
     [row, onSelect, onToggleExpand],
   )

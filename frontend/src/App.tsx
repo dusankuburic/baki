@@ -12,7 +12,7 @@ const CommandPalette = lazy(() => import('./components/search/CommandPalette'))
 const GlobalSearchOverlay = lazy(() => import('./components/search/GlobalSearchOverlay'))
 
 const SettingsModal = lazy(() => import('./components/settings/SettingsModal'))
-import {useUIStore, isSystemView} from './stores/uiStore'
+import {useUIStore, isSystemView, type MainPaneView} from './stores/uiStore'
 import {useSystemStore} from './stores/systemStore'
 import {logger} from './lib/logger'
 import {useAuthStore} from './stores/authStore'
@@ -61,8 +61,13 @@ function AppInner() {
   const {t} = useTranslation('shell')
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const setDocument = useFlowStore(s => s.setDocument)
-  const document = useFlowStore(s => s.document)
-  const user = useAuthStore(s => s.user)
+  // Subscribe to the document ID only: the shell's effects (recents refetch,
+  // presence connect) key on identity, and subscribing to the whole document
+  // object re-rendered the ENTIRE unmemoized shell on every remote-collab
+  // save, apply-fix, and reparse — a new object each time. The document
+  // itself is consumed inside CommandPaletteContainer (and the panes that
+  // actually render it).
+  const documentId = useFlowStore(s => s.document?.id ?? null)
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const requestSearchFocus = useSearchStore(s => s.requestFocus)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
@@ -78,7 +83,6 @@ function AppInner() {
   const settingsLoaded = useSettingsStore(s => s.isLoaded)
   const [welcomeDismissed, setWelcomeDismissed] = useState(false)
   const showWelcome = settingsLoaded && !firstRunCompleted && !welcomeDismissed
-  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
 
   const openDocument = useCallback(
     (doc: DomainFlowDocument | null) => {
@@ -95,22 +99,6 @@ function AppInner() {
     void useSystemStore.getState().loadInfo()
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    flowApi
-      .recentFiles()
-      .then((files: RecentFile[]) => {
-        if (!cancelled && files) setRecentFiles(files)
-      })
-      .catch(err => {
-        if (!cancelled) logger.warn('Failed to load recent files', err)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [document?.id])
-
-  const documentId = document?.id ?? null
   useEffect(() => {
     if (isTauri() || !documentId) return
     void usePresenceStore.getState().connectToFlow(documentId)
@@ -144,20 +132,6 @@ function AppInner() {
   const {dragOver, handleDragOver, handleDragLeave, handleDrop} = useFileDrop(openDocument)
 
   useAppShortcuts({openDocument, toggleTheme, toast, setShortcutsHelpOpen})
-
-  const commands = useCommandList({
-    openDocument,
-    toggleSidebar,
-    toggleInspector,
-    toggleSettings,
-    setMainPaneView,
-    requestSearchFocus,
-    recentFiles,
-    sidebarCollapsed,
-    document,
-    user,
-    toast,
-  })
 
   return (
     <>
@@ -257,7 +231,18 @@ function AppInner() {
       <ErrorBoundary>
         <Suspense fallback={null}>
           {commandPaletteOpen && (
-            <CommandPalette isOpen onClose={() => setCommandPaletteOpen(false)} commands={commands} />
+            <CommandPaletteContainer
+              isOpen
+              onClose={() => setCommandPaletteOpen(false)}
+              openDocument={openDocument}
+              toggleSidebar={toggleSidebar}
+              toggleInspector={toggleInspector}
+              toggleSettings={toggleSettings}
+              setMainPaneView={setMainPaneView}
+              requestSearchFocus={requestSearchFocus}
+              sidebarCollapsed={sidebarCollapsed}
+              toast={toast}
+            />
           )}
         </Suspense>
       </ErrorBoundary>
@@ -285,6 +270,73 @@ function AppInner() {
       </ErrorBoundary>
     </>
   )
+}
+
+/**
+ * CommandPaletteContainer owns the shell's document-object subscription.
+ * AppInner deliberately subscribes only to `document?.id` (its effects key on
+ * identity); the full document — replaced on every collaborator save,
+ * apply-fix, and reparse — is read HERE, inside a component whose render is
+ * just the palette (nothing when closed). Previously that subscription lived
+ * in AppInner and re-rendered the whole unmemoized shell per document swap.
+ */
+function CommandPaletteContainer({
+  isOpen,
+  onClose,
+  openDocument,
+  toggleSidebar,
+  toggleInspector,
+  toggleSettings,
+  setMainPaneView,
+  requestSearchFocus,
+  sidebarCollapsed,
+  toast,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  openDocument: (doc: DomainFlowDocument | null) => void
+  toggleSidebar: () => void
+  toggleInspector: () => void
+  toggleSettings: () => void
+  setMainPaneView: (view: MainPaneView) => void
+  requestSearchFocus: () => void
+  sidebarCollapsed: boolean
+  toast: ReturnType<typeof useToast>
+}) {
+  const document = useFlowStore(s => s.document)
+  const user = useAuthStore(s => s.user)
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    flowApi
+      .recentFiles()
+      .then((files: RecentFile[]) => {
+        if (!cancelled && files) setRecentFiles(files)
+      })
+      .catch(err => {
+        if (!cancelled) logger.warn('Failed to load recent files', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [document?.id])
+
+  const commands = useCommandList({
+    openDocument,
+    toggleSidebar,
+    toggleInspector,
+    toggleSettings,
+    setMainPaneView,
+    requestSearchFocus,
+    recentFiles,
+    sidebarCollapsed,
+    document,
+    user,
+    toast,
+  })
+
+  return <CommandPalette isOpen={isOpen} onClose={onClose} commands={commands} />
 }
 
 export default function App() {

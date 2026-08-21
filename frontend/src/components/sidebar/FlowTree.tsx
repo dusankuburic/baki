@@ -48,11 +48,16 @@ export default function FlowTree({
   const [viewportHeight, setViewportHeight] = useState(600)
   const [focusedIndex, setFocusedIndex] = useState(-1)
   const [ctxMenu, setCtxMenu] = useState<{row: TreeRow; x: number; y: number} | null>(null)
+  const scrollRafRef = useRef<number | null>(null)
 
   const rows = useMemo(
     () => flattenTreeRows(document, {expandedSubflowIds, expandedBlockIds, visibleTypes, searchQuery, matchedBlockIds}),
     [document, expandedSubflowIds, expandedBlockIds, visibleTypes, searchQuery, matchedBlockIds],
   )
+  // rows snapshot for the stable select handler (focus-index lookup without
+  // re-creating the callback when rows change).
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
 
   useEffect(() => {
     const el = containerRef.current
@@ -90,10 +95,58 @@ export default function FlowTree({
   const visibleRows = rows.slice(startIndex, endIndex)
 
   const handleScroll = useCallback(() => {
-    if (containerRef.current) {
-      setScrollTop(containerRef.current.scrollTop)
-    }
+    // rAF-coalesced: scroll events fire at frame+ frequency, and each
+    // setScrollTop re-render previously re-rendered every visible TreeNode
+    // (before their callbacks were stabilized).
+    if (scrollRafRef.current !== null) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      if (containerRef.current) {
+        setScrollTop(containerRef.current.scrollTop)
+      }
+    })
   }, [])
+
+  useEffect(
+    () => () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current)
+    },
+    [],
+  )
+
+  // Stable row-carrying handlers (see TreeNode's props doc): identity never
+  // changes, so TreeNode's memo holds across scroll/selection renders.
+  const handleRowSelect = useCallback(
+    (row: TreeRow) => {
+      setFocusedIndex(-1)
+      if (row.kind === 'subflow') {
+        onSelectSubflow(row.id)
+      } else {
+        onSelectBlock(row.id, row.subflowId)
+      }
+      // Also move keyboard focus to the clicked row (the previous inline
+      // closure set focusedIndex to the row's flat index).
+      rowsRef.current.findIndex((r, i) => {
+        if (r.id === row.id && r.kind === row.kind) {
+          setFocusedIndex(i)
+          return true
+        }
+        return false
+      })
+    },
+    [onSelectSubflow, onSelectBlock],
+  )
+
+  const handleRowToggleExpand = useCallback(
+    (row: TreeRow) => {
+      if (row.kind === 'subflow') {
+        onToggleSubflowExpand(row.id)
+      } else {
+        onToggleBlockExpand(row.id)
+      }
+    },
+    [onToggleSubflowExpand, onToggleBlockExpand],
+  )
 
   useEffect(() => {
     void setFocusedIndex(-1)
@@ -213,21 +266,8 @@ export default function FlowTree({
                 highlights={row.kind === 'block' ? searchHighlights?.get(row.id) : undefined}
                 isSearchMatch={matchedBlockIds?.has(row.id) ?? false}
                 findingCount={findingCounts?.get(row.id) ?? 0}
-                onSelect={() => {
-                  setFocusedIndex(idx)
-                  if (row.kind === 'subflow') {
-                    onSelectSubflow(row.id)
-                  } else {
-                    onSelectBlock(row.id, row.subflowId)
-                  }
-                }}
-                onToggleExpand={() => {
-                  if (row.kind === 'subflow') {
-                    onToggleSubflowExpand(row.id)
-                  } else {
-                    onToggleBlockExpand(row.id)
-                  }
-                }}
+                onSelect={handleRowSelect}
+                onToggleExpand={handleRowToggleExpand}
                 onContextMenu={handleContextMenu}
               />
             </div>
