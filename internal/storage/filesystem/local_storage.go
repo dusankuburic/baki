@@ -35,6 +35,11 @@ type LocalStorageBackend struct {
 	sharing      map[string][]*interfaces.Collaborator
 	apiTokens    map[string]*interfaces.APIToken  // guarded by apiTokenMu
 	userTokens   map[string]*interfaces.UserToken // keyed by token hash; guarded by userTokenMu
+	// flowMeta caches listing metadata per flow ID (see flowMetaEntry);
+	// guarded by metaMu. Invalidated by Stat (mtime+size) on refresh and kept
+	// current by SaveFlow/DeleteFlow.
+	metaMu   sync.RWMutex
+	flowMeta map[string]*flowMetaEntry
 }
 
 // atomicWrite writes data to path durably: it writes to a sibling temp file
@@ -101,12 +106,28 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 		return err
 	}
 
-	// Check for existing version to enforce OCC
-	if existing, err := lsb.LoadFlow(ctx, flow.ID); err == nil && existing != nil {
-		if flow.Version != existing.Version {
+	// Check for existing version to enforce OCC. The version comes from the
+	// metadata index when fresh (Stat-validated by refreshMetaIndex) — a full
+	// read+unmarshal of the stored document under this lock was pure overhead
+	// for the common case. A stale/missing index entry falls back to the read.
+	existingVersion := -1
+	if idx, idxErr := lsb.refreshMetaIndex(ctx); idxErr == nil {
+		lsb.metaMu.RLock()
+		if e, ok := idx[flow.ID]; ok {
+			existingVersion = e.header.Version
+		}
+		lsb.metaMu.RUnlock()
+	}
+	if existingVersion == -1 {
+		if existing, err := lsb.LoadFlow(ctx, flow.ID); err == nil && existing != nil {
+			existingVersion = existing.Version
+		}
+	}
+	if existingVersion >= 0 {
+		if flow.Version != existingVersion {
 			return interfaces.ErrVersionConflict
 		}
-		flow.Version = existing.Version + 1
+		flow.Version = existingVersion + 1
 	} else {
 		// New flow: force the initial version to match the Postgres backend
 		// (INSERT ... VALUES (..., 0)), so a caller passing a stale non-zero
@@ -127,6 +148,19 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 
 	if err := atomicWrite(flowPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write flow file: %w", err)
+	}
+
+	// Keep the metadata index current for this flow so the next listing
+	// doesn't re-read the file we just wrote.
+	if info, statErr := os.Stat(flowPath); statErr == nil {
+		header := *flow
+		header.Content = nil
+		lsb.metaMu.Lock()
+		if lsb.flowMeta == nil {
+			lsb.flowMeta = make(map[string]*flowMetaEntry)
+		}
+		lsb.flowMeta[flow.ID] = &flowMetaEntry{header: header, modTime: info.ModTime(), size: info.Size()}
+		lsb.metaMu.Unlock()
 	}
 
 	return nil
@@ -171,55 +205,97 @@ func (lsb *LocalStorageBackend) LoadFlowHeader(ctx context.Context, id string) (
 	return flow, nil
 }
 
-// ListFlows lists flow documents matching the given filter
-func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
+// flowMetaEntry is the cached listing metadata for one stored flow. The index
+// lets ListFlows/CountFlows answer from Stat checks (mtime+size) instead of
+// reading + fully JSON-parsing every flow file per listing — the defining
+// scalability issue of this backend (a 1,000-flow library paid 1,000 reads +
+// unmarshals per page render, twice, once more for the count).
+type flowMetaEntry struct {
+	header    interfaces.FlowDocument // metadata fields only; Content always nil
+	modTime   time.Time
+	size      int64
+	collabKey int // sharing-slice version, to invalidate SharedOnly filtering
+}
+
+// refreshMetaIndex brings the flow-metadata index up to date: new or changed
+// files (Stat mtime/size mismatch) are read once and their HEADER extracted
+// (a partial unmarshal — the file is lexed but the content tree is never
+// built); unchanged files reuse their cached entry; deleted files drop out.
+// Entries for SaveFlow-written files are updated in place by SaveFlow itself.
+func (lsb *LocalStorageBackend) refreshMetaIndex(ctx context.Context) (map[string]*flowMetaEntry, error) {
 	flowsDir := filepath.Join(lsb.dataDir, "flows")
-
-	// Check if flows directory exists
-	if _, err := os.Stat(flowsDir); os.IsNotExist(err) {
-		return []*interfaces.FlowDocument{}, nil
-	}
-
 	files, err := os.ReadDir(flowsDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]*flowMetaEntry{}, nil
+		}
 		return nil, fmt.Errorf("failed to read flows directory: %w", err)
 	}
 
-	var flows []*interfaces.FlowDocument
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		// Skip non-.json files (temp files, backups, etc.) to avoid
-		// index-out-of-range panics on the extension strip below.
-		if !strings.HasSuffix(file.Name(), ".json") {
-			continue
-		}
-
-		// Extract flow ID from filename (strip ".json", 5 chars)
-		flowID := file.Name()[:len(file.Name())-5]
-
-		flow, err := lsb.LoadFlow(ctx, flowID)
-		if err != nil {
-			// Skip files that can't be loaded
-			continue
-		}
-
-		if !lsb.matchesFilter(flow, filter) {
-			continue
-		}
-
-		if filter.MetadataOnly {
-			flow.Content = nil // list view needs metadata only
-		}
-		flows = append(flows, flow)
+	lsb.metaMu.Lock()
+	defer lsb.metaMu.Unlock()
+	if lsb.flowMeta == nil {
+		lsb.flowMeta = make(map[string]*flowMetaEntry, len(files))
 	}
+	seen := make(map[string]bool, len(files))
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		flowID := file.Name()[:len(file.Name())-5]
+		seen[flowID] = true
+		info, statErr := file.Info()
+		if statErr != nil {
+			continue
+		}
+		if e, ok := lsb.flowMeta[flowID]; ok && e.modTime.Equal(info.ModTime()) && e.size == info.Size() {
+			continue // cache hit: one Stat, no read/parse
+		}
+		data, readErr := os.ReadFile(filepath.Join(flowsDir, file.Name())) // #nosec G304 -- enumerating the backend's own flows dir
+		if readErr != nil {
+			continue // unreadable: treat as absent (matches previous skip behavior)
+		}
+		var h interfaces.FlowDocument
+		if json.Unmarshal(data, &h) != nil {
+			continue // corrupt: skip (matches previous skip behavior)
+		}
+		h.Content = nil
+		lsb.flowMeta[flowID] = &flowMetaEntry{header: h, modTime: info.ModTime(), size: info.Size()}
+	}
+	for id := range lsb.flowMeta {
+		if !seen[id] {
+			delete(lsb.flowMeta, id)
+		}
+	}
+	return lsb.flowMeta, nil
+}
+
+// ListFlows lists flow documents matching the given filter.
+//
+// Metadata phase answers from the cached index (Stat-validated); full content
+// is loaded ONLY for the flows on the requested page when the caller didn't
+// ask for MetadataOnly — previously every listing read and fully parsed every
+// stored flow, including all filtered-out ones.
+func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
+	index, err := lsb.refreshMetaIndex(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	lsb.metaMu.RLock()
+	flows := make([]*interfaces.FlowDocument, 0, len(index))
+	for id, e := range index {
+		doc := e.header // copy; Content nil
+		doc.ID = id
+		if !lsb.matchesFilter(&doc, filter) {
+			continue
+		}
+		flows = append(flows, &doc)
+	}
+	lsb.metaMu.RUnlock()
 
 	// Match the Postgres backend's ordering (flowOrderBy) so pagination is
 	// stable and the two backends return flows in the same relative order.
-	// os.ReadDir yields alphabetical-by-filename order, which is unrelated to
-	// updated_at and would make page-by-page iteration skip/duplicate flows.
 	sortFlows(flows, filter.SortBy)
 
 	if filter.Offset > 0 {
@@ -232,6 +308,15 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 		flows = flows[:filter.Limit]
 	}
 
+	if filter.MetadataOnly {
+		return flows, nil
+	}
+	// Hydrate content for the page only.
+	for _, doc := range flows {
+		if full, err := lsb.LoadFlow(ctx, doc.ID); err == nil && full != nil {
+			*doc = *full
+		}
+	}
 	return flows, nil
 }
 
@@ -276,36 +361,21 @@ func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
 }
 
 // CountFlows returns the total number of flows matching the filter, ignoring
-// Limit/Offset. Uses a lightweight scan that only reads metadata fields rather
-// than deserializing full flow content.
+// Limit/Offset. Answers from the same Stat-validated metadata index as
+// ListFlows — previously this re-read and re-parsed every stored flow file on
+// every call (the library handler calls list AND count per page render).
 func (lsb *LocalStorageBackend) CountFlows(ctx context.Context, filter interfaces.FlowFilter) (int, error) {
-	flowsDir := filepath.Join(lsb.dataDir, "flows")
-	if _, err := os.Stat(flowsDir); os.IsNotExist(err) {
-		return 0, nil
-	}
-	files, err := os.ReadDir(flowsDir)
+	index, err := lsb.refreshMetaIndex(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read flows directory: %w", err)
+		return 0, err
 	}
+	lsb.metaMu.RLock()
+	defer lsb.metaMu.RUnlock()
 	count := 0
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(flowsDir, file.Name())) // #nosec G304 -- enumerating the backend's own flows dir
-		if err != nil {
-			continue
-		}
-		var partial struct {
-			OwnerID string `json:"owner_id"`
-			OrgID   string `json:"org_id"`
-			Name    string `json:"name"`
-		}
-		if err := json.Unmarshal(data, &partial); err != nil {
-			continue
-		}
-		doc := &interfaces.FlowDocument{OwnerID: partial.OwnerID, OrganizationID: partial.OrgID, Name: partial.Name}
-		if lsb.matchesFilter(doc, filter) {
+	for id, e := range index {
+		doc := e.header
+		doc.ID = id
+		if lsb.matchesFilter(&doc, filter) {
 			count++
 		}
 	}
@@ -379,6 +449,12 @@ func (lsb *LocalStorageBackend) DeleteFlow(ctx context.Context, id string) error
 	if err := os.Remove(flowPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete flow file: %w", err)
 	}
+
+	// Drop the metadata index entry so listings immediately stop reporting
+	// the deleted flow (no Stat round-trip needed to notice).
+	lsb.metaMu.Lock()
+	delete(lsb.flowMeta, id)
+	lsb.metaMu.Unlock()
 
 	return nil
 }
