@@ -1,4 +1,4 @@
-import React, {useMemo} from 'react'
+import React from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import type {BlockToken, Block, FlowDocument, VariableDecl} from '@/types'
 import clsx from 'clsx'
@@ -17,12 +17,28 @@ interface TokenRendererProps {
 
 type VarInfo = {decl: VariableDecl | null; usageCount: number}
 
-// Shared index: built once per document change via useMemo in TokenRenderer,
-// consumed by all VariableToken instances via context — avoids O(tokens ×
-// blocks) repeated full-tree walks.
+// Consumed by all VariableToken instances via context.
 const VariableIndexContext = React.createContext<Map<string, VarInfo>>(new Map())
 
-function buildVariableIndex(doc: FlowDocument | null): Map<string, VarInfo> {
+// Module-level memo: ONE index build per document identity, shared by every
+// mounted TokenRenderer. The virtualized canvas keeps ~20-40 BlockCards
+// alive, and each previously built its own O(all-blocks) index per document
+// change (remote-collab saves, apply-fix, reparse) — an O(cards × blocks)
+// walk on the app's hottest path. A WeakMap keys on the document object so a
+// replaced document never serves a stale index and dead docs are GC-able.
+const variableIndexCache = new WeakMap<FlowDocument, Map<string, VarInfo>>()
+
+function variableIndexFor(doc: FlowDocument | null): Map<string, VarInfo> {
+  if (!doc) return new Map()
+  let index = variableIndexCache.get(doc)
+  if (!index) {
+    index = buildVariableIndex(doc)
+    variableIndexCache.set(doc, index)
+  }
+  return index
+}
+
+function buildVariableIndex(doc: FlowDocument): Map<string, VarInfo> {
   const index = new Map<string, VarInfo>()
   if (!doc) return index
   // Collect declarations
@@ -51,7 +67,7 @@ function buildVariableIndex(doc: FlowDocument | null): Map<string, VarInfo> {
 
 export default function TokenRenderer({tokens}: TokenRendererProps) {
   const document = useFlowStore(s => s.document)
-  const index = useMemo(() => buildVariableIndex(document), [document])
+  const index = variableIndexFor(document)
 
   return (
     <VariableIndexContext.Provider value={index}>
