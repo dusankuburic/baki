@@ -412,14 +412,21 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	// ORDER BY doc_id, id makes the 500-chunk sample deterministic (same
 	// chunks on repeated calls) — without it, Postgres returns an arbitrary
 	// set of rows depending on physical layout / vacuum state.
+	//
+	// The jsonb_array_length filter drops chunks whose embedding dimension
+	// can't match the query BEFORE transfer: cosine similarity is undefined
+	// between different-width vectors, so those rows were fully
+	// transferred + JSON-parsed per query only to be discarded by
+	// rankKnowledgeChunks (a 1536-dim embedding is ~15-30 KB of JSON text).
 	const maxChunks = 500
 	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT c.id, c.doc_id, c.content, c.embedding
 		FROM knowledge_chunks c
 		JOIN knowledge_documents d ON c.doc_id = d.id
 		WHERE d.org_id = $1
+		  AND jsonb_array_length(c.embedding) = $2
 		ORDER BY c.doc_id, c.id
-		LIMIT $2`, orgID, maxChunks)
+		LIMIT $3`, orgID, len(queryEmbedding), maxChunks)
 	if err != nil {
 		return nil, err
 	}

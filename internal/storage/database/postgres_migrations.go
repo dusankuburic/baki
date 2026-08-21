@@ -65,6 +65,7 @@ var migrations = []migration{
 	{version: 10, name: "flow_versions_blob_key", sql: flowVersionsBlobKeySQL, downSQL: flowVersionsBlobKeyDownSQL},
 	{version: 11, name: "pgvector_knowledge", sql: pgvectorKnowledgeSQL, downSQL: pgvectorKnowledgeDownSQL},
 	{version: 12, name: "governance_alerts", sql: governanceAlertsSQL, downSQL: governanceAlertsDownSQL},
+	{version: 13, name: "flows_name_trgm_index", sql: flowsNameTrgmSQL, downSQL: flowsNameTrgmDownSQL},
 }
 
 // flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
@@ -1334,4 +1335,25 @@ CREATE POLICY rls_gov_alerts_visible ON gov_alerts FOR ALL USING (
 // destroyed (the scanner re-populates it on the next sweep after re-upgrade).
 const governanceAlertsDownSQL = `
 DROP TABLE IF EXISTS gov_alerts;
+`
+
+// flowsNameTrgmSQL (v13) adds a trigram GIN index backing the library's
+// name-substring search (`name ILIKE '%q%'`). A leading-wildcard ILIKE cannot
+// use a btree index, so the query filtered every in-scope row's name after the
+// owner/org index scan — fine for small personal libraries, a full scan of
+// every org flow's name for large orgs. pg_trgm's GIN index makes the
+// substring match index-backed. CREATE EXTENSION is idempotent (IF NOT
+// EXISTS); on managed Postgres (Azure Database) pg_trgm is preinstalled and
+// creatable by the table owner.
+const flowsNameTrgmSQL = `
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+DROP INDEX IF EXISTS flows_name_trgm_idx;
+CREATE INDEX flows_name_trgm_idx ON flows USING gin (name gin_trgm_ops);
+`
+
+// flowsNameTrgmDownSQL reverses v13. The extension itself is left installed
+// (other objects may depend on it; dropping an extension other users rely on
+// from a down-migration would be surprising).
+const flowsNameTrgmDownSQL = `
+DROP INDEX IF EXISTS flows_name_trgm_idx;
 `
