@@ -276,8 +276,10 @@ func (b *PostgresStorageBackend) UpdateUserProfile(ctx context.Context, id strin
 // ---- Refresh-token rotation store ----
 // These back the auth refresh-token rotation/revocation flow in cloud mode.
 
-// StoreRefreshToken records an issued refresh token by its jti. It also makes a
-// best-effort purge of already-expired rows to keep the table small.
+// StoreRefreshToken records an issued refresh token by its jti. Expired-row
+// cleanup is NOT done here — the background retention job's PurgeExpiredData
+// runs the same indexed DELETE; doing it inline added a round trip to every
+// login/refresh and churned dead tuples under login bursts.
 func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, userID string, expiresAt time.Time, userAgent, ip string) error {
 	if _, err := b.db.ExecContext(ctx,
 		`INSERT INTO refresh_tokens (jti, user_id, expires_at, user_agent, ip) VALUES ($1, $2, $3, $4, $5)
@@ -285,11 +287,6 @@ func (b *PostgresStorageBackend) StoreRefreshToken(ctx context.Context, jti, use
 		jti, userID, expiresAt.UTC(), userAgent, ip,
 	); err != nil {
 		return fmt.Errorf("store refresh token: %w", err)
-	}
-	// Best-effort purge of expired rows. Non-fatal (the insert already
-	// succeeded), but log failures so unbounded table growth is observable.
-	if _, err := b.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE expires_at < NOW()`); err != nil {
-		slog.Warn("refresh token cleanup failed", "err", err)
 	}
 	return nil
 }

@@ -54,22 +54,41 @@ func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Or
 // churn of delete-all-then-reinsert: present members are upserted (their
 // joined_at is preserved on conflict) and only members no longer in the set are
 // deleted. now is the fallback joined_at for members without one. Shared by
-// SaveOrg and saveOrgInTx.
+// SaveOrg and saveOrgInTx. The upserts run as chunked multi-row INSERTs (4
+// params/row, org_id shared as $1) — one round trip per ≤16000 members instead
+// of one per member.
 func syncOrgMembers(ctx context.Context, tx *sql.Tx, org *interfaces.Organisation, now time.Time) error {
+	const rowsPerChunk = 16000 // 1 + 3×16000 params < 65535
 	userIDs := make([]string, 0, len(org.Members))
+	joined := make([]time.Time, 0, len(org.Members))
+	roles := make([]string, 0, len(org.Members))
 	for _, m := range org.Members {
-		joined := m.JoinedAt
-		if joined.IsZero() {
-			joined = now
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO org_members (org_id, user_id, role, joined_at)
-			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-			org.ID, m.UserID, string(m.Role), joined); err != nil {
-			return fmt.Errorf("upsert member: %w", err)
+		j := m.JoinedAt
+		if j.IsZero() {
+			j = now
 		}
 		userIDs = append(userIDs, m.UserID)
+		joined = append(joined, j)
+		roles = append(roles, string(m.Role))
+	}
+	for start := 0; start < len(userIDs); start += rowsPerChunk {
+		end := min(start+rowsPerChunk, len(userIDs))
+		var sb strings.Builder
+		args := make([]any, 0, (end-start)*3+1)
+		args = append(args, org.ID)
+		sb.WriteString(`INSERT INTO org_members (org_id, user_id, role, joined_at) VALUES `)
+		for i := start; i < end; i++ {
+			if i > start {
+				sb.WriteByte(',')
+			}
+			base := (i-start)*3 + 2
+			fmt.Fprintf(&sb, "($1,$%d,$%d,$%d)", base, base+1, base+2)
+			args = append(args, userIDs[i], roles[i], joined[i])
+		}
+		sb.WriteString(` ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role`)
+		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("upsert members %d..%d: %w", start, end, err)
+		}
 	}
 	// Delete members no longer present. An empty userIDs slice makes
 	// `user_id = ANY('{}')` always false, so NOT(...) deletes every row —
@@ -258,28 +277,49 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 		// AND the chunk's embedding dimension matches the configured contract —
 		// mismatched-dimension chunks stay NULL in the vector column so the
 		// HNSW index search never sees a vector it can't compare to a query.
-		if b.hasPgvector {
-			const stmt = `INSERT INTO knowledge_chunks (id, doc_id, content, embedding, embedding_vec) VALUES ($1, $2, $3, $4, $5::vector)`
-			for _, c := range chunks {
-				embJSON, _ := json.Marshal(c.Embedding)
-				var vec any
-				if len(c.Embedding) == b.embeddingDim {
-					vec = FormatVector(c.Embedding)
-				} else if len(c.Embedding) > 0 {
-					logger.Warn("knowledge chunk embedding dimension differs from configured; excluded from vector index",
-						"chunk_id", c.ID, "got_dim", len(c.Embedding), "configured_dim", b.embeddingDim)
+		//
+		// Multi-row INSERTs (4-5 params/row, ≤2000 rows/chunk so embedding
+		// payloads don't bloat one statement) — one round trip per chunk
+		// instead of one per chunk row.
+		const rowsPerStmt = 2000
+		for start := 0; start < len(chunks); start += rowsPerStmt {
+			end := min(start+rowsPerStmt, len(chunks))
+			batch := chunks[start:end]
+
+			var sb strings.Builder
+			args := make([]any, 0, len(batch)*5)
+			if b.hasPgvector {
+				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, content, embedding, embedding_vec) VALUES `)
+				for i, c := range batch {
+					embJSON, _ := json.Marshal(c.Embedding)
+					var vec any
+					if len(c.Embedding) == b.embeddingDim {
+						vec = FormatVector(c.Embedding)
+					} else if len(c.Embedding) > 0 {
+						logger.Warn("knowledge chunk embedding dimension differs from configured; excluded from vector index",
+							"chunk_id", c.ID, "got_dim", len(c.Embedding), "configured_dim", b.embeddingDim)
+					}
+					if i > 0 {
+						sb.WriteByte(',')
+					}
+					base := i*5 + 1
+					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d::vector)", base, base+1, base+2, base+3, base+4)
+					args = append(args, c.ID, c.DocID, c.Content, embJSON, vec)
 				}
-				if _, err := tx.ExecContext(ctx, stmt, c.ID, c.DocID, c.Content, embJSON, vec); err != nil {
-					return err
+			} else {
+				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, content, embedding) VALUES `)
+				for i, c := range batch {
+					embJSON, _ := json.Marshal(c.Embedding)
+					if i > 0 {
+						sb.WriteByte(',')
+					}
+					base := i*4 + 1
+					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", base, base+1, base+2, base+3)
+					args = append(args, c.ID, c.DocID, c.Content, embJSON)
 				}
 			}
-			return nil
-		}
-		const stmt = `INSERT INTO knowledge_chunks (id, doc_id, content, embedding) VALUES ($1, $2, $3, $4)`
-		for _, c := range chunks {
-			embJSON, _ := json.Marshal(c.Embedding)
-			if _, err := tx.ExecContext(ctx, stmt, c.ID, c.DocID, c.Content, embJSON); err != nil {
-				return err
+			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+				return fmt.Errorf("save knowledge chunks rows %d..%d: %w", start, end, err)
 			}
 		}
 		return nil

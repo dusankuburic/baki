@@ -211,10 +211,9 @@ func (lsb *LocalStorageBackend) LoadFlowHeader(ctx context.Context, id string) (
 // scalability issue of this backend (a 1,000-flow library paid 1,000 reads +
 // unmarshals per page render, twice, once more for the count).
 type flowMetaEntry struct {
-	header    interfaces.FlowDocument // metadata fields only; Content always nil
-	modTime   time.Time
-	size      int64
-	collabKey int // sharing-slice version, to invalidate SharedOnly filtering
+	header  interfaces.FlowDocument // metadata fields only; Content always nil
+	modTime time.Time
+	size    int64
 }
 
 // refreshMetaIndex brings the flow-metadata index up to date: new or changed
