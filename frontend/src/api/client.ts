@@ -256,7 +256,28 @@ export interface RequestOptions {
   method?: string
   /** Abort/timeout in ms. Defaults to DEFAULT_TIMEOUT_MS (30s). */
   timeoutMs?: number
+  /** Opt OUT of GET dedup/cache (default false). Mutations never dedup. */
+  noDedup?: boolean
 }
+
+// --- GET dedup + micro-cache -------------------------------------------------
+//
+// Two failure modes this layer removes: (1) components mounting in the same
+// tick issuing identical GETs (recent-files, dashboard) — the in-flight map
+// shares one network round trip; (2) back-to-back refetches of unchanged data
+// within a few seconds — the TTL cache serves the previous response. Any
+// non-GET (or a body-carrying request) bypasses both, and logout clears all
+// cached entries so a different account never sees them.
+
+const GET_CACHE_TTL_MS = 5_000
+const getInFlight = new Map<string, Promise<unknown>>()
+const getCache = new Map<string, {promise: Promise<unknown>; expiresAt: number}>()
+
+/** Clears the GET micro-cache (called on logout / auth teardown). */
+export function clearRequestCache(): void {
+  getCache.clear()
+}
+
 
 /**
  * Extract the human-readable message from an error response body. The backend
@@ -275,7 +296,9 @@ async function errorMessage(response: Response): Promise<string> {
   return 'Request failed'
 }
 
-export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+// doRequest is the raw transport: refresh + fetch + retry + envelope error
+// mapping. No caching — the exported request() adds the GET dedup layer.
+async function doRequest<T>(path: string, opts: RequestOptions): Promise<T> {
   const {body, method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS} = opts
   // Proactively refresh an already-expired access token so we don't make a
   // doomed first request (and log a 401) before the retry below.
@@ -296,10 +319,43 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 
   // Wrap the success-path JSON parse in a .catch() so a misconfigured proxy
   // returning a 200 with an HTML body throws a clean Error rather than an
-  // unhandled SyntaxError that can crash the calling React component.
+  // unhandled SyntaxError that can crash a calling React component.
   return response.json().catch(() => {
     throw new Error('Server returned a non-JSON response')
   }) as Promise<T>
+}
+
+// request is the public entry: identical GETs issued while one is still in
+// flight share that round trip, and responses are served from a 5s micro-cache
+// (see the GET dedup block above). Everything else — POSTs, body-carrying
+// calls, and opts.noDedup — goes straight to the transport.
+export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const {method = 'POST'} = opts
+  const cacheable = !opts.noDedup && !opts.body && (method === 'GET' || method === 'get')
+  if (!cacheable) {
+    return doRequest<T>(path, opts)
+  }
+
+  const key = path
+  const cached = getCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.promise as Promise<T>
+  }
+  const existing = getInFlight.get(key)
+  if (existing) {
+    return existing as Promise<T>
+  }
+
+  const promise = doRequest<T>(path, opts)
+    .then(value => {
+      getCache.set(key, {promise: Promise.resolve(value), expiresAt: Date.now() + GET_CACHE_TTL_MS})
+      return value
+    })
+    .finally(() => {
+      getInFlight.delete(key)
+    })
+  getInFlight.set(key, promise)
+  return promise
 }
 
 // requestValidated fetches a response and validates it against a zod schema

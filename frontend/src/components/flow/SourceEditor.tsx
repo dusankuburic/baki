@@ -1,4 +1,4 @@
-import {useState, useEffect, useRef, useCallback} from 'react'
+import {useState, useEffect, useRef, useCallback, memo} from 'react'
 import {Save, RotateCcw, Code2} from 'lucide-react'
 import {flowApi, analysisApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
@@ -9,6 +9,23 @@ import type {AnalysisReport} from '@/types'
 interface SourceEditorProps {
   onClose: () => void
 }
+
+/**
+ * Line-number gutter, memoized on the LINE COUNT only: typing re-splits the
+ * source and re-rendered one <div> per line (thousands on real PAD exports)
+ * per keystroke; now the gutter only re-renders when a line is added/removed.
+ */
+const LineGutter = memo(function LineGutter({lineCount}: {lineCount: number}) {
+  return (
+    <>
+      {Array.from({length: lineCount}, (_, i) => (
+        <div key={i} className="leading-5">
+          {i + 1}
+        </div>
+      ))}
+    </>
+  )
+})
 
 // SourceEditor is a lightweight in-app PAD source editor: a monospace textarea
 // with synced line numbers, "Save & Re-parse" (round-trips through the backend
@@ -163,11 +180,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
           className="flex-shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-muted select-none bg-surface-2 border-r border-border-subtle"
           style={{minWidth: '3rem'}}
         >
-          {Array.from({length: lineCount}, (_, i) => (
-            <div key={i} className="leading-5">
-              {i + 1}
-            </div>
-          ))}
+          <LineGutter lineCount={lineCount} />
         </div>
         <textarea
           ref={textareaRef}

@@ -102,6 +102,61 @@ describe('api/client', () => {
     })
   })
 
+  describe('GET dedup + micro-cache', () => {
+    it('concurrent identical GETs share one round trip', async () => {
+      const fetchSpy = mockFetch({items: []})
+      const {request} = await getClient()
+
+      const [a, b] = await Promise.all([
+        request('/api/recent', {method: 'GET'}),
+        request('/api/recent', {method: 'GET'}),
+      ])
+
+      expect(a).toEqual({items: []})
+      expect(b).toEqual({items: []})
+      expect(fetchSpy).toHaveBeenCalledOnce()
+    })
+
+    it('serves a repeat GET from the TTL cache within 5s', async () => {
+      const fetchSpy = mockFetch({ts: 1})
+      const {request} = await getClient()
+
+      await request('/api/info', {method: 'GET'})
+      const second = await request('/api/info', {method: 'GET'})
+
+      expect(fetchSpy).toHaveBeenCalledOnce()
+      expect(second).toEqual({ts: 1})
+    })
+
+    it('POSTs are never deduped or cached', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => new Response(JSON.stringify({ok: true}), {status: 200}))
+      const {request} = await getClient()
+
+      await request('/api/analysis/analyze')
+      await request('/api/analysis/analyze')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('a failed GET is not cached — the next call refetches', async () => {
+      let call = 0
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        call++
+        // 404 (non-transient) so the retry layer doesn't mask the failure.
+        if (call === 1) return new Response(JSON.stringify({message: 'missing'}), {status: 404})
+        return new Response(JSON.stringify({ok: true}), {status: 200})
+      })
+      const {request} = await getClient()
+
+      await expect(request('/api/flaky', {method: 'GET'})).rejects.toThrow('missing')
+      const out = await request('/api/flaky', {method: 'GET'})
+      expect(out).toEqual({ok: true})
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+  })
+
   describe('requestValidated()', () => {
     it('returns the parsed body when it matches the schema', async () => {
       mockFetch({token: 'abc'})

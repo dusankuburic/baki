@@ -436,10 +436,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     const flowId = useFlowStore.getState().document?.id
     if (!flowId) return
     try {
+      // Single round trip after the mutation: the drift fetch the previous
+      // version made here was discarded (`void drift`) and `baselineNewCount`
+      // is definitionally 0 right after setting.
       await analysisApi.setBaseline(flowId)
-      const drift = await analysisApi.baselineDrift(flowId)
       set({baseline: await analysisApi.getBaseline(flowId), baselineNewCount: 0})
-      void drift
     } catch (err) {
       logger.warn('Failed to set baseline', err)
       throw err

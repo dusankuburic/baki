@@ -15,6 +15,7 @@
 // sequential there rather than relying on ordering across handlers.
 
 import {logger} from '@/lib/logger'
+import {clearRequestCache} from '@/api/client'
 
 type ResetHandler = () => void | Promise<void>
 
@@ -25,6 +26,9 @@ export function registerStoreReset(handler: ResetHandler): void {
 }
 
 export async function resetAllStores(): Promise<void> {
+  // Drop the API client's GET micro-cache first: cached responses belong to
+  // the outgoing session and must never be served to the next account.
+  clearRequestCache()
   // Each handler is isolated so one failure can't abort the others, but the
   // error is LOGGED rather than silently swallowed — a logout-time failure
   // (e.g. presence failing to re-persist its sync queue) was previously
