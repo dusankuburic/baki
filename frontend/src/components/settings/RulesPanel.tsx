@@ -79,9 +79,7 @@ export default function RulesPanel() {
           <Shield size={20} className="text-brand-500" />
           Analysis Rules
         </h2>
-        <p className="text-sm text-text-secondary mt-1">
-          {t('rules.subtitle')}
-        </p>
+        <p className="text-sm text-text-secondary mt-1">{t('rules.subtitle')}</p>
       </div>
 
       <div className="p-4 flex items-center justify-between border border-border-default rounded-xl bg-surface-1">
@@ -89,9 +87,7 @@ export default function RulesPanel() {
           <Zap size={18} className="text-brand-500 shrink-0 mt-0.5" />
           <div>
             <h3 className="text-sm font-bold text-text-primary">{t('rules.autoAnalyzeTitle')}</h3>
-            <p className="text-xs text-text-tertiary mt-1">
-              {t('rules.autoAnalyzeHint')}
-            </p>
+            <p className="text-xs text-text-tertiary mt-1">{t('rules.autoAnalyzeHint')}</p>
           </div>
         </div>
         <Switch
@@ -124,10 +120,7 @@ export default function RulesPanel() {
             </div>
 
             {rule.enabled && (
-              <div
-                className="flex items-center gap-4 animate-fade-in"
-                title={t('rules.severityTooltip')}
-              >
+              <div className="flex items-center gap-4 animate-fade-in" title={t('rules.severityTooltip')}>
                 <span className="text-2xs font-bold uppercase text-text-tertiary">{t('rules.reportAs')}</span>
                 <SegmentedControl
                   size="sm"

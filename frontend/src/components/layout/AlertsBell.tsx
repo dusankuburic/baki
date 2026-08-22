@@ -135,7 +135,12 @@ function AlertsPanel() {
           </div>
         ) : (
           alerts.map(a => (
-            <AlertRow key={a.id} alert={a} onDismiss={() => void dismiss(a.id)} onOpenFlow={() => void openFlow(a.flowId)} />
+            <AlertRow
+              key={a.id}
+              alert={a}
+              onDismiss={() => void dismiss(a.id)}
+              onOpenFlow={() => void openFlow(a.flowId)}
+            />
           ))
         )}
       </div>
@@ -161,7 +166,12 @@ function AlertRow({
       )}
     >
       <div className="flex items-start gap-2">
-        <span className={clsx('mt-0.5 px-1 py-0.5 rounded text-2xs font-medium shrink-0', sevChip[alert.severity] ?? sevChip.warning)}>
+        <span
+          className={clsx(
+            'mt-0.5 px-1 py-0.5 rounded text-2xs font-medium shrink-0',
+            sevChip[alert.severity] ?? sevChip.warning,
+          )}
+        >
           {isRegression ? 'health' : alert.severity}
         </span>
         <button className="flex-1 text-left" onClick={onOpenFlow}>

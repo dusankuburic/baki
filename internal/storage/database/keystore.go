@@ -24,10 +24,10 @@ const keystoreTimeout = 5 * time.Second
 // the active secret backend in cloud mode, where the OS keychain is absent.
 //
 // The encryption key should be a dedicated deployment secret (PAD_ENCRYPTION_KEY),
-// separate from the JWT signing key (PAD_AUTH_SECRET). For backward compatibility
-// the auth secret is still accepted when no dedicated key is configured, but
-// rotating either then no longer affects the other. Rotating the encryption key
-// renders previously stored ciphertext undecryptable (Get reports the key as not
+// separate from the JWT signing key (PAD_AUTH_SECRET), so rotating one doesn't
+// affect the other. For backward compatibility the auth secret is accepted
+// when no dedicated key is configured. Rotating the encryption key renders
+// previously stored ciphertext undecryptable (Get reports the key as not
 // found, and the provider must be re-authenticated).
 //
 // RLS note: provider_keys has NO row-level-security policies, deliberately. Like

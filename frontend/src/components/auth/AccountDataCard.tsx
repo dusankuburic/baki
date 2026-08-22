@@ -7,9 +7,9 @@ import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
 import {useToast, useConfirm} from '@/components/shared'
 
-// AccountDataCard holds account-management actions that were previously
-// buried in Settings > Privacy: exporting a data-subject bundle and the
-// self-service account-erasure flow. Moved into the profile page so account
+// AccountDataCard holds the profile-page account-management actions:
+// exporting a data-subject bundle and the
+// self-service account-erasure flow. Kept on the profile page so account
 // management lives in one place instead of split across two panes.
 export const AccountDataCard: React.FC = () => {
   const user = useAuthStore(s => s.user)

@@ -60,11 +60,11 @@ function SelectableCard({
           <p className="text-sm font-semibold text-text-primary truncate group-hover:text-brand-400 transition-colors">
             {flow.name}
           </p>
-          {flow.description && <p className="mt-0.5 text-xs text-text-muted line-clamp-2">{flow.description}</p>}
+          {flow.description && <p className="mt-0.5 text-xs text-text-tertiary line-clamp-2">{flow.description}</p>}
         </div>
       </div>
 
-      <div className="flex items-center gap-3 text-xs text-text-muted">
+      <div className="flex items-center gap-3 text-xs text-text-tertiary">
         <span className="flex items-center gap-1">
           <FileCode size={12} />
           {flow.blockCount}

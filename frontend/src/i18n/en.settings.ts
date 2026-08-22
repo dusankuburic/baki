@@ -129,7 +129,7 @@ export const enSettings = {
     activeAssistantHint: 'Select the primary AI provider to use for chat and analysis.',
     embeddingAssistant: 'Embedding Assistant',
     embeddingAssistantHint:
-      'Provider used to index and search your Knowledge Base. Only these providers support embeddings; a Claude-only setup can\'t use the Knowledge Base.',
+      "Provider used to index and search your Knowledge Base. Only these providers support embeddings; a Claude-only setup can't use the Knowledge Base.",
     embeddingModel: 'Embedding Model',
     embeddingModelPlaceholder: 'Provider default',
     embeddingModelHintPrefix: 'Override the embedding model name (e.g.',
@@ -207,7 +207,7 @@ export const enSettings = {
     revoke: 'Revoke',
     revoked: 'Token revoked',
     revokeFailed: 'Failed to revoke token: {{message}}',
-    revealWarning: 'Copy your new token now — it won\'t be shown again.',
+    revealWarning: "Copy your new token now — it won't be shown again.",
     noTokens: 'No tokens yet.',
     loadFailed: 'Failed to load tokens',
     createdOn: 'Created {{date}}',

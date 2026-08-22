@@ -73,7 +73,9 @@ export const ProfileCard: React.FC = () => {
                 size="lg"
               />
               <div className="flex-1">
-                <label htmlFor="profile-avatar-url" className="text-xs font-medium text-text-secondary block mb-1.5">Avatar URL</label>
+                <label htmlFor="profile-avatar-url" className="text-xs font-medium text-text-secondary block mb-1.5">
+                  Avatar URL
+                </label>
                 <Input
                   id="profile-avatar-url"
                   type="url"
@@ -85,7 +87,9 @@ export const ProfileCard: React.FC = () => {
               </div>
             </div>
             <div>
-              <label htmlFor="profile-display-name" className="text-xs font-medium text-text-secondary block mb-1.5">Display Name</label>
+              <label htmlFor="profile-display-name" className="text-xs font-medium text-text-secondary block mb-1.5">
+                Display Name
+              </label>
               <Input
                 id="profile-display-name"
                 type="text"

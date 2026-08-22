@@ -175,7 +175,10 @@ export default function FlowComparisonView() {
 
             <div className="space-y-2">
               {result.subflowDiff.length === 0 ? (
-                <EmptyState title="No subflow differences" description="The two flows have no comparable subflow structure." />
+                <EmptyState
+                  title="No subflow differences"
+                  description="The two flows have no comparable subflow structure."
+                />
               ) : (
                 result.subflowDiff.map((sf, i) => <SubflowRow key={i} sf={sf} />)
               )}

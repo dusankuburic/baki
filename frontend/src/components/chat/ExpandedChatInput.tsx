@@ -35,10 +35,10 @@ export default function ExpandedChatInput({
   }, [onClose])
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 p-4 sm:p-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in p-4 sm:p-8">
       <div
         ref={containerRef}
-        className="w-full max-w-4xl bg-surface-1 border border-border-default rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 h-[80vh]"
+        className="w-full max-w-4xl bg-surface-1 border border-border-default rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-modal h-[80vh]"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface-2">

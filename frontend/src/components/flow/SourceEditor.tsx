@@ -167,7 +167,10 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
             {saving ? <Spinner size={12} /> : <Save size={12} />}
             {saving ? 'Saving…' : 'Save & Re-parse'}
           </button>
-          <button onClick={handleClose} className="text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors">
+          <button
+            onClick={handleClose}
+            className="text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors"
+          >
             Block view
           </button>
         </div>
@@ -177,7 +180,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
       <div className="flex flex-1 overflow-hidden font-mono text-xs">
         <div
           ref={gutterRef}
-          className="flex-shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-muted select-none bg-surface-2 border-r border-border-subtle"
+          className="flex-shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-tertiary select-none bg-surface-2 border-r border-border-subtle"
           style={{minWidth: '3rem'}}
         >
           <LineGutter lineCount={lineCount} />

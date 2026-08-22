@@ -43,8 +43,7 @@ export function usePaneResize() {
 
   const handleSidebarDrag = useCallback(
     (delta: number) => {
-      const base =
-        sidebarPendingRef.current ?? (parseInt(sidebarRef.current?.style.width || '') || layout.sidebarWidth)
+      const base = sidebarPendingRef.current ?? (parseInt(sidebarRef.current?.style.width || '') || layout.sidebarWidth)
       const next = Math.round(Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, base + delta)))
       sidebarPendingRef.current = next
       if (sidebarRef.current) {

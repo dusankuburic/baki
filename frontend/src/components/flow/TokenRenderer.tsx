@@ -22,9 +22,8 @@ const VariableIndexContext = React.createContext<Map<string, VarInfo>>(new Map()
 
 // Module-level memo: ONE index build per document identity, shared by every
 // mounted TokenRenderer. The virtualized canvas keeps ~20-40 BlockCards
-// alive, and each previously built its own O(all-blocks) index per document
-// change (remote-collab saves, apply-fix, reparse) — an O(cards × blocks)
-// walk on the app's hottest path. A WeakMap keys on the document object so a
+// alive; a per-card index would be an O(cards × blocks) walk per document
+// change. A WeakMap keys on the document object so a
 // replaced document never serves a stale index and dead docs are GC-able.
 const variableIndexCache = new WeakMap<FlowDocument, Map<string, VarInfo>>()
 

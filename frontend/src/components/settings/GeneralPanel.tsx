@@ -28,9 +28,7 @@ export default function GeneralPanel() {
 
         <div className="p-4 rounded-lg bg-surface-2 border border-border-default">
           <h3 className="text-sm font-medium text-text-primary">Onboarding</h3>
-          <p className="text-xs text-text-tertiary mt-1">
-            Replay the welcome tour and guided walkthrough.
-          </p>
+          <p className="text-xs text-text-tertiary mt-1">Replay the welcome tour and guided walkthrough.</p>
           <button
             className="mt-3 text-xs font-medium text-accent-blue hover:underline"
             onClick={() => updateGeneral({firstRunCompleted: false})}

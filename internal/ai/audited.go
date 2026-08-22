@@ -84,13 +84,13 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		metrics.RecordAIError(p.providerID)
 	}
 	// A stream that ended without a Done chunk (truncation, mid-stream error,
-	// cancel) still consumed provider tokens; usage arrives on the Done chunk,
-	// so those streams previously recorded nothing and their cost never counted
-	// against the daily budget. Record whatever the provider reported, falling
-	// back to estimates. Gated on evidence that the request actually reached
-	// the provider (some output or an upstream error event) so failures before
-	// the request was accepted — circuit open, connection refused — aren't
-	// billed an input-token estimate for a call that consumed nothing.
+	// cancel) still consumed provider tokens; usage arrives on the Done chunk.
+	// Record whatever the provider reported, falling back to estimates, so the
+	// cost still counts against the daily budget. Gated on evidence that the
+	// request actually reached the provider (some output or an upstream error
+	// event) so failures before the request was accepted — circuit open,
+	// connection refused — aren't billed an input-token estimate for a call
+	// that consumed nothing.
 	if !sawDone && (streamed.Len() > 0 || tokensIn > 0 || tokensOut > 0 || sawChunkErr) {
 		if tokensOut == 0 {
 			tokensOut = p.inner.EstimateTokens(streamed.String())
@@ -152,8 +152,7 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 		CreatedAt:        time.Now(),
 	}
 	// Attribute the spend to the caller's user+org so on-call can see per-tenant
-	// cost without querying the usage_metrics table (the deep-dive's biggest
-	// observability gap — every other metric was per-instance or global).
+	// cost without querying the usage_metrics table.
 	metrics.RecordAIUsageCost(p.scope, orgID, inputCost+outputCost)
 
 	// Asynchronously record the usage so it doesn't block the caller.
@@ -161,10 +160,8 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 	// The semaphore acquire is NON-blocking: when maxConcurrentRecords recorders
 	// are already in flight we DROP this metric (counted via
 	// metrics.RecordUsageDropped) rather than spawning another goroutine that
-	// parks on the send. This bounds the goroutine count to maxConcurrentRecords
-	// under any load — previously each finished AI request spawned a goroutine
-	// that blocked on recordSem, so a slow DB recorder under traffic could grow
-	// the goroutine set without limit (OOM).
+	// parks on the send. This bounds the goroutine count to
+	// maxConcurrentRecords under any load, even with a slow DB recorder.
 	//
 	// In practice the drop NEVER fires: each request gets its own auditedProvider
 	// (the factory builds a fresh chain per request) with a 16-slot semaphore,

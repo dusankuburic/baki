@@ -40,14 +40,14 @@ export default function InviteAcceptView({token, onDone}: InviteAcceptViewProps)
         {status === 'pending' && (
           <>
             <Spinner size={32} />
-            <p className="text-sm text-text-muted">Accepting your invitation…</p>
+            <p className="text-sm text-text-tertiary">Accepting your invitation…</p>
           </>
         )}
         {status === 'ok' && (
           <>
             <CheckCircle2 className="text-semantic-success" size={40} />
             <h1 className="text-xl font-semibold text-text-primary">Invitation accepted</h1>
-            <p className="text-sm text-text-muted">You've joined the organization.</p>
+            <p className="text-sm text-text-tertiary">You've joined the organization.</p>
             <Button type="button" variant="primary" fullWidth onClick={onDone}>
               Continue
             </Button>
@@ -57,7 +57,7 @@ export default function InviteAcceptView({token, onDone}: InviteAcceptViewProps)
           <>
             <XCircle className="text-semantic-error" size={40} />
             <h1 className="text-xl font-semibold text-text-primary">Invitation failed</h1>
-            <p className="text-sm text-text-muted">{error ?? 'This invite is invalid or has expired.'}</p>
+            <p className="text-sm text-text-tertiary">{error ?? 'This invite is invalid or has expired.'}</p>
             <Button type="button" variant="secondary" fullWidth onClick={onDone}>
               Continue
             </Button>

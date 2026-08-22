@@ -41,8 +41,8 @@ var (
 	// doesn't match the account's current password.
 	ErrInvalidOldPassword = errors.New("invalid old password")
 	// ErrUserLookupFailed wraps a LoadUserByID failure in ChangePassword — kept
-	// distinct from other failures so the caller can map it to 404 the same way
-	// the original inline handler did (unconditionally, for any lookup error).
+	// distinct from other failures so the caller can map it to 404
+	// (unconditionally, for any lookup error).
 	ErrUserLookupFailed = errors.New("user lookup failed")
 	// ErrPasswordHashFailed wraps a bcrypt hashing failure in Register, kept
 	// distinct from CreateUser failures so the caller can return 500 instead of
@@ -65,12 +65,12 @@ type authStore interface {
 }
 
 // AuthService owns the credential-verification and account-mutation business
-// logic that previously lived inline in handlers_auth.go: bcrypt timing-attack
-// mitigation, failed-login lockout, password hashing/change, and the
-// token-redemption flows for password reset and email verification. JWT
-// issuance and refresh-token/session bookkeeping stay in AuthHandler — those
-// are thin delegations to the already-well-abstracted auth.Manager and
-// RefreshTokenStore, not business logic that benefits from a service seam.
+// logic: bcrypt timing-attack mitigation, failed-login lockout, password
+// hashing/change, and the token-redemption flows for password reset and email
+// verification. JWT issuance and refresh-token/session bookkeeping stay in
+// AuthHandler — those are thin delegations to the already-well-abstracted
+// auth.Manager and RefreshTokenStore, not business logic that benefits from
+// a service seam.
 type AuthService struct {
 	backend authStore
 	// email may be nil in tests that don't exercise the notification paths;

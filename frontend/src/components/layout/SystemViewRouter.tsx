@@ -128,17 +128,6 @@ export function SystemViewRouter({view}: {view: string}) {
 
 // isSystemView reports whether `view` is handled by SystemViewRouter (i.e. not
 // a flow-editor view). MainPane uses this to decide between SystemViewRouter
-// and the FlowEditorPane.
-export function isSystemView(view: string): boolean {
-  return (
-    view === 'profile' ||
-    view === 'admin' ||
-    view === 'dashboard' ||
-    view === 'home' ||
-    view === 'library' ||
-    view === 'portfolio' ||
-    view === 'flow-compare' ||
-    view === 'deps' ||
-    view === 'rules'
-  )
-}
+// and the FlowEditorPane. The implementation lives in uiStore (SYSTEM_VIEWS)
+// so that view-switching logic and routing agree on what a "system view" is.
+export {isSystemView} from '@/stores/uiStore'

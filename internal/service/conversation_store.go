@@ -71,10 +71,8 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 	return out
 }
 
-// Per-conversation persistence limits. These (and the helpers below) consolidate
-// the write/eviction logic that previously lived in a separate, unused
-// internal/ai/conversation.go — the ChatService methods are the live persistence
-// path, so the robustness belongs here.
+// Per-conversation persistence limits enforced by the helpers below, used by
+// the ChatService persistence path.
 const (
 	maxConvMessages     = 50
 	maxConvBytes        = 1 * 1024 * 1024 // 1 MiB

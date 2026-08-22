@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -51,6 +52,15 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 
 	id, err := h.chatSvc.StreamChatMessage(r.Context(), h.common.KeyScope(r), doc, nil, req)
 	if err != nil {
+		// Capacity rejections are the caller's fault (too many concurrent
+		// streams), not a server failure: render as 429 with a distinct
+		// machine code so the frontend can branch on it instead of regexing
+		// the message. 4xx also keeps the message visible (5xx bodies are
+		// masked to "internal server error").
+		if errors.Is(err, service.ErrTooManyChatStreams) {
+			render.ErrorWithCode(w, err, http.StatusTooManyRequests, "CHAT_CAPACITY_REACHED")
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

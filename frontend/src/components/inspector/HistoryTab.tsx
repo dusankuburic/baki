@@ -170,7 +170,7 @@ export const HistoryTab: React.FC = () => {
                     <p className="text-2xs text-text-tertiary mt-0.5">
                       <span title={absoluteTime(v.createdAt)}>{relativeTime(v.createdAt)}</span>
                       {v.metadata?.blockCount != null && (
-                        <span className="ml-2 text-text-muted">{v.metadata.blockCount} blocks</span>
+                        <span className="ml-2 text-text-tertiary">{v.metadata.blockCount} blocks</span>
                       )}
                     </p>
                   </div>

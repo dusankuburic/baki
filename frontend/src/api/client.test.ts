@@ -100,6 +100,51 @@ describe('api/client', () => {
 
       await expect(request('/api/broken')).rejects.toThrow('Request failed')
     })
+
+    it('throws an ApiError carrying the envelope status, code and requestId', async () => {
+      // Consumers branch on err.code (machine-readable) instead of regexing
+      // the message — the message is masked on 5xx and may be reworded.
+      mockFetch(
+        {code: 'CHAT_CAPACITY_REACHED', message: 'too many chat responses running at once', requestId: 'r-42'},
+        429,
+      )
+      const {request, ApiError} = await getClient()
+
+      const err: unknown = await request('/api/chat/stream').catch(e => e)
+      expect(err).toBeInstanceOf(ApiError)
+      const apiErr = err as InstanceType<typeof ApiError>
+      expect(apiErr.status).toBe(429)
+      expect(apiErr.code).toBe('CHAT_CAPACITY_REACHED')
+      expect(apiErr.requestId).toBe('r-42')
+      expect(apiErr.message).toBe('too many chat responses running at once')
+    })
+
+    it('omits code/requestId when the error body is a legacy {error} shape', async () => {
+      mockFetch({error: 'legacy proxy message'}, 502)
+      const {request, ApiError} = await getClient()
+
+      const err: unknown = await request('/api/legacy').catch(e => e)
+      expect(err).toBeInstanceOf(ApiError)
+      const apiErr = err as InstanceType<typeof ApiError>
+      expect(apiErr.status).toBe(502)
+      expect(apiErr.code).toBeNull()
+      expect(apiErr.requestId).toBeNull()
+      expect(apiErr.message).toBe('legacy proxy message')
+    })
+
+    it('maps 403 to PermissionDeniedError and 409 to VersionConflictError (both ApiErrors)', async () => {
+      mockFetch({code: 'FORBIDDEN', message: 'nope'}, 403)
+      const {request, PermissionDeniedError, ApiError} = await getClient()
+      const forbidden: unknown = await request('/api/a').catch(e => e)
+      expect(forbidden).toBeInstanceOf(PermissionDeniedError)
+      expect(forbidden).toBeInstanceOf(ApiError)
+
+      mockFetch({code: 'CONFLICT', message: 'version mismatch'}, 409)
+      const conflict: unknown = await request('/api/b').catch(e => e)
+      expect(conflict).toBeInstanceOf(ApiError)
+      expect((conflict as InstanceType<typeof ApiError>).status).toBe(409)
+      expect((conflict as InstanceType<typeof ApiError>).code).toBe('CONFLICT')
+    })
   })
 
   describe('GET dedup + micro-cache', () => {
@@ -126,6 +171,61 @@ describe('api/client', () => {
 
       expect(fetchSpy).toHaveBeenCalledOnce()
       expect(second).toEqual({ts: 1})
+    })
+
+    it('TTL hits return a private copy — in-place mutation cannot poison other consumers', async () => {
+      mockFetch({items: [{id: 3}, {id: 1}, {id: 2}]})
+      const {request} = await getClient()
+
+      const first = await request<{items: {id: number}[]}>('/api/list', {method: 'GET'})
+      first.items.sort((a, b) => a.id - b.id) // consumer A mutates its copy in place
+
+      const second = await request<{items: {id: number}[]}>('/api/list', {method: 'GET'})
+      expect(second).not.toBe(first) // separate object, not a shared reference
+      expect(second.items).toEqual([{id: 3}, {id: 1}, {id: 2}]) // pristine server order
+    })
+
+    it('in-flight sharers each get their own copy of the result', async () => {
+      mockFetch({items: [3, 1, 2]})
+      const {request} = await getClient()
+
+      const [a, b] = await Promise.all([
+        request<{items: number[]}>('/api/shared', {method: 'GET'}),
+        request<{items: number[]}>('/api/shared', {method: 'GET'}),
+      ])
+
+      expect(a).not.toBe(b) // shared round trip, not a shared object
+      expect(a.items).toEqual([3, 1, 2])
+      expect(b.items).toEqual([3, 1, 2])
+    })
+
+    // Regression (epoch guard): a GET that resolves after clearRequestCache()
+    // (logout mid-flight / org switch) must not write the previous session's
+    // response back into the freshly-cleared cache.
+    it('a GET resolving after clearRequestCache does not re-populate the cache', async () => {
+      let resolveFetch!: (body: string) => void
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        () =>
+          new Promise(resolve => {
+            resolveFetch = body => resolve(new Response(body, {status: 200}))
+          }),
+      )
+      const {request, clearRequestCache} = await getClient()
+
+      const pending = request<{account: string}>('/api/session-data', {method: 'GET'})
+      // Let the request reach the (suspended) fetch call before "logout".
+      await new Promise(r => setTimeout(r, 0))
+      clearRequestCache()
+      resolveFetch(JSON.stringify({account: 'previous-user'}))
+
+      const first = await pending
+      expect(first).toEqual({account: 'previous-user'}) // initiator still gets its response
+
+      // The next account's request must hit the network, not the stale cache.
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({account: 'next-user'}), {status: 200}))
+      const second = await request<{account: string}>('/api/session-data', {method: 'GET'})
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      expect(second).toEqual({account: 'next-user'})
     })
 
     it('POSTs are never deduped or cached', async () => {
@@ -209,9 +309,9 @@ describe('api/client', () => {
       }
       mockFetch(finding)
       const {requestValidated} = await getClient()
-      const {FindingSchema} = await import('./schemas')
+      const {getFindingSchema} = await import('./schemas')
 
-      const out = await requestValidated('/api/finding', FindingSchema)
+      const out = await requestValidated('/api/finding', await getFindingSchema())
 
       expect(out).toMatchObject(finding)
       // The previously-stripped fields must survive:
@@ -233,9 +333,9 @@ describe('api/client', () => {
       }
       mockFetch(report)
       const {requestValidated} = await getClient()
-      const {AnalysisReportSchema} = await import('./schemas')
+      const {getAnalysisReportSchema} = await import('./schemas')
 
-      const out = await requestValidated('/api/analysis/analyze', AnalysisReportSchema)
+      const out = await requestValidated('/api/analysis/analyze', await getAnalysisReportSchema())
 
       expect(out).toHaveProperty('metrics')
       expect((out as {metrics?: {healthScore?: number}}).metrics?.healthScore).toBe(87)
@@ -270,6 +370,87 @@ describe('api/client', () => {
 
       await expect(request('/api/x', {body: {a: 1}, method: 'POST'})).rejects.toThrow('boom')
       expect(calls).toBe(1)
+    })
+  })
+
+  describe('request() consumer cancellation (signal)', () => {
+    it('rejects with AbortError when the consumer aborts mid-flight', async () => {
+      // fetch that never settles on its own — only the abort path resolves it.
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted.', 'AbortError')),
+            )
+          }),
+      )
+      const {request} = await getClient()
+      const controller = new AbortController()
+
+      const pending = request('/api/slow', {method: 'GET', signal: controller.signal})
+      controller.abort()
+
+      const err: unknown = await pending.catch(e => e)
+      // Consumers branch on err.name (documented contract); instanceof is
+      // cross-realm-fragile under jsdom.
+      expect((err as {name?: string}).name).toBe('AbortError')
+    })
+
+    it('short-circuits without touching the network when the signal is already aborted', async () => {
+      const fetchSpy = mockFetch({ok: true})
+      const {request} = await getClient()
+      const controller = new AbortController()
+      controller.abort()
+
+      await expect(request('/api/x', {method: 'GET', signal: controller.signal})).rejects.toThrow()
+
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('does not write an aborted GET into the micro-cache', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted.', 'AbortError')),
+            )
+          }),
+      )
+      const {request} = await getClient()
+      const controller = new AbortController()
+
+      const pending = request('/api/cached-abort', {method: 'GET', signal: controller.signal})
+      controller.abort()
+      await pending.catch(() => {})
+
+      // A later GET on the same path must hit the network (nothing cached).
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => new Response(JSON.stringify({fresh: true}), {status: 200}))
+      const out = await request('/api/cached-abort', {method: 'GET'})
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(out).toEqual({fresh: true})
+    })
+
+    it('abortAllRequests() aborts in-flight requests', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted.', 'AbortError')),
+            )
+          }),
+      )
+      const {request, abortAllRequests} = await getClient()
+
+      const pending = request('/api/batch', {body: {ids: [1]}, timeoutMs: 300_000})
+      // Let the request reach doFetch (config resolution registers its
+      // controller) before aborting — mirrors a real logout a moment later.
+      await new Promise(r => setTimeout(r, 0))
+      abortAllRequests()
+
+      const err: unknown = await pending.catch(e => e)
+      expect((err as {name?: string}).name).toBe('AbortError')
     })
   })
 })

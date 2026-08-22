@@ -95,8 +95,28 @@ describe('PortfolioView', () => {
       warnings: 0,
       info: 0,
       entries: [
-        {flowId: 'f1', flowName: 'Alpha', ownerName: 'u1', analyzed: true, healthScore: 40, errors: 3, warnings: 0, info: 0, analyzedAt: '2026-01-01T00:00:00Z'},
-        {flowId: 'f2', flowName: 'Bravo', ownerName: 'u2', analyzed: true, healthScore: 90, errors: 0, warnings: 0, info: 0, analyzedAt: '2026-01-01T00:00:00Z'},
+        {
+          flowId: 'f1',
+          flowName: 'Alpha',
+          ownerName: 'u1',
+          analyzed: true,
+          healthScore: 40,
+          errors: 3,
+          warnings: 0,
+          info: 0,
+          analyzedAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          flowId: 'f2',
+          flowName: 'Bravo',
+          ownerName: 'u2',
+          analyzed: true,
+          healthScore: 90,
+          errors: 0,
+          warnings: 0,
+          info: 0,
+          analyzedAt: '2026-01-01T00:00:00Z',
+        },
       ],
     })
     analyzeFlowById.mockResolvedValue({flowId: 'x', findings: [], generatedAt: '', durationMs: 0, stats: {}})

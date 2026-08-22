@@ -1,6 +1,6 @@
 import {request, requestValidated} from './client'
 import {useFlowStore} from '@/stores/flowStore'
-import {AnalysisReportSchema} from './schemas'
+import {getAnalysisReportSchema} from './schemas'
 
 // Folder-wide batch analysis can run rules over many flows, well beyond the
 // default request timeout.
@@ -55,14 +55,16 @@ function activeFlowId(): string | undefined {
 }
 
 export const analysisApi = {
-  analyzeFlow: (): Promise<AnalysisReport> =>
-    requestValidated('/api/analysis/analyze', AnalysisReportSchema, {body: {flowId: activeFlowId()}}),
+  analyzeFlow: async (): Promise<AnalysisReport> =>
+    requestValidated('/api/analysis/analyze', await getAnalysisReportSchema(), {
+      body: {flowId: activeFlowId()},
+    }),
 
   // analyzeFlowById re-analyzes an arbitrary flow the caller can view, without
   // requiring it to be the currently-open document. Used by the portfolio's bulk
   // re-analyze action (which operates on flows that aren't loaded in the editor).
-  analyzeFlowById: (flowId: string): Promise<AnalysisReport> =>
-    requestValidated('/api/analysis/analyze', AnalysisReportSchema, {body: {flowId}}),
+  analyzeFlowById: async (flowId: string): Promise<AnalysisReport> =>
+    requestValidated('/api/analysis/analyze', await getAnalysisReportSchema(), {body: {flowId}}),
 
   getVariableLineage: (varName: string): Promise<VariableHistory> =>
     request('/api/analysis/lineage', {body: {flowId: activeFlowId(), varName}}),
@@ -89,7 +91,7 @@ export const analysisApi = {
   getDiff: (): Promise<AnalysisDiff> => request('/api/analysis/diff', {body: {flowId: activeFlowId()}}),
 
   // HTML export lives in exportApi (single dialog-aware implementation for
-  // PDF/Markdown/HTML — previously duplicated here with a divergent payload
+  // PDF/Markdown/HTML
   // that omitted the save-dialog path).
 
   exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<unknown> =>
@@ -155,14 +157,11 @@ export const analysisApi = {
   evaluatePolicy: (flowId: string, policy: Policy): Promise<PolicyResult> =>
     request('/api/analysis/policy/evaluate', {body: {flowId, policy}}),
 
-  savePolicy: (policy: Policy): Promise<Policy> =>
-    request('/api/analysis/policy/save', {body: policy}),
+  savePolicy: (policy: Policy): Promise<Policy> => request('/api/analysis/policy/save', {body: policy}),
 
-  listPolicies: (orgId: string): Promise<Policy[]> =>
-    request('/api/analysis/policy/list', {body: {orgId}}),
+  listPolicies: (orgId: string): Promise<Policy[]> => request('/api/analysis/policy/list', {body: {orgId}}),
 
-  getPolicy: (orgId: string, id: string): Promise<Policy> =>
-    request('/api/analysis/policy/get', {body: {orgId, id}}),
+  getPolicy: (orgId: string, id: string): Promise<Policy> => request('/api/analysis/policy/get', {body: {orgId, id}}),
 
   deletePolicy: (orgId: string, id: string): Promise<void> =>
     request('/api/analysis/policy/delete', {body: {orgId, id}}),

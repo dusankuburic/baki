@@ -102,7 +102,13 @@ describe('MainPaneToolbar', () => {
   it('re-imports the flow, re-analyzes, and restores the document', async () => {
     const fresh = {id: 'flow-1', name: 'F2', subflows: [], metadata: {}} as never
     reimport.mockResolvedValue(fresh)
-    analyzeFlow.mockResolvedValue({flowId: 'flow-1', findings: [], stats: {errors: 0, warnings: 0, info: 0}, generatedAt: '2024-01-01T00:00:00Z', durationMs: 5} as never)
+    analyzeFlow.mockResolvedValue({
+      flowId: 'flow-1',
+      findings: [],
+      stats: {errors: 0, warnings: 0, info: 0},
+      generatedAt: '2024-01-01T00:00:00Z',
+      durationMs: 5,
+    } as never)
     renderToolbar()
 
     fireEvent.click(screen.getByRole('button', {name: 'Re-import flow'}))

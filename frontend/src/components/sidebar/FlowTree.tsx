@@ -96,8 +96,7 @@ export default function FlowTree({
 
   const handleScroll = useCallback(() => {
     // rAF-coalesced: scroll events fire at frame+ frequency, and each
-    // setScrollTop re-render previously re-rendered every visible TreeNode
-    // (before their callbacks were stabilized).
+    // setScrollTop re-render re-renders every visible TreeNode.
     if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null

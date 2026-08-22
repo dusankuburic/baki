@@ -1,3 +1,10 @@
+// PAD Analyzer backend — local (Tauri sidecar) and cloud (multi-tenant) modes.
+//
+//	@title			PAD Analyzer API
+//	@version		1.0
+//	@description	Static analysis, auto-fix, and AI-assisted review for Power Automate Desktop flows.
+//
+//	@BasePath	/
 package main
 
 import (
@@ -45,6 +52,11 @@ var (
 )
 
 func main() {
+	// The parser mints one UUID per block and the apply-fix loop re-parses per
+	// fix; batched randomness (still crypto-seeded) avoids a crypto/rand
+	// syscall per block on large flows.
+	uuid.EnableRandPool()
+
 	// `baki-backend healthcheck` is an in-image liveness/readiness probe for
 	// non-ACA deployments (docker-compose, bare `docker run`). It GETs the
 	// server's own /readyz and exits 0 on 200, 1 otherwise. The prod target

@@ -21,7 +21,7 @@ export default class ChatErrorBoundary extends React.Component<{children: React.
     if (this.state.error) {
       return (
         <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center">
-          <AlertTriangle size={20} className="text-warning" />
+          <AlertTriangle size={20} className="text-semantic-warning" />
           <div>
             <p className="text-sm font-medium text-text-primary">Chat panel error</p>
             <p className="text-xs text-text-tertiary mt-1">Something went wrong rendering this thread.</p>

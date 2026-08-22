@@ -73,7 +73,10 @@ export function useBatchAnalysis(onBatchComplete: () => void): BatchAnalysisStat
 
   // Worst-finding-first; null reports (load errors) sort last.
   const sortedResults = useMemo(
-    () => (batch ? [...batch.results].sort((a, b) => (b.report?.findings.length ?? -1) - (a.report?.findings.length ?? -1)) : []),
+    () =>
+      batch
+        ? [...batch.results].sort((a, b) => (b.report?.findings.length ?? -1) - (a.report?.findings.length ?? -1))
+        : [],
     [batch],
   )
 

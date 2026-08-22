@@ -17,9 +17,7 @@ describe('i18n scaffold', () => {
 
   it('resolves namespaced keys with interpolation', () => {
     expect(i18next.t('shell:toasts.exportedTo', {path: '/tmp/x.md'})).toBe('Exported to /tmp/x.md')
-    expect(i18next.t('findings:summary.healthAria', {score: 85, label: 'Good'})).toBe(
-      'Health score 85 of 100: Good',
-    )
+    expect(i18next.t('findings:summary.healthAria', {score: 85, label: 'Good'})).toBe('Health score 85 of 100: Good')
   })
 
   it('pluralizes counts via _one/_other', () => {

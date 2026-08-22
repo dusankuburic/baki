@@ -110,7 +110,8 @@ export default function MainPaneToolbar() {
 
   const handleExport = async (format: 'pdf' | 'markdown' | 'html') => {
     try {
-      const fn = format === 'pdf' ? exportApi.exportPDF : format === 'html' ? exportApi.exportHTML : exportApi.exportMarkdown
+      const fn =
+        format === 'pdf' ? exportApi.exportPDF : format === 'html' ? exportApi.exportHTML : exportApi.exportMarkdown
       const path = await fn()
       if (path) {
         toast.success(t('toasts.exportedTo', {path}))
@@ -162,7 +163,13 @@ export default function MainPaneToolbar() {
   return (
     <div className="flex items-center h-12 px-4 border-b border-border-default bg-surface-1 gap-4">
       <div className="flex items-center gap-1">
-        <IconButton icon={ChevronLeft} size="sm" label={t('toolbar.goBack')} disabled={historyIndex <= 0} onClick={goBack} />
+        <IconButton
+          icon={ChevronLeft}
+          size="sm"
+          label={t('toolbar.goBack')}
+          disabled={historyIndex <= 0}
+          onClick={goBack}
+        />
         <IconButton
           icon={ChevronRight}
           size="sm"
@@ -247,7 +254,9 @@ export default function MainPaneToolbar() {
             />
           </>
         )}
-        {mainPaneView === 'diff' && <IconButton icon={Plus} size="sm" label={t('toolbar.newComparison')} onClick={handleCompare} />}
+        {mainPaneView === 'diff' && (
+          <IconButton icon={Plus} size="sm" label={t('toolbar.newComparison')} onClick={handleCompare} />
+        )}
         {mainPaneView === 'block' && (
           <IconButton
             icon={Flame}

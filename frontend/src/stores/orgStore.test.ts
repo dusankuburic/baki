@@ -3,6 +3,7 @@ import {useOrgStore, type Organisation} from './orgStore'
 
 vi.mock('@/api/client', () => ({
   request: vi.fn(),
+  clearRequestCache: vi.fn(),
 }))
 
 import {request} from '@/api/client'
@@ -189,7 +190,9 @@ describe('inviteMember', () => {
 
     await useOrgStore.getState().inviteMember('org-1', 'new@example.com', 'member')
 
-    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/invites', {body: {email: 'new@example.com', role: 'member'}})
+    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/invites', {
+      body: {email: 'new@example.com', role: 'member'},
+    })
   })
 })
 

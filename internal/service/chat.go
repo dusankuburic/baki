@@ -91,6 +91,11 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) er
 // use") from the per-caller cap being exceeded.
 var errStreamIDInUse = errors.New("clientStreamId already in use")
 
+// ErrTooManyChatStreams is returned when the caller's concurrent-stream cap
+// (maxConcurrentStreamsPerScope) is exceeded. Exported so the HTTP layer can
+// map it to a distinct machine-readable error code the frontend switches on.
+var ErrTooManyChatStreams = errors.New("too many chat responses running at once")
+
 // convMutexFor returns the per-conversation mutex used to serialize the
 // reconstruct-history + persist-user-turn critical section. LoadOrStore makes
 // the lookup-and-create atomic so two concurrent callers get the same mutex.
@@ -489,7 +494,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 	if !reserved {
 		cancel()
-		return "", fmt.Errorf("too many chat responses running at once (max %d) — wait for one to finish or stop it", maxConcurrentStreamsPerScope)
+		return "", fmt.Errorf("%w (max %d) — wait for one to finish or stop it", ErrTooManyChatStreams, maxConcurrentStreamsPerScope)
 	}
 
 	// C-1: when the client supplied the stream ID it has already registered its

@@ -83,8 +83,7 @@ export const flowApi = {
   // searchLibrary runs the query across every flow the caller can access
   // (cross-flow / org-wide search); each hit carries flowId/flowName so the UI
   // can group results by flow.
-  searchLibrary: (query: SearchQuery): Promise<SearchResults> =>
-    request('/api/flow/search-library', {body: {query}}),
+  searchLibrary: (query: SearchQuery): Promise<SearchResults> => request('/api/flow/search-library', {body: {query}}),
 
   revealInFileManager: (path: string): Promise<void> => request('/api/flow/reveal', {body: {path}}),
 
@@ -126,7 +125,11 @@ export const flowApi = {
   // (empty = all auto-fixable) in one server-side pass, returning the updated
   // document + how many fixes landed. Used by the bulk-action bar. Works in
   // desktop and cloud (single-file) modes.
-  applyFixBatch: (flowId: string, rules: string[], limit?: number): Promise<{document: FlowDocument; applied: number}> =>
+  applyFixBatch: (
+    flowId: string,
+    rules: string[],
+    limit?: number,
+  ): Promise<{document: FlowDocument; applied: number}> =>
     request('/api/flow/apply-fix-batch', {body: {flowId, rules, limit}}),
 
   // getSource returns the raw PAD source text (desktop: file; cloud: stored).

@@ -18,9 +18,7 @@ export default function AIPromptsPanel() {
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">{t('prompts.title')}</h2>
-      <p className="text-sm text-text-secondary mt-1 mb-6">
-        {t('prompts.subtitle')}
-      </p>
+      <p className="text-sm text-text-secondary mt-1 mb-6">{t('prompts.subtitle')}</p>
 
       <div className="space-y-8">
         <PromptList

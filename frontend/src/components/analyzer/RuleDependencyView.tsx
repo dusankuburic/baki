@@ -10,8 +10,8 @@ import type {DependencyAnalysis} from '@/types'
 
 cytoscape.use(dagre)
 
-// RuleDependencyView renders the analyzer's rule-dependency DAG (finally wiring
-// up the previously-dormant GET /api/analysis/dependencies endpoint). It shows
+// RuleDependencyView renders the analyzer's rule-dependency DAG
+// (GET /api/analysis/dependencies). It shows
 // how the 29 rules depend on each other, the topological evaluation order, and
 // any cycles (an analyzer-internal health signal). Static: not flow-specific.
 export default function RuleDependencyView() {

@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach} from 'vitest'
-import {useUIStore, isSystemView} from './uiStore'
+import {useUIStore, isSystemView, type MainPaneView} from './uiStore'
 import {resetAllStores} from './storeRegistry'
 
 describe('uiStore', () => {
@@ -42,7 +42,20 @@ describe('uiStore', () => {
 
   describe('isSystemView', () => {
     it('treats standalone destinations as system views', () => {
-      for (const v of ['home', 'dashboard', 'profile', 'admin', 'library', 'portfolio'] as const) {
+      // Regression: 'deps' and 'rules' were missing from SYSTEM_VIEWS while
+      // SystemViewRouter already handled them, so opening a flow from those
+      // views left it off-screen. Keep this list in sync with SystemViewRouter.
+      for (const v of [
+        'home',
+        'dashboard',
+        'profile',
+        'admin',
+        'library',
+        'portfolio',
+        'flow-compare',
+        'deps',
+        'rules',
+      ] as const) {
         expect(isSystemView(v)).toBe(true)
       }
     })
@@ -50,6 +63,29 @@ describe('uiStore', () => {
     it('treats flow-dependent views as non-system', () => {
       for (const v of ['block', 'graph', 'map', 'local-map', 'diff'] as const) {
         expect(isSystemView(v)).toBe(false)
+      }
+    })
+
+    it('covers every view in the MainPaneView union exactly once', () => {
+      const allViews: MainPaneView[] = [
+        'home',
+        'block',
+        'graph',
+        'map',
+        'local-map',
+        'diff',
+        'profile',
+        'admin',
+        'dashboard',
+        'library',
+        'portfolio',
+        'flow-compare',
+        'deps',
+        'rules',
+      ]
+      expect(new Set(allViews).size).toBe(allViews.length)
+      for (const v of allViews) {
+        expect(typeof isSystemView(v)).toBe('boolean')
       }
     })
   })

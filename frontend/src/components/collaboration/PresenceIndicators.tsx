@@ -31,7 +31,7 @@ export default function PresenceIndicators({className, maxVisible = 5}: Presence
           <UserAvatar key={user.userId} user={user} />
         ))}
         {overflow > 0 && (
-          <div className="w-7 h-7 rounded-full bg-surface-3 border-2 border-surface-2 flex items-center justify-center text-2xs font-medium text-text-muted z-0">
+          <div className="w-7 h-7 rounded-full bg-surface-3 border-2 border-surface-2 flex items-center justify-center text-2xs font-medium text-text-tertiary z-0">
             +{overflow}
           </div>
         )}
@@ -43,7 +43,7 @@ export default function PresenceIndicators({className, maxVisible = 5}: Presence
 function UserAvatar({user}: {user: PresenceUser}) {
   const label = user.selectedBlockId
     ? `${user.displayName ?? user.userId} · viewing block`
-    : user.displayName ?? user.userId
+    : (user.displayName ?? user.userId)
   return (
     <Tooltip content={label}>
       <Avatar

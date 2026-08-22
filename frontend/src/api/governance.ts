@@ -37,15 +37,11 @@ export const governanceApi = {
 
   unreadCount: (): Promise<{count: number}> => request('/api/governance/alerts/unread-count', {method: 'GET'}),
 
-  markRead: (id: string): Promise<{status: string}> =>
-    request('/api/governance/alerts/read', {body: {id}}),
+  markRead: (id: string): Promise<{status: string}> => request('/api/governance/alerts/read', {body: {id}}),
 
-  markAllRead: (): Promise<{status: string}> =>
-    request('/api/governance/alerts/read-all', {body: {}}),
+  markAllRead: (): Promise<{status: string}> => request('/api/governance/alerts/read-all', {body: {}}),
 
-  dismiss: (id: string): Promise<{status: string}> =>
-    request('/api/governance/alerts/dismiss', {body: {id}}),
+  dismiss: (id: string): Promise<{status: string}> => request('/api/governance/alerts/dismiss', {body: {id}}),
 
-  clear: (): Promise<{status: string}> =>
-    request('/api/governance/alerts', {method: 'DELETE', body: {}}),
+  clear: (): Promise<{status: string}> => request('/api/governance/alerts', {method: 'DELETE', body: {}}),
 }

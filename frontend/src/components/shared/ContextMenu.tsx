@@ -17,7 +17,7 @@ interface ContextMenuProps {
   items: ContextMenuItem[]
 }
 
-// ContextMenu previously had no a11y semantics (no role, no Esc, no focus
+// ContextMenu needs explicit a11y semantics (role, Esc, focus
 // management): a keyboard/screen-reader user couldn't tell it was a menu, Esc
 // didn't close it, and opening it left focus wherever it was. Now it carries
 // role=menu / role=menuitem, closes on Esc, auto-focuses the first item, and

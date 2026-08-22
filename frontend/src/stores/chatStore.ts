@@ -9,11 +9,9 @@ import type {ChatMessage, ProviderID} from '@/types'
 // waiting for a rejected POST. Keep the two in sync.
 export const MAX_CONCURRENT_STREAMS = 3
 
-// MAX_THREADS bounds the in-memory conversation history. Each thread holds a
-// full ChatMessage[] array in the conversations Map; without a cap, a long
-// session with many threads grows unbounded. When exceeded, the oldest
-// inactive, non-streaming thread is evicted (its messages can be re-loaded
-// from the backend on demand).
+// MAX_THREADS bounds the in-memory conversation history; when exceeded, the
+// oldest inactive, non-streaming thread is evicted (messages re-load from the
+// backend on demand).
 export const MAX_THREADS = 50
 
 export interface ChatThread {
@@ -242,11 +240,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   closeThread: threadId => {
-    // Cancel any in-flight backend stream before clearing the local slot.
-    // Without this, the provider keeps generating tokens for a stream whose
-    // client-side listener was deleted — wasting spend and orphaning the
-    // assistant's response (the done event finds no slot and is silently
-    // dropped instead of being committed to history).
+    // Cancel any in-flight backend stream before clearing the local slot, or
+    // the provider keeps generating for a stream with no listener.
     const slot = get().streams[threadId]
     if (slot?.streamId) {
       chatApi.cancelStream(slot.streamId).catch(() => {})

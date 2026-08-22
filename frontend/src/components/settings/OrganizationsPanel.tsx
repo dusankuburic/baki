@@ -139,7 +139,10 @@ export default function OrganizationsPanel() {
       </div>
 
       {error && (
-        <div role="alert" className="flex items-start gap-2 p-3 rounded-lg bg-semantic-error/10 border border-semantic-error/30 text-semantic-error">
+        <div
+          role="alert"
+          className="flex items-start gap-2 p-3 rounded-lg bg-semantic-error/10 border border-semantic-error/30 text-semantic-error"
+        >
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span className="text-sm flex-1">{error}</span>
           <button onClick={clearError} className="text-xs hover:opacity-80">
@@ -364,10 +367,7 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
   const {error: toastError, success: toastSuccess} = useToast()
   const {confirm} = useConfirm()
 
-  const {
-    data: invites,
-    refetch,
-  } = useAsync<OrgInvite[]>(
+  const {data: invites, refetch} = useAsync<OrgInvite[]>(
     () => request<OrgInvite[]>(`/api/orgs/${orgId}/invites`, {method: 'GET'}).catch(() => []),
     [orgId],
   )
@@ -397,8 +397,7 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
 
   if (pending.length === 0) return null
 
-  const formatDate = (iso: string) =>
-    new Date(iso).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+  const formatDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
 
   return (
     <div className="mt-3">
@@ -416,7 +415,9 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
             >
               <Mail size={14} className="shrink-0 text-text-tertiary" />
               <div className="flex-1 min-w-0">
-                <p title={inv.email} className="text-sm text-text-primary truncate">{inv.email}</p>
+                <p title={inv.email} className="text-sm text-text-primary truncate">
+                  {inv.email}
+                </p>
                 <p className="text-xs text-text-tertiary flex items-center gap-1">
                   <Clock size={10} />
                   <span className="capitalize">{inv.role}</span>

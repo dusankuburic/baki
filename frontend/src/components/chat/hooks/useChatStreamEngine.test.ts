@@ -392,11 +392,7 @@ describe('useChatStreamEngine', () => {
         expect.arrayContaining([expect.objectContaining({role: 'assistant', content: 'hello from A'})]),
       )
       // Must NOT have saved under the switched-to doc.
-      expect(chatApi.saveConversation).not.toHaveBeenCalledWith(
-        'flow-B',
-        expect.anything(),
-        expect.anything(),
-      )
+      expect(chatApi.saveConversation).not.toHaveBeenCalledWith('flow-B', expect.anything(), expect.anything())
     })
   })
 })

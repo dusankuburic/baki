@@ -28,12 +28,9 @@ interface AuthState {
   clearError: () => void
 }
 
-// isJwtExpired decodes a JWT's `exp` claim and reports whether it is already in
-// the past. This lets us skip a doomed /api/auth/refresh call (and its console
-// 401) at startup. A token we cannot decode is treated as NOT expired: rather
-// than silently discard a possibly-valid session, we let the server's 401 be
-// the arbiter. A decodable JWT that carries no `exp` is unusable, so it counts
-// as expired.
+// isJwtExpired reports whether a JWT's `exp` claim is in the past. An
+// undecodable token is treated as NOT expired (the server's 401 decides); a
+// decodable JWT with no `exp` counts as expired.
 function isJwtExpired(token: string): boolean {
   const payload = decodeJwtPayload(token)
   if (!payload) return false
@@ -278,12 +275,8 @@ registerRefreshCallback(async () => {
   invalidateConfigCache()
 })
 
-// resetAllStores tears down every domain store on logout to prevent
-// cross-session data leakage when a user logs out — important on a shared
-// browser/device where the next user logs in without a full page reload. Stores
-// self-register their reset handler via registerStoreReset() in storeRegistry.ts
-// (so a new store can't be forgotten here, and authStore needn't import them
-// all). syncStore has no handler of its own — it mirrors the SyncManager queue
-// and is torn down inside presenceStore's handler (disconnect → syncManager.reset).
-// Re-exported so callers/tests can import it from this module as before.
+// resetAllStores tears down every domain store on logout (shared-device
+// hygiene). Stores self-register via registerStoreReset() in storeRegistry.ts;
+// syncStore has no handler of its own — it is torn down inside presenceStore's
+// handler (disconnect → syncManager.reset).
 export {resetAllStores}

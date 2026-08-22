@@ -54,16 +54,14 @@ type credentials struct {
 	Password string `json:"password"`
 }
 
-// refreshCookieName is the HttpOnly cookie that carries the refresh token.
-// Phase 1 of moving the refresh token out of JS-accessible storage (localStorage
-// is XSS-readable): the cookie is SET on login/refresh and READ (cookie-first,
-// body-fallback) on refresh/logout, so the browser auto-sends it on same-origin
-// /api/auth POSTs. HttpOnly means document.cookie/XSS can't read it; SameSite=Lax
+// refreshCookieName is the HttpOnly cookie that carries the refresh token,
+// keeping it out of JS-accessible storage (localStorage is XSS-readable).
+// The cookie is SET on login/refresh and READ (cookie-first, body-fallback)
+// on refresh/logout, so the browser auto-sends it on same-origin /api/auth
+// POSTs. HttpOnly means document.cookie/XSS can't read it; SameSite=Lax
 // blocks cross-site CSRF POSTs against /refresh; Path=/api/auth confines it to
-// the auth endpoints. The body refreshToken field is still returned and accepted
-// for backward compatibility during the frontend cutover (phase 2 stops writing
-// localStorage; the sessions-UI's JS-read of the jti moves to a backend-provided
-// field — see getCurrentSessionId in authStore.ts).
+// the auth endpoints. The body refreshToken field is still returned and
+// accepted for backward compatibility.
 const refreshCookieName = "pad_refresh"
 
 // isHTTPS reports whether the request reached the server over TLS (directly or
@@ -178,9 +176,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	user, err := h.authSvc.Register(r.Context(), email, password)
 	if err != nil {
 		// Let render.Error auto-map: ErrEmailExists → 409, everything else
-		// (incl. ErrPasswordHashFailed and DB outages) → 500. Previously the
-		// handler hard-coded 409 for every error, masking infra failures as
-		// "email already in use".
+		// (incl. ErrPasswordHashFailed and DB outages) → 500.
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -215,8 +211,8 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	metrics.RecordAuthOp("login")
 	// Login ignores the email-validation error (emailErr) and normalizes only:
-	// an empty/malformed email proceeds to the lookup and returns 401, matching
-	// the long-standing response shape and avoiding leaking input rules.
+	// an empty/malformed email proceeds to the lookup and returns 401, avoiding
+	// leaking input rules.
 	email, password, _, err := decodeCredentials(r)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -232,8 +228,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	// for a missing user, real bcrypt BEFORE the lock check) and the
 	// failed-attempt/lockout bookkeeping — see internal/service/auth.go for
 	// why this ordering must not change. The switch below only translates its
-	// outcome into the exact same audit events and HTTP responses the inline
-	// implementation produced.
+	// outcome into audit events and HTTP responses.
 	result := h.authSvc.Authenticate(r.Context(), email, password)
 	switch result.Outcome {
 	case service.LoginUserNotFound:
@@ -272,8 +267,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Set the HttpOnly refresh cookie (phase 1 of removing the refresh token
-	// from JS-readable localStorage). The body field is still returned below
+	// Set the HttpOnly refresh cookie. The body field is still returned below
 	// for backward compatibility with existing clients.
 	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
 
@@ -301,8 +295,8 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Prefer the HttpOnly cookie over the body field (phase 1 of the
-	// localStorage removal). The body fallback keeps existing clients working.
+	// Prefer the HttpOnly cookie over the body field; the body fallback keeps
+	// existing clients working.
 	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
 
 	claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
@@ -729,7 +723,7 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("logout: failed to decode body, proceeding without refresh token revocation", "error", err)
 	}
 
-	// Prefer the HttpOnly cookie (phase 1); fall back to the body for compat.
+	// Prefer the HttpOnly cookie; fall back to the body for compat.
 	refreshTok := h.refreshTokenFromRequest(r, req.RefreshToken)
 	if refreshTok != "" && h.tokenStore != nil {
 		claims, err := h.security.AuthMgr.VerifyRefresh(refreshTok)
@@ -959,8 +953,7 @@ func (h *AuthHandler) handleAuthVerifyEmail(w http.ResponseWriter, r *http.Reque
 
 // validateEmail rejects malformed or over-long addresses and returns a
 // normalized (lowercased) version. RFC 5321 caps an address at 254 chars;
-// net/mail.ParseAddress catches the structural cases the old
-// `strings.Contains(email, "@")` check let through.
+// net/mail.ParseAddress handles the structural validation.
 func validateEmail(email string) (string, error) {
 	if len(email) > 254 {
 		return "", fmt.Errorf("email too long")
@@ -1033,8 +1026,7 @@ func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {
 		// pat:<id> JTI + the PAT's expiry, set by ClaimsForPAT in
 		// verifyAPIToken). Carrying them into the WS ticket lets the re-authz
 		// loop disconnect a revoked PAT's live socket and enforce the PAT's
-		// expiry — previously PATs left these empty, so IsRevoked("") never
-		// fired and the expiry timer was never armed.
+		// expiry.
 		if claims.ExpiresAt != nil {
 			accessExp = claims.ExpiresAt.Time
 		}

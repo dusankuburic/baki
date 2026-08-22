@@ -22,7 +22,9 @@ export function TopProblemFlows({flows}: {flows: NonNullable<DashboardStats['top
           >
             <span className="text-sm text-text-primary flex-1 truncate">{p.flowName || p.flowId.slice(0, 8)}</span>
             <span className="text-sm text-text-tertiary tabular-nums">{formatCount(p.findingCount)} findings</span>
-            <span className={clsx('text-sm font-bold font-mono tabular-nums', scoreColor(p.healthScore))}>{p.healthScore}</span>
+            <span className={clsx('text-sm font-bold font-mono tabular-nums', scoreColor(p.healthScore))}>
+              {p.healthScore}
+            </span>
           </div>
         ))}
       </div>

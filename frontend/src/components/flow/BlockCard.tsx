@@ -1,7 +1,6 @@
 import React, {useState, useMemo, useCallback} from 'react'
 import clsx from 'clsx'
 import {
-  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -37,7 +36,6 @@ type BlockCardProps = {
   hasFindings?: boolean
   findingCount?: number
   findingSeverity?: 'error' | 'warning' | 'info'
-  // Remote collaborators currently viewing this block (live selection sync).
   remoteOccupants?: PresenceUser[]
   onClick?: () => void
   onDoubleClick?: () => void
@@ -59,7 +57,7 @@ export default React.memo(function BlockCard({
   const Icon = getBlockIcon(block.type) as LucideIcon
   const color = getBlockColor(block.type)
   const displayName = stripBlockKeywords(block.type, block.name)
-  const stripeWidth = selected || hovered ? 6 : 4
+  const stripeWidth = 4
   const isContainer = isContainerType(block.type)
   const collapsed = useFlowStore(s => isContainer && s.expandedBlockIds.has(block.id))
   const toggleBlockExpand = useFlowStore(s => s.toggleBlockExpand)
@@ -80,9 +78,8 @@ export default React.memo(function BlockCard({
     const score = Math.min(complexityScore, 10)
     if (score === 0) return undefined
 
-    // Heatmap scale: Yellow -> Orange -> Red
-    const hue = 40 - score * 4 // 40 (Yellow) to 0 (Red)
     const opacity = 0.1 + score * 0.08
+    const hue = 40 - score * 4
     return `hsla(${hue}, 100%, 50%, ${opacity})`
   }, [complexityMode, complexityScore])
 
@@ -91,7 +88,6 @@ export default React.memo(function BlockCard({
   const triggerAI = (text: string) => {
     const flowId = useFlowStore.getState().document?.id
     if (!flowId) return
-    // Stage the prompt in the composer for review rather than auto-sending.
     stageBlockPrompt(text, block.id, flowId)
   }
 
@@ -205,8 +201,6 @@ export default React.memo(function BlockCard({
       aria-pressed={selected}
       aria-label={`${block.rawType}: ${block.name}`}
       onKeyDown={e => {
-        // Keyboard parity with click: Enter/Space select; Enter on an
-        // already-selected card opens it (double-click equivalent).
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.preventDefault()
         e.stopPropagation()
@@ -250,84 +244,82 @@ export default React.memo(function BlockCard({
         }}
       />
 
-      {/* Remote-collaborator occupancy: a stacked avatar indicator shows when
-          one or more teammates are viewing this block. Rendered above the card
-          so it isn't clipped by the card's overflow-hidden padding. */}
-      {remoteOccupants && remoteOccupants.length > 0 && (
-        <div
-          className="absolute -bottom-1.5 left-3 flex items-center -space-x-1.5 z-10"
-          title={remoteOccupants.map(u => u.displayName).join(', ')}
-        >
-          {remoteOccupants.slice(0, 3).map(u => (
-            <Avatar
-              key={u.userId}
-              name={u.displayName}
-              colorSeed={u.userId}
-              avatarUrl={u.avatarUrl}
-              size="sm"
-              className="w-4 h-4 text-3xs ring-2 ring-surface-2"
-            />
-          ))}
-          {remoteOccupants.length > 3 && (
-            <span className="w-4 h-4 rounded-full bg-surface-3 ring-2 ring-surface-2 flex items-center justify-center text-3xs text-text-tertiary">
-              +{remoteOccupants.length - 3}
-            </span>
-          )}
-        </div>
-      )}
-
-      {findingCount > 0 && (
-        <div
-          className="absolute -top-1.5 -right-1.5 flex items-center gap-0.5 text-2xs font-bold px-1.5 py-0.5 rounded-full shadow-sm border text-text-primary"
-          // Severity shown via a themed tint background + solid colored border;
-          // the count uses text-primary so it stays legible in every theme.
-          // (White on a solid semantic fill fails WCAG in most of the new
-          // themes. Tailwind opacity modifiers like bg-semantic-error/15 don't
-          // compile here — the colors are plain var() values without alpha
-          // channels — so the tint/border come from the per-theme tokens.)
-          style={{
-            backgroundColor: `var(--${findingSeverity}-bg)`,
-            borderColor: `var(--${findingSeverity})`,
-          }}
-        >
-          <AlertTriangle size={10} />
-          {findingCount}
-        </div>
-      )}
-
       <div className="flex items-center gap-2">
-        <span className="flex items-center justify-center w-4 h-4 flex-shrink-0">
-          {isContainer && (
-            <button
-              className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors"
-              onClick={e => {
-                e.stopPropagation()
-                toggleBlockExpand(block.id)
-              }}
-              aria-label={collapsed ? 'Expand block' : 'Collapse block'}
-              aria-expanded={!collapsed}
-            >
-              <Chevron size={14} style={{color}} />
-            </button>
-          )}
-        </span>
-        <Icon size={14} style={{color}} />
-        <span className="text-sm font-medium uppercase tracking-wider" style={{color}}>
-          {resolveTypeLabel(block.type, block.name, block.rawType)}
-        </span>
-        <span className="text-xs text-text-tertiary">L{block.lineNumber}</span>
-        {collapsed && block.children.length > 0 && (
-          <span className="text-xs text-text-tertiary">· {block.children.length} items</span>
-        )}
-        {!collapsed && block.properties && Object.keys(block.properties).length > 0 && (
-          <span className="text-xs text-text-tertiary">· {Object.keys(block.properties).length} props</span>
-        )}
-        {isCallBlock && hovered && (
-          <span className="ml-auto flex items-center gap-1 text-2xs text-text-disabled opacity-60">
-            <ExternalLink size={10} />
-            <span>Ctrl+Click</span>
+        {isContainer ? (
+          <button
+            className="flex items-center justify-center w-4 h-4 rounded hover:bg-surface-3 transition-colors text-text-tertiary flex-shrink-0"
+            onClick={e => {
+              e.stopPropagation()
+              toggleBlockExpand(block.id)
+            }}
+            aria-label={collapsed ? 'Expand block' : 'Collapse block'}
+            aria-expanded={!collapsed}
+          >
+            <Chevron size={14} />
+          </button>
+        ) : (
+          <span className="flex items-center justify-center w-4 h-4 flex-shrink-0">
+            <Icon size={14} style={{color}} aria-hidden="true" />
           </span>
         )}
+        <span className="flex items-center gap-1.5 min-w-0">
+          {isContainer && <Icon size={12} style={{color}} className="opacity-70 flex-shrink-0" aria-hidden="true" />}
+          <span className="text-sm font-medium uppercase tracking-wider truncate" style={{color}}>
+            {resolveTypeLabel(block.type, block.name, block.rawType)}
+          </span>
+        </span>
+        <span className="text-xs text-text-tertiary flex-shrink-0">L{block.lineNumber}</span>
+        {collapsed && block.children.length > 0 && (
+          <span className="text-xs text-text-tertiary flex-shrink-0">· {block.children.length} items</span>
+        )}
+        {!collapsed && block.properties && Object.keys(block.properties).length > 0 && (
+          <span className="text-xs text-text-tertiary flex-shrink-0">
+            · {Object.keys(block.properties).length} props
+          </span>
+        )}
+
+        <span className="ml-auto flex items-center gap-2 min-w-0">
+          {isCallBlock && hovered && (
+            <span className="flex items-center gap-1 text-2xs text-text-disabled opacity-60 flex-shrink-0">
+              <ExternalLink size={10} />
+              <span>Ctrl+Click</span>
+            </span>
+          )}
+          {remoteOccupants && remoteOccupants.length > 0 && (
+            <span
+              className="flex items-center -space-x-1.5 flex-shrink-0"
+              title={remoteOccupants.map(u => u.displayName).join(', ')}
+            >
+              {remoteOccupants.slice(0, 3).map(u => (
+                <Avatar
+                  key={u.userId}
+                  name={u.displayName}
+                  colorSeed={u.userId}
+                  avatarUrl={u.avatarUrl}
+                  size="sm"
+                  className="w-4 h-4 text-3xs ring-2 ring-surface-2"
+                />
+              ))}
+              {remoteOccupants.length > 3 && (
+                <span className="w-4 h-4 rounded-full bg-surface-3 ring-2 ring-surface-2 flex items-center justify-center text-3xs text-text-tertiary">
+                  +{remoteOccupants.length - 3}
+                </span>
+              )}
+            </span>
+          )}
+          {findingCount > 0 && (
+            <span
+              className="flex items-center justify-center min-w-4 h-4 px-1 text-2xs font-bold leading-none rounded-full border text-text-primary flex-shrink-0"
+              title={`${findingCount} ${findingSeverity} finding${findingCount > 1 ? 's' : ''}`}
+              style={{
+                backgroundColor: `var(--${findingSeverity}-bg)`,
+                borderColor: `var(--${findingSeverity})`,
+              }}
+            >
+              {findingCount}
+            </span>
+          )}
+        </span>
       </div>
 
       <div className="text-[15px] font-medium text-text-primary truncate" title={displayName}>

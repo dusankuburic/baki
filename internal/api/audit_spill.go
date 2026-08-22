@@ -19,7 +19,7 @@ const (
 
 // auditSpillStore is a bounded, on-disk FIFO of audit events that overflowed the
 // in-memory pool. auditSpillReaper drains it back into the pool when capacity
-// returns, so a transient DB/throughput hiccup no longer drops events.
+// returns, so a transient DB/throughput hiccup doesn't drop events.
 //
 // The store is a single append-only JSON-lines file guarded by a mutex. Drain
 // rewrites the file without the consumed prefix — O(n) per drain, but the file

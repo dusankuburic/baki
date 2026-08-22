@@ -32,9 +32,7 @@ export default function AIBehaviorPanel() {
               {value: 'copilot', label: 'Copilot'},
             ]}
           />
-          <p className="text-xs text-text-tertiary mt-2">
-            {t('behavior.activeAssistantHint')}
-          </p>
+          <p className="text-xs text-text-tertiary mt-2">{t('behavior.activeAssistantHint')}</p>
         </div>
 
         <div>
@@ -49,9 +47,7 @@ export default function AIBehaviorPanel() {
               {value: 'github-models', label: 'GitHub Models'},
             ]}
           />
-          <p className="text-xs text-text-tertiary mt-2">
-            {t('behavior.embeddingAssistantHint')}
-          </p>
+          <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
         </div>
 
         <div>
@@ -64,8 +60,7 @@ export default function AIBehaviorPanel() {
           <p className="text-xs text-text-tertiary mt-2">
             {/* Split-rendered so the model name keeps its inline <code> style
                 without a Trans dependency (typed Trans + components is brittle). */}
-            {t('behavior.embeddingModelHintPrefix')}{' '}
-            <code className="text-text-secondary">text-embedding-3-large</code>
+            {t('behavior.embeddingModelHintPrefix')} <code className="text-text-secondary">text-embedding-3-large</code>
             {t('behavior.embeddingModelHintSuffix')}
           </p>
         </div>
@@ -88,9 +83,7 @@ export default function AIBehaviorPanel() {
           <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
             <div>
               <span className="text-sm font-medium text-text-primary">{t('behavior.showCosts')}</span>
-              <p className="text-xs text-text-tertiary mt-0.5">
-                {t('behavior.showCostsHint')}
-              </p>
+              <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.showCostsHint')}</p>
             </div>
             <Switch
               label={t('behavior.showCosts')}
@@ -102,9 +95,7 @@ export default function AIBehaviorPanel() {
           <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
             <div className="flex-1">
               <span className="text-sm font-medium text-text-primary">{t('behavior.dailyBudget')}</span>
-              <p className="text-xs text-text-tertiary mt-0.5">
-                {t('behavior.dailyBudgetHint')}
-              </p>
+              <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.dailyBudgetHint')}</p>
             </div>
             <div className="w-24">
               <NumberField
@@ -121,9 +112,7 @@ export default function AIBehaviorPanel() {
 
         <div className="pt-2">
           <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.customInstructions')}</h3>
-          <p className="text-xs text-text-tertiary mb-3">
-            {t('behavior.customInstructionsHint')}
-          </p>
+          <p className="text-xs text-text-tertiary mb-3">{t('behavior.customInstructionsHint')}</p>
           <CustomInstructionsInput />
         </div>
 
@@ -175,7 +164,9 @@ function ProviderAdvancedSettings({
   return (
     <div className="grid grid-cols-2 gap-6">
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-text-secondary">{t('behavior.temperature', {value: config.temperature})}</label>
+        <label className="text-xs font-medium text-text-secondary">
+          {t('behavior.temperature', {value: config.temperature})}
+        </label>
         <input
           type="range"
           min="0"

@@ -57,7 +57,7 @@ export function FixabilityCard({data, className}: {data: Fixability; className?:
           </div>
           <div className="grid grid-cols-2 gap-2 mt-2">
             <div className="flex items-center gap-2 rounded-lg bg-surface-3/50 px-2.5 py-2">
-              <Wrench size={15} className="text-success shrink-0" />
+              <Wrench size={15} className="text-semantic-success shrink-0" />
               <div className="min-w-0">
                 <div className="text-sm font-mono tabular-nums text-text-primary leading-tight">
                   {available}/{total}

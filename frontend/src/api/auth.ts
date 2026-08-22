@@ -1,5 +1,5 @@
 import {request, requestValidated, requestBlob} from './client'
-import {LoginResponseSchema, RefreshResponseSchema, AuthUserSchema} from './schemas'
+import {getAuthUserSchema, getLoginResponseSchema, getRefreshResponseSchema} from './schemas'
 
 export interface LoginRequest {
   email: string
@@ -61,18 +61,18 @@ export interface CreatedApiToken extends ApiToken {
 }
 
 export const authApi = {
-  login: (credentials: LoginRequest): Promise<LoginResponse> =>
-    requestValidated('/api/auth/login', LoginResponseSchema, {body: credentials}),
+  login: async (credentials: LoginRequest): Promise<LoginResponse> =>
+    requestValidated('/api/auth/login', await getLoginResponseSchema(), {body: credentials}),
 
-  register: (credentials: LoginRequest): Promise<LoginResponse> =>
-    requestValidated('/api/auth/register', LoginResponseSchema, {body: credentials}),
+  register: async (credentials: LoginRequest): Promise<LoginResponse> =>
+    requestValidated('/api/auth/register', await getLoginResponseSchema(), {body: credentials}),
 
   logout: (): Promise<void> => request('/api/auth/logout'),
 
-  refresh: (refreshToken: string): Promise<RefreshResponse> =>
-    requestValidated('/api/auth/refresh', RefreshResponseSchema, {body: {refreshToken}}),
+  refresh: async (refreshToken: string): Promise<RefreshResponse> =>
+    requestValidated('/api/auth/refresh', await getRefreshResponseSchema(), {body: {refreshToken}}),
 
-  me: (): Promise<AuthUser> => requestValidated('/api/auth/me', AuthUserSchema, {method: 'GET'}),
+  me: async (): Promise<AuthUser> => requestValidated('/api/auth/me', await getAuthUserSchema(), {method: 'GET'}),
 
   updateProfile: (profile: UpdateProfileRequest): Promise<AuthUser> =>
     request('/api/auth/profile', {body: profile, method: 'PUT'}),
@@ -98,8 +98,8 @@ export const authApi = {
 
   // Exchanges the single-use ticket from the OIDC callback redirect for a
   // regular token pair (same shape as login).
-  ssoExchange: (ticket: string): Promise<LoginResponse> =>
-    requestValidated('/api/auth/sso/exchange', LoginResponseSchema, {body: {ticket}}),
+  ssoExchange: async (ticket: string): Promise<LoginResponse> =>
+    requestValidated('/api/auth/sso/exchange', await getLoginResponseSchema(), {body: {ticket}}),
 
   // Machine API tokens (PATs) for headless/CI access.
   listApiTokens: (): Promise<ApiToken[]> => request('/api/auth/tokens', {method: 'GET'}),

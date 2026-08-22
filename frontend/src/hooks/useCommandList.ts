@@ -44,7 +44,18 @@ export function useCommandList(deps: {
   toggleInspector: () => void
   toggleSettings: () => void
   setMainPaneView: (
-    v: 'map' | 'block' | 'graph' | 'local-map' | 'diff' | 'profile' | 'admin' | 'dashboard' | 'portfolio' | 'flow-compare' | 'rules',
+    v:
+      | 'map'
+      | 'block'
+      | 'graph'
+      | 'local-map'
+      | 'diff'
+      | 'profile'
+      | 'admin'
+      | 'dashboard'
+      | 'portfolio'
+      | 'flow-compare'
+      | 'rules',
   ) => void
   requestSearchFocus: () => void
   recentFiles: RecentFile[]

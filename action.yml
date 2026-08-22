@@ -19,7 +19,7 @@ inputs:
     required: false
     default: ''
   format:
-    description: 'Output format for the report: sarif, json, junit, csv, text.'
+    description: 'Output format for the report: sarif, json, junit, csv, html, text.'
     required: false
     default: 'sarif'
   policy:

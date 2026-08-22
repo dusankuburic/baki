@@ -99,7 +99,23 @@ func Error(w http.ResponseWriter, err error, code int) {
 			code = http.StatusConflict
 		}
 	}
+	writeError(w, err, code, statusCode(code))
+}
 
+// ErrorWithCode writes the standard error envelope with an explicit
+// machine-readable code (e.g. "CHAT_CAPACITY_REACHED") instead of the
+// HTTP-status-derived default. Use it for domain errors that clients switch
+// on — it decouples frontend classification from the human-readable message
+// (which is masked on 5xx and may be reworded). Prefer a 4xx status so the
+// message survives the internal-error masking in writeError.
+func ErrorWithCode(w http.ResponseWriter, err error, code int, machineCode string) {
+	if code == 0 {
+		code = http.StatusInternalServerError
+	}
+	writeError(w, err, code, machineCode)
+}
+
+func writeError(w http.ResponseWriter, err error, code int, machineCode string) {
 	if code >= 500 {
 		logger.Error("internal server error", "error", err)
 	}
@@ -117,7 +133,7 @@ func Error(w http.ResponseWriter, err error, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(ErrorResponse{
-		Code:      statusCode(code),
+		Code:      machineCode,
 		Message:   msg,
 		RequestID: reqID,
 	})

@@ -27,7 +27,18 @@ export async function setupAuthenticatedPage(page: Page) {
       version: 'test', platform: 'linux', arch: 'x86', buildDate: '', gitCommit: '',
       capabilities: {sessionAnalytics: false},
     },
-    '/api/system/settings': {},
+    // Full AppSettings shape (zod-validated on the client); firstRunCompleted
+    // suppresses the onboarding welcome modal that would otherwise overlay
+    // every post-login interaction in specs using this helper.
+    '/api/system/settings': {
+      version: 1,
+      general: {firstRunCompleted: true},
+      appearance: {},
+      layout: {},
+      ai: {},
+      parser: {},
+      analysis: {},
+    },
     '/api/flow/recent': [],
     '/api/orgs/': [],
   }

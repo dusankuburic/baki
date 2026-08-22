@@ -6,10 +6,15 @@ import {Trash2, Copy} from 'lucide-react'
 describe('ContextMenu a11y', () => {
   it('renders role=menu with role=menuitem children', () => {
     render(
-      <ContextMenu x={10} y={10} onClose={() => {}} items={[
-        {label: 'Copy', icon: Copy, onClick: () => {}},
-        {label: 'Delete', icon: Trash2, onClick: () => {}, variant: 'danger'},
-      ]} />,
+      <ContextMenu
+        x={10}
+        y={10}
+        onClose={() => {}}
+        items={[
+          {label: 'Copy', icon: Copy, onClick: () => {}},
+          {label: 'Delete', icon: Trash2, onClick: () => {}, variant: 'danger'},
+        ]}
+      />,
     )
     expect(screen.getByRole('menu')).toBeInTheDocument()
     expect(screen.getAllByRole('menuitem')).toHaveLength(2)

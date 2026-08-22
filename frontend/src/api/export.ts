@@ -19,7 +19,10 @@ function currentFlowId(): string {
 // native save dialog (desktop), POST {flowId, path} to the export endpoint,
 // browser anchor download when no dialog is available (web/cloud). Returns
 // the chosen path ("" when downloaded via the browser).
-async function exportReport(kind: {endpoint: string; mime: string; label: string; ext: string}, flowId = currentFlowId()): Promise<string> {
+async function exportReport(
+  kind: {endpoint: string; mime: string; label: string; ext: string},
+  flowId = currentFlowId(),
+): Promise<string> {
   let path = ''
   if (getPlatformCapabilities().nativeDialogs) {
     const p = await createAdapter().fileSave({
@@ -29,7 +32,11 @@ async function exportReport(kind: {endpoint: string; mime: string; label: string
     path = p
   }
 
-  const res: {data: string} = await request(kind.endpoint, {body: {flowId, path}, method: 'POST', timeoutMs: EXPORT_TIMEOUT_MS})
+  const res: {data: string} = await request(kind.endpoint, {
+    body: {flowId, path},
+    method: 'POST',
+    timeoutMs: EXPORT_TIMEOUT_MS,
+  })
 
   if (!getPlatformCapabilities().nativeDialogs && res.data) {
     const link = document.createElement('a')

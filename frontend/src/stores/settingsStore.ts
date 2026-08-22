@@ -171,7 +171,7 @@ interface SettingsState {
 // updates (like window resizing or slider dragging). Rejects on failure so
 // callers can roll back their optimistic update. A superseded persist resolves
 // immediately: the newer call reads the latest state, so it carries this
-// call's changes too (previously the superseded promise never settled).
+// call's changes too.
 //
 // An in-flight guard prevents two concurrent API calls: if a new persist
 // arrives while the previous one is still hitting the network, the new call

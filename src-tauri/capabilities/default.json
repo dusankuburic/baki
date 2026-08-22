@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimum Tauri permissions the webview actually uses. The Rust host owns the Go sidecar lifecycle (spawn/kill via std::process — no shell plugin needed); the webview invokes two custom commands (get_backend_config, restart_backend) plus opens external URLs via shellOpen. Spawn/kill/execute were previously granted and represented pure gratuitous authority an XSS payload would inherit.",
+  "description": "Minimum Tauri permissions the webview actually uses. The Rust host owns the Go sidecar lifecycle (spawn/kill via std::process — no shell plugin needed); the webview invokes two custom commands (get_backend_config, restart_backend) plus opens external URLs via shellOpen. Spawn/kill/execute were previously granted and represented pure gratuitous authority an XSS payload would inherit. NOTE: shell:allow-open is deliberately UNSCOPED — the same call site handles https URLs (device-auth verification_uri) and bare filesystem paths (reveal-in-explorer), and no single validator covers both without breaking one. Residual risk (documented, accepted): a compromised backend could direct the desktop app to open arbitrary URIs via the OS handler. If reveal moves to a dedicated Rust command, scope this to https://**.",
   "windows": [
     "main"
   ],
@@ -10,9 +10,8 @@
     "core:webview:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
-    "core:window:allow-toggle-maximize",
+    "core:window:allow-maximize",
     "core:window:allow-close",
-    "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
     "dialog:allow-open",
     "dialog:allow-save",
@@ -20,3 +19,4 @@
     "log:default"
   ]
 }
+

@@ -65,7 +65,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
       <header className="flex items-start justify-between gap-2 px-4 pt-4 pb-2 border-b border-border-subtle flex-shrink-0">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text-primary truncate">{flow.name}</h2>
-          {flow.description && <p className="mt-1 text-xs text-text-muted line-clamp-3">{flow.description}</p>}
+          {flow.description && <p className="mt-1 text-xs text-text-tertiary line-clamp-3">{flow.description}</p>}
         </div>
         <button
           type="button"
@@ -127,7 +127,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
                       {relativeTime(v.createdAt)}
                     </span>
                   </div>
-                  {v.comment && <div className="text-text-muted truncate">{v.comment}</div>}
+                  {v.comment && <div className="text-text-tertiary truncate">{v.comment}</div>}
                 </li>
               ))}
             </ul>

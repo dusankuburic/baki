@@ -1,7 +1,7 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import {persist} from 'zustand/middleware'
-import {request} from '@/api/client'
+import {request, clearRequestCache} from '@/api/client'
 import type {AuthUser} from '@/api/auth'
 import {useFlowStore} from './flowStore'
 import {useAnalysisStore} from './analysisStore'
@@ -72,12 +72,14 @@ export const useOrgStore = create<OrgState>()(
       setActiveOrg: id => {
         if (get().activeOrgId === id) return
         set({activeOrgId: id})
-        // Deliberately broader than the flow-switch coordinator
-        // (resetDerivedStateForFlow): an org switch is a bigger context boundary —
-        // flow-store's reset() already clears search + doc-derived analysis fields
-        // + editor state, but analysis reports/findings and chat threads aren't
-        // scoped by org in frontend state, so they must be wiped in full here too
-        // (a lighter per-flow reset would leak the previous org's data into the UI).
+        // Drop any 5s-TTL GET cache from the previous org context: safe
+        // today because org-scoped endpoints are path-parameterized, but a
+        // future org-scoped-by-header GET would otherwise leak across the
+        // switch within the TTL window (same rationale as logout's clear).
+        clearRequestCache()
+        // Deliberately broader than resetDerivedStateForFlow: analysis reports
+        // and chat threads aren't org-scoped in frontend state, so an org switch
+        // must wipe them in full.
         useFlowStore.getState().reset()
         useAnalysisStore.getState().reset()
         useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map(), streams: {}, drafts: {}})

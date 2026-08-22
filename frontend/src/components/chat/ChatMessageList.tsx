@@ -17,9 +17,9 @@ interface Props {
 const SCROLL_UPDATE_THROTTLE = 120 // ms between scroll updates
 
 // Virtualized conversation list (react-virtuoso — same library as the
-// findings/block lists). Long threads previously mounted every MessageBubble
-// (react-markdown + Prism per message), making thread open/switch O(messages);
-// now only the visible window mounts. Scroll semantics are preserved:
+// findings/block lists): only the visible window mounts (each MessageBubble
+// carries react-markdown + Prism, so mounting all is O(messages)).
+// Scroll semantics are preserved:
 //   - opens at the bottom (initialTopMostItemIndex),
 //   - follows new messages when already at the bottom (followOutput),
 //   - during streaming, interval-smooth-scrolls while the user hasn't
@@ -76,10 +76,7 @@ function ChatMessageList({messages, renderMessage, footer, isStreaming}: Props) 
             ref={ref}
             style={style}
             {...props}
-            className={clsx(
-              'px-3 pt-3 custom-scrollbar overflow-y-auto',
-              isStreaming && 'is-streaming',
-            )}
+            className={clsx('px-3 pt-3 custom-scrollbar overflow-y-auto', isStreaming && 'is-streaming')}
             role="log"
             aria-live="polite"
             aria-relevant="additions text"

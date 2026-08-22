@@ -335,7 +335,7 @@ func Default() *Config {
 		Runtime: DefaultRuntimeConfig(),
 		Server: ServerConfig{
 			Host: "localhost",
-			Port: 0, // 0 = OS-assigned ephemeral port (current behaviour)
+			Port: 0, // 0 = OS-assigned ephemeral port
 		},
 		Storage: StorageConfig{
 			Backend: StorageLocal,

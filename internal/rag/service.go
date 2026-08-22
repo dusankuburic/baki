@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -12,6 +13,14 @@ import (
 	"pad-core/models"
 
 	"github.com/google/uuid"
+)
+
+// Embedding-provider sentinels. Exported so the HTTP layer can map them to a
+// distinct machine-readable error code the frontend switches on (a Claude-only
+// deployment can't index documents — the UI explains that root cause).
+var (
+	ErrEmbeddingNotConfigured = errors.New("embedding provider not configured")
+	ErrEmbeddingUnavailable   = errors.New("embedding provider unavailable")
 )
 
 // SettingsProvider returns the current application settings.
@@ -57,7 +66,7 @@ func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFa
 // embedding-capable provider instead of hard-failing on the openai default.
 func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
 	if s.factory == nil {
-		return nil, fmt.Errorf("embedding provider not configured")
+		return nil, ErrEmbeddingNotConfigured
 	}
 
 	providerID := ""
@@ -95,7 +104,7 @@ func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("embedding provider unavailable (configured %q: %w; no fallback had a key)", providerID, err)
+	return nil, fmt.Errorf("%w (configured %q: %w; no fallback had a key)", ErrEmbeddingUnavailable, providerID, err)
 }
 
 // AddDocument chunks content, generates embeddings in the caller's scope, then

@@ -1,6 +1,4 @@
 import {describe, it, expect} from 'vitest'
-// @ts-expect-error — node:fs is available in vitest; @types/node intentionally
-// not installed (browser app). Suppression can be removed if @types/node is added.
 import {readFileSync} from 'node:fs'
 import {THEME_REGISTRY} from './themeRegistry'
 

@@ -106,7 +106,10 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           maxResults: 50,
           blockTypes: types.size > 0 ? Array.from(types) : undefined,
         }
-        const res = scope === 'all-flows' ? await flowApi.searchLibrary(query) : await flowApi.searchFlow(document?.id ?? '', query)
+        const res =
+          scope === 'all-flows'
+            ? await flowApi.searchLibrary(query)
+            : await flowApi.searchFlow(document?.id ?? '', query)
         if (reqId !== searchReqIdRef.current) return
         setResults(res.results as SearchResult[])
         setActiveIndex(0)
@@ -186,7 +189,9 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                 }}
                 className={clsx(
                   'text-2xs font-semibold px-2.5 py-1 transition-colors',
-                  scope === s ? 'bg-brand-500 text-brand-foreground' : 'bg-transparent text-text-tertiary hover:text-text-secondary',
+                  scope === s
+                    ? 'bg-brand-500 text-brand-foreground'
+                    : 'bg-transparent text-text-tertiary hover:text-text-secondary',
                 )}
               >
                 {s === 'this-flow' ? 'This Flow' : 'All Flows'}
@@ -276,7 +281,9 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           ) : (
             <div className="py-12 text-center text-text-disabled">
               <div className="text-sm">
-                {scope === 'all-flows' ? 'Type to search across all your flows...' : 'Type to search across the entire flow...'}
+                {scope === 'all-flows'
+                  ? 'Type to search across all your flows...'
+                  : 'Type to search across the entire flow...'}
               </div>
               <div className="text-xs mt-1">Search properties, variables, and comments</div>
             </div>

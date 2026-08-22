@@ -106,6 +106,30 @@ jobs:
           working-directory: core
           args: --timeout=5m
 
+  openapi:
+    name: OpenAPI Freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Regenerate docs/ from the swag annotations in source and fail if the
+      # committed files drift — keeps swagger.json an artifact, never a
+      # hand-edited file. Version pinned to go.mod's swaggo/swag.
+      - name: Install swag
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
+      - name: Regenerate
+        run: swag init -g main.go -o docs --parseDependencyLevel 1
+      - name: Check for drift
+        run: |
+          if ! git diff --exit-code docs/; then
+            echo "::error::docs/ is stale — run 'swag init -g main.go -o docs --parseDependencyLevel 1' and commit the result"
+            git diff --stat docs/
+            exit 1
+          fi
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

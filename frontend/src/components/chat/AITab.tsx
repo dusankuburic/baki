@@ -51,11 +51,10 @@ export default function AITab() {
   const _document = useFlowStore(s => s.document)
   const _analysisReport = useAnalysisStore(s => (_document ? s.reports.get(_document.id) : undefined))
   // O(1) block-id → meta index built once per document (see FindingsTab);
-  // previously this walked the entire block tree on every selection change,
-  // which on a 10k-block flow ran a full DFS per canvas click.
+  // a per-selection tree walk would be O(blocks) on every canvas click.
   const _blockLookup = useMemo(() => (_document ? buildBlockLookup(_document) : null), [_document])
   const selectedBlock = useMemo(
-    () => (_blockLookup && _selectedBlockId ? _blockLookup.get(_selectedBlockId) ?? null : null),
+    () => (_blockLookup && _selectedBlockId ? (_blockLookup.get(_selectedBlockId) ?? null) : null),
     [_blockLookup, _selectedBlockId],
   )
   const aiSettings = useSettingsStore(s => s.settings.ai)

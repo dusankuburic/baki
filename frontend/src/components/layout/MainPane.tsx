@@ -1,6 +1,6 @@
 import {Fragment, lazy, Suspense, memo, useState, useMemo, useEffect} from 'react'
 import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle, Code2} from 'lucide-react'
-import {BlockView, MainPaneToolbar} from '@/components/flow'
+import {MainPaneToolbar} from '@/components/flow'
 import SourceEditor from '@/components/flow/SourceEditor'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
 import {Spinner, ErrorBoundary, useToast} from '@/components/shared'
@@ -18,7 +18,11 @@ import {useEditorGroups} from '@/hooks/useEditorGroups'
 
 // GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
 // its lazy siblings below.
+// BlockView pulls in react-virtuoso (~55KB) plus the block-rendering surface;
+// it only renders once a flow is open, and the app boots to a system view, so
+// lazy keeps it out of the entry chunk too.
 const GraphView = lazy(() => import('@/components/graph/GraphView'))
+const BlockView = lazy(() => import('@/components/flow/BlockView'))
 const ExecutionGraphView = lazy(() => import('@/components/flow/ExecutionGraphView'))
 const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffView'))
 
@@ -224,40 +228,41 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
               />
               {group.activeTabId && gi === focusedGroupIndex && <Breadcrumbs />}
               <div className="flex-1 flex flex-col overflow-hidden">
-                {mainPaneView === 'diff'
-                  ? gi === 0 && (
-                      <ErrorBoundary>
-                        <Suspense fallback={<Spinner />}>
-                          <RegressionDiffView key="global-diff" />
-                        </Suspense>
-                      </ErrorBoundary>
-                    )
-                  : group.activeTabId &&
-                    (mainPaneView === 'block' ? (
-                      <div key={group.activeTabId} className="flex-1 overflow-y-auto">
-                        <ErrorBoundary>
-                          <BlockView subflowId={group.activeTabId} />
-                        </ErrorBoundary>
-                      </div>
-                    ) : mainPaneView === 'graph' ? (
-                      <ErrorBoundary>
-                        <Suspense fallback={<Spinner />}>
-                          <GraphView key={group.activeTabId} subflowId={group.activeTabId} />
-                        </Suspense>
-                      </ErrorBoundary>
-                    ) : mainPaneView === 'local-map' ? (
-                      <ErrorBoundary>
-                        <Suspense fallback={<Spinner />}>
-                          <ExecutionGraphView key={`local-map-${group.activeTabId}`} subflowId={group.activeTabId} />
-                        </Suspense>
-                      </ErrorBoundary>
-                    ) : mainPaneView === 'map' ? (
-                      <ErrorBoundary>
-                        <Suspense fallback={<Spinner />}>
-                          <ExecutionGraphView key="global-map" />
-                        </Suspense>
-                      </ErrorBoundary>
-                    ) : null)}
+                {mainPaneView === 'diff' ? (
+                  gi === 0 && (
+                    <ErrorBoundary>
+                      <Suspense fallback={<Spinner />}>
+                        <RegressionDiffView key="global-diff" />
+                      </Suspense>
+                    </ErrorBoundary>
+                  )
+                ) : mainPaneView === 'block' && group.activeTabId ? (
+                  <div key={group.activeTabId} className="flex-1 overflow-y-auto">
+                    <ErrorBoundary>
+                      <Suspense fallback={<Spinner />}>
+                        <BlockView subflowId={group.activeTabId} />
+                      </Suspense>
+                    </ErrorBoundary>
+                  </div>
+                ) : mainPaneView === 'graph' && group.activeTabId ? (
+                  <ErrorBoundary>
+                    <Suspense fallback={<Spinner />}>
+                      <GraphView key={group.activeTabId} subflowId={group.activeTabId} />
+                    </Suspense>
+                  </ErrorBoundary>
+                ) : mainPaneView === 'local-map' && group.activeTabId ? (
+                  <ErrorBoundary>
+                    <Suspense fallback={<Spinner />}>
+                      <ExecutionGraphView key={`local-map-${group.activeTabId}`} subflowId={group.activeTabId} />
+                    </Suspense>
+                  </ErrorBoundary>
+                ) : mainPaneView === 'map' ? (
+                  <ErrorBoundary>
+                    <Suspense fallback={<Spinner />}>
+                      <ExecutionGraphView key="global-map" />
+                    </Suspense>
+                  </ErrorBoundary>
+                ) : null}
               </div>
             </div>
           </Fragment>

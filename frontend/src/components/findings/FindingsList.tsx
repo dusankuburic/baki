@@ -130,7 +130,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
 
   // Flatten groups → header/card rows for the virtualizer. A collapsed group
   // contributes only its header; groupEnd marks the last visible row of a group
-  // so it carries the bottom divider (the old per-group wrapper did this).
+  // so it carries the bottom divider.
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = []
     for (const group of groups) {
@@ -279,7 +279,9 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
       />
       {selectedFindingIds.size > 0 && (
         <div className="absolute bottom-0 left-0 right-0 bg-surface-2/95 backdrop-blur border-t border-border-subtle px-4 py-2 flex items-center justify-between z-30 shadow-lg">
-          <span className="text-2xs text-text-secondary font-medium">{t('selection.selectedCount', {count: selectedFindingIds.size})}</span>
+          <span className="text-2xs text-text-secondary font-medium">
+            {t('selection.selectedCount', {count: selectedFindingIds.size})}
+          </span>
           <div className="flex items-center gap-3">
             {/* Bulk apply-fix: shown only when at least one selected finding has an autoFix. */}
             {hasFixableSelection && (

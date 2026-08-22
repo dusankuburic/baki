@@ -22,10 +22,12 @@ if (!isTauri() && !isSharedView) {
   }
 }
 
-// Register the service worker for offline shell caching — web mode only. In
-// Tauri the frontend is served from a localhost sidecar and a SW would
-// interfere with the IPC bridge.
-if (!isTauri() && 'serviceWorker' in navigator) {
+// Register the service worker for offline shell caching — web + production
+// builds only. In Tauri the frontend is served from a localhost sidecar and a
+// SW would interfere with the IPC bridge; under `vite dev` the SW's
+// stale-while-revalidate caching of same-origin modules would serve outdated
+// code during HMR.
+if (import.meta.env.PROD && !isTauri() && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {
       // SW registration failure is non-fatal — the app works online regardless.

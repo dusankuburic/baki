@@ -76,7 +76,7 @@ var (
 
 	// auditSpiller is the optional on-disk overflow sink for events that don't
 	// fit the in-memory pool. Configured via SetAuditSpillConfig before
-	// InitAuditPool; nil keeps the legacy "divert to log fallback" behaviour.
+	// InitAuditPool; nil keeps the "divert to log fallback" behaviour.
 	auditSpiller *auditSpillStore
 	// spillStopCh signals auditSpillReaper to exit; spillReaperWg waits for it.
 	spillStopCh   chan struct{}
@@ -86,8 +86,8 @@ var (
 // SetAuditSpillConfig enables the on-disk spill queue for audit events that
 // overflow the in-memory pool. dir "" → temp dir; maxBytes <=0 → 10 MB. Must be
 // called before InitAuditPool. When the pool later has capacity, a reaper
-// drains spilled events back into the pool so a transient overload no longer
-// drops events (only sustained overload beyond the spill cap degrades).
+// drains spilled events back into the pool so a transient overload doesn't
+// drop events (only sustained overload beyond the spill cap degrades).
 func SetAuditSpillConfig(dir string, maxBytes int64) error {
 	s, err := newAuditSpiller(dir, maxBytes)
 	if err != nil {

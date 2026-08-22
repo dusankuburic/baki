@@ -82,7 +82,7 @@ export interface UpdateLibraryFlowRequest {
 }
 
 export const libraryApi = {
-  list: (filter: LibraryFilter = {}): Promise<PagedResponse<LibraryFlow>> => {
+  list: (filter: LibraryFilter = {}, signal?: AbortSignal): Promise<PagedResponse<LibraryFlow>> => {
     const params = new URLSearchParams()
     if (filter.orgId) params.set('orgId', filter.orgId)
     if (filter.scope) params.set('scope', filter.scope)
@@ -91,7 +91,7 @@ export const libraryApi = {
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset) params.set('offset', String(filter.offset))
     const qs = params.toString()
-    return request(`/api/library${qs ? '?' + qs : ''}`, {method: 'GET'})
+    return request(`/api/library${qs ? '?' + qs : ''}`, {method: 'GET', signal})
   },
 
   // Org-wide governance portfolio, ranked worst-health-first.

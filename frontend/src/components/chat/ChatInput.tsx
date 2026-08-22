@@ -261,7 +261,8 @@ export default function ChatInput({
   const providerCfg = aiSettings.providers[provider as keyof typeof aiSettings.providers]
   const maxTokens = (providerCfg as {maxTokens?: number} | undefined)?.maxTokens ?? 4096
   const tokenPct = tokenEstimate / maxTokens
-  const tokenClass = tokenPct >= 0.95 ? 'text-error' : tokenPct >= 0.8 ? 'text-warning' : 'text-text-tertiary'
+  const tokenClass =
+    tokenPct >= 0.95 ? 'text-semantic-error' : tokenPct >= 0.8 ? 'text-semantic-warning' : 'text-text-tertiary'
 
   return (
     <div className="px-3 pb-3 pt-1">

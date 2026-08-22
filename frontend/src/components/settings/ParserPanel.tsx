@@ -35,7 +35,9 @@ export default function ParserPanel() {
 
           {parser.treatTabsAsSpaces && (
             <div className="pl-4">
-              <label className="text-xs font-medium text-text-secondary block mb-1.5">{t('parser.spacesPerIndent')}</label>
+              <label className="text-xs font-medium text-text-secondary block mb-1.5">
+                {t('parser.spacesPerIndent')}
+              </label>
               <div className="w-24">
                 <NumberField
                   min={1}

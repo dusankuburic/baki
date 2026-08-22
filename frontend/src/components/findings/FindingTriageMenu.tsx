@@ -112,8 +112,17 @@ export default function FindingTriageMenu({finding}: Props) {
 
       {/* Assignee chip — shown only when someone is assigned. */}
       {assignee && (
-        <span className="flex items-center gap-1 text-2xs text-text-tertiary" title={`Assigned to ${assignee.displayName}`}>
-          <Avatar name={assignee.displayName} colorSeed={assignee.id} avatarUrl={assignee.avatarUrl} size="sm" className="w-4 h-4 text-3xs" />
+        <span
+          className="flex items-center gap-1 text-2xs text-text-tertiary"
+          title={`Assigned to ${assignee.displayName}`}
+        >
+          <Avatar
+            name={assignee.displayName}
+            colorSeed={assignee.id}
+            avatarUrl={assignee.avatarUrl}
+            size="sm"
+            className="w-4 h-4 text-3xs"
+          />
           <span className="max-w-16 truncate">{assignee.displayName}</span>
         </span>
       )}
@@ -149,7 +158,11 @@ export default function FindingTriageMenu({finding}: Props) {
             {!isDesktop && assignees.length > 0 && (
               <>
                 <div className="my-0.5 border-t border-border-subtle" />
-                <div className="relative" onMouseEnter={() => setShowAssign(true)} onMouseLeave={() => setShowAssign(false)}>
+                <div
+                  className="relative"
+                  onMouseEnter={() => setShowAssign(true)}
+                  onMouseLeave={() => setShowAssign(false)}
+                >
                   <button
                     onClick={() => setShowAssign(s => !s)}
                     className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors text-text-secondary"
@@ -173,7 +186,13 @@ export default function FindingTriageMenu({finding}: Props) {
                           onClick={() => handleAssign(currentUser.id)}
                           className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors text-text-secondary"
                         >
-                          <Avatar name={currentUser.displayName || currentUser.email} colorSeed={currentUser.id} avatarUrl={currentUser.avatarUrl} size="sm" className="w-4 h-4 text-3xs" />
+                          <Avatar
+                            name={currentUser.displayName || currentUser.email}
+                            colorSeed={currentUser.id}
+                            avatarUrl={currentUser.avatarUrl}
+                            size="sm"
+                            className="w-4 h-4 text-3xs"
+                          />
                           <span className="truncate">Me</span>
                         </button>
                       )}
@@ -189,7 +208,13 @@ export default function FindingTriageMenu({finding}: Props) {
                               triage?.assigneeId === a.id ? 'text-brand-400 font-medium' : 'text-text-secondary',
                             )}
                           >
-                            <Avatar name={a.displayName} colorSeed={a.id} avatarUrl={a.avatarUrl} size="sm" className="w-4 h-4 text-3xs" />
+                            <Avatar
+                              name={a.displayName}
+                              colorSeed={a.id}
+                              avatarUrl={a.avatarUrl}
+                              size="sm"
+                              className="w-4 h-4 text-3xs"
+                            />
                             <span className="truncate">{a.displayName}</span>
                             {triage?.assigneeId === a.id && <X size={9} className="ml-auto opacity-50" />}
                           </button>

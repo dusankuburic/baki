@@ -49,7 +49,7 @@ action.yml         GitHub Action (composite)
 - **Apply-fix loop**: `FlowService.ApplyFix` dispatches on `fixType` → `analyzer.*Patch(block)` → `analyzer.ApplyPatch(source, patch)` → re-parse → re-analyze.
 - **Round-trip gate**: every fixer has a test that parses source → analyzes → applies fix → re-parses → re-analyzes → asserts finding is gone.
 - **Storage**: single `StorageBackend` interface, two impls (Postgres + filesystem). Test stubs embed `testutil.FakeBackend`.
-- **Frontend state**: 12 Zustand stores, coordinated by `storeRegistry` (logout teardown). Settings persist via `/api/system/settings`.
+- **Frontend state**: 14 Zustand stores, coordinated by `storeRegistry` (logout teardown). Settings persist via `/api/system/settings`.
 - **Suppression**: source-level `# pad-ignore[rule]` (travels with the file) vs. UI-level (in-memory + cloud triage).
 
 ## Never Commit

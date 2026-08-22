@@ -84,14 +84,19 @@ export default function LibraryWorkspace() {
       if (!silent) setIsLoading(true)
       setError(null)
       try {
-        const res: PagedResponse<LibraryFlow> = await libraryApi.list({
-          scope,
-          sort,
-          orgId: requestOrgId,
-          query: debouncedQuery || undefined,
-          limit: pageSize,
-          offset: page * pageSize,
-        })
+        const res: PagedResponse<LibraryFlow> = await libraryApi.list(
+          {
+            scope,
+            sort,
+            orgId: requestOrgId,
+            query: debouncedQuery || undefined,
+            limit: pageSize,
+            offset: page * pageSize,
+          },
+          // Real cancellation: rapid filter/search typing aborts the previous
+          // request in-flight instead of discarding its late result.
+          ac.signal,
+        )
         if (ac.signal.aborted) return
         // Multi-org chip subset filtering happens client-side over the page —
         // the server doesn't accept a list of orgIds, only a single one.
@@ -102,7 +107,8 @@ export default function LibraryWorkspace() {
         setItems(pageItems)
         setTotal(res.total)
       } catch (e) {
-        if (ac.signal.aborted) return
+        // Abort (superseded fetch or unmount) is intentional, not an error.
+        if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return
         const msg = e instanceof Error ? e.message : String(e)
         logger.warn('Library: list failed', e)
         setError(msg)

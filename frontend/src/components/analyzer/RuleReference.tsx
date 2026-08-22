@@ -15,7 +15,11 @@ export default function RuleReference() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<string>('all')
 
-  const {data: rules, isLoading, error} = useAsync(async () => {
+  const {
+    data: rules,
+    isLoading,
+    error,
+  } = useAsync(async () => {
     return await analysisApi.getRules()
   }, [])
 
@@ -32,7 +36,9 @@ export default function RuleReference() {
       .filter((r: Rule) => {
         if (!query.trim()) return true
         const q = query.toLowerCase()
-        return r.id.toLowerCase().includes(q) || r.name.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)
+        return (
+          r.id.toLowerCase().includes(q) || r.name.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)
+        )
       })
       .sort((a: Rule, b: Rule) => a.category.localeCompare(b.category) || a.id.localeCompare(b.id))
   }, [rules, filter, query])
@@ -70,14 +76,19 @@ export default function RuleReference() {
           onChange={e => setFilter(e.target.value)}
         >
           {categories.map(c => (
-            <option key={c} value={c}>{c === 'all' ? 'All categories' : c}</option>
+            <option key={c} value={c}>
+              {c === 'all' ? 'All categories' : c}
+            </option>
           ))}
         </select>
       </div>
 
       <div className="space-y-3">
         {filtered.map((r: Rule) => (
-          <div key={r.id} className="p-4 rounded-lg bg-surface-2 border border-border-default hover:border-border-hover transition-colors">
+          <div
+            key={r.id}
+            className="p-4 rounded-lg bg-surface-2 border border-border-default hover:border-border-hover transition-colors"
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
@@ -101,11 +112,7 @@ export default function RuleReference() {
             </div>
           </div>
         ))}
-        {filtered.length === 0 && (
-          <div className="text-center py-12 text-text-secondary">
-            No rules match "{query}"
-          </div>
-        )}
+        {filtered.length === 0 && <div className="text-center py-12 text-text-secondary">No rules match "{query}"</div>}
       </div>
     </div>
   )

@@ -155,8 +155,8 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
         {finding.autoFix && finding.autoFix !== 'suppress' && isDesktop && (
           <button
             onClick={() => {
-                  if (finding.autoFix) void handleApplyFix(finding.autoFix)
-                }}
+              if (finding.autoFix) void handleApplyFix(finding.autoFix)
+            }}
             disabled={applyingFix}
             className="flex items-center gap-1 text-2xs text-emerald-400 hover:text-emerald-300 px-1.5 py-1 rounded hover:bg-emerald-500/10 transition-colors shrink-0 disabled:opacity-50"
             title="Apply this fix to the flow source file and re-analyze"

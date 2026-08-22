@@ -126,7 +126,9 @@ export default function VariableLineageGraph({events}: Props) {
       if (blockId) navigateToBlock(blockId)
     })
 
-    instance.layout({name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 50, animate: false} as cytoscape.LayoutOptions).run()
+    instance
+      .layout({name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 50, animate: false} as cytoscape.LayoutOptions)
+      .run()
     instance.fit(undefined, 30)
 
     cyRef.current = instance

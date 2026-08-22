@@ -38,14 +38,14 @@ export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
         {status === 'pending' && (
           <>
             <Spinner size={32} />
-            <p className="text-sm text-text-muted">Verifying your email…</p>
+            <p className="text-sm text-text-tertiary">Verifying your email…</p>
           </>
         )}
         {status === 'ok' && (
           <>
             <CheckCircle2 className="text-semantic-success" size={40} />
             <h1 className="text-xl font-semibold text-text-primary">Email verified</h1>
-            <p className="text-sm text-text-muted">Thanks — your email address is now confirmed.</p>
+            <p className="text-sm text-text-tertiary">Thanks — your email address is now confirmed.</p>
             <Button type="button" variant="primary" fullWidth onClick={onDone}>
               Continue to sign in
             </Button>
@@ -55,7 +55,7 @@ export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
           <>
             <XCircle className="text-semantic-error" size={40} />
             <h1 className="text-xl font-semibold text-text-primary">Verification failed</h1>
-            <p className="text-sm text-text-muted">{error ?? 'This link is invalid or has expired.'}</p>
+            <p className="text-sm text-text-tertiary">{error ?? 'This link is invalid or has expired.'}</p>
             <Button type="button" variant="secondary" fullWidth onClick={onDone}>
               Back to sign in
             </Button>

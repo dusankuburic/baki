@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import {useCallback, useEffect, useMemo, useState, lazy, Suspense} from 'react'
 import {Search} from 'lucide-react'
 import {analysisApi, flowApi} from '@/api'
 import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
@@ -7,12 +7,15 @@ import {EmptyState, useToast} from '@/components/shared'
 import {stageFindingFix} from '@/lib/fixWithAI'
 import {writeClipboard} from '@/lib/clipboard'
 import FindingsSummary from './FindingsSummary'
-import FindingsList from './FindingsList'
 import FindingsToolbar from './FindingsToolbar'
 import AnalysisRunner from './AnalysisRunner'
 import AnalysisDiffView from './AnalysisDiffView'
 import {exportFindingsCSV, exportFindingsHTML, exportFindingsSARIF} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
+
+// FindingsList pulls in react-virtuoso (~55KB); it only renders once a flow
+// has findings to show, so lazy-loading keeps it out of the entry chunk.
+const FindingsList = lazy(() => import('./FindingsList'))
 import {useTranslation} from 'react-i18next'
 import type {AnalysisDiff, Finding, AnalysisReport} from '@/types'
 
@@ -291,22 +294,21 @@ export default function FindingsTab() {
           )}
           {findings.length === 0 ? (
             report.findings.length === 0 ? (
-              <EmptyState
-                title={t('empty.noneTitle')}
-                description={t('empty.noneDescription')}
-              />
+              <EmptyState title={t('empty.noneTitle')} description={t('empty.noneDescription')} />
             ) : (
               <div className="flex items-center justify-center h-full text-sm text-text-tertiary">
                 {t('empty.noMatch')}
               </div>
             )
           ) : (
-            <FindingsList
-              findings={findings}
-              blockLookup={blockLookup}
-              onFixWithAI={handleFixWithAI}
-              sortMode={sortMode}
-            />
+            <Suspense fallback={<div className="flex-1" />}>
+              <FindingsList
+                findings={findings}
+                blockLookup={blockLookup}
+                onFixWithAI={handleFixWithAI}
+                sortMode={sortMode}
+              />
+            </Suspense>
           )}
         </>
       )}

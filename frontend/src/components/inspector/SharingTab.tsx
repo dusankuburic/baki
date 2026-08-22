@@ -332,7 +332,9 @@ function ShareLinksSection({flowId}: {flowId: string}) {
           })}
         </div>
       ) : (
-        <p className="text-2xs text-text-tertiary italic">No active share links. Create one to share a read-only report.</p>
+        <p className="text-2xs text-text-tertiary italic">
+          No active share links. Create one to share a read-only report.
+        </p>
       )}
     </div>
   )

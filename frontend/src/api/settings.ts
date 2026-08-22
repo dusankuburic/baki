@@ -1,21 +1,20 @@
 import {request, requestValidated} from './client'
-import {AppSettingsSchema} from './schemas'
+import {getAppSettingsSchema} from './schemas'
 import type {AppSettings} from '@/types'
 
 export const settingsApi = {
-  getSettings: (): Promise<AppSettings> =>
-    requestValidated('/api/system/settings', AppSettingsSchema, {method: 'GET'}),
+  getSettings: async (): Promise<AppSettings> =>
+    requestValidated('/api/system/settings', await getAppSettingsSchema(), {method: 'GET'}),
 
   updateSettings: (settings: AppSettings): Promise<void> => request('/api/system/settings', {body: settings}),
 
-  getUserSettings: (): Promise<AppSettings> =>
-    requestValidated('/api/system/settings/user', AppSettingsSchema, {method: 'GET'}),
+  getUserSettings: async (): Promise<AppSettings> =>
+    requestValidated('/api/system/settings/user', await getAppSettingsSchema(), {method: 'GET'}),
 
-  updateUserSettings: (settings: AppSettings): Promise<void> =>
-    request('/api/system/settings/user', {body: settings}),
+  updateUserSettings: (settings: AppSettings): Promise<void> => request('/api/system/settings/user', {body: settings}),
 
-  getOrgSettings: (orgId: string): Promise<AppSettings> =>
-    requestValidated(`/api/system/settings/org/${orgId}`, AppSettingsSchema, {method: 'GET'}),
+  getOrgSettings: async (orgId: string): Promise<AppSettings> =>
+    requestValidated(`/api/system/settings/org/${orgId}`, await getAppSettingsSchema(), {method: 'GET'}),
 
   updateOrgSettings: (orgId: string, settings: AppSettings): Promise<void> =>
     request(`/api/system/settings/org/${orgId}`, {body: settings}),

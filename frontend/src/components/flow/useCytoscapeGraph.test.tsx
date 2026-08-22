@@ -125,11 +125,7 @@ function mount(subflowId?: string) {
         <span data-testid="cy-loading">{String(api.loading)}</span>
         {api.error && <span data-testid="cy-error">{api.error}</span>}
         <span data-testid="cy-match-count">{api.matchCount ?? 'null'}</span>
-        <input
-          data-testid="cy-search"
-          value={api.searchQuery}
-          onChange={e => api.setSearchQuery(e.target.value)}
-        />
+        <input data-testid="cy-search" value={api.searchQuery} onChange={e => api.setSearchQuery(e.target.value)} />
       </div>
     )
   }

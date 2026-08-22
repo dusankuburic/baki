@@ -353,11 +353,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           updatedAt: new Date().toISOString(),
         })
       }
-      // Keep the suppress filter in sync with the triage status. A finding is
-      // hidden by the suppress filter iff its status is 'suppressed'; any other
-      // status (open/acknowledged/in_progress/resolved) must reveal it. Without
-      // this, choosing "Suppressed" from the triage menu persisted the status
-      // but left the finding visible and suppressedCount stale until reload.
+      // Keep the suppress filter in sync with the triage status: a finding is
+      // hidden iff its status is 'suppressed'; any other status must reveal it.
       const isSuppressed = status === 'suppressed'
       if (isSuppressed && !state.suppressedKeys.has(key)) {
         const keys = new Set(state.suppressedKeys)
@@ -436,9 +433,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     const flowId = useFlowStore.getState().document?.id
     if (!flowId) return
     try {
-      // Single round trip after the mutation: the drift fetch the previous
-      // version made here was discarded (`void drift`) and `baselineNewCount`
-      // is definitionally 0 right after setting.
+      // `baselineNewCount` is definitionally 0 right after setting a baseline.
       await analysisApi.setBaseline(flowId)
       set({baseline: await analysisApi.getBaseline(flowId), baselineNewCount: 0})
     } catch (err) {

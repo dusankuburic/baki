@@ -124,10 +124,9 @@ func (m *EventManager) HasSubscriber(userID string) bool {
 }
 
 func (m *EventManager) deliver(ev Event) {
-	// Encode the SSE frame ONCE for all recipients: the same event was
-	// previously marshaled independently per connected client, multiplying
-	// encode cost (and its allocations) by the number of live SSE tabs for
-	// every chat chunk / progress event.
+	// Encode the SSE frame ONCE for all recipients: encoding per connected
+	// client would multiply encode cost (and its allocations) by the number of
+	// live SSE tabs for every chat chunk / progress event.
 	data, err := json.Marshal(ev)
 	if err != nil {
 		logger.Warn("SSE: encode event failed; dropping", "event", ev.Name, "err", err)

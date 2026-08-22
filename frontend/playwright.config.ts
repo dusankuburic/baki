@@ -10,6 +10,11 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
+    // The PWA service worker intercepts /api/* fetches mid-boot, and
+    // SW-initiated fetches bypass page.route — stubs would silently miss and
+    // vite's SPA fallback (HTML, 200) would poison zod-validated responses.
+    // E2E exercises the app, not the SW; block it.
+    serviceWorkers: 'block',
   },
   projects: [
     {

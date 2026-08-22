@@ -1,13 +1,36 @@
 {
+  "id": "/",
   "name": "PAD Analyzer",
   "short_name": "PAD Analyzer",
   "description": "Static analysis, auto-fix, and AI-assisted review for Power Automate Desktop flows.",
+  "lang": "en",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "browser"],
+  "categories": ["developer", "productivity", "utilities"],
   "background_color": "#0a0a0b",
   "theme_color": "#0a0a0b",
   "icons": [
-    {"src": "/icon-128.png", "sizes": "128x128", "type": "image/png", "purpose": "any maskable"},
-    {"src": "/icon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any maskable"}
+    {"src": "/icon-128.png", "sizes": "128x128", "type": "image/png", "purpose": "any"},
+    {"src": "/icon-128.png", "sizes": "128x128", "type": "image/png", "purpose": "maskable"},
+    {"src": "/icon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any"},
+    {"src": "/icon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "maskable"}
+  ],
+  "shortcuts": [
+    {
+      "name": "Library",
+      "short_name": "Library",
+      "description": "Browse your cloud flow library",
+      "url": "/?view=library",
+      "icons": [{"src": "/icon-128.png", "sizes": "128x128", "type": "image/png"}]
+    },
+    {
+      "name": "Analytics",
+      "short_name": "Analytics",
+      "description": "Open the flow portfolio dashboard",
+      "url": "/?view=dashboard",
+      "icons": [{"src": "/icon-128.png", "sizes": "128x128", "type": "image/png"}]
+    }
   ]
 }

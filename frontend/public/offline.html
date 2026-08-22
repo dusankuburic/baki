@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Offline — PAD Analyzer</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            background: #0a0a0b; color: #e5e7eb;
+        }
+        @media (prefers-color-scheme: light) {
+            body { background: #f9fafb; color: #1f2937; }
+            .card { border-color: #e5e7eb !important; }
+            .muted { color: #6b7280 !important; }
+        }
+        .card {
+            text-align: center; padding: 3rem 2.5rem; max-width: 26rem;
+            border: 1px solid #2d2d30; border-radius: 0.75rem; background: transparent;
+        }
+        h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+        p { font-size: 0.9rem; line-height: 1.5; margin: 0 0 1.5rem; }
+        .muted { color: #9ca3af; }
+        a.retry {
+            display: inline-block; padding: 0.5rem 1.25rem; border-radius: 0.5rem;
+            background: #2563eb; color: #fff; text-decoration: none; font-weight: 600; font-size: 0.9rem;
+        }
+        a.retry:hover { background: #1d4ed8; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>You're offline</h1>
+        <p class="muted">PAD Analyzer couldn't reach the server. The app shell is cached, but flows, findings, and AI features need a connection.</p>
+        <a class="retry" href="/">Try again</a>
+    </div>
+</body>
+</html>

@@ -2,7 +2,7 @@ import {useState, useCallback, useMemo} from 'react'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {chatApi} from '@/api'
+import {chatApi, ApiError} from '@/api'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {conversationToMarkdown, downloadTextFile, safeFilename} from '@/lib/chatExport'
@@ -47,16 +47,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
 
   const [contextPreview, setContextPreview] = useState<ContextPreview | null>(null)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
-  // M10: excludeContext chosen during the preview must be forwarded to the
-  // actual send when the user confirms. Without this, confirmContextPreview
-  // called executeSend(msg) with no excludeContext, so the real AI request
-  // silently included the flow context the user had just excluded in the
-  // preview — the preview and the real send disagreed.
   const [pendingExcludeContext, setPendingExcludeContext] = useState<boolean | undefined>(undefined)
 
-  // Streaming state is per-thread (chatStore.streams); the hook surfaces the
-  // ACTIVE thread's slot under the pre-existing names. Narrow selectors keep
-  // per-chunk re-renders scoped: only slot fields used here trigger updates.
+  // Streaming state is per-thread (chatStore.streams); this hook surfaces the
+  // ACTIVE thread's slot. Narrow selectors keep per-chunk re-renders scoped:
+  // only slot fields used here trigger updates.
   const isStreaming = useChatStore(s => Object.keys(s.streams).length > 0)
   const isCurrentThreadStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
   const showThinking = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]?.isThinking))
@@ -103,31 +98,20 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       if (isFirstMessage && !activeThread.title && text.trim()) {
         updateThread(activeThread.id, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
       }
-      // Note: no save-on-send — the backend reconstructs history from its store
-      // (which holds the prior turn's state), and save-on-done persists the full
-      // user+assistant pair after completion. This drops one full-history POST
-      // per turn without changing on-success persistence.
+      // No save-on-send — the backend reconstructs history; save-on-done
+      // persists the full user+assistant pair.
 
       const msgId = crypto.randomUUID()
       const threadId = activeThread.id
       const myGen = bumpGen(threadId)
-      // C-1: client-generated stream ID. The SSE listener is subscribed BEFORE
-      // the create POST, so the backend can emit immediately (clientStreamId
-      // handshake) with no /chat/begin round-trip. The acc is primed up front so
-      // the first chunk finds its key, and the slot is reserved with the real sid
-      // (no 'pending' phase) so the thinking indicator shows and a second send
-      // for this thread is blocked from the start.
       const sid = crypto.randomUUID()
       startStream(threadId, sid, msgId)
       beginAcc(sid, threadId)
 
       try {
-        // Subscribe the listener + wait for the SSE connection to be 'open'
-        // BEFORE creating the stream, so no chunk is lost when the backend emits.
-        // registerStream returns false if the hook was unmounted mid-registration
-        // (e.g. the user closed the AI tab during the open-wait window) — in that
-        // case do NOT create the backend stream: it would emit over SSE to a dead
-        // listener and burn provider spend with no UI feedback.
+        // Subscribe + wait for the SSE connection to be 'open' BEFORE creating
+        // the stream so no chunk is lost; registerStream returns false if the
+        // hook was unmounted mid-registration — then do NOT create the stream.
         const registered = await registerStream(sid, /*begin*/ false)
         if (!registered || !isCurrentGen(threadId, myGen)) {
           dropAcc(sid)
@@ -168,21 +152,26 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       } catch (e: unknown) {
         if (!isCurrentGen(threadId, myGen)) return
         const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
-        // The concurrency cap (or any pre-stream-create failure) surfaces here as
-        // a thrown error. Treat it as a transient condition: toast + clean up, do
-        // NOT persist an *Error* bubble into the history for the cap class.
-        if (errMsg.includes('too many chat responses')) {
+        // Classify by the envelope's machine-readable code first, falling back
+        // to the message regex for older backends. Capacity errors are
+        // transient — toast + clean up, no *Error* bubble in history.
+        const apiErr = e instanceof ApiError ? e : null
+        const capacityReached = apiErr?.code === 'CHAT_CAPACITY_REACHED' || errMsg.includes('too many chat responses')
+        const budgetExceeded =
+          apiErr?.code === 'AI_BUDGET_EXCEEDED' || (/budget/i.test(errMsg) && !/check unavailable/i.test(errMsg))
+        if (capacityReached) {
           toast.warning('Chats are busy', {
             description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
           })
-        } else if (/budget/i.test(errMsg)) {
+        } else if (budgetExceeded) {
           // Daily AI budget hit: surface a dedicated, actionable message instead
           // of a raw "Error: daily AI budget exceeded ($X / $Y)" bubble — the
           // user needs to know it resets at midnight, not that something broke.
           const amounts = errMsg.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
           const detail = amounts ? ` (${amounts[0]})` : ''
           toast.warning("You've reached today's AI budget" + detail, {
-            description: 'AI requests are capped per day per organization. The budget resets at midnight UTC; contact an admin to raise it.',
+            description:
+              'AI requests are capped per day per organization. The budget resets at midnight UTC; contact an admin to raise it.',
           })
           appendMessage(threadId, {
             id: crypto.randomUUID(),
@@ -193,11 +182,22 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
             model: selectedModel,
             finishReason: 'error',
           } as ChatMessage)
+        } else {
+          // Surface any other create failure as an error bubble so the user
+          // knows their message didn't go through.
+          logger.warn('chat stream create failed', e)
+          appendMessage(threadId, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `*Error: ${errMsg}*`,
+            timestamp: new Date().toISOString(),
+            provider,
+            model: selectedModel,
+            finishReason: 'error',
+          } as ChatMessage)
         }
         // Tear down the SSE subscription we opened and cancel any backend stream
-        // that the create POST may have recorded before throwing. (B8 leak fix —
-        // without cancelStream the backend goroutine holds a live provider
-        // connection until the stream-cap timeout.)
+        // that the create POST may have recorded before throwing.
         dropAcc(sid)
         cancelStream(sid)
         endStream(threadId)
@@ -298,9 +298,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     const slot = useChatStore.getState().streams[tid]
     if (!slot) return
     const sid = slot.streamId
-    // Bump the per-thread gen so any in-flight executeSend (still awaiting
-    // streamChatMessage with a 'pending' sentinel) sees it's stale and
-    // self-cancels once the real sid arrives.
+    // Bump the per-thread gen so any in-flight executeSend sees it's stale
+    // and self-cancels.
     bumpGen(tid)
     if (sid && sid !== 'pending') {
       // stopAndCommit cancels the SSE sub + backend stream, keeping whatever
@@ -310,12 +309,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     endStream(tid)
   }, [bumpGen, endStream, stopAndCommit])
 
-  // M11: wrap the store's closeThread so the SSE listener and stall-probe
-  // timer are torn down immediately. closeThread only cancels the backend
-  // stream and clears the store slot — without this, the per-stream SSE
-  // unsubscriber (in useStreamingMessage) and the STALL_PROBE_MS timer stay
-  // live for up to ~90s, issuing failed resumeStream calls against the
-  // cancelled stream until enough probe misses trigger cleanup.
+  // Tear down the SSE sub before delegating — closeThread only cancels the
+  // backend stream and clears the store slot.
   const handleCloseThread = useCallback(
     (threadId: string) => {
       const slot = useChatStore.getState().streams[threadId]

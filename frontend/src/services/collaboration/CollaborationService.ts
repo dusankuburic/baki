@@ -1,5 +1,7 @@
 // Mirror of internal/websocket/events.go event types and payloads.
 
+import {logger} from '@/lib/logger'
+
 export type EventType =
   | 'presence.join'
   | 'presence.leave'
@@ -64,14 +66,9 @@ type TicketProvider = () => Promise<string>
 
 const MAX_RECONNECT_DELAY_MS = 30_000
 
-// Liveness watchdog for half-open sockets (suspend/resume, silent network
-// drop): the server's protocol-level pings never reach JS, so liveness must
-// come from app-level traffic. The client sends {type:'ping'} every
-// WS_PING_INTERVAL_MS (the server answers with 'pong' — see
-// internal/websocket/client.go), and any incoming message re-arms a
-// WS_INACTIVITY_TIMEOUT_MS timer. The interval guarantees ≥2 pong
-// opportunities inside the window; 45s matches the SSE watchdog
-// (SSE_INACTIVITY_TIMEOUT_MS in api/client.ts) for consistent recovery UX.
+// Liveness watchdog for half-open sockets: server protocol pings never reach
+// JS, so we ping app-level every WS_PING_INTERVAL_MS and any inbound frame
+// re-arms the WS_INACTIVITY_TIMEOUT_MS timer.
 const WS_PING_INTERVAL_MS = 20_000
 const WS_INACTIVITY_TIMEOUT_MS = 45_000
 
@@ -176,7 +173,17 @@ class CollaborationService {
       this.armInactivity()
       try {
         const env = JSON.parse(event.data as string) as Envelope
-        this.handlers.forEach(h => h(env))
+        // Per-handler isolation (same class of fix as dispatchSafely in
+        // api/client.ts): a throwing consumer must not abort delivery to the
+        // handlers registered after it, nor be misclassified below as a
+        // malformed frame.
+        for (const handler of this.handlers) {
+          try {
+            handler(env)
+          } catch (err) {
+            logger.error('collaboration event handler threw (isolated)', err)
+          }
+        }
       } catch {
         // ignore malformed frames
       }
@@ -218,11 +225,8 @@ class CollaborationService {
     }
   }
 
-  // Starts the liveness watchdog for the just-opened socket: a periodic
-  // app-level ping (the server's protocol-level pings never surface in JS) plus
-  // an inactivity timer that any inbound frame re-arms. Clearing any stale
-  // timers first guards against a superseded socket's onopen overwriting refs
-  // before that socket's onclose runs.
+  // Starts the liveness watchdog for the just-opened socket. Clearing stale
+  // timers first guards against a superseded socket's onopen overwriting refs.
   private startWatchdog(): void {
     this.clearWatchdog()
     this.armInactivity()
@@ -257,7 +261,15 @@ class CollaborationService {
   private setStatus(s: ConnectionStatus): void {
     if (this.status === s) return
     this.status = s
-    this.statusHandlers.forEach(h => h(s))
+    // Per-handler isolation: a throwing status listener must not propagate
+    // into the caller (setStatus runs before reconnect timers / the watchdog).
+    for (const handler of this.statusHandlers) {
+      try {
+        handler(s)
+      } catch (err) {
+        logger.error('collaboration status handler threw (isolated)', err)
+      }
+    }
   }
 }
 

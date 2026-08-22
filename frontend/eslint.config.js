@@ -2,6 +2,7 @@ import js from '@eslint/js'
 import tsParser from '@typescript-eslint/parser'
 import tsPlugin from '@typescript-eslint/eslint-plugin'
 import reactHooks from 'eslint-plugin-react-hooks'
+import prettier from 'eslint-config-prettier'
 
 export default [
   js.configs.recommended,
@@ -15,6 +16,9 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
+        // Type-aware rules (no-floating-promises) need the project service.
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
     },
     plugins: {
@@ -26,6 +30,10 @@ export default [
       ...reactHooks.configs.recommended.rules,
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['warn', {argsIgnorePattern: '^_', varsIgnorePattern: '^_'}],
+      // Every async call is awaited, void-ed, or caught — the convention held
+      // repo-wide already; this locks it in (catches bare fire-and-forget
+      // calls whose rejections would vanish).
+      '@typescript-eslint/no-floating-promises': 'error',
       'no-console': ['warn', {allow: ['warn', 'error']}],
       'prefer-const': 'error',
       'no-undef': 'off', // TypeScript handles this
@@ -50,4 +58,8 @@ export default [
       'no-restricted-imports': 'off',
     },
   },
+  // MUST be last: eslint-config-prettier turns off stylistic rules that clash
+  // with Prettier (which owns formatting). Previously declared but never wired
+  // in, so any future rule additions could have silently conflicted.
+  prettier,
 ]

@@ -1,0 +1,8 @@
+# Frontend-local ignores (root .gitignore covers the rest)
+node_modules/
+src/node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo

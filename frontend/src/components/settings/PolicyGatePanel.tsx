@@ -112,9 +112,7 @@ export default function PolicyGatePanel() {
   }
 
   const setRuleSeverity = (policy: Policy, ruleId: string, severity: Severity) => {
-    const newRules = policy.rules.map(r =>
-      r.ruleId === ruleId ? {...r, severity} : r,
-    )
+    const newRules = policy.rules.map(r => (r.ruleId === ruleId ? {...r, severity} : r))
     void handleUpdate({...policy, rules: newRules})
   }
 
@@ -126,9 +124,7 @@ export default function PolicyGatePanel() {
             <Shield className="w-5 h-5 text-brand-500" />
             {t('policy.title')}
           </h2>
-          <p className="text-sm text-text-secondary mt-1">
-            {t('policy.subtitle')}
-          </p>
+          <p className="text-sm text-text-secondary mt-1">{t('policy.subtitle')}</p>
         </div>
         <button
           onClick={handleCreate}
@@ -140,20 +136,12 @@ export default function PolicyGatePanel() {
         </button>
       </div>
 
-      {!activeOrgId && (
-        <div className="text-sm text-text-secondary italic">
-          {t('policy.selectOrgHint')}
-        </div>
-      )}
+      {!activeOrgId && <div className="text-sm text-text-secondary italic">{t('policy.selectOrgHint')}</div>}
 
-      {activeOrgId && loading && (
-        <div className="text-sm text-text-secondary">{t('policy.loading')}</div>
-      )}
+      {activeOrgId && loading && <div className="text-sm text-text-secondary">{t('policy.loading')}</div>}
 
       {activeOrgId && !loading && policies.length === 0 && (
-        <div className="text-sm text-text-secondary italic">
-          {t('policy.empty')}
-        </div>
+        <div className="text-sm text-text-secondary italic">{t('policy.empty')}</div>
       )}
 
       <div className="space-y-2">
@@ -161,10 +149,7 @@ export default function PolicyGatePanel() {
           const isExpanded = expandedId === policy.id
           const enabledCount = policy.rules.filter(r => r.enabled).length
           return (
-            <div
-              key={policy.id}
-              className="border border-border-default rounded-lg overflow-hidden"
-            >
+            <div key={policy.id} className="border border-border-default rounded-lg overflow-hidden">
               <button
                 onClick={() => setExpandedId(isExpanded ? null : policy.id)}
                 className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-2 transition-colors"
@@ -177,9 +162,7 @@ export default function PolicyGatePanel() {
                   )}
                   <GateBadge severity={policy.gateSeverity} />
                   <span className="font-medium text-text-primary">{policy.name}</span>
-                  <span className="text-xs text-text-secondary">
-                    {t('policy.rulesEnabled', {count: enabledCount})}
-                  </span>
+                  <span className="text-xs text-text-secondary">{t('policy.rulesEnabled', {count: enabledCount})}</span>
                 </div>
                 <button
                   onClick={e => {
@@ -229,9 +212,7 @@ export default function PolicyGatePanel() {
                   </div>
 
                   <div>
-                    <span className="text-xs font-medium text-text-secondary block mb-2">
-                      {t('policy.rulesLabel')}
-                    </span>
+                    <span className="text-xs font-medium text-text-secondary block mb-2">{t('policy.rulesLabel')}</span>
                     <div className="max-h-64 overflow-y-auto space-y-1 rounded-md border border-border-default p-2">
                       {ruleDefs.map(rule => {
                         const pr = policy.rules.find(r => r.ruleId === rule.id)

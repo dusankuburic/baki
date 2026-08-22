@@ -13,9 +13,7 @@ import (
 )
 
 // parseIntOrError parses a base-10 integer env var, returning a clear error
-// (including the var name and value) on failure. Used for numeric env vars that
-// previously used the `if err == nil` silent-swallow pattern, which left the
-// default in place with no feedback on an operator typo.
+// (including the var name and value) on failure.
 func parseIntOrError(envVar, val string) (int, error) {
 	n, err := strconv.Atoi(val)
 	if err != nil {
@@ -314,9 +312,9 @@ func applyAuditRetentionEnv(cfg *Config) error {
 
 // applyPowerPlatformEnv wires the optional Power Platform connector (desktop-flow
 // ingestion; EXPERIMENTAL — see config.PowerPlatformConfig). The bare
-// assignments intentionally overwrite defaults even with empty values, matching
-// the original behaviour. The core auth/client fields plus DataverseURL and
-// IngestInterval must be set to enable the periodic pull.
+// assignments intentionally overwrite defaults even with empty values. The
+// core auth/client fields plus DataverseURL and IngestInterval must be set
+// to enable the periodic pull.
 func applyPowerPlatformEnv(cfg *Config) error {
 	cfg.PowerPlatform.TenantID = os.Getenv("PAD_PP_TENANT_ID")
 	cfg.PowerPlatform.ClientID = os.Getenv("PAD_PP_CLIENT_ID")

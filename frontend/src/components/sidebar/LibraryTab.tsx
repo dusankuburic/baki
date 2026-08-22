@@ -225,7 +225,7 @@ export default function LibraryTab() {
                     </button>
                   )}
                 </div>
-                <div className="mt-1.5 flex items-center gap-2 text-2xs text-text-muted">
+                <div className="mt-1.5 flex items-center gap-2 text-2xs text-text-tertiary">
                   <span className="flex items-center gap-0.5">
                     <FolderOpen size={10} />
                     {f.blockCount}

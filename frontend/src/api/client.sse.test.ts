@@ -211,3 +211,36 @@ describe('connectEvents server-close and backoff', () => {
     expect(fetch).toHaveBeenCalledTimes(5)
   })
 })
+
+describe('connectEvents retry budget (bounded reconnects)', () => {
+  // Every attempt fails → the loop must stop after SSE_MAX_RECONNECT_ATTEMPTS
+  // consecutive failures, settle to 'idle', and recover on the browser
+  // 'online' event.
+  it('stops retrying after the budget is exhausted, then recovers on the online event', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      return new Response('service unavailable', {status: 503})
+    })
+
+    const {subscribeToEvents, getEventConnectionState} = await getClient()
+    await subscribeToEvents(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1) // initial attempt
+
+    // Burn through the entire backoff ladder (1+2+4+8+16+30×5 = 181s covers
+    // 10 scheduled reconnects) plus the initial dial.
+    await vi.advanceTimersByTimeAsync(181_000)
+    const attemptsAfterBudget = (fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    expect(attemptsAfterBudget).toBe(11) // 1 initial + 10 retries — no more
+
+    // Budget exhausted: settled to 'idle', and further time passes silently.
+    expect(getEventConnectionState()).toBe('idle')
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fetch).toHaveBeenCalledTimes(11)
+
+    // Network comes back: the one-shot online listener restarts the loop.
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(12)
+    expect(['connecting', 'reconnecting']).toContain(getEventConnectionState())
+  })
+})

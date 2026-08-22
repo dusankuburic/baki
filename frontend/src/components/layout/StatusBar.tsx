@@ -73,7 +73,10 @@ export default function StatusBar() {
           </span>
         )}
         {pendingCount > 0 && (
-          <span className="flex items-center gap-1 text-semantic-warning" title={`${pendingCount} change(s) pending sync`}>
+          <span
+            className="flex items-center gap-1 text-semantic-warning"
+            title={`${pendingCount} change(s) pending sync`}
+          >
             <span>⇅ {pendingCount} unsaved</span>
           </span>
         )}

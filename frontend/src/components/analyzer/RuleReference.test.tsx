@@ -3,10 +3,44 @@ import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import type {Rule} from '@/types/analysis'
 
 const mockRules: Rule[] = [
-  {id: 'unhandled-error', name: 'Unhandled error', description: 'Fallible action without error handler', defaultSeverity: 'warning', category: 'Reliability', enabled: true, confidence: 'high', autoFix: 'wrap-error-handler'},
-  {id: 'hardcoded-credential', name: 'Hardcoded credential', description: 'Secret literal in property', defaultSeverity: 'error', category: 'Security', enabled: true, confidence: 'high', autoFix: 'replace-with-variable'},
-  {id: 'deep-nesting', name: 'Deep nesting', description: 'Block nested too deeply', defaultSeverity: 'info', category: 'Style', enabled: true, confidence: 'low'},
-  {id: 'duplicate-label', name: 'Duplicate label', description: 'Two LABEL blocks with same name', defaultSeverity: 'warning', category: 'Logic', enabled: true, confidence: 'high'},
+  {
+    id: 'unhandled-error',
+    name: 'Unhandled error',
+    description: 'Fallible action without error handler',
+    defaultSeverity: 'warning',
+    category: 'Reliability',
+    enabled: true,
+    confidence: 'high',
+    autoFix: 'wrap-error-handler',
+  },
+  {
+    id: 'hardcoded-credential',
+    name: 'Hardcoded credential',
+    description: 'Secret literal in property',
+    defaultSeverity: 'error',
+    category: 'Security',
+    enabled: true,
+    confidence: 'high',
+    autoFix: 'replace-with-variable',
+  },
+  {
+    id: 'deep-nesting',
+    name: 'Deep nesting',
+    description: 'Block nested too deeply',
+    defaultSeverity: 'info',
+    category: 'Style',
+    enabled: true,
+    confidence: 'low',
+  },
+  {
+    id: 'duplicate-label',
+    name: 'Duplicate label',
+    description: 'Two LABEL blocks with same name',
+    defaultSeverity: 'warning',
+    category: 'Logic',
+    enabled: true,
+    confidence: 'high',
+  },
 ]
 
 const getRules = vi.fn()

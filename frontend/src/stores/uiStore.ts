@@ -44,7 +44,12 @@ export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing'
 // Sidebar handlers use isSystemView to know when opening a flow should also
 // transition the main pane back to a flow view ('block') so the new flow
 // becomes visible; staying on a system view would leave the flow off-screen.
-const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set([
+//
+// SINGLE SOURCE OF TRUTH: this set must stay in sync with the views handled
+// by SystemViewRouter (which re-uses this predicate). Adding a view to the
+// router's switch without adding it here reintroduces the "flow loads but
+// stays off-screen" bug (it existed for 'deps'/'rules').
+export const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set([
   'home',
   'dashboard',
   'profile',
@@ -52,6 +57,8 @@ const SYSTEM_VIEWS: ReadonlySet<MainPaneView> = new Set([
   'library',
   'portfolio',
   'flow-compare',
+  'deps',
+  'rules',
 ])
 export const isSystemView = (v: MainPaneView): boolean => SYSTEM_VIEWS.has(v)
 

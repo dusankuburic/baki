@@ -88,7 +88,7 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose}: Pro
   if (filtered.length === 0) return null
 
   return (
-    <div className="absolute bottom-full left-0 mb-2 w-64 bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
+    <div className="absolute bottom-full left-0 mb-2 w-64 bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-slide-up">
       <div className="px-3 py-2 bg-surface-3 border-b border-border-subtle">
         <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider">Commands</span>
       </div>

@@ -67,6 +67,72 @@ func TestError(t *testing.T) {
 	}
 }
 
+func TestErrorWithCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		code       int
+		machine    string
+		wantStatus int
+		wantMsg    string
+	}{
+		{
+			"explicit 4xx keeps message and custom code",
+			errors.New("too many chat responses running at once (max 3)"),
+			http.StatusTooManyRequests,
+			"CHAT_CAPACITY_REACHED",
+			http.StatusTooManyRequests,
+			"too many chat responses running at once (max 3)",
+		},
+		{
+			"explicit 5xx still masks the message",
+			errors.New("secret details"),
+			http.StatusInternalServerError,
+			"DOMAIN_CODE",
+			http.StatusInternalServerError,
+			"internal server error",
+		},
+		{
+			"zero status defaults to 500",
+			errors.New("boom"),
+			0,
+			"DOMAIN_CODE",
+			http.StatusInternalServerError,
+			"internal server error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := httptest.NewRecorder()
+			w.Header().Set("X-Request-ID", "req-123")
+			ErrorWithCode(w, tt.err, tt.code, tt.machine)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status: got %d, want %d", w.Code, tt.wantStatus)
+			}
+
+			var body ErrorResponse
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Code != tt.machine {
+				t.Fatalf("code: got %q, want %q", body.Code, tt.machine)
+			}
+			if body.Message != tt.wantMsg {
+				t.Fatalf("message: got %q, want %q", body.Message, tt.wantMsg)
+			}
+			if body.RequestID != "req-123" {
+				t.Fatalf("requestId: got %q, want %q", body.RequestID, "req-123")
+			}
+		})
+	}
+}
+
 func TestJSON(t *testing.T) {
 	t.Parallel()
 

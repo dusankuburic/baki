@@ -46,9 +46,7 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
       items.push(...cmds)
     }
     // Precompute the flat index per command id so the render below is pure
-    // (previously a `let itemIndex = -1` counter was mutated during render,
-    // relying on Object.values/Object.entries iterating in the same order —
-    // correct today but fragile under any future grouping/sort divergence).
+    // (a render-time counter would depend on Object.values iteration order).
     const idxById = new Map<string, number>()
     items.forEach((c, i) => idxById.set(c.id, i))
     return {flatItems: items, indexById: idxById}

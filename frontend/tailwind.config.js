@@ -1,6 +1,8 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  // Test files are excluded: classNames in fixtures/mocks would otherwise be
+  // extracted as production utilities (pure CSS bloat in the built sheet).
+  content: ['./index.html', './src/**/*.{ts,tsx}', '!./src/**/*.test.*'],
   darkMode: ['class', '[data-theme="dark"], [data-theme="midnight"], [data-theme="warm"], [data-theme="tokyo-night"], [data-theme="one-dark"], [data-theme="dracula"], [data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="catppuccin-mocha"], [data-theme="rose-pine"], [data-theme="rose-pine-moon"], [data-theme="github-dark"], [data-theme="kanagawa"], [data-theme="everforest"]'],
   theme: {
     extend: {

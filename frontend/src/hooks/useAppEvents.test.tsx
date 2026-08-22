@@ -82,8 +82,8 @@ describe('useAppEvents', () => {
 
     const docData = {id: 'test-1', name: 'Test', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}
     capturedCallback!({name: 'flow:loaded', data: docData})
-
-    expect(openDocument).toHaveBeenCalledWith(docData)
+    // Envelope validation awaits the (memoized, zod-importing) schema factory.
+    await vi.waitFor(() => expect(openDocument).toHaveBeenCalledWith(docData))
   })
 
   it('drops a malformed flow:loaded payload instead of hijacking the editor', async () => {
@@ -96,6 +96,9 @@ describe('useAppEvents', () => {
     // a different event's data shape. Must be rejected at the boundary.
     capturedCallback!({name: 'flow:loaded', data: {html: '<html>err</html>'}})
     capturedCallback!({name: 'flow:loaded', data: {id: '', name: 'x', subflows: []}})
+    // Give the async validation a chance to (wrongly) run before asserting it
+    // never reached openDocument.
+    await new Promise(r => setTimeout(r, 10))
     expect(openDocument).not.toHaveBeenCalled()
   })
 
@@ -137,14 +140,47 @@ describe('useAppEvents', () => {
 
     await new Promise(r => setTimeout(r, 10))
 
-    // A flow:loaded for a DIFFERENT flow arrives — must be ignored.
-    capturedCallback!({name: 'flow:loaded', data: {id: 'stale-flow', name: 'Stale', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}})
+    // A flow:loaded for a DIFFERENT flow arrives — must be ignored (the guard
+    // runs synchronously before the async envelope validation).
+    capturedCallback!({
+      name: 'flow:loaded',
+      data: {id: 'stale-flow', name: 'Stale', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+    })
+    await new Promise(r => setTimeout(r, 10))
     expect(openDocument).not.toHaveBeenCalled()
 
     // A flow:loaded for the CURRENT flow (e.g. a collaborator re-parse) is still honored.
-    capturedCallback!({name: 'flow:loaded', data: {id: 'current-flow', name: 'Current refreshed', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}})
-    expect(openDocument).toHaveBeenCalledTimes(1)
+    capturedCallback!({
+      name: 'flow:loaded',
+      data: {id: 'current-flow', name: 'Current refreshed', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+    })
+    await vi.waitFor(() => expect(openDocument).toHaveBeenCalledTimes(1))
     expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({id: 'current-flow'}))
+  })
+
+  // Regression (async-validation race): a flow:loaded that passed the stale-
+  // flow guard at arrival must not hijack the editor if the user opens a
+  // DIFFERENT flow before the deferred validation completes — widest on the
+  // first event while the zod chunk is still loading. The guard is re-checked
+  // inside the continuation.
+  it('does not hijack the editor when a different flow is opened during async validation', async () => {
+    const openDocument = vi.fn()
+    // No document open yet, so the arrival-time guard passes for any flow.
+    useFlowStore.setState({document: null})
+    render(<TestComponent openDocument={openDocument} />)
+
+    await new Promise(r => setTimeout(r, 10))
+
+    // Event for flow A arrives and passes the guard…
+    capturedCallback!({
+      name: 'flow:loaded',
+      data: {id: 'flow-a', name: 'A', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+    })
+    // …but before the async validation runs, the user opens flow B directly.
+    useFlowStore.setState({document: {id: 'flow-b', name: 'B'} as never})
+
+    await new Promise(r => setTimeout(r, 10))
+    expect(openDocument).not.toHaveBeenCalled()
   })
 
   it('refreshes the governance badge on a governance:alert event', async () => {

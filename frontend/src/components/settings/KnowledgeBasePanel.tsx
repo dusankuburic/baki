@@ -2,7 +2,7 @@ import {useState, useMemo} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {request} from '@/api/client'
+import {request, ApiError} from '@/api/client'
 import {Trash2, FileText, Loader2, Upload} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import {useConfirm, useToast, ErrorState} from '@/components/shared'
@@ -77,14 +77,17 @@ export default function KnowledgeBasePanel() {
       // The most common failure is a missing/unconfigured embedding-provider
       // key (only OpenAI/Gemini/GLM/GitHub Models support embeddings; a
       // Claude-only setup can't index). Surface that root cause with clear
-      // guidance instead of a generic "Upload failed".
-      const msg = String(e)
-      if (/embedding provider/i.test(msg)) {
+      // guidance instead of a generic "Upload failed". Classify by the
+      // envelope's machine-readable code first (stable across message
+      // rewording), with the message regex as a fallback for older backends.
+      const embeddingMissing =
+        (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
+      if (embeddingMissing) {
         setUploadError(
           'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models). Configure one under AI Behavior → Embedding Assistant.',
         )
       } else {
-        setUploadError('Upload failed: ' + msg)
+        setUploadError('Upload failed: ' + String(e))
         toastError('Upload failed')
       }
     } finally {

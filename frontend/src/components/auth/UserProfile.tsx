@@ -21,7 +21,7 @@ function formatMemberSince(iso: string | undefined): string | null {
   return d.toLocaleDateString(undefined, {year: 'numeric', month: 'long'})
 }
 
-// LocalModeCard replaces the (previously blank) profile pane for the desktop
+// LocalModeCard fills the profile pane for the desktop
 // app: Tauri skips the auth gate entirely (ProtectedRoute.tsx), so `user` is
 // always null there — there's no account to display or edit. This explains
 // why and points at the local equivalents (Settings) instead of showing an

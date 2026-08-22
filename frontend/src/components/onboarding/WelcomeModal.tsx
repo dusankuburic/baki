@@ -45,8 +45,7 @@ const STEPS: StepDef[] = [
   {
     icon: Download,
     title: 'Export',
-    body: () =>
-      'Export findings as SARIF for CI, or a PDF/Markdown report. The CLI (bakicli) gates CI on severity.',
+    body: () => 'Export findings as SARIF for CI, or a PDF/Markdown report. The CLI (bakicli) gates CI on severity.',
   },
 ]
 
@@ -106,7 +105,14 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   const Icon = current.icon
 
   return (
-    <Modal isOpen={isOpen} onClose={handleSkip} ariaLabel="Welcome to PAD Analyzer" size="md" closeOnEsc closeOnBackdrop={false}>
+    <Modal
+      isOpen={isOpen}
+      onClose={handleSkip}
+      ariaLabel="Welcome to PAD Analyzer"
+      size="md"
+      closeOnEsc
+      closeOnBackdrop={false}
+    >
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-brand-500/10 flex items-center justify-center text-brand-400">
@@ -119,7 +125,11 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
             </p>
           </div>
         </div>
-        <button onClick={handleSkip} className="text-text-tertiary hover:text-text-secondary p-1" aria-label="Skip tour">
+        <button
+          onClick={handleSkip}
+          className="text-text-tertiary hover:text-text-secondary p-1"
+          aria-label="Skip tour"
+        >
           <X size={16} />
         </button>
       </div>

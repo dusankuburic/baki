@@ -25,10 +25,6 @@ const MAX_QUEUE_SIZE = 200
 // positions): a newer op for the same element supersedes the older one. So
 // under overflow we drop the OLDEST ops (keep current state) and past MAX_AGE_MS
 // we discard stale positions — both correct for superseding state.
-// What was a bug was doing this SILENTLY: the user saw "N queued" then it became
-// 0 with no indication the stale ops were discarded vs delivered. The drop
-// handlers below let the UI toast the user when ops are dropped (a true
-// end-to-end delivery guarantee would need a deferred backend ack).
 class SyncManager {
   private queue: PendingOp[] = []
   private changeHandlers = new Set<QueueChangeHandler>()
@@ -44,13 +40,9 @@ class SyncManager {
       this.flowId = flowId
       this.loadFromStorage()
     }
-    // Drop any prior status subscription before re-subscribing. Switching flows
-    // routes through start() WITHOUT an intervening stop() (presenceStore.connectToFlow
-    // calls teardown()+start(), never syncManager.stop()), so without this the
-    // previous subscription's unsubscribe handle is overwritten and lost. It's
-    // currently harmless only because collaborationService dedups the (stable)
-    // handler ref in a Set; unsubscribing here makes this store's cleanup
-    // self-contained rather than depending on that external detail.
+    // Drop any prior status subscription before re-subscribing: switching flows
+    // routes through start() without an intervening stop(), and the old
+    // unsubscribe handle would be overwritten and lost.
     this.unsubscribeStatus?.()
     this.unsubscribeStatus = collaborationService.onStatusChange(this.handleStatusChange)
   }
@@ -61,20 +53,15 @@ class SyncManager {
     this.unsubscribeStatus = null
     this.queue = []
     // Reset flowId (AFTER saveToStorage, which keys off it) so a subsequent
-    // start() with the SAME flow re-runs loadFromStorage() and resumes the
-    // queue persisted above; without this, start(sameFlowId) skipped the load
-    // and the persisted ops were orphaned.
+    // start() with the SAME flow re-loads the persisted queue.
     this.flowId = null
     this.notifyChange()
   }
 
-  // reset discards the queue AND every persisted per-flow copy — for session
-  // teardown (logout). Unlike stop(), which persists the queue so an in-progress
-  // flow can resume after a reconnect, no queue must survive into the next user's
-  // session on a shared device. It clears ALL baki-sync-queue-* keys (not just
-  // the active flow's): switching flows orphans the previous flow's persisted
-  // queue (start() clears memory but not storage), so clearing only the current
-  // flowId would leave earlier flows' ops behind to leak.
+  // reset discards the queue AND every persisted per-flow copy — logout/session
+  // teardown, so no queue survives into the next user's session on a shared
+  // device. Clears ALL baki-sync-queue-* keys: switching flows orphans the
+  // previous flow's persisted queue in storage.
   reset(): void {
     this.clearAllStorage()
     this.unsubscribeStatus?.()

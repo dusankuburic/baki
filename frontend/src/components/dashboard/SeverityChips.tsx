@@ -29,7 +29,10 @@ export function SeverityChips({
       {Object.entries(bySeverity).map(([sev, n]) => (
         <span
           key={sev}
-          className={clsx('text-sm font-bold px-2 py-0.5 rounded-full', sevChip[sev] ?? 'text-text-tertiary bg-surface-3')}
+          className={clsx(
+            'text-sm font-bold px-2 py-0.5 rounded-full',
+            sevChip[sev] ?? 'text-text-tertiary bg-surface-3',
+          )}
         >
           {n} {sev}
         </span>
@@ -37,7 +40,10 @@ export function SeverityChips({
       {Object.entries(byCategory).map(([cat, n]) => (
         <span
           key={cat}
-          className={clsx('text-sm font-bold px-2 py-0.5 rounded-full', catChip[cat] ?? 'text-text-tertiary bg-surface-3')}
+          className={clsx(
+            'text-sm font-bold px-2 py-0.5 rounded-full',
+            catChip[cat] ?? 'text-text-tertiary bg-surface-3',
+          )}
         >
           {n} {cat}
         </span>

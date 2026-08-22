@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -108,6 +109,11 @@ func TestAddDocument_NoProvider(t *testing.T) {
 	err := svc.AddDocument(context.Background(), "scope", "org", "f.txt", "real content")
 	if err == nil || !strings.Contains(err.Error(), "embedding provider") {
 		t.Errorf("want embedding-provider error, got %v", err)
+	}
+	// The sentinel lets the HTTP layer map this to a machine-readable code
+	// (EMBEDDING_NOT_CONFIGURED) the frontend branches on.
+	if !errors.Is(err, ErrEmbeddingNotConfigured) {
+		t.Errorf("want errors.Is(err, ErrEmbeddingNotConfigured), got %v", err)
 	}
 }
 

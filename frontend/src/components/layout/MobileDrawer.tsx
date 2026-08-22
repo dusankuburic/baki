@@ -2,7 +2,7 @@ import {useRef, type ReactNode} from 'react'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 
 // MobileDrawer is the overlay-drawer chrome for the mobile sidebar/inspector
-// panes. Unlike the shared <Modal> (which these previously bypassed), it
+// panes. Like the shared <Modal>, it
 // provides the WCAG dialog behaviours: role=dialog + aria-modal, a Tab focus
 // trap, Esc-to-close, and focus restoration to the trigger on close.
 //

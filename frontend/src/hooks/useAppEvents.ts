@@ -4,7 +4,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {useGovernanceStore} from '@/stores/governanceStore'
 import {subscribeToEvents} from '@/api/client'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
-import {FlowDocumentEnvelopeSchema} from '@/api/schemas'
+import {getFlowDocumentEnvelopeSchema} from '@/api/schemas'
 import {logger} from '@/lib/logger'
 
 export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | null) => void}) {
@@ -34,12 +34,31 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
         // store: a malformed event (proxy error page, truncated JSON, another
         // event's data shape) must not hijack the editor. Top-level envelope
         // check only — see FlowDocumentEnvelopeSchema's doc comment.
-        const parsed = FlowDocumentEnvelopeSchema.safeParse(d)
-        if (!parsed.success) {
-          logger.warn('flow:loaded event failed envelope validation, dropping', parsed.error.issues[0])
-          return
-        }
-        openDocument(parsed.data as unknown as DomainFlowDocument)
+        //
+        // The schema factory dynamic-imports zod once (memoized); successive
+        // flow:loaded events await the same promise, so their continuations
+        // run in arrival order. The doc-id guard is RE-CHECKED inside the
+        // continuation: between event arrival and this deferred open, the
+        // user may have synchronously opened a different flow (the window is
+        // widest on the first event, while the zod chunk is still loading) —
+        // without the re-check, this late open would hijack the editor away
+        // from the user's choice.
+        void getFlowDocumentEnvelopeSchema()
+          .then(envelope => {
+            const nowDocId = useFlowStore.getState().document?.id
+            if (eventFlowId && nowDocId && eventFlowId !== nowDocId) return
+            const parsed = envelope.safeParse(d)
+            if (!parsed.success) {
+              logger.warn('flow:loaded event failed envelope validation, dropping', parsed.error.issues[0])
+              return
+            }
+            openDocument(parsed.data as unknown as DomainFlowDocument)
+          })
+          .catch(err => {
+            // Transient chunk-load failure (deploy invalidated the hashed
+            // chunk): drop this event; the next flow:loaded retries the load.
+            logger.warn('flow:loaded schema load failed, dropping event', err)
+          })
       } else if (ev.name === 'flow:load-error') {
         useFlowStore.getState().setParseError((d?.error as string) ?? 'Unknown error')
       } else if (ev.name === 'analysis:progress') {

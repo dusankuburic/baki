@@ -1,10 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach} from 'vitest'
-import {
-  getPlatform,
-  notifyIfBackground,
-  setPlatformForTest,
-  resetPlatformForTest,
-} from './usePlatform'
+import {getPlatform, notifyIfBackground, setPlatformForTest, resetPlatformForTest} from './usePlatform'
 import type {PlatformAdapter, NotificationOptions} from '@/platform/types'
 
 let captured: NotificationOptions | null = null
@@ -51,7 +46,11 @@ describe('notifyIfBackground', () => {
 
   it('swallows adapter errors so the caller is never disrupted', async () => {
     setVisibility('hidden')
-    const failing = {showNotification: async () => { throw new Error('boom') }} as unknown as PlatformAdapter
+    const failing = {
+      showNotification: async () => {
+        throw new Error('boom')
+      },
+    } as unknown as PlatformAdapter
     setPlatformForTest(failing)
     await expect(notifyIfBackground({title: 't', body: 'b'})).resolves.toBeUndefined()
   })

@@ -41,7 +41,7 @@ function renderCard(overrides: Partial<Parameters<typeof BlockCard>[0]> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never})
+  useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never, expandedBlockIds: new Set()})
 })
 
 describe('BlockCard', () => {
@@ -79,7 +79,6 @@ describe('BlockCard', () => {
 
     fireEvent.keyDown(screen.getByRole('button'), {key: 'Enter'})
     expect(onDoubleClick).toHaveBeenCalledTimes(1)
-    // Selected+Enter routes to open, not re-select.
     expect(onClick).not.toHaveBeenCalled()
   })
 
@@ -109,5 +108,61 @@ describe('BlockCard', () => {
     )
     fireEvent.contextMenu(screen.getByRole('button'))
     expect(screen.getByText('Fix with AI')).toBeInTheDocument()
+  })
+
+  const containerBlock: Block = {
+    ...baseBlock,
+    id: 'loop1',
+    type: 'LOOP',
+    rawType: 'LOOP',
+    name: 'Loop 1..10',
+    children: [baseBlock],
+  }
+
+  it('renders the expand chevron for container blocks', () => {
+    renderCard({block: containerBlock})
+    const chevron = screen.getByRole('button', {name: /collapse block/i})
+    expect(chevron).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('leaf blocks have no chevron (no expand control in the leading slot)', () => {
+    renderCard()
+    expect(screen.queryByRole('button', {name: /expand block/i})).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /collapse block/i})).not.toBeInTheDocument()
+  })
+
+  it('toggling the chevron stops propagation and flips the store expansion', () => {
+    renderCard({block: containerBlock})
+    fireEvent.click(screen.getByRole('button', {name: /collapse block/i}))
+    expect(useFlowStore.getState().expandedBlockIds.has('loop1')).toBe(true)
+    expect(screen.getByRole('button', {name: /expand block/i})).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(screen.getByRole('button', {name: /expand block/i}))
+    expect(useFlowStore.getState().expandedBlockIds.has('loop1')).toBe(false)
+    expect(screen.getByRole('button', {name: /collapse block/i})).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('shows the collapsed children count only for collapsed containers', () => {
+    const {rerender} = renderCard({block: containerBlock})
+    expect(screen.queryByText(/items/i)).not.toBeInTheDocument()
+
+    useFlowStore.getState().toggleBlockExpand('loop1')
+    rerender(
+      <ToastProvider>
+        <BlockCard block={containerBlock} />
+      </ToastProvider>,
+    )
+    expect(screen.getByText(/1 items/i)).toBeInTheDocument()
+  })
+
+  it('renders the findings count inside the header row (in flow, not absolute)', () => {
+    renderCard({findingCount: 3, findingSeverity: 'error'})
+    const card = screen.getByRole('button', {name: /ACTION: Display Message/i})
+    const badge = screen.getByText('3')
+    expect(badge.className).not.toContain('absolute')
+    expect(card.contains(badge)).toBe(true)
+    const group = badge.parentElement
+    expect(group).not.toBeNull()
+    expect(group!.className).toContain('ml-auto')
   })
 })

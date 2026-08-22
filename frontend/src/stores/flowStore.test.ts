@@ -119,9 +119,7 @@ describe('applyRemoteDocumentUpdate', () => {
     useChatStore.setState({activeThreadId: 't1'})
 
     // Remote edit kept b1 → selection preserved.
-    useFlowStore
-      .getState()
-      .applyRemoteDocumentUpdate(makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1')])))
+    useFlowStore.getState().applyRemoteDocumentUpdate(makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1')])))
     expect(useFlowStore.getState().selectedBlockId).toBe('b1')
 
     // Remote edit removed b1 → selection cleared, chat thread still preserved.

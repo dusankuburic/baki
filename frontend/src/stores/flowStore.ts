@@ -139,9 +139,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     // Preserve the user's block selection if it still exists in the refreshed
     // document; a remote edit may have moved or removed it.
     const selectedBlockId =
-      prev.selectedBlockId && doc && findSubflowIdByBlock(doc, prev.selectedBlockId)
-        ? prev.selectedBlockId
-        : null
+      prev.selectedBlockId && doc && findSubflowIdByBlock(doc, prev.selectedBlockId) ? prev.selectedBlockId : null
 
     set({
       document: doc,
@@ -151,11 +149,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       parseError: null,
     })
 
-    // Drop editor tabs pointing at subflows that no longer exist (a remote edit
-    // could rename/remove one), but keep the active tab + focus. Crucially do
-    // NOT call resetDerivedStateForFlow: this is a same-flow refresh, and wiping
-    // the chat thread / search / navigation on every collaborator keystroke
-    // kicks the user out of their own work.
+    // Drop editor tabs for subflows that no longer exist, but keep the active
+    // tab + focus. Do NOT call resetDerivedStateForFlow — same-flow refresh.
     if (doc) {
       useEditorStore.getState().pruneToSubflows(doc.subflows.map(s => s.id))
     }
@@ -174,9 +169,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
     if (!blockId) {
       // Deselect with a flow loaded: broadcast so collaborators stop seeing us
-      // on the previous block. This previously fell through the combined
-      // `!blockId || !document` early return and never reached the broadcast,
-      // so a deselect never propagated — others kept showing our stale selection.
+      // on the previous block.
       set({selectedBlockId: null})
       usePresenceStore.getState().updateSelectedBlock('')
       return
@@ -374,12 +367,9 @@ registerStoreReset(() => useFlowStore.getState().reset())
 
 // ---- Cross-store reset coordinator ----
 //
-// flowStore "owns" the active document, but several other stores hold UI state
-// derived from it (search results, analysis lineage/findings, the active chat
-// thread, editor groups). When the document changes that derived state must be
-// cleared so the user never sees data belonging to another flow. These helpers
-// centralize that cascade so the cross-store dependency is explicit and
-// unit-testable instead of inlined inside setDocument/reset.
+// Several stores hold UI state derived from the active document (search,
+// analysis, chat, editor groups); it must be cleared on document change so the
+// user never sees data belonging to another flow.
 
 // clearAnalysisState resets the analysis store's document-derived fields. Shared
 // by the flow-switch coordinator (resetDerivedStateForFlow) and the logout

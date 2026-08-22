@@ -87,8 +87,7 @@ export default function ApiTokensPanel() {
           {t('tokens.title')}
         </h2>
         <p className="text-sm text-text-secondary mt-1">
-          {t('tokens.subtitlePrefix')}{' '}
-          <code className="text-brand-400">Authorization: Bearer pad_pat_…</code>
+          {t('tokens.subtitlePrefix')} <code className="text-brand-400">Authorization: Bearer pad_pat_…</code>
           {t('tokens.subtitleSuffix')}
         </p>
       </div>
@@ -98,9 +97,7 @@ export default function ApiTokensPanel() {
         <div className="p-4 border border-semantic-warning/40 bg-semantic-warning/5 rounded-xl space-y-3 animate-fade-in">
           <div className="flex items-start gap-2">
             <AlertTriangle size={18} className="text-semantic-warning shrink-0 mt-0.5" />
-            <p className="text-sm text-text-primary">
-              {t('tokens.revealWarning')}
-            </p>
+            <p className="text-sm text-text-primary">{t('tokens.revealWarning')}</p>
           </div>
           <div className="flex items-center gap-2">
             <code className="flex-1 px-3 py-2 rounded-lg bg-surface-2 text-xs text-text-primary break-all select-all">

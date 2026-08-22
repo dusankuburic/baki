@@ -23,6 +23,3 @@ describe('toggleSetMember', () => {
     expect(toggleSetMember(original, 1)).not.toBe(original)
   })
 })
-
-
-

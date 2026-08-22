@@ -26,10 +26,7 @@ interface UseChatStreamEngineOptions {
 
 // useChatStreamEngine owns the per-stream text accumulator, the SSE handler
 // wiring (via useStreamingMessage), and the per-thread generation tokens used
-// to detect and discard stale sends. Extracted from useAIChat so the
-// streaming machinery — the part most prone to subtle bugs (races between
-// concurrent streams, stale closures in long-lived SSE callbacks) — is
-// isolated from request-building and send-orchestration concerns.
+// to detect and discard stale sends.
 export function useChatStreamEngine({doc, provider, selectedModel, getMessages}: UseChatStreamEngineOptions) {
   const appendMessage = useChatStore(s => s.appendMessage)
   const updateThread = useChatStore(s => s.updateThread)
@@ -38,10 +35,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   const endStream = useChatStore(s => s.endStream)
 
   // Refs mirror the latest doc/provider/selectedModel so the long-lived SSE
-  // handlers below (onDone/onError, registered once via useStreamingMessage)
-  // always see current values without needing to be in their dependency
-  // arrays — re-subscribing the SSE listener on every prop change would drop
-  // in-flight streams.
+  // handlers see current values; re-subscribing on change would drop streams.
   const docRef = useRef(doc)
   useEffect(() => {
     docRef.current = doc
@@ -59,11 +53,8 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   const teardownRef = useRef<(streamId: string) => void>(() => {})
   const cancelRef = useRef<(streamId: string) => void>(() => {})
 
-  // threadGenRef is a per-thread generation token. Each send for a thread
-  // bumps its token; a stale send (user cancelled, closed the thread, or sent
-  // again in the same thread) detects it's no longer current after an await
-  // and self-cancels. Per-thread is required since several threads can stream
-  // concurrently.
+  // Per-thread generation token: each send bumps it; a stale send detects
+  // it's no longer current after an await and self-cancels.
   const threadGenRef = useRef(new Map<string, number>())
   const bumpGen = useCallback((threadId: string) => {
     const next = (threadGenRef.current.get(threadId) ?? 0) + 1
@@ -157,16 +148,9 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   }, [])
 
   // commitAssistantMessage appends the streamed text as a permanent assistant
-  // message and persists the thread. Shared by the natural-completion path
-  // (onDone) and the user-stop path (stopAndCommit) so an interrupted answer
-  // is kept, not discarded. Persisted messages are filtered of the transient
-  // error bubbles so reloaded history isn't littered with them.
-  //
-  // The conversation is saved under the thread's own flowId — NOT the doc ref.
-  // A stream's done event can land after the user has switched documents; in
-  // that window docRef.current points at the new flow, and saving with it would
-  // persist this thread's messages under the wrong flow. flowId is immutable per
-  // thread, so it is the correct source of truth.
+  // message and persists the thread (transient error bubbles filtered out).
+  // Saves under the thread's own flowId — NOT docRef.current: a done event can
+  // land after the user switched documents.
   const commitAssistantMessage = useCallback(
     (
       threadId: string,
@@ -254,11 +238,8 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
     [updateStream],
   )
 
-  // getAccLength reports how many UTF-8 BYTES the client already holds for a
-  // stream, so a delta-resume can request only the tail from the backend. The
-  // backend slices its Go string buffer by BYTE offset, so the client must send
-  // a byte length — NOT JS string .length (UTF-16 code units), which mismatches
-  // on any non-ASCII content (emoji/CJK/accented) and corrupts the resumed tail.
+  // getAccLength reports the accumulated text's UTF-8 BYTE length for delta
+  // resume — the backend slices by byte offset, not UTF-16 .length.
   const getAccLength = useCallback((streamId: string) => {
     const acc = streamAccRef.current.get(streamId)
     return acc ? utf8ByteLength(acc.text) : 0

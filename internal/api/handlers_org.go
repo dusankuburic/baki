@@ -151,6 +151,14 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.knowledge.AddDocument(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"), req.Filename, req.Content); err != nil {
+		// Embedding-provider failures are a configuration problem, not a
+		// server fault: render as 4xx with a distinct machine code so the
+		// frontend can explain the root cause (and so the message survives
+		// 5xx masking).
+		if errors.Is(err, rag.ErrEmbeddingNotConfigured) || errors.Is(err, rag.ErrEmbeddingUnavailable) {
+			render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

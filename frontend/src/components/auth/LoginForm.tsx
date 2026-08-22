@@ -140,11 +140,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         >
           <div className="flex flex-col gap-1 mb-2">
             <h1 className="text-xl font-semibold text-text-primary">Reset your password</h1>
-            <p className="text-sm text-text-muted">
-              {forgotSent
-                ? t('login.resetSent')
-                : t('login.resetPrompt')}
-            </p>
+            <p className="text-sm text-text-tertiary">{forgotSent ? t('login.resetSent') : t('login.resetPrompt')}</p>
           </div>
 
           {!forgotSent && (
@@ -173,7 +169,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
             </>
           )}
 
-          <div className="text-center text-sm text-text-muted">
+          <div className="text-center text-sm text-text-tertiary">
             <button type="button" className="text-brand-500 hover:underline font-medium" onClick={backToLogin}>
               Back to sign in
             </button>
@@ -190,14 +186,19 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
         className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
       >
         <div className="flex flex-col gap-1 mb-2">
-          <h1 className="text-xl font-semibold text-text-primary">{isRegister ? t('login.titleRegister') : t('login.titleSignIn')}</h1>
-          <p className="text-sm text-text-muted">
+          <h1 className="text-xl font-semibold text-text-primary">
+            {isRegister ? t('login.titleRegister') : t('login.titleSignIn')}
+          </h1>
+          <p className="text-sm text-text-tertiary">
             {isRegister ? t('login.subtitleRegister') : t('login.subtitleSignIn')}
           </p>
         </div>
 
         {(error || ssoError || formError) && (
-          <div role="alert" className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error">
+          <div
+            role="alert"
+            className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error"
+          >
             {error || ssoError || formError}
           </div>
         )}
@@ -275,7 +276,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
 
         {sso?.enabled && (
           <>
-            <div className="flex items-center gap-3 text-xs text-text-muted">
+            <div className="flex items-center gap-3 text-xs text-text-tertiary">
               <div className="flex-1 h-px bg-border-default" />
               or
               <div className="flex-1 h-px bg-border-default" />
@@ -293,7 +294,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           </>
         )}
 
-        <div className="text-center text-sm text-text-muted">
+        <div className="text-center text-sm text-text-tertiary">
           {isRegister ? t('login.hasAccount') : t('login.noAccount')}{' '}
           <button
             type="button"

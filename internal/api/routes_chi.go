@@ -47,7 +47,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// --- Swagger UI ---
 	// Always registered. In cloud mode (JWTEnabled), the swagger handler
 	// checks for a valid JWT so the schema isn't browsable unauthenticated.
-	// In local mode, open access (same as before).
+	// In local mode, open access.
 	swaggerH := swaggerHandler()
 	r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)

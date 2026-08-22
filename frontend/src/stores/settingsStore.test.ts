@@ -233,9 +233,10 @@ describe('persist queue', () => {
     // Make the first write slow so a second persist arrives while it's airborne.
     let releaseFirst: () => void = () => {}
     mockUpdate.mockImplementationOnce(
-      () => new Promise<void>(resolve => {
-        releaseFirst = resolve
-      }),
+      () =>
+        new Promise<void>(resolve => {
+          releaseFirst = resolve
+        }),
     )
 
     const store = useSettingsStore.getState()

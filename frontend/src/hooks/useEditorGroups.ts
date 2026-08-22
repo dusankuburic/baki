@@ -30,9 +30,12 @@ export function useEditorGroups() {
   const groupElsRef = useRef<Array<HTMLDivElement | null>>([])
   const pendingWidthsRef = useRef<number[] | null>(null)
 
-  const registerGroup = useCallback((gi: number) => (el: HTMLDivElement | null) => {
-    groupElsRef.current[gi] = el
-  }, [])
+  const registerGroup = useCallback(
+    (gi: number) => (el: HTMLDivElement | null) => {
+      groupElsRef.current[gi] = el
+    },
+    [],
+  )
 
   // Effective per-group widths (fractions). Falls back to stored widths when
   // they match the current group count, else an even split.

@@ -43,18 +43,24 @@ beforeEach(() => {
 
 describe('useDashboardStats', () => {
   it('does not fetch when the capability is not loaded yet', () => {
-    renderHook(({enabled, isLoaded}: {enabled: boolean; isLoaded: boolean}) => useDashboardStats(enabled, isLoaded, null), {
-      initialProps: {enabled: true, isLoaded: false},
-      wrapper,
-    })
+    renderHook(
+      ({enabled, isLoaded}: {enabled: boolean; isLoaded: boolean}) => useDashboardStats(enabled, isLoaded, null),
+      {
+        initialProps: {enabled: true, isLoaded: false},
+        wrapper,
+      },
+    )
     expect(getDashboard).not.toHaveBeenCalled()
   })
 
   it('does not fetch when session analytics are disabled', () => {
-    renderHook(({enabled, isLoaded}: {enabled: boolean; isLoaded: boolean}) => useDashboardStats(enabled, isLoaded, null), {
-      initialProps: {enabled: false, isLoaded: true},
-      wrapper,
-    })
+    renderHook(
+      ({enabled, isLoaded}: {enabled: boolean; isLoaded: boolean}) => useDashboardStats(enabled, isLoaded, null),
+      {
+        initialProps: {enabled: false, isLoaded: true},
+        wrapper,
+      },
+    )
     expect(getDashboard).not.toHaveBeenCalled()
   })
 

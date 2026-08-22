@@ -136,6 +136,49 @@ describe('CollaborationService', () => {
     expect(JSON.parse(mockWs!.sent[0]).type).toBe('ping')
   })
 
+  // Regression (per-handler isolation): a throwing event handler must not
+  // abort delivery to handlers registered after it, and must not be
+  // misclassified as a malformed frame.
+  it('isolates a throwing event handler — later subscribers still receive the envelope', async () => {
+    const received: Envelope[] = []
+    const throwing = vi.fn(() => {
+      throw new Error('bad consumer')
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      collaborationService.subscribe(throwing)
+      collaborationService.subscribe(e => received.push(e))
+      collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
+      await waitConnected()
+
+      const env: Envelope = {type: 'presence.join', flowId: 'flow-1', userId: 'u1', ts: new Date().toISOString()}
+      expect(() => mockWs!.receive(env)).not.toThrow()
+      expect(throwing).toHaveBeenCalledTimes(1)
+      expect(received).toHaveLength(1)
+      expect(received[0].type).toBe('presence.join')
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  // Regression (per-handler isolation): a throwing status handler must not
+  // propagate into setStatus's caller — concretely, it must not kill the
+  // reconnect schedule or the watchdog startup that run right after a
+  // setStatus call.
+  it('isolates a throwing status handler — connect() still completes', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      collaborationService.onStatusChange(() => {
+        throw new Error('bad status consumer')
+      })
+      expect(() => collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)).not.toThrow()
+      await waitConnected()
+      expect(collaborationService.getStatus()).toBe('connected')
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
   it('send() is a no-op when not connected', () => {
     // Don't connect — service is in disconnected state
     collaborationService.send({type: 'ping'})

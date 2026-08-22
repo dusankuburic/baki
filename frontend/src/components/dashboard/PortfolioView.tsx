@@ -35,9 +35,7 @@ function exportPortfolioCSV(entries: PortfolioEntry[]): void {
     String(e.info),
     e.analyzedAt ? new Date(e.analyzedAt).toISOString() : '',
   ])
-  const csv = [header, ...rows]
-    .map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-    .join('\n')
+  const csv = [header, ...rows].map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
   downloadBlob(csv, 'text/csv', `portfolio-${new Date().toISOString().slice(0, 10)}.csv`)
 }
 
@@ -160,9 +158,7 @@ export default function PortfolioView() {
               <LayoutGrid size={20} className="text-brand-500" />
               Flow Portfolio
             </h1>
-            <p className="text-sm text-text-secondary mt-1">
-              Every flow you can access, ranked worst-health-first.
-            </p>
+            <p className="text-sm text-text-secondary mt-1">Every flow you can access, ranked worst-health-first.</p>
           </div>
           <button
             onClick={exportSelected}
@@ -188,9 +184,7 @@ export default function PortfolioView() {
         {/* Bulk-action toolbar — appears when any rows are selected. */}
         {selected.size > 0 && (
           <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-brand-500/30 bg-brand-500/5">
-            <span className="text-sm text-text-secondary">
-              {selected.size} selected
-            </span>
+            <span className="text-sm text-text-secondary">{selected.size} selected</span>
             <button
               onClick={reanalyzeSelected}
               disabled={reanalyzing.size > 0}
@@ -283,7 +277,9 @@ export default function PortfolioView() {
                     <td className="px-4 py-2 text-right tabular-nums">
                       {e.analyzed ? (
                         <span className="inline-flex gap-2">
-                          <span className={e.errors > 0 ? 'text-semantic-error' : 'text-text-tertiary'}>{e.errors}e</span>
+                          <span className={e.errors > 0 ? 'text-semantic-error' : 'text-text-tertiary'}>
+                            {e.errors}e
+                          </span>
                           <span className={e.warnings > 0 ? 'text-semantic-warning' : 'text-text-tertiary'}>
                             {e.warnings}w
                           </span>

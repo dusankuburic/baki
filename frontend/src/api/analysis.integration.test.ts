@@ -103,10 +103,10 @@ describe('AnalysisReport integration: requestValidated → store', () => {
     )
 
     const {requestValidated} = await import('@/api/client')
-    const {AnalysisReportSchema} = await import('@/api/schemas')
+    const {getAnalysisReportSchema} = await import('@/api/schemas')
 
     // Run through the real validated API layer (no vi.mock on @/api)
-    const report = await requestValidated('/api/analysis/analyze', AnalysisReportSchema)
+    const report = await requestValidated('/api/analysis/analyze', await getAnalysisReportSchema())
 
     // Core required fields
     expect(report.flowId).toBe('flow-abc-123')

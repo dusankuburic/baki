@@ -17,7 +17,7 @@
 // Flags (analyze):
 //
 //	-fail-on string   Minimum severity that causes a non-zero exit: error, warning, info (default "error")
-//	-format  string   Output format: text, json, sarif, junit, csv (default "text")
+//	-format  string   Output format: text, json, sarif, junit, csv, html (default "text")
 //	-rules   string   Comma-separated list of rule IDs to enable (empty = all enabled)
 //	-config  string   Config file path for defaults (default ".bakirc.json"; set to "" to skip)
 //	-policy  string   Path to a policy JSON file; gates on the policy's rules +
@@ -56,6 +56,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"pad-analyzer/internal/storage/database"
 	"pad-core/analyzer"
 	"pad-core/export"
@@ -68,6 +70,11 @@ import (
 var version = "dev"
 
 func main() {
+	// The parser mints one UUID per block; batched randomness (still
+	// crypto-seeded) avoids a crypto/rand syscall per block on large flows
+	// and in the per-fix re-parse loop.
+	uuid.EnableRandPool()
+
 	// --version / -v short-circuits before any subcommand dispatch.
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("bakicli %s\n", version)
@@ -105,7 +112,7 @@ func main() {
 
 func runAnalyze() {
 	failOn := flag.String("fail-on", "error", "minimum severity that causes exit 1: error, warning, info")
-	format := flag.String("format", "text", "output format: text, json, sarif, junit, csv")
+	format := flag.String("format", "text", "output format: text, json, sarif, junit, csv, html")
 	rulesFlag := flag.String("rules", "", "comma-separated rule IDs to run (empty = all)")
 	customRulesFlag := flag.String("custom-rules", "", "path to custom rules JSON file")
 	policyFlag := flag.String("policy", "", "policy JSON file; gate on its rules + gateSeverity (overrides -fail-on)")
@@ -164,9 +171,9 @@ func runAnalyze() {
 		os.Exit(2)
 	}
 
-	validFormats := map[string]bool{"text": true, "json": true, "sarif": true, "junit": true, "csv": true}
+	validFormats := map[string]bool{"text": true, "json": true, "sarif": true, "junit": true, "csv": true, "html": true}
 	if !validFormats[*format] {
-		fmt.Fprintf(os.Stderr, "bakicli: unknown -format value %q (must be text, json, sarif, junit, or csv)\n", *format)
+		fmt.Fprintf(os.Stderr, "bakicli: unknown -format value %q (must be text, json, sarif, junit, csv, or html)\n", *format)
 		os.Exit(2)
 	}
 
@@ -227,6 +234,8 @@ func runAnalyze() {
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stdout, "%s", out)
+	case "html":
+		fmt.Fprintf(os.Stdout, "%s", export.ReportToHTML(report, doc))
 	default:
 		printText(report, *quiet)
 		if policyResult != nil {

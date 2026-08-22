@@ -242,7 +242,9 @@ export class WebAdapter implements PlatformAdapter {
    * Open URL in new tab
    */
   async openURL(url: string): Promise<void> {
-    window.open(url, '_blank')
+    // noopener: the opened page (e.g. a device-auth verification URI) must not
+    // get a window.opener handle back into the app (tabnabbing).
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   /**

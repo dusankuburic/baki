@@ -37,12 +37,6 @@ export class TauriAdapter implements PlatformAdapter {
       // Sidecar not ready yet. Use BOTH a listener for the 'backend-ready'
       // event AND periodic invoke retries, because listen() is async and the
       // event may fire before the listener is attached.
-      //
-      // The whole wait is bounded by SIDEKICK_READY_DEADLINE_MS: if the sidecar
-      // hasn't become ready by then (it crashed, misconfigured, or died), we
-      // stop retrying and reject. Without this deadline the setInterval retried
-      // forever and getBackendConfig() never settled, so the app hung on a
-      // blank screen with no signal — and the 'backend-ready' listener leaked.
       return new Promise((resolve, reject) => {
         let resolved = false
         let unlisten: (() => void) | null = null
@@ -67,14 +61,9 @@ export class TauriAdapter implements PlatformAdapter {
             `Backend sidecar did not become ready within ${SIDEKICK_READY_DEADLINE_MS / 1000}s — ` +
               'check the sidecar logs/config; the app cannot start without it.',
           )
-          reject(
-            new Error(
-              `backend sidecar did not become ready within ${SIDEKICK_READY_DEADLINE_MS / 1000}s`,
-            ),
-          )
+          reject(new Error(`backend sidecar did not become ready within ${SIDEKICK_READY_DEADLINE_MS / 1000}s`))
         }
 
-        // Listen for the event
         listen<{port: number; token: string}>('backend-ready', event => {
           finish(toConfig(event.payload))
         })

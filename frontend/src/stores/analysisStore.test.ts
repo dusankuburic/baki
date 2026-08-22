@@ -290,9 +290,7 @@ describe('finding assignment', () => {
     // Status defaults to 'open' since none was set.
     expect(entry?.status).toBe('open')
     // Persisted with the assignee id.
-    expect(analysisApi.setFindingStatus).toHaveBeenCalledWith(
-      expect.objectContaining({assigneeId: 'user-7'}),
-    )
+    expect(analysisApi.setFindingStatus).toHaveBeenCalledWith(expect.objectContaining({assigneeId: 'user-7'}))
   })
 
   it('assignFinding preserves the existing triage status', () => {

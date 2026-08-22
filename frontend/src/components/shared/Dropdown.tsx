@@ -31,7 +31,7 @@ export type {DropdownItem}
 //   - ArrowUp/Down ROVE real DOM focus (not just a visual highlight) so
 //     screen readers track the active option,
 //   - closing (Escape, outside click, or selection) restores focus to the
-//     trigger — previously focus was silently dropped.
+//     trigger (don't leave focus silently dropped).
 export default function Dropdown({trigger, items, side = 'bottom', align = 'start', className}: DropdownProps) {
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -157,12 +157,7 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
 
   return (
     <div className={clsx('inline-block', className)} onKeyDown={handleKeyDown}>
-      <div
-        ref={triggerRef}
-        onClick={() => setOpen(!open)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
+      <div ref={triggerRef} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
         {trigger}
       </div>
       {open && (

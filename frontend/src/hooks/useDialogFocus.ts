@@ -1,13 +1,12 @@
 import {useCallback, useEffect, useRef} from 'react'
 
-const FOCUSABLE =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
 // useDialogFocus applies the three behaviours an overlay dialog needs for
 // keyboard/screen-reader parity with the shared <Modal>: Tab focus trap (cycles
 // within the dialog), Esc-to-close, and focus restoration to the trigger on
-// close. Mobile drawers + CommandPalette + GlobalSearch previously bypassed
-// <Modal> and so missed all three (WCAG 2.4.3 / 2.1.2 regression).
+// close. Mobile drawers + CommandPalette + GlobalSearch don't use <Modal>, so
+// they get all three from this hook (WCAG 2.4.3 / 2.1.2).
 //
 // containerRef points at the dialog's root element. isOpen toggles activation.
 // On open, the first focusable element is auto-focused; on close, the

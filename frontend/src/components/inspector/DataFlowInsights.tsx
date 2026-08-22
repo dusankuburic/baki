@@ -6,8 +6,8 @@ import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {DataFlowAnalysis, TaintPath} from '@/types'
 
-// TaintPathsPanel renders the full set of source→sink taint flows (previously
-// capped at 5 chips). Each row shows the source variable, the sink type, and a
+// TaintPathsPanel renders the full set of source→sink taint flows.
+// Each row shows the source variable, the sink type, and a
 // path-length badge; clicking jumps to the sink block for review.
 function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (id: string) => void}) {
   const [showAll, setShowAll] = React.useState(false)
@@ -50,7 +50,7 @@ function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (
   )
 }
 
-// DeadDataPanel lists each dead-data variable (previously a count-only header).
+// DeadDataPanel lists each dead-data variable.
 // Each row shows the variable, why it's dead, and jumps to the block that sets
 // it so the developer can decide whether to remove the write.
 function DeadDataPanel({
