@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,7 +45,51 @@ const (
 	// drift/regression (which compare against history), this is the raw
 	// "a flow was just analyzed" signal — useful for audit/announcement channels.
 	EventAnalysisComplete EventType = "analysis_complete"
+	// EventTest is a synthetic probe for the channel "test" button (R2-3):
+	// org admins verify a newly configured channel without waiting for a
+	// real governance signal.
+	EventTest EventType = "test"
 )
+
+// Valid channel kinds for per-org channels (R2-3). Email/Jira stay
+// deployment-global (they need SMTP creds / API tokens, not just a URL).
+var ValidChannelKinds = []string{"webhook", "teams", "slack"}
+
+// ValidChannelKind reports whether kind is an org-channel kind.
+func ValidChannelKind(kind string) bool {
+	switch kind {
+	case "webhook", "teams", "slack":
+		return true
+	}
+	return false
+}
+
+// BuildChannelNotifier constructs the single-channel notifier for an
+// org-configured channel (R2-3). Same URL validation and defaults as the
+// deployment-global builder; a bad URL errors instead of silently enabling.
+func BuildChannelNotifier(kind, rawURL, secret string) (AlertNotifier, error) {
+	u, err := validateAlertURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: defaultTimeout, Transport: guardedTransport()}
+	switch kind {
+	case "webhook":
+		return &WebhookNotifier{URL: u, Client: client, Secret: secret, MaxAttempts: defaultRetries, Backoff: defaultBackoff}, nil
+	case "teams":
+		return &TeamsNotifier{URL: u, Client: client, MaxAttempts: defaultRetries, Backoff: defaultBackoff}, nil
+	case "slack":
+		return &SlackNotifier{URL: u, Client: client, Secret: secret, MaxAttempts: defaultRetries, Backoff: defaultBackoff}, nil
+	default:
+		return nil, fmt.Errorf("unknown channel kind %q", kind)
+	}
+}
+
+// Deliver runs one notifier with timeout + panic recovery — exported so the
+// org-channel router reuses the dispatcher's exact delivery semantics.
+func Deliver(ctx context.Context, n AlertNotifier, ev Event) {
+	deliver(ctx, n, ev, defaultTimeout)
+}
 
 // AnalysisSummary carries the headline counts from an analysis report so a
 // channel can render a rich card without re-serializing the whole report.
@@ -123,8 +168,44 @@ type Dispatcher struct {
 // payload carries flow names and finding counts (internal details an attacker
 // couldn't otherwise enumerate); sending it over plaintext HTTP would expose
 // them on any in-path host. http://localhost / 127.0.0.1 / [::1] are permitted
-// for local development; everything else must be https://. Returns the URL
-// unchanged when acceptable, or an explanatory error.
+// for local development; everything else must be https://.
+//
+// B1.9 SSRF guard: HTTPS alone still allows an org admin to point the channel
+// at cloud-internal endpoints (https://169.254.169.254/... metadata, private
+// RFC1918 services) and use the synchronous test endpoint as a reachability
+// oracle — so DNS-resolved targets on loopback / link-local / private /
+// unassigned ranges are rejected unless the host is an explicit loopback NAME
+// (the documented dev escape hatch). Literal-IP hosts skip resolution.
+// guardedTransport blocks connections to link-local/private IPs at DIAL
+// time (B1.9): validateAlertURL's resolution check alone is vulnerable to
+// DNS rebinding between validation and request. Loopback is deliberately
+// ALLOWED here — it's the documented dev escape hatch (http://localhost) and
+// the test harness — while validateAlertURL still rejects literal loopback
+// https targets; the material SSRF surfaces (cloud metadata 169.254.0.0/16,
+// RFC1918 services) are blocked on both layers.
+func guardedTransport() *http.Transport {
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	dial := base.DialContext
+	base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		if host != "localhost" {
+			if ips, lerr := net.LookupIP(host); lerr == nil {
+				for _, ip := range ips {
+					if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+						return nil, fmt.Errorf("notify: refusing connection to private address %s", ip)
+					}
+				}
+			}
+		}
+		// Resolution failure falls through to the real dialer's error path.
+		return dial(ctx, network, addr)
+	}
+	return base
+}
+
 func validateAlertURL(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -132,12 +213,37 @@ func validateAlertURL(raw string) (string, error) {
 	}
 	host := u.Hostname()
 	if u.Scheme == "https" {
+		if err := rejectPrivateTarget(host); err != nil {
+			return "", err
+		}
 		return raw, nil
 	}
 	if u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
 		return raw, nil
 	}
 	return "", fmt.Errorf("alert URL %q must use https (or http://localhost for dev); governance payloads carry internal flow details and must not be sent in plaintext", raw)
+}
+
+// rejectPrivateTarget resolves host (skipping resolution for IPs and the
+// loopback dev names) and refuses RFC1918/loopback/link-local/unique-local
+// addresses (B1.9).
+func rejectPrivateTarget(host string) error {
+	if host == "" {
+		return fmt.Errorf("alert URL has no host")
+	}
+	if host == "localhost" {
+		return nil // documented dev escape hatch (http form is checked above)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("alert URL host %q does not resolve: %w", host, err)
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+			return fmt.Errorf("alert URL host %q resolves to a private/loopback address (%s) — internal targets are not allowed", host, ip)
+		}
+	}
+	return nil
 }
 
 // New builds a Dispatcher from cfg. Channels with empty URLs are omitted, so the
@@ -150,7 +256,7 @@ func New(cfg Config) (*Dispatcher, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{Timeout: timeout, Transport: guardedTransport()}
 
 	var notifiers []AlertNotifier
 	if cfg.WebhookURL != "" {

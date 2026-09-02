@@ -81,3 +81,30 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  release-sbom:
+    name: Generate & attach SBOM
+    runs-on: ubuntu-latest
+    needs: release-cli
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # SPDX SBOM of the Go source tree (syft via sbom-action), attached to
+      # the release next to the binaries and their sha256 sidecars. Consumers
+      # and scanners get a dependency inventory per tag.
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
+        with:
+          format: spdx-json
+          artifact-name: baki-sbom.spdx.json
+          upload-release-asset: true
+
+      # Sidecar for the SBOM itself, matching the binary-asset convention:
+      #   sha256sum -c baki-sbom.spdx.json.sha256
+      - name: Hash the SBOM
+        run: sha256sum baki-sbom.spdx.json > baki-sbom.spdx.json.sha256
+
+      - name: Attach SBOM sha256
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          files: baki-sbom.spdx.json.sha256

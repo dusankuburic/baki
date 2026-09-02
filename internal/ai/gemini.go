@@ -9,7 +9,22 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
+
+// geminiCallSeq mints globally-unique synthesized tool-call IDs. Gemini's
+// protocol returns no tool-call IDs, so both the streaming and non-streaming
+// paths synthesize "call_N". The counter must be process-wide (not
+// per-request): a tool-loop conversation replays history through
+// toGeminiContents, whose callNames map is keyed by ID — a per-request counter
+// makes iteration 2's call_0 overwrite iteration 1's entry, silently
+// mis-attributing an earlier tool result to the newer function name.
+var geminiCallSeq atomic.Uint64
+
+// nextGeminiCallID returns a fresh, process-unique Gemini tool-call ID.
+func nextGeminiCallID() string {
+	return fmt.Sprintf("call_%d", geminiCallSeq.Add(1))
+}
 
 type GeminiProvider struct {
 	apiKey string
@@ -29,6 +44,15 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 
 // setEmbeddingModel satisfies embedModelSetter (promoted by the factory).
 func (g *GeminiProvider) setEmbeddingModel(model string) { g.embeddingModel = model }
+
+// EmbeddingModel satisfies embedModelNamer so the audited wrapper can price
+// embedding usage against the model actually sent (empty ⇒ shipped default).
+func (g *GeminiProvider) EmbeddingModel() string {
+	if g.embeddingModel != "" {
+		return g.embeddingModel
+	}
+	return geminiEmbedModelDefault
+}
 
 // geminiEmbedModelDefault is the shipped Gemini embedding model used when no
 // override is configured.
@@ -206,7 +230,10 @@ type geminiResponse struct {
 	UsageMetadata *struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
+		// ThoughtsTokenCount bills separately from candidatesTokenCount
+		// (thinking tokens); include it in the output count.
+		ThoughtsTokenCount int `json:"thoughtsTokenCount"`
+		TotalTokenCount    int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 }
 
@@ -340,6 +367,15 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			case resp.StatusCode >= 500:
 				return nil, fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
+			// Mirror the OpenAI-compat/Claude error paths: an oversized prompt
+			// must surface as ErrContextLimit so the chat service maps it to
+			// the friendly "conversation too long" UX instead of a raw 400.
+			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return nil, err
+			}
+			if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("gemini API: %s", apiErr.Error.Message)
 		}
 		return nil, fmt.Errorf("gemini API error (status %d)", resp.StatusCode)
@@ -356,7 +392,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	parts := parsed.Candidates[0].Content.Parts
 	var text string
 	var toolCalls []ToolCall
-	for i, p := range parts {
+	for _, p := range parts {
 		if p.Text != "" {
 			text += p.Text
 		}
@@ -368,7 +404,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 				args, _ = json.Marshal(p.FunctionCall.Args)
 			}
 			toolCalls = append(toolCalls, ToolCall{
-				ID:    fmt.Sprintf("call_%d", i),
+				ID:    nextGeminiCallID(),
 				Name:  p.FunctionCall.Name,
 				Input: json.RawMessage(args),
 			})
@@ -382,7 +418,7 @@ func (g *GeminiProvider) Chat(ctx context.Context, req Request) (*Response, erro
 	tokensIn, tokensOut := 0, 0
 	if parsed.UsageMetadata != nil {
 		tokensIn = parsed.UsageMetadata.PromptTokenCount
-		tokensOut = parsed.UsageMetadata.CandidatesTokenCount
+		tokensOut = parsed.UsageMetadata.CandidatesTokenCount + parsed.UsageMetadata.ThoughtsTokenCount
 	}
 
 	return &Response{
@@ -439,6 +475,12 @@ func (g *GeminiProvider) Stream(ctx context.Context, req Request, onChunk func(C
 				return rateLimitErr(resp)
 			case resp.StatusCode >= 500:
 				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
+			}
+			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return err
+			}
+			if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return err
 			}
 			return fmt.Errorf("gemini stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
 		}

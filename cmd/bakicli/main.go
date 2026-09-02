@@ -105,6 +105,12 @@ func main() {
 		case "migrate":
 			runMigrate(os.Args[2:])
 			return
+		case "diff-reports":
+			runDiffReports(os.Args[2:])
+			return
+		case "suppressions":
+			runSuppressions(os.Args[2:])
+			return
 		}
 	}
 	runAnalyze()
@@ -318,8 +324,12 @@ func printPolicyResult(res *models.PolicyResult, quiet bool) {
 	if name == "" {
 		name = "policy"
 	}
-	fmt.Printf("policy %q: %s — %d violation(s) (errors: %d  warnings: %d  info: %d)\n",
-		name, verdict, len(res.Violations), res.Errors, res.Warnings, res.Info)
+	extra := ""
+	if res.Waived > 0 {
+		extra = fmt.Sprintf("  waived: %d", res.Waived)
+	}
+	fmt.Printf("policy %q: %s — %d violation(s) (errors: %d  warnings: %d  info: %d)%s\n",
+		name, verdict, len(res.Violations), res.Errors, res.Warnings, res.Info, extra)
 	if quiet {
 		return
 	}
@@ -341,7 +351,7 @@ func load(target string) (*models.FlowDocument, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return parser.ParseFolder(target)
+		return loadFolder(target)
 	}
 	data, err := os.ReadFile(target) // #nosec G304 -- target is a CLI argument supplied by the operator
 	if err != nil {
@@ -350,13 +360,59 @@ func load(target string) (*models.FlowDocument, error) {
 	return parser.ParseText(string(data), filepath.Base(target), info.Size())
 }
 
+// loadFolder loads a multi-file flow folder the same way `fix`/`watch` see it:
+// top-level .txt AND .pad member files, with .bakiignore patterns honored.
+// analyze/diff previously hard-wired ParseFolder (.txt only, ignore-blind), so
+// a file excluded from `fix` still failed the `analyze` gate and .pad members
+// were silently invisible — one folder, two disagreeing file sets.
+func loadFolder(dir string) (*models.FlowDocument, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read folder: %w", err)
+	}
+	ignorePatterns := loadIgnorePatterns(dir)
+	files := make(map[string]string)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".txt" && ext != ".pad" {
+			continue
+		}
+		if shouldIgnoreFile(name, ignorePatterns) {
+			continue
+		}
+		data, rerr := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- member of the folder the operator pointed at
+		if rerr != nil {
+			return nil, fmt.Errorf("read %s: %w", name, rerr)
+		}
+		files[name] = string(data)
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no .txt or .pad files found in %s", dir)
+	}
+	doc, perr := parser.ParseFiles(files, filepath.Base(dir))
+	if perr != nil {
+		return nil, perr
+	}
+	// ParseFiles is path-less (upload-shaped); analyze/diff output paths read
+	// naturally with the folder recorded.
+	doc.FilePath = dir
+	return doc, nil
+}
+
 func selectRules(rulesFlag, customRulesPath string) []analyzer.Rule {
 	all := analyzer.AllRules()
 	if customRulesPath != "" {
-		custom, err := analyzer.LoadCustomRules(customRulesPath)
+		custom, warnings, err := analyzer.LoadCustomRules(customRulesPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bakicli: -custom-rules: %v\n", err)
 			os.Exit(2)
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "bakicli: -custom-rules: warning: %s\n", w)
 		}
 		all = append(all, custom...)
 	}
@@ -414,6 +470,9 @@ func runWatch(args []string) {
 	failOn := fs.String("fail-on", "error", "minimum severity flagged in each run's summary: error, warning, info")
 	rulesFlag := fs.String("rules", "", "comma-separated rule IDs to run (empty = all)")
 	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
+	baselineFlag := fs.String("baseline", "", "baseline JSON file; gate each run on NEW findings only (the ratchet), like analyze")
+	policyFlag := fs.String("policy", "", "policy JSON file; gate each run on its rules + gateSeverity (overrides -fail-on)")
+	configFlag := fs.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
 	interval := fs.Duration("interval", 500*time.Millisecond, "poll interval for file changes")
 	quiet := fs.Bool("quiet", false, "suppress per-run output; only print when findings change")
 	fs.Usage = func() {
@@ -432,6 +491,56 @@ func runWatch(args []string) {
 	if !validSeverities[*failOn] {
 		fmt.Fprintf(os.Stderr, "bakicli watch: unknown -fail-on value %q (must be error, warning, or info)\n", *failOn)
 		os.Exit(2)
+	}
+
+	// Config discovery + defaults, identical to analyze: CLI flags win, the
+	// .bakirc.json fills unset ones. Watch previously ignored the config and
+	// the baseline/policy gates entirely, so the local feedback loop was
+	// WEAKER than the CI gate it was supposed to preview.
+	if *policyFlag != "" && *baselineFlag != "" {
+		fmt.Fprintln(os.Stderr, "bakicli watch: -policy cannot be combined with -baseline (same restriction as analyze)")
+		os.Exit(2)
+	}
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if *configFlag != "" {
+		if cfg, err := loadConfig(*configFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli watch: config: %v\n", err)
+			os.Exit(2)
+		} else if cfg != nil {
+			if !setFlags["fail-on"] && cfg.FailOn != "" {
+				*failOn = cfg.FailOn
+			}
+			if !setFlags["rules"] && cfg.Rules != "" {
+				*rulesFlag = cfg.Rules
+			}
+			if !setFlags["custom-rules"] && cfg.CustomRules != "" {
+				*customRulesFlag = cfg.CustomRules
+			}
+			if !setFlags["policy"] && cfg.Policy != "" {
+				*policyFlag = cfg.Policy
+			}
+		}
+	}
+
+	var policy models.Policy
+	if *policyFlag != "" {
+		var err error
+		policy, err = loadPolicy(*policyFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli watch: read policy: %v\n", err)
+			os.Exit(2)
+		}
+	}
+	var baselineKeys []string
+	hadBaseline := false
+	if *baselineFlag != "" {
+		var err error
+		baselineKeys, hadBaseline, err = loadBaseline(*baselineFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli watch: %v\n", err)
+			os.Exit(2)
+		}
 	}
 
 	rules := selectRules(*rulesFlag, *customRulesFlag)
@@ -457,10 +566,37 @@ func runWatch(args []string) {
 			fmt.Println(separator())
 			printText(report, false)
 		}
-		if shouldFail(report.Findings, *failOn) {
-			fmt.Fprintf(os.Stderr, "  → gate FAIL (≥%s)\n", *failOn)
-		} else {
-			fmt.Fprintf(os.Stderr, "  → gate PASS\n")
+		switch {
+		case *policyFlag != "":
+			res := analyzer.EvaluatePolicy(report, policy)
+			printPolicyResult(res, *quiet)
+			if res.Passed {
+				fmt.Fprintln(os.Stderr, "  → gate PASS (policy)")
+			} else {
+				fmt.Fprintln(os.Stderr, "  → gate FAIL (policy)")
+			}
+		case *baselineFlag != "":
+			if !hadBaseline {
+				if shouldFail(report.Findings, *failOn) {
+					fmt.Fprintf(os.Stderr, "  → gate FAIL (no baseline yet; ≥%s)\n", *failOn)
+				} else {
+					fmt.Fprintf(os.Stderr, "  → gate PASS (no baseline yet; ≥%s)\n", *failOn)
+				}
+				return
+			}
+			drift := analyzer.ComputeDrift(report.FlowID, report, baselineKeys)
+			fmt.Fprintf(os.Stderr, "  baseline drift: %d new / %d total\n", len(drift.New), len(report.Findings))
+			if shouldFail(drift.New, *failOn) {
+				fmt.Fprintf(os.Stderr, "  → gate FAIL (new findings ≥%s)\n", *failOn)
+			} else {
+				fmt.Fprintf(os.Stderr, "  → gate PASS (new findings < %s)\n", *failOn)
+			}
+		default:
+			if shouldFail(report.Findings, *failOn) {
+				fmt.Fprintf(os.Stderr, "  → gate FAIL (≥%s)\n", *failOn)
+			} else {
+				fmt.Fprintf(os.Stderr, "  → gate PASS\n")
+			}
 		}
 	}
 
@@ -1007,7 +1143,103 @@ func runRules(args []string) {
 		printRulesTable()
 		return
 	}
+	if fs.Arg(0) == "test" {
+		runRulesTest(fs.Args()[1:])
+		return
+	}
 	describeRule(fs.Arg(0))
+}
+
+// runRulesTest tries custom rules against a fixture flow: load the rule file
+// (array or single object), validate every entry (construction errors are
+// FATAL here — the whole point is authoring feedback), run ONLY the custom
+// rules against the flow, and print per-rule match counts plus each finding.
+// Exit codes: 2 invalid rule file, 1 no rule matched (--fail-on-none turns
+// the usual 0 into 1 when you expect a match).
+func runRulesTest(args []string) {
+	fs := flag.NewFlagSet("rules test", flag.ExitOnError)
+	failOnNone := fs.Bool("fail-on-none", false, "exit 1 when no rule matched")
+	_ = fs.Parse(args)
+	if fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "usage: bakicli rules test <rules.json> <flow.txt|folder|->")
+		fmt.Fprintln(os.Stderr, "  <rules.json>: custom-rule JSON — an array, or a single rule object")
+		os.Exit(2)
+	}
+	rulesPath, flowTarget := fs.Arg(0), fs.Arg(1)
+
+	configs, err := readCustomRuleConfigs(rulesPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli: rules test: %v\n", err)
+		os.Exit(2)
+	}
+	var rules []analyzer.Rule
+	invalid := 0
+	for i, cfg := range configs {
+		r, cerr := analyzer.NewCustomRule(cfg)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: rules test: entry %d (id %q) invalid: %v\n", i, cfg.ID, cerr)
+			invalid++
+			continue
+		}
+		rules = append(rules, r)
+	}
+	if invalid > 0 {
+		fmt.Fprintf(os.Stderr, "bakicli: rules test: %d of %d rule(s) invalid\n", invalid, len(configs))
+		os.Exit(2)
+	}
+	if len(rules) == 0 {
+		fmt.Fprintln(os.Stderr, "bakicli: rules test: no rules in file")
+		os.Exit(2)
+	}
+
+	doc, err := load(flowTarget)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli: rules test: load flow: %v\n", err)
+		os.Exit(2)
+	}
+	report := analyzer.RunAnalysis(doc, rules, models.DefaultSettings(), nil)
+
+	matched := 0
+	fmt.Printf("%d custom rule(s) against %q (%d block(s)):\n", len(rules), flowTarget, doc.Metadata.BlockCount)
+	for _, f := range report.Findings {
+		matched++
+		fmt.Printf("  [%s] %s — %s (block %s, subflow %s)\n",
+			strings.ToUpper(string(f.Severity)), f.RuleID, f.Title, f.BlockID, f.SubflowID)
+	}
+	perRule := map[string]int{}
+	for _, f := range report.Findings {
+		perRule[f.RuleID]++
+	}
+	for _, r := range rules {
+		fmt.Printf("rule %-20s %d match(es)\n", r.ID(), perRule[r.ID()])
+	}
+	if matched == 0 {
+		fmt.Println("no matches")
+		if *failOnNone {
+			os.Exit(1)
+		}
+		return
+	}
+	fmt.Printf("%d finding(s)\n", matched)
+}
+
+// readCustomRuleConfigs accepts the custom-rules file in either shape: the
+// canonical array used by -custom-rules, or a single rule object (handier
+// while iterating on one rule).
+func readCustomRuleConfigs(path string) ([]analyzer.CustomRuleConfig, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- operator-supplied path
+	if err != nil {
+		return nil, err
+	}
+	var arr []analyzer.CustomRuleConfig
+	if err := json.Unmarshal(data, &arr); err == nil {
+		return arr, nil
+	}
+	var one analyzer.CustomRuleConfig
+	if err := json.Unmarshal(data, &one); err == nil && one.ID != "" {
+		return []analyzer.CustomRuleConfig{one}, nil
+	}
+	return nil, fmt.Errorf("%s: not a custom-rule JSON array or object", path)
 }
 
 func printRulesTable() {
@@ -1360,4 +1592,181 @@ func buildSettingsFromConfig(cfg *bakiConfig) *models.AppSettings {
 		rules[id] = models.RuleConfig{Enabled: enabled, Severity: rc.Severity}
 	}
 	return &models.AppSettings{Analysis: models.AnalysisSettings{Rules: rules}}
+}
+
+// runDiffReports compares two saved analysis runs at the FINDINGS level
+// (`bakicli -format json run.json > old.json`, twice): added / removed /
+// persisted, with an optional gate. CI pipelines comparing branches had to
+// eyeball two JSON blobs — the server had this endpoint, the CLI didn't.
+func runDiffReports(args []string) {
+	fs := flag.NewFlagSet("diff-reports", flag.ExitOnError)
+	format := fs.String("format", "text", "output format: text, json")
+	failOnNew := fs.Bool("fail-on-new", false, "exit 1 when any finding was ADDED")
+	failOn := fs.String("fail-on", "error", "with -fail-on-new: only count added findings at or above this severity (error, warning, info)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: bakicli diff-reports [-format text|json] [-fail-on-new [-fail-on sev]] <old.json> <new.json>")
+		fmt.Fprintln(os.Stderr, "  findings-level diff between two saved analysis runs")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+	if fs.NArg() != 2 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	validSeverities := map[string]bool{"error": true, "warning": true, "info": true}
+	if !validSeverities[*failOn] {
+		fmt.Fprintf(os.Stderr, "bakicli diff-reports: unknown -fail-on value %q\n", *failOn)
+		os.Exit(2)
+	}
+
+	oldReport, err := readReport(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli diff-reports: %v\n", err)
+		os.Exit(2)
+	}
+	newReport, err := readReport(fs.Arg(1))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli diff-reports: %v\n", err)
+		os.Exit(2)
+	}
+
+	diff := analyzer.DiffReports(oldReport, newReport)
+
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(diff); err != nil {
+			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("diff: +%d added  -%d removed  =%d persisted (old %d → new %d)\n",
+			diff.AddedCount, diff.RemovedCount, diff.PersistedCount,
+			len(oldReport.Findings), len(newReport.Findings))
+		for _, f := range diff.Added {
+			fmt.Printf("  + [%s] %s — %s (block %s)\n", strings.ToUpper(string(f.Severity)), f.RuleID, f.Title, f.BlockID)
+		}
+		for _, f := range diff.Removed {
+			fmt.Printf("  - [%s] %s — %s (block %s)\n", strings.ToUpper(string(f.Severity)), f.RuleID, f.Title, f.BlockID)
+		}
+	}
+
+	if *failOnNew && diff.AddedCount > 0 {
+		if shouldFail(diff.Added, *failOn) {
+			fmt.Fprintf(os.Stderr, "gate FAIL: %d added finding(s) at or above %s\n", countAtOrAbove(diff.Added, *failOn), *failOn)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "gate PASS: added findings below %s\n", *failOn)
+	}
+}
+
+// runSuppressions inventories the flow's inline `# pad-ignore` directives and
+// audits them: STALE directives (rule no longer fires on the target block)
+// silently mask future findings forever — a governance audit needs to see
+// them. Exit 1 with --fail-on-stale for CI enforcement.
+func runSuppressions(args []string) {
+	fs := flag.NewFlagSet("suppressions", flag.ExitOnError)
+	format := fs.String("format", "text", "output format: text, json")
+	failOnStale := fs.Bool("fail-on-stale", false, "exit 1 when any stale directive exists")
+	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: bakicli suppressions [-format text|json] [-fail-on-stale] <file.txt|folder|->")
+		fmt.Fprintln(os.Stderr, "  list inline pad-ignore directives and flag stale ones")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	doc, err := load(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli suppressions: %v\n", err)
+		os.Exit(2)
+	}
+	entries := analyzer.SuppressionInventory(doc, selectRules("", *customRulesFlag), models.DefaultSettings())
+
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(entries); err != nil {
+			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if len(entries) == 0 {
+			fmt.Println("no pad-ignore directives found")
+		}
+		stale := 0
+		for _, e := range entries {
+			marker := "     "
+			if e.Stale {
+				marker = "STALE"
+				stale++
+			}
+			fmt.Printf("%s line %-4d %s → %s (%s)%s\n",
+				marker, e.Line, displayRule(e.Rule), e.BlockLabel, firstNonEmptyStr(e.BlockType, "block"), e.Subflow)
+			if e.Reason != "" {
+				fmt.Printf("       ↳ %s\n", e.Reason)
+			}
+		}
+		fmt.Printf("%d directive(s), %d stale\n", len(entries), stale)
+	}
+
+	if *failOnStale {
+		for _, e := range entries {
+			if e.Stale {
+				os.Exit(1)
+			}
+		}
+	}
+}
+
+func displayRule(rule string) string {
+	if rule == "*" {
+		return "[all rules]"
+	}
+	return "[" + rule + "]"
+}
+
+func firstNonEmptyStr(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
+// readReport loads a saved AnalysisReport JSON (the `bakicli -format json`
+// output of a prior run).
+func readReport(path string) (*models.AnalysisReport, error) {
+	var r io.Reader
+	if path == "-" {
+		r = os.Stdin
+	} else {
+		f, err := os.Open(path) // #nosec G304 -- operator-supplied path
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = f.Close() }()
+		r = f
+	}
+	var report models.AnalysisReport
+	if err := json.NewDecoder(r).Decode(&report); err != nil {
+		return nil, fmt.Errorf("%s: invalid analysis report: %w", path, err)
+	}
+	return &report, nil
+}
+
+// countAtOrAbove counts findings whose severity meets or exceeds min (for
+// gate summaries; severity rank error > warning > info).
+func countAtOrAbove(findings []models.Finding, min string) int {
+	rank := map[string]int{"error": 3, "warning": 2, "info": 1}
+	n := 0
+	for _, f := range findings {
+		if rank[string(f.Severity)] >= rank[min] {
+			n++
+		}
+	}
+	return n
 }

@@ -125,6 +125,13 @@ var (
 	ErrProviderDown        = errors.New("provider is currently unavailable")
 	ErrInsufficientBalance = errors.New("insufficient balance")
 	ErrCircuitOpen         = errors.New("provider circuit open: too many recent failures")
+	// ErrToolsUnsupported marks a 400 rejection because the selected MODEL
+	// lacks function/tool support even though the provider family does
+	// (SupportsTools is provider-wide — e.g. GitHub Models serves many models
+	// without tool support behind one OpenAI-compatible endpoint). The chat
+	// tool loop catches it and degrades gracefully to a no-tools answer
+	// instead of failing the turn.
+	ErrToolsUnsupported = errors.New("model does not support tools")
 )
 
 // detectContextLimitError checks whether a provider 400 response is a
@@ -136,9 +143,34 @@ func detectContextLimitError(statusCode int, message string) error {
 		return nil
 	}
 	lower := strings.ToLower(message)
-	for _, hint := range []string{"context length", "context window", "too long", "maximum context", "token limit", "prompt is too long"} {
+	// Gemini's wording ("The input token count (N) exceeds the maximum number
+	// of tokens allowed (M).") matches none of the OpenAI/Claude phrasings.
+	for _, hint := range []string{"context length", "context window", "too long", "maximum context", "token limit", "prompt is too long", "exceeds the maximum number of tokens"} {
 		if strings.Contains(lower, hint) {
 			return ErrContextLimit
+		}
+	}
+	return nil
+}
+
+// detectToolsUnsupportedError checks whether a provider 400 response is a
+// "this model can't use tools/function calling" rejection and returns
+// ErrToolsUnsupported if so. Matching is deliberately two-sided — the message
+// must BOTH mention tools/function-calling AND say they're unavailable — so an
+// ordinary error that merely contains the word "tool" (e.g. "tool result too
+// long") never matches. Returns nil for anything else.
+func detectToolsUnsupportedError(statusCode int, message string) error {
+	if statusCode != 400 || message == "" {
+		return nil
+	}
+	lower := strings.ToLower(message)
+	mentionsTools := strings.Contains(lower, "tool") || strings.Contains(lower, "function calling")
+	if !mentionsTools {
+		return nil
+	}
+	for _, hint := range []string{"not supported", "unsupported", "does not support", "doesn't support", "not available", "not enabled", "is disabled", "are disabled"} {
+		if strings.Contains(lower, hint) {
+			return ErrToolsUnsupported
 		}
 	}
 	return nil
@@ -205,6 +237,10 @@ type MetadataProvider interface {
 	ContextLimit() int
 	PricePerMillionTokens() Pricing
 	EstimateTokens(text string) int
+	// SupportsTools reports whether the provider family can run the agentic
+	// tool loop (native function calling or the marker-based fallback). Used
+	// by the provider listing so the UI can gate the Tools toggle.
+	SupportsTools() bool
 }
 
 func orDefault(val, def int) int {
@@ -228,4 +264,25 @@ func ModelMaxOutputTokens(ctx context.Context, p Provider, model string) int {
 		}
 	}
 	return 0
+}
+
+// ContextLimitFor returns the effective context window for a specific model:
+// the model's catalog entry when it advertises one (per-model windows vary —
+// e.g. Claude Opus/Sonnet 4.6 are 1M while the provider-wide default is 200k),
+// otherwise the provider-wide limit. Callers that pass ContextLimit()
+// directly under-use large-window models — history is truncated against the
+// smaller default and the paid-for window is never filled.
+func ContextLimitFor(ctx context.Context, p Provider, modelID string) int {
+	if modelID == "" {
+		return p.ContextLimit()
+	}
+	models, err := p.Models(ctx)
+	if err == nil {
+		for _, m := range models {
+			if m.ID == modelID && m.ContextLimit > 0 {
+				return m.ContextLimit
+			}
+		}
+	}
+	return p.ContextLimit()
 }

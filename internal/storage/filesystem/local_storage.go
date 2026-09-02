@@ -275,6 +275,13 @@ func (lsb *LocalStorageBackend) refreshMetaIndex(ctx context.Context) (map[strin
 // is loaded ONLY for the flows on the requested page when the caller didn't
 // ask for MetadataOnly — previously every listing read and fully parsed every
 // stored flow, including all filtered-out ones.
+// UpdateFlowTags: tags are a cloud-library concept (organizational labels on
+// stored flows); desktop flows are file-backed and carry no tag storage.
+// Clean error rather than a silent no-op so callers can branch on mode.
+func (lsb *LocalStorageBackend) UpdateFlowTags(ctx context.Context, flowID string, tags []string) error {
+	return fmt.Errorf("flow tags require a storage backend (cloud mode)")
+}
+
 func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
 	index, err := lsb.refreshMetaIndex(ctx)
 	if err != nil {
@@ -592,6 +599,9 @@ func (b *LocalStorageBackend) SaveKnowledgeDocument(ctx context.Context, doc *in
 func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error {
 	return nil
 }
+func (b *LocalStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Context, orgID, filename string) error {
+	return nil
+}
 func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
 	return nil, nil
 }
@@ -600,6 +610,15 @@ func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID st
 }
 func (b *LocalStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
+}
+func (b *LocalStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string) ([]interfaces.KnowledgeChunk, error) {
+	return nil, nil
+}
+func (b *LocalStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
+	return nil
+}
+func (b *LocalStorageBackend) CountKnowledgeChunks(ctx context.Context, orgID string) (int, int, error) {
+	return 0, 0, nil
 }
 
 // Audit log — not persisted in local mode.
@@ -1184,4 +1203,22 @@ func (lsb *LocalStorageBackend) RemoveCollaborator(ctx context.Context, flowID, 
 		}
 	}
 	return interfaces.ErrNotFound
+}
+
+// Org channels are a cloud-library governance feature (per-org routing of
+// external notifications); desktop has no orgs to route for.
+func (b *LocalStorageBackend) SaveOrgChannel(ctx context.Context, ch *interfaces.OrgChannel) error {
+	return fmt.Errorf("org channels require a storage backend (cloud mode)")
+}
+func (b *LocalStorageBackend) DeleteOrgChannel(ctx context.Context, orgID, id string) error {
+	return fmt.Errorf("org channels require a storage backend (cloud mode)")
+}
+func (b *LocalStorageBackend) ListOrgChannels(ctx context.Context, orgID string, enabledOnly bool) ([]*interfaces.OrgChannel, error) {
+	return nil, nil
+}
+
+// SearchFlowContents: the filesystem backend has no queryable content store
+// (flows are parsed files); the service falls back to its legacy scan.
+func (b *LocalStorageBackend) SearchFlowContents(ctx context.Context, filter interfaces.FlowFilter, needle string, limit int) ([]*interfaces.FlowDocument, error) {
+	return nil, interfaces.ErrContentSearchUnsupported
 }

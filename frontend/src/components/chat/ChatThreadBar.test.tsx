@@ -136,3 +136,34 @@ describe('ChatThreadBar accessibility', () => {
     expect(onSelect).toHaveBeenCalledWith('t1')
   })
 })
+
+describe('ChatThreadBar agentic badges', () => {
+  const renderBar = (threads: ChatThread[]) =>
+    render(
+      <ChatThreadBar
+        threads={threads}
+        activeThreadId={threads[0]?.id ?? null}
+        onSelect={() => {}}
+        onCreate={() => {}}
+        onClose={() => {}}
+        onRename={() => {}}
+      />,
+    )
+
+  it('shows a wrench badge on threads that used tools', () => {
+    renderBar([{...makeThread('t1', 'Agentic'), usedTools: true}, makeThread('t2', 'Plain')])
+    expect(screen.getByRole('img', {name: 'Tools used in this thread'})).toBeInTheDocument()
+    expect(screen.queryByRole('img', {name: 'Fixes applied in this thread'})).not.toBeInTheDocument()
+  })
+
+  it('upgrades to a fixes-applied badge when a fix landed', () => {
+    renderBar([{...makeThread('t1', 'Fixed'), usedTools: true, appliedFixes: true}])
+    expect(screen.getByRole('img', {name: 'Fixes applied in this thread'})).toBeInTheDocument()
+    expect(screen.queryByRole('img', {name: 'Tools used in this thread'})).not.toBeInTheDocument()
+  })
+
+  it('shows no badge on plain threads', () => {
+    renderBar([makeThread('t1', 'Plain')])
+    expect(screen.queryByRole('img', {name: /this thread/i})).not.toBeInTheDocument()
+  })
+})

@@ -26,6 +26,9 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const doc = useFlowStore(s => s.document)
+  // View-only shares hide source-writing actions (apply fix / suppress in
+  // file); triage + AI suggestions stay available.
+  const readOnly = useFlowStore(s => s.readOnly)
   const suppressFinding = useAnalysisStore(s => s.suppressFinding)
   const unsuppressFinding = useAnalysisStore(s => s.unsuppressFinding)
   const toast = useToast()
@@ -71,8 +74,8 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
                 className={clsx(
                   'text-2xs uppercase tracking-wider px-1 py-0.5 rounded border',
                   finding.confidence === 'low'
-                    ? 'text-amber-400 border-amber-500/30 bg-amber-500/5'
-                    : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5',
+                    ? 'text-semantic-warning border-semantic-warning/30 bg-semantic-warning/5'
+                    : 'text-semantic-success border-semantic-success/30 bg-semantic-success/5',
                 )}
                 title={
                   finding.confidence === 'low'
@@ -133,7 +136,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           <button
             onClick={() => setShowHint(h => !h)}
             aria-expanded={showHint}
-            className="flex items-center gap-1 text-2xs text-emerald-400 hover:text-emerald-300 px-1.5 py-1 rounded hover:bg-emerald-500/10 transition-colors shrink-0"
+            className="flex items-center gap-1 text-2xs text-semantic-success hover:text-semantic-success px-1.5 py-1 rounded hover:bg-semantic-success/10 transition-colors shrink-0"
             title="Show fix suggestion"
           >
             <Wrench size={10} />
@@ -152,21 +155,25 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           </button>
         )}
 
-        {finding.autoFix && finding.autoFix !== 'suppress' && isDesktop && (
+        {finding.autoFix && finding.autoFix !== 'suppress' && !readOnly && (
           <button
             onClick={() => {
               if (finding.autoFix) void handleApplyFix(finding.autoFix)
             }}
             disabled={applyingFix}
-            className="flex items-center gap-1 text-2xs text-emerald-400 hover:text-emerald-300 px-1.5 py-1 rounded hover:bg-emerald-500/10 transition-colors shrink-0 disabled:opacity-50"
-            title="Apply this fix to the flow source file and re-analyze"
+            className="flex items-center gap-1 text-2xs text-semantic-success hover:text-semantic-success px-1.5 py-1 rounded hover:bg-semantic-success/10 transition-colors shrink-0 disabled:opacity-50"
+            title={
+              isDesktop
+                ? 'Apply this fix to the flow source file and re-analyze'
+                : 'Apply this fix to the stored flow source and re-analyze'
+            }
           >
             <Wrench size={10} />
             {applyingFix ? 'Applying…' : 'Apply fix'}
           </button>
         )}
 
-        {isDesktop && (
+        {isDesktop && !readOnly && (
           <button
             onClick={() => handleApplyFix('suppress')}
             disabled={applyingFix}
@@ -189,7 +196,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
       </div>
 
       {showHint && finding.autoFixHint && (
-        <div className="mx-4 mb-2 ml-9 px-3 py-2 bg-emerald-500/8 border border-emerald-500/20 rounded text-2xs text-emerald-300 font-mono leading-relaxed">
+        <div className="mx-4 mb-2 ml-9 px-3 py-2 bg-semantic-success/10 border border-semantic-success/20 rounded text-2xs text-semantic-success font-mono leading-relaxed">
           {finding.autoFixHint}
         </div>
       )}

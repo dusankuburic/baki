@@ -2,6 +2,46 @@ package models
 
 import "time"
 
+// ToolCallRecord is one tool invocation behind an assistant message — the
+// transparency trail. It mirrors the wire `tool_result` event and is persisted
+// with the conversation so the trail survives reloads.
+type ToolCallRecord struct {
+	Name       string `json:"name"`
+	Label      string `json:"label,omitempty"`
+	Ok         bool   `json:"ok"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+}
+
+// FixItemSnapshot is one fix inside a (possibly batch) approval record, with
+// its own resolved outcome.
+type FixItemSnapshot struct {
+	RuleID     string `json:"ruleId"`
+	FixType    string `json:"fixType"`
+	BlockLabel string `json:"blockLabel"`
+	Line       int    `json:"line"`
+	Summary    string `json:"summary"`
+	Status     string `json:"status"`
+	Message    string `json:"message,omitempty"`
+}
+
+// FixProposalSnapshot persists an apply_fix approval prompt together with its
+// resolved outcome on the assistant message, so the decision record outlives
+// the stream (and its transient approval card). Items carries per-fix outcomes
+// for batch approvals (empty for single-fix records, whose fields are the
+// item).
+type FixProposalSnapshot struct {
+	ProposalID string            `json:"proposalId"`
+	RuleID     string            `json:"ruleId"`
+	FixType    string            `json:"fixType"`
+	BlockLabel string            `json:"blockLabel"`
+	Line       int               `json:"line"`
+	Summary    string            `json:"summary"`
+	Status     string            `json:"status"`
+	Message    string            `json:"message,omitempty"`
+	Items      []FixItemSnapshot `json:"items,omitempty"`
+}
+
 type ChatMessage struct {
 	ID               string    `json:"id"`
 	Role             string    `json:"role"`
@@ -14,6 +54,16 @@ type ChatMessage struct {
 	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model,omitempty"`
 	FinishReason     string    `json:"finishReason,omitempty"`
+	// ToolCalls records the tool invocations behind this assistant message.
+	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
+	// FixProposal snapshots the (single) apply_fix approval record, if any.
+	// LEGACY field: superseded by FixProposals; kept so conversations saved
+	// before the array migration still load.
+	FixProposal *FixProposalSnapshot `json:"fixProposal,omitempty"`
+	// FixProposals snapshots every apply_fix/apply_fixes approval record on
+	// this message — a stream can carry several sequential proposals, and a
+	// batch carries several fixes behind one approval.
+	FixProposals []FixProposalSnapshot `json:"fixProposals,omitempty"`
 }
 
 type ChatRequest struct {
@@ -64,6 +114,12 @@ type ModelDetail struct {
 	ContextLimit   int     `json:"contextLimit"`
 	InputCostPerM  float64 `json:"inputCostPerM"`
 	OutputCostPerM float64 `json:"outputCostPerM"`
+	// SupportsTools reports whether the provider family behind this model
+	// supports the agentic tool loop (native function calling, or the
+	// marker-based fallback). Provider-level granularity: families that mix
+	// per-model support (GitHub Models) report true — the runtime degrades
+	// gracefully per model (ErrToolsUnsupported).
+	SupportsTools bool `json:"supportsTools"`
 }
 
 type ProviderInfo struct {

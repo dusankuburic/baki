@@ -1,9 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"net/http"
+	"pad-analyzer/internal/notify"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"pad-analyzer/internal/api/render"
@@ -189,6 +193,223 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// @Summary      Re-index org knowledge base
+// @Description  Re-embeds every knowledge chunk with the currently configured embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing).
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Re-indexed"
+// @Failure      400 {object} map[string]string "Embedding provider not configured"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/orgs/{id}/knowledge/reindex [post]
+func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Request) {
+	if h.knowledge == nil {
+		render.Error(w, fmt.Errorf("knowledge service not configured"), http.StatusServiceUnavailable)
+		return
+	}
+	if !h.knowledgeBackendAvailable(w) {
+		return
+	}
+	if h.requireAdmin(w, r) == nil {
+		return
+	}
+	res, err := h.knowledge.ReindexOrg(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"))
+	if err != nil {
+		if errors.Is(err, rag.ErrEmbeddingNotConfigured) || errors.Is(err, rag.ErrEmbeddingUnavailable) {
+			render.ErrorWithCode(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED")
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, res)
+}
+
+// ── Org notification channels (R2-3) ─────────────────────────────────────────
+//
+// Org admins configure their own webhook/Teams/Slack destinations; governance
+// events for the org's flows are delivered there IN ADDITION to the
+// deployment-global channels (scanner.dispatchOrgChannels).
+
+// channelOut is the client shape — the HMAC secret never leaves the server.
+type channelOut struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Kind      string    `json:"kind"`
+	URL       string    `json:"url"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// @Summary      List org notification channels
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Channels"
+// @Router       /api/orgs/{id}/channels [get]
+func (h *OrgHandler) handleChannelList(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.JSON(w, []channelOut{})
+		return
+	}
+	if h.requireMember(w, r) == nil {
+		return
+	}
+	channels, err := h.backend.ListOrgChannels(r.Context(), chi.URLParam(r, "id"), false)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	out := make([]channelOut, len(channels))
+	for i, c := range channels {
+		out[i] = channelOut{ID: c.ID, Name: c.Name, Kind: c.Kind, URL: c.URL, Enabled: c.Enabled, CreatedAt: c.CreatedAt}
+	}
+	render.JSON(w, out)
+}
+
+// @Summary      Create/update an org notification channel
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Channel"
+// @Router       /api/orgs/{id}/channels [post]
+func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("org channels require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
+		return
+	}
+	org := h.requireAdmin(w, r)
+	if org == nil {
+		return
+	}
+	var req struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Kind    string `json:"kind"`
+		URL     string `json:"url"`
+		Secret  string `json:"secret"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if !notify.ValidChannelKind(req.Kind) {
+		render.Error(w, fmt.Errorf("kind must be one of webhook, teams, slack"), http.StatusBadRequest)
+		return
+	}
+	// Fail fast on a bad URL (the notify builder validates HTTPS + localhost
+	// carve-outs) so a typo never silently disables the channel.
+	if _, err := notify.BuildChannelNotifier(req.Kind, req.URL, req.Secret); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	id := req.ID
+	if id == "" {
+		id = uuid.NewString()
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	ch := &storageif.OrgChannel{
+		ID: id, OrgID: org.ID, Name: req.Name, Kind: req.Kind,
+		URL: req.URL, Secret: req.Secret, Enabled: enabled,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := h.backend.SaveOrgChannel(r.Context(), ch); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, "org_channel_save", "org", org.ID,
+		map[string]string{"kind": req.Kind})
+	render.JSON(w, channelOut{ID: ch.ID, Name: ch.Name, Kind: ch.Kind, URL: ch.URL, Enabled: ch.Enabled, CreatedAt: ch.CreatedAt})
+}
+
+// @Summary      Delete an org notification channel
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Param        channelId path string true "Channel ID"
+// @Produce      json
+// @Success      200 {object} map[string]string "Deleted"
+// @Router       /api/orgs/{id}/channels/{channelId} [delete]
+func (h *OrgHandler) handleChannelDelete(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("org channels require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
+		return
+	}
+	org := h.requireAdmin(w, r)
+	if org == nil {
+		return
+	}
+	if err := h.backend.DeleteOrgChannel(r.Context(), org.ID, chi.URLParam(r, "channelId")); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, "org_channel_delete", "org", org.ID,
+		map[string]string{"channelId": chi.URLParam(r, "channelId")})
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// handleChannelTest delivers a synthetic test event to ONE channel so an
+// admin verifies the destination without waiting for a real governance
+// signal. Synchronous (the 4xx/5xx is the point).
+// @Summary      Test an org notification channel
+// @Tags         org
+// @Param        id path string true "Org ID"
+// @Param        channelId path string true "Channel ID"
+// @Produce      json
+// @Success      200 {object} map[string]string "Delivered"
+// @Router       /api/orgs/{id}/channels/{channelId}/test [post]
+func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("org channels require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
+		return
+	}
+	org := h.requireAdmin(w, r)
+	if org == nil {
+		return
+	}
+	channelID := chi.URLParam(r, "channelId")
+	channels, err := h.backend.ListOrgChannels(r.Context(), org.ID, false)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	var target *storageif.OrgChannel
+	for _, c := range channels {
+		if c.ID == channelID {
+			target = c
+			break
+		}
+	}
+	if target == nil {
+		render.Error(w, fmt.Errorf("channel not found"), http.StatusNotFound)
+		return
+	}
+	n, err := notify.BuildChannelNotifier(target.Kind, target.URL, target.Secret)
+	if err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		done <- n.Notify(ctx, notify.Event{
+			Type:    notify.EventTest,
+			Title:   "baki channel test",
+			Message: fmt.Sprintf("This is a test delivery to %q (%s). If you can read this, the channel works.", target.Name, target.Kind),
+			At:      time.Now().UTC(),
+		})
+	}()
+	if err := <-done; err != nil {
+		render.Error(w, fmt.Errorf("delivery failed: %w", err), http.StatusBadGateway)
+		return
+	}
+	render.JSON(w, map[string]string{"status": "delivered"})
 }
 
 // @Summary      List user's organizations

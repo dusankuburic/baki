@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -402,6 +405,27 @@ type blobHealthChecker interface {
 
 // componentStatus is one subsystem's health verdict in the admin breakdown.
 // "skipped" means the component isn't configured (e.g. no Redis, no blob).
+// classifyHealthErr reduces a dependency error to a coarse, non-leaking
+// class for the admin health payload (B1.8): timeout / unavailable / refused
+// / auth / unknown.
+func classifyHealthErr(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "timeout"):
+		return "timeout"
+	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "no route"), strings.Contains(msg, "unreachable"):
+		return "connection refused"
+	case strings.Contains(msg, "reset by peer"), strings.Contains(msg, "broken pipe"):
+		return "connection reset"
+	case strings.Contains(msg, "auth"), strings.Contains(msg, "credential"), strings.Contains(msg, "permission"):
+		return "auth failed"
+	case strings.Contains(msg, "no rows"):
+		return "not found"
+	default:
+		return "unavailable"
+	}
+}
+
 type componentStatus struct {
 	Status string `json:"status"`          // "ok" | "error" | "skipped"
 	Error  string `json:"error,omitempty"` // present only when Status == "error"
@@ -449,9 +473,11 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
-	// Database
+	// Database. B1.8: dependency errors embed hostnames/DSN fragments/SQL
+	// state — log the full error, return a coarse class only.
 	if err := h.backend.Ping(ctx); err != nil {
-		resp.Database = componentStatus{Status: "error", Error: err.Error()}
+		slog.Warn("health: database ping failed", "err", err)
+		resp.Database = componentStatus{Status: "error", Error: classifyHealthErr(err)}
 		resp.Overall = "down"
 	} else {
 		resp.Database = componentStatus{Status: "ok"}
@@ -460,7 +486,8 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 	// Blob (optional)
 	if bc, ok := h.backend.(blobHealthChecker); ok {
 		if err := h.checkBlobCached(ctx, bc); err != nil {
-			resp.Blob = componentStatus{Status: "error", Error: err.Error()}
+			slog.Warn("health: blob check failed", "err", err)
+			resp.Blob = componentStatus{Status: "error", Error: classifyHealthErr(err)}
 			if resp.Overall == "ok" {
 				resp.Overall = "degraded"
 			}
@@ -475,7 +502,8 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 	if h.redisPinger != nil {
 		redisCtx, redisCancel := context.WithTimeout(r.Context(), 2*time.Second)
 		if err := h.redisPinger.Ping(redisCtx); err != nil {
-			resp.Redis = componentStatus{Status: "error", Error: err.Error()}
+			slog.Warn("health: redis ping failed", "err", err)
+			resp.Redis = componentStatus{Status: "error", Error: classifyHealthErr(err)}
 			if resp.Overall == "ok" {
 				resp.Overall = "degraded"
 			}

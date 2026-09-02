@@ -1,7 +1,7 @@
 import {Minus, Square, X, Settings, Menu, PanelRight} from 'lucide-react'
 import {createAdapter} from '@/platform/adapters'
 import {getPlatformCapabilities} from '@/platform/guards'
-import {useFlowStore} from '@/stores/flowStore'
+import {useBreadcrumbPath} from './Breadcrumbs'
 import {useUIStore} from '@/stores/uiStore'
 import OrgSwitcher from './OrgSwitcher'
 import PresenceIndicators from '@/components/collaboration/PresenceIndicators'
@@ -10,13 +10,12 @@ import AlertsBell from './AlertsBell'
 const platform = createAdapter()
 
 export default function TitleBar() {
-  const document = useFlowStore(s => s.document)
-  const selectedSubflowId = useFlowStore(s => s.selectedSubflowId)
   const toggleSidebar = useUIStore(s => s.toggleSidebar)
   const toggleInspector = useUIStore(s => s.toggleInspector)
 
-  const subflow = document?.subflows.find(s => s.id === selectedSubflowId)
-  const breadcrumb = document ? [document.name, ...(subflow ? [subflow.name] : [])] : ['PAD Analyzer']
+  // Shared derivation (U5a.3): same source as the interactive Breadcrumbs.
+  const {flowName, path} = useBreadcrumbPath()
+  const breadcrumb = [flowName ?? 'PAD Analyzer', ...path.map(c => c.name)]
 
   const toggleSettings = useUIStore(s => s.toggleSettings)
 

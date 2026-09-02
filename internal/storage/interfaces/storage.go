@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -115,6 +117,16 @@ type PurgeResult struct {
 // orgs, or audit logs.
 type FlowStore interface {
 	SaveFlow(ctx context.Context, flow *FlowDocument) error
+	// UpdateFlowTags replaces a flow's organizational tags WITHOUT a content
+	// round-trip or version bump (tags are metadata, not flow content).
+	// Implementations normalize (lowercase, char whitelist, ≤32 chars/tag,
+	// ≤20 tags) and reject invalid input.
+	UpdateFlowTags(ctx context.Context, flowID string, tags []string) error
+	// SearchFlowContents returns METADATA-ONLY documents whose stored content
+	// mentions needle (block names, action types, property values), newest
+	// first, within the filter's visibility scope. Backends without a
+	// queryable content column return ErrContentSearchUnsupported.
+	SearchFlowContents(ctx context.Context, filter FlowFilter, needle string, limit int) ([]*FlowDocument, error)
 	// TransferFlowOwner changes owner_id and org_id on a flow. This is the
 	// ONLY way to reassign ownership — SaveFlow's ON CONFLICT intentionally
 	// preserves the original owner_id/org_id to prevent hijacking.
@@ -249,12 +261,25 @@ type KnowledgeStore interface {
 	// DeleteKnowledgeDocument removes a document only when it belongs to orgID,
 	// so a caller scoped to one org cannot delete another org's documents.
 	DeleteKnowledgeDocument(ctx context.Context, orgID, id string) error
+	// DeleteKnowledgeDocumentByName removes every document with the given
+	// filename in the org — re-upload REPLACE semantics (chunks cascade).
+	DeleteKnowledgeDocumentByName(ctx context.Context, orgID, filename string) error
 	ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*KnowledgeDocument, error)
 	// SaveKnowledgeChunks inserts chunk rows RLS-scoped to userID so the
 	// knowledge_chunks WITH CHECK policy enforces org membership. userID is
 	// the calling user's identity ("" only in non-authenticated local mode).
 	SaveKnowledgeChunks(ctx context.Context, userID string, chunks []KnowledgeChunk) error
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]KnowledgeChunk, error)
+	// ListKnowledgeChunkContents returns every chunk's DocID+Content (no
+	// embeddings) for re-indexing after an embedding-provider change.
+	ListKnowledgeChunkContents(ctx context.Context, orgID string) ([]KnowledgeChunk, error)
+	// UpdateKnowledgeChunkEmbeddings replaces chunk embeddings in place
+	// (RLS-scoped to userID like SaveKnowledgeChunks) and refreshes the
+	// pgvector column for same-dimension vectors.
+	UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []KnowledgeChunk) error
+	// CountKnowledgeChunks reports org totals: all chunks and how many are in
+	// the pgvector index at the configured dimension (dim-mismatch detection).
+	CountKnowledgeChunks(ctx context.Context, orgID string) (total, vectorIndexed int, err error)
 }
 
 // HealthChecker covers backend liveness/lifecycle, independent of any one
@@ -360,6 +385,7 @@ type UserTokenStore interface {
 // domain doesn't ripple through unrelated callers.
 type StorageBackend interface {
 	FlowStore
+	OrgChannelStore
 	FlowVersionStore
 	AppSettingsStore
 	ConversationStore
@@ -409,17 +435,20 @@ type GovernanceAlertStore interface {
 	// UnreadGovernanceAlertCount returns the number of visible alerts that have
 	// not yet been acknowledged (read_at IS NULL and not dismissed).
 	UnreadGovernanceAlertCount(ctx context.Context) (int, error)
+	// UnreadGovernanceAlertCountFor scopes the badge count to one caller:
+	// team-wide alerts plus that user's targeted ones.
+	UnreadGovernanceAlertCountFor(ctx context.Context, userID string) (int, error)
 	// MarkGovernanceAlertRead stamps read_at = NOW() on one alert. Idempotent.
-	MarkGovernanceAlertRead(ctx context.Context, alertID string) error
+	MarkGovernanceAlertRead(ctx context.Context, userID, alertID string) error
 	// MarkAllGovernanceAlertsRead stamps read_at = NOW() on every visible unread
 	// alert (the "open the panel → clear the badge" action). Idempotent.
-	MarkAllGovernanceAlertsRead(ctx context.Context) error
+	MarkAllGovernanceAlertsRead(ctx context.Context, userID string) error
 	// DismissGovernanceAlert stamps dismissed_at = NOW() on one alert. A dismissed
 	// alert is hidden from the default list view but not deleted. Idempotent.
-	DismissGovernanceAlert(ctx context.Context, alertID string) error
+	DismissGovernanceAlert(ctx context.Context, userID, alertID string) error
 	// ClearGovernanceAlerts permanently deletes the caller's visible alerts that
 	// have been dismissed. Non-dismissed alerts are retained.
-	ClearGovernanceAlerts(ctx context.Context) error
+	ClearGovernanceAlerts(ctx context.Context, userID string) error
 }
 
 // UserToken purposes.
@@ -522,7 +551,16 @@ type FlowFilter struct {
 	// (not the owner and not via org membership). Used by the "Shared with me"
 	// scope in the library UI.
 	SharedOnly bool
+	// Tags matches flows carrying ANY of the listed tags (a tag-picker's
+	// any-of semantics). Normalization is the storage layer's concern.
+	Tags []string
 }
+
+// ErrContentSearchUnsupported is returned by SearchFlowContents on backends
+// that cannot push content matching into the store (no content column —
+// filesystem backends; or content offloaded to blob storage, where the DB
+// holds only a placeholder). Callers fall back to their legacy scan.
+var ErrContentSearchUnsupported = errors.New("content search not supported by this backend")
 
 // HealthSnapshot is the persisted per-flow analysis summary surfaced on the
 // single-flow GET. A nil pointer means the flow has never been analyzed.
@@ -713,6 +751,13 @@ type KnowledgeDocument struct {
 	OrgID     string    `json:"orgId"`
 	Filename  string    `json:"filename"`
 	CreatedAt time.Time `json:"createdAt"`
+	// ChunkCount / VectorIndexed are list-view extras (filled by
+	// ListKnowledgeDocuments): how many chunks the doc has and how many of
+	// those are in the pgvector index (same dimension as configured). A doc
+	// with chunks but 0 indexed is stranded by an embedding-provider switch —
+	// the management UI surfaces it and offers re-index.
+	ChunkCount    int `json:"chunkCount,omitempty"`
+	VectorIndexed int `json:"vectorIndexed,omitempty"`
 }
 
 type KnowledgeChunk struct {
@@ -720,6 +765,9 @@ type KnowledgeChunk struct {
 	DocID     string    `json:"docId"`
 	Content   string    `json:"content"`
 	Embedding []float32 `json:"embedding"`
+	// Filename of the source document (joined at retrieval time) so the RAG
+	// assembly can attribute each chunk to its source — empty when unknown.
+	Filename string `json:"filename,omitempty"`
 }
 
 // FlowDocument represents a flow document
@@ -738,6 +786,10 @@ type FlowDocument struct {
 	CreatedAt      time.Time    `json:"createdAt"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
 	Version        int          `json:"version"`
+	// Tags are the flow's organizational labels (business unit, criticality,
+	// environment) — normalized by storage (lowercase, comma-free, ≤32
+	// chars, ≤20 tags). Empty for untagged flows.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // FlowMetadata contains metadata about a flow
@@ -772,18 +824,57 @@ type AppSettings struct {
 // with pad-core/models.ChatMessage (the domain type) so the service-layer bridge
 // (toStorageMessages/toModelMessages) is lossless. Timestamp is an RFC3339 string
 // here; the bridge formats/parses it from the model's time.Time.
+// ToolCallRecord mirrors models.ToolCallRecord (same JSON tags) — the
+// per-message tool transparency trail persisted with the conversation.
+type ToolCallRecord struct {
+	Name       string `json:"name"`
+	Label      string `json:"label,omitempty"`
+	Ok         bool   `json:"ok"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+}
+
+// FixItemSnapshot mirrors models.FixItemSnapshot — one fix inside a batch
+// approval record.
+type FixItemSnapshot struct {
+	RuleID     string `json:"ruleId"`
+	FixType    string `json:"fixType"`
+	BlockLabel string `json:"blockLabel"`
+	Line       int    `json:"line"`
+	Summary    string `json:"summary"`
+	Status     string `json:"status"`
+	Message    string `json:"message,omitempty"`
+}
+
+// FixProposalSnapshot mirrors models.FixProposalSnapshot — the persisted
+// apply_fix approval record (single or batch).
+type FixProposalSnapshot struct {
+	ProposalID string            `json:"proposalId"`
+	RuleID     string            `json:"ruleId"`
+	FixType    string            `json:"fixType"`
+	BlockLabel string            `json:"blockLabel"`
+	Line       int               `json:"line"`
+	Summary    string            `json:"summary"`
+	Status     string            `json:"status"`
+	Message    string            `json:"message,omitempty"`
+	Items      []FixItemSnapshot `json:"items,omitempty"`
+}
+
 type ChatMessage struct {
-	ID               string `json:"id"`
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	Timestamp        string `json:"timestamp"`
-	ContextBlockID   string `json:"contextBlockId,omitempty"`
-	ContextSubflowID string `json:"contextSubflowId,omitempty"`
-	TokensIn         int    `json:"tokensIn,omitempty"`
-	TokensOut        int    `json:"tokensOut,omitempty"`
-	Provider         string `json:"provider,omitempty"`
-	Model            string `json:"model,omitempty"`
-	FinishReason     string `json:"finishReason,omitempty"`
+	ID               string                `json:"id"`
+	Role             string                `json:"role"`
+	Content          string                `json:"content"`
+	Timestamp        string                `json:"timestamp"`
+	ContextBlockID   string                `json:"contextBlockId,omitempty"`
+	ContextSubflowID string                `json:"contextSubflowId,omitempty"`
+	TokensIn         int                   `json:"tokensIn,omitempty"`
+	TokensOut        int                   `json:"tokensOut,omitempty"`
+	Provider         string                `json:"provider,omitempty"`
+	Model            string                `json:"model,omitempty"`
+	FinishReason     string                `json:"finishReason,omitempty"`
+	ToolCalls        []ToolCallRecord      `json:"toolCalls,omitempty"`
+	FixProposal      *FixProposalSnapshot  `json:"fixProposal,omitempty"` // legacy singular
+	FixProposals     []FixProposalSnapshot `json:"fixProposals,omitempty"`
 }
 
 // Settings types — kept in parity with the matching types in internal/models
@@ -938,7 +1029,7 @@ type GovernanceAlert struct {
 	FlowID      string     `json:"flowId"`
 	FlowName    string     `json:"flowName,omitempty"`
 	OrgID       string     `json:"orgId,omitempty"`
-	Type        string     `json:"type"` // "drift" | "health_regression"
+	Type        string     `json:"type"` // "drift" | "health_regression" | "finding_assigned" | "comment_added"
 	Title       string     `json:"title"`
 	Message     string     `json:"message,omitempty"`
 	Severity    string     `json:"severity"` // "error" | "warning"
@@ -949,15 +1040,47 @@ type GovernanceAlert struct {
 	CreatedAt   time.Time  `json:"createdAt"`
 	ReadAt      *time.Time `json:"readAt,omitempty"`
 	DismissedAt *time.Time `json:"dismissedAt,omitempty"`
+	// TargetUser is the delivery target for PERSONAL alerts (assignment/
+	// comment notifications): the alert is visible only to that user. Empty =
+	// team-wide (governance semantics — visible to anyone who can see the
+	// flow).
+	TargetUser string `json:"targetUser,omitempty"`
 }
 
 // GovernanceAlertFilter narrows a ListGovernanceAlerts query. Limit/Offset
 // paginate (Limit <= 0 ⇒ a sensible default cap). IncludeDismissed controls
-// whether dismissed alerts appear (default false hides them).
+// whether dismissed alerts appear (default false hides them). UserID scopes
+// visibility: an alert matches when its TargetUser is empty (team-wide) OR
+// equals UserID. Empty UserID matches ONLY team-wide alerts.
 type GovernanceAlertFilter struct {
 	Limit            int
 	Offset           int
 	IncludeDismissed bool
+	UserID           string
+}
+
+// OrgChannel is one org-configured notification destination (R2-3): governance
+// events for the org's flows are delivered here in addition to the
+// deployment-global channels. URL kinds: webhook / teams / slack.
+type OrgChannel struct {
+	ID        string    `json:"id"`
+	OrgID     string    `json:"orgId"`
+	Name      string    `json:"name"`
+	Kind      string    `json:"kind"`
+	URL       string    `json:"url"`
+	Secret    string    `json:"-"` // HMAC key; never serialized to clients
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// OrgChannelStore covers per-org notification channel management.
+type OrgChannelStore interface {
+	// SaveOrgChannel upserts a channel (ID-keyed). Kind/URL validation is the
+	// caller's (API) concern; storage persists what it's given.
+	SaveOrgChannel(ctx context.Context, ch *OrgChannel) error
+	DeleteOrgChannel(ctx context.Context, orgID, id string) error
+	// ListOrgChannels returns the org's channels; enabledOnly for dispatch.
+	ListOrgChannels(ctx context.Context, orgID string, enabledOnly bool) ([]*OrgChannel, error)
 }
 
 // APIToken is a scoped, revocable machine credential (personal access token)
@@ -971,6 +1094,9 @@ type APIToken struct {
 	TokenHash string     `json:"-"` // sha256 hex; never serialized to clients
 	CreatedAt time.Time  `json:"createdAt"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"` // nil ⇒ no expiry
+	// Scopes restricts a PAT's capabilities (empty = unscoped = full access).
+	// Members of auth.ValidTokenScopes only.
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 // FlowBaseline is the set of finding keys accepted as a flow's baseline.
@@ -1007,4 +1133,62 @@ type ShareToken struct {
 	CreatedBy string     `json:"createdBy,omitempty"`
 	CreatedAt time.Time  `json:"createdAt"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"` // nil ⇒ no expiry
+}
+
+// ── Flow-tag normalization (R2-4) ───────────────────────────────────────────
+//
+// Shared by every backend so the wire contract is identical: tags are
+// lowercase letters/digits/'-'/'_', ≤32 chars each, ≤20 per flow, deduped.
+
+const (
+	MaxFlowTags   = 20
+	MaxFlowTagLen = 32
+)
+
+// NormalizeFlowTags canonicalizes a tag list: trim, lowercase, drop empties
+// and duplicates, enforce the character whitelist and the per-tag/per-flow
+// caps. Returns an error naming the first rejected tag.
+func NormalizeFlowTags(tags []string) ([]string, error) {
+	seen := make(map[string]bool, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, raw := range tags {
+		tag := strings.ToLower(strings.TrimSpace(raw))
+		if tag == "" {
+			continue
+		}
+		if len(tag) > MaxFlowTagLen {
+			return nil, fmt.Errorf("tag %q exceeds %d characters", raw, MaxFlowTagLen)
+		}
+		for _, r := range tag {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			default:
+				return nil, fmt.Errorf("tag %q may only contain letters, digits, '-' and '_'", raw)
+			}
+		}
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	if len(out) > MaxFlowTags {
+		return nil, fmt.Errorf("a flow carries at most %d tags", MaxFlowTags)
+	}
+	return out, nil
+}
+
+// SplitFlowTags parses the CSV tags column; empty ⇒ nil (untagged).
+func SplitFlowTags(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

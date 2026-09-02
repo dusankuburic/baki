@@ -1,5 +1,5 @@
 import {useKeyboard} from './useKeyboard'
-import {useUIStore} from '@/stores/uiStore'
+import {isSystemView, useUIStore} from '@/stores/uiStore'
 import {useEditorStore} from '@/stores/editorStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -24,6 +24,14 @@ export function useAppShortcuts(deps: {
     handlers: {
       'nav.palette': () => useUIStore.getState().setCommandPaletteOpen(v => !v),
       'nav.search': () => {
+        // Contextual routing (F1.8): in the flow editor the CANVAS search is
+        // the target — this handler AND a raw window listener used to both
+        // fire, opening two search bars with one keypress.
+        const view = useUIStore.getState().mainPaneView
+        if (!isSystemView(view)) {
+          window.dispatchEvent(new CustomEvent('blockview:search-open'))
+          return
+        }
         if (useUIStore.getState().sidebarCollapsed) useUIStore.getState().toggleSidebar()
         useSearchStore.getState().requestFocus()
       },

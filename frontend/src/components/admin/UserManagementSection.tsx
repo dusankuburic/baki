@@ -3,11 +3,14 @@ import {Users} from 'lucide-react'
 import clsx from 'clsx'
 import {type AuthUser} from '@/api/auth'
 import {roleBadgeClass} from '@/lib/roleBadge'
+import {useConfirm} from '@/components/shared'
 
 export const UserManagementSection: React.FC<{
   users: AuthUser[]
   onRoleChange: (userId: string, newRole: string) => void
-}> = ({users, onRoleChange}) => (
+}> = ({users, onRoleChange}) => {
+  const {confirm} = useConfirm()
+  return (
   <section className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
     <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
       <Users size={14} className="text-text-tertiary" />
@@ -44,7 +47,19 @@ export const UserManagementSection: React.FC<{
               <td className="px-5 py-3 whitespace-nowrap">
                 <select
                   value={u.role}
-                  onChange={e => onRoleChange(u.id, e.target.value)}
+                  onChange={e => {
+                    if (e.target.value === u.role) return
+                    // Destructive-parity confirm (U4.3): one accidental
+                    // scroll-click used to change a user's role instantly.
+                    void (async () => {
+                      const ok = await confirm({
+                        title: 'Change role',
+                        message: `Change ${u.email || u.id} from "${u.role}" to "${e.target.value}"?`,
+                        confirmLabel: 'Change role',
+                      })
+                      if (ok) onRoleChange(u.id, e.target.value)
+                    })()
+                  }}
                   className="bg-surface-3 border border-border-default rounded-md text-text-primary text-xs px-2 py-1 focus:outline-none focus:border-brand-500 transition-colors"
                 >
                   <option value="admin">Admin</option>
@@ -59,4 +74,5 @@ export const UserManagementSection: React.FC<{
       </table>
     </div>
   </section>
-)
+  )
+}

@@ -319,3 +319,27 @@ func TestPatchFlow_AcceptsStructurallyValidPatch(t *testing.T) {
 		t.Errorf("valid patch was not persisted; content:\n%s", onDisk)
 	}
 }
+
+// B1.13: patch locks evict at zero in-flight users (the sync.Map grew one
+// entry per distinct path forever).
+func TestPatchLocks_EvictedAtZeroRefs(t *testing.T) {
+	svc, _ := newDesktopEditSvc(t)
+	l1 := svc.acquirePatchLock("/a")
+	if n := len(svc.patchLocks); n != 1 {
+		t.Fatalf("locks = %d, want 1", n)
+	}
+	l1.mu.Lock()
+	// Concurrent second user: refs=2 while held.
+	l2 := svc.acquirePatchLock("/a")
+	l1.mu.Unlock()
+	svc.releasePatchLock("/a", l1)
+	// Still one in-flight → entry alive.
+	if _, ok := svc.patchLocks["/a"]; !ok {
+		t.Fatal("entry evicted while still in use")
+	}
+	svc.releasePatchLock("/a", l2)
+	if _, ok := svc.patchLocks["/a"]; ok {
+		t.Fatal("entry not evicted at zero refs")
+	}
+	_ = l2
+}

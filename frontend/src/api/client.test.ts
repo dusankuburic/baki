@@ -327,6 +327,7 @@ describe('api/client', () => {
         generatedAt: '2024-01-01T00:00:00Z',
         durationMs: 42,
         findings: [],
+        stats: {errors: 0, warnings: 0, info: 0, blocksAnalyzed: 10, rulesRun: 29},
         metrics: {healthScore: 87},
         groups: [{blockId: 'b1', count: 2}],
         ruleProfiles: [{ruleId: 'unhandled-error', durationMs: 5}],

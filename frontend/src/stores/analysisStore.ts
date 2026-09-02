@@ -66,6 +66,11 @@ interface AnalysisState {
   progress: {current: number; total: number; ruleName: string}
   severityFilter: Set<Severity>
   categoryFilter: Set<FindingCategory>
+  // Triage-queue filters (R0-3): status chips + "assigned to me" narrow the
+  // list to the user's working set — resolved/acknowledged findings used to
+  // stay fully visible with no way to hide them.
+  statusFilter: Set<TriageStatus>
+  assignedToMeOnly: boolean
   variableLineage: VariableHistory | null
   suppressedFindings: SuppressedFinding[]
   suppressedKeys: Set<string>
@@ -93,6 +98,9 @@ interface AnalysisState {
   setSeverityFilter: (s: Set<Severity>) => void
   toggleCategoryFilter: (c: FindingCategory) => void
   setCategoryFilter: (c: Set<FindingCategory>) => void
+  toggleStatusFilter: (st: TriageStatus) => void
+  setStatusFilter: (sts: Set<TriageStatus>) => void
+  toggleAssignedToMe: () => void
   findingsForBlock: (flowId: string, blockId: string) => Finding[]
   setVariableLineage: (h: VariableHistory | null) => void
   setFindingSearch: (q: string) => void
@@ -103,6 +111,13 @@ interface AnalysisState {
   isSuppressed: (finding: Finding) => boolean
   loadSuppressions: (flowId: string) => Promise<void>
   setFindingTriage: (finding: Finding, status: TriageStatus) => void
+  // triageFindingsBatch applies one triage patch (status and/or assignee) to
+  // many findings: optimistic triageMap update + ONE persisted batch request
+  // (U4.4 bulk triage). prev entries are snapshotted for rollback.
+  triageFindingsBatch: (
+    findings: Finding[],
+    patch: {status?: TriageStatus; assigneeId?: string | null},
+  ) => void
   assignFinding: (finding: Finding, assigneeId: string | null) => void
   loadBaseline: (flowId: string) => Promise<void>
   handleSetBaseline: () => Promise<void>
@@ -119,6 +134,9 @@ interface AnalysisState {
 const MAX_REPORTS = 20
 
 const defaultSeverityFilter = (): Set<Severity> => new Set(['error', 'warning', 'info'])
+// All statuses on by default: 'suppressed' is listed for completeness, but
+// suppressed findings are hidden by the suppress filter regardless.
+const defaultStatusFilter = (): Set<TriageStatus> => new Set(['open', 'acknowledged', 'in_progress', 'resolved'])
 const defaultCategoryFilter = (): Set<FindingCategory> =>
   new Set<FindingCategory>(['Security', 'Reliability', 'Performance', 'Style', 'Logic'])
 
@@ -130,6 +148,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   progress: {current: 0, total: 0, ruleName: ''},
   severityFilter: defaultSeverityFilter(),
   categoryFilter: defaultCategoryFilter(),
+  statusFilter: defaultStatusFilter(),
+  assignedToMeOnly: false,
   variableLineage: null,
   suppressedFindings: [],
   suppressedKeys: new Set(),
@@ -208,6 +228,15 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })),
 
   setCategoryFilter: c => set({categoryFilter: new Set(c)}),
+
+  toggleStatusFilter: (st: TriageStatus) =>
+    set(state => ({
+      statusFilter: toggleSetMember(state.statusFilter, st),
+    })),
+
+  setStatusFilter: (sts: Set<TriageStatus>) => set({statusFilter: new Set(sts)}),
+
+  toggleAssignedToMe: () => set(state => ({assignedToMeOnly: !state.assignedToMeOnly})),
 
   findingsForBlock: (flowId, blockId) => {
     const flowIndex = get().findingsByBlock.get(flowId)
@@ -389,6 +418,61 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Assign (or unassign) a finding without changing its triage status. The
   // backend persists assigneeId alongside the status, so we re-send the current
   // status with the new owner. Cloud-only (desktop triage is in-memory).
+  triageFindingsBatch: (findings, patch) => {
+    if (findings.length === 0) return
+    const flowId = useFlowStore.getState().document?.id ?? ''
+    const prev = findings.map(f => get().triageMap.get(findingKey(f)))
+    set(state => {
+      const triageMap = new Map(state.triageMap)
+      for (const f of findings) {
+        const key = findingKey(f)
+        const existing = triageMap.get(key)
+        const status = patch.status ?? existing?.status ?? 'in_progress'
+        const assigneeId = patch.assigneeId === undefined ? existing?.assigneeId : patch.assigneeId || undefined
+        if (status === 'open' && !assigneeId) {
+          triageMap.delete(key)
+          continue
+        }
+        triageMap.set(key, {
+          flowId,
+          findingKey: key,
+          ruleId: f.ruleId,
+          status,
+          assigneeId,
+          updatedAt: new Date().toISOString(),
+        })
+      }
+      return {triageMap}
+    })
+    if (!isTauri()) {
+      analysisApi
+        .setFindingStatusBatch(
+          findings.map((f, i) => {
+            // Index into prev directly (F1.4): indexOf(f) is O(n²) AND wrong
+            // when the same object reference appears twice.
+            const existing = prev[i]
+            const status = patch.status ?? existing?.status ?? 'in_progress'
+            const assigneeId = patch.assigneeId === undefined ? existing?.assigneeId : patch.assigneeId || undefined
+            return {findingKey: findingKey(f), ruleId: f.ruleId, status, assigneeId}
+          }),
+        )
+        .catch(err => {
+          logger.warn('Failed to persist bulk triage', err)
+          // Roll back: restore each entry's prior shape (or absence).
+          set(state => {
+            const triageMap = new Map(state.triageMap)
+            findings.forEach((f, i) => {
+              const key = findingKey(f)
+              const before = prev[i]
+              if (before) triageMap.set(key, before)
+              else triageMap.delete(key)
+            })
+            return {triageMap}
+          })
+        })
+    }
+  },
+
   assignFinding: (finding, assigneeId) => {
     const key = findingKey(finding)
     const status: TriageStatus = get().triageMap.get(key)?.status ?? 'open'
@@ -512,6 +596,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       progress: {current: 0, total: 0, ruleName: ''},
       severityFilter: defaultSeverityFilter(),
       categoryFilter: defaultCategoryFilter(),
+      statusFilter: defaultStatusFilter(),
+      assignedToMeOnly: false,
       variableLineage: null,
       suppressedFindings: [],
       suppressedKeys: new Set(),
@@ -521,7 +607,9 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       baseline: null,
       baselineNewCount: null,
       selectedFindingIds: new Set(),
-      savedViews: [],
+      // savedViews are DEVICE-LOCAL prefs (persisted to localStorage, loaded
+      // at module init) — logout must not blank them for the session (F1.9):
+      // they'd stay gone until a reload despite surviving on disk.
       focusedFindingKey: null,
     }),
 }))

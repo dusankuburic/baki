@@ -1,12 +1,15 @@
 import {useState, useMemo, useRef, useEffect} from 'react'
 import {Virtuoso, type VirtuosoHandle} from 'react-virtuoso'
-import {ChevronRight, EyeOff, CheckSquare, Square, X, Wrench} from 'lucide-react'
+import {CheckCircle2, CheckSquare, ChevronRight, EyeOff, Square, UserPlus, Wrench, X} from 'lucide-react'
 import clsx from 'clsx'
 import type {Finding, Severity} from '@/types'
+import {severityTone} from '@/lib/severityTone'
+import {refreshAfterBlockEdit} from '@/lib/blockEdit'
 import type {BlockLookup} from '@/lib/tree'
-import {flowApi, analysisApi} from '@/api'
+import {flowApi} from '@/api'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {useAuthStore} from '@/stores/authStore'
 import {useToast} from '@/components/shared'
 import {useTranslation} from 'react-i18next'
 import FindingCard from './FindingCard'
@@ -56,29 +59,33 @@ function groupByRule(findings: Finding[]): RuleGroup[] {
   return Array.from(map.values())
 }
 
-const sevColor: Record<Severity, string> = {
-  error: 'border-l-red-500',
-  warning: 'border-l-amber-500',
-  info: 'border-l-blue-500',
-}
+// Row accent from the shared severity tone map (semantic tokens).
+const rowBar = (sev: Severity) => severityTone(sev).bar
 
 export default function FindingsList({findings, blockLookup, onFixWithAI, sortMode = 'severity'}: Props) {
   const {t} = useTranslation('findings')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [batchFixing, setBatchFixing] = useState(false)
   const suppressMany = useAnalysisStore(s => s.suppressMany)
+  const triageFindingsBatch = useAnalysisStore(s => s.triageFindingsBatch)
+  const currentUserId = useAuthStore(s => s.user?.id ?? '')
   const selectedFindingIds = useAnalysisStore(s => s.selectedFindingIds)
   const toggleFindingSelection = useAnalysisStore(s => s.toggleFindingSelection)
   const selectAllFindings = useAnalysisStore(s => s.selectAllFindings)
   const clearFindingSelection = useAnalysisStore(s => s.clearFindingSelection)
-  const setReport = useAnalysisStore(s => s.setReport)
-  const setDocument = useFlowStore(s => s.setDocument)
+  const readOnly = useFlowStore(s => s.readOnly)
   // Subscribed (not read via getState during render) so the bulk-fix button
   // re-evaluates when the report or selection changes — a render-time
   // getState() could go stale if autoFix flags changed without a selection
   // change.
   const docId = useFlowStore(s => s.document?.id)
   const reportFindings = useAnalysisStore(s => (docId ? s.reports.get(docId)?.findings : undefined))
+  // Selection resolved against the FULL report (not the filtered view) —
+  // selected items hidden by a filter change must not be silently skipped.
+  const selectedFindings = useMemo(
+    () => (reportFindings ?? []).filter(f => selectedFindingIds.has(f.id)),
+    [reportFindings, selectedFindingIds],
+  )
   const hasFixableSelection = useMemo(
     () => (reportFindings ?? []).some(f => selectedFindingIds.has(f.id) && f.autoFix),
     [reportFindings, selectedFindingIds],
@@ -100,13 +107,9 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     setBatchFixing(true)
     try {
       const {document: updated, applied} = await flowApi.applyFixBatch(docId, rules)
-      setDocument(updated)
-      try {
-        const r = await analysisApi.analyzeFlow()
-        if (r) setReport(updated.id, r as never)
-      } catch {
-        /* re-analysis is best-effort; the fixed source is already shown */
-      }
+      // Same-flow refresh (F1.1): preserve subflow/chat/selection, guard the
+      // doc-switch race, and analyze the UPDATED flow by id.
+      refreshAfterBlockEdit(updated)
       toast.success('Applied fixes', {description: `${applied} fix(es) across ${rules.length} rule(s).`})
       clearFindingSelection()
     } catch (err) {
@@ -193,7 +196,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
         itemContent={(_index, row) => {
           const frame = clsx(
             'border-l-2',
-            sevColor[row.group.severity],
+            rowBar(row.group.severity),
             row.groupEnd && 'border-b border-border-subtle',
           )
           if (row.kind === 'header') {
@@ -287,13 +290,35 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
             {hasFixableSelection && (
               <button
                 onClick={handleBulkFix}
-                disabled={batchFixing}
+                disabled={batchFixing || readOnly}
                 className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 transition-colors disabled:opacity-50"
               >
                 <Wrench size={11} />
                 {batchFixing ? t('selection.fixing') : t('selection.fixAll')}
               </button>
             )}
+            {/* Bulk triage (U4.4): the high-frequency queue actions on the
+                whole selection — one optimistic update + one batch request. */}
+            {currentUserId && (
+              <button
+                onClick={() => {
+                  triageFindingsBatch(selectedFindings, {assigneeId: currentUserId, status: 'in_progress'})
+                }}
+                className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 transition-colors"
+                title="Assign the selection to me and set it in progress"
+              >
+                <UserPlus size={11} />
+                {t('selection.assignMe', 'Assign to me')}
+              </button>
+            )}
+            <button
+              onClick={() => triageFindingsBatch(selectedFindings, {status: 'resolved'})}
+              className="flex items-center gap-1 text-2xs text-semantic-success px-2 py-1 rounded hover:bg-semantic-success/10 transition-colors"
+              title="Mark the selection resolved"
+            >
+              <CheckCircle2 size={11} />
+              {t('selection.resolve', 'Resolve')}
+            </button>
             <button
               onClick={() => {
                 // Suppress ALL selected findings from the full report, not

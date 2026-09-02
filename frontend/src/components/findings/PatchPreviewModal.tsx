@@ -122,7 +122,7 @@ export default function PatchPreviewModal({open, original, patched, fixType, onA
                 key={idx}
                 className={clsx(
                   'px-3 py-0.5 flex items-start gap-2',
-                  line.type === 'added' && 'bg-emerald-500/10 text-emerald-300',
+                  line.type === 'added' && 'bg-semantic-success/10 text-semantic-success',
                   line.type === 'removed' && 'bg-red-500/10 text-red-300',
                   line.type === 'context' && 'text-text-tertiary',
                 )}

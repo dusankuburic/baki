@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -154,7 +155,17 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	docs, err := h.libSvc.ListLibraryFlows(r.Context(), userID, orgID, scope, query, sort, limit, offset)
+	// Tag ANY-of filter (R2-4): ?tags=critical,prod — empty element ignored.
+	var tagFilter []string
+	if raw := q.Get("tags"); raw != "" {
+		for _, t := range strings.Split(raw, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tagFilter = append(tagFilter, t)
+			}
+		}
+	}
+
+	docs, err := h.libSvc.ListLibraryFlowsWithTagFilter(r.Context(), userID, orgID, scope, query, sort, limit, offset, tagFilter)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -179,7 +190,7 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		items[i] = h.toLibraryFlowWithPerms(d, userID, ownerNames[d.OwnerID], p)
 	}
 
-	total, err := h.libSvc.CountLibraryFlows(r.Context(), userID, orgID, scope, query)
+	total, err := h.libSvc.CountLibraryFlowsWithTagFilter(r.Context(), userID, orgID, scope, query, tagFilter)
 	if err != nil {
 		render.Error(w, err, 0)
 		return

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -302,6 +303,11 @@ func TestNew_RejectsPlaintextAlertURL(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := New(Config{WebhookURL: c.url})
+			// Offline CI: the public-name https cases now resolve DNS (B1.9
+			// SSRF check); a resolution failure is not a validation verdict.
+			if err != nil && !c.wantErr && strings.Contains(err.Error(), "does not resolve") {
+				t.Skipf("no DNS in test env: %v", err)
+			}
 			if c.wantErr && err == nil {
 				t.Errorf("expected error for URL %q, got nil", c.url)
 			}
@@ -309,5 +315,28 @@ func TestNew_RejectsPlaintextAlertURL(t *testing.T) {
 				t.Errorf("unexpected error for URL %q: %v", c.url, err)
 			}
 		})
+	}
+}
+
+// B1.9: private/link-local targets are refused even over https.
+func TestValidateAlertURL_PrivateTargets(t *testing.T) {
+	denied := []string{
+		"https://169.254.169.254/latest/meta-data/",
+		"https://10.0.0.5:8443/hook",
+		"https://192.168.1.10/hook",
+		"https://127.0.0.1/hook",
+	}
+	for _, u := range denied {
+		if _, err := validateAlertURL(u); err == nil {
+			t.Errorf("private target %q accepted", u)
+		}
+	}
+	// Public DNS name + the documented loopback dev names pass. (Offline CI:
+	// a resolution failure is not a validation rejection.)
+	if _, err := validateAlertURL("https://example.com/hook"); err != nil && !strings.Contains(err.Error(), "does not resolve") {
+		t.Errorf("public https target rejected: %v", err)
+	}
+	if _, err := validateAlertURL("http://localhost:9999/dev"); err != nil {
+		t.Errorf("loopback dev target rejected: %v", err)
 	}
 }

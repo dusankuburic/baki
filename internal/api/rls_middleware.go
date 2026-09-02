@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"pad-analyzer/internal/api/render"
 	"strings"
 
 	"pad-analyzer/internal/auth"
@@ -127,7 +129,18 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 
 		tx, err := rlsBackend.BeginRLS(r.Context(), claims.UserID)
 		if err != nil {
-			slog.Warn("rls: failed to begin transaction, proceeding without RLS", "err", err)
+			// B1.9: MUTATING requests fail CLOSED — without the RLS
+			// transaction the Postgres policies short-circuit to allow-all,
+			// so "proceeding without RLS" on a write was a cross-tenant
+			// window whenever the pool/transient DB hiccuped. Reads stay
+			// fail-open for availability (they're also scoped by explicit
+			// ownership predicates at the query layer).
+			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+				slog.Error("rls: failed to begin transaction, refusing mutation", "method", r.Method, "path", r.URL.Path, "err", err)
+				render.Error(w, fmt.Errorf("temporarily unavailable — retry"), http.StatusServiceUnavailable)
+				return
+			}
+			slog.Warn("rls: failed to begin transaction, proceeding without RLS (read-only)", "err", err)
 			next.ServeHTTP(w, r)
 			return
 		}

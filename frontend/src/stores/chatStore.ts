@@ -1,7 +1,7 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import {chatApi} from '@/api'
-import type {ChatMessage, ProviderID} from '@/types'
+import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 
 // Mirrors the backend per-caller concurrency cap in internal/service/chat.go
 // (maxConcurrentStreamsPerScope). The backend is authoritative; this constant
@@ -25,6 +25,47 @@ export interface ChatThread {
   tokensOut: number
   // useTools opts this thread into the read-only tool/agent loop (default off).
   useTools?: boolean
+  // usedTools/appliedFixes are set at commit when the stream actually ran
+  // tools / landed an applied fix — thread-tab badges so a glance shows which
+  // conversations were agentic.
+  usedTools?: boolean
+  appliedFixes?: boolean
+}
+
+// FixProposalItem is one fix inside a (possibly batch) approval prompt, with
+// its own resolved outcome after the batch decision lands.
+export interface FixProposalItem {
+  ruleId: string
+  fixType: string
+  blockLabel: string
+  line: number
+  summary: string
+  // pending → applied | applied-unresolved | error | already-resolved.
+  status: 'pending' | 'applied' | 'applied-unresolved' | 'error' | 'already-resolved'
+  message?: string
+}
+
+// FixProposalCard is one approval prompt on a thread's stream slot (single or
+// batch). Lives on the StreamSlot (transient by design): cards appear when
+// the model requests fix(es), resolve when the user decides / the backend
+// reports the outcome, and disappear with the slot when the stream ends —
+// the committed message carries the persisted snapshots.
+export interface FixProposalCard {
+  proposalId: string
+  // pending → applying (approved, mutation in flight) → applied |
+  // applied-unresolved | declined | timeout | error. 'pending' is the only
+  // state with enabled buttons.
+  status: 'pending' | 'applying' | 'applied' | 'applied-unresolved' | 'declined' | 'timeout' | 'error'
+  message?: string
+  // items carries per-fix state; single-fix prompts have exactly one item and
+  // ALSO mirror it on the flat fields below (rendering + legacy persistence).
+  items: FixProposalItem[]
+  // Flat mirrors of items[0] for single-fix prompts (empty for pure batches).
+  ruleId: string
+  fixType: string
+  blockLabel: string
+  line: number
+  summary: string
 }
 
 // StreamSlot is one thread's in-flight AI response. Streams are per-thread so
@@ -38,6 +79,14 @@ export interface StreamSlot {
   isThinking: boolean
   tokens: number
   toolStatus: string | null
+  // toolCalls accumulates the finished tool executions (tool_result events)
+  // for the response being streamed; committed onto the assistant message
+  // when the stream ends.
+  toolCalls: ToolCallRecord[]
+  // fixProposals stacks this stream's approval prompts: a stream can carry
+  // several sequential proposals (fix → continue → next fix), and each batch
+  // proposal is one card with per-item rows.
+  fixProposals: FixProposalCard[]
 }
 
 interface ChatState {
@@ -64,8 +113,29 @@ interface ChatState {
   compactThread: (threadId: string, keepPairs: number) => void
   updateStreamingMessage: (threadId: string, text: string) => void
   startStream: (threadId: string, streamId: string, messageId: string) => void
+  // Queued follow-up (U1.6): one per thread, sent automatically when the
+  // thread's stream ends. Composing while streaming is the expected UX — the
+  // queue replaces a dead textarea.
+  queuedByThread: Record<string, {text: string; files: string[]; excludeContext?: boolean}>
+  queueMessage: (threadId: string, msg: {text: string; files: string[]; excludeContext?: boolean}) => void
+  clearQueuedMessage: (threadId: string) => void
+  takeQueuedMessage: (threadId: string) => {text: string; files: string[]; excludeContext?: boolean} | undefined
+  // addToolCall appends a finished tool execution (tool_result event) to the
+  // thread's live stream slot.
+  addToolCall: (threadId: string, record: ToolCallRecord) => void
   endStream: (threadId: string) => void
   setStreamMeta: (threadId: string, patch: Partial<Pick<StreamSlot, 'isThinking' | 'tokens' | 'toolStatus'>>) => void
+  // setFixProposal shows one approval card on the thread's stream slot —
+  // appended unless a card with the same proposalId exists (journal replay is
+  // idempotent). patchFixProposal merges a decision/outcome update into the
+  // matching card (+ per-item patches for batches).
+  setFixProposal: (threadId: string, card: FixProposalCard) => void
+  patchFixProposal: (threadId: string, proposalId: string, patch: Partial<FixProposalCard>, itemPatches?: {ruleId: string; patch: Partial<FixProposalItem>}[]) => void
+  // replaceStreamTools / replaceStreamFixes wholesale-replace the slot's tool
+  // trail / proposal cards from an authoritative journal replay on reconnect —
+  // replace (not append) keeps double-replay idempotent.
+  replaceStreamTools: (threadId: string, calls: ToolCallRecord[]) => void
+  replaceStreamFixes: (threadId: string, cards: FixProposalCard[]) => void
   // updateStream patches text AND meta in one atomic set, halving the per-frame
   // subscriber notifications during streaming (the high-frequency RAF-coalesced
   // flush otherwise issues two set() calls — text + tokens — at 60fps).
@@ -99,6 +169,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeThreadId: null,
   conversations: new Map(),
   streams: {},
+  queuedByThread: {},
   selectedProvider: 'claude',
   providerEpoch: 0,
   stagedPrompt: null,
@@ -169,9 +240,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(state => ({
       streams: {
         ...state.streams,
-        [threadId]: {streamId, messageId, text: '', isThinking: true, tokens: 0, toolStatus: null},
+        [threadId]: {streamId, messageId, text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
       },
     })),
+
+  // addToolCall appends one finished tool execution to the thread's stream
+  // slot (the live view of the per-message tool trail).
+  addToolCall: (threadId, record) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      return {streams: {...state.streams, [threadId]: {...slot, toolCalls: [...slot.toolCalls, record]}}}
+    }),
+
+  replaceStreamTools: (threadId, calls) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      return {streams: {...state.streams, [threadId]: {...slot, toolCalls: calls}}}
+    }),
+
+  replaceStreamFixes: (threadId, cards) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      return {streams: {...state.streams, [threadId]: {...slot, fixProposals: cards}}}
+    }),
 
   endStream: threadId =>
     set(state => {
@@ -179,6 +273,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const next = {...state.streams}
       delete next[threadId]
       return {streams: next}
+    }),
+
+  queueMessage: (threadId, msg) => set(state => ({queuedByThread: {...state.queuedByThread, [threadId]: msg}})),
+  clearQueuedMessage: threadId =>
+    set(state => {
+      if (!(threadId in state.queuedByThread)) return state
+      const next = {...state.queuedByThread}
+      delete next[threadId]
+      return {queuedByThread: next}
+    }),
+  takeQueuedMessage: threadId => {
+    const msg = get().queuedByThread[threadId]
+    if (msg) get().clearQueuedMessage(threadId)
+    return msg
+  },
+
+  // setFixProposal appends a card unless one with the same proposalId already
+  // exists (replay idempotence) — sequential proposals stack, earlier
+  // outcomes are kept.
+  setFixProposal: (threadId, card) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      if (slot.fixProposals.some(c => c.proposalId === card.proposalId)) return state
+      return {streams: {...state.streams, [threadId]: {...slot, fixProposals: [...slot.fixProposals, card]}}}
+    }),
+
+  // patchFixProposal merges a status/message update into the matching card
+  // (a no-op when the card is gone — the stream may have ended) and applies
+  // per-item patches (batch decisions) by ruleId.
+  patchFixProposal: (threadId, proposalId, patch, itemPatches) =>
+    set(state => {
+      const slot = state.streams[threadId]
+      if (!slot) return state
+      const idx = slot.fixProposals.findIndex(c => c.proposalId === proposalId)
+      if (idx < 0) return state
+      const card = slot.fixProposals[idx]
+      let items = card.items
+      if (itemPatches && itemPatches.length > 0) {
+        items = card.items.map(it => {
+          const p = itemPatches.find(ip => ip.ruleId === it.ruleId)
+          return p ? {...it, ...p.patch} : it
+        })
+      }
+      const fixProposals = [...slot.fixProposals]
+      fixProposals[idx] = {...card, ...patch, items}
+      return {streams: {...state.streams, [threadId]: {...slot, fixProposals}}}
     }),
 
   setStreamMeta: (threadId, patch) =>
@@ -226,7 +367,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           nextConversations.delete(victim.id)
           const drafts = victim.id in state.drafts ? {...state.drafts} : state.drafts
           if (victim.id in drafts) delete drafts[victim.id]
-          return {threads, activeThreadId: id, conversations: nextConversations, drafts}
+          const queuedByThread = victim.id in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
+          if (victim.id in queuedByThread) delete queuedByThread[victim.id]
+          return {threads, activeThreadId: id, conversations: nextConversations, drafts, queuedByThread}
         }
       }
       return {threads: [...state.threads, thread], activeThreadId: id, conversations: nextConversations}
@@ -292,7 +435,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ? remaining[remaining.length - 1].id
           : null
         : state.activeThreadId
-      return {threads: remaining, conversations: next, activeThreadId}
+      // Full per-thread cleanup (F1.7), mirroring closeThread: streams,
+      // drafts, and queued follow-ups for removed threads must not linger
+      // (a lingering stream would eat a concurrency-cap slot forever).
+      const streams = {...state.streams}
+      const drafts = {...state.drafts}
+      const queuedByThread = {...state.queuedByThread}
+      for (const id of toRemove) {
+        delete streams[id]
+        delete drafts[id]
+        delete queuedByThread[id]
+      }
+      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread}
     }),
 
   setProvider: p => set({selectedProvider: p}),
@@ -325,5 +479,8 @@ registerStoreReset(() =>
     selectedProvider: 'claude',
     providerEpoch: 0,
     drafts: {},
+    // Queued (unsent) follow-ups are session state — they must not survive
+    // logout (F1.7).
+    queuedByThread: {},
   }),
 )

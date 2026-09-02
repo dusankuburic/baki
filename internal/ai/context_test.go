@@ -323,3 +323,42 @@ func TestFindSiblings_NestedBlock(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildContext_FindingsSurviveSourceCrowding pins the findings-first
+// assembly: the Analysis Summary is written BEFORE the (multi-KB) source file
+// dumps, so under the token budget the TAIL truncation trims source text —
+// not the findings. The old order lost the summary exactly when the user had
+// selected source files (it was appended last and skipped at 3/4 budget).
+func TestBuildContext_FindingsSurviveSourceCrowding(t *testing.T) {
+	doc := makeMinimalDoc("Crowded")
+	bigSource := strings.Repeat("PAD ACTION DoStuff\n", 1200) // ~20k tokens of filler
+	req := ContextRequest{
+		Flow:           doc,
+		RawSourceFiles: map[string]string{"main.txt": bigSource},
+		Findings: []models.Finding{
+			{RuleID: "unhandled-error", BlockID: "b1", Title: "Action has no error handler", Severity: "warning", Description: "no ON BLOCK ERROR", Fingerprint: "fp-1"},
+		},
+		TokenBudget: 4000,
+		Provider:    stubProvider{},
+	}
+	_, ctx := BuildContext(req)
+
+	if !strings.Contains(ctx, "Analysis Summary") {
+		t.Fatalf("findings summary crowded out by source files:\n%s", ctx[:min(400, len(ctx))])
+	}
+	// The summary lists findings by title (with counts) — that's the content
+	// that must survive the crowding.
+	if !strings.Contains(ctx, "Action has no error handler") {
+		t.Errorf("the finding itself missing from the crowded context")
+	}
+	// Order: the summary must appear BEFORE the source file dumps.
+	summaryIdx := strings.Index(ctx, "Analysis Summary")
+	sourceIdx := strings.Index(ctx, "Source Files")
+	if summaryIdx == -1 || sourceIdx == -1 || summaryIdx > sourceIdx {
+		t.Errorf("summary (idx %d) must precede source files (idx %d)", summaryIdx, sourceIdx)
+	}
+	// And the budget is still respected overall.
+	if req.Provider.EstimateTokens(ctx) > req.TokenBudget {
+		t.Errorf("context exceeded budget: %d > %d", req.Provider.EstimateTokens(ctx), req.TokenBudget)
+	}
+}

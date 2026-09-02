@@ -31,6 +31,13 @@ export const shortcuts: Shortcut[] = [
     scope: 'global',
   },
 
+  // Block editing (U3b) — active on the selected block in the canvas.
+  {id: 'edit.move.up', keys: 'alt+up', description: 'Move selected block up', category: 'Edit', scope: 'main'},
+  {id: 'edit.move.down', keys: 'alt+down', description: 'Move selected block down', category: 'Edit', scope: 'main'},
+  {id: 'edit.duplicate', keys: 'mod+d', description: 'Duplicate selected block', category: 'Edit', scope: 'main'},
+  {id: 'edit.delete', keys: 'delete', description: 'Delete selected block', category: 'Edit', scope: 'main'},
+  {id: 'edit.rename', keys: 'f2', description: 'Rename selected label/comment', category: 'Edit', scope: 'main'},
+
   {id: 'view.toggle.sidebar', keys: 'mod+b', description: 'Toggle sidebar', category: 'View', scope: 'global'},
   {id: 'view.toggle.inspector', keys: 'mod+i', description: 'Toggle inspector', category: 'View', scope: 'global'},
   {id: 'view.toggle.mode', keys: 'mod+g', description: 'Toggle block / graph view', category: 'View', scope: 'global'},

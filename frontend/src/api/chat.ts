@@ -20,11 +20,22 @@ export const chatApi = {
 
   cancelStream: (id: string): Promise<void> => request('/api/chat/cancel', {body: {id}}),
 
+  // Respond to an apply_fix approval prompt pending in one of the caller's
+  // streams (the AI proposed a source fix; the user clicked Approve/Dismiss).
+  respondFixDecision: (streamId: string, proposalId: string, approved: boolean, excludedItemIndices?: number[]): Promise<void> =>
+    request('/api/chat/fix-decision', {body: {streamId, proposalId, approved, excludedItemIndices}}),
+
   resumeStream: (
     id: string,
     from = 0,
-  ): Promise<{text: string; done: boolean; error: string; tokensIn: number; tokensOut: number}> =>
-    request('/api/chat/resume', {body: {id, from}}),
+  ): Promise<{
+    text: string
+    done: boolean
+    error: string
+    tokensIn: number
+    tokensOut: number
+    events?: {type: string; data: Record<string, unknown>}[]
+  }> => request('/api/chat/resume', {body: {id, from}}),
 
   getConversation: (flowId: string, provider: string): Promise<ConversationFile> =>
     request('/api/chat/get', {body: {flowId, provider}}),

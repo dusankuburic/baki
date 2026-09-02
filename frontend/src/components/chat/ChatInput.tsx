@@ -16,6 +16,11 @@ interface Props {
   onShowHelp?: () => void
   disabled?: boolean
   placeholder?: string
+  // Queue-while-streaming (U1.6): Enter during a stream stages the message
+  // instead of dead-ending; it auto-sends when the reply finishes.
+  onQueue?: (text: string, files: string[], excludeContext?: boolean) => void
+  queued?: {text: string; files: string[]; excludeContext?: boolean} | null
+  onCancelQueue?: () => void
 }
 
 export default function ChatInput({
@@ -27,6 +32,9 @@ export default function ChatInput({
   onShowHelp,
   disabled,
   placeholder,
+  onQueue,
+  queued,
+  onCancelQueue,
 }: Props) {
   const [value, setValue] = useState('')
   const [autocompleteQuery, setAutocompleteQuery] = useState<string | null>(null)
@@ -105,7 +113,11 @@ export default function ChatInput({
       .reverse()
   }, [activeThreadId, userMsgCount])
 
-  const isDisabled = disabled || streaming
+  // U1.6: streaming no longer disables the TEXTAREA — typing, paste, and
+  // ArrowUp history recall stay live while a reply generates; Enter routes
+  // to the queue instead. `isDisabled` now only gates send-style actions.
+  const isDisabled = disabled
+  const canQueue = streaming && !disabled && !!onQueue
   const capTooltip =
     atCap && !streaming
       ? `${MAX_CONCURRENT_STREAMS} chats are generating — wait for one to finish or stop it`
@@ -130,6 +142,19 @@ export default function ChatInput({
     const trimmed = value.trim()
     if (!trimmed && taggedFiles.length === 0) return
     if (isDisabled) return
+    if (canQueue) {
+      onQueue?.(trimmed, taggedFiles, excludeContext)
+      // Reset the FULL composer like the send branch (F1.7): attachments
+      // left behind were double-represented (chip + queued payload) and
+      // silently re-attached to the next message.
+      setValue('')
+      if (activeThreadId) setDraft(activeThreadId, '')
+      setHistoryIndex(-1)
+      setTaggedFiles([])
+      setAutocompleteQuery(null)
+      setSlashQuery(null)
+      return
+    }
     onSend(trimmed, taggedFiles, excludeContext)
     setValue('')
     if (activeThreadId) setDraft(activeThreadId, '')
@@ -142,7 +167,7 @@ export default function ChatInput({
         textareaRef.current.style.height = 'auto'
       }
     })
-  }, [value, taggedFiles, isDisabled, onSend, excludeContext, activeThreadId, setDraft])
+  }, [value, taggedFiles, isDisabled, canQueue, onQueue, onSend, excludeContext, activeThreadId, setDraft])
 
   const handlePreview = useCallback(() => {
     const trimmed = value.trim()
@@ -301,11 +326,33 @@ export default function ChatInput({
           </div>
         )}
 
+        {queued && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-500/5 border-t border-border-subtle/50 text-2xs text-text-secondary">
+            <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-soft shrink-0" />
+            <span className="truncate">
+              Queued — sends when the reply finishes: <span className="text-text-primary">{queued.text}</span>
+            </span>
+            {onCancelQueue && (
+              <button
+                onClick={onCancelQueue}
+                className="ml-auto shrink-0 text-text-tertiary hover:text-text-primary transition-colors"
+                aria-label="Cancel queued message"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="relative flex items-end gap-2 px-3 py-2">
           <textarea
             ref={textareaRef}
             className="flex-1 bg-transparent border-none outline-none text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none py-0 min-h-[20px] max-h-[200px] z-10 scrollbar-none font-sans"
-            placeholder={placeholder || 'Ask anything... (@ to tag files, / for commands)'}
+            placeholder={
+              canQueue
+                ? 'Reply streaming — type and press Enter to queue your next message…'
+                : placeholder || 'Ask anything... (@ to tag files, / for commands)'
+            }
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
@@ -337,7 +384,7 @@ export default function ChatInput({
             {streaming ? (
               <button
                 onClick={onCancel}
-                className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all border border-red-500/20"
+                className="p-1.5 rounded-lg bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20 transition-all border border-semantic-error/20"
                 title="Stop generation"
                 aria-label="Stop generation"
               >

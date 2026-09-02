@@ -2,15 +2,17 @@ import {memo} from 'react'
 import clsx from 'clsx'
 import type {LibraryFlow} from '@/api/library'
 import {relativeTime, absoluteTime} from '@/lib/time'
+import {Spinner} from '@/components/shared'
 
 interface LibraryListProps {
   items: LibraryFlow[]
   selectedId: string | null
   onSelect: (flow: LibraryFlow) => void
   onOpen: (flow: LibraryFlow) => void
+  openingId?: string | null
 }
 
-function LibraryListImpl({items, selectedId, onSelect, onOpen}: LibraryListProps) {
+function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: LibraryListProps) {
   return (
     <div className="rounded-lg border border-border-default bg-surface-2 overflow-hidden">
       <div className="grid grid-cols-[1fr_120px_140px_80px_80px] gap-3 px-4 py-2 border-b border-border-subtle bg-surface-3 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
@@ -29,7 +31,8 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen}: LibraryListProps
               role="button"
               tabIndex={0}
               aria-pressed={selected}
-              aria-label={`Flow ${flow.name}`}
+              aria-label={`Flow ${openingId === flow.id ? <Spinner size={12} /> : null}
+              {flow.name}`}
               onClick={() => onSelect(flow)}
               onDoubleClick={() => onOpen(flow)}
               onKeyDown={e => {

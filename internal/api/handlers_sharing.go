@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -129,6 +130,10 @@ func (h *SharingHandler) handleCollaboratorAdd(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := h.backend.AddCollaborator(r.Context(), flowID, collab); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") || strings.Contains(strings.ToLower(err.Error()), "already") {
+			render.Error(w, fmt.Errorf("user is already a collaborator"), http.StatusConflict)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

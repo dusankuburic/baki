@@ -51,6 +51,10 @@ func (h *AnalysisHandler) handleListGovernanceAlerts(w http.ResponseWriter, r *h
 		Limit:            limit,
 		Offset:           offset,
 		IncludeDismissed: r.URL.Query().Get("includeDismissed") == "true",
+		// Personal scoping (R2-5): a caller sees team-wide alerts plus their
+		// own targeted ones (assignments, comment replies) — never another
+		// user's personal alerts.
+		UserID: h.security.CallerID(r),
 	}
 	alerts, err := h.backend.ListGovernanceAlerts(r.Context(), filter)
 	if err != nil {
@@ -75,7 +79,7 @@ func (h *AnalysisHandler) handleUnreadGovernanceAlertCount(w http.ResponseWriter
 	if !h.governanceAvailable(w) {
 		return
 	}
-	n, err := h.backend.UnreadGovernanceAlertCount(r.Context())
+	n, err := h.backend.UnreadGovernanceAlertCountFor(r.Context(), h.security.CallerID(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -108,7 +112,7 @@ func (h *AnalysisHandler) handleMarkGovernanceAlertRead(w http.ResponseWriter, r
 		render.Error(w, fmt.Errorf("id is required"), http.StatusBadRequest)
 		return
 	}
-	if err := h.backend.MarkGovernanceAlertRead(r.Context(), req.ID); err != nil {
+	if err := h.backend.MarkGovernanceAlertRead(r.Context(), h.security.CallerID(r), req.ID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -131,7 +135,7 @@ func (h *AnalysisHandler) handleMarkAllGovernanceAlertsRead(w http.ResponseWrite
 	if !h.governanceAvailable(w) {
 		return
 	}
-	if err := h.backend.MarkAllGovernanceAlertsRead(r.Context()); err != nil {
+	if err := h.backend.MarkAllGovernanceAlertsRead(r.Context(), h.security.CallerID(r)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -163,7 +167,7 @@ func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r 
 		render.Error(w, fmt.Errorf("id is required"), http.StatusBadRequest)
 		return
 	}
-	if err := h.backend.DismissGovernanceAlert(r.Context(), req.ID); err != nil {
+	if err := h.backend.DismissGovernanceAlert(r.Context(), h.security.CallerID(r), req.ID); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -182,7 +186,7 @@ func (h *AnalysisHandler) handleClearGovernanceAlerts(w http.ResponseWriter, r *
 	if !h.governanceAvailable(w) {
 		return
 	}
-	if err := h.backend.ClearGovernanceAlerts(r.Context()); err != nil {
+	if err := h.backend.ClearGovernanceAlerts(r.Context(), h.security.CallerID(r)); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

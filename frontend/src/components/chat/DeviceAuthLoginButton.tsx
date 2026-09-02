@@ -160,7 +160,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     case 'configured':
       return (
         <div className="flex items-center gap-2">
-          <Check size={14} className="text-green-500" />
+          <Check size={14} className="text-semantic-success" />
           <span className="text-sm text-text-secondary">Connected as @{username}</span>
           <button className="text-xs text-text-tertiary hover:text-text-secondary ml-2" onClick={disconnect}>
             Disconnect
@@ -171,7 +171,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     case 'error':
       return (
         <div className="space-y-2">
-          <p className="text-sm text-red-400">{errorMsg}</p>
+          <p className="text-sm text-semantic-error">{errorMsg}</p>
           <button className="text-xs text-brand-400 hover:text-brand-300" onClick={startAuth}>
             Retry
           </button>

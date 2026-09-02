@@ -40,10 +40,19 @@ func TestStress_ConcurrentJoin_50Clients(t *testing.T) {
 	}
 	wg.Wait()
 
-	time.Sleep(200 * time.Millisecond)
-
-	if got := hub.ClientCount(); got != 50 {
-		t.Errorf("expected 50 clients, got %d", got)
+	// B1.10: poll to the expected count instead of a fixed sleep — under a
+	// parallel -race load, registration could exceed 200ms and the count
+	// check flaked. 10s ceiling mirrors the other stress deadlines.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := hub.ClientCount()
+		if got == 50 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected 50 clients, got %d", got)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if got := hub.RoomCount(); got != 1 {
 		t.Errorf("expected 1 room, got %d", got)
@@ -69,9 +78,32 @@ func TestStress_HighFrequencyBroadcast_100Messages(t *testing.T) {
 	connB := dial(t, srvB, "stress-broadcast-room")
 	defer connB.Close()
 
-	_ = readEnvelope(t, connA) // sender join
-	_ = readEnvelope(t, connA) // receiver join received by sender
-	_ = readEnvelope(t, connB) // receiver join
+	// B1.10: the join-phase reads use a stress-sized retry deadline — the
+	// shared 2s single-shot readEnvelope deadline under parallel -race load
+	// produced the flaky "i/o timeout"; retrying transient deadline errors
+	// up to 10s keeps the sequencing assertions without loosening them.
+	readStressEnvelope := func(conn *websocket.Conn) Envelope {
+		t.Helper()
+		overall := time.Now().Add(10 * time.Second)
+		for {
+			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, msg, err := conn.ReadMessage()
+			if err == nil {
+				var env Envelope
+				if json.Unmarshal(msg, &env) == nil {
+					return env
+				}
+				continue
+			}
+			if time.Now().Before(overall) {
+				continue
+			}
+			t.Fatalf("readStressEnvelope: %v", err)
+		}
+	}
+	_ = readStressEnvelope(connA) // sender join
+	_ = readStressEnvelope(connA) // receiver join received by sender
+	_ = readStressEnvelope(connB) // receiver join
 
 	for i := range 100 {
 		sendEnvelope(t, connA, Envelope{

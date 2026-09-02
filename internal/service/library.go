@@ -199,6 +199,13 @@ func (s *LibraryService) buildLibraryFilter(ctx context.Context, userID, orgID s
 //   - "mine" — only flows the user owns
 //   - "shared" — only flows shared with the user (excluding owned)
 func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID string, scope LibraryScope, query, sort string, limit, offset int) (docs []*storageif.FlowDocument, err error) {
+	return s.ListLibraryFlowsWithTagFilter(ctx, userID, orgID, scope, query, sort, limit, offset, nil)
+}
+
+// ListLibraryFlowsWithTagFilter is ListLibraryFlows with a tag ANY-of filter
+// (R2-4). Invalid tag names in the filter match nothing (the storage layer
+// rejects them into an always-false clause).
+func (s *LibraryService) ListLibraryFlowsWithTagFilter(ctx context.Context, userID, orgID string, scope LibraryScope, query, sort string, limit, offset int, tags []string) (docs []*storageif.FlowDocument, err error) {
 	defer logger.Guard("LibraryService.ListLibraryFlows", &err)
 	if s.mode == config.ModeLocal {
 		return []*storageif.FlowDocument{}, nil
@@ -207,6 +214,7 @@ func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID str
 	if err != nil {
 		return nil, err
 	}
+	filter.Tags = tags
 	return s.storage.ListFlows(ctx, filter)
 }
 
@@ -214,6 +222,12 @@ func (s *LibraryService) ListLibraryFlows(ctx context.Context, userID, orgID str
 // the given filter, ignoring pagination — used for list totals. Same org
 // membership rule as ListLibraryFlows.
 func (s *LibraryService) CountLibraryFlows(ctx context.Context, userID, orgID string, scope LibraryScope, query string) (total int, err error) {
+	return s.CountLibraryFlowsWithTagFilter(ctx, userID, orgID, scope, query, nil)
+}
+
+// CountLibraryFlowsWithTagFilter is CountLibraryFlows with a tag ANY-of
+// filter — the total must be computed under the SAME filter the list used.
+func (s *LibraryService) CountLibraryFlowsWithTagFilter(ctx context.Context, userID, orgID string, scope LibraryScope, query string, tags []string) (total int, err error) {
 	defer logger.Guard("LibraryService.CountLibraryFlows", &err)
 	if s.mode == config.ModeLocal {
 		return 0, nil
@@ -222,6 +236,7 @@ func (s *LibraryService) CountLibraryFlows(ctx context.Context, userID, orgID st
 	if err != nil {
 		return 0, err
 	}
+	filter.Tags = tags
 	return s.storage.CountFlows(ctx, filter)
 }
 

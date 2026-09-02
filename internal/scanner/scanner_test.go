@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"pad-core/models"
 
@@ -340,5 +341,79 @@ func TestScanOnce_PushesAlertOverSSE(t *testing.T) {
 	}
 	if calls[0].userID != "owner-1" {
 		t.Errorf("expected push to owner-1, got %q", calls[0].userID)
+	}
+}
+
+// TestScanOnce_OrgChannelRouting pins R2-3: a drift event for an org-scoped
+// flow is delivered to the ORG's OWN channel in addition to the global one;
+// a disabled org channel receives nothing; an unscoped flow routes only
+// globally.
+func TestScanOnce_OrgChannelRouting(t *testing.T) {
+	b := newBackend()
+	// Seed the org flow with OrganizationID set AT SAVE TIME (seedFlow copies
+	// the doc; mutating the map entry post-hoc works too, but keeping the
+	// fixture explicit documents the org-scoped shape).
+	seedFlow(t, b, "f-org")
+	if doc, err := b.LoadFlow(context.Background(), "f-org"); err == nil {
+		doc.OrganizationID = "org-1"
+		_ = b.SaveFlow(context.Background(), doc)
+	}
+	seedFlow(t, b, "f-plain")
+
+	for _, f := range []string{"f-org", "f-plain"} {
+		if err := b.SetFlowBaseline(context.Background(), &storageif.FlowBaseline{FlowID: f, Keys: []string{"r1:b1"}}); err != nil {
+			t.Fatalf("set baseline: %v", err)
+		}
+	}
+	reports := map[string]*models.AnalysisReport{
+		"f-org": {FlowID: "f-org", Findings: []models.Finding{
+			{RuleID: "r1", BlockID: "b1", Severity: models.SeverityWarning},
+			{RuleID: "r2", BlockID: "b2", Severity: models.SeverityError},
+		}},
+		"f-plain": {FlowID: "f-plain", Findings: []models.Finding{
+			{RuleID: "r1", BlockID: "b1", Severity: models.SeverityWarning},
+			{RuleID: "r3", BlockID: "b3", Severity: models.SeverityError},
+		}},
+	}
+
+	global := newCapture(t)
+	orgHook := newCapture(t)
+	orgHookDisabled := newCapture(t)
+	if err := b.SaveOrgChannel(context.Background(), &storageif.OrgChannel{
+		ID: "ch1", OrgID: "org-1", Name: "ops", Kind: "webhook", URL: orgHook.srv.URL, Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SaveOrgChannel(context.Background(), &storageif.OrgChannel{
+		ID: "ch2", OrgID: "org-1", Name: "off", Kind: "webhook", URL: orgHookDisabled.srv.URL, Enabled: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0)
+	s.ScanOnce(context.Background())
+
+	// Org delivery runs on detached goroutines (parity with the global
+	// dispatcher) — poll briefly for the async hit before asserting.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(orgHook.all()) < 1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Global dispatcher: both flows' drifts.
+	if got := global.all(); len(got) != 2 {
+		t.Fatalf("global channel: %d events, want 2", len(got))
+	}
+	// Org channel: ONLY the org flow's drift (not the plain flow's).
+	got := orgHook.all()
+	if len(got) != 1 {
+		t.Fatalf("org channel: %d events, want 1", len(got))
+	}
+	if got[0].FlowID != "f-org" || got[0].NewErrors != 1 {
+		t.Errorf("org channel event wrong: %+v", got[0])
+	}
+	// Disabled channel: silent.
+	if n := len(orgHookDisabled.all()); n != 0 {
+		t.Fatalf("disabled org channel got %d events, want 0", n)
 	}
 }

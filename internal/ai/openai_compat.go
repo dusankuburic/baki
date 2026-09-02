@@ -49,6 +49,11 @@ func (b *openaiBase) setEmbeddingModel(model string) {
 	b.embeddingModel = model
 }
 
+// EmbeddingModel satisfies embedModelNamer so the audited wrapper can price
+// embedding usage against the model actually sent. Empty means the provider
+// does not expose embeddings (embed() refuses those anyway).
+func (b *openaiBase) EmbeddingModel() string { return b.embeddingModel }
+
 // resolveToken returns the bearer token for a request: tokenFn when set
 // (dynamic token, e.g. Copilot's session exchange), else the static apiKey.
 func (b *openaiBase) resolveToken(ctx context.Context) (string, error) {
@@ -137,6 +142,9 @@ func (b *openaiBase) handleChatError(resp *http.Response, respBody []byte) error
 		if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
 			return err
 		}
+		if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
+			return err
+		}
 		return fmt.Errorf("%s API: %s", b.providerLabel, apiErr.Error.Message)
 	}
 	return fmt.Errorf("%s API error (status %d)", b.providerLabel, resp.StatusCode)
@@ -204,6 +212,9 @@ func (b *openaiBase) handleStreamError(resp *http.Response, respBody []byte) err
 			return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 		}
 		if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+			return err
+		}
+		if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
 			return err
 		}
 		return fmt.Errorf("%s stream error (status %d): %s", b.providerLabel, resp.StatusCode, apiErr.Error.Message)

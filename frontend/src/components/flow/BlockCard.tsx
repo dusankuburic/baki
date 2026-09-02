@@ -1,15 +1,20 @@
-import React, {useState, useMemo, useCallback} from 'react'
+import React, {useCallback, useEffect, useMemo, useState} from 'react'
 import clsx from 'clsx'
 import {
   ChevronDown,
   ChevronRight,
   Copy,
+  CopyPlus,
   Search,
   Clock,
   Brain,
   Sparkles,
   FileText,
   ExternalLink,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  PencilLine,
   type LucideIcon,
 } from 'lucide-react'
 import {getBlockIcon, getBlockColor, resolveTypeLabel, stripBlockKeywords} from '@/lib/blocks'
@@ -25,8 +30,10 @@ import {stageBlockPrompt} from '@/lib/fixWithAI'
 import type {Block} from '@/types'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import Avatar from '@/components/shared/Avatar'
-import {useToast} from '@/components/shared'
+import {Tooltip, useToast} from '@/components/shared'
+import {useBlockOperations} from '@/lib/blockOperations'
 import {analysisApi} from '@/api'
+import BlockPropertiesModal from './BlockPropertiesModal'
 import {logger} from '@/lib/logger'
 
 type BlockCardProps = {
@@ -38,6 +45,8 @@ type BlockCardProps = {
   findingSeverity?: 'error' | 'warning' | 'info'
   remoteOccupants?: PresenceUser[]
   onClick?: () => void
+  // Shift-click range selection (U3b) — BlockView owns the visible order.
+  onShiftClick?: (blockId: string) => void
   onDoubleClick?: () => void
 }
 
@@ -50,6 +59,7 @@ export default React.memo(function BlockCard({
   findingSeverity = 'error',
   remoteOccupants,
   onClick,
+  onShiftClick,
   onDoubleClick,
 }: BlockCardProps) {
   const [hovered, setHovered] = useState(false)
@@ -62,11 +72,15 @@ export default React.memo(function BlockCard({
   const collapsed = useFlowStore(s => isContainer && s.expandedBlockIds.has(block.id))
   const toggleBlockExpand = useFlowStore(s => s.toggleBlockExpand)
   const Chevron = collapsed ? ChevronRight : ChevronDown
+  // Multi-select membership (V1.5): group-selected cards carry a visible
+  // ring — before, only the bulk bar hinted that a selection existed.
+  const inGroupSelection = useFlowStore(s => s.selectedBlockIds.has(block.id))
   const selectedVariable = useUIStore(s => s.selectedVariable)
   const complexityMode = useUIStore(s => s.complexityMode)
   const hasSelectedVar = selectedVariable && block.variables?.includes(selectedVariable)
   const isCallBlock = block.rawType === 'CALL' || block.rawType === 'DISABLED_CALL'
   const navigateToSubflowByName = useFlowStore(s => s.navigateToSubflowByName)
+  const readOnly = useFlowStore(s => s.readOnly)
 
   const complexityScore = useMemo(() => {
     if (!complexityMode) return 0
@@ -93,24 +107,58 @@ export default React.memo(function BlockCard({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      if ((e.ctrlKey || e.metaKey) && isCallBlock) {
+      // Multi-select modifiers (U3b) outrank the CALL drill-through: plain
+      // cmd/ctrl-click toggles selection; shift-click range-selects from the
+      // current single-selection anchor (the range is computed by BlockView,
+      // which owns the visible order).
+      if (e.shiftKey) {
         e.stopPropagation()
-        const subflowName = block.name
-          .replace(/^Call\s+/i, '')
-          .replace(' (disabled)', '')
-          .trim()
-        navigateToSubflowByName(subflowName)
+        onShiftClick?.(block.id)
+        return
+      }
+      if (e.metaKey || e.ctrlKey) {
+        if (isCallBlock) {
+          e.stopPropagation()
+          const subflowName = block.name
+            .replace(/^Call\s+/i, '')
+            .replace(' (disabled)', '')
+            .trim()
+          navigateToSubflowByName(subflowName)
+          return
+        }
+        e.stopPropagation()
+        useFlowStore.getState().toggleBlockSelection(block.id)
         return
       }
       onClick?.()
     },
-    [isCallBlock, block.name, navigateToSubflowByName, onClick],
+    [isCallBlock, block.id, block.name, navigateToSubflowByName, onClick, onShiftClick],
   )
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     setMenuPos({x: e.clientX, y: e.clientY})
   }
+
+  // editBlock applies a visual-editor mutation (duplicate/remove) through the
+  // server's block-edit endpoints and refreshes doc + findings — the edit is
+  // parse-gated server-side and lands in the undo ring (snapshot endpoints).
+  const [editingProps, setEditingProps] = useState(false)
+  // Inline rename (U3b): only blocks whose name is user-controlled source
+  // text (LABEL / COMMENT). Action names are derived — the backend refuses
+  // with guidance, so the affordance never appears for them.
+  const renaming = useFlowStore(st => st.renamingBlockId === block.id)
+  const canRename = block.rawType === 'LABEL' || block.rawType === 'COMMENT'
+  const [renameValue, setRenameValue] = useState(block.name)
+  useEffect(() => {
+    if (renaming) setRenameValue(block.name)
+  }, [renaming, block.name])
+
+  // Shared mutation implementation (U3b): the context menu, canvas keyboard
+  // shortcuts, and the bulk bar all run these exact code paths.
+  const {moveBlock, duplicateBlock, removeBlock, renameBlock} = useBlockOperations()
+  const ops = {moveBlock, duplicateBlock, removeBlock}
+
 
   const contextItems: ContextMenuItem[] = [
     {
@@ -125,6 +173,15 @@ export default React.memo(function BlockCard({
       label: 'Fix with AI',
       icon: Sparkles,
       onClick: () => triggerAI('I have some findings for this block. Can you suggest how to fix them?'),
+    })
+  }
+
+  if ((block.rawType === 'LABEL' || block.rawType === 'COMMENT') && !readOnly) {
+    contextItems.push({
+      label: 'Rename',
+      icon: PencilLine,
+      onClick: () => useFlowStore.getState().setRenamingBlock(block.id),
+      shortcut: 'f2',
     })
   }
 
@@ -158,6 +215,42 @@ export default React.memo(function BlockCard({
           .catch(() => toast.error('Copy failed'))
       },
     },
+    // Read-only flows (view-only shares) hide direct mutations instead of
+    // letting them fail with a server error after the fact.
+    ...(readOnly
+      ? []
+      : [
+          {
+            label: 'Edit properties…',
+            icon: PencilLine,
+            onClick: () => setEditingProps(true),
+          },
+          {
+            label: 'Move up',
+            icon: ArrowUp,
+            onClick: () => void ops.moveBlock(block.id, 'up'),
+            shortcut: 'alt+up',
+          },
+          {
+            label: 'Move down',
+            icon: ArrowDown,
+            onClick: () => void ops.moveBlock(block.id, 'down'),
+            shortcut: 'alt+down',
+          },
+          {
+            label: 'Duplicate block',
+            icon: CopyPlus,
+            onClick: () => void ops.duplicateBlock(block.id),
+            shortcut: 'mod+d',
+          },
+          {
+            label: 'Delete block',
+            icon: Trash2,
+            variant: 'danger' as const,
+            onClick: () => void ops.removeBlock(block.id, block.name, block.children.length),
+            shortcut: 'delete',
+          },
+        ]),
     {
       label: 'Find Usages',
       icon: Search,
@@ -216,7 +309,9 @@ export default React.memo(function BlockCard({
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60',
         selected
           ? 'bg-surface-2 border-brand-500/50 shadow-glow scale-[1.01] animate-jump-pulse'
-          : 'bg-surface-2 border-border-default shadow-sm',
+          : inGroupSelection
+            ? 'bg-surface-2 border-brand-500/40 ring-1 ring-brand-500/30'
+            : 'bg-surface-2 border-border-default shadow-sm',
         hovered && !selected && 'bg-surface-3 shadow-md',
         highlighted && 'ring-2 ring-semantic-warning/40',
         hasFindings && 'ring-1 ring-semantic-error/40',
@@ -234,6 +329,7 @@ export default React.memo(function BlockCard({
       onMouseLeave={() => setHovered(false)}
     >
       {menuPos && <ContextMenu x={menuPos.x} y={menuPos.y} onClose={() => setMenuPos(null)} items={contextItems} />}
+      {editingProps && <BlockPropertiesModal block={block} onClose={() => setEditingProps(false)} />}
       <div
         className="absolute left-0 top-0 bottom-0 overflow-hidden"
         style={{
@@ -273,9 +369,32 @@ export default React.memo(function BlockCard({
           <span className="text-xs text-text-tertiary flex-shrink-0">· {block.children.length} items</span>
         )}
         {!collapsed && block.properties && Object.keys(block.properties).length > 0 && (
-          <span className="text-xs text-text-tertiary flex-shrink-0">
-            · {Object.keys(block.properties).length} props
-          </span>
+          // V1.4: the count hints at config the card doesn't show — hovering
+          // lists the user-facing properties (structural _ keys excluded)
+          // instead of forcing a pane switch to the Details tab.
+          <Tooltip
+            side="bottom"
+            content={
+              <div className="max-h-48 overflow-y-auto">
+                {Object.entries(block.properties)
+                  .filter(([k]) => !k.startsWith('_'))
+                  .slice(0, 12)
+                  .map(([k, v]) => (
+                    <div key={k} className="flex gap-2 whitespace-nowrap font-mono">
+                      <span className="text-text-tertiary">{k}:</span>
+                      <span className="text-text-primary truncate max-w-[220px]">{v}</span>
+                    </div>
+                  ))}
+                {Object.keys(block.properties).filter(k => !k.startsWith('_')).length > 12 && (
+                  <div className="text-text-tertiary">…more in Details</div>
+                )}
+              </div>
+            }
+          >
+            <span className="text-xs text-text-tertiary flex-shrink-0 cursor-help" data-testid="props-hint">
+              · {Object.keys(block.properties).length} props
+            </span>
+          </Tooltip>
         )}
 
         <span className="ml-auto flex items-center gap-2 min-w-0">
@@ -297,11 +416,11 @@ export default React.memo(function BlockCard({
                   colorSeed={u.userId}
                   avatarUrl={u.avatarUrl}
                   size="sm"
-                  className="w-4 h-4 text-3xs ring-2 ring-surface-2"
+                  className="w-4 h-4 text-2xs ring-2 ring-surface-2"
                 />
               ))}
               {remoteOccupants.length > 3 && (
-                <span className="w-4 h-4 rounded-full bg-surface-3 ring-2 ring-surface-2 flex items-center justify-center text-3xs text-text-tertiary">
+                <span className="w-4 h-4 rounded-full bg-surface-3 ring-2 ring-surface-2 flex items-center justify-center text-2xs text-text-tertiary">
                   +{remoteOccupants.length - 3}
                 </span>
               )}
@@ -322,9 +441,39 @@ export default React.memo(function BlockCard({
         </span>
       </div>
 
-      <div className="text-[15px] font-medium text-text-primary truncate" title={displayName}>
-        {block.tokens && block.tokens.length > 0 ? <TokenRenderer tokens={block.tokens} /> : displayName}
-      </div>
+      {renaming && !readOnly ? (
+        <input
+          autoFocus
+          value={renameValue}
+          onChange={e => setRenameValue(e.target.value)}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') {
+              const v = renameValue.trim()
+              if (v && v !== block.name) void renameBlock(block.id, v)
+              else useFlowStore.getState().setRenamingBlock(null)
+            } else if (e.key === 'Escape') {
+              useFlowStore.getState().setRenamingBlock(null)
+            }
+          }}
+          onBlur={() => useFlowStore.getState().setRenamingBlock(null)}
+          className="w-full text-[15px] font-medium text-text-primary bg-surface-1 border border-brand-500/50 rounded px-1.5 py-0.5 outline-none"
+          aria-label="Rename block"
+          data-testid="rename-input"
+        />
+      ) : (
+        <div
+          className="text-[15px] font-medium text-text-primary truncate"
+          title={canRename ? `${displayName} (double-click to rename)` : displayName}
+          onDoubleClick={e => {
+            if (!canRename || readOnly) return
+            e.stopPropagation()
+            useFlowStore.getState().setRenamingBlock(block.id)
+          }}
+        >
+          {block.tokens && block.tokens.length > 0 ? <TokenRenderer tokens={block.tokens} /> : displayName}
+        </div>
+      )}
     </div>
   )
 })

@@ -1,4 +1,4 @@
-import {useState, useRef, useCallback, useEffect} from 'react'
+import {useState, useRef, useCallback, useEffect, useId} from 'react'
 import clsx from 'clsx'
 
 type TooltipProps = {
@@ -11,6 +11,11 @@ type TooltipProps = {
 
 export default function Tooltip({content, side = 'top', shortcut, delay = 600, children}: TooltipProps) {
   const [visible, setVisible] = useState(false)
+  // aria-describedby wiring (U5a.2): the tooltip's id is stamped on the
+  // trigger wrapper, so screen readers announce the tooltip content even
+  // though the bubble itself is hover-only. One change here, every consumer
+  // inherits.
+  const tooltipId = useId()
   const [position, setPosition] = useState({top: 0, left: 0})
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -84,6 +89,7 @@ export default function Tooltip({content, side = 'top', shortcut, delay = 600, c
           )}
           style={{top: position.top, left: position.left}}
           role="tooltip"
+          id={tooltipId}
         >
           <span>{content}</span>
           {shortcut && <span className="ml-2 text-text-tertiary">{shortcut}</span>}
@@ -95,6 +101,7 @@ export default function Tooltip({content, side = 'top', shortcut, delay = 600, c
         onMouseLeave={hide}
         onFocus={show}
         onBlur={hide}
+        aria-describedby={tooltipId}
         className="inline-flex"
       >
         {children}

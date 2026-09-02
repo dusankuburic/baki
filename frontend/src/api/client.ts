@@ -445,7 +445,11 @@ export async function requestBlob(
   await ensureFreshToken(path)
   const response = await fetchWithRetry(path, undefined, method, timeoutMs, opts.signal)
   if (!response.ok) {
+    // Shared envelope→error mapping (F1.9): blob downloads deserve the same
+    // PermissionDenied/VersionConflict specialization as JSON requests.
     const env = await parseErrorEnvelope(response)
+    if (response.status === 403) throw new PermissionDeniedError(env.message, env.code, env.requestId)
+    if (response.status === 409) throw new VersionConflictError(env.message, env.code, env.requestId)
     throw new ApiError(env.message, response.status, env.code, env.requestId)
   }
   return response.blob()

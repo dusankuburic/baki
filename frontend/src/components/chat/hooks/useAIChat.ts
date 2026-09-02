@@ -1,4 +1,4 @@
-import {useState, useCallback, useMemo} from 'react'
+import {useState, useCallback, useMemo, useRef, useEffect} from 'react'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
@@ -56,16 +56,18 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const isCurrentThreadStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
   const showThinking = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]?.isThinking))
   const toolStatus = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.toolStatus ?? null) : null))
+  const fixProposals = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.fixProposals ?? []) : []))
 
   const toast = useToast()
 
   const {buildRequest} = useChatRequestBuilder({doc, activeThread, provider, selectedModel, aiSettings, getMessages})
-  const {registerStream, cancelStream, beginAcc, dropAcc, stopAndCommit, bumpGen, isCurrentGen} = useChatStreamEngine({
-    doc,
-    provider,
-    selectedModel,
-    getMessages,
-  })
+  const {registerStream, cancelStream, beginAcc, dropAcc, stopAndCommit, bumpGen, isCurrentGen, respondFixProposal} =
+    useChatStreamEngine({
+      doc,
+      provider,
+      selectedModel,
+      getMessages,
+    })
 
   const executeSend = useCallback(
     async (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
@@ -224,6 +226,29 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     ],
   )
 
+// Queued follow-up drain (U1.6): when the ACTIVE thread's stream ends,
+  // auto-send the message composed while it was streaming. The edge detect
+  // (not a subscription) means switching threads mid-stream doesn't misfire.
+  const wasActiveStreaming = useRef(false)
+  useEffect(() => {
+    if (wasActiveStreaming.current && !isCurrentThreadStreaming) {
+      const tid = activeThread?.id
+      const st = useChatStore.getState()
+      const queued = tid ? st.queuedByThread[tid] : undefined
+      // Guard BEFORE take (F1.7): takeQueuedMessage deletes, so sending it
+      // into executeSend's early-returns (stream cap / no doc / empty request)
+      // silently lost the message. Blocked sends stay queued — the chip keeps
+      // its promise for the next drain.
+      const blocked =
+        !queued || !tid || !doc || !!st.streams[tid] || !st.canStartStream()
+      if (!blocked) {
+        st.takeQueuedMessage(tid)
+        void executeSend(queued.text, queued.files.length ? queued.files : undefined, queued.excludeContext)
+      }
+    }
+    wasActiveStreaming.current = isCurrentThreadStreaming
+  }, [isCurrentThreadStreaming, activeThread, executeSend, doc])
+
   const handleSend = useCallback(
     (text: string, files: string[], excludeContext?: boolean) => {
       if (files.length > 0 && activeThreadId) {
@@ -232,6 +257,23 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       void executeSend(text, files.length > 0 ? files : undefined, excludeContext)
     },
     [executeSend, activeThreadId, updateThread],
+  )
+
+  // Queue a follow-up while this thread is streaming (U1.6). Replaces the
+  // previous queued message (one per thread) — the drain effect above sends
+  // it the moment the stream ends.
+  const handleQueue = useCallback(
+    (text: string, files: string[], excludeContext?: boolean) => {
+      if (!activeThreadId || !text.trim()) return
+      useChatStore.getState().queueMessage(activeThreadId, {text: text.trim(), files, excludeContext})
+    },
+    [activeThreadId],
+  )
+  const cancelQueued = useCallback(() => {
+    if (activeThreadId) useChatStore.getState().clearQueuedMessage(activeThreadId)
+  }, [activeThreadId])
+  const queuedForActiveThread = useChatStore(
+    s => (s.activeThreadId ? s.queuedByThread[s.activeThreadId] : undefined),
   )
 
   const handlePreviewContext = useCallback(
@@ -337,9 +379,14 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     contextPreview,
     pendingMessage,
     toolStatus,
+    fixProposals,
+    respondFixProposal,
     ...threadActions,
     handleCloseThread,
     handleSend,
+    handleQueue,
+    cancelQueued,
+    queuedForActiveThread,
     handlePreviewContext,
     handleResend,
     handleExport,

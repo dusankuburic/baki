@@ -12,6 +12,7 @@ package metrics
 import (
 	"database/sql"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -193,6 +194,52 @@ var (
 		},
 		[]string{"reason"},
 	)
+	ragFallbackCappedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pad_rag_fallback_capped_total",
+			Help: "Knowledge searches served by the Go-side ranking fallback at its 500-chunk sample cap — chunks beyond the deterministic sample are unsearchable; install pgvector or reduce the KB.",
+		},
+	)
+	ragDimMismatchTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pad_rag_dim_mismatch_total",
+			Help: "Knowledge searches that returned nothing while the org HAS chunks — corpus is stranded at a different embedding dimension than the configured one; re-index.",
+		},
+	)
+	chatToolIterationsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pad_chat_tool_iterations_total",
+			Help: "Tool-loop iterations executed (both native and marker-based loops). Sustained growth toward the iteration cap signals models looping without progress.",
+		},
+	)
+	chatToolResultsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_chat_tool_results_total",
+			Help: "Tool executions by tool and outcome (ok / error) — per-tool reliability and usage at a glance.",
+		},
+		[]string{"tool", "ok"},
+	)
+	chatFixDecisionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_chat_fix_decisions_total",
+			Help: "apply_fix/apply_fixes approval outcomes by status — approval rate, timeouts and failures are observable.",
+		},
+		[]string{"status"},
+	)
+	librarySearchModeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_library_search_mode_total",
+			Help: "Cross-library searches by strategy: pushdown (storage-indexed content match) vs scan (in-process, capped at the first 50 flows).",
+		},
+		[]string{"mode"},
+	)
+	chatRAGLookupsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_chat_rag_lookups_total",
+			Help: "Per-turn knowledge-base guideline lookups by outcome (hit/miss/error/skipped) — RAG health without scraping logs.",
+		},
+		[]string{"outcome"},
+	)
 	aiPricingFallbackTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_ai_pricing_fallback_total",
@@ -257,6 +304,13 @@ var registry = func() *prometheus.Registry {
 		errorsReportedTotal,
 		usageDroppedTotal,
 		aiPricingFallbackTotal,
+		ragFallbackCappedTotal,
+		ragDimMismatchTotal,
+		chatToolIterationsTotal,
+		librarySearchModeTotal,
+		chatToolResultsTotal,
+		chatFixDecisionsTotal,
+		chatRAGLookupsTotal,
 		aiUsageCostTotal,
 		blobCleanerPending,
 		auditSpillDepth,
@@ -506,6 +560,50 @@ func RecordPanic(location string) {
 // forwarded to the error-reporting sink from the given location.
 func RecordError(location string) {
 	errorsReportedTotal.WithLabelValues(location).Inc()
+}
+
+// RecordRAGFallbackCapped bumps rag_fallback_capped_total: a knowledge
+// search ran on the Go-side fallback at its sample cap, so results are
+// lossy on this deployment.
+func RecordRAGFallbackCapped() {
+	ragFallbackCappedTotal.Inc()
+}
+
+// RecordRAGDimMismatch bumps rag_dim_mismatch_total: a knowledge search
+// found nothing comparable while the org has chunks — the corpus is stranded
+// at a different embedding dimension than the query's.
+func RecordRAGDimMismatch() {
+	ragDimMismatchTotal.Inc()
+}
+
+// RecordLibrarySearch bumps pad_library_search_mode_total with the strategy
+// a cross-library search used (pushdown | scan).
+func RecordLibrarySearch(mode string) {
+	librarySearchModeTotal.WithLabelValues(mode).Inc()
+}
+
+// RecordChatToolIteration bumps pad_chat_tool_iterations_total: one tool-loop
+// iteration ran (model turn + tool executions).
+func RecordChatToolIteration() {
+	chatToolIterationsTotal.Inc()
+}
+
+// RecordChatToolResult bumps pad_chat_tool_results_total for one tool
+// execution outcome.
+func RecordChatToolResult(tool string, ok bool) {
+	chatToolResultsTotal.WithLabelValues(tool, strconv.FormatBool(ok)).Inc()
+}
+
+// RecordChatFixDecision bumps pad_chat_fix_decisions_total for one approval
+// outcome (applied / applied-unresolved / declined / timeout / error).
+func RecordChatFixDecision(status string) {
+	chatFixDecisionsTotal.WithLabelValues(status).Inc()
+}
+
+// RecordRAGLookup bumps pad_chat_rag_lookups_total for one per-turn
+// guidelines lookup outcome.
+func RecordRAGLookup(outcome string) {
+	chatRAGLookupsTotal.WithLabelValues(outcome).Inc()
 }
 
 // RecordUsageDropped bumps the usage_dropped_total counter for an AI usage

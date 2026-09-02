@@ -244,20 +244,30 @@ func ParseFolder(folderPath string) (*models.FlowDocument, error) {
 	return doc, nil
 }
 
+// trimFlowExt strips a PAD source extension (.txt or .pad) so member files
+// sort by their logical name and "Main" (either extension) sorts first.
+func trimFlowExt(name string) string {
+	if strings.HasSuffix(strings.ToLower(name), ".pad") {
+		return name[:len(name)-len(".pad")]
+	}
+	return strings.TrimSuffix(name, ".txt")
+}
+
 func ParseFiles(files map[string]string, rootName string) (*models.FlowDocument, error) {
 	var filenames []string
 	for name := range files {
-		if strings.HasSuffix(strings.ToLower(name), ".txt") {
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".txt") || strings.HasSuffix(lower, ".pad") {
 			filenames = append(filenames, name)
 		}
 	}
 	if len(filenames) == 0 {
-		return nil, fmt.Errorf("no .txt files provided")
+		return nil, fmt.Errorf("no .txt or .pad files provided")
 	}
 
 	sort.Slice(filenames, func(i, j int) bool {
-		ni := strings.TrimSuffix(filenames[i], ".txt")
-		nj := strings.TrimSuffix(filenames[j], ".txt")
+		ni := trimFlowExt(filenames[i])
+		nj := trimFlowExt(filenames[j])
 		if ni == "Main" {
 			return true
 		}

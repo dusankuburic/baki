@@ -59,6 +59,11 @@ type Scanner struct {
 	mu      sync.Mutex
 	lastSig map[string]string // (flowID|eventType) -> last alert signature, for dedup
 
+	// orgChannels caches per-org notification channels for the current sweep
+	// (R2-3); orgChMu guards it. See dispatchOrgChannels.
+	orgChMu     sync.Mutex
+	orgChannels map[string][]*storageif.OrgChannel
+
 	loop lifecycle.TickerLoop
 }
 
@@ -124,6 +129,12 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	if s.backend == nil || s.analyze == nil {
 		return
 	}
+	// Fresh per-sweep org-channel cache: a channel added mid-sweep may be
+	// missed until the next sweep (acceptable) but a DELETED one must stop
+	// receiving promptly, and a stale cache would keep delivering to it.
+	s.orgChMu.Lock()
+	s.orgChannels = nil
+	s.orgChMu.Unlock()
 	const pageSize = 100
 	offset := 0
 	seen := make(map[string]struct{})
@@ -219,6 +230,10 @@ func (s *Scanner) scanFlow(ctx context.Context, lf *storageif.FlowDocument) {
 			// so the notifications bell updates instantly (no 60s poll wait).
 			s.pushAlertSSE(ctx, lf, ev)
 			s.notifier.Dispatch(ctx, ev)
+			// Per-org channels (R2-3): the flow's org ALSO routes to its own
+			// configured destinations — ownership routing instead of one
+			// deployment-global blast.
+			s.dispatchOrgChannels(ctx, lf, ev)
 		}
 	}
 }
@@ -418,4 +433,43 @@ func flowLabel(lf *storageif.FlowDocument) string {
 		return lf.Name
 	}
 	return lf.ID
+}
+
+// dispatchOrgChannels delivers an event to the flow's org's own configured
+// channels (webhook/Teams/Slack). Best-effort and fully parallel to the
+// global dispatch: per-channel failures are logged inside notify.Deliver and
+// never affect the scan loop. A short-lived per-org channel cache avoids
+// re-reading the table on every flow of the same org within one sweep.
+func (s *Scanner) dispatchOrgChannels(ctx context.Context, lf *storageif.FlowDocument, ev notify.Event) {
+	if s.backend == nil || lf.OrganizationID == "" {
+		return
+	}
+	s.orgChMu.Lock()
+	cached, ok := s.orgChannels[lf.OrganizationID]
+	s.orgChMu.Unlock()
+	if !ok {
+		channels, err := s.backend.ListOrgChannels(ctx, lf.OrganizationID, true)
+		if err != nil {
+			logger.Warn("scanner: list org channels failed", "orgId", lf.OrganizationID, "err", err)
+			return
+		}
+		cached = channels
+		s.orgChMu.Lock()
+		if s.orgChannels == nil {
+			s.orgChannels = make(map[string][]*storageif.OrgChannel)
+		}
+		s.orgChannels[lf.OrganizationID] = cached
+		s.orgChMu.Unlock()
+	}
+	for _, ch := range cached {
+		n, err := notify.BuildChannelNotifier(ch.Kind, ch.URL, ch.Secret)
+		if err != nil {
+			logger.Warn("scanner: invalid org channel", "orgId", lf.OrganizationID, "channel", ch.Name, "err", err)
+			continue
+		}
+		// Detach from the per-flow scan context: it is canceled the moment
+		// scanFlow returns, which would kill the delivery goroutine mid-POST.
+		// The dispatcher's own timeout bounds the work.
+		go notify.Deliver(context.WithoutCancel(ctx), n, ev)
+	}
 }

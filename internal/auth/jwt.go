@@ -23,7 +23,28 @@ type Claims struct {
 	Role   Role             `json:"role"`
 	SrcJTI string           `json:"src_jti,omitempty"`
 	SrcExp *jwt.NumericDate `json:"src_exp,omitempty"`
+	// Scopes carries a PAT's capability restriction (empty = unscoped = full
+	// access). Only ever set on PAT-derived claims (ClaimsForPAT); JWT logins
+	// are interactive and unrestricted.
+	Scopes []string `json:"scopes,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// TokenScoped reports whether these claims came from a scope-restricted PAT.
+func (c *Claims) TokenScoped() bool { return len(c.Scopes) > 0 }
+
+// AllowsScope reports whether the claims permit the given scope. Unscoped
+// claims allow everything.
+func (c *Claims) AllowsScope(scope string) bool {
+	if !c.TokenScoped() {
+		return true
+	}
+	for _, s := range c.Scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
 }
 
 // RefreshClaims are the claims stored in a refresh token.
@@ -380,8 +401,8 @@ func PATJTI(tokenID string) string { return "pat:" + tokenID }
 // JTI (PATJTI) and the token's expiry. This lets a WebSocket ticket issued from
 // a PAT-authenticated request embed a real SrcJTI/SrcExp so the live socket is
 // disconnectable on PAT revocation and respects the PAT's expiry.
-func ClaimsForPAT(userID, email string, role Role, tokenID string, expiresAt *time.Time) *Claims {
-	c := &Claims{UserID: userID, Email: email, Role: role}
+func ClaimsForPAT(userID, email string, role Role, tokenID string, expiresAt *time.Time, scopes []string) *Claims {
+	c := &Claims{UserID: userID, Email: email, Role: role, Scopes: scopes}
 	c.ID = PATJTI(tokenID)
 	if expiresAt != nil {
 		c.ExpiresAt = jwt.NewNumericDate(*expiresAt)

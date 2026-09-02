@@ -238,16 +238,18 @@ func (b *PostgresStorageBackend) TransferFlowOwner(ctx context.Context, flowID, 
 // value — a "{}" placeholder when blob storage is configured.
 func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {
 	row := b.query(ctx).QueryRowContext(ctx,
-		`SELECT id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version
+		`SELECT id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version, tags
 		 FROM flows WHERE id = $1`, id)
 
 	var flow interfaces.FlowDocument
 	var contentRaw, metaRaw []byte
+	var tagsCSV string
 	if err := row.Scan(
 		&flow.ID, &flow.Name, &flow.Description,
 		&contentRaw, &flow.Source, &metaRaw,
 		&flow.OwnerID, &flow.OrganizationID,
 		&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
+		&tagsCSV,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, interfaces.ErrNotFound
@@ -258,6 +260,7 @@ func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*i
 	if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
+	flow.Tags = interfaces.SplitFlowTags(tagsCSV)
 	return &flow, nil
 }
 
@@ -398,6 +401,24 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 		n++
 	}
 
+	// Tags (R2-4): ANY-of semantics — the flow matches when it carries at
+	// least one of the filter's tags. Delimiter-anchored LIKE over the CSV
+	// column so 'prod' never matches 'production' (the trailing comma pad
+	// makes the last tag matchable).
+	if len(filter.Tags) > 0 {
+		normalized, err := interfaces.NormalizeFlowTags(filter.Tags)
+		if err != nil || len(normalized) == 0 {
+			return "1=0", nil, 1 // invalid tag in a filter matches nothing
+		}
+		orClauses := make([]string, len(normalized))
+		for i, tag := range normalized {
+			orClauses[i] = fmt.Sprintf("(',' || tags || ',') LIKE ('%%,' || $%d || ',%%')", n)
+			args = append(args, tag)
+			n++
+		}
+		where = append(where, "("+strings.Join(orClauses, " OR ")+")")
+	}
+
 	return strings.Join(where, " AND "), args, n
 }
 
@@ -475,7 +496,7 @@ func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter inter
 
 	orderClause := flowOrderBy(filter.SortBy)
 	q := fmt.Sprintf(`
-		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version
+		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version, tags
 		FROM flows
 		WHERE %s
 		%s
@@ -492,11 +513,13 @@ func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter inter
 	for rows.Next() {
 		var flow interfaces.FlowDocument
 		var contentRaw, metaRaw []byte
+		var tagsCSV string
 		if err := rows.Scan(
 			&flow.ID, &flow.Name, &flow.Description,
 			&contentRaw, &flow.Source, &metaRaw,
 			&flow.OwnerID, &flow.OrganizationID,
 			&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
+			&tagsCSV,
 		); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
@@ -510,6 +533,7 @@ func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter inter
 		if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
 			return nil, fmt.Errorf("unmarshal metadata: %w", err)
 		}
+		flow.Tags = interfaces.SplitFlowTags(tagsCSV)
 		result = append(result, &flow)
 	}
 
@@ -1268,4 +1292,90 @@ func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID str
 	}
 
 	return v, nil
+}
+
+// ── Flow tags (R2-4) ────────────────────────────────────────────────────────
+
+// UpdateFlowTags replaces a flow's tags WITHOUT a content round-trip or a
+// version bump — tags are organizational metadata, not flow content, so
+// re-tagging must not trip OCC for a concurrent editor.
+func (b *PostgresStorageBackend) UpdateFlowTags(ctx context.Context, flowID string, tags []string) error {
+	normalized, err := interfaces.NormalizeFlowTags(tags)
+	if err != nil {
+		return err
+	}
+	res, err := b.query(ctx).ExecContext(ctx,
+		`UPDATE flows SET tags = $2, updated_at = NOW() WHERE id = $1`,
+		flowID, strings.Join(normalized, ","))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return interfaces.ErrNotFound
+	}
+	return nil
+}
+
+// likeLiteral escapes LIKE wildcards so needle matches as a LITERAL substring
+// (% and _ in user input must not act as wildcards — searching for "50_%"_
+// style input would otherwise over-match).
+func likeLiteral(needle string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(needle)
+}
+
+// SearchFlowContents pushes library content search into the database: an
+// ILIKE over content::text (trgm-indexed since migration v18) under the
+// caller's visibility filter, newest first, metadata-only. Blob-offloaded
+// deployments (DB holds "{}" placeholders) report ErrContentSearchUnsupported
+// so the service falls back to its legacy scan.
+func (b *PostgresStorageBackend) SearchFlowContents(ctx context.Context, filter interfaces.FlowFilter, needle string, limit int) ([]*interfaces.FlowDocument, error) {
+	if b.blobClient != nil {
+		return nil, interfaces.ErrContentSearchUnsupported
+	}
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return []*interfaces.FlowDocument{}, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	where, args, n := flowFilterWhere(filter)
+	// The tags clause is irrelevant here; strip it by re-deriving from the
+	// filter we were given (flowFilterWhere already handled it — leave as is;
+	// an any-of tag filter only narrows further, which is correct).
+	pattern := "%" + likeLiteral(needle) + "%"
+	q := fmt.Sprintf(`
+		SELECT id, name, description, '{}'::jsonb AS content, '' AS source,
+		       metadata, owner_id, org_id, created_at, updated_at, version, tags
+		FROM flows
+		WHERE %s AND content::text ILIKE $%d
+		ORDER BY updated_at DESC
+		LIMIT $%d`,
+		where, n, n+1)
+	args = append(args, pattern, limit)
+	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("content search: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*interfaces.FlowDocument
+	for rows.Next() {
+		var f interfaces.FlowDocument
+		var contentRaw, metaRaw []byte
+		var tagsCSV string
+		if err := rows.Scan(
+			&f.ID, &f.Name, &f.Description,
+			&contentRaw, &f.Source, &metaRaw,
+			&f.OwnerID, &f.OrganizationID,
+			&f.CreatedAt, &f.UpdatedAt, &f.Version,
+			&tagsCSV,
+		); err != nil {
+			return nil, err
+		}
+		f.Tags = interfaces.SplitFlowTags(tagsCSV)
+		out = append(out, &f)
+	}
+	return out, rows.Err()
 }

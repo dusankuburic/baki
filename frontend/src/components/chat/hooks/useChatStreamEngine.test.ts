@@ -10,6 +10,10 @@ interface StreamHandler {
   onDone: (tokensOut: number, tokensIn: number, streamId: string) => void
   onError: (error: string, streamId: string) => void
   onToolStatus?: (label: string, streamId: string) => void
+  onToolResult?: (record: {kind: 'tool-result'; name: string; label: string; ok: boolean; durationMs: number; summary: string}, streamId: string) => void
+  onFixProposal?: (proposal: {kind: 'fix-proposal'; proposalId: string; items: {ruleId: string; fixType: string; blockLabel: string; line: number; summary: string}[]}, streamId: string) => void
+  onFixDecision?: (proposalId: string, status: string, message: string | undefined, streamId: string, items?: {ruleId: string; status: string; message?: string}[]) => void
+  onResumeState?: (events: unknown[], streamId: string) => void
   onAppend?: (delta: string, streamId: string) => void
   getAccLength?: (streamId: string) => number
 }
@@ -32,6 +36,13 @@ vi.mock('@/api', () => ({
     streamMessage: vi.fn(),
     cancelStream: vi.fn(),
     saveConversation: vi.fn().mockResolvedValue(undefined),
+    respondFixDecision: vi.fn().mockResolvedValue(undefined),
+  },
+  flowApi: {
+    loadFlowFromPath: vi.fn().mockResolvedValue(null),
+  },
+  analysisApi: {
+    analyzeFlowById: vi.fn().mockResolvedValue({flowId: 'flow-1', findings: []}),
   },
 }))
 
@@ -83,8 +94,8 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamB', 'threadB')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
-            threadB: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadB: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
       })
@@ -104,7 +115,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
       })
@@ -149,7 +160,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
         capturedHandler!.onChunk('héllo→😀', 'streamA')
@@ -185,7 +196,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
       })
@@ -218,7 +229,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
         capturedHandler!.onChunk('text', 'streamA')
@@ -252,7 +263,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
       })
@@ -288,7 +299,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
         capturedHandler!.onChunk('text', 'streamA')
@@ -367,7 +378,7 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null},
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
           },
         })
         result.current.beginAcc('streamA', 'threadA')
@@ -393,6 +404,369 @@ describe('useChatStreamEngine', () => {
       )
       // Must NOT have saved under the switched-to doc.
       expect(chatApi.saveConversation).not.toHaveBeenCalledWith('flow-B', expect.anything(), expect.anything())
+    })
+  })
+
+  describe('apply_fix proposal flow', () => {
+    function setupFixStream() {
+      const hook = renderEngine()
+      act(() => {
+        hook.result.current.beginAcc('streamA', 'threadA')
+        useChatStore.setState({
+          threads: [
+            {
+              id: 'threadA',
+              flowId: 'flow-1',
+              title: 't',
+              createdAt: new Date().toISOString(),
+              contextBlockId: null,
+              selectedSourceFiles: [],
+              tokensIn: 0,
+              tokensOut: 0,
+            },
+          ],
+          streams: {
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+          },
+        })
+      })
+      return hook
+    }
+
+    it('onFixProposal shows the pending approval card on the thread slot', () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [
+              {ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap lines 3-3'},
+            ],
+          },
+          'streamA',
+        )
+      })
+      const slot = useChatStore.getState().streams.threadA
+      expect(slot.fixProposals).toHaveLength(1)
+      expect(slot.fixProposals[0]).toMatchObject({
+        proposalId: 'p1',
+        ruleId: 'unhandled-error',
+        fixType: 'wrap-error-handler',
+        blockLabel: 'Call API',
+        line: 3,
+        summary: 'wrap lines 3-3',
+        status: 'pending',
+      })
+      expect(slot.fixProposals[0].items).toHaveLength(1)
+      expect(slot.fixProposals[0].items[0]).toMatchObject({ruleId: 'unhandled-error', status: 'pending'})
+    })
+
+    // U2: sequential proposals STACK — the model can propose a second fix
+    // after the first resolves; the earlier outcome must survive.
+    it('a second proposal appends instead of replacing the first card', () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r1', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]}, 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p2', items: [{ruleId: 'r2', fixType: 'f2', blockLabel: 'b2', line: 5, summary: 's2'}]}, 'streamA')
+      })
+      const slot = useChatStore.getState().streams.threadA
+      expect(slot.fixProposals).toHaveLength(2)
+      expect(slot.fixProposals[0].status).toBe('applied')
+      expect(slot.fixProposals[0].proposalId).toBe('p1')
+      expect(slot.fixProposals[1].status).toBe('pending')
+      expect(slot.fixProposals[1].proposalId).toBe('p2')
+    })
+
+    // Replaying a proposalId already on the slot is a no-op (journal replay
+    // idempotence).
+    it('replaying the same proposalId does not duplicate the card', () => {
+      setupFixStream()
+      const payload = {kind: 'fix-proposal' as const, proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]}
+      act(() => {
+        capturedHandler!.onFixProposal!(payload, 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onFixProposal!(payload, 'streamA')
+      })
+      expect(useChatStore.getState().streams.threadA.fixProposals).toHaveLength(1)
+    })
+
+    // Batch decisions patch per-item statuses.
+    it('batch decision items patch per-item statuses', () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!({
+          kind: 'fix-proposal',
+          proposalId: 'batch-1',
+          items: [
+            {ruleId: 'r1', fixType: 'f', blockLabel: 'b1', line: 1, summary: 's'},
+            {ruleId: 'r2', fixType: 'f', blockLabel: 'b2', line: 2, summary: 's'},
+          ],
+        }, 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onFixDecision!('batch-1', 'applied-unresolved', 'review', 'streamA', [
+          {ruleId: 'r1', status: 'applied'},
+          {ruleId: 'r2', status: 'applied-unresolved', message: 'still appears'},
+        ])
+      })
+      const card = useChatStore.getState().streams.threadA.fixProposals[0]
+      expect(card.status).toBe('applied-unresolved')
+      expect(card.items[0].status).toBe('applied')
+      expect(card.items[1].status).toBe('applied-unresolved')
+      expect(card.items[1].message).toBe('still appears')
+    })
+
+    // R1 frontend half: a resume journal rebuilds the slot's agentic state
+    // wholesale — reconnecting mid-approval restores the pending card instead
+    // of orphaning it into a 60s timeout.
+    it('onResumeState rebuilds tool trail and pending proposals from the journal', () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onResumeState!(
+          [
+            {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+            {kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'},
+            {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: 'verified'},
+          ],
+          'streamA',
+        )
+      })
+      const slot = useChatStore.getState().streams.threadA
+      expect(slot.toolCalls).toEqual([{name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'}])
+      expect(slot.fixProposals).toHaveLength(1)
+      expect(slot.fixProposals[0].status).toBe('applied')
+
+      // Idempotent: replaying the same journal must not duplicate state.
+      act(() => {
+        capturedHandler!.onResumeState!(
+          [
+            {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          ],
+          'streamA',
+        )
+      })
+      expect(useChatStore.getState().streams.threadA.toolCalls).toHaveLength(0)
+      expect(useChatStore.getState().streams.threadA.fixProposals).toHaveLength(1)
+    })
+
+    it('onFixDecision applied patches the card and re-analyzes the flow', async () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          'streamA',
+        )
+      })
+      act(() => {
+        capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
+      })
+      expect(useChatStore.getState().streams.threadA.fixProposals[0]?.status).toBe('applied')
+      // The refresh fires asynchronously; flush microtasks.
+      await act(async () => {
+        await Promise.resolve()
+      })
+      const {analysisApi} = await import('@/api')
+      expect(analysisApi.analyzeFlowById).toHaveBeenCalledWith('flow-1')
+    })
+
+    it('respondFixProposal posts the decision only while pending', async () => {
+      const {result} = setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          'streamA',
+        )
+      })
+      await act(async () => {
+        result.current.respondFixProposal('threadA', true)
+      })
+      expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p1', true, undefined)
+      expect(useChatStore.getState().streams.threadA.fixProposals[0]?.status).toBe('applying')
+
+      // Second click while no longer pending must not re-send.
+      await act(async () => {
+        result.current.respondFixProposal('threadA', false)
+      })
+      expect(chatApi.respondFixDecision).toHaveBeenCalledTimes(1)
+    })
+
+    it('respondFixProposal failure marks the card error', async () => {
+      const {chatApi: api} = await import('@/api')
+      vi.mocked(api.respondFixDecision).mockRejectedValueOnce(new Error('network'))
+      const {result} = setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          'streamA',
+        )
+      })
+      await act(async () => {
+        result.current.respondFixProposal('threadA', true)
+      })
+      expect(useChatStore.getState().streams.threadA.fixProposals[0]?.status).toBe('error')
+    })
+  })
+
+  // The transparency trail: finished tool executions (tool_result events)
+  // accumulate on the live slot and are pinned onto the committed assistant
+  // message — together with the fix-proposal outcome snapshot — so they
+  // persist with the saved conversation instead of dying with the slot.
+  describe('tool trail persistence', () => {
+    function setupToolStream() {
+      const hook = renderEngine()
+      act(() => {
+        hook.result.current.beginAcc('streamA', 'threadA')
+        useChatStore.setState({
+          threads: [
+            {
+              id: 'threadA',
+              flowId: 'flow-1',
+              title: 't',
+              createdAt: new Date().toISOString(),
+              contextBlockId: null,
+              selectedSourceFiles: [],
+              tokensIn: 0,
+              tokensOut: 0,
+            },
+          ],
+          conversations: new Map([['threadA', []]]),
+          streams: {
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+          },
+        })
+      })
+      return hook
+    }
+
+    it('onToolResult accumulates records on the slot', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 7, summary: '3 matches'}, 'streamA')
+        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'read_doc', label: 'Reading document', ok: false, durationMs: 1, summary: 'error: no doc'}, 'streamA')
+      })
+      expect(useChatStore.getState().streams.threadA.toolCalls).toEqual([
+        {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 7, summary: '3 matches'},
+        {name: 'read_doc', label: 'Reading document', ok: false, durationMs: 1, summary: 'error: no doc'},
+      ])
+    })
+
+    // U1: answer text resuming after a tool phase clears the stale
+    // "Using tool…" pulse instead of keeping it lit under the final answer.
+    it('a text chunk clears a stale toolStatus', () => {
+      const {result} = renderEngine()
+      act(() => {
+        result.current.beginAcc('streamA', 'threadA')
+        useChatStore.setState({
+          streams: {
+            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: 'Searching flow', toolCalls: [], fixProposals: []},
+          },
+        })
+      })
+      act(() => {
+        capturedHandler!.onChunk('the answer', 'streamA')
+      })
+      expect(useChatStore.getState().streams.threadA.toolStatus).toBeNull()
+      expect(useChatStore.getState().streams.threadA.text).toBe('the answer')
+    })
+
+    // U3: an errored turn keeps its tool trail — 4 tools ran before the
+    // failure, and the error bubble should show them.
+    it('onError pins the accumulated tool trail onto the error message', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'}, 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onError('the AI provider is temporarily unavailable', 'streamA')
+      })
+      const msgs = useChatStore.getState().conversations.get('threadA')!
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].finishReason).toBe('error')
+      expect(msgs[0].toolCalls).toEqual([{name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'}])
+    })
+
+    it('onToolResult ignores an unknown streamId', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'x', label: 'x', ok: true, durationMs: 0, summary: ''}, 'ghost')
+      })
+      expect(useChatStore.getState().streams.threadA.toolCalls).toHaveLength(0)
+    })
+
+    it('done pins toolCalls and the fix outcome snapshot onto the committed message', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onChunk('Fixed it', 'streamA')
+        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'}, 'streamA')
+        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap'}]}, 'streamA')
+        capturedHandler!.onFixDecision!('p1', 'applied', 'verified gone', 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onDone(9, 4, 'streamA')
+      })
+
+      const msgs = useChatStore.getState().conversations.get('threadA')!
+      expect(msgs).toHaveLength(1)
+      const committed = msgs[0]
+      expect(committed.content).toBe('Fixed it')
+      expect(committed.toolCalls).toEqual([{name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'}])
+      expect(committed.fixProposals).toHaveLength(1)
+      expect(committed.fixProposals![0]).toMatchObject({
+        proposalId: 'p1',
+        ruleId: 'unhandled-error',
+        fixType: 'wrap-error-handler',
+        blockLabel: 'Call API',
+        line: 3,
+        status: 'applied',
+        message: 'verified gone',
+      })
+      expect(committed.fixProposals![0].items).toHaveLength(1)
+      expect(committed.fixProposals![0].items![0].status).toBe('applied')
+      // The trail is persisted with the conversation save.
+      expect(chatApi.saveConversation).toHaveBeenCalledWith(
+        'flow-1',
+        'flow',
+        expect.arrayContaining([expect.objectContaining({toolCalls: committed.toolCalls, fixProposals: committed.fixProposals})]),
+      )
+      // Slot is gone after done — the message carries the record now.
+      expect(useChatStore.getState().streams.threadA).toBeUndefined()
+    })
+
+    // F10: commit flags the thread as agentic so the tab shows badges.
+    it('done flags the thread usedTools/appliedFixes for tab badges', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onChunk('Fixed it', 'streamA')
+        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'}, 'streamA')
+        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]}, 'streamA')
+        capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onDone(9, 4, 'streamA')
+      })
+      const thread = useChatStore.getState().threads.find(t => t.id === 'threadA')!
+      expect(thread.usedTools).toBe(true)
+      expect(thread.appliedFixes).toBe(true)
+    })
+
+    it('done without tools commits a message with no trail fields', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onChunk('plain answer', 'streamA')
+      })
+      act(() => {
+        capturedHandler!.onDone(2, 2, 'streamA')
+      })
+      const committed = useChatStore.getState().conversations.get('threadA')![0]
+      expect(committed.toolCalls).toBeUndefined()
+      expect(committed.fixProposals).toBeUndefined()
     })
   })
 })

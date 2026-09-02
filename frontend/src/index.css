@@ -1374,6 +1374,17 @@
 }
 
 /* === KEYFRAME ANIMATIONS === */
+/* Touch baseline (U5b): buttons/inputs/links get manipulation — no
+   double-tap-zoom delay, no pointercancel surprises on scroll. */
+button,
+a,
+input,
+select,
+textarea,
+[role='button'] {
+  touch-action: manipulation;
+}
+
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -1501,6 +1512,15 @@
 
 .animate-bounce {
   animation: bounce 1s infinite;
+}
+
+@keyframes indeterminate-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
 }
 
 @keyframes dash {
@@ -1665,6 +1685,10 @@
 .animate-spin {
   animation: spin 800ms linear infinite;
 }
+.animate-indeterminate {
+  animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
+
 .animate-pulse-soft {
   animation: pulse-soft 2s ease-in-out infinite;
 }

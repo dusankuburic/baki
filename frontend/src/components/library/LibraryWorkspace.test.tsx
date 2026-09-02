@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, fireEvent, waitFor, act} from '@testing-library/react'
+import {render, screen, fireEvent, waitFor, act, within} from '@testing-library/react'
 import LibraryWorkspace from './LibraryWorkspace'
 import {ToastProvider} from '@/components/shared/Toast'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
@@ -12,6 +12,15 @@ const list = vi.fn()
 const get = vi.fn()
 const getContent = vi.fn()
 const versions = vi.fn()
+const update = vi.fn()
+const create = vi.fn()
+const setTags = vi.fn()
+
+vi.mock('@/api/flow', () => ({
+  flowApi: {
+    setTags: (...a: unknown[]) => setTags(...a),
+  },
+}))
 
 vi.mock('@/api/library', async () => {
   const actual = await vi.importActual<typeof import('@/api/library')>('@/api/library')
@@ -23,8 +32,8 @@ vi.mock('@/api/library', async () => {
       getContent: (...a: unknown[]) => getContent(...a),
       versions: (...a: unknown[]) => versions(...a),
       delete: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
+      create: (...a: unknown[]) => create(...a),
+      update: (...a: unknown[]) => update(...a),
     },
   }
 })
@@ -116,6 +125,70 @@ describe('LibraryWorkspace', () => {
       expect(useFlowStore.getState().libraryFlowId).toBe('a')
       expect(useUIStore.getState().mainPaneView).toBe('block')
     })
+  })
+
+  // R0-4: rename + duplicate from the detail panel — the update endpoint
+  // always accepted {name}; no UI ever sent it.
+  it('renames a flow through the update endpoint', async () => {
+    list.mockResolvedValue({items: [flow('a', {name: 'Pipeline'})], total: 1, offset: 0, limit: 24})
+    get.mockResolvedValue(flow('a', {name: 'Pipeline'}))
+    versions.mockResolvedValue([])
+    update.mockResolvedValue({...flow('a', {name: 'Renamed'})})
+    renderWorkspace()
+
+    fireEvent.click(await screen.findByText('Pipeline'))
+    fireEvent.click(await screen.findByRole('button', {name: /rename/i}))
+    // The prompt dialog: type a new name, confirm (the dialog's confirm
+    // button is scoped to the dialog to avoid matching the toolbar button).
+    const input = await screen.findByDisplayValue('Pipeline')
+    fireEvent.change(input, {target: {value: 'Renamed'}})
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Rename'}))
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('a', {name: 'Renamed', version: 1}),
+    )
+  })
+
+  it('duplicates a flow as "<name> (copy)" in the same org', async () => {
+    const orgFlow = flow('a', {name: 'Pipeline', orgId: 'org-9'})
+    list.mockResolvedValue({items: [orgFlow], total: 1, offset: 0, limit: 24})
+    get.mockResolvedValue(orgFlow)
+    versions.mockResolvedValue([])
+    getContent.mockResolvedValue({id: 'doc-a', name: 'Pipeline', subflows: []})
+    create.mockResolvedValue(flow('b', {name: 'Pipeline (copy)', orgId: 'org-9'}))
+    renderWorkspace()
+
+    fireEvent.click(await screen.findByText('Pipeline'))
+    fireEvent.click(await screen.findByRole('button', {name: /duplicate/i}))
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        name: 'Pipeline (copy)',
+        orgId: 'org-9',
+        content: expect.objectContaining({id: 'doc-a'}),
+      }),
+    )
+    // The copy appears in the list without a refetch.
+    expect(await screen.findByText('Pipeline (copy)')).toBeInTheDocument()
+  })
+
+  // R2-4b: tag editing — chips render from the list payload; the inline
+  // editor saves through flowApi.setTags and updates the visible item.
+  it('edits tags through the detail panel', async () => {
+    list.mockResolvedValue({items: [flow('a', {name: 'Pipeline'})], total: 1, offset: 0, limit: 24})
+    get.mockResolvedValue({...flow('a', {name: 'Pipeline'}), tags: ['prod']})
+    versions.mockResolvedValue([])
+    setTags.mockResolvedValue({tags: ['prod', 'finance']})
+    renderWorkspace()
+
+    fireEvent.click(await screen.findByText('Pipeline'))
+    expect(await screen.findByText('prod')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Edit tags'}))
+    const input = await screen.findByDisplayValue('prod')
+    fireEvent.change(input, {target: {value: 'prod, finance'}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+
+    await waitFor(() => expect(setTags).toHaveBeenCalledWith('a', ['prod', 'finance']))
   })
 
   it('switches between grid and list view', async () => {

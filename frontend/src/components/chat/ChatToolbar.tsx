@@ -11,6 +11,17 @@ interface Props {
   onToggleTools?: () => void
   onToggleSearch?: () => void
   searchActive?: boolean
+  /** Selected provider id — gates the Tools toggle (hidden for demo) and
+   *  picks the protocol note (Copilot uses the slower marker fallback). */
+  providerId?: string
+}
+
+// toolsTooltip returns the toggle's explanatory copy per provider.
+function toolsTooltip(providerId: string | undefined): string {
+  if (providerId === 'copilot') {
+    return 'Let the assistant look up flow details on demand. GitHub Copilot runs tools through a slower text-marker protocol (one call at a time). Off = single-pass answer.'
+  }
+  return 'Let the assistant look up flow details on demand (Claude, OpenAI, Gemini, xAI, GLM, GitHub Models, Copilot). Off = single-pass answer.'
 }
 
 export default function ChatToolbar({
@@ -22,6 +33,7 @@ export default function ChatToolbar({
   onToggleTools,
   onToggleSearch,
   searchActive,
+  providerId,
 }: Props) {
   const [pendingAction, setPendingAction] = useState<'clear' | 'compact' | null>(null)
 
@@ -52,7 +64,7 @@ export default function ChatToolbar({
           )}
           onClick={onToggleTools}
           aria-pressed={!!useTools}
-          title="Let the assistant look up flow details on demand (Claude, OpenAI, Gemini, xAI, GLM, GitHub Models). Off = single-pass answer."
+          title={toolsTooltip(providerId)}
         >
           <Wrench size={12} />
           <span>Tools{useTools ? ' on' : ''}</span>
@@ -62,7 +74,7 @@ export default function ChatToolbar({
       {messageCount > 0 && !pendingAction && (
         <>
           <button
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-2xs text-text-tertiary hover:text-amber-400 hover:bg-amber-500/8 transition-colors"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-2xs text-text-tertiary hover:text-semantic-warning hover:bg-semantic-warning/10 transition-colors"
             onClick={() => setPendingAction('compact')}
             title="Keep only the last 3 exchanges to reduce token usage"
           >
@@ -100,7 +112,7 @@ export default function ChatToolbar({
             }}
             className={clsx(
               'text-2xs px-1.5 py-0.5 rounded font-medium transition-colors',
-              pendingAction === 'clear' ? 'text-red-400 hover:bg-red-500/10' : 'text-amber-400 hover:bg-amber-500/10',
+              pendingAction === 'clear' ? 'text-semantic-error hover:bg-semantic-error/10' : 'text-semantic-warning hover:bg-semantic-warning/10',
             )}
           >
             Confirm

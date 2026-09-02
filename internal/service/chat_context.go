@@ -3,11 +3,15 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
 	"pad-core/cache"
 	"pad-core/logger"
@@ -34,6 +38,13 @@ const maxChatCtxGen = 256
 // otherwise gate the whole turn. On timeout the turn proceeds without
 // guidelines (skip-on-timeout) rather than stalling the user.
 const ragGuidelinesDeadline = 800 * time.Millisecond
+
+// ragGuidelinesTokenCap bounds the guidelines block appended to the system
+// prompt: the assembly emits up to 5 retrieved chunks (~1.5k tokens) and a
+// verbose knowledge base could crowd the prompt's own budget. Truncation cuts
+// from the tail (whole guidelines first, then per-chunk), keeping the header
+// and the highest-ranked chunks intact.
+const ragGuidelinesTokenCap = 1200
 
 // contextReserve is the number of tokens kept free for the prompt/context when
 // clamping a caller-supplied MaxTokens against the model's context window.
@@ -128,7 +139,7 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 // scope (authz isolation), the flow's edit-generation, the selected block /
 // system-prompt suffix, the provider+model (token math differs), and a cheap
 // fingerprint of the analysis report (regenerated → GeneratedAt moves).
-func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatRequest, providerID, model string, report *models.AnalysisReport) string {
+func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string) string {
 	gen := uint64(0)
 	if v, ok := s.chatCtxGenCache().Get(context.Background(), flowID); ok {
 		gen = v.(uint64)
@@ -137,10 +148,9 @@ func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatReques
 	if report != nil {
 		reportFP = fmt.Sprintf("%d-%d", report.GeneratedAt.UnixNano(), len(report.Findings))
 	}
-	// Include the selected source files so a different selection (or a change
-	// to a file's contents between flow reloads) misses the cache. Sort for a
-	// stable key regardless of selection order.
-	sourceFP := sourceFilesFingerprint(req.SelectedSourceFiles)
+	// sourceFP (selected source files + their size/mtime, precomputed where
+	// the doc's directory is known) keys a selection AND any on-disk change to
+	// it — see sourceFilesFingerprint.
 	// ExcludeContext changes what computeContextCore produces (it gates both the
 	// SelectedBlock and RawSourceFiles context injection), so it MUST be in the
 	// key — otherwise a free-form turn caches a source/block-less contextText
@@ -155,13 +165,26 @@ func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatReques
 // sourceFilesFingerprint reduces the selected-source-files list to a stable
 // cache-key fragment (sorted names joined by ";"). Contents aren't hashed — a
 // flow reload bumps the per-flow generation in the key, covering on-disk edits.
-func sourceFilesFingerprint(files []string) string {
+// sourceFilesFingerprint reduces the selection to a stable cache key. Names
+// alone under-keyed it: a secondary source file edited ON DISK (without a
+// main-flow reload bumping the generation counter) re-served the cached raw
+// copy until the flow itself changed — so the fingerprint now folds in each
+// file's size+mtime. Stat failures degrade to the name alone (the file is
+// unreadable anyway, so computeContextCore's read will skip it).
+func sourceFilesFingerprint(dir string, files []string) string {
 	if len(files) == 0 {
 		return ""
 	}
 	cp := make([]string, len(files))
 	copy(cp, files)
 	sort.Strings(cp)
+	for i, name := range cp {
+		// Names are RELATIVE to the flow's directory (ReadSourceFiles joins
+		// them there); stat against the same base or every lookup misses.
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			cp[i] = fmt.Sprintf("%s:%d:%d", name, info.Size(), info.ModTime().UnixNano())
+		}
+	}
 	return strings.Join(cp, ";")
 }
 
@@ -199,15 +222,70 @@ func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, pr
 // caller controls the deadline via the passed context (the streaming worker
 // uses a short timeout so a slow embedding provider skips guidelines for the
 // turn instead of stalling first token).
+//
+// S2: org-scoped knowledge requires org MEMBERSHIP. A user can hold access to
+// an org-owned flow through collaboration without being an org member (the
+// flows policy allows it) — the knowledge REST API would refuse them
+// (requireMember), but this chat path is RLS-exempt, so the gate is explicit
+// here. Fails closed: no membership proof, no guidelines.
 func (s *ChatService) ragGuidelines(ctx context.Context, scope string, doc *models.FlowDocument, userMessage string) string {
 	if s.knowledge == nil || doc == nil || doc.OrganizationID == "" {
 		return ""
 	}
+	if !s.isOrgMember(ctx, doc.OrganizationID, scope) {
+		metrics.RecordRAGLookup("skipped")
+		return ""
+	}
 	guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, userMessage)
+	guidelines = ai.TruncateToTokenLimit(guidelines, ragGuidelinesTokenCap)
+	switch {
+	case err != nil:
+		if ctx.Err() == nil { // deadline skips are expected under load, not errors
+			metrics.RecordRAGLookup("error")
+		} else {
+			metrics.RecordRAGLookup("skipped")
+		}
+	case guidelines == "":
+		metrics.RecordRAGLookup("miss")
+	default:
+		metrics.RecordRAGLookup("hit")
+	}
 	if err != nil || guidelines == "" {
 		return ""
 	}
 	return guidelines
+}
+
+// isOrgMember reports whether userID is a member of orgID, per the backend's
+// org store. scope is the caller's identity ("" in local mode, where orgs
+// don't exist — and an org-owned flow can't be open — so the empty case fails
+// closed without a store round-trip). A store error also fails closed: a
+// missing membership proof must never widen knowledge access.
+//
+// The lookup is a local narrow interface (not part of chatStore) so the
+// chat-store surface stays minimal: both real backends satisfy it, and any
+// test stub without it simply fails closed.
+func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) bool {
+	if s.backend == nil || orgID == "" || userID == "" {
+		return false
+	}
+	orgs, ok := s.backend.(interface {
+		ListOrgsForUser(ctx context.Context, userID string) ([]*interfaces.Organisation, error)
+	})
+	if !ok {
+		return false
+	}
+	list, err := orgs.ListOrgsForUser(ctx, userID)
+	if err != nil {
+		logger.Warn("rag guidelines: org membership lookup failed; skipping guidelines", "error", err)
+		return false
+	}
+	for _, o := range list {
+		if o != nil && o.ID == orgID {
+			return true
+		}
+	}
+	return false
 }
 
 // cachedContextCore returns the memoised scrub+BuildContext result, computing
@@ -217,7 +295,8 @@ func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provi
 	if s.chatCtxCache == nil || doc == nil {
 		return s.computeContextCore(provider, doc, report, req)
 	}
-	key := s.chatContextKey(scope, doc.ID, req, provider.ID(), req.Model, report)
+	key := s.chatContextKey(scope, doc.ID, req, provider.ID(), req.Model, report,
+		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles))
 	if v, ok := s.chatCtxCache.Get(ctx, key); ok {
 		return v.(chatContextValue)
 	}
@@ -277,8 +356,17 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 	// doc.FilePath != "" confines reads to the opened flow's directory and rules
 	// out cloud mode (where FilePath is empty and dir would resolve to ".",
 	// letting a hand-crafted request read arbitrary server files).
+	//
+	// S1: each file is AST-scrubbed with ScrubSourceText before injection. The
+	// trailing ScrubText over the assembled context is regex-only and PAD's
+	// `SET Password TO $'''secret'''` / `Text: $'''secret'''` syntax matches no
+	// key=value pattern — raw disk bytes used to reach the model verbatim,
+	// bypassing the property-name masking the document path gets.
 	if !req.ExcludeContext && len(req.SelectedSourceFiles) > 0 && s.flowCache != nil && doc != nil && doc.FilePath != "" {
 		if sources, sErr := s.flowCache.ReadSourceFiles(doc, req.SelectedSourceFiles); sErr == nil && len(sources) > 0 {
+			for name, content := range sources {
+				sources[name] = scrubber.ScrubSourceText(content)
+			}
 			ctxReq.RawSourceFiles = sources
 		}
 	}
@@ -324,14 +412,37 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 	if ctxLimit <= 0 {
 		return nil // unknown limit — can't enforce
 	}
-	estimate := func(msgs []ai.Message) int {
-		total := provider.EstimateTokens(req.SystemPrompt)
-		for _, m := range msgs {
-			total += provider.EstimateTokens(m.Content)
-		}
-		return total
+	// Fixed component (system prompt + tool schemas) — constant across the
+	// drop loop, precomputed once (B1.4).
+	fixed := provider.EstimateTokens(req.SystemPrompt)
+	for _, td := range req.Tools {
+		fixed += provider.EstimateTokens(string(td.InputSchema)) + 8
 	}
-	if estimate(req.Messages)+contextReserve <= ctxLimit {
+	// Per-message costs + SUFFIX SUMS: suffix[i] = tokens of messages[i:].
+	// The old loop re-estimated every remaining message per drop — O(n²)
+	// token scanning in the per-turn hot path on long histories.
+	msgCost := func(m ai.Message) int {
+		// Per-message framing (~4 tokens) + each assistant tool_use's
+		// argument JSON verbatim (R4b undercount fix).
+		c := provider.EstimateTokens(m.Content) + 4
+		for _, tc := range m.ToolCalls {
+			c += provider.EstimateTokens(string(tc.Input))
+		}
+		return c
+	}
+	suffix := make([]int, len(req.Messages)+1)
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		suffix[i] = suffix[i+1] + msgCost(req.Messages[i])
+	}
+	// The pinned head (messages[0]) stays in every candidate — count it.
+	// (Zero for the empty-history edge case; len<=1 short-circuits below.)
+	headCost := 0
+	if len(req.Messages) > 0 {
+		headCost = msgCost(req.Messages[0])
+	}
+	total := func(from int) int { return fixed + headCost + suffix[from] }
+
+	if total(0)+contextReserve <= ctxLimit {
 		return nil // fits
 	}
 	if len(req.Messages) <= 1 {
@@ -340,6 +451,7 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 
 	head := req.Messages[:1] // pinned initial turn (kept as the leading user role)
 	tail := req.Messages[1:]
+	drop := 1 // index into the ORIGINAL slice of the first kept message
 	for {
 		// Repair the head→tail junction: skip any leading messages that would be
 		// invalid immediately after the pinned user turn — another user turn
@@ -347,9 +459,10 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 		// was already dropped. The next kept message must be an assistant turn.
 		for len(tail) > 0 && tail[0].Role != "assistant" {
 			tail = tail[1:]
+			drop++
 		}
-		req.Messages = append(append([]ai.Message{}, head...), tail...)
-		if estimate(req.Messages)+contextReserve <= ctxLimit {
+		if total(drop)+contextReserve <= ctxLimit {
+			req.Messages = append(append([]ai.Message{}, head...), tail...)
 			return nil
 		}
 		if len(tail) == 0 {
@@ -358,8 +471,10 @@ func truncateForContextWindow(provider ai.Provider, req *ai.Request, ctxLimit in
 		// Drop the oldest assistant turn: the assistant message plus the
 		// tool_result messages that answered it.
 		tail = tail[1:]
+		drop++
 		for len(tail) > 0 && tail[0].Role == "tool" {
 			tail = tail[1:]
+			drop++
 		}
 	}
 	// Even the pinned first turn (+ system prompt) exceeds the window.

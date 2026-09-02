@@ -132,6 +132,48 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// handleFixDecision delivers the user's approve/decline for an apply_fix
+// proposal shown in their chat stream (the AI requested a fix; the user
+// clicked Approve/Dismiss in the proposal card). Only the stream's owner may
+// decide; the actual flow mutation separately re-checks EDITOR permission at
+// apply time (the stream itself only required viewer).
+// @Summary      Respond to a fix approval prompt
+// @Description  Delivers the user's approve/decline for an apply_fix proposal pending in one of the caller's chat streams. First decision wins; unknown or already-decided proposals return 404.
+// @Tags         chat
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      404 {object} map[string]string "Not Found"
+// @Router       /api/chat/fix-decision [post]
+func (h *ChatHandler) handleFixDecision(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		StreamID   string `json:"streamId"`
+		ProposalID string `json:"proposalId"`
+		Approved   bool   `json:"approved"`
+		// Per-item opt-outs for batch approvals (U4.1): indices into the
+		// card's item list. Ignored for single-fix decisions.
+		ExcludedItemIndices []int `json:"excludedItemIndices"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.StreamID == "" || req.ProposalID == "" {
+		render.Error(w, fmt.Errorf("streamId and proposalId are required"), http.StatusBadRequest)
+		return
+	}
+	if !h.ownsStream(w, r, req.StreamID) {
+		return
+	}
+	if err := h.chatSvc.ResolveFixDecision(req.StreamID, req.ProposalID, req.Approved, req.ExcludedItemIndices); err != nil {
+		render.Error(w, err, http.StatusNotFound)
+		return
+	}
+	render.JSON(w, map[string]string{"status": "ok"})
+}
+
 // @Summary      Resume a chat stream
 // @Description  Reconnect to an in-flight AI stream and catch up on missed chunks.
 // @Tags         chat

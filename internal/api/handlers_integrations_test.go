@@ -81,12 +81,29 @@ func TestCIWebhook_ValidSignature_MissingFlowID_Returns400(t *testing.T) {
 	rt.handlers.Analysis.ciSecret = "topsecret"
 
 	body, _ := json.Marshal(map[string]string{}) // no flowId
+	ts := time.Now().Unix()
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
-	req.Header.Set("X-Baki-Signature", signBody("topsecret", body))
+	req.Header.Set("X-Baki-Signature", signBodyWithTimestamp("topsecret", body, ts))
+	req.Header.Set("X-Baki-Timestamp", strconv.FormatInt(ts, 10))
 	rr := httptest.NewRecorder()
 	rt.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing flowId, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// B1.9: a legacy (timestamp-less) signature is refused — replay protection.
+func TestCIWebhook_LegacyNoTimestamp_Refused(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	rt.handlers.Analysis.ciSecret = "topsecret"
+
+	body, _ := json.Marshal(map[string]string{"flowId": "x"})
+	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
+	req.Header.Set("X-Baki-Signature", signBody("topsecret", body))
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for legacy timestamp-less signature, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 }
 

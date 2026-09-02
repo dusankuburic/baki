@@ -16,6 +16,7 @@ export default function ApiTokensPanel() {
   const {t} = useTranslation('settings')
   const [name, setName] = useState('')
   const [expiresDays, setExpiresDays] = useState('')
+  const [expiryError, setExpiryError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<CreatedApiToken | null>(null) // one-time secret reveal
   const [copied, setCopied] = useState(false)
@@ -34,6 +35,16 @@ export default function ApiTokensPanel() {
   const handleCreate = async () => {
     const n = name.trim()
     if (!n) return
+    // Explicit expiry validation (U4.3): a non-numeric or negative value
+    // used to be silently coerced into "never expires".
+    if (expiresDays.trim() !== '') {
+      const days = Number(expiresDays)
+      if (!Number.isInteger(days) || days <= 0) {
+        setExpiryError('Expiry must be a whole number of days (or empty for no expiry).')
+        return
+      }
+    }
+    setExpiryError(null)
     setCreating(true)
     try {
       const days = parseInt(expiresDays, 10)
@@ -132,13 +143,22 @@ export default function ApiTokensPanel() {
             placeholder={t('tokens.expiresPlaceholder')}
             aria-label={t('tokens.expiresAria')}
             value={expiresDays}
-            onChange={e => setExpiresDays(e.target.value)}
+            onChange={e => {
+              setExpiresDays(e.target.value)
+              if (expiryError) setExpiryError(null)
+            }}
+            aria-invalid={!!expiryError}
           />
           <Button variant="primary" onClick={handleCreate} loading={creating} disabled={!name.trim()}>
             <Plus size={16} />
             {t('tokens.create')}
           </Button>
         </div>
+        {expiryError && (
+          <p className="mt-1 text-2xs text-semantic-error" role="alert">
+            {expiryError}
+          </p>
+        )}
       </div>
 
       {/* Existing tokens */}

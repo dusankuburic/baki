@@ -3,22 +3,28 @@ import {ChevronRight, Home} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 import {findBlockPath} from '@/lib/tree'
 
-export default function Breadcrumbs() {
+export interface Crumb {
+  id: string
+  name: string
+  type: 'subflow' | 'block'
+}
+
+// useBreadcrumbPath is THE breadcrumb derivation (U5a.3): flow name +
+// subflow + selected block's ancestry. TitleBar's static display and this
+// interactive bar share it — they used to re-derive (and drift from) the
+// same three-store state independently.
+export function useBreadcrumbPath(): {flowName: string | null; path: Crumb[]} {
   const document = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const selectedSubflowId = useFlowStore(s => s.selectedSubflowId)
-  const selectBlock = useFlowStore(s => s.selectBlock)
-  const selectSubflow = useFlowStore(s => s.selectSubflow)
 
-  const path = useMemo(() => {
-    if (!document || !selectedSubflowId) return []
+  return useMemo(() => {
+    if (!document || !selectedSubflowId) return {flowName: document?.name ?? null, path: []}
 
     const subflow = document.subflows.find(s => s.id === selectedSubflowId)
-    if (!subflow) return []
+    if (!subflow) return {flowName: document.name, path: []}
 
-    const crumbs: {id: string; name: string; type: 'subflow' | 'block'}[] = [
-      {id: subflow.id, name: subflow.name, type: 'subflow'},
-    ]
+    const crumbs: Crumb[] = [{id: subflow.id, name: subflow.name, type: 'subflow'}]
 
     if (selectedBlockId) {
       const blockPath = findBlockPath(subflow.blocks, selectedBlockId)
@@ -33,8 +39,15 @@ export default function Breadcrumbs() {
       }
     }
 
-    return crumbs
+    return {flowName: document.name, path: crumbs}
   }, [document, selectedSubflowId, selectedBlockId])
+}
+
+export default function Breadcrumbs() {
+  const document = useFlowStore(s => s.document)
+  const selectBlock = useFlowStore(s => s.selectBlock)
+  const selectSubflow = useFlowStore(s => s.selectSubflow)
+  const {path} = useBreadcrumbPath()
 
   if (!document || path.length === 0) return null
 

@@ -48,6 +48,13 @@ func seedAuthzFlow(t *testing.T, backend storageif.StorageBackend, id, ownerID, 
 	}
 }
 
+func seedAuthzAdmin(t *testing.T, backend storageif.StorageBackend, id string) {
+	t.Helper()
+	if err := backend.CreateUser(context.Background(), &storageif.User{ID: id, Email: id + "@x.test", Role: auth.RoleAdmin}); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+}
+
 func addAuthzCollab(t *testing.T, backend storageif.StorageBackend, flowID, userID, perm string) {
 	t.Helper()
 	c := &storageif.Collaborator{UserID: userID, Email: userID + "@x.test", Permission: perm}
@@ -63,6 +70,7 @@ func TestAuthz_CheckFlowAccess_Matrix(t *testing.T) {
 	seedAuthzFlow(t, backend, "org-flow", "alice", orgID)
 	seedAuthzFlow(t, backend, "personal-flow", "alice", "")
 	seedAuthzFlow(t, backend, "ownerless-flow", "", "")
+	seedAuthzAdmin(t, backend, "root-admin")
 	addAuthzCollab(t, backend, "personal-flow", "dave", "editor")
 	addAuthzCollab(t, backend, "personal-flow", "erin", "viewer")
 
@@ -93,9 +101,12 @@ func TestAuthz_CheckFlowAccess_Matrix(t *testing.T) {
 		{"viewer collab cannot edit", "personal-flow", "alice", "", "erin", "editor", false},
 		{"stranger denied", "personal-flow", "alice", "", "mallory", "viewer", false},
 		// Ownerless legacy flows: read-only for everyone
-		{"ownerless readable", "ownerless-flow", "", "", "anyone", "viewer", true},
-		{"ownerless not writable", "ownerless-flow", "", "", "anyone", "editor", false},
-		{"ownerless not admin", "ownerless-flow", "", "", "anyone", "admin", false},
+		// B1c: ownerless flows are INSTANCE-ADMIN-only (world-readable used
+		// to leak ingested content across tenants by UUID enumeration).
+		{"ownerless denied for regular user", "ownerless-flow", "", "", "anyone", "viewer", false},
+		{"ownerless readable by instance admin", "ownerless-flow", "", "", "root-admin", "viewer", true},
+		{"ownerless not writable even by admin", "ownerless-flow", "", "", "root-admin", "editor", false},
+		{"ownerless not admin-transferable", "ownerless-flow", "", "", "root-admin", "admin", false},
 	}
 
 	for _, tc := range cases {

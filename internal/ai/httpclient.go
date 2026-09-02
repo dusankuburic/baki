@@ -2,8 +2,25 @@ package ai
 
 import (
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 )
+
+// maxConnsPerHostFromEnv reads PAD_AI_MAX_CONNS_PER_HOST. Idle pooling was
+// already capped, but ACTIVE outbound connections were unbounded: N users × 3
+// concurrent streams each hold one provider connection for up to the 10-minute
+// stream cap, and a small deploy could exhaust its fd budget. The default
+// (256) covers healthy multi-tenant load; 0 disables the cap for operators
+// who prefer the old behaviour.
+func maxConnsPerHostFromEnv() int {
+	if v := os.Getenv("PAD_AI_MAX_CONNS_PER_HOST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 256
+}
 
 // sharedHTTPClient is the single http.Client used by every provider.
 //
@@ -29,8 +46,13 @@ var sharedHTTPClient = &http.Client{
 		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 20,
+		MaxConnsPerHost:     maxConnsPerHostFromEnv(),
 		IdleConnTimeout:     90 * time.Second,
-		ForceAttemptHTTP2:   true,
+		// B1.8: a header-only floor — a future call site that forgets a
+		// per-request context gets bounded headers (30s) without killing
+		// long SSE bodies the way Client.Timeout would.
+		ResponseHeaderTimeout: 30 * time.Second,
+		ForceAttemptHTTP2:     true,
 	},
 }
 

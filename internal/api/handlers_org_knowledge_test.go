@@ -37,6 +37,7 @@ func TestKnowledgeHandlers_NilBackend_Returns503NotPanic(t *testing.T) {
 	}{
 		{"list", h.handleKnowledgeList, http.MethodGet, "/api/orgs/org-1/knowledge"},
 		{"upload", h.handleKnowledgeUpload, http.MethodPost, "/api/orgs/org-1/knowledge/upload"},
+		{"reindex", h.handleKnowledgeReindex, http.MethodPost, "/api/orgs/org-1/knowledge/reindex"},
 		{"delete", h.handleKnowledgeDelete, http.MethodDelete, "/api/orgs/org-1/knowledge/doc-1"},
 	}
 	for _, tc := range cases {

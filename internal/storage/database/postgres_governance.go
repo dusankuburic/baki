@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -32,11 +34,11 @@ func (b *PostgresStorageBackend) RecordGovernanceAlert(ctx context.Context, a *s
 	}
 	_, err := b.query(ctx).ExecContext(ctx, `
 		INSERT INTO gov_alerts (id, flow_id, org_id, type, title, message, severity,
-		                        new_errors, new_warnings, health_score, prev_health, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		                        new_errors, new_warnings, health_score, prev_health, created_at, target_user_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (id) DO NOTHING`,
 		a.ID, a.FlowID, a.OrgID, a.Type, a.Title, a.Message, a.Severity,
-		a.NewErrors, a.NewWarnings, a.HealthScore, a.PrevHealth, a.CreatedAt)
+		a.NewErrors, a.NewWarnings, a.HealthScore, a.PrevHealth, a.CreatedAt, a.TargetUser)
 	return err
 }
 
@@ -50,13 +52,28 @@ func (b *PostgresStorageBackend) ListGovernanceAlerts(ctx context.Context, filte
 	q := `
 		SELECT id, flow_id, org_id, type, title, message, severity,
 		       new_errors, new_warnings, health_score, prev_health,
-		       created_at, read_at, dismissed_at
+		       created_at, read_at, dismissed_at, target_user_id
 		FROM gov_alerts`
+	// WHERE assembly: visibility (team-wide OR targeted at the caller) AND
+	// the dismissed toggle. Targeted alerts (assignment/comment) are personal;
+	// a caller never sees another user's.
+	where := []string{}
+	args := []any{}
 	if !filter.IncludeDismissed {
-		q += ` WHERE dismissed_at IS NULL`
+		where = append(where, "dismissed_at IS NULL")
 	}
-	q += ` ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-	rows, err := b.query(ctx).QueryContext(ctx, q, limit, filter.Offset)
+	if filter.UserID != "" {
+		where = append(where, fmt.Sprintf("(target_user_id = '' OR target_user_id = $%d)", len(args)+1))
+		args = append(args, filter.UserID)
+	} else {
+		where = append(where, "target_user_id = ''")
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
+	args = append(args, limit, filter.Offset)
+	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,40 +93,60 @@ func (b *PostgresStorageBackend) ListGovernanceAlerts(ctx context.Context, filte
 // UnreadGovernanceAlertCount returns the number of visible, unacknowledged
 // (read_at IS NULL) and non-dismissed alerts — the bell badge value.
 func (b *PostgresStorageBackend) UnreadGovernanceAlertCount(ctx context.Context) (int, error) {
+	return b.UnreadGovernanceAlertCountFor(ctx, "")
+}
+
+// UnreadGovernanceAlertCountFor is the badge query scoped to one caller:
+// team-wide alerts plus that user's targeted ones.
+func (b *PostgresStorageBackend) UnreadGovernanceAlertCountFor(ctx context.Context, userID string) (int, error) {
 	var n int
 	err := b.query(ctx).QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM gov_alerts WHERE read_at IS NULL AND dismissed_at IS NULL`).Scan(&n)
+		`SELECT COUNT(*) FROM gov_alerts
+		 WHERE read_at IS NULL AND dismissed_at IS NULL
+		   AND (target_user_id = '' OR target_user_id = $1)`, userID).Scan(&n)
 	return n, err
 }
 
 // MarkGovernanceAlertRead stamps read_at on one alert. Idempotent (a second call
 // is a no-op — read_at is only set when NULL).
-func (b *PostgresStorageBackend) MarkGovernanceAlertRead(ctx context.Context, alertID string) error {
+func (b *PostgresStorageBackend) MarkGovernanceAlertRead(ctx context.Context, userID, alertID string) error {
+	// B1.9: explicit visibility predicate IN ADDITION to RLS — the RLS
+	// transaction fails open on transient errors, so the WHERE clause is the
+	// load-bearing tenant boundary here. Empty userID = local mode (no
+	// claims) which is single-tenant by construction.
 	_, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE gov_alerts SET read_at = NOW() WHERE id = $1 AND read_at IS NULL`, alertID)
+		`UPDATE gov_alerts SET read_at = NOW()
+		 WHERE id = $1 AND read_at IS NULL
+		   AND ($2 = '' OR target_user_id = '' OR target_user_id = $2)`, alertID, userID)
 	return err
 }
 
 // MarkAllGovernanceAlertsRead clears the badge: stamps read_at on every visible
 // unread alert. RLS scopes the UPDATE to the caller's visible rows.
-func (b *PostgresStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context) error {
+func (b *PostgresStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context, userID string) error {
 	_, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE gov_alerts SET read_at = NOW() WHERE read_at IS NULL AND dismissed_at IS NULL`)
+		`UPDATE gov_alerts SET read_at = NOW()
+		 WHERE read_at IS NULL AND dismissed_at IS NULL
+		   AND ($1 = '' OR target_user_id = '' OR target_user_id = $1)`, userID)
 	return err
 }
 
 // DismissGovernanceAlert stamps dismissed_at on one alert. Idempotent.
-func (b *PostgresStorageBackend) DismissGovernanceAlert(ctx context.Context, alertID string) error {
+func (b *PostgresStorageBackend) DismissGovernanceAlert(ctx context.Context, userID, alertID string) error {
 	_, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE gov_alerts SET dismissed_at = NOW() WHERE id = $1 AND dismissed_at IS NULL`, alertID)
+		`UPDATE gov_alerts SET dismissed_at = NOW()
+		 WHERE id = $1 AND dismissed_at IS NULL
+		   AND ($2 = '' OR target_user_id = '' OR target_user_id = $2)`, alertID, userID)
 	return err
 }
 
 // ClearGovernanceAlerts permanently deletes the caller's visible dismissed
 // alerts. Non-dismissed alerts are retained.
-func (b *PostgresStorageBackend) ClearGovernanceAlerts(ctx context.Context) error {
+func (b *PostgresStorageBackend) ClearGovernanceAlerts(ctx context.Context, userID string) error {
 	_, err := b.query(ctx).ExecContext(ctx,
-		`DELETE FROM gov_alerts WHERE dismissed_at IS NOT NULL`)
+		`DELETE FROM gov_alerts
+		 WHERE dismissed_at IS NOT NULL
+		   AND ($1 = '' OR target_user_id = '' OR target_user_id = $1)`, userID)
 	return err
 }
 
@@ -130,7 +167,7 @@ func scanGovAlert(rows *sql.Rows) (*storageif.GovernanceAlert, error) {
 	if err := rows.Scan(
 		&a.ID, &a.FlowID, &a.OrgID, &a.Type, &a.Title, &a.Message, &a.Severity,
 		&a.NewErrors, &a.NewWarnings, &a.HealthScore, &a.PrevHealth,
-		&a.CreatedAt, &readAt, &dismissedAt,
+		&a.CreatedAt, &readAt, &dismissedAt, &a.TargetUser,
 	); err != nil {
 		return nil, err
 	}

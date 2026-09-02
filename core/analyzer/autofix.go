@@ -29,6 +29,29 @@ func reportOutOfRangePatchOp(kind string, target, nLines int) {
 		"kind", kind, "target", target, "lines", nLines)
 }
 
+// indentCols returns the block's own leading whitespace as a string of spaces.
+//
+// block.Indent is the RAW leading column count from the parser
+// (tokenizer.computeIndent: a space counts 1, a tab counts 4) — NOT a count of
+// 4-space levels — so the faithful indentation for a line at the block's own
+// level is exactly that many columns. An earlier version computed
+// strings.Repeat("    ", block.Indent), multiplying the column count by four:
+// a block nested one level deep (Indent=4, 4 leading spaces) received a
+// 16-space header, the parser (which nests by column comparison) re-nested
+// the wrap as an empty handler, and the fix loop livelocked —
+// insert-handler-log then chased ever-deeper indentation that never nested,
+// while re-minted block IDs kept every finding's fingerprint "new". See
+// TestFixerIndentation_NestsCorrectly and TestApplyFixesToSource_SecondPassOnFixedSource.
+func indentCols(block *models.Block) string { return strings.Repeat(" ", block.Indent) }
+
+// indentColsDeeper is indentCols shifted n levels (4 columns per level) deeper
+// than the block's own column. The parser nests by strictly-greater column,
+// so +4 columns is guaranteed to land inside the block regardless of the
+// file's indentation convention (2-space, 3-space, tabs).
+func indentColsDeeper(block *models.Block, levels int) string {
+	return strings.Repeat(" ", block.Indent+4*levels)
+}
+
 // SuppressFindingPatch builds a Patch that inserts a `# pad-ignore[ruleID]`
 // comment immediately before the block's source line, silencing the finding at
 // the source (honored by the analyzer, the CLI gate, baselines, and CI — not
@@ -42,7 +65,7 @@ func SuppressFindingPatch(block *models.Block, ruleID string) models.Patch {
 	if ruleID != "" {
 		directive = "# pad-ignore[" + ruleID + "]"
 	}
-	indent := strings.Repeat("    ", block.Indent)
+	indent := indentCols(block)
 	return models.Patch{
 		Ops: []models.PatchOp{{
 			Kind:       "insert",
@@ -249,6 +272,17 @@ func applyAppend(lines []string, op models.PatchOp) []string {
 	return lines
 }
 
+// BlockSpan returns the inclusive 1-based source-line range a block occupies:
+// its own start line, any multi-line literal tail (EndLineNumber), and every
+// descendant — container END markers parse as children, so they are included.
+// Used by the block-edit operations (remove/duplicate) to target exactly the
+// block's physical lines. Callers that also need trailing INLINE RETRY
+// directive lines must extend `end` themselves against the source text (the
+// directive is folded into properties at parse and carries no line).
+func BlockSpan(block *models.Block) (start, end int) {
+	return block.LineNumber, blockEndLine(block)
+}
+
 // blockEndLine returns the last line number occupied by a block (itself plus
 // any descendants). A leaf action occupies just its own LineNumber — unless its
 // value is a multi-line triple-quoted literal, in which case EndLineNumber holds
@@ -278,7 +312,7 @@ func blockEndLine(block *models.Block) int {
 // user can extend it in PAD. The wrap targets a LEAF action by default — for a
 // compound block the whole span is wrapped.
 func WrapInErrorHandlerPatch(block *models.Block) models.Patch {
-	indent := strings.Repeat("    ", block.Indent)
+	indent := indentCols(block)
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:        "wrap",
 		StartLine:   block.LineNumber,
@@ -313,7 +347,7 @@ func InsertClosePatch(block *models.Block) models.Patch {
 	if outputVar == "" {
 		return models.Patch{}
 	}
-	indent := strings.Repeat("    ", block.Indent)
+	indent := indentCols(block)
 	closeLine := indent + closePrefix + " Handle: %" + outputVar + "%"
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",
@@ -345,7 +379,7 @@ func SetTimeoutPatch(block *models.Block) models.Patch {
 // WAIT action (isWaitAction → true) so the rule no longer fires on the current
 // block. The delay value (1s) is a conservative default for UI automation.
 func InsertDelayPatch(block *models.Block) models.Patch {
-	indent := strings.Repeat("    ", block.Indent)
+	indent := indentCols(block)
 	delayLine := indent + "WAIT 1"
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",
@@ -367,7 +401,7 @@ func InsertDelayInLoopPatch(block *models.Block) models.Patch {
 	if firstChildLine == 0 {
 		firstChildLine = block.LineNumber + 1
 	}
-	indent := strings.Repeat("    ", block.Indent+1)
+	indent := indentColsDeeper(block, 1)
 	delayLine := indent + "WAIT 1"
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",
@@ -382,7 +416,7 @@ func InsertDelayInLoopPatch(block *models.Block) models.Patch {
 // (ShowMessageBox) is a placeholder the user replaces with their own error
 // handling logic.
 func InsertHandlerLogPatch(block *models.Block) models.Patch {
-	indent := strings.Repeat("    ", block.Indent+1)
+	indent := indentColsDeeper(block, 1)
 	logLine := indent + "Display.ShowMessageBox Message: 'Error occurred'"
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",
@@ -400,7 +434,7 @@ func InsertVariableInitPatch(block *models.Block, varName string) models.Patch {
 	if varName == "" {
 		return models.Patch{}
 	}
-	indent := strings.Repeat("    ", block.Indent)
+	indent := indentCols(block)
 	setLine := indent + "SET " + varName + " TO \"\""
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",
@@ -415,7 +449,7 @@ func InsertVariableInitPatch(block *models.Block, varName string) models.Patch {
 // inserted action is genuinely useful — it surfaces the actual error message.
 // After re-parse handlerDoesSomething detects the "error" reference → true.
 func InsertErrorLogPatch(block *models.Block) models.Patch {
-	indent := strings.Repeat("    ", block.Indent+1)
+	indent := indentColsDeeper(block, 1)
 	logLine := indent + "Display.ShowMessageBox Message: %LastError%"
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",
@@ -461,8 +495,8 @@ func ReplaceWithVariablePatch(block *models.Block, propKey string) models.Patch 
 //	    SET RetryCount TO %RetryCount% + 1
 //	END
 func WrapInRetryPatch(block *models.Block) models.Patch {
-	indent := strings.Repeat("    ", block.Indent)
-	inner := strings.Repeat("    ", block.Indent+1)
+	indent := indentCols(block)
+	inner := indentColsDeeper(block, 1)
 	header := indent + "SET RetryCount TO 0\n" + indent + "LOOP WHILE %RetryCount% < 3"
 	footer := inner + "SET RetryCount TO %RetryCount% + 1\n" + indent + "END"
 	return models.Patch{Ops: []models.PatchOp{{
@@ -498,9 +532,9 @@ func InsertExitConditionPatch(block *models.Block) models.Patch {
 	if firstChildLine == 0 {
 		firstChildLine = block.LineNumber + 1
 	}
-	outsideIndent := strings.Repeat("    ", block.Indent)
-	indent := strings.Repeat("    ", block.Indent+1)
-	inner := strings.Repeat("    ", block.Indent+2)
+	outsideIndent := indentCols(block)
+	indent := indentColsDeeper(block, 1)
+	inner := indentColsDeeper(block, 2)
 	insideLines := []string{
 		indent + "SET __LoopGuard TO %__LoopGuard% + 1",
 		indent + "IF %__LoopGuard% > 10000",
@@ -609,7 +643,7 @@ func AppendOutputPatch(block *models.Block) models.Patch {
 // default body is a single comment action (the user replaces it with real
 // handling). The insert goes AFTER the SWITCH's blockEndLine (before its END).
 func InsertDefaultPatch(block *models.Block) models.Patch {
-	indent := strings.Repeat("    ", block.Indent+1)
+	indent := indentColsDeeper(block, 1)
 	defaultLine := indent + "DEFAULT"
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:       "insert",

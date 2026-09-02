@@ -15,6 +15,13 @@ services:
       # reachability. Leave unset to keep flow content in Postgres.
       - PAD_AZURE_STORAGE_ACCOUNT=${PAD_AZURE_STORAGE_ACCOUNT:-}
       - PAD_AZURE_STORAGE_CONTAINER=${PAD_AZURE_STORAGE_CONTAINER:-}
+    # Immutable root filesystem (H1): the backend writes nothing outside
+    # /tmp (blob-offload staging); /tmp becomes a tmpfs. Combined with the
+    # base file's cap_drop/no-new-privileges, a container compromise gets a
+    # capability-less, read-only, non-root filesystem.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     deploy:
       resources:
         limits:

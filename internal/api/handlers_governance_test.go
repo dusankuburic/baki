@@ -122,3 +122,66 @@ func TestGovernanceAlerts_MarkReadMissingIdReturns400(t *testing.T) {
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/governance/alerts/read", bearer, map[string]string{})
 	checkStatus(t, rr, http.StatusBadRequest)
 }
+
+// TestGovernanceAlerts_TargetedVisibility pins R2-5's personal-delivery
+// semantics: a targeted alert (assignment/comment) is visible ONLY to its
+// target — in the list AND the unread badge — while team-wide alerts remain
+// visible to everyone.
+func TestGovernanceAlerts_TargetedVisibility(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "alice", "alice@example.com", "admin")
+	seedUserWithRole(t, rt, "bob", "bob@example.com", "admin")
+	aliceBearer := jwtBearer(t, rt, "alice", "alice@example.com")
+	bobBearer := jwtBearer(t, rt, "bob", "bob@example.com")
+
+	// One team-wide + one targeted-at-alice alert on the same flow.
+	seedGovAlert(t, rt, "f1|drift|x", "f1", "Flow One", "drift")
+	if err := rt.security.Backend.SaveFlow(context.Background(), &storageif.FlowDocument{
+		ID: "f1", Name: "Flow One", Content: []byte(`{}`), OwnerID: "alice",
+	}); err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
+	if err := rt.security.Backend.RecordGovernanceAlert(context.Background(), &storageif.GovernanceAlert{
+		ID: "f1|finding_assigned|k|alice", FlowID: "f1", FlowName: "Flow One",
+		Type: "finding_assigned", Title: "Hardcoded credential", Severity: "info",
+		TargetUser: "alice", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed targeted alert: %v", err)
+	}
+
+	// Alice sees both.
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/governance/alerts", aliceBearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+	var alerts []storageif.GovernanceAlert
+	decodeJSON(t, rr, &alerts)
+	if len(alerts) != 2 {
+		t.Fatalf("alice should see 2 alerts, got %d", len(alerts))
+	}
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/governance/alerts/unread-count", aliceBearer, nil)
+	var cnt struct {
+		Count int `json:"count"`
+	}
+	decodeJSON(t, rr, &cnt)
+	if cnt.Count != 2 {
+		t.Fatalf("alice badge = %d, want 2", cnt.Count)
+	}
+
+	// Bob sees only the team-wide one. (Fresh decode targets: json.Decode
+	// into a reused slice does NOT zero fields absent from the new payload —
+	// alice's TargetUser would linger on bob's drift alert.)
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/governance/alerts", bobBearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+	var bobAlerts []storageif.GovernanceAlert
+	decodeJSON(t, rr, &bobAlerts)
+	if len(bobAlerts) != 1 || bobAlerts[0].TargetUser != "" {
+		t.Fatalf("bob should see only the team-wide alert, got %+v", bobAlerts)
+	}
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/governance/alerts/unread-count", bobBearer, nil)
+	var bobCount struct {
+		Count int `json:"count"`
+	}
+	decodeJSON(t, rr, &bobCount)
+	if bobCount.Count != 1 {
+		t.Fatalf("bob badge = %d, want 1", bobCount.Count)
+	}
+}

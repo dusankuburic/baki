@@ -27,10 +27,12 @@ vi.mock('@/components/shared/Portal', () => ({
   default: ({children}: {children: React.ReactNode}) => <>{children}</>,
 }))
 
-// Mock platform guards so isTauri returns true (desktop mode) — the
-// FindingCard guards Apply fix / Suppress in file behind isTauri().
+// Mock platform guards with a mutable flag — FindingCard guards Apply fix
+// (desktop OR cloud single-file) and Suppress in file (desktop only) behind
+// isTauri(); tests flip the flag to drive both modes.
+let tauriMode = true
 vi.mock('@/platform/guards', () => ({
-  isTauri: () => true,
+  isTauri: () => tauriMode,
 }))
 
 import FindingCard from './FindingCard'
@@ -57,7 +59,7 @@ const baseFinding: Finding = {
 }
 
 function renderCard(finding: Finding = baseFinding) {
-  useFlowStore.setState({document: mockDoc})
+  useFlowStore.setState({document: mockDoc, readOnly: false})
   return render(
     <ToastProvider>
       <FindingCard finding={finding} blockLookup={new Map()} />
@@ -67,7 +69,7 @@ function renderCard(finding: Finding = baseFinding) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useFlowStore.setState({document: mockDoc})
+  useFlowStore.setState({document: mockDoc, readOnly: false})
   useAnalysisStore.setState({
     reports: new Map(),
     findingsByBlock: new Map(),
@@ -76,6 +78,22 @@ beforeEach(() => {
     triageMap: new Map(),
     isAnalyzing: false,
     analyzingGen: 0,
+  })
+})
+
+describe('FindingCard read-only gating (U1.2)', () => {
+  it('hides Apply fix and Suppress in file on read-only flows', () => {
+    tauriMode = true
+    useFlowStore.setState({readOnly: true})
+    render(
+      <ToastProvider>
+        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+      </ToastProvider>,
+    )
+    expect(screen.queryByText('Apply fix')).not.toBeInTheDocument()
+    expect(screen.queryByText('Suppress in file')).not.toBeInTheDocument()
+    // Fix with AI is a suggestion, not a source write — stays available.
+    expect(screen.getByText('Fix with AI')).toBeInTheDocument()
   })
 })
 
@@ -206,5 +224,49 @@ describe('FindingCard apply-fix chain', () => {
     await waitFor(() => {
       expect(screen.getByText('Could not apply fix')).toBeInTheDocument()
     })
+  })
+})
+
+// R0-2: single-finding Apply fix is available in cloud mode too (single-file
+// flows) — it was desktop-gated while the bulk bar's applyFixBatch already
+// worked in cloud, a pure inconsistency. Suppress-in-file stays desktop-only
+// (it writes the raw file path).
+describe('FindingCard apply-fix gating (R0-2)', () => {
+  beforeEach(() => {
+    tauriMode = false
+  })
+
+  it('shows Apply fix for a cloud single-file flow; Suppress-in-file stays desktop-only', () => {
+    useFlowStore.setState({document: {...mockDoc, filePath: '', isFolder: false} as unknown as FlowDocument})
+    render(
+      <ToastProvider>
+        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+      </ToastProvider>,
+    )
+    expect(screen.getByText('Apply fix')).toBeInTheDocument()
+    expect(screen.getByTitle(/stored flow source/)).toBeInTheDocument()
+    expect(screen.queryByTitle(/Write a pad-ignore directive/)).not.toBeInTheDocument()
+  })
+
+  it('shows Apply fix for a cloud multi-file (folder) flow too (R3-3)', () => {
+    useFlowStore.setState({document: {...mockDoc, filePath: '', isFolder: true} as unknown as FlowDocument})
+    render(
+      <ToastProvider>
+        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+      </ToastProvider>,
+    )
+    expect(screen.getByText('Apply fix')).toBeInTheDocument()
+  })
+
+  it('desktop keeps both Apply fix and Suppress in file', () => {
+    tauriMode = true
+    useFlowStore.setState({document: mockDoc, readOnly: false})
+    render(
+      <ToastProvider>
+        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+      </ToastProvider>,
+    )
+    expect(screen.getByText('Apply fix')).toBeInTheDocument()
+    expect(screen.getByTitle(/Write a pad-ignore directive/)).toBeInTheDocument()
   })
 })

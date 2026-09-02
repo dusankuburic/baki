@@ -67,6 +67,86 @@ func TestProviderCatalogConsistency(t *testing.T) {
 	}
 }
 
+// TestProviderFallbackPricing_MatchesDefaultModelCatalog locks the invariant
+// that keeps the audited-provider pricing fallback honest: for a paid provider,
+// the provider-wide PricePerMillionTokens must equal the catalog pricing of its
+// DefaultModel. audited.record falls back to the provider-wide price when a
+// model ID isn't in the catalog; if that fallback under-reports (GLM shipped
+// 0.01/M against a 1.4/M default — ~140x under-billing), usage for new models
+// is recorded at the wrong cost and the daily budget silently never trips.
+//
+// Free providers (github-models, copilot, demo) report a zero provider-wide
+// price by design — their access is billed at $0 regardless of the catalog's
+// reference prices — so they're exempt.
+func TestProviderFallbackPricing_MatchesDefaultModelCatalog(t *testing.T) {
+	for _, meta := range AvailableProviders() {
+		t.Run(meta.ID, func(t *testing.T) {
+			p := GetMetadataProvider(meta.ID)
+			if p == nil {
+				t.Fatalf("GetMetadataProvider(%q) returned nil", meta.ID)
+			}
+			fallback := p.PricePerMillionTokens()
+			if fallback.InputCostPerM == 0 && fallback.OutputCostPerM == 0 {
+				return // free provider — provider-wide $0 is intentional
+			}
+
+			models, err := p.Models(context.Background())
+			if err != nil {
+				t.Fatalf("%s.Models() error: %v", meta.ID, err)
+			}
+			def := p.DefaultModel()
+			for _, m := range models {
+				if m.ID != def {
+					continue
+				}
+				if m.Pricing != fallback {
+					t.Errorf("%s provider-wide pricing %+v != DefaultModel(%q) catalog pricing %+v — the out-of-catalog fallback would meter %s at the wrong cost",
+						meta.ID, fallback, def, m.Pricing, def)
+				}
+				return
+			}
+			t.Errorf("%s DefaultModel %q not found in Models() (checked by TestProviderCatalogConsistency)", meta.ID, def)
+		})
+	}
+}
+
+// TestEmbeddingCapability_ConsistentWithRegistry guards the static capability
+// map in registry.go: every ID it lists must be a constructible provider (a
+// stale entry would make SupportsEmbeddings lie), the fallback order must be
+// exactly the capable set (no capable provider missing from the scan, no
+// incapable one included), and the known chat-only providers must report
+// false (returning e.g. claude from a fallback scan produces a provider that
+// fails at Embed time with an opaque error).
+func TestEmbeddingCapability_ConsistentWithRegistry(t *testing.T) {
+	capable := EmbeddingFallbackOrder()
+	if len(capable) == 0 {
+		t.Fatal("embedding fallback order is empty")
+	}
+	seen := make(map[string]bool, len(capable))
+	for _, id := range capable {
+		if seen[id] {
+			t.Errorf("duplicate %q in embedding fallback order", id)
+		}
+		seen[id] = true
+		if _, ok := providerCtors[id]; !ok {
+			t.Errorf("embedding-capable list includes %q which has no constructor", id)
+		}
+		if !SupportsEmbeddings(id) {
+			t.Errorf("fallback order includes %q but SupportsEmbeddings(%q) is false", id, id)
+		}
+	}
+	for _, meta := range AvailableProviders() {
+		if SupportsEmbeddings(meta.ID) && !seen[meta.ID] {
+			t.Errorf("provider %q is embedding-capable but missing from EmbeddingFallbackOrder", meta.ID)
+		}
+	}
+	for _, chatOnly := range []string{"claude", "xai", "copilot", "demo"} {
+		if SupportsEmbeddings(chatOnly) {
+			t.Errorf("SupportsEmbeddings(%q) must be false — provider has no Embed implementation", chatOnly)
+		}
+	}
+}
+
 // TestCatalog_CoversAllProviders ensures every registered (non-demo) provider has
 // a central catalog entry, so a newly added provider can't silently ship with an
 // empty model list.

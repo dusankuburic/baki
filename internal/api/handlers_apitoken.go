@@ -42,12 +42,22 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req struct {
-		Name          string `json:"name"`
-		ExpiresInDays int    `json:"expiresInDays"`
+		Name          string   `json:"name"`
+		ExpiresInDays int      `json:"expiresInDays"`
+		Scopes        []string `json:"scopes"`
 	}
 	if err := decodeOptional(r.Body, &req); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
+	}
+	// Scope validation (R2-1): the closed set only. An empty/omitted list is
+	// the backward-compatible unscoped token (full access) — minting one
+	// requires no new permissions.
+	for _, sc := range req.Scopes {
+		if !auth.ValidScope(sc) {
+			render.Error(w, fmt.Errorf("unknown scope %q (valid: read, write, chat, admin)", sc), http.StatusBadRequest)
+			return
+		}
 	}
 
 	raw, hash, err := auth.GenerateAPIToken()
@@ -61,6 +71,7 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 		UserID:    userID,
 		Name:      req.Name,
 		TokenHash: hash,
+		Scopes:    req.Scopes,
 		CreatedAt: time.Now().UTC(),
 	}
 	days := req.ExpiresInDays
@@ -86,6 +97,7 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 		"id":        tok.ID,
 		"name":      tok.Name,
 		"token":     raw,
+		"scopes":    tok.Scopes,
 		"createdAt": tok.CreatedAt,
 		"expiresAt": tok.ExpiresAt,
 	})

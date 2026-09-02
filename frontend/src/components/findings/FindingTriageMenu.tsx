@@ -1,10 +1,12 @@
-import {useState, useRef, useEffect, useMemo} from 'react'
+import {useState, useMemo} from 'react'
 import clsx from 'clsx'
 import {CircleDot, UserPlus, UserMinus, X} from 'lucide-react'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useToast} from '@/components/shared'
+import {useDismissable} from '@/hooks/useDismissable'
+import {triageTone} from '@/lib/severityTone'
 import Avatar from '@/components/shared/Avatar'
 import {isTauri} from '@/platform/guards'
 import type {Finding, TriageStatus} from '@/types'
@@ -30,7 +32,6 @@ interface Props {
 export default function FindingTriageMenu({finding}: Props) {
   const [showTriage, setShowTriage] = useState(false)
   const [showAssign, setShowAssign] = useState(false)
-  const triageRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
   const setFindingTriage = useAnalysisStore(s => s.setFindingTriage)
   const assignFinding = useAnalysisStore(s => s.assignFinding)
@@ -63,19 +64,12 @@ export default function FindingTriageMenu({finding}: Props) {
 
   const assignee = triage?.assigneeId ? assignees.find(a => a.id === triage.assigneeId) : undefined
 
-  // Close both dropdowns on click-outside so multiple cards can't have
-  // dropdowns open simultaneously.
-  useEffect(() => {
-    if (!showTriage && !showAssign) return
-    const handler = (e: MouseEvent) => {
-      if (triageRef.current && !triageRef.current.contains(e.target as Node)) {
-        setShowTriage(false)
-        setShowAssign(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showTriage, showAssign])
+  // Shared dismissal contract (U1.5): outside click + Escape close both the
+  // triage menu and its assignee submenu.
+  const triageRef = useDismissable(showTriage || showAssign, () => {
+    setShowTriage(false)
+    setShowAssign(false)
+  })
 
   const handleSetTriage = (status: TriageStatus) => {
     setShowTriage(false)
@@ -100,10 +94,9 @@ export default function FindingTriageMenu({finding}: Props) {
         <span
           className={clsx(
             'text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded border',
-            triageStatus === 'suppressed' && 'bg-surface-3 text-text-tertiary border-border-subtle',
-            triageStatus === 'acknowledged' && 'text-blue-400 border-blue-500/30 bg-blue-500/5',
-            triageStatus === 'in_progress' && 'text-amber-400 border-amber-500/30 bg-amber-500/5',
-            triageStatus === 'resolved' && 'text-emerald-400 border-emerald-500/30 bg-emerald-500/5',
+            triageTone(triageStatus).text,
+            triageTone(triageStatus).border,
+            triageTone(triageStatus).bg,
           )}
         >
           {triageStatus.replace('_', ' ')}
@@ -121,7 +114,7 @@ export default function FindingTriageMenu({finding}: Props) {
             colorSeed={assignee.id}
             avatarUrl={assignee.avatarUrl}
             size="sm"
-            className="w-4 h-4 text-3xs"
+            className="w-4 h-4 text-2xs"
           />
           <span className="max-w-16 truncate">{assignee.displayName}</span>
         </span>
@@ -158,11 +151,11 @@ export default function FindingTriageMenu({finding}: Props) {
             {!isDesktop && assignees.length > 0 && (
               <>
                 <div className="my-0.5 border-t border-border-subtle" />
-                <div
-                  className="relative"
-                  onMouseEnter={() => setShowAssign(true)}
-                  onMouseLeave={() => setShowAssign(false)}
-                >
+                {/* Hover PEEKS into the submenu; only click/outside/Esc close
+                    it — a mouse-leave slam-shut made keyboard assignment
+                    unreachable (the submenu vanished before its buttons
+                    could take focus). */}
+                <div className="relative" onMouseEnter={() => setShowAssign(true)}>
                   <button
                     onClick={() => setShowAssign(s => !s)}
                     className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors text-text-secondary"
@@ -191,7 +184,7 @@ export default function FindingTriageMenu({finding}: Props) {
                             colorSeed={currentUser.id}
                             avatarUrl={currentUser.avatarUrl}
                             size="sm"
-                            className="w-4 h-4 text-3xs"
+                            className="w-4 h-4 text-2xs"
                           />
                           <span className="truncate">Me</span>
                         </button>
@@ -213,7 +206,7 @@ export default function FindingTriageMenu({finding}: Props) {
                               colorSeed={a.id}
                               avatarUrl={a.avatarUrl}
                               size="sm"
-                              className="w-4 h-4 text-3xs"
+                              className="w-4 h-4 text-2xs"
                             />
                             <span className="truncate">{a.displayName}</span>
                             {triage?.assigneeId === a.id && <X size={9} className="ml-auto opacity-50" />}

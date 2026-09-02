@@ -352,3 +352,32 @@ describe('bulk finding selection', () => {
     expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(0)
   })
 })
+
+describe('triageFindingsBatch (U4.4)', () => {
+  const f1 = () => makeFinding('f1', {blockId: 'b1'})
+  const f2 = () => makeFinding('f2', {blockId: 'b2'})
+
+  it('applies status + assignee optimistically and persists ONE batch request', () => {
+    vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
+    useAnalysisStore.getState().triageFindingsBatch([f1(), f2()], {status: 'in_progress', assigneeId: 'me'})
+    const st = useAnalysisStore.getState()
+    expect(st.triageMap.get(findingKey(f1()))?.assigneeId).toBe('me')
+    expect(st.triageMap.get(findingKey(f2()))?.status).toBe('in_progress')
+    expect(vi.mocked(analysisApi.setFindingStatusBatch)).toHaveBeenCalledTimes(1)
+    const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0][0]
+    expect(items).toHaveLength(2)
+    expect(items.every(i => i.assigneeId === 'me' && i.status === 'in_progress')).toBe(true)
+  })
+
+  it('rolls back the optimistic update when the batch fails', async () => {
+    vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
+    vi.mocked(analysisApi.setFindingStatusBatch).mockRejectedValueOnce(new Error('boom'))
+    useAnalysisStore.getState().triageFindingsBatch([f1()], {status: 'resolved'})
+    // Optimistic first...
+    expect(useAnalysisStore.getState().triageMap.get(findingKey(f1()))?.status).toBe('resolved')
+    // ...then rolled back after the rejection settles.
+    await vi.waitFor(() => {
+      expect(useAnalysisStore.getState().triageMap.get(findingKey(f1()))?.status ?? 'open').toBe('open')
+    })
+  })
+})

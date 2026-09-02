@@ -197,9 +197,9 @@ func TestCircuitBreaker_ClosesOnSuccessAfterOpen(t *testing.T) {
 	}
 
 	// Fast-forward past the open window.
-	cb.st.mu.Lock()
-	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
-	cb.st.mu.Unlock()
+	cb.stateFor("").mu.Lock()
+	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.stateFor("").mu.Unlock()
 
 	// Probe succeeds → circuit closes.
 	if err := cbCall(t, cb); err != nil {
@@ -226,9 +226,9 @@ func TestCircuitBreaker_RetripsOnFailedProbe(t *testing.T) {
 	}
 
 	// Fast-forward past open window to enter half-open.
-	cb.st.mu.Lock()
-	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
-	cb.st.mu.Unlock()
+	cb.stateFor("").mu.Lock()
+	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.stateFor("").mu.Unlock()
 
 	// Probe fails (stub still has one error queued) → circuit reopens.
 	if err := cbCall(t, cb); !errors.Is(err, ErrProviderDown) {
@@ -264,9 +264,9 @@ func TestCircuitBreaker_NonRetryableProbeDoesNotWedge(t *testing.T) {
 	}
 
 	// Enter half-open and let the single probe fail with the non-retryable error.
-	cb.st.mu.Lock()
-	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
-	cb.st.mu.Unlock()
+	cb.stateFor("").mu.Lock()
+	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.stateFor("").mu.Unlock()
 	if err := cbCall(t, cb); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("half-open probe expected context.DeadlineExceeded, got %v", err)
 	}
@@ -277,9 +277,9 @@ func TestCircuitBreaker_NonRetryableProbeDoesNotWedge(t *testing.T) {
 	if !errors.Is(cbCall(t, cb), ErrCircuitOpen) {
 		t.Fatal("circuit should be open (cooling down) after a failed probe, not wedged half-open")
 	}
-	cb.st.mu.Lock()
-	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
-	cb.st.mu.Unlock()
+	cb.stateFor("").mu.Lock()
+	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Millisecond)
+	cb.stateFor("").mu.Unlock()
 	if err := cbCall(t, cb); err != nil {
 		t.Fatalf("circuit should admit a fresh probe and recover, got %v", err)
 	}
@@ -337,10 +337,11 @@ func TestCircuitBreaker_ProbePanicDoesNotWedge(t *testing.T) {
 
 	// Drive the shared state to a half-open probe: open with an elapsed cooldown
 	// so the next check() admits exactly one probe.
-	cb.st.mu.Lock()
-	cb.st.state = circuitOpen
-	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
-	cb.st.mu.Unlock()
+	st := cb.stateFor("")
+	st.mu.Lock()
+	st.state = circuitOpen
+	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
+	cb.stateFor("").mu.Unlock()
 
 	// The probe call panics; recover it here (as the real stream goroutine does).
 	func() {
@@ -353,9 +354,9 @@ func TestCircuitBreaker_ProbePanicDoesNotWedge(t *testing.T) {
 	}()
 
 	// The circuit must have been resolved (reopened), NOT left half-open.
-	cb.st.mu.Lock()
-	state := cb.st.state
-	cb.st.mu.Unlock()
+	cb.stateFor("").mu.Lock()
+	state := cb.stateFor("").state
+	cb.stateFor("").mu.Unlock()
 	if state == circuitHalfOpen {
 		t.Fatal("circuit wedged half-open after a probe panic — record was skipped")
 	}
@@ -364,19 +365,19 @@ func TestCircuitBreaker_ProbePanicDoesNotWedge(t *testing.T) {
 	}
 
 	// And it must recover normally: after the cooldown, a healthy probe closes it.
-	// Reuse the SAME shared state (cb.st) with a healthy provider, exactly as the
+	// Reuse the SAME shared state (the shared state) with a healthy provider, exactly as the
 	// next admitted probe would.
-	cb.st.mu.Lock()
-	cb.st.lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
-	cb.st.mu.Unlock()
-	cb2 := &CircuitBreakerProvider{Provider: okStub{}, st: cb.st, failureThreshold: cbFailureThreshold, openDuration: cbOpenDuration}
+	cb.stateFor("").mu.Lock()
+	cb.stateFor("").lastFailure = time.Now().Add(-cbOpenDuration - time.Second)
+	cb.stateFor("").mu.Unlock()
+	cb2 := &CircuitBreakerProvider{Provider: okStub{}, providerID: cb.providerID, failureThreshold: cbFailureThreshold, openDuration: cbOpenDuration}
 	if _, err := cb2.Chat(context.Background(), Request{}); err != nil {
 		t.Fatalf("post-cooldown probe on a healthy provider should succeed, got %v", err)
 	}
-	cb.st.mu.Lock()
-	defer cb.st.mu.Unlock()
-	if cb.st.state != circuitClosed {
-		t.Fatalf("expected circuit closed after a successful probe, got %s", cb.st.state)
+	cb.stateFor("").mu.Lock()
+	defer cb.stateFor("").mu.Unlock()
+	if st := cb.stateFor(""); st.state != circuitClosed {
+		t.Fatalf("expected circuit closed after a successful probe, got %s", st.state)
 	}
 }
 
@@ -385,3 +386,57 @@ type okStub struct{ Provider }
 
 func (okStub) Chat(context.Context, Request) (*Response, error) { return &Response{Content: "ok"}, nil }
 func (okStub) ID() string                                       { return "panic-stub" }
+
+// TestCircuitBreaker_ModelScopedIsolation pins the per-(provider|model) keying:
+// a deprecated model ID 500-ing five times must open ONLY that model's
+// circuit — its healthy siblings (and the provider-wide Embed path) keep
+// working. The pre-fix provider-wide key blocked every model and every user
+// for the cooldown.
+func TestCircuitBreaker_ModelScopedIsolation(t *testing.T) {
+	resetBreakerRegistry()
+	cb := NewCircuitBreakerProvider(cbFailStub{})
+
+	chat := func(model string) error {
+		_, err := cb.Chat(context.Background(), Request{Model: model})
+		return err
+	}
+
+	// Trip the bad model's circuit.
+	for range cbFailureThreshold {
+		if err := chat("deprecated-model"); !errors.Is(err, ErrProviderDown) {
+			t.Fatalf("expected provider-down, got %v", err)
+		}
+	}
+	if err := chat("deprecated-model"); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("bad model's circuit should be open, got %v", err)
+	}
+
+	// Healthy sibling: its circuit is closed — the call goes THROUGH to the
+	// (failing) stub rather than being short-circuited by a shared breaker.
+	if err := chat("healthy-model"); !errors.Is(err, ErrProviderDown) {
+		t.Fatalf("healthy model blocked by the bad model's circuit: %v", err)
+	}
+	// Model-less requests (provider-wide key): unaffected.
+	if _, err := cb.Embed(context.Background(), []string{"x"}); err != nil {
+		if errors.Is(err, ErrCircuitOpen) {
+			t.Fatal("provider-wide circuit opened by a single model's failures")
+		}
+	}
+	// Distinct registry entries per model.
+	breakerRegistryMu.Lock()
+	defer breakerRegistryMu.Unlock()
+	if _, ok := breakerRegistry["cbfail|deprecated-model"]; !ok {
+		t.Errorf("model-scoped key missing from registry: %v", breakerRegistry)
+	}
+}
+
+// cbFailStub fails every Chat; the embedded interface covers the rest of
+// Provider (its Embed succeeds — the provider-wide circuit must stay closed).
+type cbFailStub struct{ Provider }
+
+func (cbFailStub) ID() string   { return "cbfail" }
+func (cbFailStub) Name() string { return "fail" }
+func (cbFailStub) Chat(context.Context, Request) (*Response, error) {
+	return nil, ErrProviderDown
+}
+func (cbFailStub) Embed(context.Context, []string) ([][]float32, error) { return nil, nil }

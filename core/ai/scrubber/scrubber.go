@@ -44,7 +44,12 @@ var secretRegexes = []*regexp.Regexp{
 // values must always be masked, regardless of their content. This is a belt-and-
 // suspenders layer on top of the field-name and regex/entropy passes below.
 var sensitiveActions = map[string][]string{
-	"WebAutomation.PopulateTextField":     {"Text"},
+	"WebAutomation.PopulateTextField": {"Text"},
+	// Fill actions: FillWith is the value typed into the field (the
+	// credential); Text is the element locator text and stays visible.
+	"WebAutomation.FillTextByText":        {"FillWith"},
+	"WebAutomation.FillTextByName":        {"FillWith"},
+	"WebAutomation.FillTextByPlaceholder": {"FillWith"},
 	"Database.Connect":                    {"ConnectionString"},
 	"Database.OpenSQLConnection":          {"ConnectionString"},
 	"Database.OpenODBCConnection":         {"ConnectionString"},
@@ -178,6 +183,17 @@ func scrubBlock(b *models.Block) {
 		}
 		if isSensitiveFieldName(k) && len(b.Properties[k]) > 0 {
 			b.Properties[k] = "[REDACTED]"
+		}
+	}
+
+	// 2b. SET <name> TO <literal> injects _var/_value/_output (parser.go):
+	// the literal is masked when the target variable names a credential —
+	// the key-based pass can't see it because the keys are the synthetic
+	// _var/_value names, so `SET Password TO $'''secret'''` used to survive
+	// the document scrub with the secret intact.
+	if name, ok := b.Properties["_var"]; ok && isSensitiveFieldName(name) {
+		if v := b.Properties["_value"]; len(v) > 0 {
+			b.Properties["_value"] = "[REDACTED]"
 		}
 	}
 

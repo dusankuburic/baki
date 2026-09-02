@@ -66,6 +66,11 @@ var migrations = []migration{
 	{version: 11, name: "pgvector_knowledge", sql: pgvectorKnowledgeSQL, downSQL: pgvectorKnowledgeDownSQL},
 	{version: 12, name: "governance_alerts", sql: governanceAlertsSQL, downSQL: governanceAlertsDownSQL},
 	{version: 13, name: "flows_name_trgm_index", sql: flowsNameTrgmSQL, downSQL: flowsNameTrgmDownSQL},
+	{version: 14, name: "api_token_scopes", sql: apiTokenScopesSQL, downSQL: apiTokenScopesDownSQL},
+	{version: 15, name: "flow_tags", sql: flowTagsSQL, downSQL: flowTagsDownSQL},
+	{version: 16, name: "gov_alert_targets", sql: govAlertTargetsSQL, downSQL: govAlertTargetsDownSQL},
+	{version: 17, name: "org_channels", sql: orgChannelsSQL, downSQL: orgChannelsDownSQL},
+	{version: 18, name: "flows_content_trgm_index", sql: flowsContentTrgmSQL, downSQL: flowsContentTrgmDownSQL},
 }
 
 // flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
@@ -1356,4 +1361,99 @@ CREATE INDEX flows_name_trgm_idx ON flows USING gin (name gin_trgm_ops);
 // from a down-migration would be surprising).
 const flowsNameTrgmDownSQL = `
 DROP INDEX IF EXISTS flows_name_trgm_idx;
+`
+
+// apiTokenScopesSQL (R2-1): PAT capability restriction. scopes is a
+// comma-joined TEXT column (the set is ≤4 short, comma-free names — an array
+// type would drag a pq dependency for no benefit). ” = unscoped = full
+// access (every pre-existing token), so the default keeps behavior identical
+// until a scoped token is minted.
+//
+//nolint:gosec // G101 false positive: schema DDL, not a credential
+const apiTokenScopesSQL = `
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS scopes TEXT NOT NULL DEFAULT '';
+`
+
+//nolint:gosec // G101 false positive: schema DDL, not a credential
+const apiTokenScopesDownSQL = `
+ALTER TABLE api_tokens DROP COLUMN IF EXISTS scopes;
+`
+
+// flowTagsSQL (R2-4): organizational tagging for the flow library — business
+// unit, criticality, environment. CSV TEXT column: tags are a small set of
+// normalized (comma-free, ≤32 char) names; filtering uses delimiter-anchored
+// LIKE so 'prod' never matches 'production'.
+const flowTagsSQL = `
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS tags TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS flows_tags_idx ON flows (tags);
+`
+
+const flowTagsDownSQL = `
+DROP INDEX IF EXISTS flows_tags_idx;
+ALTER TABLE flows DROP COLUMN IF EXISTS tags;
+`
+
+// govAlertTargetsSQL (R2-5): targeted alerts. target_user_id ” (default) =
+// team-wide (every existing alert); a user ID = visible ONLY to that user —
+// the delivery target for assignment/comment notifications, which are
+// personal, not governance-wide.
+const govAlertTargetsSQL = `
+ALTER TABLE gov_alerts ADD COLUMN IF NOT EXISTS target_user_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS gov_alerts_target_user_idx ON gov_alerts (target_user_id) WHERE target_user_id <> '';
+`
+
+const govAlertTargetsDownSQL = `
+DROP INDEX IF EXISTS gov_alerts_target_user_idx;
+ALTER TABLE gov_alerts DROP COLUMN IF EXISTS target_user_id;
+`
+
+// orgChannelsSQL (R2-3): per-org notification channels. Governance events for
+// an org's flows fan out to the org's own channels IN ADDITION to the
+// deployment-global ones — routing by ownership instead of one global blast.
+// RLS mirrors the knowledge tables (org-member read; writes also via member
+// policy — the HTTP layer additionally requires admin).
+const orgChannelsSQL = `
+CREATE TABLE IF NOT EXISTS org_channels (
+    id         TEXT        PRIMARY KEY,
+    org_id     TEXT        NOT NULL,
+    name       TEXT        NOT NULL DEFAULT '',
+    kind       TEXT        NOT NULL,
+    url        TEXT        NOT NULL,
+    secret     TEXT        NOT NULL DEFAULT '',
+    enabled    BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS org_channels_org_idx ON org_channels (org_id);
+
+ALTER TABLE org_channels ENABLE ROWS LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rls_org_channels_visible ON org_channels;
+CREATE POLICY rls_org_channels_visible ON org_channels FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_channels.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_channels.org_id AND om.user_id = app_current_user_id())
+);
+`
+
+const orgChannelsDownSQL = `
+DROP TABLE IF EXISTS org_channels;
+`
+
+// flowsContentTrgmSQL (R3-5a) backs library content-search pushdown: an
+// ILIKE over content::text finds flows whose BLOCK NAMES/properties mention
+// the needle WITHOUT loading + parsing every flow in-process (the previous
+// SearchLibrary capped at 50 flows — on a 500-flow org, 450 flows were
+// silently invisible to search). pg_trgm (required since v13) makes the scan
+// index-backed. NOTE: deployments with Azure Blob content offloading store a
+// "{}" placeholder in this column — the storage method detects that mode and
+// reports unsupported, so the service falls back to the legacy scan there.
+const flowsContentTrgmSQL = `
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS flows_content_trgm_idx ON flows USING gin ((content::text) gin_trgm_ops);
+`
+
+const flowsContentTrgmDownSQL = `
+DROP INDEX IF EXISTS flows_content_trgm_idx;
 `

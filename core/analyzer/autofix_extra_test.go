@@ -146,8 +146,10 @@ func TestInsertDelayInLoopPatch_InsertsBeforeFirstChild(t *testing.T) {
 		Type:       models.BlockTypeLoop,
 		RawType:    "LOOP",
 		LineNumber: 3,
-		Indent:     1,
-		Children:   []models.Block{*child},
+		// block.Indent is the parser's RAW leading column count (one level of
+		// 4-space indentation == 4 columns), not a level count.
+		Indent:   4,
+		Children: []models.Block{*child},
 	}
 	patch := InsertDelayInLoopPatch(block)
 	if len(patch.Ops) != 1 {
@@ -156,8 +158,8 @@ func TestInsertDelayInLoopPatch_InsertsBeforeFirstChild(t *testing.T) {
 	if patch.Ops[0].BeforeLine != 5 {
 		t.Errorf("expected BeforeLine=5 (first child), got %d", patch.Ops[0].BeforeLine)
 	}
-	indentSpace := strings.Repeat("    ", 2) // Indent+1 = 2 levels
+	indentSpace := strings.Repeat(" ", 4+4) // loop column (4) + one level (4)
 	if !strings.Contains(patch.Ops[0].Lines[0], indentSpace+"WAIT 1") {
-		t.Errorf("expected WAIT at indent level 2, got %q", patch.Ops[0].Lines[0])
+		t.Errorf("expected WAIT one level deeper than the loop, got %q", patch.Ops[0].Lines[0])
 	}
 }

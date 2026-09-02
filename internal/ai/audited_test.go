@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 type auditStub struct {
 	Provider
 	models       []ModelInfo
+	modelsCalls  atomic.Int32 // counts Models() invocations (memoisation tests)
 	price        Pricing
 	resp         *Response
 	streamChunks []Chunk
@@ -26,10 +29,13 @@ func (s *auditStub) Stream(_ context.Context, _ Request, onChunk func(Chunk)) er
 	}
 	return s.streamErr
 }
-func (s *auditStub) Models(_ context.Context) ([]ModelInfo, error) { return s.models, nil }
-func (s *auditStub) PricePerMillionTokens() Pricing                { return s.price }
-func (s *auditStub) ID() string                                    { return "stub" }
-func (s *auditStub) EstimateTokens(t string) int                   { return len(t) / 4 }
+func (s *auditStub) Models(_ context.Context) ([]ModelInfo, error) {
+	s.modelsCalls.Add(1)
+	return s.models, nil
+}
+func (s *auditStub) PricePerMillionTokens() Pricing { return s.price }
+func (s *auditStub) ID() string                     { return "stub" }
+func (s *auditStub) EstimateTokens(t string) int    { return len(t) / 4 }
 
 // awaitMetric runs a Chat through the audited wrapper and returns the recorded
 // metric (recording is async). Fails the test if nothing is recorded.
@@ -231,4 +237,196 @@ func TestAudited_RecorderBoundedUnderSaturation(t *testing.T) {
 
 	// Release the in-flight recorders so the goroutines exit cleanly.
 	close(release)
+}
+
+// TestAudited_ModelsMemoisedPerInstance proves the audited wrapper consults
+// the inner provider's Models() at most once per request chain: a single
+// tool-loop request records up to ~7 metrics (each pricing via Models) and
+// also calls ContextLimitFor/ModelMaxOutputTokens — for wire-backed Models()
+// implementations (GitHub Models pre-cache) that multiplied into a live HTTP
+// GET per usage record.
+func TestAudited_ModelsMemoisedPerInstance(t *testing.T) {
+	stub := &auditStub{
+		models: []ModelInfo{{ID: "m", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		resp:   &Response{TokensIn: 100, TokensOut: 100},
+	}
+	ap := NewAuditedProvider(stub, func(_ context.Context, _ *interfaces.UsageMetric) error { return nil }, "user-1", "stub")
+
+	// Simulate one request's access pattern: clamp lookups + several records.
+	_ = ContextLimitFor(context.Background(), ap, "m")
+	_ = ModelMaxOutputTokens(context.Background(), ap, "m")
+	for i := 0; i < 5; i++ {
+		if _, err := ap.Chat(context.Background(), Request{Model: "m"}); err != nil {
+			t.Fatalf("Chat %d: %v", i, err)
+		}
+	}
+	if n := stub.modelsCalls.Load(); n != 1 {
+		t.Errorf("inner Models() called %d times for one audited instance, want exactly 1", n)
+	}
+}
+
+// embedAuditStub extends auditStub with Embed + the embedding-model accessor,
+// mirroring openaiBase/Gemini providers on the audited chain.
+type embedAuditStub struct {
+	auditStub
+	embedModel string
+	embedTexts [][]string
+}
+
+func (s *embedAuditStub) Embed(_ context.Context, text []string) ([][]float32, error) {
+	s.embedTexts = append(s.embedTexts, text)
+	out := make([][]float32, len(text))
+	for i := range out {
+		out[i] = []float32{0.1}
+	}
+	return out, nil
+}
+func (s *embedAuditStub) EmbeddingModel() string { return s.embedModel }
+
+// awaitEmbedMetric runs one Embed through the audited wrapper and returns the
+// recorded metric (recording is async).
+func awaitEmbedMetric(t *testing.T, stub *embedAuditStub, texts []string) *interfaces.UsageMetric {
+	t.Helper()
+	ch := make(chan *interfaces.UsageMetric, 1)
+	rec := func(_ context.Context, m *interfaces.UsageMetric) error {
+		ch <- m
+		return nil
+	}
+	ap := NewAuditedProvider(stub, rec, "user-1", "stub")
+	if _, err := ap.Embed(context.Background(), texts); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	select {
+	case m := <-ch:
+		return m
+	case <-time.After(2 * time.Second):
+		t.Fatal("embedding usage metric was not recorded")
+		return nil
+	}
+}
+
+// TestAuditedEmbed_RecordsUsage pins R2: embedding spend (RAG indexing +
+// per-turn query embeddings) must hit usage_metrics and the daily budget.
+// Before this, auditedProvider.Embed was a bare delegation — every embedding
+// call was unbilled.
+func TestAuditedEmbed_RecordsUsage(t *testing.T) {
+	stub := &embedAuditStub{
+		auditStub: auditStub{
+			models: []ModelInfo{{ID: "text-embedding-3-small", Pricing: Pricing{InputCostPerM: 0.02}}},
+		},
+		embedModel: "text-embedding-3-small",
+	}
+	texts := []string{"alpha beta gamma delta", "one two three four five six"}
+	m := awaitEmbedMetric(t, stub, texts)
+
+	if m.CompletionTokens != 0 {
+		t.Errorf("CompletionTokens = %d, want 0 (embeddings bill input only)", m.CompletionTokens)
+	}
+	// EstimateTokens is len/4 on the stub: "alpha beta gamma delta"=22 → 5,
+	// "one two three four five six"=27 → 6. 11 total.
+	if m.PromptTokens != 11 {
+		t.Errorf("PromptTokens = %d, want 11 (sum of per-text estimates)", m.PromptTokens)
+	}
+	if m.Model != "text-embedding-3-small" {
+		t.Errorf("Model = %q, want the embedding model name (catalog pricing)", m.Model)
+	}
+	if want := 11.0 / 1_000_000 * 0.02; m.EstimatedCost != want {
+		t.Errorf("EstimatedCost = %v, want %v", m.EstimatedCost, want)
+	}
+	if m.OrgID != "" {
+		t.Errorf("OrgID = %q, want empty (personal attribution — Embed carries no org context)", m.OrgID)
+	}
+	if len(stub.embedTexts) != 1 || len(stub.embedTexts[0]) != 2 {
+		t.Errorf("inner Embed received wrong batch: %+v", stub.embedTexts)
+	}
+}
+
+// TestAuditedEmbed_FailedEmbedRecordsNothing: the error path records no usage
+// (the provider rejected the call — nothing was spent).
+func TestAuditedEmbed_FailedEmbedRecordsNothing(t *testing.T) {
+	stub := &failingEmbedStub{auditStub: auditStub{}}
+	ap := NewAuditedProvider(stub, func(context.Context, *interfaces.UsageMetric) error {
+		t.Error("no usage must be recorded for a failed Embed")
+		return nil
+	}, "user-1", "stub")
+	if _, err := ap.Embed(context.Background(), []string{"x"}); err == nil {
+		t.Fatal("want error propagated")
+	}
+	time.Sleep(20 * time.Millisecond) // any (wrong) async record would fire by now
+}
+
+type failingEmbedStub struct{ auditStub }
+
+func (f *failingEmbedStub) Embed(context.Context, []string) ([][]float32, error) {
+	return nil, fmt.Errorf("embed rejected")
+}
+
+// awaitStreamMetric drives one Stream through the audited wrapper and returns
+// the recorded metric.
+func awaitStreamMetric(t *testing.T, stub *auditStub, req Request) *interfaces.UsageMetric {
+	t.Helper()
+	ch := make(chan *interfaces.UsageMetric, 1)
+	rec := func(_ context.Context, m *interfaces.UsageMetric) error {
+		ch <- m
+		return nil
+	}
+	ap := NewAuditedProvider(stub, rec, "user-1", "stub")
+	if err := ap.Stream(context.Background(), req, func(Chunk) {}); err != nil && stub.streamErr == nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	select {
+	case m := <-ch:
+		return m
+	case <-time.After(2 * time.Second):
+		t.Fatal("usage metric was not recorded")
+		return nil
+	}
+}
+
+// TestAuditedStream_DoneWithZeroUsageEstimates pins R3: OpenAI-COMPAT servers
+// that ignore stream_options (older vLLM/Ollama/proxies; base URLs are
+// env-overridable) end every stream with Done(0,0). Without the fallback,
+// every such stream billed $0 — no metric, budget never trips.
+func TestAuditedStream_DoneWithZeroUsageEstimates(t *testing.T) {
+	stub := &auditStub{
+		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 2}}},
+		streamChunks: []Chunk{{Text: "hello world, this is output"}, {Done: true}}, // Done(0,0)
+	}
+	req := Request{
+		Model:        "m",
+		SystemPrompt: "you are a stub",
+		Messages:     []Message{{Role: "user", Content: "a question worth asking"}, {Role: "assistant", Content: "", ToolCalls: []ToolCall{{ID: "t1", Name: "search_flow", Input: []byte(`{"query":"credentials"}`)}}}},
+	}
+	m := awaitStreamMetric(t, stub, req)
+
+	// Stub EstimateTokens = len/4.
+	wantIn := len(req.SystemPrompt)/4 + len(req.Messages[0].Content)/4 + len(`{"query":"credentials"}`)/4
+	wantOut := len("hello world, this is output") / 4
+	if m.PromptTokens != wantIn {
+		t.Errorf("PromptTokens = %d, want %d (system+content+tool_use args)", m.PromptTokens, wantIn)
+	}
+	if m.CompletionTokens != wantOut {
+		t.Errorf("CompletionTokens = %d, want %d (estimated from streamed text)", m.CompletionTokens, wantOut)
+	}
+	if m.EstimatedCost == 0 {
+		t.Error("EstimatedCost = 0 — stream billed nothing")
+	}
+}
+
+// TestAuditedStream_DoneZeroNoContentRecordsNothing: Done(0,0) with NO
+// delivered content is an empty response, not a usage event — nothing billed
+// (mirrors the never-started gate on the no-Done path).
+func TestAuditedStream_DoneZeroNoContentRecordsNothing(t *testing.T) {
+	stub := &auditStub{
+		models:       []ModelInfo{{ID: "m"}},
+		streamChunks: []Chunk{{Done: true}}, // empty response, no usage
+	}
+	ap := NewAuditedProvider(stub, func(context.Context, *interfaces.UsageMetric) error {
+		t.Error("no usage must be recorded for an empty Done(0,0) stream")
+		return nil
+	}, "user-1", "stub")
+	if err := ap.Stream(context.Background(), Request{Model: "m"}, func(Chunk) {}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
 }

@@ -114,6 +114,7 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 				ContextLimit:   m.ContextLimit,
 				InputCostPerM:  m.Pricing.InputCostPerM,
 				OutputCostPerM: m.Pricing.OutputCostPerM,
+				SupportsTools:  p.SupportsTools(),
 			}
 		}
 

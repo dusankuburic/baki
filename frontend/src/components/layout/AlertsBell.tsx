@@ -158,6 +158,9 @@ function AlertRow({
   onOpenFlow: () => void
 }) {
   const isRegression = alert.type === 'health_regression'
+  // Personal alert types get a friendlier chip than the raw severity: an
+  // assignment is an action item, not an error state.
+  const chip = isRegression ? 'health' : alert.type === 'finding_assigned' ? 'assigned' : alert.type === 'comment_added' ? 'comment' : alert.severity
   return (
     <div
       className={clsx(
@@ -169,10 +172,12 @@ function AlertRow({
         <span
           className={clsx(
             'mt-0.5 px-1 py-0.5 rounded text-2xs font-medium shrink-0',
-            sevChip[alert.severity] ?? sevChip.warning,
+            alert.type === 'finding_assigned' || alert.type === 'comment_added'
+              ? 'bg-brand-500/10 text-brand-400'
+              : sevChip[alert.severity] ?? sevChip.warning,
           )}
         >
-          {isRegression ? 'health' : alert.severity}
+          {chip}
         </span>
         <button className="flex-1 text-left" onClick={onOpenFlow}>
           <div className="text-xs text-text-primary line-clamp-2">{alert.title}</div>

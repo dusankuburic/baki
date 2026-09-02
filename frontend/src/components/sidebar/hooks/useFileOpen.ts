@@ -42,6 +42,34 @@ export function useFileOpen() {
       })
   }, [document?.id])
 
+  // handleNewFlow creates a blank single-file flow ("Main" region only) and
+  // loads it — the missing CREATE entry point (the analyzer could only open
+  // existing exports; building something new meant hand-writing a file in a
+  // text editor first). Works in both modes: uploadFlow parses server-side
+  // and (cloud) persists.
+  const handleNewFlow = useCallback(async () => {
+    const gen = beginDocLoad()
+    setIsLoadingState()
+    try {
+      const doc = await flowApi.uploadFlow('Untitled flow', {
+        'Main.txt': '#Region "Main"\n#EndRegion\n',
+      })
+      if (doc && isDocLoadCurrent(gen)) {
+        setDocument(doc)
+        setFolderFiles([])
+        setSelectedFilePath(doc.filePath)
+        checkView()
+        toast.success('New flow created', {description: 'Start in the source editor: Add action builds PAD lines for you.'})
+      }
+    } catch (err) {
+      logger.warn('Failed to create flow:', err)
+      if (isDocLoadCurrent(gen))
+        toast.error('Failed to create flow', {description: err instanceof Error ? err.message : String(err)})
+    } finally {
+      if (isDocLoadCurrent(gen)) endLoad()
+    }
+  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast])
+
   const handleOpenFile = useCallback(async () => {
     const gen = beginDocLoad()
     setIsLoadingState()
@@ -221,6 +249,7 @@ export function useFileOpen() {
   return {
     recentFiles,
     isLoading,
+    handleNewFlow,
     handleOpenFile,
     handleOpenFolder,
     handleSelectFolderFile,

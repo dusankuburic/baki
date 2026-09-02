@@ -73,6 +73,9 @@ interface UiState {
   globalSearchOpen: boolean
   complexityMode: boolean
   settingsOpen: boolean
+  // Section the settings modal opens on (deep-links: "Set one up" from the
+  // welcome tour, ApiKeyMissingState, etc.). Consumed on open, then reset.
+  settingsSection: string | null
   variablePanelOpen: boolean
   selectedVariable: string | null
   graphZoom: number
@@ -89,6 +92,7 @@ interface UiState {
   setCommandPaletteOpen: (o: boolean | ((prev: boolean) => boolean)) => void
   setGlobalSearchOpen: (o: boolean | ((prev: boolean) => boolean)) => void
   setSettingsOpen: (o: boolean) => void
+  setSettingsSection: (s: string | null) => void
   setVariablePanelOpen: (o: boolean) => void
   setSelectedVariable: (v: string | null) => void
   setGraphZoom: (z: number) => void
@@ -112,6 +116,7 @@ export const useUIStore = create<UiState>(set => ({
   globalSearchOpen: false,
   complexityMode: false,
   settingsOpen: false,
+  settingsSection: null,
   variablePanelOpen: false,
   selectedVariable: null,
   graphZoom: 1,
@@ -134,6 +139,7 @@ export const useUIStore = create<UiState>(set => ({
       globalSearchOpen: typeof o === 'function' ? o(s.globalSearchOpen) : o,
     })),
   setSettingsOpen: o => set({settingsOpen: o}),
+  setSettingsSection: sec => set({settingsSection: sec}),
   setVariablePanelOpen: o => set({variablePanelOpen: o}),
   setSelectedVariable: v => set({selectedVariable: v}),
   setGraphZoom: z => set({graphZoom: z}),
@@ -159,6 +165,7 @@ registerStoreReset(() =>
     globalSearchOpen: false,
     complexityMode: false,
     settingsOpen: false,
+    settingsSection: null,
     variablePanelOpen: false,
     selectedVariable: null,
     graphZoom: 1,

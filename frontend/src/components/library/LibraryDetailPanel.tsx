@@ -1,4 +1,5 @@
-import {Activity, Calendar, FileCode, GitBranch, Trash2, User, Users, X} from 'lucide-react'
+import {useState, useEffect} from 'react'
+import {Activity, Calendar, Copy, FileCode, GitBranch, Pencil, Tag, Trash2, User, Users, X} from 'lucide-react'
 import {libraryApi, type LibraryFlow, type LibraryFlowVersion} from '@/api/library'
 import {Button, Spinner, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
@@ -10,6 +11,11 @@ interface Props {
   flowId: string | null
   onOpen: (flow: LibraryFlow) => void
   onDelete: (flow: LibraryFlow) => void
+  onRename: (flow: LibraryFlow) => void
+  onDuplicate: (flow: LibraryFlow) => void
+  onSaveTags: (flow: LibraryFlow, tags: string[]) => void
+  editingTags: boolean
+  setEditingTags: (v: boolean) => void
   onClose: () => void
 }
 
@@ -18,7 +24,7 @@ interface DetailData {
   versions: LibraryFlowVersion[]
 }
 
-export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: Props) {
+export default function LibraryDetailPanel({flowId, onOpen, onDelete, onRename, onDuplicate, onSaveTags, editingTags, setEditingTags, onClose}: Props) {
   const orgs = useOrgStore(s => s.organisations)
 
   const {
@@ -88,6 +94,7 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
           />
           <Row icon={FileCode} label="Blocks / subflows" value={`${flow.blockCount} / ${flow.subflowCount}`} />
           <Row icon={GitBranch} label="Version" value={`#${flow.version}`} />
+          <TagRow flow={flow} editing={editingTags} setEditing={setEditingTags} onSave={onSaveTags} />
         </Section>
 
         {flow.healthScore !== undefined && (
@@ -134,7 +141,13 @@ export default function LibraryDetailPanel({flowId, onOpen, onDelete, onClose}: 
           )}
         </Section>
 
-        <div className="flex items-center gap-2 pt-3 border-t border-border-subtle">
+        <div className="flex items-center gap-2 pt-3 border-t border-border-subtle flex-wrap">
+          <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onRename(flow)}>
+            Rename
+          </Button>
+          <Button variant="ghost" size="sm" icon={Copy} onClick={() => onDuplicate(flow)}>
+            Duplicate
+          </Button>
           {flow.canDelete && (
             <Button variant="ghost" size="sm" icon={Trash2} onClick={() => onDelete(flow)}>
               Delete
@@ -164,6 +177,77 @@ function Row({icon: Icon, label, value}: {icon: typeof Activity; label: string; 
       <Icon size={11} className="text-text-tertiary translate-y-0.5 flex-shrink-0" />
       <span className="text-text-tertiary w-28 flex-shrink-0">{label}</span>
       <span className="text-text-primary truncate">{value}</span>
+    </div>
+  )
+}
+
+
+// TagRow renders the flow's tags as chips with an inline editor
+// (comma-separated input → server-normalized set on save). Editing is
+// triggered by the pencil; empty input saves an empty set (untagged).
+function TagRow({flow, editing, setEditing, onSave}: {flow: LibraryFlow; editing: boolean; setEditing: (v: boolean) => void; onSave: (flow: LibraryFlow, tags: string[]) => void}) {
+  const [draft, setDraft] = useState('')
+  useEffect(() => {
+    if (editing) setDraft((flow.tags ?? []).join(', '))
+  }, [editing, flow.tags])
+
+  if (editing) {
+    return (
+      <div className="pt-1">
+        <input
+          value={draft}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              onSave(flow, draft.split(',').map((t: string) => t.trim()).filter(Boolean))
+              setEditing(false)
+            }
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          placeholder="prod, finance, critical — Enter to save"
+          autoFocus
+          className="w-full px-2 py-1 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-none focus:border-brand-500"
+          aria-label="Tags (comma-separated)"
+        />
+        <div className="flex gap-2 mt-1">
+          <button
+            className="text-2xs text-brand-400 hover:text-brand-300"
+            onClick={() => {
+              onSave(flow, draft.split(',').map((t: string) => t.trim()).filter(Boolean))
+              setEditing(false)
+            }}
+          >
+            Save
+          </button>
+          <button className="text-2xs text-text-tertiary hover:text-text-secondary" onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-start gap-2 pt-1 flex-wrap">
+      {(flow.tags ?? []).length === 0 ? (
+        <span className="text-xs text-text-tertiary/60">No tags</span>
+      ) : (
+        (flow.tags ?? []).map(t => (
+          <span key={t} className="px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-300 text-2xs font-medium">
+            {t}
+          </span>
+        ))
+      )}
+      {flow.canEdit && (
+        <button
+          onClick={() => setEditing(true)}
+          className="p-0.5 rounded text-text-tertiary hover:text-text-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Edit tags"
+          aria-label="Edit tags"
+        >
+          <Tag size={10} />
+        </button>
+      )}
     </div>
   )
 }

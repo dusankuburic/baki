@@ -9,6 +9,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import CodeBlock from './CodeBlock'
+import {ToolTrail, FixOutcomeStrip} from './ToolTrail'
 
 interface Props {
   message: ChatMessageType
@@ -309,6 +310,22 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
         {renderContent(message.content, isUser, isStreaming)}
       </div>
 
+      {!isUser &&
+        (message.fixProposals ?? (message.fixProposal ? [message.fixProposal] : [])).map(snap => (
+          // A still-pending card on an interrupted message is DEAD: stopping
+          // the stream cancels the apply_fix tool call server-side, so the
+          // decision can never resolve — say so instead of showing an
+          // ambiguous pending strip (U4.1).
+          <FixOutcomeStrip
+            key={snap.proposalId}
+            snapshot={isInterrupted && snap.status === 'pending' ? {...snap, status: 'cancelled'} : snap}
+          />
+        ))}
+
+      {!isUser && !isStreaming && message.toolCalls && message.toolCalls.length > 0 && (
+        <ToolTrail calls={message.toolCalls} />
+      )}
+
       {isInterrupted && (
         <div className="flex items-center gap-1 px-1 text-2xs text-text-tertiary">
           <CircleSlash size={10} />
@@ -319,8 +336,11 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
       {!isStreaming && (
         <div
           className={clsx(
+            // U1.6: actions reveal on hover AND on keyboard focus-within —
+            // hover-only opacity left keyboard users with invisible-but-
+            // focusable buttons (the FindingsList pattern).
             'flex items-center gap-1 px-1 transition-opacity duration-150',
-            showActions ? 'opacity-100' : 'opacity-0',
+            showActions ? 'opacity-100' : 'opacity-0 focus-within:opacity-100',
           )}
         >
           <button
@@ -360,6 +380,9 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.finishReason === nextProps.message.finishReason &&
+    prevProps.message.toolCalls === nextProps.message.toolCalls &&
+    prevProps.message.fixProposal === nextProps.message.fixProposal &&
+    prevProps.message.fixProposals === nextProps.message.fixProposals &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.isThinking === nextProps.isThinking &&
     prevProps.isLastAssistant === nextProps.isLastAssistant &&

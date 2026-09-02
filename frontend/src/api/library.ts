@@ -20,6 +20,8 @@ export interface LibraryFlow {
   healthScore?: number
   errorCount?: number
   warningCount?: number
+  /** Org tags (backend-normalized). */
+  tags?: string[]
 }
 
 // Portfolio: the org-wide governance fleet view (GET /api/library/portfolio).

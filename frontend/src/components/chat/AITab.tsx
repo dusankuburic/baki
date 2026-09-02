@@ -18,11 +18,13 @@ import {
   SourceFilePicker,
   ChatToolbar,
   ChatThreadBar,
+  FixProposalCard,
 } from '.'
 import {useState, useEffect, useMemo, useCallback, lazy, Suspense} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import StreamingProgress from './StreamingProgress'
+import LiveToolTrail from './LiveToolTrail'
 import StreamingBubble from './StreamingBubble'
 import type {ProviderID} from '@/types'
 import ConnectionStatus from './ConnectionStatus'
@@ -83,9 +85,13 @@ export default function AITab() {
     sourceFiles,
     contextPreview,
     pendingMessage,
-    toolStatus,
+    fixProposals,
+    respondFixProposal,
     switchThread,
     handleSend,
+    handleQueue,
+    cancelQueued,
+    queuedForActiveThread,
     handlePreviewContext,
     handleResend,
     handleExport,
@@ -235,7 +241,8 @@ export default function AITab() {
             onClearContext={handleClearContext}
             onCompact={handleCompact}
             useTools={activeThread?.useTools ?? false}
-            onToggleTools={() => setThreadUseTools(!(activeThread?.useTools ?? false))}
+            providerId={provider}
+            onToggleTools={provider === 'demo' ? undefined : () => setThreadUseTools(!(activeThread?.useTools ?? false))}
             onToggleSearch={toggleSearch}
             searchActive={searchOpen}
           />
@@ -304,12 +311,17 @@ export default function AITab() {
         {/* Pinned bottom — tokens/progress + input. */}
         {doc && activeThread && (
           <div className="flex-shrink-0">
-            {isCurrentThreadStreaming && toolStatus && (
-              <div className="flex items-center gap-2 px-3 py-1.5 text-2xs text-brand-400" role="status">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />
-                <span className="truncate">{toolStatus}…</span>
-              </div>
-            )}
+            {isCurrentThreadStreaming && <LiveToolTrail />}
+            {isCurrentThreadStreaming &&
+              fixProposals.map(card => (
+                <FixProposalCard
+                  key={card.proposalId}
+                  proposal={card}
+                  onRespond={(approved, proposalId, excludedItemIndices) =>
+                    respondFixProposal(activeThreadId!, approved, proposalId, excludedItemIndices)
+                  }
+                />
+              ))}
             {isCurrentThreadStreaming ? (
               <StreamingProgress />
             ) : (
@@ -328,6 +340,9 @@ export default function AITab() {
               onFilesChange={setThreadSourceFiles}
               onClearThread={handleClearThread}
               onShowHelp={() => setHelpOpen(true)}
+              onQueue={(text, files, excludeContext) => handleQueue(text, files, excludeContext)}
+              queued={queuedForActiveThread ?? null}
+              onCancelQueue={cancelQueued}
             />
           </div>
         )}

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/testutil"
@@ -413,6 +414,124 @@ func TestWatchStream_ActiveProviderNotIdleCancelled(t *testing.T) {
 	}
 }
 
+// TestWatchStream_ToolExecutionTouchedNotIdleCancelled locks the contract the
+// tool loops rely on: tool execution emits no provider chunks, so the loops
+// ctl.touch() around ExecuteTool (chat.go runToolLoop/runPromptToolLoop) to
+// signal activity. A stream whose only activity is these periodic touches —
+// simulating a legitimately slow tool running well past the idle timeout —
+// must NOT be cancelled as an idle provider.
+func TestWatchStream_ToolExecutionTouchedNotIdleCancelled(t *testing.T) {
+	notifier := &testutil.CountingNotifier{}
+	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: 40 * time.Millisecond}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctl := &streamCtl{cancel: cancel, started: make(chan struct{})}
+	ctl.touch()
+	close(ctl.started)
+
+	go svc.watchStream(ctx, "s1", "user-1", ctl)
+
+	// Simulate a slow tool: 12 "tool execution" windows of 20ms each — every
+	// window well under the 40ms idle limit, but the total (240ms) far past
+	// it. Each window starts and ends with a touch, exactly like the loop.
+	stop := time.After(2 * time.Second)
+	for i := 0; i < 12; i++ {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("watchdog idle-cancelled during slow tool execution (window %d)", i)
+		case <-stop:
+			t.Fatal("test timed out")
+		default:
+		}
+		ctl.touch() // loop touches before ExecuteTool
+		time.Sleep(20 * time.Millisecond)
+		ctl.touch() // …and after
+	}
+	// Sanity contrast: with touches stopped, the same stream IS idle-cancelled
+	// (proves the touches above were load-bearing, not a short test).
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchdog failed to cancel once activity stopped — contrast half of the test is vacuous")
+	}
+}
+
+// windowFakeProvider scripts one plain (tool-less) assistant turn like
+// testutil.FakeProvider, but with a controllable catalog: Models() lists
+// "big-window" with a huge ContextLimit while the provider-wide ContextLimit()
+// stays small, and Stream records how many messages each request carried.
+type windowFakeProvider struct {
+	testutil.FakeProvider
+	providerLimit int
+	streamMsgs    []int
+}
+
+func (p *windowFakeProvider) Models(_ context.Context) ([]ai.ModelInfo, error) {
+	return []ai.ModelInfo{{ID: "big-window", ContextLimit: 1 << 20}}, nil
+}
+func (p *windowFakeProvider) ContextLimit() int { return p.providerLimit }
+func (p *windowFakeProvider) Stream(ctx context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
+	p.streamMsgs = append(p.streamMsgs, len(req.Messages))
+	return p.FakeProvider.Stream(ctx, req, onChunk)
+}
+
+// TestRunToolLoop_UsesModelCatalogWindow proves the tool loop truncates
+// against the SELECTED MODEL's catalog window, not the smaller provider-wide
+// default: the same conversation that fails as "too long" under the provider
+// default streams intact (all history delivered to the provider) once the
+// model's catalog entry advertises a window big enough to hold it.
+func TestRunToolLoop_UsesModelCatalogWindow(t *testing.T) {
+	newSvc := func() *ChatService {
+		return &ChatService{notifier: &testutil.CountingNotifier{}, analysisCache: &AnalysisService{}}
+	}
+
+	// A pinned first turn of ~1500 tokens (6000 bytes at the fake's len/4
+	// estimator) plus the 4000 reserve overflows a 5000 provider default on
+	// its own (→ ErrContextLimit even after truncation), while the 1M catalog
+	// window holds the whole conversation.
+	msgs := []ai.Message{{Role: "user", Content: strings.Repeat("u", 6000)}}
+	for i := 0; i < 20; i++ {
+		role := "assistant"
+		if i%2 == 1 {
+			role = "user"
+		}
+		msgs = append(msgs, ai.Message{Role: role, Content: fmt.Sprintf("turn %d %s", i, strings.Repeat("x", 300))})
+	}
+
+	run := func(model string) (provider *windowFakeProvider, ctl *streamCtl) {
+		provider = &windowFakeProvider{
+			FakeProvider:  testutil.FakeProvider{Tools: true, Turns: []testutil.FakeTurn{{Text: "ok"}}},
+			providerLimit: 5000,
+		}
+		ctl = &streamCtl{cancel: func() {}, started: make(chan struct{})}
+		close(ctl.started)
+		svc := newSvc()
+		svc.runToolLoop(context.Background(), provider, ai.Request{
+			SystemPrompt: "sys",
+			Model:        model,
+			Messages:     msgs,
+		}, "user-1", &ai.ToolContext{Ctx: context.Background()}, ctl, func() bool { return true }, func(string, map[string]interface{}) {}, func() int { return 0 })
+		return provider, ctl
+	}
+
+	bigProv, bigCtl := run("big-window")
+	if bigCtl.errMsg != "" {
+		t.Fatalf("catalog window must hold the conversation, got failure %q", bigCtl.errMsg)
+	}
+	if len(bigProv.streamMsgs) != 1 || bigProv.streamMsgs[0] != len(msgs) {
+		t.Errorf("provider must receive the full history (%d messages) under the catalog window, got %v", len(msgs), bigProv.streamMsgs)
+	}
+
+	_, smallCtl := run("not-in-catalog")
+	if smallCtl.errMsg == "" {
+		t.Fatal("uncatalogued model falls back to the small provider default — expected a 'conversation too long' failure")
+	}
+	if !strings.Contains(smallCtl.errMsg, "too long") {
+		t.Errorf("want context-window failure message, got %q", smallCtl.errMsg)
+	}
+}
+
 // TestFailureMessage maps stream failures to client-facing text: a deliberate
 // cancellation surfaces its stored reason instead of the provider's raw
 // "context canceled" wrapping, the duration cap gets a readable message, and
@@ -545,7 +664,7 @@ func TestEnforceBudget_FailsClosedOnStoreError(t *testing.T) {
 		backend:  backend,
 		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
 	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1"); err == nil {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0); err == nil {
 		t.Fatal("enforceBudget with a store error returned nil, want a fail-closed error")
 	}
 }
@@ -558,7 +677,7 @@ func TestEnforceBudget_AllowsUnderBudget(t *testing.T) {
 		backend:  backend,
 		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
 	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1"); err != nil {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0); err != nil {
 		t.Fatalf("enforceBudget under budget returned error: %v", err)
 	}
 }
@@ -573,13 +692,14 @@ func TestRunToolLoop_ExecutesToolThenFinal(t *testing.T) {
 	emit, evs := collectEvents()
 
 	svc.runToolLoop(context.Background(), stub, ai.Request{Messages: []ai.Message{{Role: "user", Content: "hi"}}},
-		toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
+		"user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
 	if stub.Calls() != 2 {
 		t.Fatalf("expected 2 Stream calls, got %d", stub.Calls())
 	}
-	if got := strings.Join(*evs, ","); got != "tool,chunk,done" {
-		t.Errorf("expected tool,chunk,done events, got %q", got)
+	// tool (starting) → tool_result (finished, transparency trail) → final.
+	if got := strings.Join(*evs, ","); got != "tool,tool_result,chunk,done" {
+		t.Errorf("expected tool,tool_result,chunk,done events, got %q", got)
 	}
 	if !ctl.done || ctl.buffer.String() != "Final answer" {
 		t.Errorf("ctl not finalized: done=%v buffer=%q", ctl.done, ctl.buffer.String())
@@ -595,7 +715,7 @@ func TestRunToolLoop_NoToolsFinalImmediately(t *testing.T) {
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
 
-	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
+	svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
 	if stub.Calls() != 1 {
 		t.Fatalf("expected 1 Stream call, got %d", stub.Calls())
@@ -626,7 +746,7 @@ func TestRunToolLoop_MasksSecretSplitAcrossChunks(t *testing.T) {
 		}
 	}
 
-	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
+	svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
 	for name, got := range map[string]string{"emitted chunks": streamed.String(), "resume buffer": ctl.buffer.String()} {
 		if strings.Contains(got, "supersecret123") {
@@ -644,7 +764,7 @@ func TestRunToolLoop_ChatErrorEmitsError(t *testing.T) {
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
 
-	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
+	svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
 	if got := strings.Join(*evs, ","); got != "error" {
 		t.Errorf("expected single error event, got %q", got)
@@ -660,7 +780,7 @@ func TestRunToolLoop_IterationCap(t *testing.T) {
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
 
-	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return true }, emit, func() int { return 0 })
+	svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
 	if stub.Calls() != maxToolIterations {
 		t.Errorf("expected %d Stream calls at cap, got %d", maxToolIterations, stub.Calls())
@@ -678,11 +798,170 @@ func TestRunToolLoop_NotStartedEmitsNothing(t *testing.T) {
 	emit, evs := collectEvents()
 
 	// awaitStart returns false (client cancelled before begin) → no events.
-	svc.runToolLoop(context.Background(), stub, ai.Request{}, toolLoopDoc(), ctl, func() bool { return false }, emit, func() int { return 0 })
+	svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return false }, emit, func() int { return 0 })
 
 	if len(*evs) != 0 {
 		t.Errorf("expected no events when not started, got %v", *evs)
 	}
+}
+
+// TestRunToolLoop_EmitsToolResult pins the tool_result transparency event: one
+// per executed tool, after execution, carrying name/label, ok (per
+// ExecuteTool's "error:" contract), a non-negative duration, and a one-line
+// summary. The failing half drives an unknown tool through the same path.
+func TestRunToolLoop_EmitsToolResult(t *testing.T) {
+	cases := []struct {
+		name       string
+		tool       string
+		input      []byte
+		wantOK     bool
+		wantSubstr string
+	}{
+		{"ok tool", "search_flow", []byte(`{"query":"xav"}`), true, ""},
+		{"failing tool", "no_such_tool", []byte(`{}`), false, "error: unknown tool"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{
+				{ToolCalls: []ai.ToolCall{{ID: "t1", Name: tc.tool, Input: tc.input}}, TokensIn: 1, TokensOut: 1},
+				{Text: "done", TokensIn: 1, TokensOut: 1},
+			}}
+			svc := &ChatService{analysisCache: &AnalysisService{}}
+			ctl := &streamCtl{}
+
+			var got map[string]interface{}
+			emit := func(typ string, data map[string]interface{}) {
+				if typ == "tool_result" {
+					got = data
+				}
+			}
+
+			svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
+
+			if got == nil {
+				t.Fatal("no tool_result event emitted")
+			}
+			if got["name"] != tc.tool {
+				t.Errorf("name = %v, want %q", got["name"], tc.tool)
+			}
+			if label, _ := got["label"].(string); label == "" {
+				t.Error("label missing in tool_result payload")
+			}
+			if ok, _ := got["ok"].(bool); ok != tc.wantOK {
+				t.Errorf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ms, _ := got["durationMs"].(int64); ms < 0 {
+				t.Errorf("durationMs = %v, want >= 0", ms)
+			}
+			summary, _ := got["summary"].(string)
+			if tc.wantSubstr != "" && !strings.Contains(summary, tc.wantSubstr) {
+				t.Errorf("summary = %q, want substring %q", summary, tc.wantSubstr)
+			}
+			if strings.ContainsAny(summary, "\n") {
+				t.Errorf("summary must be one line, got %q", summary)
+			}
+		})
+	}
+}
+
+// toolsUnsupportedProvider fails the FIRST Stream call (when tools are still
+// attached) with the wrapped sentinel, then answers normally — proving the
+// runToolLoop degradation path: tools dropped, notice emitted, same iteration
+// retried, final answer delivered.
+type toolsUnsupportedProvider struct {
+	testutil.FakeProvider
+	sawTools bool
+	calls    int
+}
+
+func (p *toolsUnsupportedProvider) Stream(ctx context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
+	p.calls++
+	if len(req.Tools) > 0 {
+		p.sawTools = true
+		return fmt.Errorf("wrapped: %w", ai.ErrToolsUnsupported)
+	}
+	return p.FakeProvider.Stream(ctx, req, onChunk)
+}
+
+func TestRunToolLoop_ToolsUnsupportedDegradesGracefully(t *testing.T) {
+	stub := &toolsUnsupportedProvider{FakeProvider: testutil.FakeProvider{
+		Turns: []testutil.FakeTurn{{Text: "answer without tools", TokensIn: 5, TokensOut: 5}},
+		Tools: true,
+	}}
+	svc := &ChatService{analysisCache: &AnalysisService{}}
+	ctl := &streamCtl{}
+
+	var events []string
+	var toolLabels []string
+	emit := func(typ string, data map[string]interface{}) {
+		events = append(events, typ)
+		if typ == "tool" {
+			if l, ok := data["label"].(string); ok {
+				toolLabels = append(toolLabels, l)
+			}
+		}
+	}
+
+	svc.runToolLoop(context.Background(), stub, ai.Request{Messages: []ai.Message{{Role: "user", Content: "hi"}}},
+		"user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
+
+	if !stub.sawTools {
+		t.Fatal("expected the first attempt to carry tools")
+	}
+	// Two chunk events: "answer without tools" ends in "s" — a possible
+	// prefix of a secret anchor — so the scrubber holds that byte until the
+	// turn-end flush (same as TestRunToolLoop_NoToolsFinalImmediately).
+	if got := strings.Join(events, ","); got != "tool,chunk,chunk,done" {
+		t.Errorf("expected tool(notice),chunk,chunk,done events, got %q", got)
+	}
+	if len(toolLabels) != 1 || !strings.Contains(toolLabels[0], "answering without") {
+		t.Errorf("expected one degradation notice label, got %v", toolLabels)
+	}
+	if !ctl.done || ctl.buffer.String() != "answer without tools" {
+		t.Errorf("turn not finalized: done=%v buffer=%q", ctl.done, ctl.buffer.String())
+	}
+	// Exactly 2 Stream calls: tools-rejected + toolless answer (the retry did
+	// NOT consume an iteration or loop extra times).
+	if stub.calls != 2 {
+		t.Errorf("expected 2 Stream calls, got %d", stub.calls)
+	}
+}
+
+// TestToolSummary pins the summary derivation: first line only, whitespace
+// trimmed, capped at 120 bytes on a rune boundary with an ellipsis (multibyte
+// safety mirrors ai.truncateResult).
+func TestToolSummary(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "3 matches found", "3 matches found"},
+		{"first line only", "3 matches found\nand more detail", "3 matches found"},
+		{"trims whitespace", "  hello  \nnext", "hello"},
+		{"short passthrough", "x", "x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toolSummary(tc.in); got != tc.want {
+				t.Errorf("toolSummary(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	t.Run("caps long lines without splitting runes", func(t *testing.T) {
+		// 130 multibyte runes (390 bytes) — the cut must land on a boundary.
+		in := strings.Repeat("€", 130)
+		got := toolSummary(in)
+		if !utf8.ValidString(got) {
+			t.Fatalf("summary is not valid UTF-8: %q", got)
+		}
+		if len(got) > 124 { // 120-byte cap + "…"
+			t.Errorf("summary too long: %d bytes", len(got))
+		}
+		if want := strings.TrimSuffix(got, "…"); strings.Count(want, "€") != len(want)/3 {
+			t.Errorf("summary split a rune: %q", got)
+		}
+	})
 }
 
 // ctxCacheStubProvider is a minimal ai.Provider for the context-cache test:

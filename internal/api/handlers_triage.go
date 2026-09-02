@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"pad-analyzer/internal/api/render"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -151,9 +152,70 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 			flowName = doc.Name
 		}
 		go h.notifyFindingAssignment(req.AssigneeID, userID, flowName, req.RuleID)
+		// In-app bell alert too (R2-5): the email only reaches users watching
+		// their inbox; the assignee's badge should light up either way.
+		// Targeted: only the assignee sees it.
+		h.recordFindingAlert(&storageif.GovernanceAlert{
+			ID:         fmt.Sprintf("%s|finding_assigned|%s|%s", req.FlowID, req.FindingKey, req.AssigneeID),
+			FlowID:     req.FlowID,
+			FlowName:   flowName,
+			Type:       "finding_assigned",
+			Title:      h.ruleDisplayName(req.RuleID),
+			Message:    fmt.Sprintf("Assigned to you by %s", h.callerDisplayName(userID)),
+			Severity:   "info",
+			TargetUser: req.AssigneeID,
+		})
 	}
 
 	render.JSON(w, st)
+}
+
+// recordFindingAlert persists a personal (targeted) in-app alert for the
+// bell. Synchronous best-effort: a failure logs and never blocks the
+// mutation that already committed (the response follows immediately).
+// The ID embeds the (flow, type, key, target) tuple — the storage layer's
+// ON CONFLICT DO NOTHING makes retries idempotent.
+func (h *AnalysisHandler) recordFindingAlert(a *storageif.GovernanceAlert) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("finding alert recording panicked", "err", r)
+		}
+	}()
+	if h.backend == nil || a == nil {
+		return
+	}
+	a.CreatedAt = time.Now().UTC()
+	if err := h.backend.RecordGovernanceAlert(context.Background(), a); err != nil {
+		logger.Warn("failed to record finding alert", "type", a.Type, "err", err)
+	}
+}
+
+// callerDisplayName resolves a display name for alert copy ("you were
+// assigned by X"); falls back to "a teammate".
+func (h *AnalysisHandler) callerDisplayName(userID string) string {
+	if h.backend == nil || userID == "" {
+		return "a teammate"
+	}
+	if u, err := h.backend.LoadUserByID(context.Background(), userID); err == nil && u != nil {
+		if u.DisplayName != "" {
+			return u.DisplayName
+		}
+		return u.Email
+	}
+	return "a teammate"
+}
+
+// ruleDisplayName maps a rule ID to its human name for alert titles.
+func (h *AnalysisHandler) ruleDisplayName(ruleID string) string {
+	for _, rule := range analyzer.AllRules() {
+		if rule.ID() == ruleID {
+			return rule.Name()
+		}
+	}
+	if ruleID == "" {
+		return "A finding"
+	}
+	return ruleID
 }
 
 // notifyFindingAssignment emails the assignee that a finding was assigned to

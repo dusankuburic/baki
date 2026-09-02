@@ -74,6 +74,7 @@ func Tokenize(text string) []Token {
 				tokens = append(tokens, Token{
 					Kind:    TokComment,
 					Line:    commentStartLine,
+					EndLine: lineNum,
 					Indent:  commentIndent,
 					Raw:     fullText,
 					Content: fullText,

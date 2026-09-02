@@ -39,6 +39,87 @@ func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
 			Model:            m.Model,
 			FinishReason:     m.FinishReason,
 		}
+		if len(m.ToolCalls) > 0 {
+			calls := make([]storageif.ToolCallRecord, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				calls[j] = storageif.ToolCallRecord{
+					Name:       tc.Name,
+					Label:      tc.Label,
+					Ok:         tc.Ok,
+					DurationMs: tc.DurationMs,
+					Summary:    tc.Summary,
+				}
+			}
+			out[i].ToolCalls = calls
+		}
+		if m.FixProposal != nil {
+			out[i].FixProposal = &storageif.FixProposalSnapshot{
+				ProposalID: m.FixProposal.ProposalID,
+				RuleID:     m.FixProposal.RuleID,
+				FixType:    m.FixProposal.FixType,
+				BlockLabel: m.FixProposal.BlockLabel,
+				Line:       m.FixProposal.Line,
+				Summary:    m.FixProposal.Summary,
+				Status:     m.FixProposal.Status,
+				Message:    m.FixProposal.Message,
+			}
+			out[i].FixProposal.Items = convertItemsToStorage(m.FixProposal.Items)
+		}
+		if len(m.FixProposals) > 0 {
+			proposals := make([]storageif.FixProposalSnapshot, len(m.FixProposals))
+			for j, fp := range m.FixProposals {
+				proposals[j] = storageif.FixProposalSnapshot{
+					ProposalID: fp.ProposalID,
+					RuleID:     fp.RuleID,
+					FixType:    fp.FixType,
+					BlockLabel: fp.BlockLabel,
+					Line:       fp.Line,
+					Summary:    fp.Summary,
+					Status:     fp.Status,
+					Message:    fp.Message,
+				}
+				proposals[j].Items = convertItemsToStorage(fp.Items)
+			}
+			out[i].FixProposals = proposals
+		}
+	}
+	return out
+}
+
+func convertItemsToStorage(items []models.FixItemSnapshot) []storageif.FixItemSnapshot {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]storageif.FixItemSnapshot, len(items))
+	for k, it := range items {
+		out[k] = storageif.FixItemSnapshot{
+			RuleID:     it.RuleID,
+			FixType:    it.FixType,
+			BlockLabel: it.BlockLabel,
+			Line:       it.Line,
+			Summary:    it.Summary,
+			Status:     it.Status,
+			Message:    it.Message,
+		}
+	}
+	return out
+}
+
+func convertItemsToModel(items []storageif.FixItemSnapshot) []models.FixItemSnapshot {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]models.FixItemSnapshot, len(items))
+	for k, it := range items {
+		out[k] = models.FixItemSnapshot{
+			RuleID:     it.RuleID,
+			FixType:    it.FixType,
+			BlockLabel: it.BlockLabel,
+			Line:       it.Line,
+			Summary:    it.Summary,
+			Status:     it.Status,
+			Message:    it.Message,
+		}
 	}
 	return out
 }
@@ -66,6 +147,49 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 			Provider:         m.Provider,
 			Model:            m.Model,
 			FinishReason:     m.FinishReason,
+		}
+		if len(m.ToolCalls) > 0 {
+			calls := make([]models.ToolCallRecord, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				calls[j] = models.ToolCallRecord{
+					Name:       tc.Name,
+					Label:      tc.Label,
+					Ok:         tc.Ok,
+					DurationMs: tc.DurationMs,
+					Summary:    tc.Summary,
+				}
+			}
+			out[i].ToolCalls = calls
+		}
+		if m.FixProposal != nil {
+			out[i].FixProposal = &models.FixProposalSnapshot{
+				ProposalID: m.FixProposal.ProposalID,
+				RuleID:     m.FixProposal.RuleID,
+				FixType:    m.FixProposal.FixType,
+				BlockLabel: m.FixProposal.BlockLabel,
+				Line:       m.FixProposal.Line,
+				Summary:    m.FixProposal.Summary,
+				Status:     m.FixProposal.Status,
+				Message:    m.FixProposal.Message,
+			}
+			out[i].FixProposal.Items = convertItemsToModel(m.FixProposal.Items)
+		}
+		if len(m.FixProposals) > 0 {
+			proposals := make([]models.FixProposalSnapshot, len(m.FixProposals))
+			for j, fp := range m.FixProposals {
+				proposals[j] = models.FixProposalSnapshot{
+					ProposalID: fp.ProposalID,
+					RuleID:     fp.RuleID,
+					FixType:    fp.FixType,
+					BlockLabel: fp.BlockLabel,
+					Line:       fp.Line,
+					Summary:    fp.Summary,
+					Status:     fp.Status,
+					Message:    fp.Message,
+				}
+				proposals[j].Items = convertItemsToModel(fp.Items)
+			}
+			out[i].FixProposals = proposals
 		}
 	}
 	return out

@@ -172,13 +172,12 @@ func TestParseGeminiSSE_EOF_WithoutFinishReason_ReturnsTruncatedError(t *testing
 }
 
 // TestParseGeminiSSE_NonStopFinishReason_TerminalAndNotTruncation locks in
-// the behavior fix that any non-empty FinishReason (MAX_TOKENS, SAFETY,
-// RECITATION, OTHER) is treated as a clean stream end, not a truncation.
-// Previously only "STOP" was considered terminal, so a token-capped
-// response was incorrectly auto-Done'd / now would be wrongly reported as
-// truncated.
+// that any non-empty FinishReason (MAX_TOKENS, SAFETY, RECITATION, OTHER) is
+// treated as a clean stream end, not a truncation. Previously only "STOP" was
+// considered terminal, so a token-capped response was incorrectly auto-Done'd
+// / now would be wrongly reported as truncated.
 func TestParseGeminiSSE_NonStopFinishReason_TerminalAndNotTruncation(t *testing.T) {
-	cases := []string{"STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "OTHER"}
+	cases := []string{"STOP", "MAX_TOKENS", "OTHER"}
 	for _, reason := range cases {
 		t.Run(reason, func(t *testing.T) {
 			input := "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"x\"}]}, \"finishReason\": \"" + reason + "\"}]}\n\n"
@@ -193,6 +192,41 @@ func TestParseGeminiSSE_NonStopFinishReason_TerminalAndNotTruncation(t *testing.
 			}
 			if !doneSent {
 				t.Errorf("finishReason=%s: expected Done chunk", reason)
+			}
+		})
+	}
+}
+
+// TestParseGeminiSSE_FilteredFinishReason_TerminalErrorChunk refines the
+// terminal contract for content-filter finishes (SAFETY, RECITATION, …): the
+// stream is NOT a truncation (returns nil), but the terminal chunk is an
+// Error, not a Done — otherwise a blocked response looks like a clean, empty
+// success and the user gets no explanation.
+func TestParseGeminiSSE_FilteredFinishReason_TerminalErrorChunk(t *testing.T) {
+	for _, reason := range []string{"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT"} {
+		t.Run(reason, func(t *testing.T) {
+			input := "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"x\"}]}, \"finishReason\": \"" + reason + "\"}]}\n\n"
+			var gotErr error
+			var doneSent bool
+			err := parseGeminiSSE(strings.NewReader(input), func(chunk Chunk) {
+				if chunk.Error != nil {
+					gotErr = chunk.Error
+				}
+				if chunk.Done {
+					doneSent = true
+				}
+			})
+			if err != nil {
+				t.Fatalf("filtered finish must be terminal (nil stream error), got %v", err)
+			}
+			if doneSent {
+				t.Error("filtered finish must not emit a Done chunk")
+			}
+			if gotErr == nil {
+				t.Fatal("filtered finish must emit an Error chunk")
+			}
+			if !strings.Contains(gotErr.Error(), reason) {
+				t.Errorf("error chunk should name the finish reason %q, got %v", reason, gotErr)
 			}
 		})
 	}

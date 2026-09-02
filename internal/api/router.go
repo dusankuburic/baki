@@ -226,6 +226,14 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 			var claims *auth.Claims
 			if auth.IsAPIToken(tokenStr) {
 				claims = rt.verifyAPIToken(r.Context(), tokenStr)
+				// Scope enforcement (R2-1): a scoped PAT may only touch routes
+				// its capabilities allow — checked HERE, before any handler
+				// runs, so no route can accidentally skip it. Unscoped PATs
+				// (every pre-existing token) and interactive JWTs pass through.
+				if claims != nil && claims.TokenScoped() && !auth.RouteAllowed(r.Method, r.URL.Path, claims.Scopes) {
+					render.Error(w, fmt.Errorf("token is not authorized for this operation (missing scope)"), http.StatusForbidden)
+					return
+				}
 			} else if c, err := rt.security.AuthMgr.Verify(tokenStr); err == nil {
 				claims = c
 			}
@@ -235,7 +243,11 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 			}
 			r = r.WithContext(auth.WithClaims(r.Context(), claims))
 		} else {
-			if subtle.ConstantTimeCompare([]byte(tokenStr), []byte(rt.security.Token)) != 1 {
+			// B1.8: ConstantTimeCompare("","") == 1 — an empty configured
+			// token would admit anyone. Unreachable today (the auth manager
+			// backfills a random secret), but that guarantee lives in an
+			// unrelated provider; fail closed here regardless.
+			if rt.security.Token == "" || subtle.ConstantTimeCompare([]byte(tokenStr), []byte(rt.security.Token)) != 1 {
 				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
@@ -271,7 +283,7 @@ func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
 	// SrcJTI/SrcExp. Without this, the WS re-authz loop calls IsRevoked("") (always
 	// false) and never arms the expiry timer — a revoked/expired PAT's live socket
 	// would stay open indefinitely.
-	return auth.ClaimsForPAT(user.ID, user.Email, user.Role, tok.ID, tok.ExpiresAt)
+	return auth.ClaimsForPAT(user.ID, user.Email, user.Role, tok.ID, tok.ExpiresAt, tok.Scopes)
 }
 
 // --- WebSocket handler ---

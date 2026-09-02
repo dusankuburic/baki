@@ -176,3 +176,26 @@ describe('theme registry ↔ CSS cross-check', () => {
     }
   })
 })
+
+// ---- Semantic tone tokens (U2) --------------------------------------------
+// Findings/chat/admin tones ride --error/--warning/--info/--success via
+// lib/severityTone. Every theme (root + overrides) must define all four, or
+// a themed surface silently falls back to an inherited (wrong-palette) tone.
+
+describe('semantic tone tokens per theme', () => {
+  const TONE_TOKENS = ['--error', '--warning', '--info', '--success'] as const
+
+  it(':root defines all tone tokens', () => {
+    for (const tok of TONE_TOKENS) {
+      expect(allThemes[':root']?.[tok] ?? root[tok], `root missing ${tok}`).toBeTruthy()
+    }
+  })
+
+  it('every theme defines all tone tokens (no inherited-wrong-palette fallback)', () => {
+    for (const [id, tokens] of Object.entries(perTheme)) {
+      for (const tok of TONE_TOKENS) {
+        expect(tokens[tok], `theme "${id}" missing ${tok}`).toBeTruthy()
+      }
+    }
+  })
+})

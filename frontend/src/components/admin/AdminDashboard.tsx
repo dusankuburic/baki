@@ -7,6 +7,7 @@ import {useAdminData} from './useAdminData'
 import {UserManagementSection} from './UserManagementSection'
 import {DataMigrationSection} from './DataMigrationSection'
 import {AuditLogSection} from './AuditLogSection'
+import {OperationsSection} from './OperationsSection'
 
 function StatCard({
   icon: Icon,
@@ -94,6 +95,7 @@ export const AdminDashboard: React.FC = () => {
         isStarting={isStarting}
         onStart={startMigration}
       />
+      <OperationsSection visible />
       <AuditLogSection events={auditEvents} action={auditAction} onFilterChange={filterAudit} />
 
       {error && (

@@ -35,16 +35,23 @@ describe('MessageBubble — interrupted state', () => {
 
 describe('MessageBubble — chat→app navigation', () => {
   it('navigates to the matching subflow when a mention pill is clicked', () => {
+    // F1-followup: patch INDIVIDUAL actions on the REAL stores (not a
+    // full-store getState mock that silently keeps passing when the
+    // component starts reading other state).
     const navigateToSourceFile = vi.fn(() => true)
     const setMainPaneView = vi.fn()
-    vi.spyOn(useFlowStore, 'getState').mockReturnValue({navigateToSourceFile} as never)
-    vi.spyOn(useUIStore, 'getState').mockReturnValue({setMainPaneView} as never)
+    const prevFlow = useFlowStore.getState()
+    const prevUI = useUIStore.getState()
+    useFlowStore.setState({navigateToSourceFile} as never)
+    useUIStore.setState({setMainPaneView} as never)
 
     render(<MessageBubble message={msg({role: 'user', content: 'look at @Login.txt please'})} />)
     fireEvent.click(screen.getByRole('button', {name: /Go to Login.txt/}))
 
     expect(navigateToSourceFile).toHaveBeenCalledWith('Login.txt')
     expect(setMainPaneView).toHaveBeenCalledWith('graph')
+    useFlowStore.setState({navigateToSourceFile: prevFlow.navigateToSourceFile} as never)
+    useUIStore.setState({setMainPaneView: prevUI.setMainPaneView} as never)
   })
 
   it('intercepts a block: markdown link and jumps to the block instead of navigating', () => {

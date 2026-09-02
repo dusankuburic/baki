@@ -28,6 +28,20 @@ func NewAuthzService(storage storageif.StorageBackend, orgSvc *collaboration.Org
 	return &AuthzService{storage: storage, orgSvc: orgSvc}
 }
 
+// isInstanceAdmin reports whether userID holds the platform-level admin
+// role (auth.RoleAdmin). Lookup failures deny: authz on the ownerless path
+// fails closed.
+func (a *AuthzService) isInstanceAdmin(ctx context.Context, userID string) bool {
+	if a.storage == nil || userID == "" {
+		return false
+	}
+	u, err := a.storage.LoadUserByID(ctx, userID)
+	if err != nil || u == nil {
+		return false
+	}
+	return u.Role == auth.RoleAdmin
+}
+
 // CheckFlowAccess reports whether userID has at least minPerm access to the
 // flow identified by flowID with the given owner/org. minPerm is "viewer",
 // "editor", or "admin". Returns nil when allowed, ErrPermissionDenied otherwise.
@@ -49,9 +63,14 @@ func (a *AuthzService) CheckFlowAccess(ctx context.Context, flowID, ownerID, org
 		return ErrPermissionDenied
 	}
 
-	// Ownerless legacy flows: read-only for everyone.
+	// Ownerless legacy flows (pre-dating per-user ownership; the padcloud
+	// ingester mints them when PAD_PP_OWNER_USER is unset): readable by
+	// INSTANCE ADMINS only. They used to be world-readable to every tenant —
+	// any registered user could enumerate another org's ingested flow content
+	// by UUID. Admins keep triage access; a regular user gets a denial
+	// (fail-closed). Assigning an owner restores normal sharing semantics.
 	if ownerID == "" {
-		if need <= permRank("viewer") {
+		if need <= permRank("viewer") && a.isInstanceAdmin(ctx, userID) {
 			return nil
 		}
 		return ErrPermissionDenied

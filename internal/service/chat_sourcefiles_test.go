@@ -12,19 +12,43 @@ import (
 )
 
 // TestSourceFilesFingerprint verifies the cache-key fragment is order-stable
-// (so a re-ordering of the same selection still hits) and empty when nothing is
-// selected.
+// (so a re-ordering of the same selection still hits), empty when nothing is
+// selected, and content-sensitive: a file edited on disk (no flow reload)
+// changes the key — names alone under-keyed the cache.
 func TestSourceFilesFingerprint(t *testing.T) {
-	if got := sourceFilesFingerprint(nil); got != "" {
+	dir := t.TempDir()
+	if got := sourceFilesFingerprint(dir, nil); got != "" {
 		t.Errorf("nil files fingerprint = %q, want empty", got)
 	}
-	a := sourceFilesFingerprint([]string{"b.txt", "a.txt"})
-	b := sourceFilesFingerprint([]string{"a.txt", "b.txt"})
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := sourceFilesFingerprint(dir, []string{"b.txt", "a.txt"})
+	b := sourceFilesFingerprint(dir, []string{"a.txt", "b.txt"})
 	if a != b {
 		t.Errorf("fingerprint not order-stable: %q vs %q", a, b)
 	}
 	if !strings.Contains(a, "a.txt") || !strings.Contains(a, "b.txt") {
 		t.Errorf("fingerprint missing names: %q", a)
+	}
+
+	// H8: same names, different content → different fingerprint.
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := sourceFilesFingerprint(dir, []string{"a.txt", "b.txt"})
+	if c == b {
+		t.Errorf("on-disk edit did not change the fingerprint: %q", c)
+	}
+
+	// Unreadable/missing files degrade to the bare name (the context read
+	// will skip them anyway).
+	ghost := sourceFilesFingerprint(dir, []string{"missing.txt"})
+	if ghost != "missing.txt" {
+		t.Errorf("missing file should fingerprint to its bare name, got %q", ghost)
 	}
 }
 

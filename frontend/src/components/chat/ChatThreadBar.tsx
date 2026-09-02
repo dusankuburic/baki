@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import {Plus, X, MessageSquare} from 'lucide-react'
+import {Plus, X, MessageSquare, Wrench, CircleCheck} from 'lucide-react'
 import {useState, useRef, useEffect, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import type {ChatThread} from '@/stores/chatStore'
@@ -142,6 +142,13 @@ function ThreadTab({
       {isStreaming && (
         <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" title="Generating…" />
       )}
+      {/* Agentic badges: which conversations ran tools / landed approved
+          fixes. aria-labels carry the meaning; the glyphs are decorative. */}
+      {thread.appliedFixes ? (
+        <CircleCheck size={10} className="shrink-0 text-semantic-success/80" aria-label="Fixes applied in this thread" role="img" />
+      ) : thread.usedTools ? (
+        <Wrench size={10} className="shrink-0 text-text-tertiary/70" aria-label="Tools used in this thread" role="img" />
+      ) : null}
       {editing ? (
         <input
           ref={inputRef}

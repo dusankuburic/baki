@@ -1,5 +1,5 @@
 import {useState, useCallback, useRef} from 'react'
-import {FolderOpen, ChevronDown, Loader2} from 'lucide-react'
+import {FolderOpen, ChevronDown, FilePlus, Loader2} from 'lucide-react'
 import clsx from 'clsx'
 import Tooltip from '@/components/shared/Tooltip'
 import RecentFilesMenu from './RecentFilesMenu'
@@ -9,6 +9,7 @@ type FileHeaderProps = {
   document: FlowDocument | null
   recentFiles: RecentFile[]
   isLoading?: boolean
+  onNewFlow?: () => void
   onOpenFile: () => void
   onOpenFolder: () => void
   onLoadRecent: (path: string) => void
@@ -20,6 +21,7 @@ export default function FileHeader({
   document,
   recentFiles,
   isLoading = false,
+  onNewFlow,
   onOpenFile,
   onOpenFolder,
   onLoadRecent,
@@ -42,6 +44,17 @@ export default function FileHeader({
   if (!document) {
     return (
       <div className="flex items-center h-12 px-3 border-b border-border-subtle gap-2">
+        {onNewFlow && (
+          <button
+            onClick={onNewFlow}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 h-8 px-3 text-sm font-medium text-text-secondary bg-surface-3 border border-border-default rounded-md hover:bg-surface-4 transition-colors duration-fast disabled:opacity-50 disabled:cursor-wait shrink-0"
+            title="Create a blank flow and build it in-app"
+          >
+            <FilePlus size={14} />
+            <span>New</span>
+          </button>
+        )}
         <button
           onClick={onOpenFile}
           disabled={isLoading}

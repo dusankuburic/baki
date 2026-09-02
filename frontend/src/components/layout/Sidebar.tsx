@@ -1,5 +1,4 @@
 import {useCallback, useMemo} from 'react'
-import clsx from 'clsx'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import {FolderOpen, FolderTree, BarChart2, Library} from 'lucide-react'
 import Button from '@/components/shared/Button'
@@ -15,6 +14,7 @@ import {useFlowStore, ALL_TYPES} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {useToast} from '@/components/shared/Toast'
+import {Tabs} from '@/components/shared'
 import {useFileOpen} from '@/components/sidebar/hooks/useFileOpen'
 import {useSidebarSearch} from '@/components/sidebar/hooks/useSidebarSearch'
 import {analysisApi} from '@/api'
@@ -56,6 +56,7 @@ export default function Sidebar() {
   const {
     recentFiles,
     isLoading,
+    handleNewFlow,
     handleOpenFile,
     handleOpenFolder,
     handleSelectFolderFile,
@@ -197,6 +198,7 @@ export default function Sidebar() {
         document={document}
         recentFiles={recentFiles}
         isLoading={isLoading}
+        onNewFlow={handleNewFlow}
         onOpenFile={handleOpenFile}
         onOpenFolder={handleOpenFolder}
         onLoadRecent={handleLoadRecent}
@@ -215,30 +217,20 @@ export default function Sidebar() {
         />
       )}
 
-      <div className="flex items-center h-10 px-2 gap-1 border-b border-border-default bg-surface-1">
-        {[
+      <Tabs
+        items={[
           {value: 'explorer' as const, label: 'Explorer', icon: FolderTree},
           {value: 'variables' as const, label: 'Variables', icon: BarChart2},
           {value: 'library' as const, label: 'Library', icon: Library},
-        ].map(({value, label, icon: Icon}) => (
-          <button
-            key={value}
-            className={clsx(
-              'flex-1 flex items-center justify-center gap-1.5 h-7 px-2 text-xs font-medium',
-              'rounded-md transition-colors duration-fast',
-              'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-none',
-              sidebarTab === value
-                ? 'bg-surface-3 text-text-primary shadow-xs'
-                : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-2',
-            )}
-            onClick={() => setSidebarTab(value)}
-          >
-            <Icon size={13} />
-            {label}
-          </button>
-        ))}
-      </div>
+        ]}
+        value={sidebarTab}
+        onChange={setSidebarTab}
+        aria-label="Sidebar sections"
+        panelIdPrefix="sidebar-panel"
+        className="h-10 px-2 border-b border-border-default bg-surface-1"
+      />
 
+      <div id={`sidebar-panel-${sidebarTab}`} role="tabpanel" aria-label="Sidebar panel" className="flex-1 min-h-0 flex flex-col">
       {sidebarTab === 'explorer' ? (
         <>
           <SearchBar
@@ -308,6 +300,8 @@ export default function Sidebar() {
       ) : (
         <LibraryTab />
       )}
+      </div>
+
 
       <SidebarToolbar hasFlow={!!document} isAnalyzing={isAnalyzing} onAnalyze={handleAnalyze} />
     </div>

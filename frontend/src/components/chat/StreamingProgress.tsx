@@ -31,14 +31,26 @@ export default function StreamingProgress() {
   if (!isStreaming || tokens === 0) return null
 
   return (
-    <div className="px-3 pb-2 flex items-center gap-2">
+    <div
+      className="px-3 pb-2 flex items-center gap-2"
+      role="status"
+      aria-label={`Generating answer — ${formatCompact(tokens)} output tokens so far`}
+    >
       <div className="flex-1 h-0.5 bg-surface-3 rounded-full overflow-hidden">
         <div
           className="h-full w-1/3 bg-gradient-to-r from-brand-500 to-brand-400 animate-pulse"
           style={{backgroundSize: '200% 100%'}}
         />
       </div>
-      <span className="text-2xs text-text-tertiary tabular-nums">{formatCompact(tokens)} tokens</span>
+      {/* "so far" + tooltip: the live count tracks streamed OUTPUT only —
+          tool-loop input tokens land on the final totals when the stream
+          completes. Without the label the mid-stream number read as final. */}
+      <span
+        className="text-2xs text-text-tertiary tabular-nums"
+        title="Counts output tokens as they stream; full input/output totals appear when the response completes."
+      >
+        {formatCompact(tokens)} tokens so far
+      </span>
     </div>
   )
 }

@@ -79,25 +79,45 @@ func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, histo
 // LoadCustomRules loads user-defined rules from a JSON file (see
 // core/analyzer/custom_rules.go for the format). Called once at construction;
 // custom rules are folded into every subsequent analysis run alongside the
-// built-in rules. Invalid rules in the file are silently skipped (by
-// LoadCustomRules); a missing file is a no-op.
+// built-in rules. Invalid entries are skipped with a startup WARNING each (a
+// silent skip used to leave operators believing a typo'd rule was enforcing);
+// a missing file is a no-op.
 func (s *AnalysisService) LoadCustomRules(path string) {
 	if path == "" {
 		return
 	}
-	custom, err := analyzer.LoadCustomRules(path)
+	custom, warnings, err := analyzer.LoadCustomRules(path)
 	if err != nil {
 		// Don't fail boot — log and continue with built-in rules only.
 		fmt.Printf("analysis service: custom rules load failed: %v\n", err)
 		return
 	}
+	for _, w := range warnings {
+		logger.Warn("custom rule skipped", "file", path, "detail", w)
+	}
 	s.customRules = custom
 }
 
 func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (report *models.AnalysisReport, err error) {
+	return s.analyzeFlow(ctx, doc, true)
+}
+
+// AnalyzeFlowReadOnly analyzes WITHOUT recording into the report-history pair
+// or the trend store, and without progress events or run metrics. The chat
+// tool loop runs it against its working copy of the document (and against the
+// real doc for fix tools) — those internal analyses used to overwrite
+// CurrentReport / the diff pair (same StableFlowID for scrubbed clones) and
+// flash the UI's analysis progress bar mid-chat.
+func (s *AnalysisService) AnalyzeFlowReadOnly(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+	return s.analyzeFlow(ctx, doc, false)
+}
+
+func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocument, record bool) (report *models.AnalysisReport, err error) {
 	defer logger.Guard("App.AnalyzeFlow", &err)
 
-	metrics.RecordAnalysisRun()
+	if record {
+		metrics.RecordAnalysisRun()
+	}
 
 	// Trace the analysis run so its (potentially long, CPU-bound) duration is
 	// attributable within the request trace. No-op when no OTLP exporter is
@@ -123,13 +143,17 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 		userID = claims.UserID
 	}
 
-	result := analyzer.CachedAnalysisCtx(ctx, doc, rules, settings, func(current, total int, ruleName string) {
-		s.notifier.EmitTo(userID, "analysis:progress", map[string]any{
-			"current":  current,
-			"total":    total,
-			"ruleName": ruleName,
-		})
-	})
+	onProgress := func(current, total int, ruleName string) {}
+	if record {
+		onProgress = func(current, total int, ruleName string) {
+			s.notifier.EmitTo(userID, "analysis:progress", map[string]any{
+				"current":  current,
+				"total":    total,
+				"ruleName": ruleName,
+			})
+		}
+	}
+	result := analyzer.CachedAnalysisCtx(ctx, doc, rules, settings, onProgress)
 	// CachedAnalysis never returns nil today, but a future hash-miss / edge case
 	// could; fail gracefully instead of letting a nil result panic the API
 	// process when the downstream code dereferences it (span attrs, history,
@@ -153,23 +177,26 @@ func (s *AnalysisService) AnalyzeFlow(ctx context.Context, doc *models.FlowDocum
 	)
 
 	// Track the two most recent distinct runs for diffing, and record a trend
-	// snapshot. Pointer identity detects freshness: cache hits return the same
+	// snapshot — recording runs only (see AnalyzeFlowReadOnly). Pointer
+	// identity detects freshness: cache hits return the same
 	// *AnalysisReport, so repeated analyzes of unchanged content are no-ops.
-	key := analysisHistoryKey(doc)
-	s.mu.Lock()
-	pair, ok := s.reports.Get(key)
-	if !ok {
-		pair = &reportPair{}
-		s.reports.Add(key, pair)
-	}
-	fresh := pair.current != result
-	if fresh {
-		pair.prev = pair.current
-		pair.current = result
-	}
-	s.mu.Unlock()
-	if fresh && s.history != nil {
-		s.history.Record(key, result, doc)
+	if record {
+		key := analysisHistoryKey(doc)
+		s.mu.Lock()
+		pair, ok := s.reports.Get(key)
+		if !ok {
+			pair = &reportPair{}
+			s.reports.Add(key, pair)
+		}
+		fresh := pair.current != result
+		if fresh {
+			pair.prev = pair.current
+			pair.current = result
+		}
+		s.mu.Unlock()
+		if fresh && s.history != nil {
+			s.history.Record(key, result, doc)
+		}
 	}
 
 	// NOTE: we intentionally do NOT broadcast the full report over SSE here.

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"golang.org/x/sync/errgroup"
 	"math"
 	"sort"
 	"sync"
@@ -203,9 +204,34 @@ func (s *DashboardService) InvalidateDashboardCache(userID string) {
 
 func (s *DashboardService) buildCloud(ctx context.Context, userID string) *models.DashboardHomeData {
 	out := emptyHome()
-	data, err := s.backend.FlowDashboardData(ctx, userID, dashboardTokenDays)
-	if err != nil {
-		logger.Warn("dashboard: build cloud data failed", "userId", userID, "err", err)
+	// B1.5: the base and advanced queries are independent — run them
+	// concurrently (16 sequential round-trips used to gate every cold
+	// dashboard load).
+	var (
+		data *storageif.DashboardData
+		adv  *storageif.DashboardAdvancedData
+	)
+	var dataErr, advErr error
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		data, dataErr = s.backend.FlowDashboardData(gctx, userID, dashboardTokenDays)
+		return dataErr
+	})
+	g.Go(func() error {
+		adv, advErr = s.backend.FlowDashboardAdvanced(gctx, userID, 30)
+		return advErr
+	})
+	_ = g.Wait()
+	// Best-effort halves (parity with the old sequential behavior): the base
+	// sections render when the base fetch made it, advanced appended when its
+	// fetch made it; each failure logs and leaves its half empty.
+	if dataErr != nil {
+		logger.Warn("dashboard: build cloud data failed", "userId", userID, "err", dataErr)
+	}
+	if advErr != nil {
+		logger.Warn("dashboard: advanced data failed", "userId", userID, "err", advErr)
+	}
+	if data == nil {
 		return out
 	}
 	out.Overview = models.DashboardOverview{
@@ -235,12 +261,6 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 		})
 	}
 
-	// Advanced sections (best-effort; a failure logs and leaves empty slices).
-	adv, err := s.backend.FlowDashboardAdvanced(ctx, userID, 30)
-	if err != nil {
-		logger.Warn("dashboard: advanced data failed", "userId", userID, "err", err)
-		return out
-	}
 	for _, h := range adv.HealthTrend {
 		out.HealthTrend = append(out.HealthTrend, models.DailyHealthPoint{
 			Date: h.Date, AvgHealth: h.AvgHealth, FlowCount: h.FlowCount,

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"testing"
 
 	"pad-analyzer/internal/auth"
@@ -94,17 +96,31 @@ func TestHandleLibraryDelete_NonOwnerForbidden(t *testing.T) {
 
 func TestHandleLibraryGet_SharedFlowVisibleToNonOwner(t *testing.T) {
 	rt, seed := newLibraryTestRouter(t)
-	// Seeding with empty OwnerID makes the flow visible to everyone (legacy compatibility).
+	// B1c: ownerless flows are INSTANCE-ADMIN-only (they used to be visible
+	// to every tenant — ingested content leakable by UUID enumeration).
 	seed("flow-public", "")
 	bearer := jwtBearer(t, rt, "bob", "bob@example.com")
 
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library/flow-public", bearer, nil)
-	// Empty OwnerID means the ownership check is skipped (doc.OwnerID == "").
+	checkStatus(t, rr, http.StatusForbidden)
+
+	// The instance admin retains triage access (role lives on the USER
+	// record — the authz lookup reads storage, not just JWT claims).
+	if rt.security.Backend == nil {
+		t.Fatal("library router has no backend")
+	}
+	if err := rt.security.Backend.CreateUser(context.Background(), &storageif.User{
+		ID: "root", Email: "root@example.com", Role: auth.RoleAdmin,
+	}); err != nil {
+		t.Fatalf("seed admin user: %v", err)
+	}
+	admin := jwtBearer(t, rt, "root", "root@example.com")
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/library/flow-public", admin, nil)
 	checkStatus(t, rr, http.StatusOK)
 	var resp map[string]any
 	decodeJSON(t, rr, &resp)
 	if resp["isSharedWithMe"] != true {
-		t.Errorf("expected isSharedWithMe=true for non-owner, got %v", resp["isSharedWithMe"])
+		t.Errorf("expected isSharedWithMe=true for admin on ownerless flow, got %v", resp["isSharedWithMe"])
 	}
 }
 

@@ -316,6 +316,9 @@ export default function ConnectionPanel({
                       <div className="text-2xs text-text-tertiary">
                         {m.contextLimit / 1000}k context
                         {m.inputCostPerM > 0 && ` · $${m.inputCostPerM}/$${m.outputCostPerM} per 1M`}
+                        {m.supportsTools === false && (
+                          <span title="This provider runs tools through a slower text-marker protocol"> · no native tools</span>
+                        )}
                       </div>
                     </div>
                     {m.id === selectedModel && <Check size={13} className="text-brand-400 shrink-0" />}

@@ -11,12 +11,65 @@ import (
 	"pad-analyzer/internal/ai"
 )
 
+// journalEvent is one recorded agentic stream event (tool / tool_result /
+// fix_proposal / fix_decision) kept for reconnect replay: the resume buffer
+// only carries scrubbed text, so a client that drops mid-stream and resumes
+// used to lose its tool trail entirely — and a fix_proposal emitted while
+// disconnected orphaned the approval card into a guaranteed 60s timeout.
+type journalEvent struct {
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"`
+}
+
+// journaledEventTypes are the emit types recorded to the journal. chunk is
+// excluded (the resume buffer already carries the text); done/error are
+// excluded (ResumeResult carries them as fields).
+var journaledEventTypes = map[string]bool{
+	"tool":         true,
+	"tool_result":  true,
+	"fix_proposal": true,
+	"fix_decision": true,
+}
+
+// maxJournalEvents bounds the journal. Tool loops produce a handful of events
+// per iteration (cap 6 iterations); batch fixes add one event per batch, not
+// per item. 100 covers every realistic stream; when exceeded, the OLDEST
+// entries drop (recent events matter most for replay).
+const maxJournalEvents = 100
+
+// recordJournal appends an event when its type is journaled. Called on the
+// stream's base emit path, under the ctl mutex (same lock as the buffer —
+// emits and snapshots serialize).
+func (c *streamCtl) recordJournal(eventType string, data map[string]interface{}) {
+	if !journaledEventTypes[eventType] {
+		return
+	}
+	if len(c.journal) >= maxJournalEvents {
+		// Drop half the oldest entries amortized-O(1) rather than one per hit.
+		c.journal = c.journal[maxJournalEvents/2:]
+	}
+	c.journal = append(c.journal, journalEvent{Type: eventType, Data: data})
+}
+
+// snapshotEvents returns a copy of the journal for inclusion in a snapshot or
+// ResumeResult (callers must not alias the live slice).
+func (c *streamCtl) snapshotEvents() []journalEvent {
+	if len(c.journal) == 0 {
+		return nil
+	}
+	out := make([]journalEvent, len(c.journal))
+	copy(out, c.journal)
+	return out
+}
+
 // streamCtl holds the mutable, concurrency-safe state of one in-flight chat
 // stream: the accumulated (scrubbed) output buffer, terminal status, and the
 // cancellation plumbing shared between the stream worker goroutine, the
 // watchdog, and any client-facing begin/cancel/resume call.
 type streamCtl struct {
 	cancel context.CancelFunc
+	// streamID addresses this stream's events (journal replay, emit envelopes).
+	streamID string
 	// started is closed (once) by BeginStream so every waiter — the emit gate
 	// and the subscriber watchdog — unblocks together.
 	started   chan struct{}
@@ -35,6 +88,9 @@ type streamCtl struct {
 	// lastActivity is the UnixNano of the most recent provider chunk (any
 	// kind, before scrub holdback), read by the idle check in watchStream.
 	lastActivity atomic.Int64
+	// journal records agentic events (tool/tool_result/fix_proposal/
+	// fix_decision) for replay on reconnect; guarded by mu. See journalEvent.
+	journal []journalEvent
 }
 
 // touch records provider activity for the idle timeout.
@@ -71,8 +127,10 @@ func (c *streamCtl) markDone(tokensIn, tokensOut int) {
 }
 
 // failureMessage returns the client-facing message for a stream error. A
-// deliberate cancellation surfaces its stored reason, and the stream-duration
-// timeout gets a readable message — everything else is the error as-is.
+// deliberate cancellation surfaces its stored reason, the stream-duration
+// timeout gets a readable message, and the common provider sentinels map to
+// actionable copy — a raw "rate limited" or "provider circuit open: too many
+// recent failures" told the user nothing they could act on.
 func (c *streamCtl) failureMessage(ctx context.Context, err error) string {
 	c.mu.Lock()
 	reason := c.cancelReason
@@ -85,10 +143,34 @@ func (c *streamCtl) failureMessage(ctx context.Context, err error) string {
 			return "response stopped: maximum response time reached"
 		}
 	}
-	if errors.Is(err, ai.ErrContextLimit) {
+	switch {
+	case errors.Is(err, ai.ErrContextLimit):
 		return "conversation is too long for this model's context window — start a new conversation or remove some history"
+	case errors.Is(err, ai.ErrRateLimited):
+		return "the AI provider is rate-limiting requests — wait a moment and try again"
+	case errors.Is(err, ai.ErrCircuitOpen):
+		return "the AI provider is temporarily unavailable after repeated failures — wait a moment and try again"
+	case errors.Is(err, ai.ErrProviderDown):
+		return "the AI provider is temporarily unavailable — try again shortly"
+	case errors.Is(err, ai.ErrInsufficientBalance):
+		return "the AI provider account has insufficient balance — add credits or switch providers"
+	case errors.Is(err, ai.ErrApiKeyInvalid):
+		return "the API key for this provider is invalid — check it in Settings → AI Providers"
+	case isStreamTruncation(err):
+		return "the response was interrupted before it finished — try again"
 	}
 	return err.Error()
+}
+
+// isStreamTruncation matches the stream-helpers' truncation/malformed errors
+// (they're fmt-wrapped per provider, so match on the message shape).
+func isStreamTruncation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "truncated before terminal marker") ||
+		strings.Contains(msg, "undecodable event(s) and no terminal marker")
 }
 
 // snapshot captures the stream's resumable state under lock, for mirroring to
@@ -103,5 +185,6 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 		Error:     c.errMsg,
 		TokensIn:  c.tokensIn,
 		TokensOut: c.tokensOut,
+		Events:    c.snapshotEvents(),
 	}
 }

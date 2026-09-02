@@ -14,6 +14,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Least privilege (H1): the distroless image already runs as non-root;
+    # drop every Linux capability (the Go binary needs none) and forbid
+    # setuid/setgid escalations.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       # The distroless image has no shell/wget, so probe via the binary's own
       # healthcheck subcommand (GETs /readyz, exits 0/1).
@@ -34,6 +39,9 @@ services:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # no-new-privileges only: the entrypoint's root bootstrap (chown on the
+    # data dir) still needs capabilities, so cap_drop stays off for db.
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s

@@ -41,9 +41,16 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 	// Capture email + owned flow IDs before deleting: org_invites is keyed by
 	// email (not user_id), and owned flows' blob content must be cleaned up.
 	var email string
-	_ = tx.QueryRowContext(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email)
+	if err := tx.QueryRowContext(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email); err != nil {
+		// B1.8: a transient scan error used to silently skip the
+		// org_invites cleanup keyed by email — a gap in an audited GDPR flow.
+		return fmt.Errorf("erasure: read user email: %w", err)
+	}
 
-	ownedFlowIDs, _ := rowsOfStrings(ctx, tx, `SELECT id FROM flows WHERE owner_id = $1`, userID)
+	ownedFlowIDs, err := rowsOfStrings(ctx, tx, `SELECT id FROM flows WHERE owner_id = $1`, userID)
+	if err != nil {
+		return fmt.Errorf("erasure: list owned flows: %w", err)
+	}
 
 	// Owned flows: ON DELETE CASCADE removes their versions, analysis history,
 	// triage, baselines, conversations and collaborator rows.

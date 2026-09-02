@@ -23,15 +23,16 @@ type PromptToolCall struct {
 var toolCallRe = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
 
 // ToolPromptInstructions returns the system-prompt text that teaches a
-// function-calling-less model how to invoke the read-only grounding tools. It
-// lists each tool and the exact marker format the parser expects. Append this to
-// the system prompt when running the prompt-based tool loop (runPromptToolLoop).
+// function-calling-less model how to invoke the grounding tools. It lists each
+// tool and the exact marker format the parser expects. Append this to the
+// system prompt when running the prompt-based tool loop (runPromptToolLoop).
 func ToolPromptInstructions() string {
 	var b strings.Builder
-	b.WriteString("You have access to read-only tools to inspect the currently open flow. ")
+	b.WriteString("You have access to tools to inspect the currently open flow (and, for apply_fix, to request a user-approved fix). ")
 	b.WriteString("To call a tool, output exactly one block on its own in this format:\n")
 	b.WriteString("<tool_call>\n{\"name\": \"<tool_name>\", \"input\": {<args as JSON>}}\n</tool_call>\n")
-	b.WriteString("After you emit a tool_call block, the tool runs and its result is returned to you. ")
+	b.WriteString("After you emit a tool_call block, the tool runs and its result comes back to you as the next user message, in the form:\n")
+	b.WriteString("<tool_result name=\"<tool_name>\">\n<result text>\n</tool_result>\n")
 	b.WriteString("When you have enough information for your final answer, respond normally WITHOUT any tool_call block.\n\n")
 	b.WriteString("Available tools:\n")
 	for _, td := range ToolDefinitions() {

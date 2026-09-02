@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {RefreshCw, ChevronLeft} from 'lucide-react'
 import {libraryApi, type LibraryFlow} from '@/api/library'
+import {flowApi} from '@/api/flow'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useUIStore} from '@/stores/uiStore'
@@ -8,6 +9,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {Button, useToast, useConfirm} from '@/components/shared'
 import type {FlowDocument, PagedResponse} from '@/types'
 import {logger} from '@/lib/logger'
+import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
 import LibraryFilterRail from './LibraryFilterRail'
 import LibraryToolbar from './LibraryToolbar'
 import LibraryGrid from './LibraryGrid'
@@ -41,7 +43,7 @@ export default function LibraryWorkspace() {
   const orgs = useOrgStore(s => s.organisations)
   const loadOrgs = useOrgStore(s => s.loadOrgs)
   const toast = useToast()
-  const {confirm} = useConfirm()
+  const {confirm, prompt} = useConfirm()
 
   const [items, setItems] = useState<LibraryFlow[]>([])
   const [total, setTotal] = useState(0)
@@ -49,8 +51,9 @@ export default function LibraryWorkspace() {
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState(query)
+  const [openingId, setOpeningId] = useState<string | null>(null)
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query.trim()), 250)
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [query])
 
@@ -126,13 +129,18 @@ export default function LibraryWorkspace() {
 
   const handleOpen = useCallback(
     async (flow: LibraryFlow) => {
+      // Per-card loading (U4.5): the clicked card shows a spinner while the
+      // content fetch runs — the click used to feel ignored.
+      setOpeningId(flow.id)
       try {
         const doc = await libraryApi.getContent(flow.id)
         setDocument(doc as FlowDocument)
-        useFlowStore.setState({libraryFlowId: flow.id, libraryVersion: flow.version})
+        useFlowStore.setState({libraryFlowId: flow.id, libraryVersion: flow.version, readOnly: !flow.canEdit})
         setMainPaneView('block')
       } catch (e) {
         toast.error('Failed to load flow', {description: e instanceof Error ? e.message : String(e)})
+      } finally {
+        setOpeningId(null)
       }
     },
     [setDocument, setMainPaneView, toast],
@@ -158,6 +166,64 @@ export default function LibraryWorkspace() {
       }
     },
     [selectedFlowId, setSelectedFlow, toast, confirm],
+  )
+
+  // R0-4: rename a library flow. The backend's update endpoint always
+  // accepted {name}; no UI ever sent it — renaming meant delete + re-upload.
+  const handleRename = useCallback(
+    async (flow: LibraryFlow) => {
+      const name = await prompt({
+        title: 'Rename flow',
+        label: 'Flow name',
+        initialValue: flow.name,
+        placeholder: 'Enter a new name',
+        confirmLabel: 'Rename',
+      })
+      if (!name?.trim() || name.trim() === flow.name) return
+      try {
+        const updated = await libraryApi.update(flow.id, {name: name.trim(), version: flow.version})
+        setItems(prev => prev.map(f => (f.id === flow.id ? updated : f)))
+        toast.success('Flow renamed')
+      } catch (e) {
+        toast.error('Failed to rename', {description: e instanceof Error ? e.message : String(e)})
+      }
+    },
+    [toast, prompt],
+  )
+
+  // R0-4: duplicate = load content, save as "<name> (copy)" (same org).
+  const handleDuplicate = useCallback(
+    async (flow: LibraryFlow) => {
+      try {
+        const content = await libraryApi.getContent(flow.id)
+        const created = await libraryApi.create({
+          name: `${flow.name} (copy)`,
+          orgId: flow.organizationId ?? undefined,
+          content,
+        })
+        setItems(prev => [created, ...prev])
+        setTotal(t => t + 1)
+        toast.success(`Duplicated as "${created.name}"`)
+      } catch (e) {
+        toast.error('Failed to duplicate', {description: e instanceof Error ? e.message : String(e)})
+      }
+    },
+    [toast],
+  )
+
+  // Tag editor state (R2-4b): inline chip editing in the detail panel.
+  const [editingTags, setEditingTags] = useState(false)
+  const handleSaveTags = useCallback(
+    async (flow: LibraryFlow, tags: string[]) => {
+      try {
+        const res = await flowApi.setTags(flow.id, tags)
+        setItems(prev => prev.map(f => (f.id === flow.id ? {...f, tags: res?.tags ?? []} : f)))
+        toast.success('Tags updated')
+      } catch (e) {
+        toast.error('Failed to update tags', {description: e instanceof Error ? e.message : String(e)})
+      }
+    },
+    [toast],
   )
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -208,6 +274,7 @@ export default function LibraryWorkspace() {
               />
             ) : view === 'grid' ? (
               <LibraryGrid
+                openingId={openingId}
                 items={items}
                 selectedId={selectedFlowId}
                 onSelect={f => setSelectedFlow(f.id)}
@@ -215,6 +282,7 @@ export default function LibraryWorkspace() {
               />
             ) : (
               <LibraryList
+              openingId={openingId}
                 items={items}
                 selectedId={selectedFlowId}
                 onSelect={f => setSelectedFlow(f.id)}
@@ -235,6 +303,11 @@ export default function LibraryWorkspace() {
             flowId={selectedFlowId}
             onOpen={handleOpen}
             onDelete={handleDelete}
+            onRename={handleRename}
+            onDuplicate={handleDuplicate}
+            onSaveTags={handleSaveTags}
+            editingTags={editingTags}
+            setEditingTags={setEditingTags}
             onClose={() => setSelectedFlow(null)}
           />
         </aside>

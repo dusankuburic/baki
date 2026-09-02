@@ -75,6 +75,22 @@ export default function ChatHelpPopover({onClose}: Props) {
               ))}
             </ul>
           </div>
+
+          <div>
+            <p className="text-2xs font-semibold uppercase tracking-wider text-text-tertiary mb-2">AI tools &amp; fixes</p>
+            <ul className="space-y-1.5 text-xs text-text-tertiary">
+              <li>
+                <span className="text-text-secondary font-medium">Tools toggle</span> — when on, the assistant can look
+                up flow details (findings, blocks, source) on demand. Each finished lookup shows in the message's tool
+                trail after it completes.
+              </li>
+              <li>
+                <span className="text-text-secondary font-medium">Fix approval</span> — when the assistant proposes a
+                source fix, an approval card appears. Nothing is written until you click <em>Approve &amp; apply</em>;
+                the proposal expires (declined, nothing changed) if you don't decide within a minute. <kbd className="text-2xs text-text-tertiary bg-surface-3 border border-border-subtle rounded px-1.5 py-0.5">Esc</kbd> dismisses.
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>

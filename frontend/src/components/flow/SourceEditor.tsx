@@ -1,10 +1,11 @@
 import {useState, useEffect, useRef, useCallback, memo} from 'react'
-import {Save, RotateCcw, Code2} from 'lucide-react'
+import {Save, RotateCcw, Code2, Plus} from 'lucide-react'
 import {flowApi, analysisApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useToast, useConfirm, Spinner} from '@/components/shared'
 import type {AnalysisReport} from '@/types'
+import AddActionForm, {insertBeforeLastRegionEnd} from './AddActionForm'
 
 interface SourceEditorProps {
   onClose: () => void
@@ -41,6 +42,8 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
 
   const [source, setSource] = useState('')
   const [original, setOriginal] = useState('')
+  const [addingAction, setAddingAction] = useState(false)
+  const readOnly = useFlowStore(s => s.readOnly)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -72,15 +75,19 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const dirty = source !== original
 
   const handleSave = useCallback(async () => {
-    if (!document || !dirty || saving) return
+    // readOnly guards the mod+S shortcut too (F1.5) — the button was already
+    // disabled, the keyboard path wasn't.
+    if (!document || !dirty || saving || useFlowStore.getState().readOnly) return
     setSaving(true)
     try {
       const updated = await flowApi.saveSource(document.id, source)
-      setDocument(updated)
+      // Same-flow refresh (F1.1): preserve subflow/chat/selection.
+      useFlowStore.getState().applyRemoteDocumentUpdate(updated)
       setOriginal(source)
-      // Best-effort re-analysis so findings reflect the edited source.
+      // Best-effort re-analysis so findings reflect the edited source —
+      // targeted at the SAVED flow, not whatever is active when it lands.
       try {
-        const r = await analysisApi.analyzeFlow()
+        const r = await analysisApi.analyzeFlowById(updated.id)
         if (r) setReport(updated.id, r as AnalysisReport)
       } catch {
         /* re-analysis is best-effort */
@@ -97,6 +104,19 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     setSource(original)
     textareaRef.current?.focus()
   }, [original])
+
+  // handleInsertAction appends a composed action line to the end of the LAST
+  // subflow region (the structured-editing slice): users who don't know PAD's
+  // text format still build flows; power users see the raw line in the
+  // editor before saving.
+  const handleInsertAction = useCallback(
+    (line: string) => {
+      setSource(prev => insertBeforeLastRegionEnd(prev, line))
+      setAddingAction(false)
+      textareaRef.current?.focus()
+    },
+    [],
+  )
 
   // Guard: confirm before discarding unsaved edits when switching to Block view.
   const handleClose = useCallback(async () => {
@@ -148,9 +168,19 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
         <div className="flex items-center gap-2 text-xs text-text-tertiary">
           <Code2 size={14} />
           <span className="font-medium">Source Editor</span>
-          {dirty && <span className="text-amber-500">• unsaved</span>}
+          {dirty && <span className="text-semantic-warning">• unsaved</span>}
+          {readOnly && <span className="text-2xs text-text-tertiary">· read-only</span>}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setAddingAction(a => !a)}
+            disabled={saving || !!document?.isFolder || readOnly}
+            className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
+            title={document?.isFolder ? 'Structured editing is single-file for now' : 'Compose a PAD action line and insert it'}
+          >
+            <Plus size={12} />
+            Add action
+          </button>
           <button
             onClick={handleRevert}
             disabled={!dirty || saving}
@@ -161,7 +191,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
           </button>
           <button
             onClick={handleSave}
-            disabled={!dirty || saving}
+            disabled={!dirty || saving || readOnly}
             className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
           >
             {saving ? <Spinner size={12} /> : <Save size={12} />}
@@ -175,6 +205,10 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
           </button>
         </div>
       </div>
+
+      {addingAction && (
+        <AddActionForm onInsert={handleInsertAction} onClose={() => setAddingAction(false)} />
+      )}
 
       {/* Editor: line-number gutter + textarea */}
       <div className="flex flex-1 overflow-hidden font-mono text-xs">

@@ -38,8 +38,29 @@ func estimateTokensGeneric(text string) int {
 		return len(tokens)
 	}
 
-	charCount := utf8.RuneCountInString(text)
-	return int(float64(charCount) / 3.5)
+	return heuristicTokenEstimate(text, 3.5)
+}
+
+// heuristicTokenEstimate is the tokenizer-unavailable fallback: Latin-ish
+// text runs ~divisor runes per token, but CJK ideographs cost ~1 token PER
+// rune — a uniform /3.5 or /4 undercounted Chinese/Japanese/Korean ~3-4×,
+// letting oversized prompts pass window guards and surface as provider 400s.
+// CJK runes are counted at 1 token each; the rest at divisor.
+func heuristicTokenEstimate(text string, divisor float64) int {
+	cjk, other := 0, 0
+	for _, r := range text {
+		switch {
+		case r >= 0x4E00 && r <= 0x9FFF, // CJK Unified Ideographs
+			r >= 0x3400 && r <= 0x4DBF, // Extension A
+			r >= 0x3040 && r <= 0x30FF, // Hiragana + Katakana
+			r >= 0xAC00 && r <= 0xD7AF, // Hangul syllables
+			r >= 0xF900 && r <= 0xFAFF: // CJK Compatibility Ideographs
+			cjk++
+		default:
+			other++
+		}
+	}
+	return cjk + int(float64(other)/divisor)
 }
 
 func EstimateTokensClaude(text string) int {
@@ -53,8 +74,7 @@ func EstimateTokensOpenAI(text string) int {
 		return len(tokens)
 	}
 
-	charCount := utf8.RuneCountInString(text)
-	return int(float64(charCount) / 4.0)
+	return heuristicTokenEstimate(text, 4.0)
 }
 
 func EstimateTokensGemini(text string) int {

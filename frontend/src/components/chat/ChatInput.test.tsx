@@ -124,7 +124,7 @@ describe('ChatInput', () => {
 
   it('disables Send when streaming', () => {
     useChatStore.setState({
-      streams: {threadA: {streamId: 's1', messageId: 'm1', text: '', isThinking: true, tokens: 0, toolStatus: null}},
+      streams: {threadA: {streamId: 's1', messageId: 'm1', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []}},
     })
     render(<ChatInput onSend={vi.fn()} />)
 
@@ -206,5 +206,50 @@ describe('ChatInput', () => {
 
     // The old thread's draft should have been saved
     expect(useChatStore.getState().drafts.threadA).toBe('half-typed message')
+  })
+})
+
+describe('ChatInput queue-while-streaming (U1.6)', () => {
+  const streamState = {
+    streams: {threadA: {messageId: 'm1', streamId: 's1', text: ''}},
+  }
+
+  it('keeps the textarea enabled while streaming', () => {
+    useChatStore.setState(streamState as never)
+    render(<ChatInput onSend={vi.fn()} />)
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(ta.disabled).toBe(false)
+  })
+
+  it('Enter during streaming queues the message instead of sending', async () => {
+    useChatStore.setState(streamState as never)
+    const onSend = vi.fn()
+    const onQueue = vi.fn()
+    render(<ChatInput onSend={onSend} onQueue={onQueue} />)
+    const ta = screen.getByRole('textbox')
+    await userEvent.type(ta, 'follow up question')
+    fireEvent.keyDown(ta, {key: 'Enter'})
+    expect(onQueue).toHaveBeenCalledWith('follow up question', [], false)
+    expect(onSend).not.toHaveBeenCalled()
+    // The composer cleared — the message lives in the queue now.
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('renders the queued chip with the message and lets the user cancel it', () => {
+    useChatStore.setState({
+      ...streamState,
+      queuedByThread: {threadA: {text: 'queued msg', files: []}},
+    } as never)
+    render(
+      <ChatInput
+        onSend={vi.fn()}
+        onQueue={vi.fn()}
+        queued={{text: 'queued msg', files: []}}
+        onCancelQueue={() => useChatStore.getState().clearQueuedMessage('threadA')}
+      />,
+    )
+    expect(screen.getByText('queued msg')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel queued message'}))
+    expect(useChatStore.getState().queuedByThread['threadA']).toBeUndefined()
   })
 })

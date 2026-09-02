@@ -135,6 +135,17 @@ type claudeContent struct {
 type claudeUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// Cache tokens are billed separately (reads ~0.1×, writes ~1.25×) and are
+	// EXCLUDED from input_tokens — folded into the count at full rate so
+	// cached conversations don't silently bypass the budget (see
+	// parseClaudeSSE for the same treatment on streams).
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// totalInputTokens returns input_tokens plus cache reads/writes.
+func (u claudeUsage) totalInputTokens() int {
+	return u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 }
 
 type claudeErrorResp struct {
@@ -292,6 +303,9 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
 				return nil, err
 			}
+			if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("claude API: %s", apiErr.Error.Message)
 		}
 		return nil, fmt.Errorf("claude API error (status %d)", resp.StatusCode)
@@ -321,7 +335,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req Request) (*Response, erro
 
 	return &Response{
 		Content:      text,
-		TokensIn:     parsed.Usage.InputTokens,
+		TokensIn:     parsed.Usage.totalInputTokens(),
 		TokensOut:    parsed.Usage.OutputTokens,
 		FinishReason: parsed.StopReason,
 		ToolCalls:    toolCalls,
@@ -364,6 +378,9 @@ func (c *ClaudeProvider) Stream(ctx context.Context, req Request, onChunk func(C
 				return fmt.Errorf("%w: %s", ErrProviderDown, apiErr.Error.Message)
 			}
 			if err := detectContextLimitError(resp.StatusCode, apiErr.Error.Message); err != nil {
+				return err
+			}
+			if err := detectToolsUnsupportedError(resp.StatusCode, apiErr.Error.Message); err != nil {
 				return err
 			}
 			return fmt.Errorf("claude stream error (status %d): %s", resp.StatusCode, apiErr.Error.Message)

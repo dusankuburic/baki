@@ -1,3 +1,4 @@
+import {severityTone} from '@/lib/severityTone'
 import clsx from 'clsx'
 import type {Finding} from '@/types'
 
@@ -27,7 +28,7 @@ export default function FindingRelatedPanel({related, relatedLoading, relatedErr
             <span
               className={clsx(
                 'font-bold uppercase',
-                r.severity === 'error' ? 'text-red-400' : r.severity === 'warning' ? 'text-amber-400' : 'text-blue-400',
+                severityTone(r.severity).text,
               )}
             >
               {r.severity}

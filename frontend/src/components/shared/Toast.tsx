@@ -109,7 +109,12 @@ export function ToastProvider({children}: {children: React.ReactNode}) {
 
   const addToast = useCallback((toast: Omit<ToastData, 'id'>) => {
     const id = `toast-${++counterRef.current}`
-    setToasts(prev => [...prev, {...toast, id}])
+    // Duration policy (V1.2): toasts carrying an ACTION (Undo/Retry) and
+    // errors need time to be read and acted on — the 4s default fired the
+    // undo away before users reached it. Everything else keeps 4s.
+    const duration =
+      toast.duration ?? (toast.action || toast.variant === 'error' ? 8000 : 4000)
+    setToasts(prev => [...prev, {...toast, duration, id}])
   }, [])
 
   const removeToast = useCallback((id: string) => {

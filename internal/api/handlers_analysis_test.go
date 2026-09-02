@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -90,4 +91,52 @@ func TestNewAnalysisHandler_EmailWired(t *testing.T) {
 	if h.email == nil {
 		t.Fatal("email field is nil — notifications are dead code; assign email in the constructor")
 	}
+}
+
+// POST /api/analysis/custom-rules/validate: authoring feedback without
+// installing — per-entry validity + errors, array or single-object payloads,
+// clean 400 on neither shape. The backend for the settings rule editor.
+func TestHandleValidateCustomRules(t *testing.T) {
+	rt := newTestRouter(nil, false)
+
+	t.Run("mixed array flags the invalid entry", func(t *testing.T) {
+		body := map[string]any{"rules": []map[string]any{
+			{"id": "ok", "name": "fine", "rawTypeMatch": "Labels\\."},
+			{"id": "bad", "name": "broken regex", "nameMatch": "*["},
+		}}
+		rr := doRequest(t, rt, http.MethodPost, "/api/analysis/custom-rules/validate", body)
+		checkStatus(t, rr, http.StatusOK)
+		var res struct {
+			Valid   int `json:"valid"`
+			Invalid int `json:"invalid"`
+			Entries []struct {
+				ID    string `json:"id"`
+				Valid bool   `json:"valid"`
+				Error string `json:"error"`
+			} `json:"entries"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&res); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if res.Valid != 1 || res.Invalid != 1 {
+			t.Errorf("valid=%d invalid=%d, want 1/1", res.Valid, res.Invalid)
+		}
+		if len(res.Entries) != 2 || res.Entries[0].ID != "ok" || !res.Entries[0].Valid {
+			t.Errorf("entries[0] wrong: %+v", res.Entries)
+		}
+		if res.Entries[1].Valid || res.Entries[1].Error == "" {
+			t.Errorf("invalid entry missing error: %+v", res.Entries[1])
+		}
+	})
+
+	t.Run("single object accepted", func(t *testing.T) {
+		body := map[string]any{"rules": map[string]any{"id": "one", "name": "x", "rawTypeMatch": "Labels\\."}}
+		rr := doRequest(t, rt, http.MethodPost, "/api/analysis/custom-rules/validate", body)
+		checkStatus(t, rr, http.StatusOK)
+	})
+
+	t.Run("garbage returns 400", func(t *testing.T) {
+		rr := doRequest(t, rt, http.MethodPost, "/api/analysis/custom-rules/validate", map[string]any{"rules": "not-rules"})
+		checkStatus(t, rr, http.StatusBadRequest)
+	})
 }

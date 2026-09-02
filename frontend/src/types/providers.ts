@@ -10,6 +10,8 @@ export interface ModelDetail {
   contextLimit: number
   inputCostPerM: number
   outputCostPerM: number
+  /** Provider-family tool support (native or marker-based fallback). */
+  supportsTools?: boolean
 }
 
 export interface ProviderInfo {

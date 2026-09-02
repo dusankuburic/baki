@@ -11,8 +11,9 @@ import (
 )
 
 // mintToken seeds a user and an API token (by hash) directly via the backend and
-// returns the raw token to present in the Authorization header.
-func mintToken(t *testing.T, rt *Router, userID, email string, role auth.Role, expiresAt *time.Time) string {
+// returns the raw token to present in the Authorization header. scopes nil/empty
+// = unscoped (full access); otherwise the capability restriction under test.
+func mintToken(t *testing.T, rt *Router, userID, email string, role auth.Role, expiresAt *time.Time, scopes ...string) string {
 	t.Helper()
 	seedUserWithRole(t, rt, userID, email, role)
 	raw, hash, err := auth.GenerateAPIToken()
@@ -20,7 +21,7 @@ func mintToken(t *testing.T, rt *Router, userID, email string, role auth.Role, e
 		t.Fatalf("generate token: %v", err)
 	}
 	if err := rt.security.Backend.CreateAPIToken(context.Background(), &storageif.APIToken{
-		ID: "tok-" + userID, UserID: userID, Name: "ci", TokenHash: hash, ExpiresAt: expiresAt,
+		ID: "tok-" + userID, UserID: userID, Name: "ci", TokenHash: hash, ExpiresAt: expiresAt, Scopes: scopes,
 	}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -67,4 +68,59 @@ func TestAPIToken_RevokedRejected(t *testing.T) {
 	}
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/auth/me", "Bearer "+raw, nil)
 	checkStatus(t, rr, http.StatusUnauthorized)
+}
+
+// TestAPIToken_ScopeEnforcement pins R2-1: a scoped PAT is capability-restricted
+// at the auth middleware — before any handler runs. The motivating case: a CI
+// token (read) must not mutate flows, reach chat (spends money), or manage
+// credentials, while remaining a valid credential for reads.
+func TestAPIToken_ScopeEnforcement(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	readOnly := mintToken(t, rt, "ci-user", "ci@example.com", auth.RoleMember, nil, auth.ScopeRead)
+
+	// Reads pass.
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/analysis/rules", "Bearer "+readOnly, nil)
+	checkStatus(t, rr, http.StatusOK)
+
+	// Mutations are 403 (not 401 — the token IS valid, just not authorized).
+	rr = doRequestWithAuth(t, rt, http.MethodPost, "/api/flow/apply-fix", "Bearer "+readOnly, map[string]any{"flowId": "x"})
+	checkStatus(t, rr, http.StatusForbidden)
+
+	// Chat is out of scope for a read token.
+	rr = doRequestWithAuth(t, rt, http.MethodPost, "/api/chat/stream", "Bearer "+readOnly, map[string]any{"flowId": "x"})
+	checkStatus(t, rr, http.StatusForbidden)
+
+	// Credential management is denied for EVERY scoped token.
+	rr = doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/tokens", "Bearer "+readOnly, map[string]any{"name": "esc"})
+	checkStatus(t, rr, http.StatusForbidden)
+	// ...but the identity self-check works (CI validation use case).
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/auth/me", "Bearer "+readOnly, nil)
+	checkStatus(t, rr, http.StatusOK)
+}
+
+// TestAPIToken_ScopeWriteTokenMutates: the write scope grants mutations.
+func TestAPIToken_ScopeWriteTokenMutates(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	writer := mintToken(t, rt, "ci-writer", "w@example.com", auth.RoleMember, nil, auth.ScopeWrite)
+
+	// A mutation attempt now passes the scope gate (the 400/404 that follows
+	// is the handler's normal validation, proving the request reached it).
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/flow/apply-fix", "Bearer "+writer, map[string]any{"flowId": "nope"})
+	if rr.Code == http.StatusForbidden {
+		t.Fatalf("write-scoped token rejected at the scope gate: %s", rr.Body.String())
+	}
+}
+
+// TestAPIToken_UnscopedBackwardCompatible: tokens with no scope list (every
+// pre-existing token) keep full access — no behavioral change on upgrade.
+func TestAPIToken_UnscopedBackwardCompatible(t *testing.T) {
+	rt, _ := newLibraryTestRouter(t)
+	full := mintToken(t, rt, "legacy", "legacy@example.com", auth.RoleMember, nil) // no scopes
+
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/analysis/rules", "Bearer "+full, nil)
+	checkStatus(t, rr, http.StatusOK)
+	rr = doRequestWithAuth(t, rt, http.MethodPost, "/api/flow/apply-fix", "Bearer "+full, map[string]any{"flowId": "x"})
+	if rr.Code == http.StatusForbidden {
+		t.Fatalf("unscoped legacy token hit the scope gate: %s", rr.Body.String())
+	}
 }

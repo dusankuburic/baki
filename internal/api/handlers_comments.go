@@ -106,7 +106,75 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 	// Detached so the response isn't delayed by SMTP.
 	go h.notifyFindingComment(req.FlowID, req.FindingKey, userID, req.Body)
 
+	// In-app bell alerts (R2-5): the assignee AND prior distinct commenters
+	// (excluding the actor) each get a targeted alert. Synchronous best-effort
+	// — the comment write already committed.
+	h.recordCommentAlerts(req, userID, comment)
+
 	render.JSON(w, comment)
+}
+
+// recordCommentAlerts delivers targeted comment_added alerts to the finding's
+// assignee and everyone who previously commented on it (deduped, actor
+// excluded). Names resolve best-effort; an unresolvable user is skipped.
+func (h *AnalysisHandler) recordCommentAlerts(req struct {
+	FlowID     string `json:"flowId"`
+	FindingKey string `json:"findingKey"`
+	Body       string `json:"body"`
+}, actorID string, comment *storageif.FindingComment) {
+	if h.backend == nil {
+		return
+	}
+	ctx := context.Background()
+	targets := map[string]bool{}
+	// Assignee.
+	if statuses, err := h.backend.ListFindingStatuses(ctx, req.FlowID); err == nil {
+		for _, st := range statuses {
+			if st.FindingKey == req.FindingKey && st.AssigneeID != "" {
+				targets[st.AssigneeID] = true
+			}
+		}
+	}
+	// Prior commenters.
+	if prior, err := h.backend.ListFindingComments(ctx, req.FlowID, req.FindingKey); err == nil {
+		for _, c := range prior {
+			if c.AuthorID != "" && c.ID != comment.ID {
+				targets[c.AuthorID] = true
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	flowName := ""
+	if doc, err := h.flowSvc.GetAuthorized(ctx, req.FlowID, actorID, "viewer"); err == nil && doc != nil {
+		flowName = doc.Name
+	}
+	title := h.ruleDisplayName(ruleIDFromFindingKey(req.FindingKey))
+	for target := range targets {
+		if target == actorID {
+			continue // never notify the actor about their own comment
+		}
+		h.recordFindingAlert(&storageif.GovernanceAlert{
+			ID:         fmt.Sprintf("%s|comment_added|%s|%s|%s", req.FlowID, req.FindingKey, comment.ID, target),
+			FlowID:     req.FlowID,
+			FlowName:   flowName,
+			Type:       "comment_added",
+			Title:      title,
+			Message:    fmt.Sprintf("New comment from %s", h.callerDisplayName(actorID)),
+			Severity:   "info",
+			TargetUser: target,
+		})
+	}
+}
+
+// ruleIDFromFindingKey extracts the rule prefix ("rule:block" keys); the whole
+// key when the separator is absent.
+func ruleIDFromFindingKey(key string) string {
+	if idx := indexByte(key, ':'); idx > 0 {
+		return key[:idx]
+	}
+	return key
 }
 
 // notifyFindingComment emails the finding's assignee when someone else comments.

@@ -37,6 +37,88 @@ func TestSaveConversation_RejectsBadScope(t *testing.T) {
 	}
 }
 
+// TestConversationStore_ToolTrailRoundTrip proves the transparency fields
+// (ToolCalls + FixProposal snapshot) survive BOTH persistence paths: the
+// filesystem file (models JSON directly) and the storage-backend bridge
+// (models ↔ interfaces field-by-field conversion), which is where a forgotten
+// field would silently strip the trail in cloud mode only.
+func TestConversationStore_ToolTrailRoundTrip(t *testing.T) {
+	msgs := []models.ChatMessage{{
+		ID: "1", Role: "assistant", Content: "fixed it",
+		ToolCalls: []models.ToolCallRecord{
+			{Name: "list_findings", Label: "Listing findings", Ok: true, DurationMs: 12, Summary: "3 findings"},
+			{Name: "apply_fix", Label: "Applying fix", Ok: false, DurationMs: 60002, Summary: "error: no decision"},
+		},
+		FixProposal: &models.FixProposalSnapshot{
+			ProposalID: "p1", RuleID: "unhandled-error", FixType: "wrap-error-handler",
+			BlockLabel: "Main/Xavier", Line: 4, Summary: "wrap in ON BLOCK ERROR",
+			Status: "timeout", Message: "no decision within 60s",
+		},
+		FixProposals: []models.FixProposalSnapshot{
+			{
+				ProposalID: "p2", RuleID: "unhandled-error", FixType: "wrap-error-handler",
+				BlockLabel: "Main/Xavier", Line: 4, Summary: "wrap", Status: "applied",
+				Items: []models.FixItemSnapshot{
+					{RuleID: "unhandled-error", FixType: "wrap-error-handler", BlockLabel: "Call API", Line: 3, Summary: "s1", Status: "applied"},
+					{RuleID: "missing-retry", FixType: "wrap-in-retry", BlockLabel: "Sync API", Line: 8, Summary: "s2", Status: "applied-unresolved", Message: "still appears"},
+				},
+			},
+			{ProposalID: "p3", RuleID: "missing-retry", FixType: "wrap-in-retry", BlockLabel: "Sync", Line: 9, Summary: "x", Status: "declined"},
+		},
+	}}
+
+	// Path 1: filesystem (local mode) — models serialize verbatim.
+	svc := &ChatService{configDir: t.TempDir()}
+	doc := &models.FlowDocument{ID: "flow-1"}
+	if err := svc.SaveConversation(context.Background(), doc, "flow", msgs); err != nil {
+		t.Fatalf("SaveConversation: %v", err)
+	}
+	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	if err != nil {
+		t.Fatalf("GetConversation: %v", err)
+	}
+	assertToolTrail(t, got, "filesystem")
+
+	// Path 2: the models↔storage bridge (cloud mode) — field-by-field copy.
+	stored := toStorageMessages(msgs)
+	back := toModelMessages(stored)
+	assertToolTrail(t, back, "bridge")
+}
+
+func assertToolTrail(t *testing.T, got []models.ChatMessage, path string) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("[%s] expected 1 message, got %d", path, len(got))
+	}
+	m := got[0]
+	if len(m.ToolCalls) != 2 {
+		t.Fatalf("[%s] ToolCalls lost: %+v", path, m.ToolCalls)
+	}
+	if m.ToolCalls[1].Name != "apply_fix" || m.ToolCalls[1].Ok || m.ToolCalls[1].DurationMs != 60002 {
+		t.Errorf("[%s] ToolCalls[1] mismatch: %+v", path, m.ToolCalls[1])
+	}
+	if m.FixProposal == nil {
+		t.Fatalf("[%s] FixProposal snapshot lost", path)
+	}
+	if m.FixProposal.Status != "timeout" || m.FixProposal.FixType != "wrap-error-handler" || m.FixProposal.Message != "no decision within 60s" {
+		t.Errorf("[%s] FixProposal mismatch: %+v", path, m.FixProposal)
+	}
+	// Sequential + batch proposal records survive with per-item outcomes.
+	if len(m.FixProposals) != 2 {
+		t.Fatalf("[%s] FixProposals lost: %+v", path, m.FixProposals)
+	}
+	batch := m.FixProposals[0]
+	if batch.ProposalID != "p2" || len(batch.Items) != 2 {
+		t.Errorf("[%s] batch record mismatch: %+v", path, batch)
+	}
+	if batch.Items[1].Status != "applied-unresolved" || batch.Items[1].Message != "still appears" {
+		t.Errorf("[%s] batch item outcome lost: %+v", path, batch.Items[1])
+	}
+	if m.FixProposals[1].Status != "declined" {
+		t.Errorf("[%s] second sequential proposal lost: %+v", path, m.FixProposals[1])
+	}
+}
+
 func TestSaveGetConversation_RoundTripAndPerms(t *testing.T) {
 	dir := t.TempDir()
 	svc := &ChatService{configDir: dir}

@@ -47,3 +47,11 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		}
 	}
 }
+
+// B1.9: the unauthenticated share-link report rides the tighter analysis
+// bucket — it resolves a flow and runs the analyzer per fresh flow.
+func TestRateLimitGroup_SharedReportInAnalysisBucket(t *testing.T) {
+	if got := rateLimitGroup("GET", "/api/shared"); got != rlGroupAnalysis {
+		t.Errorf("GET /api/shared group = %q, want %q", got, rlGroupAnalysis)
+	}
+}

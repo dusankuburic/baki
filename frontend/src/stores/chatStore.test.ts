@@ -197,7 +197,26 @@ describe('streaming', () => {
       isThinking: true,
       tokens: 0,
       toolStatus: null,
+      toolCalls: [],
+      fixProposals: [],
     })
+  })
+
+  it('addToolCall appends a finished execution without mutating prior state', () => {
+    useChatStore.getState().startStream('t1', 'stream1', 'msg1')
+    const before = useChatStore.getState().streams['t1']!
+    useChatStore.getState().addToolCall('t1', {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 5, summary: '3 matches'})
+    useChatStore.getState().addToolCall('t1', {name: 'no_such', ok: false})
+    const after = useChatStore.getState().streams['t1']!
+    expect(after.toolCalls).toHaveLength(2)
+    expect(after.toolCalls[0]).toMatchObject({name: 'search_flow', ok: true, durationMs: 5})
+    expect(after.toolCalls[1]).toMatchObject({name: 'no_such', ok: false})
+    expect(before.toolCalls).toHaveLength(0) // prior array untouched (immutable append)
+  })
+
+  it('addToolCall is a no-op for a thread with no slot', () => {
+    useChatStore.getState().addToolCall('nope', {name: 'x', ok: true})
+    expect(useChatStore.getState().streams['nope']).toBeUndefined()
   })
 
   it('updateStreamingMessage updates the slot text', () => {
@@ -364,5 +383,26 @@ describe('setDraft', () => {
     useChatStore.getState().setDraft(id, 'unsent')
     useChatStore.getState().closeThread(id)
     expect(id in useChatStore.getState().drafts).toBe(false)
+  })
+})
+
+describe('queued follow-up messages (U1.6)', () => {
+  it('queue / take / clear semantics', () => {
+    const st = useChatStore.getState()
+    st.queueMessage('t1', {text: 'hello', files: [], excludeContext: true})
+    expect(useChatStore.getState().queuedByThread['t1']?.text).toBe('hello')
+
+    // take returns the message AND removes it (single-shot).
+    const got = useChatStore.getState().takeQueuedMessage('t1')
+    expect(got?.text).toBe('hello')
+    expect(useChatStore.getState().takeQueuedMessage('t1')).toBeUndefined()
+
+    // clear on an empty thread is a no-op.
+    expect(() => useChatStore.getState().clearQueuedMessage('t1')).not.toThrow()
+
+    // re-queue replaces (one per thread).
+    st.queueMessage('t1', {text: 'first', files: []})
+    st.queueMessage('t1', {text: 'second', files: []})
+    expect(useChatStore.getState().takeQueuedMessage('t1')?.text).toBe('second')
   })
 })

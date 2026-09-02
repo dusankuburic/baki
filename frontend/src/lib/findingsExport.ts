@@ -33,6 +33,17 @@ export async function exportFindingsHTML(docId: string) {
   await exportApi.exportHTML(docId)
 }
 
+// exportFindingsJUnit downloads the backend-rendered JUnit XML report (CI
+// dashboards, test-report viewers). R0-6: the endpoint existed with no UI.
+export async function exportFindingsJUnit(docId: string) {
+  const xml = await analysisApi.exportJUnit()
+  downloadBlob(
+    xml,
+    'application/xml;charset=utf-8;',
+    `analysis-${docId}-${new Date().toISOString().slice(0, 10)}.xml`,
+  )
+}
+
 // exportFindingsSARIF downloads a SARIF 2.1.0 report for GitHub Code Scanning
 // or any SARIF-consuming tool. The backend serializes findings with stable
 // fingerprints, rule metadata, and physical/logical locations.

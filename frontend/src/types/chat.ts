@@ -2,6 +2,43 @@
 
 import type {ProviderID} from './providers'
 
+// ToolCallRecord is one tool invocation behind an assistant message — the
+// transparency trail (mirrors the backend's tool_result wire event).
+export interface ToolCallRecord {
+  name: string
+  label?: string
+  ok: boolean
+  durationMs?: number
+  summary?: string
+}
+
+// FixItemSnapshot is one fix inside a (batch) persisted approval record, with
+// its own resolved outcome.
+export interface FixItemSnapshot {
+  ruleId: string
+  fixType: string
+  blockLabel: string
+  line: number
+  summary: string
+  status: string
+  message?: string
+}
+
+// FixProposalSnapshot is the persisted apply_fix approval record: what was
+// proposed and how it resolved. Attached to the assistant message so the
+// decision outlives the stream's transient approval card.
+export interface FixProposalSnapshot {
+  proposalId: string
+  ruleId: string
+  fixType: string
+  blockLabel: string
+  line: number
+  summary: string
+  status: string
+  message?: string
+  items?: FixItemSnapshot[]
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -13,6 +50,9 @@ export interface ChatMessage {
   provider?: ProviderID
   model?: string
   finishReason?: 'stop' | 'interrupted' | 'error'
+  toolCalls?: ToolCallRecord[]
+  fixProposal?: FixProposalSnapshot
+  fixProposals?: FixProposalSnapshot[]
 }
 
 export interface ChatRequest {

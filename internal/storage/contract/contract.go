@@ -702,11 +702,11 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 
 		// Mark one read → unread drops to 1.
-		if err := b.MarkGovernanceAlertRead(ctx, a1.ID); err != nil {
+		if err := b.MarkGovernanceAlertRead(ctx, "", a1.ID); err != nil {
 			t.Fatalf("MarkGovernanceAlertRead: %v", err)
 		}
 		// Idempotent.
-		if err := b.MarkGovernanceAlertRead(ctx, a1.ID); err != nil {
+		if err := b.MarkGovernanceAlertRead(ctx, "", a1.ID); err != nil {
 			t.Errorf("MarkGovernanceAlertRead (idempotent): %v", err)
 		}
 		n, _ = b.UnreadGovernanceAlertCount(ctx)
@@ -715,7 +715,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 
 		// Dismiss a2 → it's hidden from the default list, unread drops to 0.
-		if err := b.DismissGovernanceAlert(ctx, a2.ID); err != nil {
+		if err := b.DismissGovernanceAlert(ctx, "", a2.ID); err != nil {
 			t.Fatalf("DismissGovernanceAlert: %v", err)
 		}
 		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{})
@@ -733,7 +733,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 
 		// Clear removes dismissed alerts permanently.
-		if err := b.ClearGovernanceAlerts(ctx); err != nil {
+		if err := b.ClearGovernanceAlerts(ctx, ""); err != nil {
 			t.Fatalf("ClearGovernanceAlerts: %v", err)
 		}
 		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{IncludeDismissed: true})
@@ -742,7 +742,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 
 		// Mark-all-read clears remaining unread badge.
-		if err := b.MarkAllGovernanceAlertsRead(ctx); err != nil {
+		if err := b.MarkAllGovernanceAlertsRead(ctx, ""); err != nil {
 			t.Fatalf("MarkAllGovernanceAlertsRead: %v", err)
 		}
 		n, _ = b.UnreadGovernanceAlertCount(ctx)

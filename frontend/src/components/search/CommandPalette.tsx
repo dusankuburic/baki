@@ -85,7 +85,7 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
       <div className="absolute inset-0 bg-surface-overlay backdrop-blur-sm" />
       <div
         ref={paletteRef}
-        className="relative w-full max-w-[640px] bg-surface-1 border border-border-default rounded-xl shadow-xl overflow-hidden animate-palette"
+        className="relative w-full max-w-[640px] max-md:max-w-none max-md:h-full max-md:rounded-none bg-surface-1 border border-border-default rounded-xl shadow-xl overflow-hidden animate-palette"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center px-4 border-b border-border-subtle">

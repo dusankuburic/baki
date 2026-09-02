@@ -97,6 +97,10 @@ func (lsb *LocalStorageBackend) ListGovernanceAlerts(ctx context.Context, filter
 		if !filter.IncludeDismissed && a.DismissedAt != nil {
 			continue
 		}
+		// Targeted alerts are personal: visible only to their target.
+		if a.TargetUser != "" && a.TargetUser != filter.UserID {
+			continue
+		}
 		out = append(out, a)
 	}
 	limit := filter.Limit
@@ -114,6 +118,10 @@ func (lsb *LocalStorageBackend) ListGovernanceAlerts(ctx context.Context, filter
 }
 
 func (lsb *LocalStorageBackend) UnreadGovernanceAlertCount(ctx context.Context) (int, error) {
+	return lsb.UnreadGovernanceAlertCountFor(ctx, "")
+}
+
+func (lsb *LocalStorageBackend) UnreadGovernanceAlertCountFor(ctx context.Context, userID string) (int, error) {
 	lsb.govAlertMu.Lock()
 	defer lsb.govAlertMu.Unlock()
 	alerts, err := lsb.readGovAlerts()
@@ -122,14 +130,14 @@ func (lsb *LocalStorageBackend) UnreadGovernanceAlertCount(ctx context.Context) 
 	}
 	n := 0
 	for _, a := range alerts {
-		if a.ReadAt == nil && a.DismissedAt == nil {
+		if a.ReadAt == nil && a.DismissedAt == nil && (a.TargetUser == "" || a.TargetUser == userID) {
 			n++
 		}
 	}
 	return n, nil
 }
 
-func (lsb *LocalStorageBackend) MarkGovernanceAlertRead(ctx context.Context, alertID string) error {
+func (lsb *LocalStorageBackend) MarkGovernanceAlertRead(ctx context.Context, _, alertID string) error {
 	lsb.govAlertMu.Lock()
 	defer lsb.govAlertMu.Unlock()
 	alerts, err := lsb.readGovAlerts()
@@ -150,7 +158,7 @@ func (lsb *LocalStorageBackend) MarkGovernanceAlertRead(ctx context.Context, ale
 	return lsb.writeGovAlerts(alerts)
 }
 
-func (lsb *LocalStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context) error {
+func (lsb *LocalStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context, _ string) error {
 	lsb.govAlertMu.Lock()
 	defer lsb.govAlertMu.Unlock()
 	alerts, err := lsb.readGovAlerts()
@@ -171,7 +179,7 @@ func (lsb *LocalStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context)
 	return lsb.writeGovAlerts(alerts)
 }
 
-func (lsb *LocalStorageBackend) DismissGovernanceAlert(ctx context.Context, alertID string) error {
+func (lsb *LocalStorageBackend) DismissGovernanceAlert(ctx context.Context, _, alertID string) error {
 	lsb.govAlertMu.Lock()
 	defer lsb.govAlertMu.Unlock()
 	alerts, err := lsb.readGovAlerts()
@@ -192,7 +200,7 @@ func (lsb *LocalStorageBackend) DismissGovernanceAlert(ctx context.Context, aler
 	return lsb.writeGovAlerts(alerts)
 }
 
-func (lsb *LocalStorageBackend) ClearGovernanceAlerts(ctx context.Context) error {
+func (lsb *LocalStorageBackend) ClearGovernanceAlerts(ctx context.Context, _ string) error {
 	lsb.govAlertMu.Lock()
 	defer lsb.govAlertMu.Unlock()
 	alerts, err := lsb.readGovAlerts()

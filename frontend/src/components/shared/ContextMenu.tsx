@@ -1,6 +1,7 @@
 import {useEffect, useRef} from 'react'
 import clsx from 'clsx'
 import type {LucideIcon} from 'lucide-react'
+import {formatShortcutParts} from '@/lib/shortcuts'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 
 export interface ContextMenuItem {
@@ -8,6 +9,10 @@ export interface ContextMenuItem {
   icon: LucideIcon
   onClick: () => void
   variant?: 'default' | 'danger'
+  // Keyboard equivalent (V1.1), registry format ('alt+up', 'mod+d', 'delete')
+  // — rendered as kbd chips on the row's right so shortcuts are discoverable
+  // where the action lives instead of only in the ? dialog.
+  shortcut?: string
 }
 
 interface ContextMenuProps {
@@ -67,7 +72,19 @@ export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
             }}
           >
             <Icon size={14} className="opacity-70" />
-            {item.label}
+            <span className="flex-1">{item.label}</span>
+            {item.shortcut && (
+              <span className="flex items-center gap-0.5 pl-3" aria-hidden="true">
+                {formatShortcutParts(item.shortcut).map((part, j) => (
+                  <kbd
+                    key={j}
+                    className="bg-surface-3 border border-border-strong text-text-tertiary font-mono rounded text-2xs px-1 py-0.5"
+                  >
+                    {part.display}
+                  </kbd>
+                ))}
+              </span>
+            )}
           </button>
         )
       })}

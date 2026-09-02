@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"pad-analyzer/internal/metrics"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -42,6 +43,11 @@ type FlowService struct {
 	// many distinct flows can't grow it without limit.
 	idxCache cache.Cache
 
+	// snapshots is the in-memory undo ring (see flow_snapshots.go): the last
+	// maxSnapshotsPerFlow pre-mutation source states per flow, captured by
+	// every fix/batch/save path before it writes. Nil when disabled.
+	snapshots *snapshotStore
+
 	// invalidateCbs holds flow-invalidation callbacks registered by other
 	// services (e.g. ChatService's scrubbed-context cache) that must be dropped
 	// when a flow changes in place. Registering here avoids a direct dependency
@@ -53,10 +59,11 @@ type FlowService struct {
 	// patchLocks serializes read-modify-write patches to the same source file so
 	// two concurrent ApplyFix/SuppressFindingInSource calls on the same file
 	// can't silently clobber each other (one overwriting the other's change).
-	// Keyed by absolute target path; each entry is a *sync.Mutex held for the
-	// PatchFlow critical section. Without this, PatchFlow's
-	// ReadFile→ApplyPatch→atomicWrite window is a classic lost-update race.
-	patchLocks sync.Map
+	// Keyed by absolute target path; refcounted entries (B1.13) — the old
+	// sync.Map grew one mutex per distinct path ever patched and never
+	// evicted; entries now drop at zero in-flight users.
+	patchLocksMu sync.Mutex
+	patchLocks   map[string]*patchFileLock
 }
 
 // maxSearchIndexCache bounds the number of cached search indexes (one per
@@ -74,15 +81,44 @@ func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvid
 		authz:       authz,
 		astCache:    astCache,
 		idxCache:    idxCache,
+		snapshots:   newSnapshotStore(),
 	}
 }
 
-// patchMutexFor returns the per-file mutex used to serialize patches to a given
-// source file. LoadOrStore makes the lookup-and-create atomic so two concurrent
-// callers get the same mutex instance.
-func (s *FlowService) patchMutexFor(path string) *sync.Mutex {
-	v, _ := s.patchLocks.LoadOrStore(path, &sync.Mutex{})
-	return v.(*sync.Mutex)
+// patchFileLock is a refcounted per-file patch lock (B1.13).
+type patchFileLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// acquirePatchLock returns the per-file lock for path, bumping its in-flight
+// count. Map bookkeeping runs under patchLocksMu (pointer ops only, never
+// I/O) so an acquire can never interleave with a zero-ref delete — the lost-
+// update window naive sync.Map deletion would open.
+func (s *FlowService) acquirePatchLock(path string) *patchFileLock {
+	s.patchLocksMu.Lock()
+	defer s.patchLocksMu.Unlock()
+	if s.patchLocks == nil {
+		s.patchLocks = map[string]*patchFileLock{}
+	}
+	l := s.patchLocks[path]
+	if l == nil {
+		l = &patchFileLock{}
+		s.patchLocks[path] = l
+	}
+	l.refs++
+	return l
+}
+
+// releasePatchLock decrements the in-flight count and deletes the entry at
+// zero (only when it is still the live entry for path).
+func (s *FlowService) releasePatchLock(path string, l *patchFileLock) {
+	s.patchLocksMu.Lock()
+	defer s.patchLocksMu.Unlock()
+	l.refs--
+	if l.refs == 0 && s.patchLocks[path] == l {
+		delete(s.patchLocks, path)
+	}
 }
 
 // GetAuthorized loads a flow and verifies the user has at least minPerm access.
@@ -335,6 +371,14 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 
 	if s.astCache != nil {
 		s.astCache.Set(ctx, key, doc, 24*time.Hour)
+		// B1.12: hand the caller a SHALLOW COPY of the cached value — the
+		// cache's contract is "shared, read-only" but nothing enforced it,
+		// and the upload handler legitimately stamps doc.Source after load
+		// (mutating the cached object). Subflows/BlocksByID stay shared
+		// (large); the copy pins the cheap per-load fields against exactly
+		// this class of accidental mutation.
+		copied := *doc
+		doc = &copied
 	}
 
 	s.docProvider.SetCurrentDoc(doc)
@@ -449,6 +493,10 @@ const maxLibrarySearchFlows = 50
 // each hit stamped by its source FlowID/FlowName so the UI can group them. A
 // cross-flow search is an enumerate→load→index loop; there is no storage-level
 // "search across flows" primitive. Per-flow MaxResults is clamped so one huge
+// searchFanOut bounds concurrent candidate resolution during library
+// search (B1.6): enough to hide blob latency, low enough not to stampede.
+const searchFanOut = 8
+
 // flow doesn't monopolise the result, then a global cap is applied.
 func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query models.SearchQuery) (*models.SearchResults, error) {
 	if s.storage == nil || s.docProvider == nil {
@@ -460,35 +508,83 @@ func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query mo
 	// phase only uses ID/Name. Without this, the Postgres backend backfills
 	// full blob content for up to maxLibrarySearchFlows flows that is then
 	// discarded — a wasted blob round-trip per flow per search.
-	flows, err := s.storage.ListFlows(ctx, storageif.FlowFilter{UserID: userID, Limit: maxLibrarySearchFlows, MetadataOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("list flows for search: %w", err)
+	// R3-5a: prefer STORAGE-PUSHED content matching — flows whose stored
+	// content mentions the needle come straight from the index, so a search
+	// sees the WHOLE library instead of an arbitrary 50-flow window. The
+	// per-flow resolve+search below then ranks within true candidates only.
+	// Backends without a queryable content column (filesystem; blob-offloaded
+	// Postgres) report unsupported and fall back to the legacy scan.
+	var flows []*storageif.FlowDocument
+	candidates, cerr := s.storage.SearchFlowContents(ctx, storageif.FlowFilter{UserID: userID}, query.Text, 200)
+	switch {
+	case cerr == nil && len(candidates) > 0:
+		metrics.RecordLibrarySearch("pushdown")
+		flows = candidates
+	case cerr == nil:
+		// Pushdown matched nothing: the library genuinely has no content hit.
+		metrics.RecordLibrarySearch("pushdown")
+		return &models.SearchResults{Query: query, Results: []models.SearchResult{}, TotalCount: 0}, nil
+	default:
+		if !errors.Is(cerr, storageif.ErrContentSearchUnsupported) {
+			// A real storage error on the pushdown: degrade to the scan
+			// rather than failing the search outright.
+			logger.Warn("library search pushdown failed; falling back to scan", "error", cerr)
+		}
+		metrics.RecordLibrarySearch("scan")
+		scanFlows, slErr := s.storage.ListFlows(ctx, storageif.FlowFilter{UserID: userID, Limit: maxLibrarySearchFlows, MetadataOnly: true})
+		if slErr != nil {
+			return nil, fmt.Errorf("list flows for search: %w", slErr)
+		}
+		flows = scanFlows
 	}
 	// Clamp per-flow hits so no single flow drowns out the others.
 	perFlow := query.MaxResults
 	if perFlow <= 0 || perFlow > 10 {
 		perFlow = 10
 	}
-	merged := make([]models.SearchResult, 0)
-	for _, f := range flows {
+	// B1.6: candidates resolve + index strictly sequentially — each miss is a
+	// blob round-trip + unmarshal + index rebuild, so a cold search of 200
+	// pushdown candidates paid 200 serialized stalls. Bounded fan-out (the
+	// doc provider's caches make this idempotent); results stay in candidate
+	// order via indexed slots.
+	type slot struct{ res []models.SearchResult }
+	results := make([]slot, len(flows))
+	sem := make(chan struct{}, searchFanOut)
+	var wg sync.WaitGroup
+	for i, f := range flows {
 		if ctx.Err() != nil {
 			break
 		}
-		doc, err := s.docProvider.ResolveDoc(ctx, f.ID)
-		if err != nil || doc == nil {
-			continue
-		}
-		q := query
-		q.MaxResults = perFlow
-		res, err := s.SearchFlow(doc, q)
-		if err != nil || res == nil {
-			continue
-		}
-		for i := range res.Results {
-			res.Results[i].FlowID = f.ID
-			res.Results[i].FlowName = f.Name
-		}
-		merged = append(merged, res.Results...)
+		wg.Add(1)
+		go func(i int, f *storageif.FlowDocument) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			doc, err := s.docProvider.ResolveDoc(ctx, f.ID)
+			if err != nil || doc == nil {
+				return
+			}
+			q := query
+			q.MaxResults = perFlow
+			res, err := s.SearchFlow(doc, q)
+			if err != nil || res == nil {
+				return
+			}
+			for j := range res.Results {
+				res.Results[j].FlowID = f.ID
+				res.Results[j].FlowName = f.Name
+			}
+			results[i].res = res.Results
+		}(i, f)
+	}
+	wg.Wait()
+	merged := make([]models.SearchResult, 0)
+	for _, r := range results {
+		merged = append(merged, r.res...)
 	}
 	// Global cap (default 50 when unset).
 	globalCap := query.MaxResults
@@ -729,9 +825,18 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 	// the same contents, apply their patch, and the second atomicWrite would
 	// silently overwrite the first (lost update). Held through the re-parse so
 	// the returned doc reflects exactly what we wrote.
-	mu := s.patchMutexFor(targetPath)
-	mu.Lock()
-	defer mu.Unlock()
+	plock := s.acquirePatchLock(targetPath)
+	plock.mu.Lock()
+	// The critical section covers read-modify-validate-write ONLY (B1.7):
+	// holding it across the post-write folder-wide re-parse serialized
+	// concurrent fixes on the same file for the entire multi-parse gate.
+	// unlock() is the deferred safety net (every return path releases);
+	// reaching the commit point unlocks EARLY and neutralizes the defer.
+	unlock := func() {
+		plock.mu.Unlock()
+		s.releasePatchLock(targetPath, plock)
+	}
+	defer func() { unlock() }()
 
 	data, readErr := os.ReadFile(targetPath) // #nosec G304 -- target derived from doc.FilePath + a validated bare filename
 	if readErr != nil {
@@ -762,10 +867,25 @@ func (s *FlowService) PatchFlow(doc *models.FlowDocument, patch models.Patch) (*
 		return nil, fmt.Errorf("patch would introduce parse errors (file left unchanged)")
 	}
 
+	// Capture the pre-fix state for the undo ring BEFORE writing (the write
+	// below is the destructive step; everything above only validated).
+	s.snapshotDesktopFile(doc, targetPath, "before fix")
+
 	dir := filepath.Dir(targetPath)
 	if writeErr := atomicWriteConv(dir, targetPath, []byte(patched)); writeErr != nil {
 		return nil, fmt.Errorf("write source file: %w", writeErr)
 	}
+	// Commit point: the read-modify-write is done — release the file lock
+	// NOW and finish (invalidation, folder reload, wiring) outside the
+	// critical section; neutralize the deferred unlock.
+	unlock()
+	unlock = func() {} // neutralize the deferred double-release
+
+	// The flow's content changed: drop derived caches (search index + any
+	// registered consumers like the chat context) so the next reader sees the
+	// post-patch flow. Runs after the write committed — a failed patch never
+	// invalidates.
+	s.InvalidateSearchIndex(doc.ID)
 
 	// Folder flows must re-parse the whole folder (cross-subflow indexes);
 	// single-file flows reuse the gate's after-parse — it is the parse of
@@ -846,14 +966,20 @@ func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixTyp
 }
 
 func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*models.FlowDocument, error) {
+	// Cloud mode (no local source file): build the ALIGNED patching context
+	// (stored source, or the canonical bridge for ingested/folder flows —
+	// see flow_cloudfix.go) and persist via SaveFlow. Desktop falls through
+	// to PatchFlow (file I/O).
+	if doc.FilePath == "" {
+		cctx, err := s.cloudFixContextFor(doc, blockID, fixType, ruleID, variable, property)
+		if err != nil {
+			return nil, err
+		}
+		return s.applyCloudPatch(ctx, doc, cctx)
+	}
 	patch, err := s.generateFixPatch(doc, blockID, fixType, ruleID, variable, property)
 	if err != nil {
 		return nil, err
-	}
-	// Cloud mode (no local source file): patch the in-memory raw source and
-	// persist via SaveFlow. Desktop mode falls through to PatchFlow (file I/O).
-	if doc.FilePath == "" {
-		return s.applyPatchToCloudSource(ctx, doc, patch)
 	}
 	return s.PatchFlow(doc, patch)
 }
@@ -862,33 +988,18 @@ func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, bl
 // validates the result (no new parse errors), re-parses, and persists the
 // updated content + source via SaveFlow. For single-file flows, patches the
 // doc.Source directly. For multi-file flows, doc.Source contains the combined
-// applyPatchToCloudSource patches the stored raw PAD source (cloud mode),
-// validates the result (no new parse errors), re-parses, and persists the
-// updated content + source via SaveFlow. Only works for single-file flows
-// (multi-file flows don't have stored per-file source — cloud fix is deferred).
-func (s *FlowService) applyPatchToCloudSource(ctx context.Context, doc *models.FlowDocument, patch models.Patch) (*models.FlowDocument, error) {
-	if doc.Source == "" {
-		return nil, fmt.Errorf("source not available — cloud fix requires a single-file flow (multi-file cloud fix is not yet supported)")
-	}
-	patched := analyzer.ApplyPatch(doc.Source, patch)
-	// doc.ParseErrors is the parse of doc.Source itself (Content and Source
-	// are persisted together), so it serves as the before-count without a
-	// second full parse of the unpatched source.
-	updated, err := parser.ParseText(patched, doc.Name, int64(len(patched)))
-	if err != nil {
-		return nil, fmt.Errorf("re-parse patched source: %w", err)
-	}
-	if analyzer.CountParseErrors(updated) > analyzer.CountParseErrors(doc) {
-		return nil, fmt.Errorf("patch would introduce parse errors (flow left unchanged)")
-	}
-	return s.persistCloudDoc(ctx, doc, updated, patched)
-}
 
 // GetSource returns the raw PAD source text for a flow. Desktop: reads the
 // source file. Cloud: returns doc.Source. Used by the in-app source editor.
 func (s *FlowService) GetSource(doc *models.FlowDocument) (string, error) {
 	if doc.FilePath == "" {
-		return doc.Source, nil
+		// Cloud: stored source; for INGESTED flows (padcloud — parsed content
+		// only, Source never set) fall back to the serializer so the source
+		// view works instead of showing empty.
+		if doc.Source != "" {
+			return doc.Source, nil
+		}
+		return parser.SerializeDocument(doc), nil
 	}
 	targetPath := doc.FilePath
 	if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
@@ -908,7 +1019,17 @@ func (s *FlowService) GetSource(doc *models.FlowDocument) (string, error) {
 // source editor view.
 func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, source string) (*models.FlowDocument, error) {
 	if doc.FilePath == "" {
-		// Cloud: persist via the shared cloud-source path.
+		if doc.IsFolder {
+			// Guard: the combined text parses as a SINGLE-file flow, so a
+			// save here would silently collapse the folder structure. The
+			// source editor is view-only for folder flows until per-file
+			// editing ships.
+			return nil, fmt.Errorf("saving the combined source of a multi-file flow is not supported (it would collapse the folder structure)")
+		}
+		// Cloud: persist via the shared cloud-source path. Snapshot the
+		// current stored source first — a source-editor save replaces the
+		// whole file and is the most destructive mutation of all.
+		s.snapshotCloudSource(doc, "before source save")
 		return s.persistCloudSource(ctx, doc, source)
 	}
 	// Desktop: write the source to the file, then re-parse the whole flow.
@@ -916,9 +1037,12 @@ func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, 
 	if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
 		targetPath = filepath.Join(doc.FilePath, "Main.txt")
 	}
+	s.snapshotDesktopFile(doc, targetPath, "before source save")
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
 		return nil, fmt.Errorf("write source file: %w", err)
 	}
+	// The source-editor save replaced the file: derived caches are stale.
+	s.InvalidateSearchIndex(doc.ID)
 	if info, _ := os.Stat(doc.FilePath); info != nil && info.IsDir() {
 		return s.LoadFlowFolder(doc.FilePath)
 	}
@@ -940,10 +1064,18 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 	var source, targetPath string
 	cloud := doc.FilePath == ""
 	if cloud {
-		if doc.Source == "" {
-			return nil, 0, fmt.Errorf("source not available for this flow (batch fix requires a single-file flow)")
+		if doc.IsFolder {
+			// Folder flows: the iterative loop runs PER MEMBER FILE on the
+			// canonical serialization (see flow_cloudfix.go).
+			return s.applyFixBatchCloudFolder(ctx, doc, ruleFilter, limit)
 		}
-		source = doc.Source
+		// Ingested flows: serialize the parsed content (the batch loop
+		// re-parses its own input, so line alignment is inherent).
+		if doc.Source == "" {
+			source = parser.SerializeDocument(doc)
+		} else {
+			source = doc.Source
+		}
 	} else {
 		targetPath = doc.FilePath
 		if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
@@ -972,12 +1104,14 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 	}
 
 	if cloud {
+		s.snapshotCloudSource(doc, "before batch fix")
 		// res.Doc is already the parse of the patched source — persist it
 		// directly instead of re-parsing inside persistCloudSource.
 		updated, err := s.persistCloudDoc(ctx, doc, res.Doc, source)
 		return updated, res.Fixed, err
 	}
 	// Desktop: write once, then re-parse the whole flow (cross-subflow indexes).
+	s.snapshotDesktopFile(doc, targetPath, "before batch fix")
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
 		return nil, res.Fixed, fmt.Errorf("write source file: %w", err)
 	}
@@ -1039,6 +1173,10 @@ func (s *FlowService) persistCloudDoc(ctx context.Context, doc *models.FlowDocum
 		if err := s.storage.SaveFlow(ctx, &libDoc); err != nil {
 			return nil, err
 		}
+		// Saved content changed: drop derived caches (search index + chat
+		// context via the registered callbacks) so the next reader — the AI
+		// included — sees the post-edit flow.
+		s.InvalidateSearchIndex(doc.ID)
 	}
 	return updated, nil
 }
@@ -1060,23 +1198,45 @@ func (s *FlowService) persistCloudSource(ctx context.Context, doc *models.FlowDo
 type PatchPreviewResult struct {
 	Original string `json:"original"`
 	Patched  string `json:"patched"`
+	// File names the member file a folder-flow preview refers to ("" for
+	// single-file flows) so the UI can label the diff.
+	File string `json:"file,omitempty"`
 }
 
 // PreviewFix generates the patch and returns the before/after source text
 // WITHOUT writing to disk. Lets the user review the change before applying.
 func (s *FlowService) PreviewFix(doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*PatchPreviewResult, error) {
+	// Cloud mode (no local source file): build the ALIGNED patching context
+	// (stored source, or the canonical bridge — see flow_cloudfix.go). Folder
+	// flows preview the TARGET member file only (the patch's file), which is
+	// the text a fix would actually change.
+	if doc.FilePath == "" {
+		cctx, err := s.cloudFixContextFor(doc, blockID, fixType, ruleID, variable, property)
+		if err != nil {
+			return nil, err
+		}
+		if cctx.isFolder() {
+			fname := cctx.patch.File
+			if fname == "" {
+				fname = "Main.txt"
+			}
+			text, ok := cctx.files[fname]
+			if !ok {
+				return nil, fmt.Errorf("patch targets file %q which is not part of this flow", fname)
+			}
+			return &PatchPreviewResult{
+				Original: text,
+				Patched:  analyzer.ApplyPatch(text, cctx.patch),
+				File:     fname,
+			}, nil
+		}
+		patched := analyzer.ApplyPatch(cctx.source, cctx.patch)
+		return &PatchPreviewResult{Original: cctx.source, Patched: patched}, nil
+	}
+
 	patch, err := s.generateFixPatch(doc, blockID, fixType, ruleID, variable, property)
 	if err != nil {
 		return nil, err
-	}
-
-	// Cloud mode (no local source file): patch the in-memory raw source.
-	if doc.FilePath == "" {
-		if doc.Source == "" {
-			return nil, fmt.Errorf("source not available for this flow (cloud preview requires a single-file flow)")
-		}
-		patched := analyzer.ApplyPatch(doc.Source, patch)
-		return &PatchPreviewResult{Original: doc.Source, Patched: patched}, nil
 	}
 
 	targetPath := doc.FilePath

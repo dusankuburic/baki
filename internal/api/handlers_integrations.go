@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -124,11 +125,17 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 		render.Error(w, fmt.Errorf("invalid or missing X-Baki-Signature"), http.StatusUnauthorized)
 		return
 	}
-	// Backward-compat nudge: a request without X-Baki-Timestamp was accepted
-	// (legacy signer) but is replay-vulnerable. Surface it so operators upgrade
-	// their CI senders; the header will become mandatory in a future release.
+	// B1.9: the header is now MANDATORY. A legacy-signed body (which loads
+	// any flow by ID and returns full findings) could be replayed forever
+	// without a timestamp; the deprecation window has run its course. An env
+	// escape hatch exists for senders that genuinely cannot upgrade yet.
 	if r.Header.Get("X-Baki-Timestamp") == "" {
-		logger.Warn("CI webhook accepted a request without X-Baki-Timestamp (deprecated; replay-vulnerable) — update the sender to include the timestamp")
+		if os.Getenv("PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP") == "1" {
+			logger.Warn("CI webhook accepted WITHOUT X-Baki-Timestamp (PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1; replay-vulnerable) — update the sender")
+		} else {
+			render.Error(w, fmt.Errorf("missing X-Baki-Timestamp (replay protection); include it in the signed payload or set PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1 on the server to re-enable legacy senders"), http.StatusUnauthorized)
+			return
+		}
 	}
 
 	var req ciWebhookRequest
@@ -152,7 +159,11 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 	// not as a user. This mirrors handleViewShared's resolve path.
 	doc, err := h.flowSvc.DocProvider().ResolveDoc(r.Context(), req.FlowID)
 	if err != nil {
-		render.Error(w, fmt.Errorf("flow not found: %w", err), http.StatusNotFound)
+		// B1.8: 4xx bodies pass through unmasked — a wrapped driver error
+		// (SQL state, blob details) must not reach an HMAC-authenticated but
+		// external caller. Static message; detail stays server-side.
+		logger.Warn("ci webhook: flow resolve failed", "flowId", req.FlowID, "err", err)
+		render.Error(w, fmt.Errorf("flow not found"), http.StatusNotFound)
 		return
 	}
 

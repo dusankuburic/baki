@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"pad-core/ai/scrubber"
 	"pad-core/models"
@@ -141,18 +142,50 @@ func TestExecuteTool_VariableLineage(t *testing.T) {
 
 func TestExecuteTool_UnknownAndBadInput(t *testing.T) {
 	tctx := ToolContext{Ctx: context.Background(), Doc: toolFixtureDoc()}
-	if out := ExecuteTool("nope_tool", json.RawMessage(`{}`), tctx); !strings.Contains(out, "unknown tool") {
-		t.Errorf("expected unknown-tool error, got: %s", out)
+
+	if got := ExecuteTool("no_such_tool", nil, tctx); !strings.Contains(got, "unknown tool") {
+		t.Errorf("unknown tool: want 'unknown tool' in result, got %q", got)
 	}
-	if out := ExecuteTool("get_block", json.RawMessage(`{bad json`), tctx); !strings.Contains(out, "error:") {
-		t.Errorf("expected input error, got: %s", out)
+	if got := ExecuteTool("get_block", json.RawMessage("not json"), tctx); !strings.Contains(got, "error:") {
+		t.Errorf("bad input: want 'error:' in result, got %q", got)
+	}
+}
+
+// TestTruncateResult_RuneSafe proves the byte cap backs off to a UTF-8 rune
+// boundary: a naive s[:6000] slice can split a multi-byte rune and feed the
+// model invalid UTF-8.
+func TestTruncateResult_RuneSafe(t *testing.T) {
+	// 3-byte runes (☃): any byte offset ≡ 0 mod 3 except multiples past the
+	// cap is mid-rune. 2001 snowmen = 6003 bytes > 6000 cap.
+	in := strings.Repeat("☃", 2001)
+	got := truncateResult(in)
+	if !strings.HasSuffix(got, "\n…(result truncated)") {
+		t.Error("want truncation marker suffix")
+	}
+	body := strings.TrimSuffix(got, "\n…(result truncated)")
+	if n := len(body); n > maxToolResultBytes {
+		t.Errorf("truncated body is %d bytes, exceeds cap %d", n, maxToolResultBytes)
+	}
+	if !utf8.ValidString(body) {
+		t.Errorf("truncated body is not valid UTF-8 (split rune): %q", body[len(body)-8:])
+	}
+	if r := len([]rune(body)); r != maxToolResultBytes/3 {
+		t.Errorf("want %d whole runes (2000), got %d", maxToolResultBytes/3, r)
+	}
+}
+
+// TestTruncateResult_AsciiUnchanged guards the no-op path.
+func TestTruncateResult_AsciiUnchanged(t *testing.T) {
+	in := strings.Repeat("a", maxToolResultBytes)
+	if got := truncateResult(in); got != in {
+		t.Error("input at the cap must round-trip unchanged")
 	}
 }
 
 func TestToolDefinitions_StableAndComplete(t *testing.T) {
 	defs := ToolDefinitions()
-	if len(defs) != 5 {
-		t.Fatalf("expected 5 tools, got %d", len(defs))
+	if len(defs) != 8 {
+		t.Fatalf("expected 8 tools, got %d", len(defs))
 	}
 	for _, d := range defs {
 		if d.Name == "" || len(d.InputSchema) == 0 {

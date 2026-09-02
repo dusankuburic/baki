@@ -97,6 +97,14 @@ export const analysisApi = {
   exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<unknown> =>
     request('/api/analysis/export/sarif', {body: {flowId}}),
 
+  // Server-rendered exports (R0-6): the endpoints existed with no frontend
+  // consumer. Both return text bodies shaped by the backend serializers.
+  exportJUnit: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
+    request('/api/analysis/export/junit', {body: {flowId}}),
+
+  exportCSVServer: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
+    request('/api/analysis/export/csv', {body: {flowId}}),
+
   getDependencies: (): Promise<DependencyAnalysis> => request('/api/analysis/dependencies', {method: 'GET'}),
 
   getDashboard: (): Promise<DashboardStats> => request('/api/analysis/dashboard', {method: 'GET'}),

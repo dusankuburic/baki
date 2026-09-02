@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useConfirm} from '@/components/shared'
+import OrgChannelsSection from './OrgChannelsSection'
 import {useAsync} from '@/hooks/useAsync'
 import {request} from '@/api/client'
 import {useToast} from '@/components/shared/Toast'
@@ -38,6 +39,7 @@ export default function OrganizationsPanel() {
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<OrgRole>('member')
   const [inviteBusy, setInviteBusy] = useState(false)
+  const [inviteError, setInviteError] = useState<string | null>(null)
 
   useEffect(() => {
     void loadOrgs()
@@ -64,6 +66,13 @@ export default function OrganizationsPanel() {
   const handleInvite = async () => {
     const email = inviteEmail.trim()
     if (!selected || !email) return
+    // Client-side format gate (U4.3): a typo'd address used to burn a
+    // round-trip and surface a raw server error.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setInviteError('Enter a valid email address (name@example.com).')
+      return
+    }
+    setInviteError(null)
     setInviteBusy(true)
     try {
       await inviteMember(selected.id, email, inviteRole)
@@ -243,6 +252,7 @@ export default function OrganizationsPanel() {
 
                 {isActive && selected?.id === org.id && (
                   <div className="p-4 border-t border-border-subtle space-y-4 bg-surface-1/50">
+                    <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} />
                     <div>
                       <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Members</h4>
                       <div className="border border-border-subtle rounded-lg overflow-hidden">
@@ -309,13 +319,20 @@ export default function OrganizationsPanel() {
                         <div className="flex gap-2">
                           <input
                             value={inviteEmail}
-                            onChange={e => setInviteEmail(e.target.value)}
+                            onChange={e => {
+                              setInviteEmail(e.target.value)
+                              if (inviteError) setInviteError(null)
+                            }}
                             onKeyDown={e => {
                               if (e.key === 'Enter') void handleInvite()
                             }}
                             placeholder="teammate@example.com"
                             type="email"
-                            className="flex-1 px-3 py-1.5 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
+                            aria-invalid={!!inviteError}
+                            className={
+                              'flex-1 px-3 py-1.5 rounded-lg bg-surface-2 border text-sm focus:outline-none focus:border-brand-500 ' +
+                              (inviteError ? 'border-semantic-error' : 'border-border-default')
+                            }
                           />
                           <select
                             value={inviteRole}
@@ -337,6 +354,11 @@ export default function OrganizationsPanel() {
                             {inviteBusy ? 'Inviting…' : 'Invite'}
                           </button>
                         </div>
+                        {inviteError && (
+                          <p className="mt-1 text-2xs text-semantic-error" role="alert">
+                            {inviteError}
+                          </p>
+                        )}
 
                         <PendingInvites orgId={org.id} onInviteSent={handleInvite} />
                       </div>

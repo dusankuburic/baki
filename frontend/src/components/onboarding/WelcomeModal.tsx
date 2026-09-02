@@ -1,11 +1,12 @@
 import {useState, useCallback, useEffect} from 'react'
-import {FlaskConical, Search, Wrench, Download, ChevronRight, X} from 'lucide-react'
+import {FlaskConical, Search, Wrench, Download, Sparkles, ChevronRight, X} from 'lucide-react'
 import Modal from '@/components/shared/Modal'
 import {Spinner, useToast} from '@/components/shared'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useFlowStore} from '@/stores/flowStore'
-import {flowApi, analysisApi} from '@/api'
+import {flowApi, analysisApi, providersApi} from '@/api'
 import {SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES} from '@/data/sampleFlow'
+import {useUIStore} from '@/stores/uiStore'
 
 interface WelcomeModalProps {
   isOpen: boolean
@@ -47,6 +48,14 @@ const STEPS: StepDef[] = [
     title: 'Export',
     body: () => 'Export findings as SARIF for CI, or a PDF/Markdown report. The CLI (bakicli) gates CI on severity.',
   },
+  {
+    icon: Sparkles,
+    title: 'Explain & fix with AI',
+    // The provider-configured flag arrives live; the copy degrades gracefully
+    // while the check is in flight.
+    body: () =>
+      'Connect an AI provider key (Settings → AI Providers) to explain findings, fix with AI, and chat about your flows. Analysis and auto-fix work without one.',
+  },
 ]
 
 export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
@@ -58,6 +67,26 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   const {error: toastError} = useToast()
   const current = STEPS[step]
   const isLast = step === STEPS.length - 1
+
+  // Provider detection (onboarding R1-6): the tour previously never steered
+  // an unconfigured user toward the one setup step the headline AI features
+  // need. Checked once when the modal opens; failure = unknown (no nag).
+  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    providersApi
+      .listProviders()
+      .then((ps: {configured?: boolean}[]) => {
+        if (!cancelled) setAiConfigured((ps || []).some(p => p.configured))
+      })
+      .catch(() => {
+        if (!cancelled) setAiConfigured(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen])
 
   // Fetch the live rule count so the copy never drifts from the engine again.
   useEffect(() => {
@@ -135,6 +164,26 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
       </div>
 
       <p className="text-sm text-text-secondary leading-relaxed mb-6 min-h-[3rem]">{current.body(ruleCount)}</p>
+
+      {/* AI setup nudge: only on the AI step, only when the check confirms NO
+          provider is configured (null = unknown; never nag on a maybe). */}
+      {current.title.startsWith('Explain') && aiConfigured === false && (
+        <div className="flex items-center justify-between gap-3 mb-6 px-3 py-2 rounded-lg border border-brand-500/30 bg-brand-500/5">
+          <span className="text-xs text-text-secondary">No AI provider connected yet.</span>
+          <button
+            onClick={() => {
+              const ui = useUIStore.getState()
+              ui.setSettingsSection('providers')
+              ui.setSettingsOpen(true)
+              complete()
+            }}
+            className="flex items-center gap-1 text-xs font-medium text-brand-400 hover:text-brand-300"
+          >
+            Set one up
+            <ChevronRight size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Progress dots */}
       <div className="flex gap-1.5 mb-6">

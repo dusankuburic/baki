@@ -122,7 +122,9 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 			var parsed struct {
 				Message struct {
 					Usage struct {
-						InputTokens int `json:"input_tokens"`
+						InputTokens              int `json:"input_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 					} `json:"usage"`
 				} `json:"message"`
 			}
@@ -130,8 +132,15 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 				parseErrors++
 				continue
 			}
-			if parsed.Message.Usage.InputTokens > 0 {
-				tokensIn = parsed.Message.Usage.InputTokens
+			// Cache tokens are billed separately (reads ~0.1×, writes ~1.25×)
+			// and are EXCLUDED from input_tokens — not counting them made
+			// prompt-cached tool loops (the norm on long conversations)
+			// systematically understate usage against the daily budget.
+			// Counting both at full rate errs toward overstatement, the safe
+			// direction for a spend cap.
+			u := parsed.Message.Usage
+			if total := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens; total > 0 {
+				tokensIn = total
 				onChunk(Chunk{TokensIn: tokensIn})
 			}
 
@@ -358,15 +367,26 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 	return nil
 }
 
+// geminiFilteredFinish lists Gemini finishReason values meaning the response
+// was blocked or filtered server-side rather than completed. Treating these as
+// a clean Done makes an empty/blocked answer indistinguishable from a normal
+// completion — the user just sees nothing. STOP and MAX_TOKENS (and unknown
+// reasons) stay clean completions.
+var geminiFilteredFinish = map[string]bool{
+	"SAFETY":             true,
+	"RECITATION":         true,
+	"BLOCKLIST":          true,
+	"PROHIBITED_CONTENT": true,
+}
+
 func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var (
-		doneSent     bool
-		parseErrors  int
-		toolCallsIdx int
-		toolCalls    []ToolCall
+		doneSent    bool
+		parseErrors int
+		toolCalls   []ToolCall
 	)
 
 	for scanner.Scan() {
@@ -388,6 +408,10 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 			UsageMetadata *struct {
 				PromptTokenCount     int `json:"promptTokenCount"`
 				CandidatesTokenCount int `json:"candidatesTokenCount"`
+				// ThoughtsTokenCount is Gemini's billing for thinking tokens;
+				// candidatesTokenCount EXCLUDES it, so 2.5-series models
+				// systematically undercounted output without it.
+				ThoughtsTokenCount int `json:"thoughtsTokenCount"`
 			} `json:"usageMetadata"`
 		}
 
@@ -409,12 +433,13 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 					if part.FunctionCall.Args != nil {
 						args, _ = json.Marshal(part.FunctionCall.Args)
 					}
+					// Process-unique ID (see geminiCallSeq): a per-stream counter
+					// collides across tool-loop iterations.
 					toolCalls = append(toolCalls, ToolCall{
-						ID:    fmt.Sprintf("call_%d", toolCallsIdx),
+						ID:    nextGeminiCallID(),
 						Name:  part.FunctionCall.Name,
 						Input: json.RawMessage(args),
 					})
-					toolCallsIdx++
 				}
 			}
 			if cand.FinishReason != "" {
@@ -422,8 +447,16 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 					doneSent = true
 					tokensOut, tokensIn := 0, 0
 					if parsed.UsageMetadata != nil {
-						tokensOut = parsed.UsageMetadata.CandidatesTokenCount
+						tokensOut = parsed.UsageMetadata.CandidatesTokenCount + parsed.UsageMetadata.ThoughtsTokenCount
 						tokensIn = parsed.UsageMetadata.PromptTokenCount
+					}
+					if geminiFilteredFinish[cand.FinishReason] {
+						// Terminal (no truncation error — the stream ended
+						// deliberately), but surfaced as an error chunk so the
+						// client explains the block instead of showing an
+						// empty answer. Mirrors the Claude `error`-event path.
+						onChunk(Chunk{Error: fmt.Errorf("gemini stopped the response (finishReason=%s): the response was blocked by a content filter", cand.FinishReason)})
+						return nil
 					}
 					onChunk(Chunk{
 						Done:         true,

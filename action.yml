@@ -42,6 +42,10 @@ inputs:
     description: 'Post a summary comment on the pull request (requires pull-requests: write, only fires on pull_request events).'
     required: false
     default: 'true'
+  version:
+    description: 'bakicli release tag to download (e.g. v1.2.0; "latest" resolves the newest release). Falls back to building from the action checkout when the download is unavailable (air-gapped runners, pre-release tags).'
+    required: false
+    default: 'latest'
 
 outputs:
   sarif-file:
@@ -54,13 +58,69 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Set up Go
+    # Acquire bakicli from GitHub Releases (fast, pin-able via the `version`
+    # input, checksum-verified via the .sha256 sidecar shipped per RELEASE.md).
+    # Every run used to compile the CLI from source through setup-go — slow
+    # first-runs and no pinning story. Any download failure (air-gapped
+    # runner, tag predating the release assets) falls back to a source build.
+    - name: Acquire bakicli (release binary)
+      id: acquire
+      shell: bash
+      env:
+        BAKI_REPO: ${{ github.action_repository }}
+        BAKI_VERSION: ${{ inputs.version }}
+      run: |
+        set -uo pipefail
+        case "${{ runner.os }}" in
+          Linux) goos=linux ;;
+          macOS) goos=darwin ;;
+          Windows) goos=windows ;;
+          *) echo "unsupported OS: ${{ runner.os }}"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+        esac
+        case "${{ runner.arch }}" in
+          X64) goarch=amd64 ;;
+          ARM64) goarch=arm64 ;;
+          *) echo "unsupported arch: ${{ runner.arch }}"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+        esac
+        ext="tar.gz"; [ "$goos" = "windows" ] && ext="zip"
+        if [ "$BAKI_VERSION" = "latest" ]; then
+          base="https://github.com/${BAKI_REPO}/releases/latest/download"
+        else
+          base="https://github.com/${BAKI_REPO}/releases/download/${BAKI_VERSION}"
+        fi
+        asset="bakicli-${goos}-${goarch}.${ext}"
+        tmp="$(mktemp -d)"
+        if ! curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset"; then
+          echo "download failed for $base/$asset — falling back to source build"
+          echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+        fi
+        if ! curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256"; then
+          echo "checksum sidecar missing — falling back to source build"
+          echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+        fi
+        # Verify integrity (sha256sum ships in the runner's bash).
+        ( cd "$tmp" && sha256sum -c "$asset.sha256" ) || { echo "checksum mismatch — falling back to source build"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0; }
+        bin="${{ runner.temp }}/bakicli"
+        mkdir -p "${{ runner.temp }}"
+        if [ "$ext" = "zip" ]; then
+          # -j flattens: the archive holds bakicli.exe at its root.
+          unzip -o -j "$tmp/$asset" -d "${{ runner.temp }}" >/dev/null
+        else
+          tar -xzf "$tmp/$asset" -C "$tmp"
+          mv "$tmp/bakicli-${goos}-${goarch}" "$bin"
+        fi
+        chmod +x "$bin" 2>/dev/null || true
+        echo "acquired release binary $asset"
+
+    - name: Set up Go (fallback toolchain)
+      if: ${{ steps.acquire.outputs.build == 'true' }}
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version-file: ${{ github.action_path }}/go.mod
         cache-dependency-path: ${{ github.action_path }}/go.sum
 
-    - name: Build bakicli
+    - name: Build bakicli (fallback)
+      if: ${{ steps.acquire.outputs.build == 'true' }}
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |
@@ -90,8 +150,10 @@ runs:
         [ -z "$out_format" ] && out_format="sarif"
         out_file="${{ inputs.sarif-file }}"
         # SARIF is emitted before the gate exits non-zero, so the report is complete.
+        BAKICLI="${{ runner.temp }}/bakicli"
+        [ -x "$BAKICLI" ] || BAKICLI="${{ runner.temp }}/bakicli.exe"
         set +e
-        "${{ runner.temp }}/bakicli" -format "$out_format" "${args[@]}" "${{ inputs.flow-path }}" > "$out_file"
+        "$BAKICLI" -format "$out_format" "${args[@]}" "${{ inputs.flow-path }}" > "$out_file"
         code=$?
         set -e
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"

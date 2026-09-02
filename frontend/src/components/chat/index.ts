@@ -12,6 +12,7 @@ export {default as ConnectionPanel} from './ConnectionPanel'
 export {default as SourceFilePicker} from './SourceFilePicker'
 export {default as ChatToolbar} from './ChatToolbar'
 export {default as ChatThreadBar} from './ChatThreadBar'
+export {default as FixProposalCard} from './FixProposalCard'
 // AITab is deliberately NOT re-exported: it is the lazy entry for this whole
 // directory (InspectorPanel imports it by direct path), so a barrel
 // self-export would create a circular module graph.

@@ -39,8 +39,12 @@ func (g *GLMProvider) ContextLimit() int    { return 200000 }
 func (g *GLMProvider) DefaultModel() string { return "glm-5.1" }
 func (g *GLMProvider) FreeModel() string    { return "glm-4.7-flash" }
 
+// PricePerMillionTokens is the fallback price used to meter out-of-catalog
+// models (audited.record). It must mirror the default model's catalog entry:
+// a stale/lowball value silently under-bills usage and keeps the daily budget
+// from ever tripping for models the catalog hasn't caught up to.
 func (g *GLMProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 0.01, OutputCostPerM: 0.01}
+	return Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}
 }
 
 func (g *GLMProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {

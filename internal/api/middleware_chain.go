@@ -146,6 +146,14 @@ var authRateLimitPaths = map[string]struct{}{
 	"/api/auth/sso/exchange": {},
 }
 
+// expensiveGetPaths are unauthenticated GETs that resolve a flow and run the
+// analyzer (B1.9): the per-flow report cache bounds steady-state cost, but a
+// first-hit wave per leaked link still pays a full walk per flow — they ride
+// the tighter "analysis" bucket, not "general".
+var expensiveGetPaths = map[string]struct{}{
+	"/api/shared": {},
+}
+
 // rateLimitGroup classifies a request into its rate-limit group. It is a pure
 // function (no I/O) so the routing policy can be unit-tested independently of
 // the fx wiring. Order matters only in that the explicit checks take precedence
@@ -153,6 +161,9 @@ var authRateLimitPaths = map[string]struct{}{
 func rateLimitGroup(method, path string) string {
 	if _, ok := authRateLimitPaths[path]; ok {
 		return rlGroupAuth
+	}
+	if _, ok := expensiveGetPaths[path]; ok {
+		return rlGroupAnalysis
 	}
 	if method == "POST" {
 		if strings.HasPrefix(path, "/api/analysis/") {

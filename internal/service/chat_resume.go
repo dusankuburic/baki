@@ -38,12 +38,16 @@ const (
 const streamIdleTimeout = 90 * time.Second
 
 // ResumeResult is the buffered state of a stream returned to a reconnecting client.
+// Events replays the agentic journal (tool results, fix proposals/decisions)
+// recorded since the stream began — the reconnecting client rebuilds its tool
+// trail and any pending approval card from these instead of losing them.
 type ResumeResult struct {
-	Text      string `json:"text"`
-	Done      bool   `json:"done"`
-	Error     string `json:"error"`
-	TokensIn  int    `json:"tokensIn"`
-	TokensOut int    `json:"tokensOut"`
+	Text      string         `json:"text"`
+	Done      bool           `json:"done"`
+	Error     string         `json:"error"`
+	TokensIn  int            `json:"tokensIn"`
+	TokensOut int            `json:"tokensOut"`
+	Events    []journalEvent `json:"events,omitempty"`
 }
 
 // resumeSnapshot is the cross-replica-persistable form of a stream's resumable
@@ -51,12 +55,13 @@ type ResumeResult struct {
 // request that lands on a different replica can be authorized. It is written to
 // the backplane so a client that reconnects to any replica can fetch the buffer.
 type resumeSnapshot struct {
-	Owner     string `json:"owner"`
-	Text      string `json:"text"`
-	Done      bool   `json:"done"`
-	Error     string `json:"error"`
-	TokensIn  int    `json:"tokensIn"`
-	TokensOut int    `json:"tokensOut"`
+	Owner     string         `json:"owner"`
+	Text      string         `json:"text"`
+	Done      bool           `json:"done"`
+	Error     string         `json:"error"`
+	TokensIn  int            `json:"tokensIn"`
+	TokensOut int            `json:"tokensOut"`
+	Events    []journalEvent `json:"events,omitempty"`
 }
 
 // resumeStore is the pluggable backing for chat-stream resume. The no-op impl
@@ -231,17 +236,26 @@ func sliceFrom(s string, from int) string {
 // subscription existed — the final buffered state is returned instead so the
 // caller can deliver it directly. nil means the stream is live (or unknown)
 // and events arrive over SSE.
+//
+// A live stream that already recorded journal events (a tool loop that ran
+// while this client was connecting/reconnecting) has them re-emitted over SSE
+// to the owner: a fresh subscriber misses everything emitted before it
+// subscribed, and without the replay a reconnected client's tool trail and
+// any pending fix proposal would be gone for good.
 func (s *ChatService) BeginStream(ctx context.Context, streamID string) *ResumeResult {
 	if val, ok := s.activeStreams.Load(streamID); ok {
 		ctl := val.(*streamCtl)
 		ctl.startOnce.Do(func() { close(ctl.started) })
+		// Replay the agentic journal to the owner's SSE connection(s); the
+		// events are stream-addressed so non-matching clients drop them.
+		s.replayJournal(ctl)
 		// A failed-fast stream may still be in the active set for an instant;
 		// its error was emitted before this call (pre-subscription, so lost) —
 		// hand it back synchronously. A snapshot without done/error means any
 		// later terminal event is emitted after this request arrived, i.e.
 		// after the client subscribed, so SSE delivery covers it.
 		if snap := ctl.snapshot(); snap.Done || snap.Error != "" {
-			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut}
+			return &ResumeResult{Text: snap.Text, Done: snap.Done, Error: snap.Error, TokensIn: snap.TokensIn, TokensOut: snap.TokensOut, Events: snap.Events}
 		}
 		return nil
 	}
@@ -249,6 +263,18 @@ func (s *ChatService) BeginStream(ctx context.Context, streamID string) *ResumeR
 		return res
 	}
 	return nil
+}
+
+// replayJournal re-emits a stream's recorded journal events to its owner over
+// SSE. Cheap no-op when the journal is empty (the common begin path).
+func (s *ChatService) replayJournal(ctl *streamCtl) {
+	ctl.mu.Lock()
+	events := ctl.snapshotEvents()
+	ctl.mu.Unlock()
+	for _, ev := range events {
+		s.notifier.EmitTo(ctl.ownerID, "chat:event",
+			map[string]interface{}{"streamId": ctl.streamID, "type": ev.Type, "data": ev.Data})
+	}
 }
 
 func (s *ChatService) CancelStream(streamID string) {
@@ -303,14 +329,20 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 	if ok {
 		ctl := val.(*streamCtl)
 		ctl.mu.Lock()
-		defer ctl.mu.Unlock()
-		return &ResumeResult{
-			Text:      sliceFrom(ctl.buffer.String(), from),
+		// B1.13: copy the buffer bytes under the lock (pre-sized), then build
+		// the result OUTSIDE it — String()+sliceFrom under mu stalled chunk
+		// emission for the duration of a full-buffer copy on long streams.
+		buf := ctl.buffer.String()
+		snap := &ResumeResult{
 			Done:      ctl.done,
 			Error:     ctl.errMsg,
 			TokensIn:  ctl.tokensIn,
 			TokensOut: ctl.tokensOut,
-		}, nil
+			Events:    ctl.snapshotEvents(),
+		}
+		ctl.mu.Unlock()
+		snap.Text = sliceFrom(buf, from)
+		return snap, nil
 	}
 	if snap, ok := s.resumeBackplane().Load(ctx, streamID); ok {
 		return &ResumeResult{
@@ -319,6 +351,7 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 			Error:     snap.Error,
 			TokensIn:  snap.TokensIn,
 			TokensOut: snap.TokensOut,
+			Events:    snap.Events,
 		}, nil
 	}
 	return nil, fmt.Errorf("stream not found or already completed")

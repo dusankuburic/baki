@@ -43,6 +43,7 @@ import PaneDivider from './components/layout/PaneDivider'
 import WelcomeModal from './components/onboarding/WelcomeModal'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
+import {useFileWatcher} from '@/hooks/useFileWatcher'
 import type {FlowDocument as DomainFlowDocument, RecentFile} from './types'
 
 function AppInner() {
@@ -68,6 +69,8 @@ function AppInner() {
   // itself is consumed inside CommandPaletteContainer (and the panes that
   // actually render it).
   const documentId = useFlowStore(s => s.document?.id ?? null)
+  const settingsSection = useUIStore(s => s.settingsSection)
+  const setSettingsSection = useUIStore(s => s.setSettingsSection)
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const requestSearchFocus = useSearchStore(s => s.requestFocus)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
@@ -259,7 +262,16 @@ function AppInner() {
             </div>
           }
         >
-          {settingsOpen && <SettingsModal isOpen onClose={() => setSettingsOpen(false)} />}
+          {settingsOpen && (
+            <SettingsModal
+              isOpen
+              initialSection={settingsSection}
+              onClose={() => {
+                setSettingsOpen(false)
+                if (settingsSection) setSettingsSection(null)
+              }}
+            />
+          )}
         </Suspense>
       </ErrorBoundary>
       <ErrorBoundary>
@@ -306,6 +318,11 @@ function CommandPaletteContainer({
   const document = useFlowStore(s => s.document)
   const user = useAuthStore(s => s.user)
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
+
+  // Desktop auto-reimport (R1-3): when the flow's file changes on disk (the
+  // user edited in Power Automate Desktop), reload + re-analyze without the
+  // manual Reimport click. No-op for cloud docs and web builds.
+  useFileWatcher(document)
 
   useEffect(() => {
     let cancelled = false

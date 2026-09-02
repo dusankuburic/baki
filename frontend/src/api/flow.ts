@@ -97,10 +97,12 @@ export const flowApi = {
   suppressInSource: (flowId: string, blockId: string, ruleId: string): Promise<FlowDocument> =>
     request('/api/flow/suppress-in-source', {body: {flowId, blockId, ruleId}}),
 
-  // applyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler) to a
-  // block in the flow's source file and returns the re-parsed document. Desktop
-  // only. The finding carries the available fixType in its `autoFix` field;
-  // show "Apply fix" only when that is set.
+  // applyFix applies a deterministic auto-fix (e.g. wrap-error-handler) to a
+  // block in the flow's source and returns the re-parsed document. Works on
+  // desktop (file-backed) and cloud flows — single-file (stored source) AND
+  // folder flows (per-member-file patching via the canonical serializer, R3-3).
+  // The finding carries the available fixType in its `autoFix` field; show
+  // "Apply fix" only when that is set.
   applyFix: (
     flowId: string,
     blockId: string,
@@ -131,6 +133,62 @@ export const flowApi = {
     limit?: number,
   ): Promise<{document: FlowDocument; applied: number}> =>
     request('/api/flow/apply-fix-batch', {body: {flowId, rules, limit}}),
+
+  // Snapshot (undo) API: every fix/batch/source-save captures the pre-mutation
+  // source server-side; restore writes it back (desktop: file; cloud: OCC
+  // persist) and returns the re-loaded document.
+  listSnapshots: (flowId: string): Promise<{snapshots: {id: string; label: string; createdAt: string; bytes: number}[]}> =>
+    request(`/api/flow/snapshots${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
+
+  restoreSnapshot: (flowId: string, snapshotId: string): Promise<{document: FlowDocument}> =>
+    request('/api/flow/snapshots/restore', {body: {flowId, snapshotId}}),
+
+  // Property editing + reordering (R3-2): targeted in-line property replaces
+  // (other properties' text untouched) and sibling moves. Same undo/parse-gate
+  // guarantees as the other block edits.
+  updateBlockProperties: (flowId: string, blockId: string, changes: Record<string, string>): Promise<{document: FlowDocument}> =>
+    request('/api/flow/block/properties', {body: {flowId, blockId, changes}}),
+
+  moveBlock: (flowId: string, blockId: string, direction: 'up' | 'down'): Promise<{document: FlowDocument}> =>
+    request('/api/flow/block/move', {body: {flowId, blockId, direction}}),
+
+  // moveBlockTo reorders before/after a reference sibling — the primitive
+  // drag-and-drop maps to. Same-scope only (cross-container refused server-side).
+  moveBlockTo: (
+    flowId: string,
+    blockId: string,
+    refBlockId: string,
+    position: 'before' | 'after',
+  ): Promise<{document: FlowDocument}> =>
+    request('/api/flow/block/move-to', {body: {flowId, blockId, refBlockId, position}}),
+
+  // Block editing (R3-1b): remove deletes the block (+ descendants) from the
+  // source; duplicate inserts a verbatim copy after it. Both parse-gated and
+  // snapshotted server-side (undo via listSnapshots/restoreSnapshot).
+  removeBlock: (flowId: string, blockId: string): Promise<{document: FlowDocument}> =>
+    request('/api/flow/block/remove', {body: {flowId, blockId}}),
+
+  // removeBlocks bulk-deletes in ONE server-side patch (U3b multi-select).
+  removeBlocks: (flowId: string, blockIds: string[]): Promise<{document: FlowDocument}> =>
+    request('/api/flow/block/remove-batch', {body: {flowId, blockIds}}),
+
+  // renameBlock renames LABEL/COMMENT blocks; labels rewrite their GOTO refs.
+  renameBlock: (flowId: string, blockId: string, name: string): Promise<{document: FlowDocument; gotoRefsUpdated: number}> =>
+    request('/api/flow/block/rename', {body: {flowId, blockId, name}}),
+
+  duplicateBlock: (flowId: string, blockId: string): Promise<{document: FlowDocument}> =>
+    request('/api/flow/block/duplicate', {body: {flowId, blockId}}),
+
+  // setTags replaces a cloud flow's organizational tags (R2-4b). Server
+  // normalizes (lowercase, letters/digits/-/_, ≤32 chars, ≤20 tags) and
+  // returns the canonical set.
+  setTags: (flowId: string, tags: string[]): Promise<{tags: string[]}> =>
+    request('/api/flow/tags', {body: {flowId, tags}, method: 'PUT'}),
+
+  // getSourceMeta returns the cheap change-detection signal (size + mtime;
+  // folder flows aggregate members) the desktop watcher polls.
+  getSourceMeta: (flowId: string): Promise<{size: number; modTime: string; files: number}> =>
+    request(`/api/flow/source-meta${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
 
   // getSource returns the raw PAD source text (desktop: file; cloud: stored).
   getSource: (flowId: string): Promise<{source: string}> =>

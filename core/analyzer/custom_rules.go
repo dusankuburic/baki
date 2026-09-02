@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -32,29 +33,42 @@ type CustomRule struct {
 	rawRe  *regexp.Regexp
 }
 
-func LoadCustomRules(path string) ([]Rule, error) {
+// LoadCustomRules reads a custom-rules JSON file. Invalid entries are
+// skipped, but each skip is now REPORTED as a warning (index + rule id +
+// reason) — the old silent `continue` meant a typo'd regex or unknown autoFix
+// quietly removed a rule the operator believed was enforcing. Callers decide
+// where warnings surface (CLI stderr, server startup log).
+func LoadCustomRules(path string) ([]Rule, []string, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- custom-rules path is operator-configured
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	var configs []CustomRuleConfig
 	if err := json.Unmarshal(data, &configs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var rules []Rule
-	for _, cfg := range configs {
-		r, err := NewCustomRule(cfg)
-		if err != nil {
+	var warnings []string
+	for i, cfg := range configs {
+		r, cerr := NewCustomRule(cfg)
+		if cerr != nil {
+			id := cfg.ID
+			if id == "" {
+				id = fmt.Sprintf("#%d (no id)", i)
+			}
+			// NewCustomRule's regexp errors don't carry the id — prefix it so
+			// every warning names the skipped rule unambiguously.
+			warnings = append(warnings, fmt.Sprintf("%s: entry %d (rule %q) skipped: %v", filepath.Base(path), i, id, cerr))
 			continue
 		}
 		rules = append(rules, r)
 	}
-	return rules, nil
+	return rules, warnings, nil
 }
 
 func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {

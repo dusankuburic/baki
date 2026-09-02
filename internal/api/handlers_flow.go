@@ -386,6 +386,9 @@ func (h *FlowHandler) handleReimport(w http.ResponseWriter, r *http.Request) {
 	// Drop only the re-imported flow's stale analytics entry (the source may
 	// have changed on disk); the rest of the session's analytics survive.
 	analyzer.DefaultCache.Invalidate(analyzer.StableFlowID(fresh))
+	// The flow's content changed on disk (edited in PAD): derived caches —
+	// search index, chat context — must not serve the pre-import state.
+	h.flowSvc.InvalidateSearchIndex(fresh.ID)
 	render.JSON(w, fresh)
 }
 
@@ -583,6 +586,388 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
 	}
 	render.JSON(w, map[string]any{"document": updated, "applied": applied})
+}
+
+// handleListSourceSnapshots returns the flow's undo ring (newest last):
+// the pre-mutation states captured by every fix/batch/source-save path this
+// session. Editor access (restoring is an edit; listing previews it).
+// @Summary      List undo snapshots
+// @Tags         flow
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Snapshots"
+// @Router       /api/flow/snapshots [get]
+func (h *FlowHandler) handleListSourceSnapshots(w http.ResponseWriter, r *http.Request) {
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, r.URL.Query().Get("flowId"), "editor")
+	if !ok {
+		return
+	}
+	render.JSON(w, map[string]any{"snapshots": h.flowSvc.ListSourceSnapshots(doc)})
+}
+
+// handleRestoreSourceSnapshot writes a snapshot's bytes back (undo for the
+// last fix/batch/save). Desktop re-writes the recorded file; cloud persists
+// through the standard OCC path — and snapshots the current state first, so
+// a restore is itself undoable.
+// @Summary      Restore undo snapshot
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/snapshots/restore [post]
+func (h *FlowHandler) handleRestoreSourceSnapshot(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID     string `json:"flowId"`
+		SnapshotID string `json:"snapshotId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.SnapshotID == "" {
+		render.Error(w, fmt.Errorf("snapshotId is required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("snapshot_restore")
+	updated, err := h.flowSvc.RestoreSourceSnapshot(r.Context(), doc, req.SnapshotID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated})
+}
+
+// handleUpdateFlowTags replaces a flow's organizational tags (business unit,
+// criticality, environment). Editor access. Tags are metadata, not content:
+// no version bump, so re-tagging can't trip OCC for a concurrent editor.
+// @Summary      Set flow tags
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Tags"
+// @Router       /api/flow/tags [put]
+func (h *FlowHandler) handleUpdateFlowTags(w http.ResponseWriter, r *http.Request) {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("flow tags require a storage backend (cloud mode)"), http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		FlowID string   `json:"flowId"`
+		Tags   []string `json:"tags"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.FlowID == "" {
+		render.Error(w, fmt.Errorf("flowId is required"), http.StatusBadRequest)
+		return
+	}
+	// Editor: tags change how the flow is governed/found, so they're an edit.
+	// Permission-only check — a metadata write needs no content resolution.
+	if !requireFlowPerm(w, r, h.flowSvc, h.security, req.FlowID, "editor") {
+		return
+	}
+	if err := h.backend.UpdateFlowTags(r.Context(), req.FlowID, req.Tags); err != nil {
+		if errors.Is(err, storageif.ErrNotFound) {
+			render.Error(w, err, http.StatusNotFound)
+			return
+		}
+		render.Error(w, err, http.StatusBadRequest) // invalid tag names are the common failure
+		return
+	}
+	normalized, _ := storageif.NormalizeFlowTags(req.Tags)
+	render.JSON(w, map[string]any{"tags": normalized})
+}
+
+// handleRemoveBlock deletes one block (with descendants) from the flow
+// source — the visual editor's delete. Parse-gated + snapshotted server-side
+// (undo via the snapshot endpoints). Editor access.
+// @Summary      Remove a block
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/block/remove [post]
+func (h *FlowHandler) handleRemoveBlock(w http.ResponseWriter, r *http.Request) {
+	h.handleBlockEdit(w, r, "remove")
+}
+
+// handleDuplicateBlock inserts a verbatim copy of one block directly after
+// it. Editor access.
+// @Summary      Duplicate a block
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/block/duplicate [post]
+func (h *FlowHandler) handleDuplicateBlock(w http.ResponseWriter, r *http.Request) {
+	h.handleBlockEdit(w, r, "duplicate")
+}
+
+func (h *FlowHandler) handleBlockEdit(w http.ResponseWriter, r *http.Request, kind string) {
+	var req struct {
+		FlowID  string `json:"flowId"`
+		BlockID string `json:"blockId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.BlockID == "" {
+		render.Error(w, fmt.Errorf("blockId is required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("block_" + kind)
+	var updated *models.FlowDocument
+	var err error
+	if kind == "remove" {
+		updated, err = h.flowSvc.RemoveBlock(r.Context(), doc, req.BlockID)
+	} else {
+		updated, err = h.flowSvc.DuplicateBlock(r.Context(), doc, req.BlockID)
+	}
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusConflict) // stale-file/guard errors carry their own guidance
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated})
+}
+
+// handleUpdateBlockProperties applies a batch of property edits to one block
+// (targeted in-line replaces; other properties' text untouched). Editor.
+// @Summary      Update block properties
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/block/properties [post]
+func (h *FlowHandler) handleUpdateBlockProperties(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID  string            `json:"flowId"`
+		BlockID string            `json:"blockId"`
+		Changes map[string]string `json:"changes"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.BlockID == "" || len(req.Changes) == 0 {
+		render.Error(w, fmt.Errorf("blockId and at least one change are required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("block_properties")
+	updated, err := h.flowSvc.UpdateBlockProperties(r.Context(), doc, req.BlockID, req.Changes)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated})
+}
+
+// handleMoveBlock reorders a block among its siblings ({"up"|"down"}).
+// @Summary      Move a block
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/block/move [post]
+func (h *FlowHandler) handleMoveBlock(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID    string `json:"flowId"`
+		BlockID   string `json:"blockId"`
+		Direction string `json:"direction"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.BlockID == "" {
+		render.Error(w, fmt.Errorf("blockId is required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("block_move")
+	updated, err := h.flowSvc.MoveBlock(r.Context(), doc, req.BlockID, req.Direction)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusConflict)
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated})
+}
+
+// handleRemoveBlocks bulk-deletes blocks in one patch (U3b multi-select).
+// @Summary      Bulk delete blocks
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/block/remove-batch [post]
+func (h *FlowHandler) handleRemoveBlocks(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID   string   `json:"flowId"`
+		BlockIDs []string `json:"blockIds"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if len(req.BlockIDs) == 0 {
+		render.Error(w, fmt.Errorf("blockIds must not be empty"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("block_remove_batch")
+	updated, err := h.flowSvc.RemoveBlocks(r.Context(), doc, req.BlockIDs)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated})
+}
+
+// handleRenameBlock renames LABEL/COMMENT blocks (rewriting same-file GOTO
+// references for labels). @Summary Rename a block
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document + gotoRefsUpdated"
+// @Router       /api/flow/block/rename [post]
+func (h *FlowHandler) handleRenameBlock(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID  string `json:"flowId"`
+		BlockID string `json:"blockId"`
+		Name    string `json:"name"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.BlockID == "" || req.Name == "" {
+		render.Error(w, fmt.Errorf("blockId and name are required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("block_rename")
+	updated, gotoRefs, err := h.flowSvc.RenameBlock(r.Context(), doc, req.BlockID, req.Name)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated, "gotoRefsUpdated": gotoRefs})
+}
+
+// handleMoveBlockTo reorders a block before/after a reference sibling —
+// the primitive drag-and-drop maps to. Same-scope only (re-parenting
+// refused). Editor access.
+// @Summary      Move a block relative to another
+// @Tags         flow
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Document"
+// @Router       /api/flow/block/move-to [post]
+func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FlowID     string `json:"flowId"`
+		BlockID    string `json:"blockId"`
+		RefBlockID string `json:"refBlockId"`
+		Position   string `json:"position"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.BlockID == "" || req.RefBlockID == "" {
+		render.Error(w, fmt.Errorf("blockId and refBlockId are required"), http.StatusBadRequest)
+		return
+	}
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, req.FlowID, "editor")
+	if !ok {
+		return
+	}
+	metrics.RecordFlowOp("block_move_to")
+	updated, err := h.flowSvc.MoveBlockTo(r.Context(), doc, req.BlockID, req.RefBlockID, req.Position)
+	if err != nil {
+		if errors.Is(err, storageif.ErrVersionConflict) {
+			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
+			return
+		}
+		render.Error(w, err, http.StatusConflict) // guards carry their own guidance
+		return
+	}
+	if h.notifier != nil {
+		h.notifier.NotifyFlowChanged(req.FlowID, int(time.Now().UnixMilli()))
+	}
+	render.JSON(w, map[string]any{"document": updated})
+}
+
+// handleGetSourceMeta returns the cheap file stat signal the desktop
+// watcher polls (size + mtime; folder flows aggregate members). Viewer.
+// @Summary      Get flow file change signal
+// @Tags         flow
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Meta"
+// @Router       /api/flow/source-meta [get]
+func (h *FlowHandler) handleGetSourceMeta(w http.ResponseWriter, r *http.Request) {
+	doc, ok := resolveFlow(w, r, h.flowSvc, h.security, r.URL.Query().Get("flowId"), "viewer")
+	if !ok {
+		return
+	}
+	meta, err := h.flowSvc.GetSourceMeta(doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, meta)
 }
 
 // handleGetSource returns the raw PAD source text for the flow. Desktop: reads

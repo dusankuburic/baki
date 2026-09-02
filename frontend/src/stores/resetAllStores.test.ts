@@ -147,7 +147,10 @@ describe('resetAllStores', () => {
     expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(0)
     expect(useAnalysisStore.getState().triageMap.size).toBe(0)
     expect(useAnalysisStore.getState().baseline).toBeNull()
-    expect(useAnalysisStore.getState().savedViews).toHaveLength(0)
+    // Saved views are DEVICE-LOCAL prefs (persisted to localStorage) and
+    // deliberately survive the session reset — blanking them in memory while
+    // they live on disk made them vanish until reload.
+    expect(useAnalysisStore.getState().savedViews).toHaveLength(1)
     expect(useFlowStore.getState().document).toBeNull()
     // visibleTypes resets to ALL_TYPES (non-empty, full set)
     expect(useFlowStore.getState().visibleTypes.size).toBeGreaterThan(1)

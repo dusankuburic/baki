@@ -172,7 +172,9 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 
 	user, err := h.resolveSSOUser(r.Context(), ident)
 	if err != nil {
-		redirectSSOError(w, r, err.Error())
+		// B1.8: backend/driver error text must not ride a browser redirect.
+		logger.Warn("sso: user resolution failed", "err", err)
+		redirectSSOError(w, r, "account resolution failed")
 		return
 	}
 

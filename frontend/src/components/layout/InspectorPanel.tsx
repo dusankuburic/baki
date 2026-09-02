@@ -27,7 +27,12 @@ export default function InspectorPanel() {
   return (
     <div className="flex flex-col h-full bg-surface-1">
       <InspectorTabs />
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+      <div
+        id={`inspector-panel-${tab}`}
+        role="tabpanel"
+        aria-label="Inspector panel"
+        className="flex-1 min-h-0 overflow-hidden flex flex-col"
+      >
         {tab === 'details' && (
           <ErrorBoundary fallbackMessage="Details tab error">
             <DetailsTab />

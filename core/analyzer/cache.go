@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"golang.org/x/sync/singleflight"
+
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -269,9 +271,33 @@ func CachedAnalysisCtx(gctx context.Context, doc *models.FlowDocument, rules []R
 		return cached
 	}
 
-	// Skip per-rule timing on the cached hot path; RuleProfiles durations are a
-	// dev diagnostic and not worth two time.Now() calls per (block, rule) here.
-	report := runAnalysisCore(gctx, doc, rules, settings, onProgress, false)
-	DefaultCache.PutWithPath(id, doc.FilePath, hash, report)
-	return report
+	// In-flight dedup (B1.2): the HTTP handler, chat tool loop, batch fix,
+	// and re-analysis refresh routinely race on the same flow — every
+	// concurrent miss used to run the FULL 41-rule walk. Same shape as the
+	// document provider's ResolveDoc singleflight. Non-cancellable joiners
+	// still run under the leader's context; the report is cache-keyed so the
+	// value is identical by construction.
+	sfKey := id + "\x00" + hash
+	v, err, _ := analysisSF.Do(sfKey, func() (any, error) {
+		// Re-check inside the flight: a previous leader may have populated
+		// the cache between our miss and acquiring the slot.
+		if cached := DefaultCache.Get(id, hash); cached != nil {
+			return cached, nil
+		}
+		// Skip per-rule timing on the cached hot path; RuleProfiles durations
+		// are a dev diagnostic and not worth two time.Now() calls per
+		// (block, rule) here.
+		report := runAnalysisCore(gctx, doc, rules, settings, onProgress, false)
+		DefaultCache.PutWithPath(id, doc.FilePath, hash, report)
+		return report, nil
+	})
+	if err != nil || v == nil {
+		// Singleflight error only if the leader panicked-errored (it can't
+		// here); fall back to a direct walk so a caller NEVER gets nil.
+		return runAnalysisCore(gctx, doc, rules, settings, onProgress, false)
+	}
+	return v.(*models.AnalysisReport)
 }
+
+// analysisSF dedups concurrent identical analysis walks (B1.2).
+var analysisSF singleflight.Group

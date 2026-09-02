@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -241,8 +242,29 @@ func (b *PostgresStorageBackend) DeleteKnowledgeDocument(ctx context.Context, or
 	return err
 }
 
+// DeleteKnowledgeDocumentByName gives re-upload REPLACE semantics: chunks
+// cascade with the document rows, so the stale version stops influencing
+// retrieval the moment the new upload begins.
+func (b *PostgresStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Context, orgID, filename string) error {
+	_, err := b.query(ctx).ExecContext(ctx, `DELETE FROM knowledge_documents WHERE org_id = $1 AND filename = $2`, orgID, filename)
+	return err
+}
+
+// ListKnowledgeDocuments joins per-doc chunk counts and vector-indexed
+// counts: a doc with chunks but 0 indexed is stranded by an embedding
+// provider/dimension switch — the management UI surfaces it and offers
+// re-index. embedding_vec IS NOT NULL counts only rows the HNSW index can
+// compare (mismatched dims are stored NULL; see SaveKnowledgeChunks).
 func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
-	rows, err := b.query(ctx).QueryContext(ctx, `SELECT id, org_id, filename, created_at FROM knowledge_documents WHERE org_id = $1`, orgID)
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT d.id, d.org_id, d.filename, d.created_at,
+		       COUNT(c.id) AS chunk_count,
+		       COUNT(c.id) FILTER (WHERE c.embedding_vec IS NOT NULL) AS indexed_count
+		FROM knowledge_documents d
+		LEFT JOIN knowledge_chunks c ON c.doc_id = d.id
+		WHERE d.org_id = $1
+		GROUP BY d.id
+		ORDER BY d.created_at DESC`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +272,7 @@ func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, org
 	var docs []*interfaces.KnowledgeDocument
 	for rows.Next() {
 		var d interfaces.KnowledgeDocument
-		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt, &d.ChunkCount, &d.VectorIndexed); err != nil {
 			return nil, err
 		}
 		docs = append(docs, &d)
@@ -370,9 +392,12 @@ func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID stri
 // searchKnowledgeVector runs the server-side similarity search. A cosine
 // distance threshold of 1.0 (max distance = 2.0) excludes irrelevant chunks
 // — a query with no genuinely-relevant docs returns empty instead of noise.
+// The SELECT deliberately omits c.embedding (the ~15-30KB JSONB copy): the
+// ranking already happened in SQL and the caller only uses content/filename
+// — transferring + parsing megabytes of embeddings per query bought nothing.
 func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	rows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT c.id, c.doc_id, c.content, c.embedding
+		SELECT c.id, c.doc_id, c.content, d.filename
 		FROM knowledge_chunks c
 		JOIN knowledge_documents d ON c.doc_id = d.id
 		WHERE d.org_id = $1
@@ -388,12 +413,8 @@ func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgI
 	var chunks []interfaces.KnowledgeChunk
 	for rows.Next() {
 		var c interfaces.KnowledgeChunk
-		var embJSON []byte
-		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON); err != nil {
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &c.Filename); err != nil {
 			return nil, err
-		}
-		if err := json.Unmarshal(embJSON, &c.Embedding); err != nil {
-			logger.Warn("corrupt embedding JSON", "chunk_id", c.ID, "error", err)
 		}
 		chunks = append(chunks, c)
 	}
@@ -420,7 +441,7 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	// rankKnowledgeChunks (a 1536-dim embedding is ~15-30 KB of JSON text).
 	const maxChunks = 500
 	rows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT c.id, c.doc_id, c.content, c.embedding
+		SELECT c.id, c.doc_id, c.content, c.embedding, d.filename
 		FROM knowledge_chunks c
 		JOIN knowledge_documents d ON c.doc_id = d.id
 		WHERE d.org_id = $1
@@ -436,7 +457,7 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	for rows.Next() {
 		var c interfaces.KnowledgeChunk
 		var embJSON []byte
-		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON); err != nil {
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON, &c.Filename); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(embJSON, &c.Embedding); err != nil {
@@ -447,8 +468,140 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate knowledge chunks: %w", err)
 	}
+	// The capped sample is deterministic but ARBITRARY: on an org with more
+	// same-dim chunks than maxChunks, the same subset is always searched and
+	// the rest are permanently invisible. Surface it so ops knows the
+	// fallback is lossy on this deployment (install pgvector / re-index).
+	if len(chunks) >= maxChunks {
+		logger.Warn("knowledge search fallback capped — chunks beyond the sample are unsearchable",
+			"org_id", orgID, "sampled", len(chunks))
+		metrics.RecordRAGFallbackCapped()
+	}
 
 	return rankKnowledgeChunks(orgID, chunks, queryEmbedding, limit)
+}
+
+// ListKnowledgeChunkContents returns every chunk's ID+DocID+Content for
+// re-indexing: the embedding provider changed, but the chunked TEXT is still
+// the source of truth (no re-chunking needed).
+func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string) ([]interfaces.KnowledgeChunk, error) {
+	// Bound the re-index payload like AddDocument bounds uploads (500
+	// chunks/doc): an unbounded org would fan out into an unbounded
+	// embedding bill from one admin click.
+	const maxReindexChunks = 2000
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT c.id, c.doc_id, c.content
+		FROM knowledge_chunks c
+		JOIN knowledge_documents d ON c.doc_id = d.id
+		WHERE d.org_id = $1
+		ORDER BY c.doc_id, c.id
+		LIMIT $2`, orgID, maxReindexChunks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chunks []interfaces.KnowledgeChunk
+	for rows.Next() {
+		var c interfaces.KnowledgeChunk
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
+// UpdateKnowledgeChunkEmbeddings replaces chunk embeddings in place for
+// re-indexing (RLS-scoped like SaveKnowledgeChunks; see its comment for why
+// the tx must set app.current_user_id). embedding_vec is refreshed only for
+// vectors matching the configured dimension — a switch TO a new dimension
+// leaves old rows NULL and this call fills exactly the matching ones.
+func (b *PostgresStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+	runUpdates := func(tx DBTX) error {
+		const perStmt = 200
+		for start := 0; start < len(chunks); start += perStmt {
+			end := min(start+perStmt, len(chunks))
+			batch := chunks[start:end]
+			var sb strings.Builder
+			args := make([]any, 0, len(batch)*3)
+			if b.hasPgvector {
+				sb.WriteString(`UPDATE knowledge_chunks AS c SET embedding = v.emb, embedding_vec = v.vec
+					FROM (VALUES `)
+				for i, c := range batch {
+					embJSON, _ := json.Marshal(c.Embedding)
+					var vec any
+					if len(c.Embedding) == b.embeddingDim {
+						vec = FormatVector(c.Embedding)
+					}
+					if i > 0 {
+						sb.WriteByte(',')
+					}
+					base := i*3 + 1
+					fmt.Fprintf(&sb, "($%d::uuid, $%d::jsonb, $%d::vector)", base, base+1, base+2)
+					args = append(args, c.ID, embJSON, vec)
+				}
+				sb.WriteString(`) AS v(id, emb, vec) WHERE c.id = v.id`)
+			} else {
+				sb.WriteString(`UPDATE knowledge_chunks AS c SET embedding = v.emb
+					FROM (VALUES `)
+				for i, c := range batch {
+					embJSON, _ := json.Marshal(c.Embedding)
+					if i > 0 {
+						sb.WriteByte(',')
+					}
+					base := i*2 + 1
+					fmt.Fprintf(&sb, "($%d::uuid, $%d::jsonb)", base, base+1)
+					args = append(args, c.ID, embJSON)
+				}
+				sb.WriteString(`) AS v(id, emb) WHERE c.id = v.id`)
+			}
+			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+				return fmt.Errorf("update knowledge chunk embeddings: %w", err)
+			}
+		}
+		return nil
+	}
+
+	// Reuse the middleware RLS tx if present (same pattern as
+	// SaveKnowledgeChunks).
+	if existingTx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && existingTx != nil {
+		return runUpdates(existingTx)
+	}
+
+	tx, err := b.BeginRLS(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("begin RLS tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := runUpdates(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("update knowledge chunk embeddings: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// CountKnowledgeChunks reports the org's total chunks and how many sit in the
+// pgvector index at the configured dimension — total>0 with 0 indexed (and
+// pgvector active) means an embedding switch stranded the corpus.
+func (b *PostgresStorageBackend) CountKnowledgeChunks(ctx context.Context, orgID string) (int, int, error) {
+	var total, indexed int
+	err := b.query(ctx).QueryRowContext(ctx, `
+		SELECT COUNT(c.id), COUNT(c.id) FILTER (WHERE c.embedding_vec IS NOT NULL)
+		FROM knowledge_chunks c
+		JOIN knowledge_documents d ON c.doc_id = d.id
+		WHERE d.org_id = $1`, orgID).Scan(&total, &indexed)
+	return total, indexed, err
 }
 
 // rankKnowledgeChunks scores chunks against queryEmbedding by cosine similarity

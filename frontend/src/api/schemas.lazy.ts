@@ -75,16 +75,18 @@ export function buildSchemas() {
       generatedAt: z.string(),
       durationMs: z.number(),
       findings: z.array(FindingSchema),
+      // stats REQUIRED (F1.9): the analyzer unconditionally stamps it
+      // (core/analyzer/engine.go computeStats), and the TS type requires it —
+      // optionality here only hid the drift behind the cast below.
       stats: z
         .object({
-          errors: z.number().optional(),
-          warnings: z.number().optional(),
-          info: z.number().optional(),
-          blocksAnalyzed: z.number().optional(),
-          rulesRun: z.number().optional(),
+          errors: z.number(),
+          warnings: z.number(),
+          info: z.number(),
+          blocksAnalyzed: z.number(),
+          rulesRun: z.number(),
         })
-        .passthrough()
-        .optional(),
+        .passthrough(),
     })
     .passthrough() as unknown as z.ZodType<AnalysisReport>
 

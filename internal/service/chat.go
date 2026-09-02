@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
@@ -57,7 +59,25 @@ func (s *ChatService) dailyUsage(ctx context.Context, scope, orgID string) (floa
 // configured DailyBudget. A budget of 0 (or absent settings) means unlimited.
 // It fails closed: if the current spend cannot be read from the store the
 // request is denied, so a DB hiccup can't open an unlimited-spend window.
-func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) error {
+// inFlightCost is the caller's own not-yet-persisted spend: usage records
+// are written asynchronously after each provider turn, so a budget check that
+// only reads the store lags the current stream by up to one full iteration
+// (several turns' worth of tokens on a tool loop). The tool loops pass their
+// locally-summed tokens priced at the provider's rates; when the async record
+// HAS landed both sides count, erring toward overstatement — the safe
+// direction for a spend cap.
+func inFlightCost(p ai.Provider, tokensIn, tokensOut int) float64 {
+	if p == nil || (tokensIn <= 0 && tokensOut <= 0) {
+		return 0
+	}
+	price := p.PricePerMillionTokens()
+	return float64(tokensIn)/1e6*price.InputCostPerM + float64(tokensOut)/1e6*price.OutputCostPerM
+}
+
+func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, inflight float64) error {
+	if s.settings == nil {
+		return nil // no settings provider wired (bare-struct tests/local) — unlimited
+	}
 	settings := s.settings.Get()
 	if settings == nil || settings.AI.DailyBudget <= 0 {
 		return nil
@@ -66,8 +86,8 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) er
 	if err != nil {
 		return fmt.Errorf("daily AI budget check unavailable: %w", err)
 	}
-	if usage >= settings.AI.DailyBudget {
-		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f)", usage, settings.AI.DailyBudget)
+	if usage+inflight >= settings.AI.DailyBudget {
+		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f)", usage+inflight, settings.AI.DailyBudget)
 	}
 
 	// When org-scoped, also enforce a per-user sub-limit so one member can't
@@ -78,8 +98,8 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string) er
 		if err != nil {
 			return fmt.Errorf("per-user AI budget check unavailable: %w", err)
 		}
-		if userUsage >= settings.AI.PerUserDailyBudget {
-			return fmt.Errorf("per-user daily AI budget exceeded ($%.2f / $%.2f)", userUsage, settings.AI.PerUserDailyBudget)
+		if userUsage+inflight >= settings.AI.PerUserDailyBudget {
+			return fmt.Errorf("per-user daily AI budget exceeded ($%.2f / $%.2f)", userUsage+inflight, settings.AI.PerUserDailyBudget)
 		}
 	}
 	return nil
@@ -96,12 +116,24 @@ var errStreamIDInUse = errors.New("clientStreamId already in use")
 // map it to a distinct machine-readable error code the frontend switches on.
 var ErrTooManyChatStreams = errors.New("too many chat responses running at once")
 
-// convMutexFor returns the per-conversation mutex used to serialize the
-// reconstruct-history + persist-user-turn critical section. LoadOrStore makes
-// the lookup-and-create atomic so two concurrent callers get the same mutex.
+// convMutexFor returns the mutex serializing the reconstruct-history +
+// persist-user-turn critical section for a conversation.
+//
+// STRIPED, not exact-keyed: the original LoadOrStore map grew one *sync.Mutex
+// per (flowID, convKey) FOREVER — a long-lived process over many flows
+// accumulated unbounded lock entries for a critical section that holds for
+// two storage round-trips. A fixed 256-way stripe set (hash of the key) gives
+// the same mutual exclusion for any single conversation with bounded, constant
+// memory; distinct conversations merely sharing a stripe serialize behind one
+// another, which the two-I/O critical section tolerates fine.
+const convMutexStripes = 256
+
 func (s *ChatService) convMutexFor(flowID, convKey string) *sync.Mutex {
-	v, _ := s.convMu.LoadOrStore(flowID+"\x00"+convKey, &sync.Mutex{})
-	return v.(*sync.Mutex)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(flowID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(convKey))
+	return &s.convMutexes[h.Sum32()%convMutexStripes]
 }
 
 // reconstructAndPersistUserTurn runs the reconstruct-history + persist-user-turn
@@ -174,6 +206,27 @@ type chatStore interface {
 	storageif.UsageStore
 }
 
+// readOnlyAnalysis adapts AnalysisService to the tool loop's ToolAnalysis
+// using the read-only entry point: tool-driven analyses never record into the
+// report-history pair / trend store and never emit progress events, so the
+// chat's internal analyses can't overwrite the UI's CurrentReport or flash
+// its progress bar mid-conversation.
+type readOnlyAnalysis struct{ inner *AnalysisService }
+
+func (r readOnlyAnalysis) AnalyzeFlow(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+	if r.inner == nil {
+		return nil, fmt.Errorf("analysis not available")
+	}
+	return r.inner.AnalyzeFlowReadOnly(ctx, doc)
+}
+
+func (r readOnlyAnalysis) GetVariableLineage(doc *models.FlowDocument, varName string) (*models.VariableHistory, error) {
+	if r.inner == nil {
+		return nil, fmt.Errorf("analysis not available")
+	}
+	return r.inner.GetVariableLineage(doc, varName)
+}
+
 // ChatService owns chat stream state and operations.
 type ChatService struct {
 	notifier      EventNotifier
@@ -198,16 +251,27 @@ type ChatService struct {
 	// (resumeRetention) so a client that reconnects after a stream ended can
 	// still fetch its final buffer via ResumeStream.
 	finishedStreams sync.Map // map[streamID]*streamCtl
-	// convMu serializes the reconstruct-history + persist-user-turn critical
-	// section per (flowID, convKey). Without it, two concurrent streams on the
-	// same conversation both reconstruct the same history and then clobber each
-	// other's SaveConversation (a full-file replace), silently losing one user
-	// turn. Keyed by flowID+"\x00"+convKey; each entry is a *sync.Mutex.
-	convMu sync.Map
+	// convMutexes stripes the reconstruct/persist critical section across a
+	// fixed lock set (see convMutexFor): same mutual exclusion per
+	// conversation, constant memory. Without ANY lock two concurrent streams
+	// on one conversation reconstructed the same history and clobbered each
+	// other's SaveConversation (a full-file replace), silently losing a user
+	// turn.
+	convMutexes [convMutexStripes]sync.Mutex
 	// resume mirrors resumable stream state to a shared backplane so a client
 	// that reconnects to a DIFFERENT replica can still fetch the buffer. The
 	// default is a no-op (single-replica); SetResumeBackplane swaps in Redis.
 	resume resumeStore
+
+	// pendingFixDecisions holds apply_fix proposals awaiting the stream
+	// owner's approve/decline (chat_fixes.go). Keyed by proposal ID (UUID);
+	// entries carry their stream ID and are removed when the wait resolves.
+	pendingFixDecisions sync.Map
+	// applyFixFunc overrides the FlowService-backed fix mutation in tests
+	// (nil ⇒ FlowService.ApplyFix). See chat_fixes.go.
+	applyFixFunc applyFixFunc
+	// fixDecisionWait overrides fixDecisionTimeout in tests (0 ⇒ default).
+	fixDecisionWait time.Duration
 
 	// chatCtxCache memoises the scrubbed document + built system/context text
 	// (the expensive, turn-invariant part of buildScrubbedContext) across
@@ -341,7 +405,7 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 		orgID = doc.OrganizationID
 	}
 
-	if err := s.enforceBudget(ctx, scope, orgID); err != nil {
+	if err := s.enforceBudget(ctx, scope, orgID, 0); err != nil {
 		return turnSetup{}, err
 	}
 
@@ -432,7 +496,11 @@ func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scop
 	// Without this, an oversized prompt reaches the provider and surfaces as
 	// a raw, confusing 400 ("context length exceeded") instead of a friendly
 	// "conversation too long" message.
-	if err := truncateForContextWindow(ts.provider, &aiReq, ts.provider.ContextLimit()); err != nil {
+	//
+	// Model-aware: the selected model's catalog window (e.g. 1M for Claude
+	// Opus/Sonnet 4.6) overrides the smaller provider-wide default, so
+	// truncation doesn't throw away history that would have fit.
+	if err := truncateForContextWindow(ts.provider, &aiReq, ai.ContextLimitFor(ctx, ts.provider, req.Model)); err != nil {
 		return ai.Request{}, nil, false, err
 	}
 
@@ -482,7 +550,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	// session-token exchange on a cold cache) with "context canceled". Cancellation
 	// is handled explicitly via ctl.cancel() (CancelStream) and the timeout below.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxChatStreamDuration)
-	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), ownerID: scope}
+	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), ownerID: scope, streamID: streamID}
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
 	// Per-caller concurrency cap + stream-ID reservation, performed atomically
 	// so two concurrent requests can't both observe active < cap and both
@@ -517,6 +585,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	go s.watchStream(ctx, streamID, scope, ctl)
 
 	emit := func(eventType string, data map[string]interface{}) {
+		// Journal first (under the ctl lock, ordered with the buffer): agentic
+		// events survive a client disconnect via ResumeResult.Events / the
+		// BeginStream replay. Runs on the coalescer's inner path too — chunk
+		// events are simply not journaled.
+		ctl.mu.Lock()
+		ctl.recordJournal(eventType, data)
+		ctl.mu.Unlock()
 		s.notifier.EmitTo(scope, "chat:event",
 			map[string]interface{}{"streamId": streamID, "type": eventType, "data": data})
 	}
@@ -568,6 +643,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// emit — BeginStream returns the stored state when the emit predated the
 		// client's SSE subscription.
 		fail := func(msg string) {
+			msg = scrubber.ScrubText(msg) // provider strings can echo request content
 			ctl.setError(msg)
 			emit("error", map[string]interface{}{"message": msg})
 		}
@@ -607,17 +683,44 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			return // ctx cancelled while waiting on RAG
 		}
 
-		// When the caller opted into tools, run the read-only agentic loop. Native
+		// When the caller opted into tools, run the agentic loop. Native
 		// function-calling providers use runToolLoop; providers without it
-		// (notably GitHub Copilot) fall back to runPromptToolLoop, which teaches
-		// the model a <tool_call> marker format via the system prompt. Both are
-		// self-contained (emit chunk/tool/done/error + update ctl), so the normal
-		// streaming path below is skipped entirely.
+		// (notably GitHub Copilot) fall back to runPromptToolLoop, which
+		// teaches the model a <tool_call> marker format via the system prompt.
+		// Both are self-contained (emit chunk/tool/done/error + update ctl),
+		// so the normal streaming path below is skipped entirely.
+		//
+		// The ToolContext carries the scrubbed doc + the approval-gated fix
+		// applier (bound to this stream's owner + emit), so apply_fix can
+		// prompt the user through the same SSE channel. RealDoc is the
+		// unscrubbed flow for analyses/fix resolution (A2), and analyses run
+		// read-only so the tool loop never overwrites the UI's CurrentReport.
+		// tctx is passed by POINTER: an approved apply swaps in the fresh
+		// post-fix document mid-stream (A1) so follow-up tool calls in the
+		// SAME stream see the fixed flow — the re-parse mints new block IDs,
+		// and the pre-fix snapshot would mis-answer every later tool.
 		if req.UseTools {
+			tctx := ai.ToolContext{
+				Ctx:      ctx,
+				Doc:      scrubbedDoc,
+				RealDoc:  doc,
+				Analysis: readOnlyAnalysis{s.analysisCache},
+			}
+			if ap := s.newFixApplier(scope, doc, streamID, emit, ctl.touch, func(fresh *models.FlowDocument) {
+				tctx.RealDoc = fresh
+				if sd, sErr := scrubber.ScrubDocument(fresh); sErr == nil {
+					tctx.Doc = sd
+				} else {
+					logger.Error("Failed to scrub post-fix document; tools see the real doc", "error", sErr)
+					tctx.Doc = fresh
+				}
+			}); ap != nil {
+				tctx.Fixes = ap
+			}
 			if ts.provider.SupportsTools() {
-				s.runToolLoop(ctx, ts.provider, aiReq, scrubbedDoc, ctl, awaitStart, emit, coalesce.flushAndCount)
+				s.runToolLoop(ctx, ts.provider, aiReq, scope, &tctx, ctl, awaitStart, emit, coalesce.flushAndCount)
 			} else {
-				s.runPromptToolLoop(ctx, ts.provider, aiReq, scrubbedDoc, ctl, awaitStart, emit, coalesce.flushAndCount)
+				s.runPromptToolLoop(ctx, ts.provider, aiReq, scope, &tctx, ctl, awaitStart, emit, coalesce.flushAndCount)
 			}
 			return
 		}
@@ -634,8 +737,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}
 			if chunk.Error != nil {
 				out.flush()
-				ctl.setError(chunk.Error.Error())
-				emit("error", map[string]interface{}{"message": chunk.Error.Error()})
+				msg := scrubber.ScrubText(chunk.Error.Error())
+				ctl.setError(msg)
+				emit("error", map[string]interface{}{"message": msg})
 				return
 			}
 			if chunk.Done {
@@ -668,12 +772,15 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	return streamID, nil
 }
 
-// runToolLoop drives the read-only tool/agent loop: it offers the registered
-// tools to the model, executes any tool calls against the (already scrubbed)
-// doc + analysis cache, feeds results back, and repeats until the model returns
-// a final text answer (or the iteration cap is hit). It is self-contained —
+// runToolLoop drives the tool/agent loop: it offers the registered tools to
+// the model, executes any tool calls against the (already scrubbed) doc +
+// analysis cache, feeds results back, and repeats until the model returns a
+// final text answer (or the iteration cap is hit). It is self-contained —
 // emits "tool"/"chunk"/"done"/"error" events and updates ctl — so the caller
 // does not run its own streaming/error handling for this path.
+//
+// scope is the caller's identity (budget re-checks per iteration); tctx is the
+// prebuilt tool context (scrubbed doc + optional fix applier).
 //
 // Token consumption of ctl.started is gated through a single cached
 // ensureStarted so it is consumed at most once (the channel only holds one
@@ -682,7 +789,8 @@ func (s *ChatService) runToolLoop(
 	ctx context.Context,
 	provider ai.Provider,
 	base ai.Request,
-	doc *models.FlowDocument,
+	scope string,
+	tctx *ai.ToolContext,
 	ctl *streamCtl,
 	awaitStart func() bool,
 	emit func(string, map[string]interface{}),
@@ -690,7 +798,11 @@ func (s *ChatService) runToolLoop(
 ) {
 	base.Tools = ai.ToolDefinitions()
 	msgs := base.Messages
-	tctx := ai.ToolContext{Ctx: ctx, Doc: doc, Analysis: s.analysisCache}
+	// Model-aware window (computed once — the model doesn't change across
+	// iterations): the catalog's per-model limit overrides the smaller
+	// provider-wide default, so accumulating tool results aren't truncated
+	// against a window the model doesn't actually have.
+	ctxLimit := ai.ContextLimitFor(ctx, provider, base.Model)
 
 	started := false
 	ensureStarted := func() bool {
@@ -700,6 +812,7 @@ func (s *ChatService) runToolLoop(
 		return started
 	}
 	fail := func(msg string) {
+		msg = scrubber.ScrubText(msg) // provider strings can echo request content
 		ctl.setError(msg)
 		if ensureStarted() {
 			emit("error", map[string]interface{}{"message": msg})
@@ -713,7 +826,18 @@ func (s *ChatService) runToolLoop(
 	// each turn's text is flushed before its tool events, so held text can't
 	// bleed between turns.
 	out := newScrubbedEmitter(ctl, emit)
+	mem := newLoopToolMemory()
 	for i := 0; i < maxToolIterations; i++ {
+		metrics.RecordChatToolIteration()
+		// Re-check the daily AI budget every iteration: a tool loop multiplies
+		// the turn's spend up to maxToolIterations×, and the turn-start check
+		// alone would let one approved request run past the cap mid-loop. The
+		// in-flight term covers this stream's async-unwritten spend (see
+		// inFlightCost).
+		if err := s.enforceBudget(ctx, scope, base.OrgID, inFlightCost(provider, totalIn, totalOut)); err != nil {
+			fail("response stopped: " + err.Error())
+			return
+		}
 		turn := base
 		turn.Messages = msgs
 
@@ -721,7 +845,7 @@ func (s *ChatService) runToolLoop(
 		// text accumulate and can overflow the model's context window by
 		// iteration 4-6, surfacing as a raw provider 400. Truncating oldest
 		// history here keeps the loop within bounds.
-		if err := truncateForContextWindow(provider, &turn, provider.ContextLimit()); err != nil {
+		if err := truncateForContextWindow(provider, &turn, ctxLimit); err != nil {
 			fail("conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
@@ -761,10 +885,33 @@ func (s *ChatService) runToolLoop(
 			out.flush()
 		}
 		if streamErr != nil {
+			// A model that can't use tools (provider family supports them,
+			// this model doesn't — common on GitHub Models) rejects the
+			// request outright. Degrade gracefully: retry the SAME iteration
+			// once with tools dropped and a status notice, instead of failing
+			// the whole turn with an opaque 400.
+			if errors.Is(streamErr, ai.ErrToolsUnsupported) && len(base.Tools) > 0 {
+				base.Tools = nil
+				if ensureStarted() {
+					emit("tool", map[string]interface{}{"name": "tools_unsupported", "label": "This model can't use tools — answering without them"})
+				}
+				i-- // don't consume an iteration for the degradation retry
+				continue
+			}
 			fail(ctl.failureMessage(ctx, streamErr))
 			return
 		}
 		if chunkErr != nil {
+			// Same graceful degradation when the rejection arrives as an
+			// in-stream error chunk (some providers stream the 400 body).
+			if errors.Is(chunkErr, ai.ErrToolsUnsupported) && len(base.Tools) > 0 {
+				base.Tools = nil
+				if ensureStarted() {
+					emit("tool", map[string]interface{}{"name": "tools_unsupported", "label": "This model can't use tools — answering without them"})
+				}
+				i--
+				continue
+			}
 			fail(chunkErr.Error())
 			return
 		}
@@ -786,13 +933,8 @@ func (s *ChatService) runToolLoop(
 		// preamble text), then run each tool and append its result so the next
 		// turn can see them.
 		msgs = append(msgs, ai.Message{Role: "assistant", Content: turnText.String(), ToolCalls: turnCalls})
-		for _, tc := range turnCalls {
-			if !ensureStarted() {
-				return
-			}
-			emit("tool", map[string]interface{}{"name": tc.Name, "label": ai.ToolLabel(tc.Name)})
-			result := ai.ExecuteTool(tc.Name, tc.Input, tctx)
-			msgs = append(msgs, ai.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+		for _, r := range s.execTurnTools(emit, ctl, ensureStarted, mem, tctx, turnCalls) {
+			msgs = append(msgs, ai.Message{Role: "tool", Content: r.result, ToolCallID: r.id})
 		}
 	}
 
@@ -813,22 +955,30 @@ func (s *ChatService) runPromptToolLoop(
 	ctx context.Context,
 	provider ai.Provider,
 	base ai.Request,
-	doc *models.FlowDocument,
+	scope string,
+	tctx *ai.ToolContext,
 	ctl *streamCtl,
 	awaitStart func() bool,
 	emit func(string, map[string]interface{}),
 	doneChunks func() int,
 ) {
 	msgs := base.Messages
-	// Inject tool instructions into the system prompt so the model knows the
-	// marker format and the available tools.
+	// Teach the model the marker protocol by APPENDING to the system prompt —
+	// NOT by injecting an extra system message. The context-window truncation
+	// pins Messages[:1] as the user's question; a synthetic leading system
+	// message used to take that pin, so under overflow the junction repair
+	// dropped the USER'S TURN (context + question) while tool-instruction
+	// boilerplate stayed pinned. SystemPrompt is counted by the truncation
+	// estimate either way.
 	toolInstr := ai.ToolPromptInstructions()
-	if len(msgs) > 0 && msgs[0].Role == "system" {
-		msgs = append([]ai.Message{{Role: "system", Content: msgs[0].Content + "\n\n" + toolInstr}}, msgs[1:]...)
+	if base.SystemPrompt != "" {
+		turn := base
+		turn.SystemPrompt = base.SystemPrompt + "\n\n" + toolInstr
+		base = turn
 	} else {
-		msgs = append([]ai.Message{{Role: "system", Content: toolInstr}}, msgs...)
+		base.SystemPrompt = toolInstr
 	}
-	tctx := ai.ToolContext{Ctx: ctx, Doc: doc, Analysis: s.analysisCache}
+	ctxLimit := ai.ContextLimitFor(ctx, provider, base.Model)
 
 	started := false
 	ensureStarted := func() bool {
@@ -838,6 +988,7 @@ func (s *ChatService) runPromptToolLoop(
 		return started
 	}
 	fail := func(msg string) {
+		msg = scrubber.ScrubText(msg) // provider strings can echo request content
 		ctl.setError(msg)
 		if ensureStarted() {
 			emit("error", map[string]interface{}{"message": msg})
@@ -846,10 +997,18 @@ func (s *ChatService) runPromptToolLoop(
 
 	var totalIn, totalOut int
 	out := newScrubbedEmitter(ctl, emit)
+	mem := newLoopToolMemory()
 	for i := 0; i < maxToolIterations; i++ {
+		metrics.RecordChatToolIteration()
+		// Same per-iteration budget re-check as runToolLoop (in-flight term
+		// included).
+		if err := s.enforceBudget(ctx, scope, base.OrgID, inFlightCost(provider, totalIn, totalOut)); err != nil {
+			fail("response stopped: " + err.Error())
+			return
+		}
 		turn := base
 		turn.Messages = msgs
-		if err := truncateForContextWindow(provider, &turn, provider.ContextLimit()); err != nil {
+		if err := truncateForContextWindow(provider, &turn, ctxLimit); err != nil {
 			fail("conversation is too long for this model's context window — too many tool results, try a simpler question")
 			return
 		}
@@ -916,17 +1075,67 @@ func (s *ChatService) runPromptToolLoop(
 			out.flush()
 		}
 		msgs = append(msgs, ai.Message{Role: "assistant", Content: full})
+		// Feed results back as a USER message with <tool_result> markers. A
+		// bare role:"tool" message is schema-invalid on OpenAI-compatible
+		// wires (tool messages must answer an assistant tool_calls turn this
+		// protocol never emits) — Copilot rejected the second request of every
+		// tool conversation with a 400. One user message per turn also keeps
+		// consecutive-user-role sequences impossible.
+		var results strings.Builder
 		for _, tc := range calls {
 			if !ensureStarted() {
 				return
 			}
 			emit("tool", map[string]interface{}{"name": tc.Name, "label": ai.ToolLabel(tc.Name)})
-			result := ai.ExecuteTool(tc.Name, tc.Input, tctx)
-			msgs = append(msgs, ai.Message{Role: "tool", Content: result})
+			// See runToolLoop: keep the idle watchdog aware of in-flight tool
+			// execution (no provider chunks flow while a tool runs).
+			ctl.touch()
+			started := time.Now()
+			result := mem.exec(tc.Name, tc.Input, tctx)
+			ctl.touch()
+			emitToolResult(emit, tc.Name, result, time.Since(started))
+			fmt.Fprintf(&results, "<tool_result name=%q>\n%s\n</tool_result>\n", tc.Name, result)
 		}
+		msgs = append(msgs, ai.Message{Role: "user", Content: results.String()})
 	}
 
 	fail(fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations))
+}
+
+// toolSummary derives the one-line transparency summary for a tool_result
+// event from the result string the model saw: first line, capped, so a
+// multi-KB doc dump doesn't flood the event. Results derive from the
+// scrubbed document (ToolContext carries scrubbed docs), so the summary
+// inherits that scrubbing.
+func toolSummary(result string) string {
+	line := result
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	line = strings.TrimSpace(line)
+	if len(line) > 120 {
+		// Back off to a rune boundary (same rule as ai.truncateResult) so a
+		// truncated multibyte char doesn't reach the client as invalid UTF-8.
+		cut := 120
+		for cut > 0 && !utf8.RuneStart(line[cut]) {
+			cut--
+		}
+		line = line[:cut] + "…"
+	}
+	return line
+}
+
+// emitToolResult reports a finished tool execution on the stream so the client
+// can accumulate the per-message tool trail. ok follows ExecuteTool's error
+// contract ("error: …" prefix); the duration covers execution only.
+func emitToolResult(emit func(string, map[string]interface{}), name, result string, took time.Duration) {
+	emit("tool_result", map[string]interface{}{
+		"name":       name,
+		"label":      ai.ToolLabel(name),
+		"ok":         !strings.HasPrefix(result, "error:"),
+		"durationMs": took.Milliseconds(),
+		"summary":    toolSummary(result),
+	})
 }
 
 func (s *ChatService) GetDemoRemaining() (int, error) {

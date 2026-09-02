@@ -66,10 +66,21 @@ function useSections(): {id: SettingsSection; label: string}[] {
   return SECTION_IDS.map(id => ({id, label: t(`modal.sections.${id}`)}))
 }
 
-export default function SettingsModal({isOpen, onClose}: {isOpen: boolean; onClose: () => void}) {
+export default function SettingsModal({
+  isOpen,
+  onClose,
+  initialSection,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  // initialSection selects the opening tab (deep-link from onboarding /
+  // missing-key states); falls back to 'general' when unknown.
+  initialSection?: string | null
+}) {
   const {t} = useTranslation('settings')
   const sections = useSections()
-  const [activeSection, setActiveSection] = useState<SettingsSection>('general')
+  const validInitial = initialSection && sections.some(s => s.id === initialSection) ? (initialSection as SettingsSection) : 'general'
+  const [activeSection, setActiveSection] = useState<SettingsSection>(validInitial)
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={t('modal.title')} size="xl" height="tall" bodyScroll={false}>

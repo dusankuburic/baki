@@ -38,8 +38,8 @@ export default function CodeBlock({language, value}: Props) {
         >
           {copied ? (
             <>
-              <Check size={14} className="text-green-400" />
-              <span className="text-xs font-medium text-green-400">Copied</span>
+              <Check size={14} className="text-semantic-success" />
+              <span className="text-xs font-medium text-semantic-success">Copied</span>
             </>
           ) : (
             <>

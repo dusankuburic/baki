@@ -41,6 +41,12 @@ export function isDocLoadCurrent(gen: number): boolean {
 interface FlowState {
   document: FlowDocument | null
   selectedBlockId: string | null
+  // Multi-select (U3b): cmd/ctrl-click toggles, shift-click range-selects.
+  // Bulk actions (delete / group move) operate on this set; single-select
+  // interactions keep using selectedBlockId as the anchor.
+  selectedBlockIds: Set<string>
+  // Inline rename target (F2 / double-click on LABEL & COMMENT names).
+  renamingBlockId: string | null
   visibleBlockId: string | null
   selectedSubflowId: string | null
   drilledSubflowPath: string[]
@@ -55,6 +61,13 @@ interface FlowState {
 
   libraryFlowId: string | null
   libraryVersion: number
+  // True when the active flow was opened from the cloud library without
+  // edit permission (view-only share). Mutation UI (block edit menu, DnD,
+  // apply-fix, source save) hides behind this instead of failing on the
+  // server after the fact. Same-document refreshes keep the flag; loading a
+  // different document resets it (callers like the library open path set it
+  // explicitly right after).
+  readOnly: boolean
 
   navigationHistory: {blockId: string | null; subflowId: string | null}[]
   historyIndex: number
@@ -67,6 +80,10 @@ interface FlowState {
   applyRemoteDocumentUpdate: (doc: FlowDocument | null) => void
   setVisibleBlockId: (id: string | null) => void
   selectBlock: (blockId: string | null, skipHistory?: boolean) => void
+  toggleBlockSelection: (blockId: string) => void
+  setBlockSelection: (ids: Set<string>) => void
+  clearBlockSelection: () => void
+  setRenamingBlock: (blockId: string | null) => void
   selectSubflow: (subflowId: string | null, skipHistory?: boolean) => void
   goBack: () => void
   goForward: () => void
@@ -96,6 +113,8 @@ interface FlowState {
 export const useFlowStore = create<FlowState>((set, get) => ({
   document: null,
   selectedBlockId: null,
+  selectedBlockIds: new Set<string>(),
+  renamingBlockId: null,
   visibleBlockId: null,
   selectedSubflowId: null,
   drilledSubflowPath: [],
@@ -109,14 +128,21 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   selectedFilePath: null,
   libraryFlowId: null,
   libraryVersion: 0,
+  readOnly: false,
   navigationHistory: [],
   historyIndex: -1,
 
   setDocument: doc => {
     const firstId = doc?.subflows[0]?.id ?? null
+    // A different document resets read-only (local docs are editable); a
+    // same-document refresh (watcher, undo, mutation result) preserves it.
+    const changedDoc = doc?.id !== get().document?.id
     set({
       document: doc,
+      ...(changedDoc ? {readOnly: false, libraryFlowId: null, libraryVersion: 0} : {}),
       selectedBlockId: null,
+      selectedBlockIds: new Set<string>(),
+      renamingBlockId: null,
       visibleBlockId: null,
       selectedSubflowId: firstId,
       drilledSubflowPath: firstId ? [firstId] : [],
@@ -160,6 +186,17 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     if (get().visibleBlockId === id) return
     set({visibleBlockId: id})
   },
+
+  toggleBlockSelection: blockId =>
+    set(state => {
+      const next = new Set(state.selectedBlockIds)
+      if (next.has(blockId)) next.delete(blockId)
+      else next.add(blockId)
+      return {selectedBlockIds: next}
+    }),
+  setBlockSelection: ids => set({selectedBlockIds: ids}),
+  clearBlockSelection: () => set({selectedBlockIds: new Set<string>()}),
+  setRenamingBlock: blockId => set({renamingBlockId: blockId}),
 
   selectBlock: (blockId, skipHistory = false) => {
     const state = get()
@@ -324,7 +361,12 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   reset: () => {
     set({
       document: null,
+      readOnly: false,
+      libraryFlowId: null,
+      libraryVersion: 0,
       selectedBlockId: null,
+      selectedBlockIds: new Set<string>(),
+      renamingBlockId: null,
       selectedSubflowId: null,
       drilledSubflowPath: [],
       expandedSubflowIds: new Set(),
@@ -332,8 +374,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       parseError: null,
       folderFiles: null,
       selectedFilePath: null,
-      libraryFlowId: null,
-      libraryVersion: 0,
       isParsing: false,
       parseProgress: 0,
       visibleBlockId: null,

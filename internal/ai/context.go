@@ -22,7 +22,7 @@ When analyzing a flow:
 - When you reference a specific block whose "Block ID" is given in the context, link it as a markdown link with a "block:" URL — e.g. [Run SQL statement](block:abc123) — so the user can click through to it. Only do this for IDs actually present in the context.
 - Likewise, when you reference one of the listed Known Issues, link it as a markdown link with a "finding:" URL using its given finding id — e.g. [hardcoded password](finding:hardcoded-credential:abc123) — so the user can jump to it in the findings list. Only use finding ids present in the context.
 
-IMPORTANT: You are READ-ONLY. You cannot execute or modify flows. Your job is to explain, analyze, and recommend. Never suggest you can change files or take actions on behalf of the user.`
+IMPORTANT: You are read-only by default — you cannot execute flows or change files on your own. The ONLY way to modify the flow is the apply_fix tool, which always shows the user an approval prompt with the exact patch first; NOTHING is written unless they explicitly approve. Prefer propose_fix to show what would change; call apply_fix only when the user asks you to fix the issue. If apply_fix is declined, times out, or unavailable, explain the change so the user can apply it manually — never claim you changed anything you didn't.`
 
 type ContextRequest struct {
 	Flow               *models.FlowDocument
@@ -53,6 +53,17 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 	b.WriteString("\n\n")
 
 	hasSources := len(req.RawSourceFiles) > 0
+
+	// Findings come FIRST: the final truncation cuts the tail, so whatever is
+	// written last is sacrificed first. With source files selected the
+	// multi-KB file dumps used to crowd out (or entirely skip, via the old
+	// 3/4-budget gate) the Analysis Summary — losing the most decision-relevant
+	// data while keeping raw file text. Now the analysis rides early and the
+	// file dumps are what truncation trims.
+	if len(req.Findings) > 0 {
+		b.WriteString("\n## Analysis Summary\n\n")
+		writeFindingsSummary(&b, req.Findings)
+	}
 
 	if hasSources {
 		filenames := make([]string, 0, len(req.RawSourceFiles))
@@ -140,11 +151,6 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 			b.WriteString("\n## Flow Overview\n\n")
 			writeFlowOverview(&b, req.Flow)
 		}
-	}
-
-	if len(req.Findings) > 0 && req.Provider.EstimateTokens(b.String()) < req.TokenBudget*3/4 {
-		b.WriteString("\n## Analysis Summary\n\n")
-		writeFindingsSummary(&b, req.Findings)
 	}
 
 	contextMessage = TruncateToTokenLimit(b.String(), req.TokenBudget)

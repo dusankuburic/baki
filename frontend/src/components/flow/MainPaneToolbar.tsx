@@ -26,7 +26,6 @@ import SegmentedControl from '@/components/shared/SegmentedControl'
 import IconButton from '@/components/shared/IconButton'
 import {useUIStore, isSystemView} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
-import {useEditorStore} from '@/stores/editorStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {exportApi, flowApi, analysisApi} from '@/api'
@@ -51,8 +50,6 @@ export default function MainPaneToolbar() {
   const setGraphZoom = useUIStore(s => s.setGraphZoom)
   const setActiveDiff = useUIStore(s => s.setActiveDiff)
   const document = useFlowStore(s => s.document)
-  const groups = useEditorStore(s => s.groups)
-  const focusedGroupIndex = useEditorStore(s => s.focusedGroupIndex)
   const navigationHistory = useFlowStore(s => s.navigationHistory)
   const historyIndex = useFlowStore(s => s.historyIndex)
   const goBack = useFlowStore(s => s.goBack)
@@ -63,10 +60,6 @@ export default function MainPaneToolbar() {
   const setReport = useAnalysisStore(s => s.setReport)
   const [reimporting, setReimporting] = useState(false)
   const {t} = useTranslation('shell')
-
-  const activeTabId = groups[focusedGroupIndex]?.activeTabId ?? null
-  const subflow = activeTabId && document ? document.subflows.find(s => s.id === activeTabId) : document?.subflows?.[0]
-  const breadcrumb = document ? [document.name, ...(subflow && subflow.name !== 'Main' ? [subflow.name] : [])] : []
 
   const toast = useToast()
   const userRole = useAuthStore(s => s.user?.role)
@@ -194,19 +187,11 @@ export default function MainPaneToolbar() {
         size="sm"
       />
 
+      {/* The center breadcrumb copy is GONE (U5a.3): the interactive
+          Breadcrumbs bar renders directly under the tab strip — showing the
+          same path twice in one pane was chrome, not information. The diff
+          label stays (it replaces the editor view, not a duplicate). */}
       <div className="flex-1 flex items-center justify-center">
-        {breadcrumb.length > 0 && mainPaneView !== 'diff' && (
-          <div className="flex items-center gap-1 text-sm">
-            {breadcrumb.map((segment, i) => (
-              <span key={i} className="flex items-center gap-1">
-                {i > 0 && <span className="text-text-tertiary">›</span>}
-                <span className={i === breadcrumb.length - 1 ? 'text-text-primary font-medium' : 'text-text-tertiary'}>
-                  {segment}
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
         {mainPaneView === 'diff' && (
           <div className="text-sm font-medium text-brand-500 flex items-center gap-2">
             <History size={16} />

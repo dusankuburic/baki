@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -279,6 +280,62 @@ func (h *AnalysisHandler) handleGetExecutionGraph(w http.ResponseWriter, r *http
 func (h *AnalysisHandler) handleGetRules(w http.ResponseWriter, r *http.Request) {
 	rules := h.analysisSvc.GetRules()
 	render.JSON(w, rules)
+}
+
+// handleValidateCustomRules validates a custom-rules payload (array or single
+// object) WITHOUT loading it: per-entry validity + error, and warnings for
+// entries that would be skipped — the backend for the settings editor's
+// authoring feedback (the same checks `bakicli rules test` applies).
+// @Summary      Validate custom rules
+// @Description  Validates custom-rule JSON without installing it: per-entry validity, errors, and skip warnings.
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Results"
+// @Router       /api/analysis/custom-rules/validate [post]
+func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var raw json.RawMessage
+	if !decodeBody(w, r, &raw) {
+		return
+	}
+	// Accept three shapes: a raw array, a single object, or the {"rules": …}
+	// envelope the API client conventionally uses.
+	var payload struct {
+		Rules json.RawMessage `json:"rules"`
+	}
+	inner := raw
+	if err := json.Unmarshal(raw, &payload); err == nil && len(payload.Rules) > 0 {
+		inner = payload.Rules
+	}
+	var configs []analyzer.CustomRuleConfig
+	if err := json.Unmarshal(inner, &configs); err != nil {
+		var one analyzer.CustomRuleConfig
+		if err2 := json.Unmarshal(inner, &one); err2 != nil || one.ID == "" {
+			render.Error(w, fmt.Errorf("not a custom-rule JSON array or object"), http.StatusBadRequest)
+			return
+		}
+		configs = []analyzer.CustomRuleConfig{one}
+	}
+	type entryResult struct {
+		Index  int    `json:"index"`
+		ID     string `json:"id"`
+		Valid  bool   `json:"valid"`
+		Error  string `json:"error,omitempty"`
+		Loaded bool   `json:"loaded"`
+	}
+	out := make([]entryResult, len(configs))
+	valid := 0
+	for i, cfg := range configs {
+		out[i] = entryResult{Index: i, ID: cfg.ID}
+		if _, err := analyzer.NewCustomRule(cfg); err != nil {
+			out[i].Error = err.Error()
+			continue
+		}
+		out[i].Valid = true
+		valid++
+	}
+	render.JSON(w, map[string]any{"entries": out, "valid": valid, "invalid": len(configs) - valid})
 }
 
 // @Summary      Rule catalog summary

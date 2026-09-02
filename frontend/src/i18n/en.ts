@@ -91,9 +91,30 @@ export const findings = {
     clear: 'Clear selection',
     select: 'Select finding',
     deselect: 'Deselect finding',
+    assignMe: 'Assign to me',
+    resolve: 'Resolve',
   },
   toolbar: {
     toggleGrouping: 'Toggle duplicate grouping',
+  },
+  dedup: {
+    groupedSummary: 'Grouped: {{unique}} unique findings ({{duplicates}} duplicates folded)',
+    showAll: 'Show all',
+  },
+  suppressed: {
+    summary_one: '{{count}} finding suppressed',
+    summary_other: '{{count}} findings suppressed',
+    restoreAll: 'Restore all',
+  },
+  progress: {
+    analyzing: 'Analyzing… {{percent}}%',
+    analyzingIndeterminate: 'Analyzing…',
+    analysisLabel: 'Analysis progress',
+    noRunYet: 'No analysis run yet',
+    runAnalysis: 'Run Analysis',
+  },
+  toasts: {
+    snapshotRestored: 'Snapshot restored',
   },
   chat: {
     scrollToBottom: 'Scroll to bottom',

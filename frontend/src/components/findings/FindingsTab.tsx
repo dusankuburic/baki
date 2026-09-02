@@ -3,14 +3,18 @@ import {Search} from 'lucide-react'
 import {analysisApi, flowApi} from '@/api'
 import {useAnalysisStore, findingKey, type FindingCategory} from '@/stores/analysisStore'
 import {useFlowStore} from '@/stores/flowStore'
+import {useAuthStore} from '@/stores/authStore'
 import {EmptyState, useToast} from '@/components/shared'
 import {stageFindingFix} from '@/lib/fixWithAI'
+import {refreshAfterBlockEdit} from '@/lib/blockEdit'
+import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
 import {writeClipboard} from '@/lib/clipboard'
 import FindingsSummary from './FindingsSummary'
 import FindingsToolbar from './FindingsToolbar'
 import AnalysisRunner from './AnalysisRunner'
+import AnalysisProgressStrip from './AnalysisProgressStrip'
 import AnalysisDiffView from './AnalysisDiffView'
-import {exportFindingsCSV, exportFindingsHTML, exportFindingsSARIF} from '@/lib/findingsExport'
+import {exportFindingsCSV, exportFindingsHTML, exportFindingsSARIF, exportFindingsJUnit} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
 
 // FindingsList pulls in react-virtuoso (~55KB); it only renders once a flow
@@ -41,11 +45,15 @@ export default function FindingsTab() {
   }, [findingSearch])
   useEffect(() => {
     if (searchInput === findingSearch) return
-    const t = setTimeout(() => setFindingSearch(searchInput), 150)
+    const t = setTimeout(() => setFindingSearch(searchInput), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [searchInput, findingSearch, setFindingSearch])
   const severityFilter = useAnalysisStore(s => s.severityFilter)
   const categoryFilter = useAnalysisStore(s => s.categoryFilter)
+  const statusFilter = useAnalysisStore(s => s.statusFilter)
+  const assignedToMeOnly = useAnalysisStore(s => s.assignedToMeOnly)
+  const triageMap = useAnalysisStore(s => s.triageMap)
+  const currentUserId = useAuthStore(s => s.user?.id ?? '')
   const suppressedKeys = useAnalysisStore(s => s.suppressedKeys)
   const loadSuppressions = useAnalysisStore(s => s.loadSuppressions)
   const loadBaseline = useAnalysisStore(s => s.loadBaseline)
@@ -55,9 +63,6 @@ export default function FindingsTab() {
   const [dedupGroups, setDedupGroups] = useState<Map<string, number> | null>(null)
   const [dedupLoading, setDedupLoading] = useState(false)
   const [sortMode, setSortMode] = useState<'default' | 'severity' | 'count'>('severity')
-  const cycleSortMode = useCallback(() => {
-    setSortMode(m => (m === 'severity' ? 'count' : m === 'count' ? 'default' : 'severity'))
-  }, [])
 
   // Leave the diff view when switching documents or after a fresh analysis.
   useEffect(() => {
@@ -79,14 +84,23 @@ export default function FindingsTab() {
   // tree per finding (which made a large report's render O(findings × blocks)).
   const blockLookup = useMemo<BlockLookup>(() => (doc ? buildBlockLookup(doc) : new Map()), [doc])
 
-  const findings = useMemo(() => {
+  // baseFindings applies every filter EXCEPT severity, so the severity chips
+  // can show live counts of what toggling would reveal/hide (U2.3) — the
+  // severity predicate is applied on top for the rendered list.
+  const baseFindings = useMemo(() => {
     if (!report) return []
     const q = findingSearch.toLowerCase()
     return report.findings.filter(f => {
       if (dedupGroups && !dedupGroups.has(f.id)) return false
-      if (!severityFilter.has(f.severity)) return false
       if (f.category && !categoryFilter.has(f.category as FindingCategory)) return false
       if (suppressedKeys.has(findingKey(f))) return false
+      // Triage-queue filters (R0-3): status chips narrow to a working set
+      // (hide resolved/acknowledged while grinding through the backlog);
+      // "Mine" keeps only findings assigned to the signed-in user. An absent
+      // triage entry is 'open'.
+      const triage = triageMap.get(findingKey(f))
+      if (statusFilter.size > 0 && !statusFilter.has(triage?.status ?? 'open')) return false
+      if (assignedToMeOnly && (!triage?.assigneeId || triage.assigneeId !== currentUserId)) return false
       if (
         q &&
         !f.title.toLowerCase().includes(q) &&
@@ -96,7 +110,18 @@ export default function FindingsTab() {
         return false
       return true
     })
-  }, [report, severityFilter, categoryFilter, findingSearch, suppressedKeys, dedupGroups])
+  }, [report, categoryFilter, statusFilter, assignedToMeOnly, triageMap, currentUserId, findingSearch, suppressedKeys, dedupGroups])
+
+  const findings = useMemo(
+    () => baseFindings.filter(f => severityFilter.has(f.severity)),
+    [baseFindings, severityFilter],
+  )
+
+  const severityCounts = useMemo(() => {
+    const counts: Record<Finding['severity'], number> = {error: 0, warning: 0, info: 0}
+    for (const f of baseFindings) counts[f.severity]++
+    return counts
+  }, [baseFindings])
 
   const suppressedCount = useMemo(() => {
     if (!report) return 0
@@ -109,6 +134,9 @@ export default function FindingsTab() {
 
   const handleAnalyze = useCallback(async () => {
     if (!doc) return
+    // One run at a time: the toolbar button stays visible while the stale
+    // list is mounted behind the progress strip, so guard re-entry here.
+    if (useAnalysisStore.getState().isAnalyzing) return
     const gen = beginAnalyzing()
     setProgress({current: 0, total: 0, ruleName: ''})
 
@@ -185,6 +213,15 @@ export default function FindingsTab() {
     }
   }, [doc, toast])
 
+  const handleExportJUnit = useCallback(async () => {
+    if (!doc) return
+    try {
+      await exportFindingsJUnit(doc.id)
+    } catch (err) {
+      toast.error('JUnit export failed', {description: String(err)})
+    }
+  }, [doc, toast])
+
   const handleExportSARIF = useCallback(async () => {
     if (!doc) return
     try {
@@ -193,6 +230,41 @@ export default function FindingsTab() {
       toast.error('SARIF export failed: ' + (err as Error).message)
     }
   }, [doc, toast])
+
+  // Undo (R1-2): lazy-load the flow's snapshot ring when the undo menu
+  // opens, restore on selection, then refresh doc + analysis so the findings
+  // list reflects the rolled-back source.
+  const [snapshots, setSnapshots] = useState<{id: string; label: string; createdAt: string; bytes: number}[]>([])
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false)
+  const loadSnapshots = useCallback(async () => {
+    if (!doc) return
+    setSnapshotsLoading(true)
+    try {
+      const res = await flowApi.listSnapshots(doc.id)
+      setSnapshots(res?.snapshots ?? [])
+    } catch {
+      setSnapshots([])
+    } finally {
+      setSnapshotsLoading(false)
+    }
+  }, [doc])
+
+  const handleRestoreSnapshot = useCallback(
+    async (snapshotId: string) => {
+      if (!doc) return
+      try {
+        const res = await flowApi.restoreSnapshot(doc.id, snapshotId)
+        // Refresh doc AND re-analyze (U1.4): a bare setDocument left the
+        // findings list stale after a restore until the user noticed.
+        if (res?.document) refreshAfterBlockEdit(res.document)
+        toast.success(t('toasts.snapshotRestored'))
+        void loadSnapshots()
+      } catch (err) {
+        toast.error('Restore failed', {description: String(err)})
+      }
+    },
+    [doc, toast, loadSnapshots],
+  )
 
   const handleShare = useCallback(async () => {
     if (!doc) return
@@ -215,18 +287,21 @@ export default function FindingsTab() {
     )
   }
 
-  // Pre-report states: the Run Analysis CTA and the analyzing spinner are owned
-  // by AnalysisRunner. Shown when there is no report or an analysis is in flight.
-  if (isAnalyzing || !report) {
+  // Pre-report state: no report yet → the Run Analysis CTA (or the initial
+  // full-pane spinner). Once a report exists, re-analysis is NON-BLOCKING
+  // (U1.1): the stale list stays mounted and AnalysisProgressStrip runs
+  // above it, so scroll position, filters, and expanded groups survive.
+  if (!report) {
     return <AnalysisRunner onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} progress={progress} />
   }
 
-  // Unreachable given the guards above (report is set whenever we get here),
-  // but this narrows the type so the render below needs no non-null assertions.
+  // Unreachable given the guard above, but this narrows the type so the
+  // render below needs no non-null assertions.
   if (!report) return null
 
   return (
     <div className="flex flex-col h-full">
+      {isAnalyzing && <AnalysisProgressStrip progress={progress} />}
       <FindingsSummary stats={report.stats} durationMs={report.durationMs} healthScore={report.metrics?.healthScore} />
       <FindingsToolbar
         onReanalyze={handleAnalyze}
@@ -238,34 +313,41 @@ export default function FindingsTab() {
         onExportCSV={handleExportCSV}
         onExportHTML={handleExportHTML}
         onExportSARIF={handleExportSARIF}
+        onExportJUnit={handleExportJUnit}
         onShare={handleShare}
+        snapshots={snapshots}
+        snapshotsLoading={snapshotsLoading}
+        onRestoreSnapshot={handleRestoreSnapshot}
+        onOpenSnapshots={loadSnapshots}
         sortMode={sortMode}
-        onCycleSortMode={cycleSortMode}
+        onSetSortMode={setSortMode}
+        severityCounts={severityCounts}
         hasFindings={report.findings.length > 0}
       />
       {dedupGroups && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-brand-400 bg-brand-500/5 border-b border-border-subtle">
           <span>
-            Grouped: {findings.length} unique findings ({report.findings.length - findings.length} duplicates folded)
+            {t('dedup.groupedSummary', {
+              unique: findings.length,
+              duplicates: report.findings.length - findings.length,
+            })}
           </span>
           <button
             onClick={() => setDedupGroups(null)}
             className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"
           >
-            Show all
+            {t('dedup.showAll')}
           </button>
         </div>
       )}
       {suppressedCount > 0 && (
         <div className="px-3 py-1 flex items-center justify-between text-2xs text-text-tertiary border-b border-border-subtle">
-          <span>
-            {suppressedCount} finding{suppressedCount !== 1 ? 's' : ''} suppressed
-          </span>
+          <span>{t('suppressed.summary', {count: suppressedCount})}</span>
           <button
             onClick={() => useAnalysisStore.getState().clearSuppressed()}
             className="text-brand-400 hover:text-brand-300 px-1.5 py-0.5 rounded hover:bg-brand-500/10 transition-colors"
           >
-            Restore all
+            {t('suppressed.restoreAll')}
           </button>
         </div>
       )}

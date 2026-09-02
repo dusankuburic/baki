@@ -24,7 +24,7 @@ func TestLoadCustomRules_ValidFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	rules, err := LoadCustomRules(path)
+	rules, _, err := LoadCustomRules(path)
 	if err != nil {
 		t.Fatalf("LoadCustomRules: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestLoadCustomRules_ValidFile(t *testing.T) {
 }
 
 func TestLoadCustomRules_MissingFile(t *testing.T) {
-	rules, err := LoadCustomRules("/nonexistent/path/rules.json")
+	rules, _, err := LoadCustomRules("/nonexistent/path/rules.json")
 	if err != nil {
 		t.Fatalf("missing file should return nil,nil; got error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestLoadCustomRules_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
 	os.WriteFile(path, []byte(`{not valid json`), 0644)
-	_, err := LoadCustomRules(path)
+	_, _, err := LoadCustomRules(path)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -64,7 +64,7 @@ func TestLoadCustomRules_SkipsInvalidRules(t *testing.T) {
 	  {"id": "bad-regex", "name": "Bad", "rawTypeMatch": "[invalid"}
 	]`
 	os.WriteFile(path, []byte(content), 0644)
-	rules, err := LoadCustomRules(path)
+	rules, _, err := LoadCustomRules(path)
 	if err != nil {
 		t.Fatalf("LoadCustomRules: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestLoadCustomRules_EmptyArray(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.json")
 	os.WriteFile(path, []byte(`[]`), 0644)
-	rules, err := LoadCustomRules(path)
+	rules, _, err := LoadCustomRules(path)
 	if err != nil {
 		t.Fatalf("LoadCustomRules: %v", err)
 	}

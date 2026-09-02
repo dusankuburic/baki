@@ -2,7 +2,7 @@ import {useEffect, useRef, useCallback} from 'react'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {utf8ByteLength} from '@/lib/utf8'
-import {parseChatEvent, chatEventStreamId} from '@/lib/chatEvent'
+import {parseChatEvent, chatEventStreamId, parseResumeEvents, FixProposalPayload, ToolResultPayload, ChatEvent} from '@/lib/chatEvent'
 import {subscribeToEvents, subscribeConnectionState, EventConnectionState, getEventConnectionState} from '@/api/client'
 
 // registerStream gives up waiting for SSE 'open' after this (token refresh +
@@ -23,6 +23,17 @@ interface StreamHandler {
   onDone: (tokensOut: number, tokensIn: number, streamId: string) => void
   onError: (error: string, streamId: string) => void
   onToolStatus?: (label: string, streamId: string) => void
+  // One finished tool execution (transparency trail record).
+  onToolResult?: (record: ToolResultPayload, streamId: string) => void
+  // onResumeState receives the replayable journal from a resume response —
+  // the reconnecting client rebuilds its tool trail and any pending approval
+  // cards from it. Wholesale-replace semantics: call even when empty only if
+  // events were present (undefined = old backend, keep live state).
+  onResumeState?: (events: ChatEvent[], streamId: string) => void
+  // apply_fix human-in-the-loop: a proposal awaits the user's decision, and
+  // its resolution (applying/applied/declined/timeout/error) lands here.
+  onFixProposal?: (proposal: FixProposalPayload, streamId: string) => void
+  onFixDecision?: (proposalId: string, status: string, message: string | undefined, streamId: string) => void
   // Delta-resume path; when absent, resumeInto falls back to a full onReplace.
   onAppend?: (delta: string, streamId: string) => void
   // UTF-8 byte length of accumulated text, so a delta-resume requests only the tail.
@@ -96,6 +107,12 @@ export function useStreamingMessage(handler: StreamHandler) {
             } else {
               handlerRef.current.onReplace(res.text, streamId)
             }
+          }
+          // Reconnect replay: rebuild the agentic slot state (tool trail,
+          // pending approval cards) from the journaled events — events
+          // emitted while disconnected never arrived over SSE.
+          if (res.events) {
+            handlerRef.current.onResumeState?.(parseResumeEvents(res.events), streamId)
           }
           if (res.error) {
             handlerRef.current.onError(res.error, streamId)
@@ -270,6 +287,21 @@ export function useStreamingMessage(handler: StreamHandler) {
             sub.probeMisses = 0
             armStall(streamId)
             handlerRef.current.onToolStatus?.(parsed.label, streamId)
+            break
+          case 'tool-result':
+            sub.probeMisses = 0
+            armStall(streamId)
+            handlerRef.current.onToolResult?.(parsed, streamId)
+            break
+          case 'fix-proposal':
+            sub.probeMisses = 0
+            armStall(streamId)
+            handlerRef.current.onFixProposal?.(parsed, streamId)
+            break
+          case 'fix-decision':
+            sub.probeMisses = 0
+            armStall(streamId)
+            handlerRef.current.onFixDecision?.(parsed.proposalId, parsed.status, parsed.message, streamId)
             break
         }
       })

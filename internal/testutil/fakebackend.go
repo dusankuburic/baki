@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -23,6 +24,14 @@ type FakeBackend struct {
 	// conversation persistence can be round-tripped in tests. nil-safe: the methods
 	// below tolerate a zero-valued FakeBackend built with a struct literal.
 	Conversations map[string][]interfaces.ChatMessage
+	// FlowTags backs the in-memory UpdateFlowTags (tag filter tests).
+	FlowTags map[string][]string
+	// OrgChannels backs the in-memory org-channel store (R2-3 tests).
+	OrgChannels map[string]*interfaces.OrgChannel
+	// KnowledgeDocs / KnowledgeChunks back the in-memory knowledge methods
+	// (upload/replace/re-index round-trips in rag service tests).
+	KnowledgeDocs   map[string]*interfaces.KnowledgeDocument
+	KnowledgeChunks map[string]interfaces.KnowledgeChunk
 	// FindingStatuses (flowID -> findingKey -> status) and Baselines (flowID ->
 	// baseline) back the triage methods. Lazily initialized, so a struct-literal
 	// FakeBackend works without NewFakeBackend.
@@ -69,7 +78,25 @@ func convKey(flowID, scope string) string { return scope + "\x00" + flowID }
 func (m *FakeBackend) Ping(_ context.Context) error { return m.PingErr }
 func (m *FakeBackend) Close() error                 { return nil }
 
+// FlowTags backs UpdateFlowTags/ListFlows tag filtering in tests.
+func (m *FakeBackend) UpdateFlowTags(_ context.Context, flowID string, tags []string) error {
+	normalized, err := interfaces.NormalizeFlowTags(tags)
+	if err != nil {
+		return err
+	}
+	if m.FlowTags == nil {
+		m.FlowTags = make(map[string][]string)
+	}
+	m.FlowTags[flowID] = normalized
+	return nil
+}
+
 func (m *FakeBackend) SaveFlow(_ context.Context, f *interfaces.FlowDocument) error {
+	// Lazily init: a zero-valued struct-literal FakeBackend is a documented
+	// supported construction (see Conversations).
+	if m.Flows == nil {
+		m.Flows = make(map[string]*interfaces.FlowDocument)
+	}
 	if existing, ok := m.Flows[f.ID]; ok {
 		if f.Version > 0 && existing.Version != f.Version {
 			return interfaces.ErrVersionConflict
@@ -317,20 +344,101 @@ func (m *FakeBackend) RevokeRefreshTokenForUser(_ context.Context, _ string, _ s
 }
 
 // ---- Knowledge Base ----
-func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, _ *interfaces.KnowledgeDocument) error {
+// KnowledgeDocs / KnowledgeChunks back the knowledge methods in-memory so
+// rag service tests can round-trip upload/replace/re-index. Lazily
+// initialized; a struct-literal FakeBackend works without them.
+func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, doc *interfaces.KnowledgeDocument) error {
+	m.initKnowledge()
+	m.KnowledgeDocs[doc.ID] = doc
 	return nil
 }
-func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, _, _ string) error {
+func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, orgID, id string) error {
+	m.initKnowledge()
+	if d, ok := m.KnowledgeDocs[id]; ok && d.OrgID == orgID {
+		delete(m.KnowledgeDocs, id)
+		for cid, c := range m.KnowledgeChunks {
+			if c.DocID == id {
+				delete(m.KnowledgeChunks, cid)
+			}
+		}
+	}
 	return nil
 }
-func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, _ string) ([]*interfaces.KnowledgeDocument, error) {
-	return nil, nil
+func (m *FakeBackend) DeleteKnowledgeDocumentByName(_ context.Context, orgID, filename string) error {
+	m.initKnowledge()
+	for id, d := range m.KnowledgeDocs {
+		if d.OrgID == orgID && d.Filename == filename {
+			_ = m.DeleteKnowledgeDocument(context.TODO(), orgID, id)
+		}
+	}
+	return nil
 }
-func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, _ []interfaces.KnowledgeChunk) error {
+func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
+	m.initKnowledge()
+	var out []*interfaces.KnowledgeDocument
+	for _, d := range m.KnowledgeDocs {
+		if d.OrgID == orgID {
+			cp := *d
+			for _, c := range m.KnowledgeChunks {
+				if c.DocID == d.ID {
+					cp.ChunkCount++
+				}
+			}
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, chunks []interfaces.KnowledgeChunk) error {
+	m.initKnowledge()
+	for _, c := range chunks {
+		m.KnowledgeChunks[c.ID] = c
+	}
 	return nil
 }
 func (m *FakeBackend) SearchKnowledge(_ context.Context, _ string, _ []float32, _ int) ([]interfaces.KnowledgeChunk, error) {
 	return nil, nil
+}
+func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string) ([]interfaces.KnowledgeChunk, error) {
+	m.initKnowledge()
+	var out []interfaces.KnowledgeChunk
+	for _, c := range m.KnowledgeChunks {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID {
+			out = append(out, interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, Content: c.Content})
+		}
+	}
+	return out, nil
+}
+func (m *FakeBackend) UpdateKnowledgeChunkEmbeddings(_ context.Context, _ string, chunks []interfaces.KnowledgeChunk) error {
+	m.initKnowledge()
+	for _, c := range chunks {
+		if old, ok := m.KnowledgeChunks[c.ID]; ok {
+			old.Embedding = c.Embedding
+			m.KnowledgeChunks[c.ID] = old
+		}
+	}
+	return nil
+}
+func (m *FakeBackend) CountKnowledgeChunks(_ context.Context, orgID string) (int, int, error) {
+	m.initKnowledge()
+	total, indexed := 0, 0
+	for _, c := range m.KnowledgeChunks {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID {
+			total++
+			if len(c.Embedding) > 0 {
+				indexed++
+			}
+		}
+	}
+	return total, indexed, nil
+}
+func (m *FakeBackend) initKnowledge() {
+	if m.KnowledgeDocs == nil {
+		m.KnowledgeDocs = make(map[string]*interfaces.KnowledgeDocument)
+	}
+	if m.KnowledgeChunks == nil {
+		m.KnowledgeChunks = make(map[string]interfaces.KnowledgeChunk)
+	}
 }
 
 // ---- Finding triage & baselines ----
@@ -624,6 +732,10 @@ func (m *FakeBackend) ListGovernanceAlerts(_ context.Context, filter interfaces.
 		if !filter.IncludeDismissed && a.DismissedAt != nil {
 			continue
 		}
+		// Targeted alerts are personal: visible only to their target.
+		if a.TargetUser != "" && a.TargetUser != filter.UserID {
+			continue
+		}
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -641,17 +753,21 @@ func (m *FakeBackend) ListGovernanceAlerts(_ context.Context, filter interfaces.
 	return out, nil
 }
 
-func (m *FakeBackend) UnreadGovernanceAlertCount(_ context.Context) (int, error) {
+func (m *FakeBackend) UnreadGovernanceAlertCount(ctx context.Context) (int, error) {
+	return m.UnreadGovernanceAlertCountFor(ctx, "")
+}
+
+func (m *FakeBackend) UnreadGovernanceAlertCountFor(_ context.Context, userID string) (int, error) {
 	n := 0
 	for _, a := range m.govAlerts() {
-		if a.ReadAt == nil && a.DismissedAt == nil {
+		if a.ReadAt == nil && a.DismissedAt == nil && (a.TargetUser == "" || a.TargetUser == userID) {
 			n++
 		}
 	}
 	return n, nil
 }
 
-func (m *FakeBackend) MarkGovernanceAlertRead(_ context.Context, alertID string) error {
+func (m *FakeBackend) MarkGovernanceAlertRead(_ context.Context, _, alertID string) error {
 	now := time.Now().UTC()
 	if a, ok := m.govAlerts()[alertID]; ok && a.ReadAt == nil {
 		a.ReadAt = &now
@@ -659,7 +775,7 @@ func (m *FakeBackend) MarkGovernanceAlertRead(_ context.Context, alertID string)
 	return nil
 }
 
-func (m *FakeBackend) MarkAllGovernanceAlertsRead(_ context.Context) error {
+func (m *FakeBackend) MarkAllGovernanceAlertsRead(_ context.Context, _ string) error {
 	now := time.Now().UTC()
 	for _, a := range m.govAlerts() {
 		if a.ReadAt == nil && a.DismissedAt == nil {
@@ -669,7 +785,7 @@ func (m *FakeBackend) MarkAllGovernanceAlertsRead(_ context.Context) error {
 	return nil
 }
 
-func (m *FakeBackend) DismissGovernanceAlert(_ context.Context, alertID string) error {
+func (m *FakeBackend) DismissGovernanceAlert(_ context.Context, _, alertID string) error {
 	now := time.Now().UTC()
 	if a, ok := m.govAlerts()[alertID]; ok && a.DismissedAt == nil {
 		a.DismissedAt = &now
@@ -677,11 +793,66 @@ func (m *FakeBackend) DismissGovernanceAlert(_ context.Context, alertID string) 
 	return nil
 }
 
-func (m *FakeBackend) ClearGovernanceAlerts(_ context.Context) error {
+func (m *FakeBackend) ClearGovernanceAlerts(_ context.Context, _ string) error {
 	for id, a := range m.govAlerts() {
 		if a.DismissedAt != nil {
 			delete(m.GovernanceAlerts, id)
 		}
 	}
 	return nil
+}
+
+// OrgChannels backs the org-channel store in memory (R2-3 tests).
+func (m *FakeBackend) SaveOrgChannel(_ context.Context, ch *interfaces.OrgChannel) error {
+	if m.OrgChannels == nil {
+		m.OrgChannels = make(map[string]*interfaces.OrgChannel)
+	}
+	cp := *ch
+	m.OrgChannels[ch.ID] = &cp
+	return nil
+}
+
+func (m *FakeBackend) DeleteOrgChannel(_ context.Context, orgID, id string) error {
+	if c, ok := m.OrgChannels[id]; ok && c.OrgID == orgID {
+		delete(m.OrgChannels, id)
+	}
+	return nil
+}
+
+func (m *FakeBackend) ListOrgChannels(_ context.Context, orgID string, enabledOnly bool) ([]*interfaces.OrgChannel, error) {
+	var out []*interfaces.OrgChannel
+	for _, c := range m.OrgChannels {
+		if c.OrgID == orgID && (!enabledOnly || c.Enabled) {
+			cp := *c
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// SearchFlowContents: in-memory substring match over stored flow Content —
+// mirrors the Postgres pushdown's semantics for service-level tests.
+func (m *FakeBackend) SearchFlowContents(_ context.Context, filter interfaces.FlowFilter, needle string, limit int) ([]*interfaces.FlowDocument, error) {
+	if needle == "" {
+		return []*interfaces.FlowDocument{}, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	var out []*interfaces.FlowDocument
+	for _, f := range m.Flows {
+		if filter.UserID != "" && f.OwnerID != filter.UserID {
+			continue
+		}
+		if strings.Contains(strings.ToLower(string(f.Content)), strings.ToLower(needle)) {
+			cp := *f
+			cp.Content = nil
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }

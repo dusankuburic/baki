@@ -80,3 +80,26 @@ func TestHandleResumeStream_UnknownIDReturns404(t *testing.T) {
 	rr := doRequest(t, rt, http.MethodPost, "/api/chat/resume", map[string]string{"id": "nope"})
 	checkStatus(t, rr, http.StatusNotFound)
 }
+
+// --- fix-decision endpoint ---
+
+func TestHandleFixDecision_BadBodyReturns400(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/chat/fix-decision")
+	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+func TestHandleFixDecision_MissingFieldsReturn400(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPost, "/api/chat/fix-decision", map[string]string{"streamId": "s1"})
+	checkStatus(t, rr, http.StatusBadRequest)
+}
+
+// An unknown proposal on a locally-owned stream maps ErrNoPendingFix to 404.
+func TestHandleFixDecision_UnknownProposalReturns404(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	rr := doRequest(t, rt, http.MethodPost, "/api/chat/fix-decision", map[string]interface{}{
+		"streamId": "s1", "proposalId": "nope", "approved": true,
+	})
+	checkStatus(t, rr, http.StatusNotFound)
+}

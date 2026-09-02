@@ -51,10 +51,16 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 	// content fingerprint) so they aren't retried every iteration. A declined
 	// fixer won't resolve its finding, but other fixable findings still can.
 	skipped := make(map[string]bool)
-	// Stall detection (see fixLoopStallLimit): consecutive applied fixes that
-	// fail to shrink the remaining-fixable pool.
+	// Stall detection (see fixLoopStallLimit): applied fixes that fail to
+	// drive the remaining-fixable pool to a NEW MINIMUM. The guard must count
+	// from the minimum, not from the previous iteration: an oscillator whose
+	// pool dips and regrows (3→2→3→2…) resets a consecutive-flat counter on
+	// every dip and runs to `limit` — exactly the duplicate-action/remove
+	// livelock this guard exists to stop. A legitimate cascade still passes:
+	// each reveal keeps the pool flat for at most a couple of steps before the
+	// next shrink (6,5,4,3,2,2,1,0 stalls at most once).
 	stall := 0
-	prevFixable := -1
+	minFixable := -1
 	// The loop only ever selects findings with a non-empty AutoFix, so it only
 	// needs the rules that can emit one — this cuts per-iteration rule
 	// dispatch by more than half with no behavior change (the remaining rules'
@@ -98,15 +104,15 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 				fixable++
 			}
 		}
-		if prevFixable >= 0 && fixable >= prevFixable {
+		if minFixable < 0 || fixable < minFixable {
+			minFixable = fixable
+			stall = 0
+		} else {
 			stall++
 			if stall >= fixLoopStallLimit {
 				break
 			}
-		} else {
-			stall = 0
 		}
-		prevFixable = fixable
 
 		// Pick the first auto-fixable finding (matching the filter, not already
 		// skipped) whose fixer accepts the work. Trying each candidate's patch
