@@ -1,69 +1,36 @@
+import {useTranslation} from 'react-i18next'
 import {useState} from 'react'
 import {BookOpen, ChevronDown, ChevronRight} from 'lucide-react'
 
+export type TemplateId =
+  | 't-explain-block'
+  | 't-explain-flow'
+  | 't-find-bugs'
+  | 't-error-handling'
+  | 't-performance'
+  | 't-security'
+  | 't-simplify'
+  | 't-variables'
+
 export interface PromptTemplate {
-  id: string
+  id: TemplateId
   label: string
   prompt: string
   category: 'analysis' | 'debug' | 'refactor' | 'explain'
 }
 
-const builtInTemplates: PromptTemplate[] = [
-  {
-    id: 't-explain-block',
-    label: 'Explain block in detail',
-    prompt: 'Explain what this block does step by step, including all properties and variables it uses.',
-    category: 'explain',
-  },
-  {
-    id: 't-explain-flow',
-    label: 'Explain entire flow',
-    prompt:
-      'Explain what this entire flow does from start to finish. Describe the main purpose, key decision points, and the overall logic.',
-    category: 'explain',
-  },
-  {
-    id: 't-find-bugs',
-    label: 'Find bugs',
-    prompt:
-      'Analyze this for potential bugs, race conditions, unhandled errors, and edge cases. List each issue with severity and a suggested fix.',
-    category: 'debug',
-  },
-  {
-    id: 't-error-handling',
-    label: 'Check error handling',
-    prompt:
-      'Review the error handling in this flow. Are there actions that could fail without proper error handlers? List missing error handling and suggest improvements.',
-    category: 'debug',
-  },
-  {
-    id: 't-performance',
-    label: 'Performance review',
-    prompt:
-      'Analyze this for performance issues. Look for unnecessary loops, redundant API calls, missing parallelism, and suggest optimizations.',
-    category: 'analysis',
-  },
-  {
-    id: 't-security',
-    label: 'Security audit',
-    prompt:
-      'Perform a security audit. Check for hardcoded credentials, injection vulnerabilities, insecure data handling, and missing input validation.',
-    category: 'analysis',
-  },
-  {
-    id: 't-simplify',
-    label: 'Simplify logic',
-    prompt:
-      'Suggest ways to simplify this flow. Look for redundant blocks, overly complex conditions, and opportunities to reduce nesting.',
-    category: 'refactor',
-  },
-  {
-    id: 't-variables',
-    label: 'Variable usage review',
-    prompt:
-      'Review variable usage in this flow. Find unused variables, variables that could be consolidated, and naming improvements.',
-    category: 'refactor',
-  },
+// Ids + category only. Labels and prompts resolve through
+// chat:templates.labels.<id> / chat:templates.prompts.<id>, so adding a locale
+// does not mean forking this table.
+const builtInTemplates: {id: TemplateId; category: PromptTemplate['category']}[] = [
+  {id: 't-explain-block', category: 'explain'},
+  {id: 't-explain-flow', category: 'explain'},
+  {id: 't-find-bugs', category: 'debug'},
+  {id: 't-error-handling', category: 'debug'},
+  {id: 't-performance', category: 'analysis'},
+  {id: 't-security', category: 'analysis'},
+  {id: 't-simplify', category: 'refactor'},
+  {id: 't-variables', category: 'refactor'},
 ]
 
 interface Props {
@@ -74,6 +41,7 @@ interface Props {
 }
 
 export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName, blockName}: Props) {
+  const {t} = useTranslation('chat')
   const [expanded, setExpanded] = useState(false)
 
   const interpolate = (prompt: string) => {
@@ -83,17 +51,16 @@ export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName
     return result
   }
 
-  const categoryLabels: Record<string, string> = {
-    explain: 'Explain',
-    debug: 'Debug',
-    analysis: 'Analysis',
-    refactor: 'Refactor',
-  }
-
   const grouped = builtInTemplates.reduce(
-    (acc, t) => {
-      if (!acc[t.category]) acc[t.category] = []
-      acc[t.category].push(t)
+    (acc, tpl) => {
+      const resolved: PromptTemplate = {
+        id: tpl.id,
+        category: tpl.category,
+        label: t(`templates.labels.${tpl.id}`),
+        prompt: t(`templates.prompts.${tpl.id}`),
+      }
+      if (!acc[tpl.category]) acc[tpl.category] = []
+      acc[tpl.category].push(resolved)
       return acc
     },
     {} as Record<string, PromptTemplate[]>,
@@ -106,7 +73,7 @@ export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName
         onClick={() => setExpanded(v => !v)}
       >
         <BookOpen size={13} />
-        <span>Templates</span>
+        <span>{t('templates.ui.heading')}</span>
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       </button>
 
@@ -115,17 +82,17 @@ export default function PromptTemplates({onSelect, hasBlock: _hasBlock, flowName
           {Object.entries(grouped).map(([cat, templates]) => (
             <div key={cat}>
               <span className="text-2xs font-medium text-text-tertiary uppercase tracking-wider">
-                {categoryLabels[cat] || cat}
+                {t(`templates.categories.${cat}`, {defaultValue: cat})}
               </span>
               <div className="flex flex-wrap gap-1.5 mt-1">
-                {templates.map(t => (
+                {templates.map(tpl => (
                   <button
-                    key={t.id}
+                    key={tpl.id}
                     className="bg-surface-2 hover:bg-surface-3 text-xs px-2.5 py-1 rounded-md whitespace-nowrap transition-colors border border-border-default"
-                    onClick={() => onSelect(interpolate(t.prompt))}
-                    title={t.prompt}
+                    onClick={() => onSelect(interpolate(tpl.prompt))}
+                    title={tpl.prompt}
                   >
-                    {t.label}
+                    {tpl.label}
                   </button>
                 ))}
               </div>

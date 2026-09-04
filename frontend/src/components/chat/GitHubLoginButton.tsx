@@ -1,4 +1,5 @@
 import {providersApi} from '@/api'
+import i18n from '@/i18n'
 import DeviceAuthLoginButton, {type DeviceAuthProvider} from './DeviceAuthLoginButton'
 
 interface Props {
@@ -7,7 +8,9 @@ interface Props {
 
 const githubProvider: DeviceAuthProvider = {
   name: 'GitHub',
-  label: 'Sign in with GitHub',
+  // `name` is a provider IDENTIFIER (matched against the API's provider id),
+  // not copy — only `label` is user-facing.
+  label: i18n.t('chat:auth.signInWithGitHub'),
   buttonClassName: 'bg-[#24292e] hover:bg-[#2f363d]',
   getUser: () => providersApi.getGitHubUser(),
   startAuth: () => providersApi.startGitHubAuth(),

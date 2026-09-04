@@ -20,8 +20,28 @@ describe('triage queue filters (R0-3)', () => {
       statusFilter: new Set(['open', 'acknowledged', 'in_progress', 'resolved']),
       assignedToMeOnly: false,
       triageMap: new Map([
-        [findingKey(f('a')), {flowId: 'fl', findingKey: findingKey(f('a')), ruleId: 'r', status: 'resolved', assigneeId: 'u1', updatedAt: ''} as never],
-        [findingKey(f('b')), {flowId: 'fl', findingKey: findingKey(f('b')), ruleId: 'r', status: 'in_progress', assigneeId: 'u2', updatedAt: ''} as never],
+        [
+          findingKey(f('a')),
+          {
+            flowId: 'fl',
+            findingKey: findingKey(f('a')),
+            ruleId: 'r',
+            status: 'resolved',
+            assigneeId: 'u1',
+            updatedAt: '',
+          } as never,
+        ],
+        [
+          findingKey(f('b')),
+          {
+            flowId: 'fl',
+            findingKey: findingKey(f('b')),
+            ruleId: 'r',
+            status: 'in_progress',
+            assigneeId: 'u2',
+            updatedAt: '',
+          } as never,
+        ],
       ]),
     })
   })

@@ -205,7 +205,9 @@ describe('streaming', () => {
   it('addToolCall appends a finished execution without mutating prior state', () => {
     useChatStore.getState().startStream('t1', 'stream1', 'msg1')
     const before = useChatStore.getState().streams['t1']!
-    useChatStore.getState().addToolCall('t1', {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 5, summary: '3 matches'})
+    useChatStore
+      .getState()
+      .addToolCall('t1', {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 5, summary: '3 matches'})
     useChatStore.getState().addToolCall('t1', {name: 'no_such', ok: false})
     const after = useChatStore.getState().streams['t1']!
     expect(after.toolCalls).toHaveLength(2)
@@ -383,6 +385,32 @@ describe('setDraft', () => {
     useChatStore.getState().setDraft(id, 'unsent')
     useChatStore.getState().closeThread(id)
     expect(id in useChatStore.getState().drafts).toBe(false)
+  })
+
+  // Regression: closeThread cleared conversations, streams and drafts but NOT
+  // queuedByThread, so a queued follow-up outlived the thread it belonged to for
+  // the rest of the session. clearFlowThreads clears all four and its comment
+  // claims it is "mirroring closeThread" — which was precisely what closeThread
+  // did not do.
+  it('closeThread drops the queued follow-up', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().queueMessage(id, {text: 'follow-up', files: []})
+    expect(id in useChatStore.getState().queuedByThread).toBe(true)
+
+    useChatStore.getState().closeThread(id)
+    expect(id in useChatStore.getState().queuedByThread).toBe(false)
+  })
+
+  it("closeThread leaves other threads' queued messages alone", () => {
+    const keep = useChatStore.getState().createThread('flow1')
+    const drop = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().queueMessage(keep, {text: 'keep me', files: []})
+    useChatStore.getState().queueMessage(drop, {text: 'drop me', files: []})
+
+    useChatStore.getState().closeThread(drop)
+
+    expect(useChatStore.getState().queuedByThread[keep]?.text).toBe('keep me')
+    expect(drop in useChatStore.getState().queuedByThread).toBe(false)
   })
 })
 

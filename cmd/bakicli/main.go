@@ -195,7 +195,7 @@ func runAnalyze() {
 		os.Exit(2)
 	}
 
-	rules := selectRules(*rulesFlag, *customRulesFlag)
+	rules := selectRules(*rulesFlag, *customRulesFlag, inlineRulesOf(loadedCfg))
 	settings := buildSettingsFromConfig(loadedCfg)
 	report := analyzer.RunAnalysis(doc, rules, settings, nil)
 
@@ -403,7 +403,7 @@ func loadFolder(dir string) (*models.FlowDocument, error) {
 	return doc, nil
 }
 
-func selectRules(rulesFlag, customRulesPath string) []analyzer.Rule {
+func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRuleConfig) []analyzer.Rule {
 	all := analyzer.AllRules()
 	if customRulesPath != "" {
 		custom, warnings, err := analyzer.LoadCustomRules(customRulesPath)
@@ -415,6 +415,22 @@ func selectRules(rulesFlag, customRulesPath string) []analyzer.Rule {
 			fmt.Fprintf(os.Stderr, "bakicli: -custom-rules: warning: %s\n", w)
 		}
 		all = append(all, custom...)
+	}
+	// Inline rules from the config file (see bakiConfig.CustomRulesInline).
+	// A bad entry is SKIPPED WITH A WARNING, matching LoadCustomRules — never
+	// silently, which is how R0-5 found operators believing a typo'd rule was
+	// enforcing.
+	for i, cfg := range inline {
+		r, err := analyzer.NewCustomRule(cfg)
+		if err != nil {
+			id := cfg.ID
+			if id == "" {
+				id = fmt.Sprintf("#%d (no id)", i)
+			}
+			fmt.Fprintf(os.Stderr, "bakicli: config customRulesInline: entry %d (rule %q) skipped: %v\n", i, id, err)
+			continue
+		}
+		all = append(all, r)
 	}
 	if rulesFlag == "" {
 		return all
@@ -503,11 +519,16 @@ func runWatch(args []string) {
 	}
 	setFlags := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	// Kept, not discarded: the config also carries inline custom rules and the
+	// per-rule profile, and watch must preview the SAME gate analyze applies
+	// (R0-7). Dropping it here would make the local loop weaker than CI again.
+	var watchCfg *bakiConfig
 	if *configFlag != "" {
 		if cfg, err := loadConfig(*configFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "bakicli watch: config: %v\n", err)
 			os.Exit(2)
 		} else if cfg != nil {
+			watchCfg = cfg
 			if !setFlags["fail-on"] && cfg.FailOn != "" {
 				*failOn = cfg.FailOn
 			}
@@ -543,7 +564,7 @@ func runWatch(args []string) {
 		}
 	}
 
-	rules := selectRules(*rulesFlag, *customRulesFlag)
+	rules := selectRules(*rulesFlag, *customRulesFlag, inlineRulesOf(watchCfg))
 	files, err := expandFixTargets(target)
 	if err != nil || len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "bakicli watch: %s: no .txt/.pad files to watch\n", target)
@@ -1492,6 +1513,23 @@ type bakiConfig struct {
 	Policy      string                  `json:"policy,omitempty"`
 	Verbose     *bool                   `json:"verbose,omitempty"`
 	RuleCfg     map[string]bakiRuleConf `json:"ruleConfig,omitempty"`
+	// CustomRulesInline carries rule definitions in the config file itself,
+	// alongside `customRules` (which is a PATH to a separate file).
+	//
+	// It exists so one fetched document can carry a team's whole analysis
+	// configuration: `GET /api/orgs/{id}/rules/export` emits exactly this
+	// shape, so a pipeline can do
+	//
+	//	curl -H "Authorization: Bearer $PAT" .../rules/export > .bakirc.json
+	//
+	// and gate on the SAME rules the org sees in the UI. Without it the profile
+	// (ruleConfig) and the rules (customRules) would be two artifacts that can
+	// drift apart — and a CI gate quietly enforcing a different rule set than
+	// the team configured is the failure mode this repo has hit before.
+	//
+	// Both sources are additive: a file referenced by `customRules` and these
+	// inline entries are all loaded.
+	CustomRulesInline []analyzer.CustomRuleConfig `json:"customRulesInline,omitempty"`
 }
 
 type bakiRuleConf struct {
@@ -1685,7 +1723,7 @@ func runSuppressions(args []string) {
 		fmt.Fprintf(os.Stderr, "bakicli suppressions: %v\n", err)
 		os.Exit(2)
 	}
-	entries := analyzer.SuppressionInventory(doc, selectRules("", *customRulesFlag), models.DefaultSettings())
+	entries := analyzer.SuppressionInventory(doc, selectRules("", *customRulesFlag, nil), models.DefaultSettings())
 
 	if *format == "json" {
 		enc := json.NewEncoder(os.Stdout)
@@ -1769,4 +1807,13 @@ func countAtOrAbove(findings []models.Finding, min string) int {
 		}
 	}
 	return n
+}
+
+// inlineRulesOf returns a config's inline custom rules, tolerating a nil config
+// (no .bakirc.json discovered).
+func inlineRulesOf(cfg *bakiConfig) []analyzer.CustomRuleConfig {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.CustomRulesInline
 }

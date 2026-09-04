@@ -41,6 +41,8 @@ export default function FindingsTab() {
   // debouncedQuery pattern in LibraryWorkspace.
   const [searchInput, setSearchInput] = useState(findingSearch)
   useEffect(() => {
+    // Two-way sync between the debounced store value and the local input.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSearchInput(findingSearch)
   }, [findingSearch])
   useEffect(() => {
@@ -66,6 +68,8 @@ export default function FindingsTab() {
 
   // Leave the diff view when switching documents or after a fresh analysis.
   useEffect(() => {
+    // Leaves the diff view when the document or report identity changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDiff(null)
     setDedupGroups(null)
   }, [doc?.id, report?.generatedAt])
@@ -110,7 +114,17 @@ export default function FindingsTab() {
         return false
       return true
     })
-  }, [report, categoryFilter, statusFilter, assignedToMeOnly, triageMap, currentUserId, findingSearch, suppressedKeys, dedupGroups])
+  }, [
+    report,
+    categoryFilter,
+    statusFilter,
+    assignedToMeOnly,
+    triageMap,
+    currentUserId,
+    findingSearch,
+    suppressedKeys,
+    dedupGroups,
+  ])
 
   const findings = useMemo(
     () => baseFindings.filter(f => severityFilter.has(f.severity)),
@@ -263,7 +277,7 @@ export default function FindingsTab() {
         toast.error('Restore failed', {description: String(err)})
       }
     },
-    [doc, toast, loadSnapshots],
+    [doc, toast, loadSnapshots, t],
   )
 
   const handleShare = useCallback(async () => {

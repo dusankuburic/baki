@@ -1,117 +1,98 @@
-import {useRef, useEffect} from 'react'
-import {X, Send, Eye} from 'lucide-react'
-import {createPortal} from 'react-dom'
+import {useTranslation} from 'react-i18next'
+import {useEffect} from 'react'
+import {Send, Eye} from 'lucide-react'
+import {Button, Checkbox, Modal} from '@/components/shared'
 
 interface Props {
   value: string
-  onChange: (val: string) => void
+  textareaRef: React.RefObject<HTMLTextAreaElement>
+  // The composer's own handlers, so the expanded editor is a different SHELL
+  // around identical behaviour rather than a second implementation: @-mentions,
+  // /commands, Enter-to-send and ArrowUp history all keep working here.
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
+  onKeyDown: (e: React.KeyboardEvent) => void
   onSend: () => void
-  onPreview: () => void
+  onPreview?: () => void
   onClose: () => void
   excludeContext: boolean
   onExcludeContextChange: (val: boolean) => void
+  canSend: boolean
+  menus: React.ReactNode
 }
 
 export default function ExpandedChatInput({
   value,
+  textareaRef,
   onChange,
+  onKeyDown,
   onSend,
   onPreview,
   onClose,
   excludeContext,
   onExcludeContextChange,
+  canSend,
+  menus,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null)
+  const {t} = useTranslation('chat')
 
-  // Close on Escape
+  // Modal's focus trap puts focus on the first tabbable element; the editor
+  // wants the caret in the textarea, at the end of the existing draft.
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.shiftKey) {
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [textareaRef])
 
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in p-4 sm:p-8">
-      <div
-        ref={containerRef}
-        className="w-full max-w-4xl bg-surface-1 border border-border-default rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-modal h-[80vh]"
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface-2">
-          <div className="flex flex-col">
-            <h3 className="text-lg font-semibold text-text-primary">Compose Prompt</h3>
-            <p className="text-xs text-text-tertiary">
-              Write a detailed prompt. Press Enter to send, Shift+Enter for new line.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-full hover:bg-surface-3 text-text-tertiary hover:text-text-primary transition-colors"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Editor Area */}
-        <div className="flex-1 relative flex flex-col p-6 bg-surface-1">
-          <textarea
-            autoFocus
-            className="flex-1 w-full bg-transparent text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none text-base leading-relaxed font-sans"
-            placeholder="Type your prompt here..."
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-                e.preventDefault()
-                onSend()
-                onClose()
-              }
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={t('compose.title')}
+      size="xl"
+      height="tall"
+      footer={
+        <>
+          <label className="mr-auto flex items-center gap-2 cursor-pointer select-none">
+            <Checkbox checked={excludeContext} onChange={onExcludeContextChange} />
+            <span className="text-sm text-text-secondary">{t('compose.excludeContext')}</span>
+          </label>
+          {onPreview && (
+            <Button variant="secondary" size="sm" onClick={onPreview}>
+              <Eye size={14} className="mr-1.5" />
+              {t('compose.preview')}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!canSend}
+            onClick={() => {
+              onSend()
+              onClose()
             }}
-          />
-        </div>
-
-        {/* Footer Actions */}
-        <div className="px-6 py-4 bg-surface-2 border-t border-border-subtle flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                className="w-4 h-4 rounded border-border-default bg-surface-3 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-2"
-                checked={excludeContext}
-                onChange={e => onExcludeContextChange(e.target.checked)}
-              />
-              <span className="text-sm text-text-secondary">Exclude current file context</span>
-            </label>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onPreview}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-3 hover:bg-surface-4 text-text-secondary hover:text-text-primary border border-border-default transition-all font-medium text-sm"
-            >
-              <Eye size={16} />
-              <span>Preview</span>
-            </button>
-            <button
-              onClick={() => {
-                onSend()
-                onClose()
-              }}
-              disabled={!value.trim()}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 disabled:cursor-not-allowed text-brand-foreground shadow-lg shadow-brand-500/20 transition-all font-medium text-sm"
-            >
-              <Send size={16} />
-              <span>Send Prompt</span>
-            </button>
-          </div>
-        </div>
+          >
+            <Send size={14} className="mr-1.5" />
+            {t('compose.send')}
+          </Button>
+        </>
+      }
+    >
+      <div className="relative flex flex-col h-full">
+        <p className="text-xs text-text-tertiary mb-3 shrink-0">{t('compose.hint')}</p>
+        <textarea
+          ref={textareaRef}
+          className="flex-1 w-full min-h-0 bg-transparent text-text-primary placeholder:text-text-tertiary resize-none focus:outline-none text-base leading-relaxed font-sans custom-scrollbar"
+          placeholder={t('compose.placeholder')}
+          value={value}
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+          aria-label={t('composer.inputAria')}
+        />
+        {/* The menus anchor to the bottom of the editor area, matching the
+            inline composer's placement. */}
+        {menus}
       </div>
-    </div>,
-    document.body,
+    </Modal>
   )
 }

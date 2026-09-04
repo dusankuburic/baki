@@ -1,4 +1,5 @@
 import {useState, useRef, useEffect, useCallback} from 'react'
+import {type LucideIcon} from 'lucide-react'
 import clsx from 'clsx'
 import Kbd from './Kbd'
 
@@ -6,7 +7,11 @@ type DropdownItem =
   | {
       type: 'item'
       label: string
-      icon?: React.ComponentType<{size?: number; className?: string}>
+      // LucideIcon, matching IconButton — lucide-react is the app's icon set,
+      // and its `size?: string | number` does not satisfy a hand-written
+      // ComponentType<{size?: number}> (propTypes variance), so every icon
+      // passed here failed to type-check.
+      icon?: LucideIcon
       shortcut?: string
       onSelect: () => void
       danger?: boolean
@@ -39,7 +44,7 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({top: 0, left: 0})
 
-  const flattenedItems = flattenItems(items) as FlattenedDropdownItem[]
+  const flattenedItems = flattenItems(items)
 
   const selectableButtons = () =>
     menuRef.current
@@ -54,10 +59,21 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
   const close = useCallback(
     (restoreFocus: boolean) => {
       setOpen(false)
+      // Reset here (and on open below) instead of in an effect: the highlight is
+      // a consequence of the open/close transition, not state to re-derive after
+      // one — an effect-time setState just cascades an extra render.
+      setActiveIndex(-1)
       if (restoreFocus) focusTrigger()
     },
     [focusTrigger],
   )
+
+  const toggle = useCallback(() => {
+    setOpen(prev => {
+      if (!prev) setActiveIndex(-1)
+      return !prev
+    })
+  }, [])
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current || !menuRef.current) return
@@ -90,9 +106,17 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
   }, [side, align])
 
   useEffect(() => {
-    if (open) {
-      updatePosition()
-      setActiveIndex(-1)
+    if (!open) return
+    updatePosition()
+    // The menu is position:fixed, so it does NOT follow its trigger when an
+    // ancestor scrolls — it just floats away. Capture-phase scroll catches
+    // scrolling containers, not only the window. (SourceFilePicker already did
+    // this; Dropdown positioned once on open and never again.)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
     }
   }, [open, updatePosition])
 
@@ -119,7 +143,7 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!open) return
-      const selectable = flattenedItems.filter(i => i.type === 'item' && !i.disabled)
+      const selectable = flattenedItems.filter(i => !i.disabled)
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setActiveIndex(prev => {
@@ -139,8 +163,10 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
         e.preventDefault()
         if (selectable.length) setActiveIndex(selectable[selectable.length - 1]._index)
       } else if (e.key === 'Enter' && activeIndex >= 0) {
-        const item = flattenedItems[activeIndex]
-        if (item?.type === 'item' && !item.disabled) {
+        // Resolve by _index rather than array position: they coincide now, but
+        // an identity lookup cannot silently drift again.
+        const item = flattenedItems.find(i => i._index === activeIndex)
+        if (item && !item.disabled) {
           item.onSelect()
           close(true)
         }
@@ -157,7 +183,7 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
 
   return (
     <div className={clsx('inline-block', className)} onKeyDown={handleKeyDown}>
-      <div ref={triggerRef} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
+      <div ref={triggerRef} onClick={toggle} aria-haspopup="menu" aria-expanded={open}>
         {trigger}
       </div>
       {open && (
@@ -172,36 +198,51 @@ export default function Dropdown({trigger, items, side = 'bottom', align = 'star
             if (e.key === 'Escape') close(true)
           }}
         >
-          {renderItems(items, activeIndex, () => close(true))}
+          {/* eslint-disable-next-line react-hooks/refs -- `close` reaches
+              triggerRef.current, but only when this callback is INVOKED from a
+              click/keypress; the rule flags its mere construction in render. */}
+          {renderItems(items, activeIndex, () => close(true), {n: 0})}
         </div>
       )}
     </div>
   )
 }
 
-type FlattenedDropdownItem = DropdownItem & {_index: number}
+type SelectableItem = Extract<DropdownItem, {type: 'item'}>
+type FlattenedDropdownItem = SelectableItem & {_index: number}
 
+// flattenItems numbers the SELECTABLE items in render order, and nothing else.
+//
+// It previously advanced the counter for `group` wrappers and separators too,
+// so `_index` drifted from the flattened array position as soon as a group was
+// present — and the Enter handler, which used activeIndex as an array index,
+// then fired the wrong item's onSelect (or none). Counting only `type: 'item'`
+// entries keeps `_index` in lockstep with renderItems' identical DFS walk,
+// which is what makes data-index / aria-activedescendant resolvable.
 function flattenItems(items: DropdownItem[]): FlattenedDropdownItem[] {
   const result: FlattenedDropdownItem[] = []
-  let idx = 0
   function walk(list: DropdownItem[]) {
     for (const item of list) {
-      if (item.type === 'group') {
-        walk(item.items)
-      } else {
-        result.push({...item, _index: idx})
-      }
-      idx++
+      if (item.type === 'group') walk(item.items)
+      else if (item.type === 'item') result.push({...item, _index: result.length})
     }
   }
   walk(items)
   return result
 }
 
+// `counter` is threaded through the recursion so nested groups continue the same
+// numbering flattenItems produces. Previously renderItems was handed the ORIGINAL
+// nested array, whose entries carry no `_index` at all — so `data-index` and the
+// `menu-item-N` ids were never emitted, `isActive` compared against undefined,
+// and the roving-focus effect's `dataset.index` lookup could never match. Result:
+// keyboard navigation moved no real DOM focus and highlighted nothing, in EVERY
+// dropdown, grouped or not.
 function renderItems(
-  items: (DropdownItem & {_index?: number})[],
+  items: DropdownItem[],
   activeIndex: number,
   close: () => void,
+  counter: {n: number},
 ): React.ReactNode {
   return items.map((item, i) => {
     if (item.type === 'separator') {
@@ -211,17 +252,18 @@ function renderItems(
       return (
         <div key={i}>
           <div className="text-2xs uppercase tracking-wider text-text-tertiary px-2 py-1">{item.label}</div>
-          {renderItems(item.items, activeIndex, close)}
+          {renderItems(item.items, activeIndex, close, counter)}
         </div>
       )
     }
     const Icon = item.icon
-    const isActive = item._index === activeIndex
+    const index = counter.n++
+    const isActive = index === activeIndex
     return (
       <button
         key={i}
-        data-index={item._index}
-        id={item._index !== undefined ? `menu-item-${item._index}` : undefined}
+        data-index={index}
+        id={`menu-item-${index}`}
         tabIndex={-1}
         className={clsx(
           'w-full flex items-center h-8 px-2 text-sm text-left transition-colors duration-fast',

@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Sparkles, User, Shield, Settings, LayoutDashboard, BarChart3, Cloud, Loader2} from 'lucide-react'
 import Button from '@/components/shared/Button'
@@ -13,6 +14,7 @@ type SidebarToolbarProps = {
 }
 
 export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCount, onAnalyze}: SidebarToolbarProps) {
+  const {t} = useTranslation('shell')
   const user = useAuthStore(s => s.user)
   const mainPaneView = useUIStore(s => s.mainPaneView)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
@@ -39,7 +41,7 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
             disabled={isAnalyzing}
             className={isAnalyzing ? '[&_svg]:animate-spin' : ''}
           >
-            {isAnalyzing ? 'Analyzing…' : 'Analyze flow'}
+            {isAnalyzing ? t('sidebar.analyzing') : t('sidebar.analyzeFlow')}
             {!isAnalyzing && findingCount !== undefined && findingCount > 0 && (
               <span className="ml-1 text-xs opacity-80">{findingCount} findings</span>
             )}
@@ -51,8 +53,8 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
         <button
           onClick={() => setMainPaneView('home')}
           className={navClass('home')}
-          title="Home Dashboard"
-          aria-label="Home Dashboard"
+          title={t('sidebar.homeDashboard')}
+          aria-label={t('sidebar.homeDashboard')}
         >
           <LayoutDashboard size={16} />
         </button>
@@ -60,8 +62,8 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
         <button
           onClick={() => setMainPaneView('dashboard')}
           className={navClass('dashboard')}
-          title="Analytics Dashboard"
-          aria-label="Analytics Dashboard"
+          title={t('sidebar.analyticsDashboard')}
+          aria-label={t('sidebar.analyticsDashboard')}
         >
           <BarChart3 size={16} />
         </button>
@@ -69,8 +71,8 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
         <button
           onClick={() => setMainPaneView('library')}
           className={navClass('library')}
-          title="Cloud Library"
-          aria-label="Cloud Library"
+          title={t('sidebar.cloudLibrary')}
+          aria-label={t('sidebar.cloudLibrary')}
         >
           <Cloud size={16} />
         </button>
@@ -81,8 +83,8 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
             'rounded-full transition-colors ring-2',
             mainPaneView === 'profile' ? 'ring-brand-400' : 'ring-transparent hover:ring-border-default',
           )}
-          title="User Profile"
-          aria-label="User Profile"
+          title={t('sidebar.userProfile')}
+          aria-label={t('sidebar.userProfile')}
         >
           {user ? (
             <Avatar name={user.displayName || user.email} colorSeed={user.id} avatarUrl={user.avatarUrl} size="sm" />
@@ -97,8 +99,8 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
           <button
             onClick={() => setMainPaneView('admin')}
             className={navClass('admin')}
-            title="Admin Dashboard"
-            aria-label="Admin Dashboard"
+            title={t('sidebar.adminDashboard')}
+            aria-label={t('sidebar.adminDashboard')}
           >
             <Shield size={16} />
           </button>
@@ -107,8 +109,8 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
         <button
           onClick={toggleSettings}
           className="p-1.5 text-text-tertiary hover:text-text-primary hover:bg-surface-3 rounded transition-colors"
-          title="Settings"
-          aria-label="Settings"
+          title={t('sidebar.settings')}
+          aria-label={t('sidebar.settings')}
         >
           <Settings size={16} />
         </button>

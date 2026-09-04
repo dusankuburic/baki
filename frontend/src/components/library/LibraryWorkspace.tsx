@@ -123,6 +123,8 @@ export default function LibraryWorkspace() {
   )
 
   useEffect(() => {
+    // Kicks off the paged fetch (external system).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchPage(false)
     return () => abortRef.current?.abort()
   }, [fetchPage])
@@ -282,7 +284,7 @@ export default function LibraryWorkspace() {
               />
             ) : (
               <LibraryList
-              openingId={openingId}
+                openingId={openingId}
                 items={items}
                 selectedId={selectedFlowId}
                 onSelect={f => setSelectedFlow(f.id)}

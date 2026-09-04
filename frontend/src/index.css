@@ -1952,23 +1952,18 @@ pre,
   padding: 0.1em 0.35em;
   font-size: 0.875em;
   font-family: var(--font-mono);
+  /* Was the one utility on markdownComponents.code that actually took effect
+     (this rule sets no colour, so it did not outrank it). Declared here now
+     that inline code has a single owner. */
+  color: var(--brand-300);
 }
 
-.prose-chat pre {
-  background: var(--surface-0);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  padding: 0.75em 1em;
-  overflow-x: auto;
-  margin: 0.75em 0;
-}
-
-.prose-chat pre code {
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: 0.85em;
-}
+/* NOTE: there is deliberately no `.prose-chat pre` block. Every <pre> inside
+   chat prose is rendered by <CodeBlock>, which brings its own bordered frame,
+   header and padding (and sets margin/padding/background inline). The old rule
+   still matched that inner <pre> and drew a SECOND border inside CodeBlock's
+   own. Only the print rule at the bottom of this file targets it, to keep a
+   block from splitting across pages. */
 
 .prose-chat a {
   color: var(--brand-400);
@@ -2075,17 +2070,63 @@ pre,
   animation: dot-ripple 1.2s ease-in-out infinite;
 }
 
-/* Message bubble hover effects */
-.chat-message-list:has(.message-streaming) {
-  pointer-events: auto;
+/* Search hit inside chat prose. Uses the brand tint rather than a UA yellow so
+   it reads correctly on all themes, and keeps the surrounding text colour so a
+   match never changes the line's rhythm. */
+.chat-search-hit {
+  background: color-mix(in srgb, var(--brand-500) 28%, transparent);
+  color: inherit;
+  border-radius: var(--radius-xs);
+  padding: 0 0.1em;
 }
 
-.chat-message-list.is-streaming .message-bubble {
-  opacity: 0.85;
+/* === CHAT PANEL CONTAINER QUERIES ===
+
+   The chat lives in the Inspector pane, whose width the user drags between
+   280px and 560px (usePaneResize), and on mobile in an ~80vw drawer. That
+   width has nothing to do with the viewport, so viewport breakpoints cannot
+   describe it — every rule below keys off the panel itself. */
+
+.chat-root {
+  container: chat / inline-size;
 }
 
-.chat-message-list.is-streaming .message-bubble:last-child {
-  opacity: 1;
+/* Narrow (< 340px): the header chip only has room for the provider name, and
+   the composer's context toggle relies on its checkbox alone. */
+@container chat (max-width: 339px) {
+  .cq-model {
+    display: none;
+  }
+  .cq-exclude-label {
+    display: none;
+  }
+  .chat-thread-tab {
+    max-width: 84px;
+  }
+  /* Chips wrap instead of scrolling off the edge under an invisible scrollbar. */
+  .chat-prompt-strip {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
+/* Roomy (>= 460px): there is space for the secondary numbers again. */
+@container chat (max-width: 459px) {
+  .cq-count {
+    display: none;
+  }
+  .cq-usage-detail {
+    display: none;
+  }
+}
+
+/* Wide (>= 700px) — popped out, or a wide inspector. Cap the measure so long
+   answers and code don't run to a fatiguing line length. */
+@container chat (min-width: 700px) {
+  .chat-msg-item {
+    max-width: 46rem;
+    margin-inline: auto;
+  }
 }
 
 /* === AUTOFILL OVERRIDE === */

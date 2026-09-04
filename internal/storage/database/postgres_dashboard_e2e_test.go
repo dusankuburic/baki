@@ -90,19 +90,43 @@ func TestPostgres_SeverityTrend_DedupesSameDayReanalyses(t *testing.T) {
 	flowID := "dash-v3-trend-flow"
 	seedDashFlow(t, ctx, b, flowID, owner)
 
-	seedHist := func(errors int, ago time.Duration) {
+	// Seed into a fixed hour of YESTERDAY rather than NOW() minus an offset.
+	//
+	// The previous version seeded at NOW()-2h and NOW()-1h and asserted on the
+	// LAST trend bucket ("today"). Both assumptions break in the two hours
+	// after midnight in the DB's timezone: at 00:07 UTC, NOW()-2h and NOW()-1h
+	// are both YESTERDAY, so today's bucket is legitimately 0 and the test
+	// fails. CI runs in UTC, which made this a ~8% chance of a spurious
+	// failure on any push landing between 00:00 and 02:00 UTC. Worse, between
+	// 01:00 and 02:00 the two seeds straddle midnight and land on DIFFERENT
+	// days — at which point the test would pass while no longer testing
+	// same-day deduplication at all.
+	//
+	// Yesterday is always exactly one calendar day and always fully in the
+	// past, so anchoring there is correct at every wall-clock time.
+	seedHist := func(errors int, hourOfDay int) {
 		t.Helper()
 		_, err := b.DB().ExecContext(ctx, `
 			INSERT INTO flow_analysis_history (flow_id, errors, warnings, info, analyzed_at)
-			VALUES ($1, $2, 1, 0, NOW() - $3::interval)`,
-			flowID, errors, fmt.Sprintf("%f seconds", ago.Seconds()))
+			VALUES ($1, $2, 1, 0,
+			        date_trunc('day', NOW()) - INTERVAL '1 day' + ($3::int * INTERVAL '1 hour'))`,
+			flowID, errors, hourOfDay)
 		if err != nil {
 			t.Fatalf("seed history: %v", err)
 		}
 	}
-	// Same flow analyzed twice today: 5 errors, then 3. Only the latest counts.
-	seedHist(5, 2*time.Hour)
-	seedHist(3, 1*time.Hour)
+	// Same flow analyzed twice on the same day: 5 errors, then 3. Only the
+	// latest (11:00) may count.
+	seedHist(5, 10)
+	seedHist(3, 11)
+
+	// Resolve the expected bucket from the database rather than assuming a
+	// position in the slice.
+	var wantDay string
+	if err := b.DB().QueryRowContext(ctx,
+		`SELECT TO_CHAR(date_trunc('day', NOW()) - INTERVAL '1 day', 'YYYY-MM-DD')`).Scan(&wantDay); err != nil {
+		t.Fatalf("resolve expected day: %v", err)
+	}
 
 	out, err := b.FlowDashboardAdvanced(ctx, owner, 30)
 	if err != nil {
@@ -111,15 +135,24 @@ func TestPostgres_SeverityTrend_DedupesSameDayReanalyses(t *testing.T) {
 	if len(out.SeverityTrend) == 0 {
 		t.Fatal("SeverityTrend is empty")
 	}
-	// NOTE: assumes both seeds land on the same calendar day as NOW() in the DB
-	// session timezone; true except within 2h after midnight — the intervals
-	// above stay small to keep that window tiny.
-	today := out.SeverityTrend[len(out.SeverityTrend)-1]
-	if today.Errors != 3 {
-		t.Errorf("today's errors: want 3 (latest analysis only), got %d", today.Errors)
+
+	var day *interfaces.DailySeverityPoint
+	for i := range out.SeverityTrend {
+		if out.SeverityTrend[i].Date == wantDay {
+			day = &out.SeverityTrend[i]
+			break
+		}
 	}
-	if today.Warnings != 1 {
-		t.Errorf("today's warnings: want 1, got %d", today.Warnings)
+	if day == nil {
+		t.Fatalf("no severity-trend bucket for %s (got %d buckets: %s..%s)",
+			wantDay, len(out.SeverityTrend),
+			out.SeverityTrend[0].Date, out.SeverityTrend[len(out.SeverityTrend)-1].Date)
+	}
+	if day.Errors != 3 {
+		t.Errorf("%s errors: want 3 (latest analysis only), got %d", wantDay, day.Errors)
+	}
+	if day.Warnings != 1 {
+		t.Errorf("%s warnings: want 1, got %d", wantDay, day.Warnings)
 	}
 }
 

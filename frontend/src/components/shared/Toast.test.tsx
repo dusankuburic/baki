@@ -53,3 +53,72 @@ describe('Toast duration policy', () => {
     expect(screen.queryByText('Bad')).not.toBeInTheDocument()
   })
 })
+
+// Regression: the manual-dismiss path scheduled `setTimeout(() => onClose(id), 200)`
+// for the exit animation without keeping the handle, so nothing cancelled it.
+// Unmounting the provider (route change, logout teardown) inside that window left
+// a live timer holding a closure over a torn-down tree.
+//
+// Asserted via the pending-timer count rather than "does it throw": React 18
+// dropped the setState-after-unmount warning, so a leaked timer is otherwise
+// completely silent.
+describe('Toast dismiss timer cleanup', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('cancels the deferred close when unmounted mid-animation', () => {
+    const {unmount} = render(
+      <ToastProvider>
+        <Probe />
+      </ToastProvider>,
+    )
+    act(() => {
+      fireEvent.click(screen.getByTestId('fire-plain'))
+    })
+    act(() => {
+      fireEvent.click(screen.getByLabelText('Dismiss'))
+    })
+    // In-flight: the 200ms exit timer is armed.
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+
+    unmount()
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cancels the auto-dismiss timer on unmount', () => {
+    const {unmount} = render(
+      <ToastProvider>
+        <Probe />
+      </ToastProvider>,
+    )
+    act(() => {
+      fireEvent.click(screen.getByTestId('fire-plain'))
+    })
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+
+    unmount()
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a second dismiss does not schedule a duplicate close', () => {
+    render(
+      <ToastProvider>
+        <Probe />
+      </ToastProvider>,
+    )
+    act(() => {
+      fireEvent.click(screen.getByTestId('fire-plain'))
+    })
+    const dismiss = screen.getByLabelText('Dismiss')
+    act(() => {
+      fireEvent.click(dismiss)
+    })
+    const afterFirst = vi.getTimerCount()
+    act(() => {
+      fireEvent.click(dismiss)
+    })
+    expect(vi.getTimerCount()).toBe(afterFirst)
+  })
+})

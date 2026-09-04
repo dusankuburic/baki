@@ -29,7 +29,9 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
   const hasStatsRef = useRef(false)
   // Keep the latest toast so the async callbacks don't capture a stale one.
   const toastRef = useRef(toast)
-  toastRef.current = toast
+  useEffect(() => {
+    toastRef.current = toast
+  })
 
   const refresh = useCallback(
     (background = false) => {
@@ -75,10 +77,15 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
   )
 
   useEffect(() => {
+    // Enters the loading state for an async fetch (external system).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh()
     return () => {
       // Invalidate any in-flight request on unmount/dep-change so a late
       // response can't write state into an unmounted/changed component.
+      // Incrementing the LIVE ref is the point; the rule's suggested local
+      // copy would pin a stale id and cancel nothing.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       reqIdRef.current++
     }
   }, [refresh, depKey])

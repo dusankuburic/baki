@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback} from 'react'
 import {User as UserIcon} from 'lucide-react'
 import {useAuthStore} from '@/stores/authStore'
@@ -8,6 +9,7 @@ import Avatar from '@/components/shared/Avatar'
 import {useToast} from '@/components/shared'
 
 export const ProfileCard: React.FC = () => {
+  const {t} = useTranslation('auth')
   const user = useAuthStore(s => s.user)
   const updateUser = useAuthStore(s => s.updateUser)
   const toast = useToast()
@@ -27,15 +29,15 @@ export const ProfileCard: React.FC = () => {
           avatarUrl: avatarUrlInput.trim(),
         })
         updateUser({displayName: updated.displayName, avatarUrl: updated.avatarUrl})
-        toast.success('Profile updated')
+        toast.success(t('profile.updated'))
         setIsEditing(false)
       } catch (err) {
-        toast.error('Failed to update profile', {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('profile.updateFailed'), {description: err instanceof Error ? err.message : String(err)})
       } finally {
         setIsSaving(false)
       }
     },
-    [displayNameInput, avatarUrlInput, updateUser, toast],
+    [displayNameInput, avatarUrlInput, updateUser, toast, t],
   )
 
   const displayName = user?.displayName?.trim()
@@ -45,7 +47,7 @@ export const ProfileCard: React.FC = () => {
       <div className="px-5 py-3 border-b border-border-subtle flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <UserIcon size={13} className="text-text-tertiary" />
-          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Profile</h2>
+          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">{t('profile.heading')}</h2>
         </div>
         {!isEditing && (
           <button
@@ -57,7 +59,7 @@ export const ProfileCard: React.FC = () => {
               setIsEditing(true)
             }}
           >
-            Edit
+            {t('profile.edit')}
           </button>
         )}
       </div>
@@ -74,35 +76,35 @@ export const ProfileCard: React.FC = () => {
               />
               <div className="flex-1">
                 <label htmlFor="profile-avatar-url" className="text-xs font-medium text-text-secondary block mb-1.5">
-                  Avatar URL
+                  {t('profile.avatarUrl')}
                 </label>
                 <Input
                   id="profile-avatar-url"
                   type="url"
                   value={avatarUrlInput}
                   onChange={e => setAvatarUrlInput(e.target.value)}
-                  placeholder="https://…"
+                  placeholder={t('profile.avatarPlaceholder')}
                   maxLength={2048}
                 />
               </div>
             </div>
             <div>
               <label htmlFor="profile-display-name" className="text-xs font-medium text-text-secondary block mb-1.5">
-                Display Name
+                {t('profile.displayName')}
               </label>
               <Input
                 id="profile-display-name"
                 type="text"
                 value={displayNameInput}
                 onChange={e => setDisplayNameInput(e.target.value)}
-                placeholder="Enter a display name"
+                placeholder={t('profile.displayNamePlaceholder')}
                 maxLength={100}
               />
             </div>
 
             <div className="flex gap-2">
               <Button type="submit" variant="primary" size="md" loading={isSaving}>
-                Save
+                {t('profile.save')}
               </Button>
               <Button
                 type="button"
@@ -111,7 +113,7 @@ export const ProfileCard: React.FC = () => {
                 onClick={() => setIsEditing(false)}
                 disabled={isSaving}
               >
-                Cancel
+                {t('profile.cancel')}
               </Button>
             </div>
           </form>
@@ -124,9 +126,9 @@ export const ProfileCard: React.FC = () => {
               size="lg"
             />
             <div>
-              <label className="text-xs font-medium text-text-secondary block mb-1">Display Name</label>
+              <label className="text-xs font-medium text-text-secondary block mb-1">{t('profile.displayName')}</label>
               <p className="text-sm text-text-primary">
-                {displayName || <span className="text-text-tertiary">Not set</span>}
+                {displayName || <span className="text-text-tertiary">{t('profile.notSet')}</span>}
               </p>
             </div>
           </div>

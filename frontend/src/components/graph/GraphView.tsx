@@ -126,6 +126,8 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
   // Re-style when the app theme changes and keep tokens in sync for Minimap.
   useEffect(() => {
     const tokens = resolveGraphTokens()
+    // Publishes theme tokens read off the DOM so Minimap can consume them.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setGraphTokens(tokens)
     if (!cyRef.current) return
     cyRef.current.style().fromJson(buildGraphStyle(tokens)).update()

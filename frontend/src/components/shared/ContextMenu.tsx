@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useEffect, useRef} from 'react'
 import clsx from 'clsx'
 import type {LucideIcon} from 'lucide-react'
@@ -28,6 +29,7 @@ interface ContextMenuProps {
 // role=menu / role=menuitem, closes on Esc, auto-focuses the first item, and
 // restores focus to the trigger on close (via the shared useDialogFocus hook).
 export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
+  const {t} = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   useDialogFocus({isOpen: true, onClose, containerRef: ref})
 
@@ -49,7 +51,7 @@ export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
     <div
       ref={ref}
       role="menu"
-      aria-label="Context menu"
+      aria-label={t('contextMenu')}
       className="fixed z-tooltip min-w-[180px] bg-surface-1 border border-border-default rounded-lg shadow-xl py-1.5 animate-fade-in"
       style={{left, top}}
     >

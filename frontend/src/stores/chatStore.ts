@@ -1,6 +1,7 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import {chatApi} from '@/api'
+import {uuid} from '@/lib/uuid'
 import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
 
 // Mirrors the backend per-caller concurrency cap in internal/service/chat.go
@@ -130,7 +131,12 @@ interface ChatState {
   // idempotent). patchFixProposal merges a decision/outcome update into the
   // matching card (+ per-item patches for batches).
   setFixProposal: (threadId: string, card: FixProposalCard) => void
-  patchFixProposal: (threadId: string, proposalId: string, patch: Partial<FixProposalCard>, itemPatches?: {ruleId: string; patch: Partial<FixProposalItem>}[]) => void
+  patchFixProposal: (
+    threadId: string,
+    proposalId: string,
+    patch: Partial<FixProposalCard>,
+    itemPatches?: {ruleId: string; patch: Partial<FixProposalItem>}[],
+  ) => void
   // replaceStreamTools / replaceStreamFixes wholesale-replace the slot's tool
   // trail / proposal cards from an authoritative journal replay on reconnect —
   // replace (not append) keeps double-replay idempotent.
@@ -240,7 +246,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(state => ({
       streams: {
         ...state.streams,
-        [threadId]: {streamId, messageId, text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+        [threadId]: {
+          streamId,
+          messageId,
+          text: '',
+          isThinking: true,
+          tokens: 0,
+          toolStatus: null,
+          toolCalls: [],
+          fixProposals: [],
+        },
       },
     })),
 
@@ -340,7 +355,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   canStartStream: () => get().activeStreamCount() < MAX_CONCURRENT_STREAMS,
 
   createThread: flowId => {
-    const id = crypto.randomUUID()
+    const id = uuid()
     const thread: ChatThread = {
       id,
       flowId,
@@ -400,13 +415,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       const drafts = threadId in state.drafts ? {...state.drafts} : state.drafts
       if (threadId in drafts) delete drafts[threadId]
+      // The queued follow-up dies with its thread, same as the draft — leaving
+      // it behind kept an unsendable message in the store for the session.
+      const queuedByThread = threadId in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
+      if (threadId in queuedByThread) delete queuedByThread[threadId]
       const activeThreadId =
         state.activeThreadId === threadId
           ? remaining.length > 0
             ? remaining[remaining.length - 1].id
             : null
           : state.activeThreadId
-      return {threads: remaining, conversations: next, activeThreadId, streams, drafts}
+      return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread}
     })
   },
 

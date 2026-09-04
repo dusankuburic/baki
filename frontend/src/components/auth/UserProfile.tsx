@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useEffect} from 'react'
 import clsx from 'clsx'
 import {HardDrive} from 'lucide-react'
@@ -27,6 +28,7 @@ function formatMemberSince(iso: string | undefined): string | null {
 // why and points at the local equivalents (Settings) instead of showing an
 // empty pane with just a toolbar.
 function LocalModeCard() {
+  const {t} = useTranslation('auth')
   const toggleSettings = useUIStore(s => s.toggleSettings)
   return (
     <div className="p-6 md:p-8 max-w-lg mx-auto">
@@ -35,15 +37,12 @@ function LocalModeCard() {
           <HardDrive size={20} />
         </div>
         <div>
-          <p className="text-sm font-medium text-text-primary">Local Mode</p>
-          <p className="text-sm text-text-tertiary mt-1">
-            You're running the desktop app in local mode — flows, findings, and analysis stay on this machine. There's
-            no cloud account to manage here.
-          </p>
+          <p className="text-sm font-medium text-text-primary">{t('localMode.title')}</p>
+          <p className="text-sm text-text-tertiary mt-1">{t('localMode.body')}</p>
         </div>
-        <p className="text-xs text-text-tertiary">AI provider keys and app preferences live in Settings.</p>
+        <p className="text-xs text-text-tertiary">{t('localMode.settingsHint')}</p>
         <Button variant="secondary" size="sm" onClick={toggleSettings}>
-          Open Settings
+          {t('localMode.openSettings')}
         </Button>
       </div>
     </div>
@@ -51,6 +50,7 @@ function LocalModeCard() {
 }
 
 export const UserProfile: React.FC = () => {
+  const {t} = useTranslation('auth')
   const user = useAuthStore(s => s.user)
   const logout = useAuthStore(s => s.logout)
   const organisations = useOrgStore(s => s.organisations)
@@ -83,12 +83,14 @@ export const UserProfile: React.FC = () => {
                 >
                   {user.role}
                 </span>
-                {memberSince && <span className="text-xs text-text-tertiary">Member since {memberSince}</span>}
+                {memberSince && (
+                  <span className="text-xs text-text-tertiary">{t('profile.memberSince', {date: memberSince})}</span>
+                )}
               </div>
             </div>
           </div>
           <Button variant="danger" size="sm" onClick={() => logout()}>
-            Logout
+            {t('profile.logout')}
           </Button>
         </div>
       </div>

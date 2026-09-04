@@ -44,7 +44,6 @@ vi.mock('@/api', () => ({
   },
 }))
 
-
 const b = (id: string, name: string, type: Block['type'] = 'ACTION'): Block => ({
   subflowId: 'sf1',
   id,
@@ -282,7 +281,8 @@ describe('BlockView canvas legibility (U3a)', () => {
   it('auto-scrolls the canvas when dragging near the viewport edge', () => {
     const fake = {
       _scrollTop: 100,
-      getBoundingClientRect: () => ({top: 0, bottom: 600, height: 600, left: 0, right: 400, width: 400, x: 0, y: 0}) as DOMRect,
+      getBoundingClientRect: () =>
+        ({top: 0, bottom: 600, height: 600, left: 0, right: 400, width: 400, x: 0, y: 0}) as DOMRect,
     }
     Object.defineProperty(fake, 'scrollTop', {
       get() {

@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 type SpinnerProps = {
   size?: number
   color?: string
@@ -5,6 +6,7 @@ type SpinnerProps = {
 }
 
 export default function Spinner({size = 16, color, className}: SpinnerProps) {
+  const {t} = useTranslation()
   return (
     <svg
       width={size}
@@ -14,7 +16,7 @@ export default function Spinner({size = 16, color, className}: SpinnerProps) {
       className={className}
       style={color ? {color} : undefined}
       role="status"
-      aria-label="Loading"
+      aria-label={t('loadingAria')}
     >
       <circle
         cx="8"

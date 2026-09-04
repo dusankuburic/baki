@@ -205,7 +205,13 @@ func (b *PostgresStorageBackend) ListUsers(ctx context.Context, limit, offset in
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+	// `id` as a final tiebreaker: this is offset-paginated by the admin user
+	// list, and created_at ties whenever two accounts are created in the same
+	// microsecond (a seeded install, a bulk import, concurrent signups). SQL
+	// orders tied rows arbitrarily, so without this the same walk can order a
+	// tied group differently per page and drop or repeat users across the
+	// boundary.
+	rows, err := b.db.QueryContext(ctx, `SELECT id, email, role, email_verified, failed_login_attempts, locked_until, created_at, updated_at FROM users ORDER BY created_at DESC, id ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -542,8 +548,23 @@ func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter int
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
+	// `id` as a final tiebreaker — audit_events.id is the primary key. Events
+	// logged in the same microsecond (concurrent requests, or one request
+	// emitting several) otherwise tie on created_at, and SQL orders tied rows
+	// arbitrarily, so paging the audit log could drop or repeat records. For a
+	// security audit trail "I paged through the log and it wasn't there" has to
+	// be a sound conclusion.
+	//
+	// KNOWN LIMITATION, not fixed by the tiebreaker: audit_events is
+	// append-heavy and this orders newest-first, so events written WHILE an
+	// operator pages shift every later row down and the page boundary skips
+	// one per new event. Fixing that needs keyset pagination
+	// (WHERE (created_at, id) < ($last, $lastID)) or an upper time bound
+	// pinned when paging starts — both change the AuditFilter contract and the
+	// admin UI, so they are deliberately out of scope here. Use the Since
+	// filter to narrow a window when completeness matters.
 	// #nosec G202 -- only generated "$N" placeholders are concatenated; all values are parameterized args.
-	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", i, i+1)
+	q += fmt.Sprintf(" ORDER BY created_at DESC, id ASC LIMIT $%d OFFSET $%d", i, i+1)
 	args = append(args, limit, offset)
 
 	rows, err := b.db.QueryContext(ctx, q, args...)

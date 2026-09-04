@@ -5,6 +5,7 @@ import {chatApi, providersApi, flowApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
 import {useChatStore} from '@/stores/chatStore'
 import {ToastProvider} from '@/components/shared/Toast'
+import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {ConversationFile} from '@/types'
 import type {ProviderInfo} from '@/types'
 
@@ -53,7 +54,9 @@ describe('AITab', () => {
     await act(async () => {
       render(
         <ToastProvider>
-          <AITab />
+          <ConfirmProvider>
+            <AITab />
+          </ConfirmProvider>
         </ToastProvider>,
       )
     })
@@ -75,7 +78,9 @@ describe('AITab', () => {
 
     render(
       <ToastProvider>
-        <AITab />
+        <ConfirmProvider>
+          <AITab />
+        </ConfirmProvider>
       </ToastProvider>,
     )
 
@@ -90,10 +95,93 @@ describe('AITab', () => {
     await act(async () => {
       render(
         <ToastProvider>
-          <AITab />
+          <ConfirmProvider>
+            <AITab />
+          </ConfirmProvider>
         </ToastProvider>,
       )
     })
     expect(screen.getByRole('button', {name: /open settings/i})).toBeInTheDocument()
+  })
+})
+
+// Regression: the AI tab must not clobber the thread's source-file selection.
+// ChatInput used to mirror its LOCAL @-mention array (`taggedFiles`) into the
+// thread via an `onFilesChange` effect. That array starts [] and is reset to []
+// after every send, so the effect wrote an empty selection on mount, after each
+// message, and again whenever the active thread changed (which changes the
+// callback's identity and re-fires the effect). The result: the AI silently lost
+// all source-file context from the second message onward, and the picker read
+// "No files selected" though the user never deselected anything.
+//
+// Per-message @-mention overrides already travel correctly as onSend's `files`
+// argument (→ buildRequest's `overrideFiles`); the thread's persistent selection
+// belongs to SourceFilePicker alone. These two concepts must not share a writer.
+describe('AITab source-file selection (B1)', () => {
+  const SOURCE_FILES = [
+    {filename: 'Main.txt', subflowId: 'sf1', subflowName: 'Main', blockCount: 3, lineCount: 10},
+    {filename: 'Login.txt', subflowId: 'sf2', subflowName: 'Login', blockCount: 2, lineCount: 8},
+  ]
+
+  function seedConfiguredChat() {
+    vi.mocked(providersApi.listProviders).mockResolvedValue([
+      {id: 'claude', name: 'Claude', configured: true, authType: 'apiKey', models: [], defaultModel: 'm1'},
+    ] as unknown as ProviderInfo[])
+    vi.mocked(flowApi.getSourceFiles).mockResolvedValue(SOURCE_FILES)
+    useFlowStore.setState({
+      document: {id: 'f1', name: 'Flow', subflows: [{id: 'sf1', name: 'Main', blocks: []}]} as never,
+    })
+    useChatStore.setState({
+      activeThreadId: 't1',
+      threads: [
+        {
+          id: 't1',
+          flowId: 'f1',
+          title: 'T',
+          createdAt: '2024-01-01T00:00:00Z',
+          contextBlockId: null,
+          selectedSourceFiles: ['Main.txt', 'Login.txt'],
+          tokensIn: 0,
+          tokensOut: 0,
+        },
+      ],
+      conversations: new Map([['t1', []]]),
+    })
+  }
+
+  it('preserves the thread source-file selection across mount', async () => {
+    seedConfiguredChat()
+
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <ConfirmProvider>
+            <AITab />
+          </ConfirmProvider>
+        </ToastProvider>,
+      )
+    })
+
+    const thread = useChatStore.getState().threads.find(t => t.id === 't1')
+    expect(thread?.selectedSourceFiles).toEqual(['Main.txt', 'Login.txt'])
+  })
+
+  it('shows the preserved selection in the source-file picker', async () => {
+    seedConfiguredChat()
+
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <ConfirmProvider>
+            <AITab />
+          </ConfirmProvider>
+        </ToastProvider>,
+      )
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('All 2 files')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('No files selected')).not.toBeInTheDocument()
   })
 })

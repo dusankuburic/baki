@@ -63,6 +63,8 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
       })
 
     const {ticket, error: hashError} = readSSOHash()
+    // One-shot parse of the URL fragment on mount: an external input, not derived state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (hashError) setSsoError(hashError)
     if (ticket) {
       loginWithSSOTicket(ticket)

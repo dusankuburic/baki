@@ -195,13 +195,24 @@ runs:
         sarif_file: ${{ inputs.sarif-file }}
         category: pad-analysis
 
+    # The condition must also fire when a POLICY is configured. `policy` is
+    # documented as "the authoritative gate (overrides fail-on)", so the natural
+    # way to ask for policy-only enforcement is policy=<file> with
+    # fail-on=none — and that combination used to skip this step entirely,
+    # passing the build on a policy violation. The analyze step already drops
+    # -fail-on whenever a policy is set, so fail-on carries no meaning there;
+    # gating enforcement on it alone was the bug.
     - name: Enforce gate
-      if: ${{ inputs.fail-on != 'none' }}
+      if: ${{ inputs.fail-on != 'none' || inputs.policy != '' }}
       shell: bash
       run: |
         code="${{ steps.analyze.outputs.exit-code }}"
         if [ "$code" != "0" ]; then
-          echo "::error::PAD analysis gate failed (fail-on=${{ inputs.fail-on }}, policy=${{ inputs.policy }})."
+          if [ -n "${{ inputs.policy }}" ]; then
+            echo "::error::PAD analysis gate failed (policy=${{ inputs.policy }})."
+          else
+            echo "::error::PAD analysis gate failed (fail-on=${{ inputs.fail-on }})."
+          fi
           exit "$code"
         fi
 

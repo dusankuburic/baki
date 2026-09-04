@@ -47,6 +47,8 @@ export default function PolicyGatePanel() {
   }, [activeOrgId])
 
   useEffect(() => {
+    // Kicks off the async policy load (external system).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadPolicies()
   }, [loadPolicies])
 

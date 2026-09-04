@@ -228,6 +228,8 @@ export function useCytoscapeGraph(subflowId?: string) {
 
   // Re-load when document or report changes
   useEffect(() => {
+    // Drives the cytoscape instance — an external system, which is what effects are for.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadGraph()
   }, [flowDoc?.id, report?.generatedAt, subflowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -239,6 +241,8 @@ export function useCytoscapeGraph(subflowId?: string) {
     const q = searchQuery.trim().toLowerCase()
     if (!q) {
       cy.elements().removeClass('search-match search-dim')
+      // Publishes a count derived from cytoscape's live graph, which React does not own.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setMatchCount(null)
       return
     }

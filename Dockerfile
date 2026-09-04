@@ -16,11 +16,24 @@ COPY core/go.mod core/go.sum ./core/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
-RUN swag init -g main.go --parseDependency --parseInternal
+# Same invocation as the OpenAPI Freshness CI job, so the spec baked into the
+# image is the one CI validated. (Verified identical output to the previous
+# --parseDependency --parseInternal form, but identical-by-accident is not a
+# property worth relying on.)
+RUN swag init -g main.go -o docs --parseDependencyLevel 1
 ARG GIT_COMMIT=dev
 ARG VERSION=0.1.0
+# Commit date, not build time: keeps the image reproducible from a given commit
+# while still answering "how old is what's running".
+ARG BUILD_DATE=
+# /api/system/info reports Version, GitCommit and BuildDate — and it reads them
+# from internal/service, NOT from main. Only internal/service.Version was being
+# stamped, so the endpoint operators use to identify a deployment always
+# answered gitCommit="" and buildDate="". main.Version is stamped too because
+# telemetry.Init reports it as the OTel service version; main.GitCommit is
+# stamped for symmetry, though nothing reads it today.
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w -X main.GitCommit=${GIT_COMMIT} -X main.Version=${VERSION} -X pad-analyzer/internal/service.Version=${VERSION}" \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X pad-analyzer/internal/service.Version=${VERSION} -X pad-analyzer/internal/service.GitCommit=${GIT_COMMIT} -X pad-analyzer/internal/service.BuildDate=${BUILD_DATE}" \
     -o baki-backend main.go
 
 # Stage 3: Final lean image — distroless (no shell/package-manager) for a

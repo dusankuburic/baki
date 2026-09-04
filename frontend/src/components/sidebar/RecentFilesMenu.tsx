@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useRef, useEffect, useState, useCallback, useMemo} from 'react'
 import {FileText, Folder, X, Trash2} from 'lucide-react'
 import clsx from 'clsx'
@@ -31,6 +32,7 @@ function RecentRow({
   onSelect: (path: string) => void
   onRemove: (path: string) => void
 }) {
+  const {t} = useTranslation('shell')
   return (
     <div
       role="option"
@@ -62,7 +64,7 @@ function RecentRow({
           onRemove(file.path)
         }}
         className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded-sm text-text-tertiary hover:text-semantic-error hover:bg-surface-4 transition-all duration-fast"
-        aria-label="Remove"
+        aria-label={t('recent.remove')}
       >
         <X size={10} />
       </button>
@@ -78,6 +80,7 @@ export default function RecentFilesMenu({
   onClear,
   onClose,
 }: RecentFilesMenuProps) {
+  const {t} = useTranslation('shell')
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({top: 0, left: 0, width: 0})
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -162,12 +165,12 @@ export default function RecentFilesMenu({
         className="fixed bg-surface-2 border border-border-default rounded-lg shadow-lg z-overlay animate-fade-in overflow-hidden"
         style={{top: pos.top, left: pos.left, width: pos.width}}
         role="listbox"
-        aria-label="Recent files and folders"
+        aria-label={t('recent.menuAria')}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
       >
         <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
-          <span className="text-xs font-medium text-text-secondary">Recent</span>
+          <span className="text-xs font-medium text-text-secondary">{t('recent.heading')}</span>
           {!isEmpty && (
             <button
               onClick={() => {
@@ -183,13 +186,15 @@ export default function RecentFilesMenu({
         </div>
 
         {isEmpty ? (
-          <div className="px-3 py-4 text-xs text-text-tertiary text-center">No recent items</div>
+          <div className="px-3 py-4 text-xs text-text-tertiary text-center">{t('recent.empty')}</div>
         ) : (
           <div className="max-h-72 overflow-y-auto">
             {folders.length > 0 && (
               <>
                 <div className="px-3 pt-2 pb-1">
-                  <span className="text-2xs font-semibold uppercase tracking-wider text-text-disabled">Folders</span>
+                  <span className="text-2xs font-semibold uppercase tracking-wider text-text-disabled">
+                    {t('recent.folders')}
+                  </span>
                 </div>
                 {folders.map(file => (
                   <RecentRow
@@ -206,7 +211,9 @@ export default function RecentFilesMenu({
             {items.length > 0 && (
               <>
                 <div className={`px-3 pb-1 ${folders.length > 0 ? 'pt-2 border-t border-border-subtle mt-1' : 'pt-2'}`}>
-                  <span className="text-2xs font-semibold uppercase tracking-wider text-text-disabled">Files</span>
+                  <span className="text-2xs font-semibold uppercase tracking-wider text-text-disabled">
+                    {t('recent.files')}
+                  </span>
                 </div>
                 {items.map(file => (
                   <RecentRow

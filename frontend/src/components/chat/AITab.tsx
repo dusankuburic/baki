@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useSettingsStore} from '@/stores/settingsStore'
@@ -11,26 +12,22 @@ import {
   SuggestedPrompts,
   ChatInput,
   ApiKeyMissingState,
-  ContextChip,
-  ConnectionPanel,
-  TokenCounter,
   PromptTemplates,
-  SourceFilePicker,
-  ChatToolbar,
   ChatThreadBar,
   FixProposalCard,
 } from '.'
 import {useState, useEffect, useMemo, useCallback, lazy, Suspense} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
-import StreamingProgress from './StreamingProgress'
 import LiveToolTrail from './LiveToolTrail'
 import StreamingBubble from './StreamingBubble'
 import type {ProviderID} from '@/types'
-import ConnectionStatus from './ConnectionStatus'
+import ChatHeader from './ChatHeader'
+import ChatContextBar from './ChatContextBar'
 import EmptyChatState from './EmptyChatState'
 import ChatErrorBoundary from './ChatErrorBoundary'
 import ChatSearchBar from './ChatSearchBar'
+import {useChatPanel} from './ResizableChatPanel'
 
 // Rarely-rendered overlays load on first open: the context-preview modal only
 // appears when the user confirms a context-heavy send, and the help popover
@@ -39,16 +36,11 @@ import ChatSearchBar from './ChatSearchBar'
 const ContextPreviewModal = lazy(() => import('./ContextPreviewModal'))
 const ChatHelpPopover = lazy(() => import('./ChatHelpPopover'))
 
-const WELCOME_MESSAGES: Record<string, string> = {
-  copilot: 'GitHub Copilot is ready — ask about your PAD flow, request code, or analyze findings.',
-  claude: 'Claude is ready to help you analyze and debug your PAD flow.',
-  openai: 'GPT is ready — ask questions about your flow or request analysis.',
-  gemini: 'Gemini is ready to help you explore your PAD flow.',
-  demo: 'Demo mode — try out AI analysis with limited daily requests.',
-}
-const DEFAULT_WELCOME = 'AI assistant is ready — ask about your flow, request analysis, or explore findings.'
+// Welcome copy is keyed by provider id under chat:welcome.*, with a fallback
+// for providers that have no dedicated line.
 
 export default function AITab() {
+  const {t} = useTranslation('chat')
   const _selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const _document = useFlowStore(s => s.document)
   const _analysisReport = useAnalysisStore(s => (_document ? s.reports.get(_document.id) : undefined))
@@ -61,6 +53,7 @@ export default function AITab() {
   )
   const aiSettings = useSettingsStore(s => s.settings.ai)
   const provider = useChatStore(s => s.selectedProvider)
+  const chatPanel = useChatPanel()
 
   const {
     configured,
@@ -113,11 +106,21 @@ export default function AITab() {
   const [msgSearch, setMsgSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  // Which match the user is standing on. The query is stored ALONGSIDE the
+  // index so a new query resets to the first hit by derivation rather than by
+  // an effect that would render one frame with a stale cursor. `nonce` makes
+  // stepping onto the same index twice scroll again.
+  const [matchCursor, setMatchCursor] = useState<{query: string; index: number; nonce: number}>({
+    query: '',
+    index: 0,
+    nonce: 0,
+  })
   const toggleSearch = useCallback(() => setSearchOpen(v => !v), [])
   const closeSearch = useCallback(() => {
     setSearchOpen(false)
     setMsgSearch('')
   }, [])
+  const showHelp = useCallback(() => setHelpOpen(true), [])
 
   const contextBlockId = activeThread?.contextBlockId ?? null
 
@@ -141,33 +144,109 @@ export default function AITab() {
     }
   }, [selectedBlockId, hasFindings])
 
-  const displayedMessages = useMemo(() => {
-    if (!searchOpen || !msgSearch.trim()) return activeThreadMessages
-    const q = msgSearch.toLowerCase()
-    return activeThreadMessages.filter(m => m.content.toLowerCase().includes(q))
-  }, [activeThreadMessages, searchOpen, msgSearch])
+  // Search no longer FILTERS the conversation — it indexes it. Matches keep
+  // their surrounding turns, and the search bar steps through them.
+  const searchQuery = searchOpen ? msgSearch.trim() : ''
+  const matchIndices = useMemo(() => {
+    if (!searchQuery) return []
+    const q = searchQuery.toLowerCase()
+    const out: number[] = []
+    activeThreadMessages.forEach((m, i) => {
+      if (m.content.toLowerCase().includes(q)) out.push(i)
+    })
+    return out
+  }, [activeThreadMessages, searchQuery])
+
+  const stepMatch = useCallback(
+    (delta: number) => {
+      setMatchCursor(prev => {
+        const count = matchIndices.length
+        if (count === 0) return prev
+        const from = prev.query === searchQuery ? prev.index : 0
+        return {query: searchQuery, index: (from + delta + count) % count, nonce: prev.nonce + 1}
+      })
+    },
+    [matchIndices.length, searchQuery],
+  )
+  const nextMatch = useCallback(() => stepMatch(1), [stepMatch])
+  const prevMatch = useCallback(() => stepMatch(-1), [stepMatch])
+
+  // A cursor belonging to an older query reads as 0, so a new search always
+  // starts at its first hit without a reset pass.
+  const rawCursor = matchCursor.query === searchQuery ? matchCursor.index : 0
+  const safeCursor = matchIndices.length > 0 ? Math.min(rawCursor, matchIndices.length - 1) : 0
+  const activeMatchIndex = matchIndices.length > 0 ? matchIndices[safeCursor] : -1
+  const scrollTo = useMemo(
+    () =>
+      activeMatchIndex >= 0 && matchCursor.nonce > 0 ? {index: activeMatchIndex, nonce: matchCursor.nonce} : undefined,
+    [activeMatchIndex, matchCursor.nonce],
+  )
+
+  // Identify the regeneratable turn by message ID, not by index. Comparing a
+  // render index against a position in the FILTERED array attached Regenerate
+  // to whichever message happened to sit last in the search results.
+  const lastAssistantId = useMemo(() => {
+    for (let i = activeThreadMessages.length - 1; i >= 0; i--) {
+      if (activeThreadMessages[i].role === 'assistant') return activeThreadMessages[i].id
+    }
+    return null
+  }, [activeThreadMessages])
+
+  const clearBlockScope = useCallback(() => setThreadContextBlock(null), [setThreadContextBlock])
+  const onSelectPrompt = useCallback((text: string) => handleSend(text, [], false), [handleSend])
+  const toggleTools = useCallback(
+    () => setThreadUseTools(!(activeThread?.useTools ?? false)),
+    [setThreadUseTools, activeThread],
+  )
+
+  const streamFooter = useMemo(
+    () => (
+      <>
+        {showThinking && (
+          <MessageBubble
+            message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
+            isThinking
+          />
+        )}
+        {isCurrentThreadStreaming && <StreamingBubble />}
+        {/* Agentic activity rides INSIDE the scroll region. Pinned below it,
+            the tool trail and approval cards grew row by row mid-stream and
+            squeezed the conversation as the answer arrived. */}
+        {isCurrentThreadStreaming && <LiveToolTrail />}
+        {isCurrentThreadStreaming &&
+          activeThreadId &&
+          fixProposals.map(card => (
+            <FixProposalCard
+              key={card.proposalId}
+              proposal={card}
+              onRespond={(approved, proposalId, excludedItemIndices) =>
+                respondFixProposal(activeThreadId, approved, proposalId, excludedItemIndices)
+              }
+            />
+          ))}
+      </>
+    ),
+    [showThinking, isCurrentThreadStreaming, fixProposals, activeThreadId, respondFixProposal],
+  )
 
   if (!configured) {
     return <ApiKeyMissingState />
   }
 
   const selectedSourceFiles = activeThread?.selectedSourceFiles ?? []
-  const totalTokensIn = activeThread?.tokensIn ?? 0
-  const totalTokensOut = activeThread?.tokensOut ?? 0
-
   const configuredProviders = providers.filter(p => p.configured || p.id === 'demo')
   const showCost = aiSettings.showCostEstimates && currentModelDetail && currentModelDetail.inputCostPerM > 0
   const messages = activeThreadMessages
-  const lastAssistantIdx = displayedMessages.reduce((acc, m, i) => (m.role === 'assistant' ? i : acc), -1)
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming
 
   return (
     <ChatErrorBoundary key={activeThreadId ?? 'no-thread'}>
-      <div className="flex flex-col h-full min-h-0">
-        {/* Pinned header — provider/model selector, connection status, thread tabs.
-          flex-shrink-0 keeps it anchored while only the message list scrolls. */}
-        <div className="flex-shrink-0 border-b border-border-subtle">
-          <ConnectionPanel
+      {/* chat-root establishes the container that every density rule below
+          keys off. The panel is 280-560px wide by drag, independent of the
+          viewport, so viewport breakpoints cannot describe it. */}
+      <div className="chat-root flex flex-col h-full min-h-0">
+        <div className="flex-shrink-0">
+          <ChatHeader
             providers={configuredProviders.map(p => ({
               id: p.id as ProviderID,
               name: p.name,
@@ -180,13 +259,20 @@ export default function AITab() {
             selectedModel={selectedModel}
             onSelectModel={setSelectedModel}
             demoRemaining={demoRemaining}
+            isStreaming={isCurrentThreadStreaming}
+            messageCount={messages.length}
+            useTools={activeThread?.useTools ?? false}
+            onToggleTools={provider === 'demo' ? undefined : toggleTools}
+            onNewChat={handleCreateThread}
+            onClearContext={handleClearContext}
+            onCompact={handleCompact}
             onExport={handleExport}
-            hasMessages={messages.length > 0}
+            onToggleSearch={toggleSearch}
+            searchActive={searchOpen}
+            onShowHelp={showHelp}
+            isPoppedOut={chatPanel?.isPoppedOut}
+            onTogglePopOut={chatPanel?.togglePopOut}
           />
-
-          <div className="px-3 py-1.5">
-            <ConnectionStatus isStreaming={isCurrentThreadStreaming} provider={currentModelDetail?.displayName} />
-          </div>
 
           <ChatThreadBar
             threads={flowThreads}
@@ -196,61 +282,29 @@ export default function AITab() {
             onClose={handleCloseThread}
             onRename={handleRenameThread}
           />
-        </div>
 
-        {/* Pinned sub-controls — context scope, source files, toolbar. */}
-        {(contextBlockId || doc) && activeThread && (
-          <div className="flex-shrink-0 mt-1">
-            {contextBlockId && selectedBlock ? (
-              <ContextChip
-                blockId={contextBlockId}
-                blockName={selectedBlock.name}
-                blockType={selectedBlock.rawType}
-                onClear={() => setThreadContextBlock(null)}
-              />
-            ) : doc && selectedBlockId ? (
-              <div className="px-3 py-1.5">
-                <span className="text-2xs text-text-tertiary">
-                  Scope: entire flow
-                  <button
-                    className="ml-2 text-brand-400 hover:text-brand-300 transition-colors"
-                    onClick={() => setThreadContextBlock(selectedBlockId)}
-                  >
-                    Focus on selected block
-                  </button>
-                </span>
-              </div>
-            ) : null}
-          </div>
-        )}
-
-        {sourceFiles.length > 0 && activeThread && (
-          <div className="flex-shrink-0 mt-1">
-            <SourceFilePicker
+          {activeThread && (doc || contextBlockId) && (
+            <ChatContextBar
+              contextBlockId={contextBlockId}
+              blockName={selectedBlock?.name}
+              blockType={selectedBlock?.rawType}
+              onClearBlock={clearBlockScope}
+              selectedBlockId={selectedBlockId}
+              onFocusBlock={setThreadContextBlock}
               files={sourceFiles}
-              selected={selectedSourceFiles}
-              onSelectionChange={setThreadSourceFiles}
+              selectedFiles={selectedSourceFiles}
+              onFilesChange={setThreadSourceFiles}
             />
-          </div>
-        )}
+          )}
 
-        <div className="flex-shrink-0">
-          <ChatToolbar
-            messageCount={messages.length}
-            onNewChat={handleCreateThread}
-            onClearContext={handleClearContext}
-            onCompact={handleCompact}
-            useTools={activeThread?.useTools ?? false}
-            providerId={provider}
-            onToggleTools={provider === 'demo' ? undefined : () => setThreadUseTools(!(activeThread?.useTools ?? false))}
-            onToggleSearch={toggleSearch}
-            searchActive={searchOpen}
-          />
           {searchOpen && (
             <ChatSearchBar
               query={msgSearch}
               onChange={setMsgSearch}
-              matchCount={displayedMessages.length}
+              current={matchIndices.length > 0 ? safeCursor + 1 : 0}
+              total={matchIndices.length}
+              onPrev={prevMatch}
+              onNext={nextMatch}
               onClose={closeSearch}
             />
           )}
@@ -264,12 +318,12 @@ export default function AITab() {
               <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                 <div className="px-4 pt-4 pb-2">
                   <p className="text-xs text-text-tertiary leading-relaxed">
-                    {WELCOME_MESSAGES[useChatStore.getState().selectedProvider] ?? DEFAULT_WELCOME}
+                    {t(`welcome.${provider}`, {defaultValue: t('welcome.fallback')})}
                   </p>
                 </div>
-                <SuggestedPrompts prompts={suggestedPrompts} onSelect={text => handleSend(text, [], false)} />
+                <SuggestedPrompts prompts={suggestedPrompts} onSelect={onSelectPrompt} />
                 <PromptTemplates
-                  onSelect={text => handleSend(text, [], false)}
+                  onSelect={onSelectPrompt}
                   hasBlock={!!contextBlockId}
                   flowName={doc?.name}
                   blockName={selectedBlock?.name}
@@ -280,27 +334,20 @@ export default function AITab() {
               // list so it opens at the new thread's bottom (initialTopMostItemIndex).
               <ChatMessageList
                 key={activeThread.id}
-                messages={displayedMessages}
+                messages={activeThreadMessages}
                 renderMessage={(i, m) => (
                   <MessageBubble
                     message={m}
-                    isLastAssistant={i === lastAssistantIdx}
-                    onRegenerate={i === lastAssistantIdx ? handleResend : undefined}
+                    isLastAssistant={m.id === lastAssistantId}
+                    onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
                     onRetry={m.finishReason === 'error' ? handleResend : undefined}
+                    highlight={searchQuery || undefined}
+                    isActiveMatch={i === activeMatchIndex}
                   />
                 )}
-                footer={
-                  <>
-                    {showThinking && (
-                      <MessageBubble
-                        message={{id: 'thinking', role: 'assistant', content: '', timestamp: new Date().toISOString()}}
-                        isThinking
-                      />
-                    )}
-                    {isCurrentThreadStreaming && <StreamingBubble />}
-                  </>
-                }
+                footer={streamFooter}
                 isStreaming={isCurrentThreadStreaming}
+                scrollTo={scrollTo}
               />
             )
           ) : (
@@ -308,41 +355,23 @@ export default function AITab() {
           )}
         </div>
 
-        {/* Pinned bottom — tokens/progress + input. */}
+        {/* Pinned bottom — the composer, and nothing else. */}
         {doc && activeThread && (
           <div className="flex-shrink-0">
-            {isCurrentThreadStreaming && <LiveToolTrail />}
-            {isCurrentThreadStreaming &&
-              fixProposals.map(card => (
-                <FixProposalCard
-                  key={card.proposalId}
-                  proposal={card}
-                  onRespond={(approved, proposalId, excludedItemIndices) =>
-                    respondFixProposal(activeThreadId!, approved, proposalId, excludedItemIndices)
-                  }
-                />
-              ))}
-            {isCurrentThreadStreaming ? (
-              <StreamingProgress />
-            ) : (
-              <TokenCounter
-                promptTokens={totalTokensIn}
-                completionTokens={totalTokensOut}
-                inputCostPerM={showCost ? currentModelDetail?.inputCostPerM : undefined}
-                outputCostPerM={showCost ? currentModelDetail?.outputCostPerM : undefined}
-              />
-            )}
-
             <ChatInput
-              onSend={(text, files, excludeContext) => handleSend(text, files, excludeContext)}
-              onPreview={(text, files, excludeContext) => handlePreviewContext(text, files, excludeContext)}
+              onSend={handleSend}
+              onPreview={handlePreviewContext}
               onCancel={handleCancelStream}
-              onFilesChange={setThreadSourceFiles}
               onClearThread={handleClearThread}
-              onShowHelp={() => setHelpOpen(true)}
-              onQueue={(text, files, excludeContext) => handleQueue(text, files, excludeContext)}
+              onShowHelp={showHelp}
+              onQueue={handleQueue}
               queued={queuedForActiveThread ?? null}
               onCancelQueue={cancelQueued}
+              sourceFiles={sourceFiles}
+              promptTokens={activeThread.tokensIn ?? 0}
+              completionTokens={activeThread.tokensOut ?? 0}
+              inputCostPerM={showCost ? currentModelDetail?.inputCostPerM : undefined}
+              outputCostPerM={showCost ? currentModelDetail?.outputCostPerM : undefined}
             />
           </div>
         )}

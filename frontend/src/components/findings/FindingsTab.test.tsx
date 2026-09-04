@@ -204,7 +204,6 @@ describe('snapshot restore (U1.4)', () => {
 })
 
 describe('FindingsTab', () => {
-
   it('renders all findings by default', async () => {
     await renderTab()
     await waitFor(() => {

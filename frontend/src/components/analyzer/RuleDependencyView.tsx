@@ -170,6 +170,10 @@ export default function RuleDependencyView() {
       instance.destroy()
       cyRef.current = null
     }
+    // `load` is a plain function redeclared each render; listing it would tear
+    // down and rebuild the cytoscape instance every render. Theme is the only
+    // real input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedTheme])
 
   const selectedDeps =

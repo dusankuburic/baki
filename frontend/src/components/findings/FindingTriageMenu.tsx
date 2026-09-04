@@ -1,4 +1,5 @@
 import {useState, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {CircleDot, UserPlus, UserMinus, X} from 'lucide-react'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
@@ -11,13 +12,9 @@ import Avatar from '@/components/shared/Avatar'
 import {isTauri} from '@/platform/guards'
 import type {Finding, TriageStatus} from '@/types'
 
-const TRIAGE_OPTIONS: {s: TriageStatus; label: string}[] = [
-  {s: 'open', label: 'Open'},
-  {s: 'acknowledged', label: 'Acknowledged'},
-  {s: 'in_progress', label: 'In Progress'},
-  {s: 'resolved', label: 'Resolved'},
-  {s: 'suppressed', label: 'Suppressed'},
-]
+// Order only — labels resolve through findings:triage.status.<status>, whose
+// keys mirror the TriageStatus union.
+const TRIAGE_OPTIONS: TriageStatus[] = ['open', 'acknowledged', 'in_progress', 'resolved', 'suppressed']
 
 interface AssignableUser {
   id: string
@@ -30,6 +27,7 @@ interface Props {
 }
 
 export default function FindingTriageMenu({finding}: Props) {
+  const {t} = useTranslation('findings')
   const [showTriage, setShowTriage] = useState(false)
   const [showAssign, setShowAssign] = useState(false)
   const toast = useToast()
@@ -76,8 +74,8 @@ export default function FindingTriageMenu({finding}: Props) {
     if (status === triageStatus) return
     setFindingTriage(finding, status)
     if (status === 'suppressed') {
-      toast.info('Finding suppressed', {
-        action: {label: 'Undo', onClick: () => setFindingTriage(finding, 'open')},
+      toast.info(t('toasts.findingSuppressed'), {
+        action: {label: t('toasts.undo'), onClick: () => setFindingTriage(finding, 'open')},
       })
     }
   }
@@ -99,7 +97,7 @@ export default function FindingTriageMenu({finding}: Props) {
             triageTone(triageStatus).bg,
           )}
         >
-          {triageStatus.replace('_', ' ')}
+          {t(`triage.status.${triageStatus}`)}
         </span>
       )}
 
@@ -107,7 +105,7 @@ export default function FindingTriageMenu({finding}: Props) {
       {assignee && (
         <span
           className="flex items-center gap-1 text-2xs text-text-tertiary"
-          title={`Assigned to ${assignee.displayName}`}
+          title={t('triage.labels.assignedTo', {name: assignee.displayName})}
         >
           <Avatar
             name={assignee.displayName}
@@ -127,13 +125,13 @@ export default function FindingTriageMenu({finding}: Props) {
             setShowAssign(false)
           }}
           className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
-          title="Set triage status"
+          title={t('triage.actions.setStatus')}
         >
           <CircleDot size={10} />
         </button>
         {showTriage && (
           <div className="absolute right-0 top-full mt-1 z-20 bg-surface-2 border border-border-subtle rounded-md shadow-lg py-0.5 min-w-36">
-            {TRIAGE_OPTIONS.map(({s, label}) => (
+            {TRIAGE_OPTIONS.map(s => (
               <button
                 key={s}
                 onClick={() => handleSetTriage(s)}
@@ -142,7 +140,7 @@ export default function FindingTriageMenu({finding}: Props) {
                   triageStatus === s ? 'text-brand-400 font-medium' : 'text-text-secondary',
                 )}
               >
-                {label}
+                {t(`triage.status.${s}`)}
               </button>
             ))}
 
@@ -161,7 +159,7 @@ export default function FindingTriageMenu({finding}: Props) {
                     className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors text-text-secondary"
                   >
                     <UserPlus size={10} />
-                    Assign to…
+                    {t('triage.actions.assignTo')}
                   </button>
                   {showAssign && (
                     <div className="absolute left-full top-0 ml-0.5 z-30 bg-surface-2 border border-border-subtle rounded-md shadow-lg py-0.5 min-w-40 max-h-56 overflow-auto">
@@ -171,7 +169,7 @@ export default function FindingTriageMenu({finding}: Props) {
                           className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors text-text-tertiary"
                         >
                           <UserMinus size={10} />
-                          Unassign
+                          {t('triage.actions.unassign')}
                         </button>
                       )}
                       {currentUser && triage?.assigneeId !== currentUser.id && (
@@ -186,7 +184,7 @@ export default function FindingTriageMenu({finding}: Props) {
                             size="sm"
                             className="w-4 h-4 text-2xs"
                           />
-                          <span className="truncate">Me</span>
+                          <span className="truncate">{t('triage.actions.assignToMe')}</span>
                         </button>
                       )}
                       <div className="[&:not(:first-child)]:border-t border-border-subtle" />

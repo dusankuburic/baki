@@ -1,5 +1,7 @@
+import {useTranslation} from 'react-i18next'
 import {TRAIL_REFRESH_MS} from '@/lib/constants'
 import {useEffect, useState} from 'react'
+import {ChevronDown, ChevronUp} from 'lucide-react'
 import {useChatStore} from '@/stores/chatStore'
 import type {ToolCallRecord} from '@/types'
 
@@ -8,13 +10,13 @@ import type {ToolCallRecord} from '@/types'
 // here would re-render AITab's whole tree on every finished tool; polling
 // keeps this leaf isolated and cheap.
 
-
 // LiveToolTrail is the streaming view of the slot's finished tool executions:
 // the current tool's pulsing label (from toolStatus) plus the last few
 // finished calls with ok/fail dots. Before this, a multi-iteration tool loop
 // showed ONE spinning label for its whole duration with zero history — the
 // full trail only appeared after the message committed.
 export default function LiveToolTrail() {
+  const {t} = useTranslation('chat')
   const isStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
   const [toolStatus, setToolStatus] = useState<string | null>(null)
   const [calls, setCalls] = useState<ToolCallRecord[]>([])
@@ -26,6 +28,8 @@ export default function LiveToolTrail() {
 
   useEffect(() => {
     if (!isStreaming) {
+      // Clears state mirroring an external poll when streaming stops.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setToolStatus(null)
       setCalls([])
       setTotalCalls(0)
@@ -50,7 +54,12 @@ export default function LiveToolTrail() {
   if (!isStreaming || (toolStatus == null && calls.length === 0)) return null
 
   return (
-    <div className="px-3 pt-1.5 flex flex-col gap-0.5" role="status" aria-label="AI tool activity" data-testid="live-tool-trail">
+    <div
+      className="px-3 pt-1.5 flex flex-col gap-0.5"
+      role="status"
+      aria-label={t('a11y.toolActivity')}
+      data-testid="live-tool-trail"
+    >
       {toolStatus != null && (
         <div className="flex items-center gap-2 text-2xs text-brand-400">
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" aria-hidden="true" />
@@ -61,10 +70,10 @@ export default function LiveToolTrail() {
         <button
           onClick={() => setExpanded(true)}
           className="self-start text-2xs text-text-tertiary hover:text-text-secondary px-1 -ml-1 rounded transition-colors"
-          aria-label={`Show ${hiddenCount} earlier tool calls`}
+          aria-label={t('trail.showEarlier', {count: hiddenCount})}
           data-testid="tool-trail-expand"
         >
-          ⌃ {hiddenCount} earlier call{hiddenCount !== 1 ? 's' : ''}
+          <ChevronUp size={10} className="inline" /> {t('trail.earlierCalls', {count: hiddenCount})}
         </button>
       )}
       {expanded && totalCalls > 3 && (
@@ -73,14 +82,14 @@ export default function LiveToolTrail() {
           className="self-start text-2xs text-text-tertiary hover:text-text-secondary px-1 -ml-1 rounded transition-colors"
           data-testid="tool-trail-collapse"
         >
-          ⌄ collapse
+          <ChevronDown size={10} className="inline" /> {t('trail.collapse')}
         </button>
       )}
       {calls.map((call, i) => (
         <div key={i} className="flex items-baseline gap-1.5 text-2xs">
           <span
             role="img"
-            aria-label={call.ok ? 'succeeded' : 'failed'}
+            aria-label={call.ok ? t('trail.succeeded') : t('trail.failed')}
             className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${call.ok ? 'bg-semantic-success/70' : 'bg-semantic-error/80'}`}
           />
           <span className="text-text-tertiary/80 truncate">

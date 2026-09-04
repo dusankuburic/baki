@@ -1,3 +1,4 @@
+import i18n from '@/i18n'
 import {useCallback, useRef, useEffect, useMemo} from 'react'
 import {chatApi, flowApi, analysisApi} from '@/api'
 import {useChatStore, FixProposalCard, FixProposalItem} from '@/stores/chatStore'
@@ -5,6 +6,7 @@ import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {logger} from '@/lib/logger'
+import {uuid} from '@/lib/uuid'
 import {utf8ByteLength} from '@/lib/utf8'
 import type {ChatEvent, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
 import type {ChatMessage, FlowDocument, ProviderID, ToolCallRecord} from '@/types'
@@ -138,7 +140,13 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
     (record: ToolResultPayload, streamId: string) => {
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
-      addToolCall(acc.threadId, {name: record.name, label: record.label, ok: record.ok, durationMs: record.durationMs, summary: record.summary})
+      addToolCall(acc.threadId, {
+        name: record.name,
+        label: record.label,
+        ok: record.ok,
+        durationMs: record.durationMs,
+        summary: record.summary,
+      })
     },
     [addToolCall],
   )
@@ -195,7 +203,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       if (!thread) return
       const slot = useChatStore.getState().streams[threadId]
       const msg: ChatMessage = {
-        id: messageId || crypto.randomUUID(),
+        id: messageId || uuid(),
         role: 'assistant',
         content,
         timestamp: new Date().toISOString(),
@@ -229,7 +237,9 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       if ((msg.toolCalls?.length ?? 0) > 0 || (msg.fixProposals?.length ?? 0) > 0) {
         updateThread(threadId, {
           usedTools: true,
-          appliedFixes: thread.appliedFixes || (msg.fixProposals ?? []).some(p => p.status === 'applied' || p.status === 'applied-unresolved'),
+          appliedFixes:
+            thread.appliedFixes ||
+            (msg.fixProposals ?? []).some(p => p.status === 'applied' || p.status === 'applied-unresolved'),
         })
       }
       const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
@@ -262,9 +272,10 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
-      const displayContent = acc.text ? acc.text + '\n\n---\n*Error: ' + error + '*' : '*Error: ' + error + '*'
+      const errorLine = i18n.t('chat:errors.generic', {message: error})
+      const displayContent = acc.text ? acc.text + '\n\n---\n' + errorLine : errorLine
       const msg: ChatMessage = {
-        id: slot?.messageId || crypto.randomUUID(),
+        id: slot?.messageId || uuid(),
         role: 'assistant',
         content: displayContent,
         timestamp: new Date().toISOString(),
@@ -364,15 +375,19 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   // refreshes the affected flow's findings + canvas so the user sees the fix
   // (the mutation happened server-side, invisible to the open document).
   const onFixDecision = useCallback(
-    (proposalId: string, status: string, message: string | undefined, streamId: string, items?: {ruleId: string; status: string; message?: string}[]) => {
+    (
+      proposalId: string,
+      status: string,
+      message: string | undefined,
+      streamId: string,
+      items?: {ruleId: string; status: string; message?: string}[],
+    ) => {
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
       // Only map statuses the card type knows; unknown statuses still clear
       // the buttons via 'error'.
       const known = ['applying', 'applied', 'applied-unresolved', 'declined', 'timeout', 'error'] as const
-      const cardStatus = (known as readonly string[]).includes(status)
-        ? (status as FixProposalCard['status'])
-        : 'error'
+      const cardStatus = (known as readonly string[]).includes(status) ? (status as FixProposalCard['status']) : 'error'
       // Per-item outcome patches (batch decisions carry items[]). A
       // single-fix decision carries none — its one item mirrors the card, so
       // the card status propagates to the item.
@@ -389,10 +404,21 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
         const slot = useChatStore.getState().streams[acc.threadId]
         const card = slot?.fixProposals.find(c => c.proposalId === proposalId)
         if (card && card.items.length === 1 && card.items[0].status === 'pending') {
-          itemPatches = [itemFromWire(card.items[0].ruleId, cardStatus === 'declined' || cardStatus === 'timeout' ? 'error' : cardStatus, message)]
+          itemPatches = [
+            itemFromWire(
+              card.items[0].ruleId,
+              cardStatus === 'declined' || cardStatus === 'timeout' ? 'error' : cardStatus,
+              message,
+            ),
+          ]
         }
       }
-      patchFixProposal(acc.threadId, proposalId, {status: cardStatus, message}, itemPatches.length > 0 ? itemPatches : undefined)
+      patchFixProposal(
+        acc.threadId,
+        proposalId,
+        {status: cardStatus, message},
+        itemPatches.length > 0 ? itemPatches : undefined,
+      )
       if (status === 'applied' || status === 'applied-unresolved') {
         refreshAfterFix(acc.threadId)
       }
@@ -403,24 +429,27 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
   // respondFixProposal delivers the user's Approve/Dismiss for a thread's
   // pending proposal. Optimistically marks applying/declined so the buttons
   // lock immediately; the backend's fix_decision event is authoritative.
-  const respondFixProposal = useCallback((threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
-    // View-only flows never dispatch an APPLY decision (F1.5): approval
-    // writes source; declining is always allowed.
-    if (approved && useFlowStore.getState().readOnly) return
-    const slot = useChatStore.getState().streams[threadId]
-    if (!slot) return
-    // Default to the newest pending card (the card the user just clicked);
-    // an explicit proposalId targets a specific stacked card.
-    const card = proposalId
-      ? slot.fixProposals.find(c => c.proposalId === proposalId)
-      : [...slot.fixProposals].reverse().find(c => c.status === 'pending')
-    if (!card || card.status !== 'pending') return
-    patchFixProposal(threadId, card.proposalId, {status: approved ? 'applying' : 'declined'})
-    chatApi.respondFixDecision(slot.streamId, card.proposalId, approved, excludedItemIndices).catch(err => {
-      logger.warn('Fix decision failed', err)
-      patchFixProposal(threadId, card.proposalId, {status: 'error', message: String(err)})
-    })
-  }, [patchFixProposal])
+  const respondFixProposal = useCallback(
+    (threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
+      // View-only flows never dispatch an APPLY decision (F1.5): approval
+      // writes source; declining is always allowed.
+      if (approved && useFlowStore.getState().readOnly) return
+      const slot = useChatStore.getState().streams[threadId]
+      if (!slot) return
+      // Default to the newest pending card (the card the user just clicked);
+      // an explicit proposalId targets a specific stacked card.
+      const card = proposalId
+        ? slot.fixProposals.find(c => c.proposalId === proposalId)
+        : [...slot.fixProposals].reverse().find(c => c.status === 'pending')
+      if (!card || card.status !== 'pending') return
+      patchFixProposal(threadId, card.proposalId, {status: approved ? 'applying' : 'declined'})
+      chatApi.respondFixDecision(slot.streamId, card.proposalId, approved, excludedItemIndices).catch(err => {
+        logger.warn('Fix decision failed', err)
+        patchFixProposal(threadId, card.proposalId, {status: 'error', message: String(err)})
+      })
+    },
+    [patchFixProposal],
+  )
 
   // onResumeState rebuilds the slot's agentic state from a resume journal —
   // the authoritative replay after a reconnect. Wholesale replace (never
@@ -453,13 +482,17 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
           const card = byId.get(ev.proposalId)
           if (!card) continue
           const known = ['applying', 'applied', 'applied-unresolved', 'declined', 'timeout', 'error'] as const
-          card.status = (known as readonly string[]).includes(ev.status) ? (ev.status as FixProposalCard['status']) : 'error'
+          card.status = (known as readonly string[]).includes(ev.status)
+            ? (ev.status as FixProposalCard['status'])
+            : 'error'
           card.message = ev.message
           for (const it of ev.items ?? []) {
             const target = card.items.find(x => x.ruleId === it.ruleId)
             if (target) {
               const itemKnown = ['applied', 'applied-unresolved', 'error', 'already-resolved'] as const
-              target.status = ((itemKnown as readonly string[]).includes(it.status) ? it.status : 'error') as FixProposalItem['status']
+              target.status = (
+                (itemKnown as readonly string[]).includes(it.status) ? it.status : 'error'
+              ) as FixProposalItem['status']
               target.message = it.message
             }
           }
@@ -485,7 +518,19 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
       onAppend,
       getAccLength,
     }),
-    [onChunk, onReplace, onDone, onError, onToolStatus, onToolResult, onFixProposal, onFixDecision, onResumeState, onAppend, getAccLength],
+    [
+      onChunk,
+      onReplace,
+      onDone,
+      onError,
+      onToolStatus,
+      onToolResult,
+      onFixProposal,
+      onFixDecision,
+      onResumeState,
+      onAppend,
+      getAccLength,
+    ],
   )
 
   const {registerStream, cancel, teardownStream} = useStreamingMessage(handler)

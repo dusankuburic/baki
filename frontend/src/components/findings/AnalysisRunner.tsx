@@ -31,7 +31,8 @@ export default function AnalysisRunner({onAnalyze, isAnalyzing, progress}: Analy
       >
         <Spinner size={24} />
         <span className="text-sm text-text-secondary tabular-nums">
-          {pct === null ? t('progress.analyzingIndeterminate') : t('progress.analyzing', {percent: pct})} ({progress.ruleName})
+          {pct === null ? t('progress.analyzingIndeterminate') : t('progress.analyzing', {percent: pct})} (
+          {progress.ruleName})
         </span>
       </div>
     )

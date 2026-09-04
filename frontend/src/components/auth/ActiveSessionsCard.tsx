@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React from 'react'
 import {Monitor, XCircle, Trash2} from 'lucide-react'
 import {useSessions} from './useSessions'
@@ -13,6 +14,7 @@ function formatDate(value: string) {
 }
 
 export const ActiveSessionsCard: React.FC = () => {
+  const {t} = useTranslation('auth')
   const {sessions, loading, error, revokingId, revoke, currentSessionId, revokingOthers, revokeOthers} = useSessions()
   // Only offer bulk sign-out when we can tell which session is this one —
   // with a null currentSessionId "others" would include the current session.
@@ -23,11 +25,11 @@ export const ActiveSessionsCard: React.FC = () => {
       <div className="px-5 py-3 border-b border-border-subtle flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Monitor size={13} className="text-text-tertiary" />
-          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Active Sessions</h2>
+          <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">{t('sessions.heading')}</h2>
         </div>
         {hasOtherSessions && (
           <Button variant="ghost" size="sm" onClick={revokeOthers} loading={revokingOthers}>
-            Sign out other sessions
+            {t('sessions.signOutOthers')}
           </Button>
         )}
       </div>
@@ -41,9 +43,9 @@ export const ActiveSessionsCard: React.FC = () => {
         )}
 
         {loading ? (
-          <p className="text-sm text-text-tertiary">Loading sessions...</p>
+          <p className="text-sm text-text-tertiary">{t('sessions.loading')}</p>
         ) : sessions.length === 0 ? (
-          <p className="text-sm text-text-tertiary">No active sessions found.</p>
+          <p className="text-sm text-text-tertiary">{t('sessions.empty')}</p>
         ) : (
           <ul className="space-y-2">
             {sessions.map(session => {
@@ -58,7 +60,7 @@ export const ActiveSessionsCard: React.FC = () => {
                       {describeUserAgent(session.userAgent)}
                       {isCurrent && (
                         <span className="px-1.5 py-0.5 rounded text-2xs font-semibold uppercase bg-semantic-success/10 text-semantic-success">
-                          This device
+                          {t('sessions.thisDevice')}
                         </span>
                       )}
                     </p>
@@ -74,7 +76,7 @@ export const ActiveSessionsCard: React.FC = () => {
                     onClick={() => revoke(session.id)}
                     loading={revokingId === session.id}
                     disabled={isCurrent}
-                    title={isCurrent ? 'This is your current session' : 'Revoke session'}
+                    title={isCurrent ? t('sessions.currentTitle') : t('sessions.revokeTitle')}
                   >
                     <Trash2 size={14} />
                   </Button>

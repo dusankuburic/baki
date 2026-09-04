@@ -144,8 +144,16 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 		}
 		flows, err := s.backend.ListFlows(ctx, storageif.FlowFilter{
 			AllFlows: true,
-			Limit:    pageSize,
-			Offset:   offset,
+			// Immutable ordering: this sweep pages with LIMIT/OFFSET, and the
+			// default updated_at DESC is mutable — a flow SAVED mid-sweep jumps
+			// to the front and pushes the row on the next page boundary out of
+			// the walk entirely. Users editing during a sweep is the normal
+			// case, so that skipped flow silently goes ungoverned, and the
+			// pruneLastSig call below then drops its dedup keys because `seen`
+			// looked complete.
+			SortBy: storageif.FlowSortIDAsc,
+			Limit:  pageSize,
+			Offset: offset,
 		})
 		if err != nil {
 			logger.Warn("scanner: list flows failed", "offset", offset, "err", err)

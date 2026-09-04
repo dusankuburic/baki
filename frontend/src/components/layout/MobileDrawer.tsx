@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useRef, useState, type ReactNode} from 'react'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 
@@ -20,6 +21,7 @@ export default function MobileDrawer({
   onClose: () => void
   children: ReactNode
 }) {
+  const {t} = useTranslation('shell')
   const ref = useRef<HTMLDivElement>(null)
   useDialogFocus({isOpen: true, onClose, closeOnEsc: true, containerRef: ref})
 
@@ -35,7 +37,7 @@ export default function MobileDrawer({
       <button
         className="absolute inset-0 bg-surface-overlay/60 backdrop-blur-sm"
         onClick={onClose}
-        aria-label={`Close ${label}`}
+        aria-label={t('drawer.close', {label})}
       />
       <div
         ref={ref}

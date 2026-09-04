@@ -39,6 +39,8 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
 
   useEffect(() => {
     if (!doc) {
+      // Clears the list when the document goes away; the async fetch owns the other branch.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSourceFiles(EMPTY_SOURCE_FILES)
       return
     }

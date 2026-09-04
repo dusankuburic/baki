@@ -193,8 +193,12 @@ vi.mock('@/api', () => ({
 
 describe('BlockCard block editing', () => {
   beforeEach(() => {
-    removeBlock.mockResolvedValue({document: {id: 'flow-1', name: 'F', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}})
-    duplicateBlock.mockResolvedValue({document: {id: 'flow-1', name: 'F', subflows: [{id: 'sf1', name: 'Main', blocks: []}]}})
+    removeBlock.mockResolvedValue({
+      document: {id: 'flow-1', name: 'F', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+    })
+    duplicateBlock.mockResolvedValue({
+      document: {id: 'flow-1', name: 'F', subflows: [{id: 'sf1', name: 'Main', blocks: []}]},
+    })
   })
 
   // The context menu itself is a shared component; the contract under test is
@@ -211,7 +215,9 @@ describe('BlockCard block editing', () => {
     const {flowApi} = await import('@/api')
     const real = flowApi.moveBlock
     flowApi.moveBlock = moveBlock as never
-    listSnapshots.mockResolvedValue({snapshots: [{id: 'snap-move', label: 'before remove', createdAt: new Date().toISOString(), bytes: 10}]})
+    listSnapshots.mockResolvedValue({
+      snapshots: [{id: 'snap-move', label: 'before remove', createdAt: new Date().toISOString(), bytes: 10}],
+    })
     const restoreSnapshot2 = vi.fn().mockResolvedValue({document: mockDoc})
     const realRestore = flowApi.restoreSnapshot
     flowApi.restoreSnapshot = restoreSnapshot2 as never
@@ -301,7 +307,9 @@ describe('BlockCard delete confirmation (U1.3)', () => {
 
 describe('inline rename (U3b)', () => {
   it('double-click on a COMMENT name opens the rename input; Enter commits via renameBlock', async () => {
-    const renameBlock = vi.fn().mockResolvedValue({document: {id: 'flow-1', name: 'F', subflows: []}, gotoRefsUpdated: 0})
+    const renameBlock = vi
+      .fn()
+      .mockResolvedValue({document: {id: 'flow-1', name: 'F', subflows: []}, gotoRefsUpdated: 0})
     const {flowApi} = await import('@/api')
     const real = flowApi.renameBlock
     flowApi.renameBlock = renameBlock as never

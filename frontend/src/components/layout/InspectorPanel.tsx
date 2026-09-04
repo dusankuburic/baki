@@ -1,4 +1,5 @@
-import {lazy, Suspense, useState, useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
+import {lazy, Suspense, useState} from 'react'
 import {InspectorTabs, DetailsTab} from '@/components/inspector'
 import {FindingsTab} from '@/components/findings'
 import {SharingTab} from '@/components/inspector/SharingTab'
@@ -7,7 +8,7 @@ import {useUIStore} from '@/stores/uiStore'
 import {Spinner, ErrorBoundary} from '@/components/shared'
 import ResizableChatPanel from '@/components/chat/ResizableChatPanel'
 
-// AITab transitively pulls react-markdown + react-syntax-highlighter; lazy
+// AITab transitively pulls react-markdown + prism-react-renderer; lazy
 // loading keeps that chat-only weight out of the entry chunk.
 const AITab = lazy(() => import('@/components/chat/AITab'))
 
@@ -16,13 +17,14 @@ const AITab = lazy(() => import('@/components/chat/AITab'))
 const MetricsTab = lazy(() => import('@/components/inspector/MetricsTab'))
 
 export default function InspectorPanel() {
+  const {t} = useTranslation('shell')
   const tab = useUIStore(s => s.inspectorTab)
   // Once the AI tab has been visited, keep it mounted (hidden when inactive)
   // so switching tabs doesn't cancel in-flight streams or lose chat state.
   const [aiVisited, setAiVisited] = useState(false)
-  useEffect(() => {
-    if (tab === 'ai') setAiVisited(true)
-  }, [tab])
+  // Monotonic latch, flipped during render: an effect would paint one frame with
+  // the AI tab still unmounted before latching.
+  if (tab === 'ai' && !aiVisited) setAiVisited(true)
 
   return (
     <div className="flex flex-col h-full bg-surface-1">
@@ -30,7 +32,7 @@ export default function InspectorPanel() {
       <div
         id={`inspector-panel-${tab}`}
         role="tabpanel"
-        aria-label="Inspector panel"
+        aria-label={t('inspector.panelAria')}
         className="flex-1 min-h-0 overflow-hidden flex flex-col"
       >
         {tab === 'details' && (

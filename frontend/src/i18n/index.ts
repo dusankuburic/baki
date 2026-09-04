@@ -32,11 +32,12 @@ void i18next.use(initReactI18next).init({
       shell: en.shell,
       findings: en.findings,
       auth: en.auth,
+      chat: en.chat,
       settings: enSettings,
     },
   },
   defaultNS: 'common',
-  ns: ['common', 'shell', 'findings', 'auth', 'settings'],
+  ns: ['common', 'shell', 'findings', 'auth', 'chat', 'settings'],
   interpolation: {
     // React already escapes interpolated values; i18next escaping is for
     // non-React targets and would double-encode (&amp; etc.).

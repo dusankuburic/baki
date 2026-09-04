@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"unicode/utf8"
 
 	"pad-analyzer/internal/config"
 )
@@ -104,7 +105,12 @@ func (s *Service) SendFindingAssigned(ctx context.Context, to, assigneeName, ass
 			"<blockquote>%s</blockquote>",
 		html.EscapeString(assigneeName), html.EscapeString(assignerName), html.EscapeString(flowName), html.EscapeString(findingTitle))
 	if flowURL != "" {
-		htmlBody += fmt.Sprintf("<p><a href=\"%s\">View the finding</a>.</p>", flowURL)
+		// Escaped even though every caller currently passes a server-built URL
+		// (today: the empty string). An unescaped value interpolated into an
+		// href is an attribute-injection hole waiting for the first caller that
+		// passes something derived from user input, and the cost of closing it
+		// now is one function call.
+		htmlBody += fmt.Sprintf("<p><a href=\"%s\">View the finding</a>.</p>", html.EscapeString(flowURL))
 	}
 	return s.mailer.Send(ctx, to, "A finding was assigned to you", text, htmlBody)
 }
@@ -116,10 +122,7 @@ func (s *Service) SendFindingComment(ctx context.Context, to, recipientName, com
 	if s == nil {
 		return nil
 	}
-	preview := commentBody
-	if len(preview) > 300 {
-		preview = preview[:300] + "…"
-	}
+	preview := previewOf(commentBody)
 	text := fmt.Sprintf(
 		"Hi %s,\n\n%s commented on a finding assigned to you on the flow %q:\n\n  %s\n",
 		recipientName, commenterName, flowName, preview)
@@ -128,4 +131,26 @@ func (s *Service) SendFindingComment(ctx context.Context, to, recipientName, com
 			"<blockquote>%s</blockquote>",
 		html.EscapeString(recipientName), html.EscapeString(commenterName), html.EscapeString(flowName), html.EscapeString(preview))
 	return s.mailer.Send(ctx, to, "New comment on your assigned finding", text, htmlBody)
+}
+
+// commentPreviewBytes bounds the comment excerpt embedded in a notification
+// email.
+const commentPreviewBytes = 300
+
+// previewOf truncates a comment body to a preview, cutting on a RUNE boundary.
+//
+// The cut used to be a plain byte slice (s[:300]), which splits a multi-byte
+// UTF-8 character whenever the boundary lands inside one — so a comment in any
+// non-ASCII script could put a mangled byte sequence into the email body, which
+// html.EscapeString passes straight through. Same class as the stream-scrubber
+// and chat-resume fixes; this mirrors ai.truncateResult's approach.
+func previewOf(s string) string {
+	if len(s) <= commentPreviewBytes {
+		return s
+	}
+	cut := commentPreviewBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }

@@ -57,7 +57,11 @@ export default function AddActionForm({onInsert, onClose}: Props) {
     >
       <div className="flex items-center justify-between mb-2">
         <span className="text-2xs font-semibold uppercase tracking-wide text-brand-300">Add action</span>
-        <button onClick={onClose} className="p-1 rounded text-text-tertiary hover:text-text-secondary" aria-label="Close add action">
+        <button
+          onClick={onClose}
+          className="p-1 rounded text-text-tertiary hover:text-text-secondary"
+          aria-label="Close add action"
+        >
           <X size={12} />
         </button>
       </div>
@@ -107,7 +111,9 @@ export default function AddActionForm({onInsert, onClose}: Props) {
           </Button>
         </div>
         {!valid && rawType.trim().length > 0 && (
-          <p className="text-2xs text-semantic-warning">Action type must look like Module.Action (letters, digits, dots).</p>
+          <p className="text-2xs text-semantic-warning">
+            Action type must look like Module.Action (letters, digits, dots).
+          </p>
         )}
       </div>
     </div>

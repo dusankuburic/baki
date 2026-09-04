@@ -22,8 +22,12 @@ export const chatApi = {
 
   // Respond to an apply_fix approval prompt pending in one of the caller's
   // streams (the AI proposed a source fix; the user clicked Approve/Dismiss).
-  respondFixDecision: (streamId: string, proposalId: string, approved: boolean, excludedItemIndices?: number[]): Promise<void> =>
-    request('/api/chat/fix-decision', {body: {streamId, proposalId, approved, excludedItemIndices}}),
+  respondFixDecision: (
+    streamId: string,
+    proposalId: string,
+    approved: boolean,
+    excludedItemIndices?: number[],
+  ): Promise<void> => request('/api/chat/fix-decision', {body: {streamId, proposalId, approved, excludedItemIndices}}),
 
   resumeStream: (
     id: string,

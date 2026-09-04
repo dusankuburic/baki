@@ -170,6 +170,17 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 	render.JSON(w, st)
 }
 
+// bestEffortTimeout bounds the detached / best-effort work hanging off a
+// triage or comment write (alert rows, display-name lookups, assignment
+// mail). These run on context.Background() rather than the request context so
+// a failure cannot poison the caller's RLS transaction — but Background never
+// cancels, so without an explicit bound a slow or hung database keeps the
+// goroutine (and its pooled connection) alive indefinitely, including through
+// shutdown drain. Several of these run SYNCHRONOUSLY in the request path, so
+// an unbounded one also extends the response past the server's request
+// timeout. Mirrors the bound already documented on notifyFindingComment.
+const bestEffortTimeout = 10 * time.Second
+
 // recordFindingAlert persists a personal (targeted) in-app alert for the
 // bell. Synchronous best-effort: a failure logs and never blocks the
 // mutation that already committed (the response follows immediately).
@@ -185,7 +196,9 @@ func (h *AnalysisHandler) recordFindingAlert(a *storageif.GovernanceAlert) {
 		return
 	}
 	a.CreatedAt = time.Now().UTC()
-	if err := h.backend.RecordGovernanceAlert(context.Background(), a); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+	defer cancel()
+	if err := h.backend.RecordGovernanceAlert(ctx, a); err != nil {
 		logger.Warn("failed to record finding alert", "type", a.Type, "err", err)
 	}
 }
@@ -196,7 +209,9 @@ func (h *AnalysisHandler) callerDisplayName(userID string) string {
 	if h.backend == nil || userID == "" {
 		return "a teammate"
 	}
-	if u, err := h.backend.LoadUserByID(context.Background(), userID); err == nil && u != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+	defer cancel()
+	if u, err := h.backend.LoadUserByID(ctx, userID); err == nil && u != nil {
 		if u.DisplayName != "" {
 			return u.DisplayName
 		}
@@ -230,7 +245,8 @@ func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowNa
 	if h.email == nil || h.backend == nil {
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+	defer cancel()
 	assignee, err := h.backend.LoadUserByID(ctx, assigneeID)
 	if err != nil || assignee == nil || assignee.Email == "" {
 		return

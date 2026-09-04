@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useMemo} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
@@ -9,6 +10,7 @@ import {Variable} from 'lucide-react'
 import {logger} from '@/lib/logger'
 
 export default function VariablesTab() {
+  const {t} = useTranslation('shell')
   const document = useFlowStore(s => s.document)
   const selectedSubflowId = useFlowStore(s => s.selectedSubflowId)
   const selectedVariable = useUIStore(s => s.selectedVariable)
@@ -51,7 +53,7 @@ export default function VariablesTab() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-text-tertiary">
         <Variable size={24} className="mb-2 opacity-50" />
-        <p className="text-sm">No flow loaded</p>
+        <p className="text-sm">{t('sidebar.noFlowTitle')}</p>
       </div>
     )
   }
@@ -62,7 +64,7 @@ export default function VariablesTab() {
         Variables ({allVariables.length})
       </div>
       {allVariables.length === 0 ? (
-        <div className="text-sm text-text-tertiary px-2 py-4">No variables found</div>
+        <div className="text-sm text-text-tertiary px-2 py-4">{t('sidebar.noVariables')}</div>
       ) : (
         allVariables.map(v => (
           <button

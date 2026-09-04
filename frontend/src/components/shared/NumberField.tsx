@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react'
+import {useState} from 'react'
 import Input from './Input'
 
 type Props = {
@@ -28,9 +28,12 @@ export default function NumberField({value, onCommit, min, max, step, fallback, 
   const [draft, setDraft] = useState(String(value))
 
   // Reflect external value changes (store reset, switching provider, etc.).
-  useEffect(() => {
+  // Adjusted during render — see the same pattern in Avatar.
+  const [lastValue, setLastValue] = useState(value)
+  if (value !== lastValue) {
+    setLastValue(value)
     setDraft(String(value))
-  }, [value])
+  }
 
   const commit = () => {
     const parsed = integer ? parseInt(draft, 10) : parseFloat(draft)

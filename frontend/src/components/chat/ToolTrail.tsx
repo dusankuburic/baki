@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useId, useState} from 'react'
 import {Wrench} from 'lucide-react'
 import type {FixProposalSnapshot, ToolCallRecord} from '@/types'
@@ -13,6 +14,7 @@ function formatDuration(ms: number | undefined): string {
 // per-call rows (name, duration, one-line outcome). Pure display — the records
 // arrive from tool_result events and travel with the saved conversation.
 export function ToolTrail({calls}: {calls: ToolCallRecord[]}) {
+  const {t} = useTranslation('chat')
   const [open, setOpen] = useState(false)
   // useId BEFORE the early return — hooks must run unconditionally.
   const listId = useId()
@@ -30,10 +32,10 @@ export function ToolTrail({calls}: {calls: ToolCallRecord[]}) {
       >
         <Wrench size={10} />
         <span>
-          Used {calls.length} {calls.length === 1 ? 'tool' : 'tools'}
-          {failed > 0 && <span className="text-semantic-error/80"> · {failed} failed</span>}
+          {t('trail.usedTools', {count: calls.length})}
+          {failed > 0 && <span className="text-semantic-error/80"> · {t('trail.nFailed', {count: failed})}</span>}
         </span>
-        <span className="text-text-tertiary/60">{open ? 'Hide' : 'Show'}</span>
+        <span className="text-text-tertiary/60">{open ? t('trail.hide') : t('trail.show')}</span>
       </button>
       {open && (
         <ul id={listId} className="mt-1 space-y-0.5">
@@ -41,7 +43,7 @@ export function ToolTrail({calls}: {calls: ToolCallRecord[]}) {
             <li key={i} className="flex items-baseline gap-1.5 text-2xs leading-relaxed">
               <span
                 role="img"
-                aria-label={call.ok ? 'succeeded' : 'failed'}
+                aria-label={call.ok ? t('trail.succeeded') : t('trail.failed')}
                 className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${call.ok ? 'bg-semantic-success/70' : 'bg-semantic-error/80'}`}
               />
               <span className="font-medium text-text-secondary">{call.label || call.name}</span>
@@ -57,24 +59,24 @@ export function ToolTrail({calls}: {calls: ToolCallRecord[]}) {
   )
 }
 
-// Status copy + tone for a persisted fix outcome (mirrors FixProposalCard's
-// live card, minus the interactive states).
-const OUTCOME: Record<string, {text: string; dot: string}> = {
-  cancelled: {text: 'cancelled — generation stopped before you decided', dot: 'bg-text-disabled'},
-  applied: {text: 'Fix applied and verified', dot: 'bg-semantic-success/70'},
-  'applied-unresolved': {text: 'Applied, but the finding still appears', dot: 'bg-amber-400/80'},
-  declined: {text: 'Declined — nothing was changed', dot: 'bg-text-tertiary/60'},
-  timeout: {text: 'No response in time — nothing was changed', dot: 'bg-amber-400/80'},
-  error: {text: 'Fix failed', dot: 'bg-red-400/80'},
-  applying: {text: 'Applying…', dot: 'bg-brand-400'},
-  pending: {text: 'Awaiting decision', dot: 'bg-brand-400'},
+// Tone only — the status COPY lives in chat:outcome.* / chat:itemOutcome.*,
+// keyed by the same status strings the backend sends.
+const OUTCOME_DOT: Record<string, string> = {
+  cancelled: 'bg-text-disabled',
+  applied: 'bg-semantic-success/70',
+  'applied-unresolved': 'bg-amber-400/80',
+  declined: 'bg-text-tertiary/60',
+  timeout: 'bg-amber-400/80',
+  error: 'bg-red-400/80',
+  applying: 'bg-brand-400',
+  pending: 'bg-brand-400',
 }
 
-const ITEM_OUTCOME: Record<string, {text: string; dot: string}> = {
-  applied: {text: 'applied', dot: 'bg-green-500/70'},
-  'applied-unresolved': {text: 'still appears', dot: 'bg-amber-400/80'},
-  error: {text: 'failed', dot: 'bg-red-400/80'},
-  'already-resolved': {text: 'already resolved', dot: 'bg-text-tertiary/60'},
+const ITEM_OUTCOME_DOT: Record<string, string> = {
+  applied: 'bg-green-500/70',
+  'applied-unresolved': 'bg-amber-400/80',
+  error: 'bg-red-400/80',
+  'already-resolved': 'bg-text-tertiary/60',
 }
 
 // FixOutcomeStrip is the persisted record of an apply_fix / apply_fixes
@@ -82,7 +84,12 @@ const ITEM_OUTCOME: Record<string, {text: string; dot: string}> = {
 // message so it survives the stream that produced it. Batches render one
 // per-fix row list under the overall status.
 export function FixOutcomeStrip({snapshot}: {snapshot: FixProposalSnapshot}) {
-  const outcome = OUTCOME[snapshot.status] ?? {text: snapshot.status, dot: 'bg-text-tertiary/60'}
+  const {t} = useTranslation('chat')
+  // Unknown status falls back to the raw wire value rather than a blank row.
+  const outcome = {
+    text: t(`outcome.${snapshot.status}`, {defaultValue: snapshot.status}),
+    dot: OUTCOME_DOT[snapshot.status] ?? 'bg-text-tertiary/60',
+  }
   const items = snapshot.items ?? []
   const batch = items.length > 1
   return (
@@ -93,7 +100,13 @@ export function FixOutcomeStrip({snapshot}: {snapshot: FixProposalSnapshot}) {
       <div className="flex items-baseline gap-1.5">
         <span className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${outcome.dot}`} aria-hidden="true" />
         <span className="font-medium text-text-secondary">
-          {batch ? `${items.length} fixes` : <>Fix <code className="font-mono text-brand-300">{snapshot.fixType}</code></>}
+          {batch ? (
+            `${items.length} fixes`
+          ) : (
+            <>
+              Fix <code className="font-mono text-brand-300">{snapshot.fixType}</code>
+            </>
+          )}
           {!batch && snapshot.blockLabel && <span className="text-text-tertiary"> · {snapshot.blockLabel}</span>}
         </span>
         <span className="text-text-tertiary">{outcome.text}</span>
@@ -102,7 +115,10 @@ export function FixOutcomeStrip({snapshot}: {snapshot: FixProposalSnapshot}) {
       {batch && (
         <ul className="mt-1 space-y-0.5">
           {items.map((it, i) => {
-            const io = ITEM_OUTCOME[it.status] ?? {text: it.status, dot: 'bg-text-tertiary/60'}
+            const io = {
+              text: t(`itemOutcome.${it.status}`, {defaultValue: it.status}),
+              dot: ITEM_OUTCOME_DOT[it.status] ?? 'bg-text-tertiary/60',
+            }
             return (
               <li key={i} className="flex items-baseline gap-1.5">
                 <span className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${io.dot}`} aria-hidden="true" />

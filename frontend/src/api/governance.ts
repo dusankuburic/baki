@@ -74,11 +74,9 @@ export interface OrgChannelInput {
 }
 
 export const channelsApi = {
-  list: (orgId: string): Promise<OrgChannel[]> =>
-    request(`/api/orgs/${orgId}/channels`, {method: 'GET'}),
+  list: (orgId: string): Promise<OrgChannel[]> => request(`/api/orgs/${orgId}/channels`, {method: 'GET'}),
 
-  save: (orgId: string, ch: OrgChannelInput): Promise<OrgChannel> =>
-    request(`/api/orgs/${orgId}/channels`, {body: ch}),
+  save: (orgId: string, ch: OrgChannelInput): Promise<OrgChannel> => request(`/api/orgs/${orgId}/channels`, {body: ch}),
 
   remove: (orgId: string, channelId: string): Promise<void> =>
     request(`/api/orgs/${orgId}/channels/${channelId}`, {method: 'DELETE', body: {}}),
@@ -86,4 +84,45 @@ export const channelsApi = {
   // Synchronous probe: 200 = delivered, non-2xx carries the failure.
   test: (orgId: string, channelId: string): Promise<void> =>
     request(`/api/orgs/${orgId}/channels/${channelId}/test`, {body: {}}),
+}
+
+/**
+ * A user-authored analyzer rule owned by an org (R4).
+ *
+ * `config.id` is the rule id that appears on findings and is unique PER ORG —
+ * two orgs may both define `house-style` and mean different things. `id` is the
+ * storage row's surrogate key, used for delete.
+ */
+export interface OrgCustomRuleConfig {
+  id: string
+  name: string
+  description?: string
+  severity: 'error' | 'warning' | 'info'
+  category?: string
+  rawTypeMatch?: string
+  nameMatch?: string
+  typeMatch?: string
+  propertyHas?: Record<string, string>
+  propertyNot?: Record<string, string>
+  suggestion?: string
+  autoFix?: string
+}
+
+export interface OrgCustomRule {
+  id: string
+  ruleId: string
+  config: OrgCustomRuleConfig
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export const orgRulesApi = {
+  list: (orgId: string): Promise<OrgCustomRule[]> => request(`/api/orgs/${orgId}/rules`, {method: 'GET'}),
+
+  save: (orgId: string, config: OrgCustomRuleConfig, enabled = true, rowId?: string): Promise<OrgCustomRule> =>
+    request(`/api/orgs/${orgId}/rules`, {body: {id: rowId, config, enabled}}),
+
+  remove: (orgId: string, rowId: string): Promise<void> =>
+    request(`/api/orgs/${orgId}/rules/${rowId}`, {method: 'DELETE', body: {}}),
 }

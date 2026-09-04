@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {Github, Check, Loader2} from 'lucide-react'
 import {useState, useEffect, useRef, useCallback} from 'react'
 import {createAdapter} from '@/platform/adapters'
@@ -30,6 +31,7 @@ interface Props {
 type State = 'unconfigured' | 'authorizing' | 'configured' | 'error'
 
 export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props) {
+  const {t} = useTranslation('chat')
   const [state, setState] = useState<State>('unconfigured')
   const [userCode, setUserCode] = useState('')
   const [verificationURI, setVerificationURI] = useState('')
@@ -85,7 +87,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           if (result.status === 'error') {
             pollingRef.current = false
             setState('error')
-            setErrorMsg(result.error || 'Authentication failed')
+            setErrorMsg(result.error || t('deviceAuth.authFailed'))
             return
           }
         } catch {
@@ -98,9 +100,9 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       timeoutRef.current = setTimeout(poll, interval)
     } catch (e: unknown) {
       setState('error')
-      setErrorMsg(e instanceof Error ? e.message : String(e) || 'Failed to start auth')
+      setErrorMsg(e instanceof Error ? e.message : String(e) || t('deviceAuth.startFailed'))
     }
-  }, [provider, onAuthComplete])
+  }, [provider, onAuthComplete, t])
 
   const cancel = useCallback(() => {
     pollingRef.current = false
@@ -134,7 +136,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     case 'authorizing':
       return (
         <div className="bg-surface-2 border border-border-default rounded-lg p-4 space-y-3">
-          <p className="text-sm text-text-secondary">To authenticate, visit:</p>
+          <p className="text-sm text-text-secondary">{t('deviceAuth.visitPrompt')}</p>
           <a
             href={verificationURI}
             className="text-sm text-brand-400 underline break-all"
@@ -145,14 +147,14 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           >
             {verificationURI}
           </a>
-          <p className="text-sm text-text-secondary">Enter code:</p>
+          <p className="text-sm text-text-secondary">{t('deviceAuth.enterCode')}</p>
           <p className="text-2xl font-mono font-bold text-text-primary tracking-wider">{userCode}</p>
           <div className="flex items-center gap-2 text-sm text-text-tertiary">
             <Loader2 size={14} className="animate-spin" />
-            Waiting for authorization...
+            {t('deviceAuth.waiting')}
           </div>
           <button className="text-xs text-text-tertiary hover:text-text-secondary" onClick={cancel}>
-            Cancel
+            {t('deviceAuth.cancel')}
           </button>
         </div>
       )

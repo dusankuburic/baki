@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Terminal, Info, Zap, Trash2, HelpCircle} from 'lucide-react'
 import {useEffect} from 'react'
@@ -5,8 +6,7 @@ import {useListNavigation} from '@/hooks/useListNavigation'
 
 export interface SlashCommand {
   id: string
-  label: string
-  description: string
+  copyKey: 'explain' | 'fix' | 'test' | 'clear' | 'help'
   icon: React.ReactNode
   // 'insert' commands drop their text into the composer for the user to
   // extend and send; 'action' commands run a local handler (never sent to the
@@ -15,38 +15,15 @@ export interface SlashCommand {
   action?: 'clear' | 'help'
 }
 
+// Copy lives in chat:commands.{labels,descriptions}.<key>; this table holds the
+// id, icon and behaviour. Keeping it a module constant (rather than a hook) means
+// ChatHelpPopover can keep importing it directly.
 const COMMANDS: SlashCommand[] = [
-  {
-    id: '/explain',
-    label: 'Explain',
-    description: 'Explain how this code works in detail',
-    icon: <Info size={14} />,
-    kind: 'insert',
-  },
-  {id: '/fix', label: 'Fix', description: 'Find and fix bugs in this code', icon: <Zap size={14} />, kind: 'insert'},
-  {
-    id: '/test',
-    label: 'Test',
-    description: 'Generate unit tests for this code',
-    icon: <Terminal size={14} />,
-    kind: 'insert',
-  },
-  {
-    id: '/clear',
-    label: 'Clear',
-    description: 'Clear the current conversation thread',
-    icon: <Trash2 size={14} />,
-    kind: 'action',
-    action: 'clear',
-  },
-  {
-    id: '/help',
-    label: 'Help',
-    description: 'Show available commands and shortcuts',
-    icon: <HelpCircle size={14} />,
-    kind: 'action',
-    action: 'help',
-  },
+  {id: '/explain', copyKey: 'explain', icon: <Info size={14} />, kind: 'insert'},
+  {id: '/fix', copyKey: 'fix', icon: <Zap size={14} />, kind: 'insert'},
+  {id: '/test', copyKey: 'test', icon: <Terminal size={14} />, kind: 'insert'},
+  {id: '/clear', copyKey: 'clear', icon: <Trash2 size={14} />, kind: 'action', action: 'clear'},
+  {id: '/help', copyKey: 'help', icon: <HelpCircle size={14} />, kind: 'action', action: 'help'},
 ]
 
 export const SLASH_COMMANDS = COMMANDS
@@ -55,11 +32,16 @@ interface Props {
   query: string
   onSelect: (command: SlashCommand) => void
   onClose: () => void
+  // Reports how many entries the menu is showing so the composer knows whether
+  // its keys belong to this menu — 0 means Enter must fall through and send.
+  onMatchCount?: (n: number) => void
 }
 
-export default function SlashCommandAutocomplete({query, onSelect, onClose}: Props) {
+export default function SlashCommandAutocomplete({query, onSelect, onClose, onMatchCount}: Props) {
+  const {t} = useTranslation('chat')
+  const q = query.toLowerCase()
   const filtered = COMMANDS.filter(
-    c => c.id.toLowerCase().includes(query.toLowerCase()) || c.label.toLowerCase().includes(query.toLowerCase()),
+    c => c.id.toLowerCase().includes(q) || t(`commands.labels.${c.copyKey}`).toLowerCase().includes(q),
   )
 
   const {
@@ -81,16 +63,25 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose}: Pro
   }, [query, setActiveIndex])
 
   useEffect(() => {
+    onMatchCount?.(filtered.length)
+  }, [filtered.length, onMatchCount])
+
+  // Only claim the keyboard while there is something to pick. With no matches
+  // the menu renders nothing, so Enter belongs to the composer.
+  useEffect(() => {
+    if (filtered.length === 0) return
     window.addEventListener('keydown', handleKeyDown as (e: KeyboardEvent) => void, true)
     return () => window.removeEventListener('keydown', handleKeyDown as (e: KeyboardEvent) => void, true)
-  }, [handleKeyDown])
+  }, [handleKeyDown, filtered.length])
 
   if (filtered.length === 0) return null
 
   return (
-    <div className="absolute bottom-full left-0 mb-2 w-64 bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-slide-up">
+    <div className="absolute bottom-full left-0 mb-2 w-[min(16rem,100%)] bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-slide-up">
       <div className="px-3 py-2 bg-surface-3 border-b border-border-subtle">
-        <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider">Commands</span>
+        <span className="text-2xs font-semibold text-text-tertiary uppercase tracking-wider">
+          {t('commands.heading')}
+        </span>
       </div>
       <div className="max-h-60 overflow-y-auto p-1">
         {filtered.map((cmd, i) => (
@@ -111,8 +102,8 @@ export default function SlashCommandAutocomplete({query, onSelect, onClose}: Pro
               {cmd.icon}
             </div>
             <div className="flex flex-col min-w-0">
-              <span className="font-medium truncate">{cmd.label}</span>
-              <span className="text-xs text-text-tertiary truncate">{cmd.description}</span>
+              <span className="font-medium truncate">{t(`commands.labels.${cmd.copyKey}`)}</span>
+              <span className="text-xs text-text-tertiary truncate">{t(`commands.descriptions.${cmd.copyKey}`)}</span>
             </div>
           </button>
         ))}

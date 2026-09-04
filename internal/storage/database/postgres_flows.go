@@ -424,18 +424,39 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 
 // flowOrderBy returns the ORDER BY clause for a FlowSort. Whitelisted columns
 // only — never interpolate user input here.
+//
+// Every clause ends in `id` (the primary key) as a final tiebreaker. That is
+// not cosmetic: ListFlows is consumed with LIMIT/OFFSET by callers that walk
+// the WHOLE table one page at a time — the storage migrator
+// (migration.Migrator.migrateFlows) and the governance scanner
+// (scanner.ScanOnce) — and SQL gives no ordering guarantee between rows that
+// compare equal. Without a unique tiebreaker, two pages of the same walk can
+// order a tied group differently, so rows shift across the page boundary and
+// the walk silently skips some while returning others twice.
+//
+// Ties are ordinary, not exotic: updated_at is TIMESTAMPTZ (microsecond
+// resolution), so any bulk write — an import, the padcloud ingester, a
+// migration — produces groups of rows sharing a timestamp. lower(name) and
+// BlockCount tie far more easily still.
+//
+// A skipped row in the migrator is silent data loss: the run reports the flows
+// it saw and no errors, so the operator believes everything moved.
 func flowOrderBy(s interfaces.FlowSort) string {
 	switch s {
 	case interfaces.FlowSortUpdatedAsc:
-		return "ORDER BY updated_at ASC"
+		return "ORDER BY updated_at ASC, id ASC"
 	case interfaces.FlowSortNameAsc:
-		return "ORDER BY lower(name) ASC, updated_at DESC"
+		return "ORDER BY lower(name) ASC, updated_at DESC, id ASC"
 	case interfaces.FlowSortNameDesc:
-		return "ORDER BY lower(name) DESC, updated_at DESC"
+		return "ORDER BY lower(name) DESC, updated_at DESC, id ASC"
 	case interfaces.FlowSortBlocksDesc:
-		return "ORDER BY COALESCE((metadata->>'BlockCount')::int, 0) DESC, updated_at DESC"
+		return "ORDER BY COALESCE((metadata->>'BlockCount')::int, 0) DESC, updated_at DESC, id ASC"
+	case interfaces.FlowSortIDAsc:
+		// Immutable sort key — see FlowSortIDAsc's doc comment. Already unique,
+		// so it needs no tiebreaker.
+		return "ORDER BY id ASC"
 	default:
-		return "ORDER BY updated_at DESC"
+		return "ORDER BY updated_at DESC, id ASC"
 	}
 }
 

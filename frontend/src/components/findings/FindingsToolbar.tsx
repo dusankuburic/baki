@@ -190,20 +190,20 @@ export default function FindingsToolbar({
           const tone = triageTone(s)
           const label = STATUS_LABELS[s]
           return (
-          <button
-            key={s}
-            onClick={() => toggleStatusFilter(s)}
-            aria-pressed={statusFilter.has(s)}
-            title="Filter by triage status"
-            className={clsx(
-              'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
-              statusFilter.has(s)
-                ? `${tone.bg} ${tone.text} border-transparent`
-                : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary',
-            )}
-          >
-            {label}
-          </button>
+            <button
+              key={s}
+              onClick={() => toggleStatusFilter(s)}
+              aria-pressed={statusFilter.has(s)}
+              title="Filter by triage status"
+              className={clsx(
+                'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
+                statusFilter.has(s)
+                  ? `${tone.bg} ${tone.text} border-transparent`
+                  : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary',
+              )}
+            >
+              {label}
+            </button>
           )
         })}
         {currentUserId && (
@@ -302,7 +302,10 @@ export default function FindingsToolbar({
           <span className="hidden sm:inline">{SORT_OPTIONS.find(o => o.mode === sortMode)?.label}</span>
         </button>
         {showSort && (
-          <div role="menu" className="absolute right-0 top-full mt-1 z-20 bg-surface-2 border border-border-subtle rounded-md shadow-lg py-0.5 min-w-36">
+          <div
+            role="menu"
+            className="absolute right-0 top-full mt-1 z-20 bg-surface-2 border border-border-subtle rounded-md shadow-lg py-0.5 min-w-36"
+          >
             {SORT_OPTIONS.map(o => (
               <button
                 key={o.mode}
@@ -420,7 +423,9 @@ export default function FindingsToolbar({
               title="Undo a fix or save (restore a snapshot)"
               className={clsx(
                 'text-2xs px-1.5 py-1 rounded transition-colors',
-                showUndo ? 'text-brand-400 bg-surface-3' : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
+                showUndo
+                  ? 'text-brand-400 bg-surface-3'
+                  : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
               )}
             >
               <Undo2 size={12} />

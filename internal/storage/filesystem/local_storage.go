@@ -329,25 +329,56 @@ func (lsb *LocalStorageBackend) ListFlows(ctx context.Context, filter interfaces
 // sortFlows orders flows in place to mirror the Postgres flowOrderBy clause, so
 // the filesystem backend's pagination is stable and consistent with the
 // database backend. Default (unset/unknown sort) = updated_at DESC.
+//
+// Every comparator ends in a comparison on ID, which is what actually makes the
+// claim in the paragraph above true. Two things conspired to break it before:
+// ListFlows builds its slice by ranging a MAP (random order per call), and
+// slices.SortFunc is NOT a stable sort. So a group of flows comparing equal came
+// out in a different arbitrary order on every call.
+//
+// Ties are the ordinary case here, not a corner one: SaveFlow persists whatever
+// UpdatedAt the caller supplied and never stamps one itself, so every flow
+// written without an explicit timestamp carries the ZERO time and ties with all
+// the others. A bulk import sharing one timestamp does the same.
+//
+// That matters because ListFlows is walked page-by-page with LIMIT/OFFSET by
+// migration.Migrator.migrateFlows and scanner.ScanOnce. Re-ordering between
+// pages shifts rows across the boundary, so the walk silently skips some and
+// returns others twice — measured at 3 of 40 flows lost with zero-time ties and
+// 14 of 40 with a shared timestamp. In the migrator that is silent data loss:
+// the run reports the flows it saw and no errors.
+//
+// ID is unique, so each comparator is now a total order and the sort's own
+// stability no longer matters.
 func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
+	byID := func(a, b *interfaces.FlowDocument) int { return strings.Compare(a.ID, b.ID) }
 	switch sort {
 	case interfaces.FlowSortUpdatedAsc:
 		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
-			return a.UpdatedAt.Compare(b.UpdatedAt)
+			if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
+				return c
+			}
+			return byID(a, b)
 		})
 	case interfaces.FlowSortNameAsc:
 		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
 			if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
 				return c
 			}
-			return b.UpdatedAt.Compare(a.UpdatedAt)
+			if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+				return c
+			}
+			return byID(a, b)
 		})
 	case interfaces.FlowSortNameDesc:
 		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
 			if c := strings.Compare(strings.ToLower(b.Name), strings.ToLower(a.Name)); c != 0 {
 				return c
 			}
-			return b.UpdatedAt.Compare(a.UpdatedAt)
+			if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+				return c
+			}
+			return byID(a, b)
 		})
 	case interfaces.FlowSortBlocksDesc:
 		// Mirror the Postgres ORDER BY COALESCE((metadata->>'BlockCount')::int, 0)
@@ -357,11 +388,20 @@ func sortFlows(flows []*interfaces.FlowDocument, sort interfaces.FlowSort) {
 			if c := cmp.Compare(b.Metadata.BlockCount, a.Metadata.BlockCount); c != 0 {
 				return c
 			}
-			return b.UpdatedAt.Compare(a.UpdatedAt)
+			if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+				return c
+			}
+			return byID(a, b)
 		})
+	case interfaces.FlowSortIDAsc:
+		// Immutable sort key — see FlowSortIDAsc's doc comment. Already unique.
+		slices.SortFunc(flows, byID)
 	default: // FlowSortUpdatedDesc / unset
 		slices.SortFunc(flows, func(a, b *interfaces.FlowDocument) int {
-			return b.UpdatedAt.Compare(a.UpdatedAt)
+			if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+				return c
+			}
+			return byID(a, b)
 		})
 	}
 }
@@ -892,9 +932,22 @@ func (lsb *LocalStorageBackend) ListUsers(ctx context.Context, limit, offset int
 		cp := *u
 		users = append(users, &cp)
 	}
-	// Keep a stable, newest-first ordering to match the postgres backend.
+	// Newest-first, tie-broken by ID to match the postgres backend's
+	// `ORDER BY created_at DESC, id ASC`.
+	//
+	// The ID tiebreaker is what makes this actually stable, which the comment
+	// here used to claim without delivering: the slice is built by ranging a
+	// MAP (random order per call) and sort.Slice is not a stable sort, so any
+	// group of users sharing a CreatedAt came out in a different arbitrary
+	// order every call — and this list is offset-paginated by the admin UI, so
+	// that dropped and repeated users across page boundaries. Ties are easy to
+	// hit: a seeded install or a bulk import creates accounts within the same
+	// clock tick.
 	sort.Slice(users, func(i, j int) bool {
-		return users[i].CreatedAt.After(users[j].CreatedAt)
+		if !users[i].CreatedAt.Equal(users[j].CreatedAt) {
+			return users[i].CreatedAt.After(users[j].CreatedAt)
+		}
+		return users[i].ID < users[j].ID
 	})
 	if offset > 0 && offset >= len(users) {
 		return users[:0], nil
@@ -1203,6 +1256,23 @@ func (lsb *LocalStorageBackend) RemoveCollaborator(ctx context.Context, flowID, 
 		}
 	}
 	return interfaces.ErrNotFound
+}
+
+// Org custom rules are a cloud governance feature — desktop has no orgs. The
+// single-user path keeps using the deployment-level rule file
+// (PAD_CUSTOM_RULES), which the resolver falls back to when there is no org.
+//
+// Save/Delete report the mode mismatch rather than silently succeeding; List
+// returns empty (not an error) because the ANALYSIS path calls it on every run
+// and must degrade to "no org rules", not fail the analysis.
+func (b *LocalStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *interfaces.OrgCustomRule) error {
+	return fmt.Errorf("org custom rules require a storage backend (cloud mode)")
+}
+func (b *LocalStorageBackend) DeleteOrgCustomRule(ctx context.Context, orgID, id string) error {
+	return fmt.Errorf("org custom rules require a storage backend (cloud mode)")
+}
+func (b *LocalStorageBackend) ListOrgCustomRules(ctx context.Context, orgID string, enabledOnly bool) ([]*interfaces.OrgCustomRule, error) {
+	return nil, nil
 }
 
 // Org channels are a cloud-library governance feature (per-org routing of

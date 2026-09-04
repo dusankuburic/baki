@@ -1,4 +1,5 @@
-import {useState, useMemo, useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
+import {useState, useMemo} from 'react'
 import clsx from 'clsx'
 import {Modal, Button} from '@/components/shared'
 
@@ -94,13 +95,17 @@ interface Props {
 }
 
 export default function PatchPreviewModal({open, original, patched, fixType, onApply, onCancel}: Props) {
+  const {t} = useTranslation('findings')
   const [applying, setApplying] = useState(false)
 
   // Reset applying state whenever the modal closes so re-opening doesn't
-  // leave the buttons permanently disabled.
-  useEffect(() => {
+  // leave the buttons permanently disabled. Keyed on the open TRANSITION and
+  // adjusted during render rather than in an effect.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
     if (!open) setApplying(false)
-  }, [open])
+  }
 
   const diff = useMemo(() => computeDiff(original, patched), [original, patched])
 
@@ -140,7 +145,7 @@ export default function PatchPreviewModal({open, original, patched, fixType, onA
             Cancel
           </Button>
           <Button variant="primary" onClick={handleApply} disabled={applying}>
-            {applying ? 'Applying…' : 'Apply fix'}
+            {applying ? t('card.applying') : t('card.applyFix')}
           </Button>
         </div>
       </div>

@@ -43,7 +43,25 @@ jobs:
       image-tag: ${{ steps.meta.outputs.tags }}
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
+      # fetch-depth: 0 so `git describe` can see tags — the build stamp below
+      # needs them to produce a human-meaningful version.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      # Without these, every pushed image inherited the Dockerfile's ARG
+      # defaults and /api/system/info answered version=0.1.0, gitCommit="",
+      # buildDate="" forever — so the endpoint operators use to identify a
+      # running deployment could not distinguish any two builds.
+      - name: Compute build stamp
+        id: stamp
+        run: |
+          set -euo pipefail
+          echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          # Commit date rather than wall-clock: the same commit rebuilds to the
+          # same image.
+          echo "date=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
@@ -69,6 +87,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.stamp.outputs.version }}
+            GIT_COMMIT=${{ steps.stamp.outputs.commit }}
+            BUILD_DATE=${{ steps.stamp.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

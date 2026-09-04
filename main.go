@@ -749,6 +749,8 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 		MaxHeaderBytes: 1 << 20,
 	}
 
+	warnIfMetricsExposed(cfg)
+
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go func() {
@@ -818,6 +820,27 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 //
 // Used only in local/desktop mode (cloud mode requires an explicit
 // PAD_AUTH_SECRET and never reaches the stdout CONFIG handshake).
+// warnIfMetricsExposed logs at boot when /metrics is reachable from the public
+// internet.
+//
+// MetricsGuard's private-IP allowlist reads r.RemoteAddr, which behind a
+// TLS-terminating reverse proxy (PAD_BEHIND_PROXY=true — the posture the
+// Dockerfile and infra/main.bicep ship) is the proxy's own private address for
+// every request, including ones originating on the public internet. The
+// allowlist therefore passes unconditionally, leaving PAD_METRICS_TOKEN as the
+// only real gate.
+//
+// This warns rather than refusing: /metrics carries operational data, not
+// secrets, and an in-cluster Prometheus scraper reaching the pod directly is
+// indistinguishable by RemoteAddr from proxied public traffic — so failing
+// closed here would break legitimate scraping. /debug/pprof/* is a different
+// story and DOES fail closed; see config.validateProfilingConfig.
+func warnIfMetricsExposed(cfg *config.Config) {
+	if cfg.Server.BehindProxy && strings.TrimSpace(cfg.Server.MetricsToken) == "" {
+		logger.Warn("/metrics is reachable through the reverse proxy: PAD_BEHIND_PROXY=true makes the private-IP allowlist pass for every request (RemoteAddr is the proxy). Set PAD_METRICS_TOKEN, and block /metrics at the ingress/NSG.")
+	}
+}
+
 func writeSessionSecret(secret string) (string, error) {
 	configDir, err := storage.ConfigDir()
 	if err != nil {

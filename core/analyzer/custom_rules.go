@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -69,6 +71,31 @@ func LoadCustomRules(path string) ([]Rule, []string, error) {
 		rules = append(rules, r)
 	}
 	return rules, warnings, nil
+}
+
+// RuleDigest implements analyzer.RuleDigester: it identifies this rule by its
+// full CONFIGURATION, not just its ID.
+//
+// The analysis cache keys on the rule set, and two orgs can legitimately define
+// different rules under the same ID (there is no global namespace for
+// user-authored rule IDs). Folding only the ID would let org B be served org A's
+// cached findings for a same-named, different-behaviour rule.
+//
+// encoding/json sorts map keys, so PropertyHas/PropertyNot serialise
+// deterministically and the digest is stable across processes.
+func (r *CustomRule) RuleDigest() string {
+	b, err := json.Marshal(r.config)
+	if err != nil {
+		// Marshalling CustomRuleConfig cannot fail (plain strings and
+		// map[string]string). If it somehow did, fall back to a rendering that
+		// is still a faithful function of the config rather than to a constant
+		// — a constant would silently re-open the cross-tenant collision this
+		// method exists to close. Go renders map literals with sorted keys, so
+		// this stays deterministic.
+		b = []byte(fmt.Sprintf("%#v", r.config))
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {

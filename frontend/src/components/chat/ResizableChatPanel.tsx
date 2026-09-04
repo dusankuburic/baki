@@ -1,7 +1,21 @@
-import {useRef, useState, useCallback, useEffect, ReactNode} from 'react'
-import {Maximize2, Minimize2} from 'lucide-react'
+import {useTranslation} from 'react-i18next'
+import {createContext, useContext, useMemo, useRef, useState, useCallback, useEffect, ReactNode} from 'react'
+import {Minimize2} from 'lucide-react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import clsx from 'clsx'
+
+// The pop-out toggle lives in the chat's overflow menu rather than on a
+// hover-only floating button that sat on top of the header. AITab reaches it
+// through this context; it is nullable so AITab still renders standalone (in
+// tests, and anywhere the panel wrapper isn't used).
+interface ChatPanelApi {
+  isPoppedOut: boolean
+  togglePopOut: () => void
+}
+const ChatPanelContext = createContext<ChatPanelApi | null>(null)
+export function useChatPanel(): ChatPanelApi | null {
+  return useContext(ChatPanelContext)
+}
 
 interface Props {
   children: ReactNode
@@ -13,6 +27,7 @@ const MIN_HEIGHT = 300
 const MAX_HEIGHT = 900
 
 export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, maxHeight = MAX_HEIGHT}: Props) {
+  const {t} = useTranslation('chat')
   const containerRef = useRef<HTMLDivElement>(null)
   const startYRef = useRef(0)
   const startHeightRef = useRef(0)
@@ -94,21 +109,25 @@ export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, ma
     setIsPoppedOut(prev => !prev)
   }, [])
 
+  const panelApi = useMemo<ChatPanelApi>(() => ({isPoppedOut, togglePopOut}), [isPoppedOut, togglePopOut])
+
   if (isPoppedOut) {
     return (
       <div className="fixed inset-4 z-modal bg-surface-0 border border-border-subtle rounded-xl shadow-2xl flex flex-col animate-fade-in">
         <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
-          <span className="text-xs font-medium text-text-secondary">AI Chat</span>
+          <span className="text-xs font-medium text-text-secondary">{t('panel.title')}</span>
           <button
             className="p-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors"
             onClick={togglePopOut}
-            title="Dock to panel"
-            aria-label="Dock to panel"
+            title={t('panel.dock')}
+            aria-label={t('panel.dock')}
           >
             <Minimize2 size={14} />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <ChatPanelContext.Provider value={panelApi}>{children}</ChatPanelContext.Provider>
+        </div>
       </div>
     )
   }
@@ -123,17 +142,9 @@ export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, ma
         willChange: isResizing ? 'height' : 'auto',
       }}
     >
-      {/* Pop-out button */}
-      <button
-        className="absolute top-2 right-2 z-10 p-1.5 rounded-lg bg-surface-2/80 backdrop-blur border border-border-subtle hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-all duration-fast opacity-0 group-hover:opacity-100"
-        onClick={togglePopOut}
-        title="Pop out to floating panel"
-        aria-label="Pop out to floating panel"
-      >
-        <Maximize2 size={12} />
-      </button>
-
-      <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <ChatPanelContext.Provider value={panelApi}>{children}</ChatPanelContext.Provider>
+      </div>
 
       {/* Resize handle — three-dot pill indicator with accent line */}
       <div
@@ -143,7 +154,7 @@ export default function ResizableChatPanel({children, minHeight = MIN_HEIGHT, ma
         )}
         onMouseDown={startResize}
         onDoubleClick={handleDoubleClick}
-        title="Drag to resize · Double-click to reset"
+        title={t('panel.resizeHint')}
       >
         <div
           className={clsx(

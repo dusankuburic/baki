@@ -3,6 +3,7 @@ package scrubber
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // streamMaxHold bounds how much text the stream scrubber holds back while a
@@ -10,6 +11,19 @@ import (
 // a multi-kilobyte unterminated match is pathological, and an unbounded hold
 // would stall the visible stream and grow memory with the response.
 const streamMaxHold = 4096
+
+// streamMatchedHold is a much tighter budget that applies once the held text
+// ALREADY contains a complete secret match. Past that point, holding longer
+// cannot change whether the secret is caught — only how much trailing text the
+// redaction swallows — so every extra byte is pure visible latency.
+//
+// This is what keeps prose readable. The connection-string pattern's value
+// runs to end of line (`(?:Password|PWD)\s*=\s*([^;\r\n]+)`), and its
+// terminal byte class accepts spaces, so a single "Password = " in an
+// explanation used to hold the entire rest of the paragraph — up to
+// streamMaxHold — before anything reached the screen. An assistant that talks
+// about credentials for a living writes that sentence often.
+const streamMatchedHold = 256
 
 // anchorRegex finds every position where one of the secretRegexes patterns
 // could begin. It is the union of their fixed lead-ins (key names, "Bearer",
@@ -188,6 +202,18 @@ func (s *StreamScrubber) Flush() string {
 	return out
 }
 
+// holdBudget returns how many bytes this hold may occupy before it is
+// released anyway. The tight budget applies only once the held text already
+// contains a finished match — checked lazily, so a short hold (the common
+// case: a keyword waiting one delta for its next character) never pays for the
+// scan.
+func holdBudget(held []byte) int {
+	if len(held) > streamMatchedHold && HasCompleteSecret(held) {
+		return streamMatchedHold
+	}
+	return streamMaxHold
+}
+
 func allInClass(chunk string, cls *byteClass) bool {
 	for i := 0; i < len(chunk); i++ {
 		if !cls[chunk[i]] {
@@ -245,15 +271,29 @@ func (s *StreamScrubber) release() string {
 		}
 	}
 
-	// Hold cap: a potential match that outgrew streamMaxHold stops stalling
-	// the stream. Emit the WHOLE buffer through one ScrubText pass — if it
-	// really is a secret, the mask applies to the complete match instead of a
-	// split leaking its lead-in. Value bytes that arrive afterwards stream
-	// unheld (the documented cap tradeoff).
-	if n-boundary > streamMaxHold {
+	// Hold cap: a potential match that outgrew its budget stops stalling the
+	// stream. Emit the WHOLE buffer through one ScrubText pass — if it really
+	// is a secret, the mask applies to the complete match instead of a split
+	// leaking its lead-in. Value bytes that arrive afterwards stream unheld
+	// (the documented cap tradeoff).
+	if n-boundary > holdBudget(s.pending[boundary:]) {
 		boundary = n
 		s.kind, s.terminal = holdNone, nil
 	}
+
+	// Never emit a trailing PARTIAL rune. Each released chunk is JSON-encoded
+	// into its own SSE event, and encoding/json does not reject invalid UTF-8 —
+	// it substitutes U+FFFD. A provider splitting a multi-byte character across
+	// two deltas therefore turned "hello ✅ world" into "hello \ufffd\ufffd\ufffd world"
+	// on the client, for any emoji / CJK / accented character in model output.
+	// Holding the few trailing bytes until the rune completes costs nothing:
+	// they arrive with the next delta, and Flush() releases them unconditionally
+	// at end of stream.
+	//
+	// This also removes a confusing asymmetry — ctl.buffer stores the raw bytes,
+	// so a resume returned the correct text while the live stream showed
+	// mojibake, making it look like a reload "fixed" it.
+	boundary = runeSafeBoundary(s.pending, boundary)
 
 	if boundary <= 0 {
 		return ""
@@ -264,15 +304,60 @@ func (s *StreamScrubber) release() string {
 	return out
 }
 
+// runeSafeBoundary reduces n to the largest offset <= n that does not cut a
+// multi-byte rune in half. It walks back at most 3 bytes (the longest possible
+// continuation tail); a byte sequence that is malformed rather than merely
+// incomplete is left alone, so garbage input can never stall the stream.
+func runeSafeBoundary(b []byte, n int) int {
+	if n <= 0 || n > len(b) {
+		return n
+	}
+	for i := 1; i <= 4 && i <= n; i++ {
+		c := b[n-i]
+		if !utf8.RuneStart(c) {
+			continue // continuation byte; keep walking back to the lead byte
+		}
+		if want := leadRuneLen(c); want > i {
+			return n - i // lead byte promises more bytes than we hold
+		}
+		return n
+	}
+	return n
+}
+
+// leadRuneLen returns the total byte length a UTF-8 rune beginning with c
+// should have. An invalid lead byte reports 1 so it is emitted as-is rather
+// than held forever waiting for bytes that will never make it valid.
+func leadRuneLen(c byte) int {
+	switch {
+	case c < 0x80:
+		return 1
+	case c&0xE0 == 0xC0:
+		return 2
+	case c&0xF0 == 0xE0:
+		return 3
+	case c&0xF8 == 0xF0:
+		return 4
+	}
+	return 1
+}
+
 // capOverflow releases a fast-path hold that outgrew the cap: the whole
 // buffer goes through one ScrubText pass (masking the complete oversized
 // match) and the hold resets — same policy as release()'s cap branch.
 func (s *StreamScrubber) capOverflow() string {
-	if len(s.pending) <= streamMaxHold {
+	if len(s.pending) <= holdBudget(s.pending) {
 		return ""
 	}
-	out := ScrubText(string(s.pending))
-	s.pending = s.pending[:0]
+	// Same rune-boundary rule as release(): the cap bounds how long we hold,
+	// but never at the cost of emitting half a character.
+	boundary := runeSafeBoundary(s.pending, len(s.pending))
+	if boundary <= 0 {
+		return ""
+	}
+	out := ScrubText(string(s.pending[:boundary]))
+	m := copy(s.pending, s.pending[boundary:])
+	s.pending = s.pending[:m]
 	s.kind, s.terminal = holdNone, nil
 	return out
 }

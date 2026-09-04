@@ -25,13 +25,14 @@ func registerRoutes(rt *Router, r chi.Router) {
 	// Future breaking changes land on /api/v2/ only; /api/ stays backward-
 	// compatible. The rewrite happens before jwtAuth and routing so the rest
 	// of the pipeline is unaware of the version prefix.
+	//
+	// The rule lives in canonicalRequestPath (middleware_chain.go) because the
+	// rate-limit classifier — which runs OUTSIDE this mux, before any of this
+	// applies — has to predict the same result. Two copies drifted once
+	// already and that was a rate-limit bypass; keep it one function.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if rest := strings.TrimPrefix(req.URL.Path, "/api/v1/"); rest != req.URL.Path {
-				req.URL.Path = "/api/" + rest
-			} else if rest := strings.TrimPrefix(req.URL.Path, "/api/v1"); rest == "" {
-				req.URL.Path = "/api"
-			}
+			req.URL.Path = canonicalRequestPath(req.URL.Path)
 			next.ServeHTTP(w, req)
 		})
 	})
@@ -74,18 +75,37 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Get("/api/health", h.Sys.handleReadiness)
 	// /metrics is protected by a private-IP allowlist to prevent public internet
 	// access to internal operational data. Supplement this with Azure NSG /
-	// ACA ingress rules that block /metrics from the public load balancer.
+	// ACA ingress rules that block /metrics from the public load balancer, and
+	// set PAD_METRICS_TOKEN — behind a reverse proxy the allowlist alone passes
+	// for every request (see MetricsGuard). Router.warnIfMetricsExposed logs at
+	// boot when that combination is live.
 	r.Handle("/metrics", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(middleware.MetricsHandler()))
-	// /debug/pprof/* — Go runtime profiling, same private-IP guard as /metrics.
-	// Register the pprof handlers on a dedicated ServeMux so they don't leak
-	// onto http.DefaultServeMux (which other imports might accidentally expose).
-	pprofMux := http.NewServeMux()
-	pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-	pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	r.Handle("/debug/pprof/*", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(pprofMux))
+	// /debug/pprof/* — Go runtime profiling. OPT-IN (PAD_PPROF_ENABLED), unlike
+	// /metrics, and never registered at all when disabled: an unregistered route
+	// 404s no matter what the guard would have decided.
+	//
+	// It used to be registered unconditionally behind the same private-IP guard
+	// as /metrics. That guard reads r.RemoteAddr, which behind a reverse proxy
+	// is the proxy itself — always private — so it passed for every request off
+	// the public internet. With PAD_METRICS_TOKEN unset (its default, and
+	// documented nowhere at the time) that made /debug/pprof/heap a public heap
+	// dump: auth secret, decrypted provider keys, flow content, chat history.
+	// infra/main.bicep ships ACA ingress external:true and the Dockerfile sets
+	// PAD_BEHIND_PROXY=true, so that was the shipped posture, not a corner case.
+	//
+	// Config validation refuses PAD_PPROF_ENABLED=true without a token, so the
+	// guard below always has a real secret to check.
+	if rt.pprofEnabled {
+		// A dedicated ServeMux so the handlers don't leak onto
+		// http.DefaultServeMux (which other imports might accidentally expose).
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		r.Handle("/debug/pprof/*", middleware.MetricsGuard(rt.trustedProxies, rt.metricsToken)(pprofMux))
+	}
 	r.Get("/api/events", rt.eventManager.HandleEvents)
 
 	// --- System & Keys ---
@@ -206,6 +226,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Get("/rules", h.Analysis.handleGetRules)
 		r.Get("/rules/summary", h.Analysis.handleGetRulesSummary)
 		r.Post("/custom-rules/validate", h.Analysis.handleValidateCustomRules)
+		r.Post("/custom-rules/test", h.Analysis.handleTestCustomRule)
 		r.Post("/rule/enabled", h.Analysis.handleSetRuleEnabled)
 		r.Post("/rule/config", h.Analysis.handleUpdateRuleConfig)
 		// Finding triage & baselines (persistent, team-shared; cloud mode only)
@@ -313,6 +334,13 @@ func registerRoutes(rt *Router, r chi.Router) {
 					r.Delete("/", h.Org.handleOrgMemberRemove)
 					r.Put("/role", h.Org.handleOrgMemberRoleUpdate)
 				})
+			})
+			// Per-org custom analyzer rules (R4). Reads: member. Writes: admin.
+			r.Route("/rules", func(r chi.Router) {
+				r.Get("/", h.Org.handleOrgRuleList)
+				r.Get("/export", h.Org.handleOrgRuleExport)
+				r.Post("/", h.Org.handleOrgRuleSave)
+				r.Delete("/{ruleId}", h.Org.handleOrgRuleDelete)
 			})
 			r.Route("/channels", func(r chi.Router) {
 				r.Get("/", h.Org.handleChannelList)

@@ -226,7 +226,46 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	// and any deployment without the vector extension keep working unchanged.
 	b.hasPgvector = detectPgvector(ctx, db)
 
+	// Surface a silently-disabled security layer. Every RLS policy in this
+	// schema is defense-in-depth behind the Go authz layer, but "defense in
+	// depth" is only true if the depth exists — and a superuser/BYPASSRLS
+	// connection role makes every policy inert no matter how they are written
+	// (FORCE ROW LEVEL SECURITY does not apply to such roles either). Nothing
+	// in the running system otherwise reveals this: queries succeed, tests
+	// pass, and the schema still lists the policies.
+	warnIfRLSBypassed(ctx, db)
+
 	return b, nil
+}
+
+// rlsBypassedByRole reports whether the connection's current role ignores
+// Row-Level Security — i.e. it is a superuser or carries BYPASSRLS. The second
+// return is false when the question could not be answered (no connection, or
+// the catalog is unreadable), so callers can stay quiet rather than guess.
+func rlsBypassedByRole(ctx context.Context, db *sql.DB) (role string, bypassed bool, known bool) {
+	err := db.QueryRowContext(ctx,
+		`SELECT current_user, rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user`,
+	).Scan(&role, &bypassed)
+	if err != nil {
+		return "", false, false
+	}
+	return role, bypassed, true
+}
+
+// warnIfRLSBypassed logs once at startup when the configured database role
+// defeats Row-Level Security. It deliberately WARNS rather than refusing to
+// boot: the shipped docker-compose default connects as `postgres`, so failing
+// closed would brick existing deployments on upgrade. The operator gets the
+// exact remediation instead.
+func warnIfRLSBypassed(ctx context.Context, db *sql.DB) {
+	role, bypassed, known := rlsBypassedByRole(ctx, db)
+	if !known || !bypassed {
+		return
+	}
+	slog.Warn("postgres: connection role bypasses Row-Level Security — the RLS policies in this schema are INERT",
+		"role", role,
+		"impact", "tenant isolation rests entirely on the application authz layer; the database-side backstop is not in effect",
+		"remediation", "connect as a role created with NOSUPERUSER NOBYPASSRLS that owns the application database")
 }
 
 func (b *PostgresStorageBackend) Ping(ctx context.Context) error {

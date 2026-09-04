@@ -27,6 +27,9 @@ const FILTER_TYPES: {type: BlockType; label: string}[] = [
   {type: 'COMMENT', label: 'Comment'},
 ]
 
+const LISTBOX_ID = 'global-search-listbox'
+const optionId = (index: number) => `global-search-option-${index}`
+
 export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverlayProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
@@ -72,6 +75,8 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
   useEffect(() => {
     if (isOpen) {
+      // Resets overlay state on open; the panel is not remounted per open.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery('')
       setResults([])
       setActiveIndex(0)
@@ -129,6 +134,8 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
   // Re-run search when type filters change
   useEffect(() => {
+    // Re-runs the query against the backend when the type filters change.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (query) void handleSearch(query, activeTypes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTypes])
@@ -147,6 +154,9 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         ref={overlayRef}
         className="relative w-full max-w-[720px] bg-surface-1 border border-border-default rounded-xl shadow-2xl overflow-hidden animate-palette flex flex-col max-h-[70vh]"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search"
       >
         {/* Search input row */}
         <div className="flex items-center px-4 border-b border-border-subtle bg-surface-2">
@@ -162,6 +172,12 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
             onKeyDown={handleKeyDown}
             placeholder="Search across all subflows and properties..."
             className="flex-1 bg-transparent py-4 text-base outline-none text-text-primary placeholder:text-text-disabled"
+            role="combobox"
+            aria-expanded={results.length > 0}
+            aria-controls={LISTBOX_ID}
+            aria-autocomplete="list"
+            aria-label="Search across all subflows and properties"
+            aria-activedescendant={activeIndex >= 0 && results[activeIndex] ? optionId(activeIndex) : undefined}
           />
           {isSearching && (
             <div className="w-4 h-4 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mr-2 flex-shrink-0" />
@@ -229,7 +245,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         {/* Results list */}
         <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar p-1">
           {results.length > 0 ? (
-            <div className="space-y-0.5">
+            <div className="space-y-0.5" role="listbox" id={LISTBOX_ID} aria-label="Search results">
               {results.map((res, idx) => {
                 const subflow = document?.subflows.find(s => s.id === res.subflowId)
                 const prev = idx > 0 ? results[idx - 1] : undefined
@@ -238,7 +254,10 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                 // by flow, so a flowId change marks a group boundary.
                 const showFlowHeader = scope === 'all-flows' && res.flowId && res.flowId !== prev?.flowId
                 return (
-                  <div key={`${res.flowId ?? ''}-${res.blockId}-${idx}`}>
+                  // role="presentation": this wrapper only exists to pair a
+                  // flow-name header with its row. Leaving it as a generic div
+                  // between the listbox and its options breaks ARIA ownership.
+                  <div key={`${res.flowId ?? ''}-${res.blockId}-${idx}`} role="presentation">
                     {showFlowHeader && (
                       <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 text-2xs font-bold uppercase tracking-wider text-brand-400">
                         <FileCode size={11} />
@@ -246,6 +265,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                       </div>
                     )}
                     <div
+                      id={optionId(idx)}
                       role="option"
                       aria-selected={idx === activeIndex}
                       data-active={idx === activeIndex}

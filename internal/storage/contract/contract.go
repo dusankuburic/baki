@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -642,6 +643,23 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Fatalf("SaveFlow: %v", err)
 		}
 
+		// The alert inbox is a GLOBAL list — GovernanceAlertFilter has no
+		// FlowID field — so this subtest must not assume it owns the table.
+		// Every other subtest scopes its rows by runID; this one instead
+		// filters the returned list to its own flow and measures the unread
+		// badge as a DELTA from a baseline. Without that, re-running the
+		// suite against a persistent database (the documented local podman
+		// harness) failed on rows left by the previous run.
+		mine := func(alerts []*interfaces.GovernanceAlert) []*interfaces.GovernanceAlert {
+			out := make([]*interfaces.GovernanceAlert, 0, len(alerts))
+			for _, a := range alerts {
+				if a.FlowID == flowID {
+					out = append(out, a)
+				}
+			}
+			return out
+		}
+
 		// Empty list returns a non-nil slice, never nil.
 		got, err := b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{})
 		if err != nil {
@@ -650,16 +668,13 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if got == nil {
 			t.Fatal("empty list: expected non-nil empty slice, got nil")
 		}
-		if len(got) != 0 {
-			t.Errorf("expected 0 alerts, got %d", len(got))
+		if len(mine(got)) != 0 {
+			t.Errorf("expected 0 alerts for this run's flow, got %d", len(mine(got)))
 		}
 
-		n, err := b.UnreadGovernanceAlertCount(ctx)
+		baseUnread, err := b.UnreadGovernanceAlertCount(ctx)
 		if err != nil {
 			t.Fatalf("UnreadGovernanceAlertCount empty: %v", err)
-		}
-		if n != 0 {
-			t.Errorf("expected 0 unread, got %d", n)
 		}
 
 		// Record two alerts (drift + regression). Timestamps ensure stable
@@ -689,16 +704,16 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if err != nil {
 			t.Fatalf("ListGovernanceAlerts: %v", err)
 		}
-		if len(got) != 2 {
-			t.Fatalf("expected 2 alerts, got %d", len(got))
+		if len(mine(got)) != 2 {
+			t.Fatalf("expected 2 alerts, got %d", len(mine(got)))
 		}
 		// Newest-first: a2 (health, later timestamp) before a1 (drift).
-		if got[0].ID != a2.ID {
-			t.Errorf("expected newest-first (a2), got %q first", got[0].ID)
+		if mine(got)[0].ID != a2.ID {
+			t.Errorf("expected newest-first (a2), got %q first", mine(got)[0].ID)
 		}
-		n, _ = b.UnreadGovernanceAlertCount(ctx)
-		if n != 2 {
-			t.Errorf("expected 2 unread, got %d", n)
+		n, _ := b.UnreadGovernanceAlertCount(ctx)
+		if n != baseUnread+2 {
+			t.Errorf("expected %d unread, got %d", baseUnread+2, n)
 		}
 
 		// Mark one read → unread drops to 1.
@@ -710,26 +725,27 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Errorf("MarkGovernanceAlertRead (idempotent): %v", err)
 		}
 		n, _ = b.UnreadGovernanceAlertCount(ctx)
-		if n != 1 {
-			t.Errorf("expected 1 unread after read, got %d", n)
+		if n != baseUnread+1 {
+			t.Errorf("expected %d unread after read, got %d", baseUnread+1, n)
 		}
 
-		// Dismiss a2 → it's hidden from the default list, unread drops to 0.
+		// Dismiss a2 → it's hidden from the default list, unread drops back to
+		// the baseline.
 		if err := b.DismissGovernanceAlert(ctx, "", a2.ID); err != nil {
 			t.Fatalf("DismissGovernanceAlert: %v", err)
 		}
 		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{})
-		if len(got) != 1 || got[0].ID != a1.ID {
-			t.Errorf("expected only the non-dismissed a1, got %+v", got)
+		if len(mine(got)) != 1 || mine(got)[0].ID != a1.ID {
+			t.Errorf("expected only the non-dismissed a1, got %+v", mine(got))
 		}
 		// includeDismissed surfaces it again.
 		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{IncludeDismissed: true})
-		if len(got) != 2 {
-			t.Errorf("expected 2 alerts including dismissed, got %d", len(got))
+		if len(mine(got)) != 2 {
+			t.Errorf("expected 2 alerts including dismissed, got %d", len(mine(got)))
 		}
 		n, _ = b.UnreadGovernanceAlertCount(ctx)
-		if n != 0 {
-			t.Errorf("expected 0 unread after dismiss, got %d", n)
+		if n != baseUnread {
+			t.Errorf("expected %d unread after dismiss, got %d", baseUnread, n)
 		}
 
 		// Clear removes dismissed alerts permanently.
@@ -737,8 +753,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Fatalf("ClearGovernanceAlerts: %v", err)
 		}
 		got, _ = b.ListGovernanceAlerts(ctx, interfaces.GovernanceAlertFilter{IncludeDismissed: true})
-		if len(got) != 1 || got[0].ID != a1.ID {
-			t.Errorf("expected only a1 after clear, got %+v", got)
+		if len(mine(got)) != 1 || mine(got)[0].ID != a1.ID {
+			t.Errorf("expected only a1 after clear, got %+v", mine(got))
 		}
 
 		// Mark-all-read clears remaining unread badge.
@@ -749,5 +765,388 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if n != 0 {
 			t.Errorf("expected 0 unread after mark-all, got %d", n)
 		}
+	})
+
+	// A LIMIT/OFFSET walk of the whole table must visit every flow exactly
+	// once. The storage migrator (migration.Migrator.migrateFlows) and the
+	// governance scanner (scanner.ScanOnce) both enumerate that way, and in the
+	// migrator a skipped row is silent data loss — the run reports the flows it
+	// saw and no errors.
+	//
+	// The flows are seeded with a SHARED UpdatedAt on purpose. Ordering between
+	// rows that compare equal is not guaranteed by SQL, and the filesystem
+	// backend built its slice from a map range fed into a non-stable sort, so
+	// each page was ordered independently of the last and rows shifted across
+	// the page boundary. Ties are ordinary: any bulk write shares a timestamp,
+	// and the filesystem backend never stamps UpdatedAt itself, so flows saved
+	// without one all carry the zero time.
+	//
+	// The assertion counts only this run's flows, so it holds on the persistent
+	// podman database where earlier runs left rows behind.
+	t.Run("ListFlows_paginated_walk_visits_every_flow_once", func(t *testing.T) {
+		const seeded, pageSize = 25, 10
+		owner := "contract-page-owner-" + runID
+		shared := time.Now().UTC().Truncate(time.Hour)
+
+		want := make(map[string]bool, seeded)
+		for i := 0; i < seeded; i++ {
+			id := fmt.Sprintf("contract-page-%s-%02d", runID, i)
+			if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
+				ID: id, Name: "Paged Flow", Content: json.RawMessage(`{}`),
+				OwnerID: owner, UpdatedAt: shared,
+			}); err != nil {
+				t.Fatalf("SaveFlow %s: %v", id, err)
+			}
+			want[id] = true
+		}
+		t.Cleanup(func() {
+			for id := range want {
+				_ = b.DeleteFlow(ctx, id)
+			}
+		})
+
+		seen := map[string]int{}
+		// maxPages bounds the walk so a pagination bug that never advances
+		// fails with this message instead of hanging the suite.
+		const maxPages = 500
+		for offset, pages := 0, 0; ; pages++ {
+			if pages > maxPages {
+				t.Fatalf("pagination did not terminate after %d pages", maxPages)
+			}
+			page, err := b.ListFlows(ctx, interfaces.FlowFilter{
+				AllFlows: true, Limit: pageSize, Offset: offset, MetadataOnly: true,
+			})
+			if err != nil {
+				t.Fatalf("ListFlows(offset=%d): %v", offset, err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, f := range page {
+				if want[f.ID] {
+					seen[f.ID]++
+				}
+			}
+			offset += len(page)
+			if len(page) < pageSize {
+				break
+			}
+		}
+
+		var missed, duped []string
+		for id := range want {
+			switch n := seen[id]; {
+			case n == 0:
+				missed = append(missed, id)
+			case n > 1:
+				duped = append(duped, fmt.Sprintf("%s x%d", id, n))
+			}
+		}
+		if len(missed) > 0 {
+			t.Errorf("paginated walk skipped %d of %d flows: %v", len(missed), seeded, missed)
+		}
+		if len(duped) > 0 {
+			t.Errorf("paginated walk returned %d flow(s) more than once: %v", len(duped), duped)
+		}
+	})
+
+	// A full-table walk must survive a concurrent save. The governance scanner
+	// sweeps while users edit, and the migrator can run against a live source,
+	// so this is the normal case rather than a race to be hand-waved.
+	//
+	// FlowSortIDAsc exists for exactly this: the default updated_at DESC is a
+	// MUTABLE sort key, so a flow saved mid-walk jumps to the front of the
+	// ordering and pushes the row on the next page boundary out of the walk. A
+	// unique tiebreaker does not help — the row genuinely moved.
+	t.Run("ListFlows_paginated_walk_survives_a_concurrent_save", func(t *testing.T) {
+		const seeded, pageSize = 24, 8
+		owner := "contract-cwalk-owner-" + runID
+		shared := time.Now().UTC().Truncate(time.Hour)
+
+		ids := make([]string, 0, seeded)
+		want := make(map[string]bool, seeded)
+		for i := 0; i < seeded; i++ {
+			id := fmt.Sprintf("contract-cwalk-%s-%02d", runID, i)
+			if err := b.SaveFlow(ctx, &interfaces.FlowDocument{
+				ID: id, Name: "Concurrent Walk", Content: json.RawMessage(`{}`),
+				OwnerID: owner, UpdatedAt: shared,
+			}); err != nil {
+				t.Fatalf("SaveFlow %s: %v", id, err)
+			}
+			ids = append(ids, id)
+			want[id] = true
+		}
+		t.Cleanup(func() {
+			for id := range want {
+				_ = b.DeleteFlow(ctx, id)
+			}
+		})
+
+		seen := map[string]int{}
+		const maxPages = 500
+		bumped := false
+		for offset, pages := 0, 0; ; pages++ {
+			if pages > maxPages {
+				t.Fatalf("pagination did not terminate after %d pages", maxPages)
+			}
+			page, err := b.ListFlows(ctx, interfaces.FlowFilter{
+				AllFlows: true, SortBy: interfaces.FlowSortIDAsc,
+				Limit: pageSize, Offset: offset, MetadataOnly: true,
+			})
+			if err != nil {
+				t.Fatalf("ListFlows(offset=%d): %v", offset, err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, f := range page {
+				if want[f.ID] {
+					seen[f.ID]++
+				}
+			}
+			offset += len(page)
+
+			// After the first page, a user saves one of the flows the walk has
+			// ALREADY passed. Under a mutable ordering that re-sorts it to the
+			// front and shifts everything still to come.
+			if !bumped {
+				bumped = true
+				existing, err := b.LoadFlow(ctx, ids[0])
+				if err != nil {
+					t.Fatalf("LoadFlow for concurrent save: %v", err)
+				}
+				existing.UpdatedAt = time.Now().UTC()
+				if err := b.SaveFlow(ctx, existing); err != nil {
+					t.Fatalf("concurrent SaveFlow: %v", err)
+				}
+			}
+
+			if len(page) < pageSize {
+				break
+			}
+		}
+
+		var missed, duped []string
+		for id := range want {
+			switch n := seen[id]; {
+			case n == 0:
+				missed = append(missed, id)
+			case n > 1:
+				duped = append(duped, fmt.Sprintf("%s x%d", id, n))
+			}
+		}
+		if len(missed) > 0 {
+			t.Errorf("a save during the walk made it skip %d of %d flows: %v", len(missed), seeded, missed)
+		}
+		if len(duped) > 0 {
+			t.Errorf("a save during the walk made it return %d flow(s) twice: %v", len(duped), duped)
+		}
+	})
+
+	// Per-org custom rules must be isolated by org at the SQL layer, not only by
+	// RLS: RLS is bypassed entirely whenever the app connects as a
+	// superuser/BYPASSRLS role, and this suite runs without an RLS transaction
+	// on purpose so the explicit predicates are what is under test (B8's
+	// lesson — a test that runs under RLS proves nothing about the application
+	// layer).
+	//
+	// The (org_id, rule_id) pair is the uniqueness contract: two orgs may both
+	// define "house-style" and they are DIFFERENT rules.
+	t.Run("OrgCustomRules_isolated_per_org", func(t *testing.T) {
+		orgA := "contract-rules-orgA-" + runID
+		orgB := "contract-rules-orgB-" + runID
+		const sharedRuleID = "house-style"
+
+		// Postgres stores config as JSONB and hands it back re-serialized —
+		// whitespace and key order are NOT preserved. Assert on parsed fields,
+		// never on raw substrings, or the test passes on the filesystem backend
+		// and fails on the real one for a reason that has nothing to do with
+		// the contract.
+		field := func(t *testing.T, raw json.RawMessage, key string) string {
+			t.Helper()
+			var m map[string]any
+			if err := json.Unmarshal(raw, &m); err != nil {
+				t.Fatalf("stored config is not valid JSON: %v (%s)", err, raw)
+			}
+			v, _ := m[key].(string)
+			return v
+		}
+
+		mk := func(org, id, match string) *interfaces.OrgCustomRule {
+			return &interfaces.OrgCustomRule{
+				ID:      id,
+				OrgID:   org,
+				RuleID:  sharedRuleID,
+				Config:  json.RawMessage(`{"id":"` + sharedRuleID + `","name":"House style","severity":"warning","rawTypeMatch":"` + match + `"}`),
+				Enabled: true,
+			}
+		}
+
+		ruleA := mk(orgA, "contract-rule-a-"+runID, "^SET$")
+		if err := b.SaveOrgCustomRule(ctx, ruleA); err != nil {
+			t.Skipf("backend does not support org custom rules: %v", err)
+		}
+		ruleB := mk(orgB, "contract-rule-b-"+runID, "^WAIT$")
+		if err := b.SaveOrgCustomRule(ctx, ruleB); err != nil {
+			t.Fatalf("SaveOrgCustomRule(orgB): %v", err)
+		}
+		t.Cleanup(func() {
+			_ = b.DeleteOrgCustomRule(ctx, orgA, ruleA.ID)
+			_ = b.DeleteOrgCustomRule(ctx, orgB, ruleB.ID)
+		})
+
+		// The same author-id under two orgs coexists as two rows.
+		listA, err := b.ListOrgCustomRules(ctx, orgA, false)
+		if err != nil {
+			t.Fatalf("ListOrgCustomRules(orgA): %v", err)
+		}
+		if len(listA) != 1 {
+			t.Fatalf("orgA sees %d rule(s), want exactly its own 1", len(listA))
+		}
+		if got := field(t, listA[0].Config, "rawTypeMatch"); got != "^SET$" {
+			t.Errorf("orgA got the wrong config (rawTypeMatch=%q, want ^SET$) — possibly orgB's", got)
+		}
+
+		listB, err := b.ListOrgCustomRules(ctx, orgB, false)
+		if err != nil {
+			t.Fatalf("ListOrgCustomRules(orgB): %v", err)
+		}
+		if len(listB) != 1 || field(t, listB[0].Config, "rawTypeMatch") != "^WAIT$" {
+			t.Errorf("orgB does not see exactly its own rule: %+v", listB)
+		}
+
+		// A delete scoped to the wrong org must not remove another org's rule.
+		if err := b.DeleteOrgCustomRule(ctx, orgB, ruleA.ID); err != nil {
+			t.Fatalf("cross-org DeleteOrgCustomRule: %v", err)
+		}
+		if again, err := b.ListOrgCustomRules(ctx, orgA, false); err != nil {
+			t.Fatalf("ListOrgCustomRules(orgA) after cross-org delete: %v", err)
+		} else if len(again) != 1 {
+			t.Errorf("orgA's rule was deleted through orgB's scope")
+		}
+
+		// Re-saving the same (org, ruleID) replaces rather than duplicating.
+		ruleA.Config = json.RawMessage(`{"id":"` + sharedRuleID + `","name":"House style","severity":"error","rawTypeMatch":"^SET$"}`)
+		if err := b.SaveOrgCustomRule(ctx, ruleA); err != nil {
+			t.Fatalf("re-save: %v", err)
+		}
+		if after, err := b.ListOrgCustomRules(ctx, orgA, false); err != nil {
+			t.Fatalf("list after re-save: %v", err)
+		} else if len(after) != 1 {
+			t.Errorf("re-saving the same (org, ruleId) produced %d rows, want 1", len(after))
+		} else if got := field(t, after[0].Config, "severity"); got != "error" {
+			t.Errorf("re-save did not replace the config (severity=%q, want error): %s", got, after[0].Config)
+		}
+
+		// The B8.2 shape: an admin of one org submits ANOTHER org's surrogate
+		// id. Whether the backend errors or no-ops does not matter; what must
+		// never happen is the other org's row changing. Conflicting on the
+		// surrogate id instead of (org_id, rule_id) is precisely how
+		// org_channels let one tenant retarget another's row.
+		hijack := &interfaces.OrgCustomRule{
+			ID:      ruleA.ID, // orgA's surrogate id
+			OrgID:   orgB,     // ...submitted by orgB
+			RuleID:  "hijacked",
+			Config:  json.RawMessage(`{"id":"hijacked","name":"Hijack","severity":"info","rawTypeMatch":"^IF$"}`),
+			Enabled: true,
+		}
+		_ = b.SaveOrgCustomRule(ctx, hijack) // error or no-op are both fine
+		if victim, err := b.ListOrgCustomRules(ctx, orgA, false); err != nil {
+			t.Fatalf("list orgA after hijack attempt: %v", err)
+		} else if len(victim) != 1 {
+			t.Errorf("orgA has %d rule(s) after a cross-org save attempt, want 1", len(victim))
+		} else if got := field(t, victim[0].Config, "rawTypeMatch"); got != "^SET$" {
+			t.Errorf("orgB overwrote orgA's rule through its surrogate id (rawTypeMatch=%q, want ^SET$)", got)
+		}
+		if attacker, err := b.ListOrgCustomRules(ctx, orgB, false); err != nil {
+			t.Fatalf("list orgB after hijack attempt: %v", err)
+		} else if len(attacker) != 1 {
+			t.Errorf("orgB has %d rule(s) after a rejected save, want its original 1", len(attacker))
+		}
+
+		// enabledOnly must exclude a disabled rule — the analysis path relies on
+		// it to avoid compiling rules the org has paused.
+		ruleA.Enabled = false
+		if err := b.SaveOrgCustomRule(ctx, ruleA); err != nil {
+			t.Fatalf("disable: %v", err)
+		}
+		if enabled, err := b.ListOrgCustomRules(ctx, orgA, true); err != nil {
+			t.Fatalf("list enabledOnly: %v", err)
+		} else if len(enabled) != 0 {
+			t.Errorf("enabledOnly returned %d disabled rule(s)", len(enabled))
+		}
+	})
+
+	// SaveOrgChannel is keyed on a client-supplied id while the HTTP layer
+	// authorizes against the org in the URL, so "id wins" would let an admin of
+	// one org overwrite another org's channel — replacing its webhook url and
+	// secret while the row keeps its original owner. The upsert must be scoped
+	// to the owning org, and the rejection must be VISIBLE (ErrNotFound), not a
+	// silent no-op that a caller reads as success.
+	//
+	// Backends without org support (filesystem/desktop) report that and are
+	// skipped rather than asserted against.
+	t.Run("SaveOrgChannel_cannot_retarget_another_orgs_channel", func(t *testing.T) {
+		victimOrg := "contract-org-victim-" + runID
+		attackerOrg := "contract-org-attacker-" + runID
+		channelID := "contract-channel-" + runID
+
+		victim := &interfaces.OrgChannel{
+			ID: channelID, OrgID: victimOrg, Name: "Victim Ops",
+			Kind: "webhook", URL: "https://victim.example.com/hook",
+			Secret: "victim-secret", Enabled: true, CreatedAt: time.Now().UTC(),
+		}
+		if err := b.SaveOrgChannel(ctx, victim); err != nil {
+			t.Skipf("backend does not support org channels: %v", err)
+		}
+
+		attempt := &interfaces.OrgChannel{
+			ID: channelID, OrgID: attackerOrg, Name: "Attacker",
+			Kind: "webhook", URL: "https://attacker.example.com/collect",
+			Secret: "attacker-secret", Enabled: true, CreatedAt: time.Now().UTC(),
+		}
+		err := b.SaveOrgChannel(ctx, attempt)
+		if err == nil {
+			t.Fatal("cross-org SaveOrgChannel succeeded — an org admin can retarget another org's notification channel")
+		}
+		if !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("cross-org SaveOrgChannel: got %v, want ErrNotFound", err)
+		}
+
+		// The victim's row must be untouched — url and secret especially, since
+		// those are what redirect the alert stream.
+		list, err := b.ListOrgChannels(ctx, victimOrg, false)
+		if err != nil {
+			t.Fatalf("ListOrgChannels(victim): %v", err)
+		}
+		var found *interfaces.OrgChannel
+		for _, c := range list {
+			if c.ID == channelID {
+				found = c
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("victim channel disappeared")
+		}
+		if found.OrgID != victimOrg || found.URL != victim.URL || found.Secret != victim.Secret || found.Name != victim.Name {
+			t.Errorf("victim channel was modified: %+v", found)
+		}
+
+		// The attacker must also not have gained a channel of their own.
+		if attackerList, err := b.ListOrgChannels(ctx, attackerOrg, false); err != nil {
+			t.Fatalf("ListOrgChannels(attacker): %v", err)
+		} else if len(attackerList) != 0 {
+			t.Errorf("attacker org gained %d channel(s) from a rejected save", len(attackerList))
+		}
+
+		// A same-org update of the same id is still allowed — the fix must not
+		// break the legitimate edit path it shares.
+		victim.URL = "https://victim.example.com/hook-v2"
+		if err := b.SaveOrgChannel(ctx, victim); err != nil {
+			t.Fatalf("same-org update of an existing channel should succeed: %v", err)
+		}
+
+		_ = b.DeleteOrgChannel(ctx, victimOrg, channelID)
 	})
 }

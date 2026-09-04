@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useCallback, useMemo} from 'react'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import {FolderOpen, FolderTree, BarChart2, Library} from 'lucide-react'
@@ -20,20 +21,8 @@ import {useSidebarSearch} from '@/components/sidebar/hooks/useSidebarSearch'
 import {analysisApi} from '@/api'
 import type {BlockType, AnalysisReport, Block} from '@/types'
 
-const BLOCK_TYPE_LABELS: Record<string, string> = {
-  ACTION: 'Actions',
-  LOOP: 'Loops',
-  CONDITION: 'Conditions',
-  ERROR_HANDLER: 'Errors',
-  COMMENT: 'Comments',
-  VARIABLE: 'Variables',
-  WAIT: 'Wait',
-  BLOCK: 'Blocks',
-  SWITCH: 'Switch',
-  UNKNOWN: 'Other',
-}
-
 export default function Sidebar() {
+  const {t} = useTranslation('shell')
   const document = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
   const visibleBlockId = useFlowStore(s => s.visibleBlockId)
@@ -179,11 +168,12 @@ export default function Sidebar() {
     for (const sf of document.subflows) countTypes(sf.blocks, counts)
     const chips = ALL_TYPES.map(type => ({
       type,
-      label: BLOCK_TYPE_LABELS[type] || type,
+      // Falls back to the raw enum for a type with no label key yet.
+      label: t(`blockTypes.${type}`, {defaultValue: type}),
       count: counts.get(type) ?? 0,
     }))
-    return [{type: 'ALL' as const, label: 'All', count: 0}, ...chips]
-  }, [document])
+    return [{type: 'ALL' as const, label: t('blockTypes.ALL'), count: 0}, ...chips]
+  }, [document, t])
 
   const folderName = useMemo(() => {
     if (!folderFiles?.length) return ''
@@ -219,89 +209,91 @@ export default function Sidebar() {
 
       <Tabs
         items={[
-          {value: 'explorer' as const, label: 'Explorer', icon: FolderTree},
-          {value: 'variables' as const, label: 'Variables', icon: BarChart2},
-          {value: 'library' as const, label: 'Library', icon: Library},
+          {value: 'explorer' as const, label: t('sidebar.explorer'), icon: FolderTree},
+          {value: 'variables' as const, label: t('sidebar.variables'), icon: BarChart2},
+          {value: 'library' as const, label: t('sidebar.library'), icon: Library},
         ]}
         value={sidebarTab}
         onChange={setSidebarTab}
-        aria-label="Sidebar sections"
+        aria-label={t('sidebar.sectionsAria')}
         panelIdPrefix="sidebar-panel"
         className="h-10 px-2 border-b border-border-default bg-surface-1"
       />
 
-      <div id={`sidebar-panel-${sidebarTab}`} role="tabpanel" aria-label="Sidebar panel" className="flex-1 min-h-0 flex flex-col">
-      {sidebarTab === 'explorer' ? (
-        <>
-          <SearchBar
-            value={searchQuery}
-            onChange={handleQueryChange}
-            disabled={!document}
-            resultCount={searchResults.length}
-            activeIndex={activeResultIndex}
-            onNextResult={nextResult}
-            onPrevResult={prevResult}
-          />
-
-          {document && (
-            <FilterChips
-              chips={filterChips}
-              activeTypes={visibleTypes}
-              onToggle={handleToggleType}
-              onSelectAll={handleSelectAll}
+      <div
+        id={`sidebar-panel-${sidebarTab}`}
+        role="tabpanel"
+        aria-label={t('sidebar.panelAria')}
+        className="flex-1 min-h-0 flex flex-col"
+      >
+        {sidebarTab === 'explorer' ? (
+          <>
+            <SearchBar
+              value={searchQuery}
+              onChange={handleQueryChange}
+              disabled={!document}
+              resultCount={searchResults.length}
+              activeIndex={activeResultIndex}
+              onNextResult={nextResult}
+              onPrevResult={prevResult}
             />
-          )}
 
-          {document ? (
-            <FlowTree
-              document={document}
-              selectedBlockId={selectedBlockId}
-              visibleBlockId={visibleBlockId}
-              selectedSubflowId={selectedSubflowId}
-              expandedSubflowIds={expandedSubflowIds}
-              expandedBlockIds={expandedBlockIds}
-              visibleTypes={visibleTypes}
-              searchQuery={searchQuery}
-              matchedBlockIds={matchedBlockIds}
-              searchHighlights={searchHighlightsMap}
-              findingCounts={findingCounts}
-              onSelectBlock={handleSelectBlock}
-              onSelectSubflow={id => {
-                selectSubflow(id)
-                if (isSystemView(useUIStore.getState().mainPaneView)) {
-                  useUIStore.getState().setMainPaneView('block')
-                }
-              }}
-              onToggleSubflowExpand={toggleSubflowExpand}
-              onToggleBlockExpand={toggleBlockExpand}
-            />
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-              <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4">
-                <FolderOpen size={28} className="text-text-tertiary" />
+            {document && (
+              <FilterChips
+                chips={filterChips}
+                activeTypes={visibleTypes}
+                onToggle={handleToggleType}
+                onSelectAll={handleSelectAll}
+              />
+            )}
+
+            {document ? (
+              <FlowTree
+                document={document}
+                selectedBlockId={selectedBlockId}
+                visibleBlockId={visibleBlockId}
+                selectedSubflowId={selectedSubflowId}
+                expandedSubflowIds={expandedSubflowIds}
+                expandedBlockIds={expandedBlockIds}
+                visibleTypes={visibleTypes}
+                searchQuery={searchQuery}
+                matchedBlockIds={matchedBlockIds}
+                searchHighlights={searchHighlightsMap}
+                findingCounts={findingCounts}
+                onSelectBlock={handleSelectBlock}
+                onSelectSubflow={id => {
+                  selectSubflow(id)
+                  if (isSystemView(useUIStore.getState().mainPaneView)) {
+                    useUIStore.getState().setMainPaneView('block')
+                  }
+                }}
+                onToggleSubflowExpand={toggleSubflowExpand}
+                onToggleBlockExpand={toggleBlockExpand}
+              />
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+                <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4">
+                  <FolderOpen size={28} className="text-text-tertiary" />
+                </div>
+                <h3 className="text-sm font-semibold text-text-primary mb-1">{t('sidebar.noFlowTitle')}</h3>
+                <p className="text-xs text-text-tertiary mb-4 leading-relaxed">{t('sidebar.noFlowBody')}</p>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="primary" onClick={handleOpenFile}>
+                    {t('sidebar.openFile')}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={handleOpenFolder}>
+                    {t('sidebar.openFolder')}
+                  </Button>
+                </div>
               </div>
-              <h3 className="text-sm font-semibold text-text-primary mb-1">No flow loaded</h3>
-              <p className="text-xs text-text-tertiary mb-4 leading-relaxed">
-                Open a PAD flow export file or folder to begin analysis.
-              </p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="primary" onClick={handleOpenFile}>
-                  Open file
-                </Button>
-                <Button size="sm" variant="secondary" onClick={handleOpenFolder}>
-                  Open folder
-                </Button>
-              </div>
-            </div>
-          )}
-        </>
-      ) : sidebarTab === 'variables' ? (
-        <VariablesTab />
-      ) : (
-        <LibraryTab />
-      )}
+            )}
+          </>
+        ) : sidebarTab === 'variables' ? (
+          <VariablesTab />
+        ) : (
+          <LibraryTab />
+        )}
       </div>
-
 
       <SidebarToolbar hasFlow={!!document} isAnalyzing={isAnalyzing} onAnalyze={handleAnalyze} />
     </div>

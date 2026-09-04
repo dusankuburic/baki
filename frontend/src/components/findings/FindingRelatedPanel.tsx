@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {severityTone} from '@/lib/severityTone'
 import clsx from 'clsx'
 import type {Finding} from '@/types'
@@ -10,14 +11,15 @@ interface Props {
 }
 
 export default function FindingRelatedPanel({related, relatedLoading, relatedError, onRetry}: Props) {
+  const {t} = useTranslation('findings')
   return (
     <div className="mx-4 mb-2 ml-9 px-3 py-2 bg-surface-3 border border-border-subtle rounded space-y-1">
-      <span className="text-2xs font-bold uppercase tracking-wider text-text-tertiary">Related findings</span>
+      <span className="text-2xs font-bold uppercase tracking-wider text-text-tertiary">{t('related.heading')}</span>
       {relatedLoading ? (
-        <span className="text-2xs text-text-tertiary">Loading…</span>
+        <span className="text-2xs text-text-tertiary">{t('related.loading')}</span>
       ) : relatedError ? (
         <div className="flex items-center gap-2 text-2xs text-text-tertiary">
-          <span>Couldn't load related findings.</span>
+          <span>{t('related.loadFailed')}</span>
           <button onClick={onRetry} className="text-brand-400 hover:text-brand-300 font-medium">
             Retry
           </button>
@@ -25,20 +27,13 @@ export default function FindingRelatedPanel({related, relatedLoading, relatedErr
       ) : related && related.length > 0 ? (
         related.map(r => (
           <div key={r.id} className="flex items-center gap-2 text-2xs">
-            <span
-              className={clsx(
-                'font-bold uppercase',
-                severityTone(r.severity).text,
-              )}
-            >
-              {r.severity}
-            </span>
+            <span className={clsx('font-bold uppercase', severityTone(r.severity).text)}>{r.severity}</span>
             <span className="text-text-secondary truncate">{r.title}</span>
             <span className="text-text-tertiary shrink-0">{r.ruleId}</span>
           </div>
         ))
       ) : (
-        <span className="text-2xs text-text-tertiary">No other findings for this block.</span>
+        <span className="text-2xs text-text-tertiary">{t('related.empty')}</span>
       )}
     </div>
   )

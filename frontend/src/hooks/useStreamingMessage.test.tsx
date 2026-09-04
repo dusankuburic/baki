@@ -50,6 +50,10 @@ function makeHandler() {
     onDone: vi.fn(),
     onError: vi.fn(),
     onToolStatus: vi.fn(),
+    onToolResult: vi.fn(),
+    onFixProposal: vi.fn(),
+    onFixDecision: vi.fn(),
+    onResumeState: vi.fn(),
     onAppend: vi.fn(),
     getAccLength: vi.fn(() => 0),
   }
@@ -213,5 +217,56 @@ describe('stall probe', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     await vi.advanceTimersByTimeAsync(30_000)
     expect(handler.onError).toHaveBeenCalledWith(expect.stringContaining('stalled'), 's1')
+  })
+})
+
+// Regression: the live SSE dispatch must forward a fix_decision's per-item
+// outcomes. parseChatEvent has always produced `items[]` for batch decisions and
+// useChatStreamEngine.onFixDecision has always accepted them, but the
+// StreamHandler signature stopped at 4 parameters and the dispatch dropped
+// `parsed.items` on the floor. A batch where 3 of 5 fixes applied and 2 errored
+// therefore rendered all 5 rows identically — until an SSE reconnect, whose
+// separate onResumeState path DID honour the items, making the bug intermittent.
+//
+// These assertions run against the real dispatcher (not a hand-rolled handler
+// type), which is the whole point: the previous test for this behaviour declared
+// its own 5-arg interface and invoked it directly, so it exercised a contract no
+// production code implemented.
+describe('fix_decision dispatch', () => {
+  function fixDecisionEvent(streamId: string, data: Record<string, unknown>) {
+    return {name: 'chat:event', data: {streamId, type: 'fix_decision', data}}
+  }
+
+  it('forwards per-item outcomes from a batch decision', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    capturedCb!(
+      fixDecisionEvent('s1', {
+        proposalId: 'batch-1',
+        status: 'applied-unresolved',
+        message: 'review',
+        items: [
+          {ruleId: 'r1', status: 'applied'},
+          {ruleId: 'r2', status: 'error', message: 'still appears'},
+        ],
+      }),
+    )
+
+    expect(handler.onFixDecision).toHaveBeenCalledWith('batch-1', 'applied-unresolved', 'review', 's1', [
+      {ruleId: 'r1', status: 'applied', message: undefined},
+      {ruleId: 'r2', status: 'error', message: 'still appears'},
+    ])
+  })
+
+  it('passes undefined items for a single-fix decision', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    capturedCb!(fixDecisionEvent('s1', {proposalId: 'p1', status: 'applied'}))
+
+    expect(handler.onFixDecision).toHaveBeenCalledWith('p1', 'applied', undefined, 's1', undefined)
   })
 })

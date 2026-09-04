@@ -17,7 +17,13 @@ export type ChatEvent =
   | {kind: 'tool'; label: string}
   | {kind: 'tool-result'; name: string; label: string; ok: boolean; durationMs: number; summary: string}
   | {kind: 'fix-proposal'; proposalId: string; items: FixProposalEventItem[]}
-  | {kind: 'fix-decision'; proposalId: string; status: string; message?: string; items?: {ruleId: string; status: string; message?: string}[]}
+  | {
+      kind: 'fix-decision'
+      proposalId: string
+      status: string
+      message?: string
+      items?: {ruleId: string; status: string; message?: string}[]
+    }
 
 // FixProposalEventItem is one fix inside a proposal event (single-fix events
 // carry one item synthesized from the flat fields).
@@ -127,7 +133,13 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
           if (rid && st) items.push({ruleId: rid, status: st, message: asString(rec.message) ?? undefined})
         }
       }
-      return {kind: 'fix-decision', proposalId, status, message: asString(data.message) ?? undefined, items: items.length > 0 ? items : undefined}
+      return {
+        kind: 'fix-decision',
+        proposalId,
+        status,
+        message: asString(data.message) ?? undefined,
+        items: items.length > 0 ? items : undefined,
+      }
     }
     default:
       return null

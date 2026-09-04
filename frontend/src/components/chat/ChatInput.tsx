@@ -1,17 +1,21 @@
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Square, Eye, ArrowUp, Maximize2, FileText, X} from 'lucide-react'
 import {useRef, useEffect, useCallback, useState, useMemo} from 'react'
+import type {SourceFileInfo} from '@/types'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import FileAutocomplete from './FileAutocomplete'
 import SlashCommandAutocomplete, {type SlashCommand} from './SlashCommandAutocomplete'
 import ExpandedChatInput from './ExpandedChatInput'
+import ChatUsageMeter from './ChatUsageMeter'
+
+const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
 interface Props {
   onSend: (text: string, files: string[], excludeContext?: boolean) => void
   onPreview?: (text: string, files: string[], excludeContext?: boolean) => void
   onCancel?: () => void
-  onFilesChange?: (files: string[]) => void
   onClearThread?: () => void
   onShowHelp?: () => void
   disabled?: boolean
@@ -21,13 +25,20 @@ interface Props {
   onQueue?: (text: string, files: string[], excludeContext?: boolean) => void
   queued?: {text: string; files: string[]; excludeContext?: boolean} | null
   onCancelQueue?: () => void
+  // The flow's source files, for @-mention completion. Owned by AITab so the
+  // menu does not refetch the same list every time it opens.
+  sourceFiles?: SourceFileInfo[]
+  // Thread usage totals, rendered in the composer's always-present footer.
+  promptTokens?: number
+  completionTokens?: number
+  inputCostPerM?: number
+  outputCostPerM?: number
 }
 
 export default function ChatInput({
   onSend,
   onPreview,
   onCancel,
-  onFilesChange,
   onClearThread,
   onShowHelp,
   disabled,
@@ -35,18 +46,48 @@ export default function ChatInput({
   onQueue,
   queued,
   onCancelQueue,
+  sourceFiles = EMPTY_SOURCE_FILES,
+  promptTokens = 0,
+  completionTokens = 0,
+  inputCostPerM,
+  outputCostPerM,
 }: Props) {
   const [value, setValue] = useState('')
+  const {t} = useTranslation('chat')
   const [autocompleteQuery, setAutocompleteQuery] = useState<string | null>(null)
   const [slashQuery, setSlashQuery] = useState<string | null>(null)
+  // A menu only OWNS the keyboard while it has something to pick. Gating on
+  // `query !== null` alone dead-ended Enter whenever the query matched nothing
+  // ("/xyz" + Enter did nothing at all): the popup had already rendered null,
+  // so no one handled the key and the composer had bowed out.
+  const [fileMatches, setFileMatches] = useState(0)
+  const [slashMatches, setSlashMatches] = useState(0)
   const [isExpanded, setIsExpanded] = useState(false)
+  const isExpandedRef = useRef(false)
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [excludeContext, setExcludeContext] = useState(false)
   const [taggedFiles, setTaggedFiles] = useState<string[]>([])
 
+  // Two textareas exist while the expanded editor is open (the inline one
+  // stays mounted behind the modal), so selection-dependent helpers must act
+  // on whichever one the user is actually typing in.
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const expandedRef = useRef<HTMLTextAreaElement>(null)
+  const activeTextarea = useCallback(
+    () => (isExpandedRef.current ? expandedRef.current : textareaRef.current),
+    [],
+  )
   const valueRef = useRef(value)
-  valueRef.current = value
+  // Synced in a commit-phase effect rather than assigned during render:
+  // mutating a ref while rendering is not safe under concurrent rendering
+  // (a render can be discarded, leaving the ref describing a tree that was
+  // never committed). The draft-flush cleanup only reads this after commit.
+  useEffect(() => {
+    valueRef.current = value
+  })
+  useEffect(() => {
+    isExpandedRef.current = isExpanded
+  }, [isExpanded])
 
   const activeThreadId = useChatStore(s => s.activeThreadId)
   const setDraft = useChatStore(s => s.setDraft)
@@ -59,6 +100,8 @@ export default function ChatInput({
   // the whole drafts map (which would re-seed mid-typing). Cleared on send.
   useEffect(() => {
     if (!activeThreadId) return
+    // Seeds the composer from the persisted draft store when the thread changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setValue(useChatStore.getState().drafts[activeThreadId] ?? '')
     const threadId = activeThreadId
     return () => {
@@ -72,16 +115,18 @@ export default function ChatInput({
   // is what the user sees. Cleared once consumed.
   useEffect(() => {
     if (!stagedPrompt || stagedPrompt.threadId !== activeThreadId) return
+    // Consumes a one-shot staged prompt handed over by another component.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setValue(stagedPrompt.text)
     setStagedPrompt(null)
     requestAnimationFrame(() => {
-      const el = textareaRef.current
+      const el = activeTextarea()
       if (el) {
         el.focus()
         el.setSelectionRange(el.value.length, el.value.length)
       }
     })
-  }, [stagedPrompt, activeThreadId, setStagedPrompt])
+  }, [stagedPrompt, activeThreadId, setStagedPrompt, activeTextarea])
   // Per-thread streaming: the Send/Stop toggle reflects ONLY the active thread
   // so the user can keep composing in other idle threads while one generates.
   const streaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
@@ -111,6 +156,10 @@ export default function ChatInput({
       .filter(m => m.role === 'user')
       .map(m => m.content)
       .reverse()
+    // userMsgCount is a deliberate reactivity TRIGGER, not an input: the body
+    // reads history via getState() (a non-reactive snapshot), so without this
+    // dep ArrowUp recall would miss the just-sent message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThreadId, userMsgCount])
 
   // U1.6: streaming no longer disables the TEXTAREA — typing, paste, and
@@ -118,14 +167,27 @@ export default function ChatInput({
   // to the queue instead. `isDisabled` now only gates send-style actions.
   const isDisabled = disabled
   const canQueue = streaming && !disabled && !!onQueue
-  const capTooltip =
-    atCap && !streaming
-      ? `${MAX_CONCURRENT_STREAMS} chats are generating — wait for one to finish or stop it`
-      : undefined
+  const capTooltip = atCap && !streaming ? t('composer.atCap', {count: MAX_CONCURRENT_STREAMS}) : undefined
 
-  useEffect(() => {
-    onFilesChange?.(taggedFiles)
-  }, [taggedFiles, onFilesChange])
+  // NOTE: `taggedFiles` is deliberately NOT mirrored into the thread's
+  // selectedSourceFiles. It is a PER-MESSAGE @-mention override that already
+  // travels to the backend as onSend/onQueue/onPreview's `files` argument
+  // (buildRequest's `overrideFiles`). The thread's persistent selection is owned
+  // by SourceFilePicker. An effect used to push taggedFiles outward, but since
+  // it starts [] and is cleared after every send, it wrote an EMPTY selection on
+  // mount, after each message, and on every thread switch — silently dropping
+  // the user's source-file context from the second message onward.
+
+  // Closing a menu also clears its match count, so a stale non-zero count can
+  // never keep the composer from handling Enter.
+  const closeFileMenu = useCallback(() => {
+    setAutocompleteQuery(null)
+    setFileMatches(0)
+  }, [])
+  const closeSlashMenu = useCallback(() => {
+    setSlashQuery(null)
+    setSlashMatches(0)
+  }, [])
 
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current
@@ -153,6 +215,8 @@ export default function ChatInput({
       setTaggedFiles([])
       setAutocompleteQuery(null)
       setSlashQuery(null)
+      setFileMatches(0)
+      setSlashMatches(0)
       return
     }
     onSend(trimmed, taggedFiles, excludeContext)
@@ -162,6 +226,8 @@ export default function ChatInput({
     setTaggedFiles([])
     setAutocompleteQuery(null)
     setSlashQuery(null)
+    setFileMatches(0)
+    setSlashMatches(0)
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto'
@@ -177,8 +243,9 @@ export default function ChatInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      // Autocomplete navigation is handled by the sub-components via window event listeners
-      if (autocompleteQuery !== null || slashQuery !== null) {
+      // Autocomplete navigation is handled by the sub-components via window
+      // event listeners — but only while they actually have matches to show.
+      if ((autocompleteQuery !== null && fileMatches > 0) || (slashQuery !== null && slashMatches > 0)) {
         return
       }
 
@@ -187,7 +254,7 @@ export default function ChatInput({
         handleSend()
       } else if (
         e.key === 'ArrowUp' &&
-        (value === '' || (textareaRef.current?.selectionStart === 0 && textareaRef.current?.selectionEnd === 0))
+        (value === '' || (activeTextarea()?.selectionStart === 0 && activeTextarea()?.selectionEnd === 0))
       ) {
         // History Up
         if (historyIndex < history.length - 1) {
@@ -204,7 +271,7 @@ export default function ChatInput({
         e.preventDefault()
       }
     },
-    [handleSend, autocompleteQuery, slashQuery, value, history, historyIndex],
+    [handleSend, autocompleteQuery, slashQuery, fileMatches, slashMatches, value, history, historyIndex, activeTextarea],
   )
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -222,6 +289,7 @@ export default function ChatInput({
     if (lastAt !== -1 && lastAt > lastSpace) {
       setAutocompleteQuery(textBefore.slice(lastAt + 1))
       setSlashQuery(null)
+      setSlashMatches(0)
     }
     // Check for / slash commands
     else {
@@ -230,15 +298,18 @@ export default function ChatInput({
       if (lastSlash !== -1 && (lastSlash === 0 || textBefore[lastSlash - 1] === ' ') && lastSlash > lastSpace) {
         setSlashQuery(textBefore.slice(lastSlash + 1))
         setAutocompleteQuery(null)
+        setFileMatches(0)
       } else {
         setAutocompleteQuery(null)
         setSlashQuery(null)
+        setFileMatches(0)
+        setSlashMatches(0)
       }
     }
   }
 
   const handleSelectFile = (filename: string) => {
-    const pos = textareaRef.current?.selectionStart ?? value.length
+    const pos = activeTextarea()?.selectionStart ?? value.length
     const textBefore = value.slice(0, pos)
     const atIdx = textBefore.lastIndexOf('@')
 
@@ -251,8 +322,8 @@ export default function ChatInput({
       setTaggedFiles([...taggedFiles, filename])
     }
 
-    setAutocompleteQuery(null)
-    textareaRef.current?.focus()
+    closeFileMenu()
+    activeTextarea()?.focus()
   }
 
   const handleRemoveFile = (filename: string) => {
@@ -260,7 +331,7 @@ export default function ChatInput({
   }
 
   const handleSelectCommand = (cmd: SlashCommand) => {
-    const pos = textareaRef.current?.selectionStart ?? value.length
+    const pos = activeTextarea()?.selectionStart ?? value.length
     const textBefore = value.slice(0, pos)
     const lastSlash = textBefore.lastIndexOf('/')
 
@@ -268,18 +339,44 @@ export default function ChatInput({
     // Strip the "/cmd" token from the composer and dispatch.
     if (cmd.kind === 'action') {
       setValue(value.slice(0, lastSlash) + value.slice(pos))
-      setSlashQuery(null)
+      closeSlashMenu()
       if (cmd.action === 'clear') onClearThread?.()
       else if (cmd.action === 'help') onShowHelp?.()
-      textareaRef.current?.focus()
+      activeTextarea()?.focus()
       return
     }
 
     const newValue = value.slice(0, lastSlash) + cmd.id + ' ' + value.slice(pos)
     setValue(newValue)
-    setSlashQuery(null)
-    textareaRef.current?.focus()
+    closeSlashMenu()
+    activeTextarea()?.focus()
   }
+
+  // One definition, rendered either inline or inside the expanded editor.
+  // The expanded composer used to silently lose @-mentions and /commands —
+  // exactly the editor a user opens to write a detailed, file-referencing
+  // prompt.
+  const menus = (
+    <>
+      {autocompleteQuery !== null && (
+        <FileAutocomplete
+          query={autocompleteQuery}
+          files={sourceFiles}
+          onSelect={handleSelectFile}
+          onClose={closeFileMenu}
+          onMatchCount={setFileMatches}
+        />
+      )}
+      {slashQuery !== null && (
+        <SlashCommandAutocomplete
+          query={slashQuery}
+          onSelect={handleSelectCommand}
+          onClose={closeSlashMenu}
+          onMatchCount={setSlashMatches}
+        />
+      )}
+    </>
+  )
 
   const hasContent = value.trim().length > 0 || taggedFiles.length > 0
   const tokenEstimate = Math.ceil(value.length / 4)
@@ -330,13 +427,13 @@ export default function ChatInput({
           <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-500/5 border-t border-border-subtle/50 text-2xs text-text-secondary">
             <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-soft shrink-0" />
             <span className="truncate">
-              Queued — sends when the reply finishes: <span className="text-text-primary">{queued.text}</span>
+              {t('composer.queuedPrefix')} <span className="text-text-primary">{queued.text}</span>
             </span>
             {onCancelQueue && (
               <button
                 onClick={onCancelQueue}
                 className="ml-auto shrink-0 text-text-tertiary hover:text-text-primary transition-colors"
-                aria-label="Cancel queued message"
+                aria-label={t('composer.cancelQueued')}
               >
                 <X size={12} />
               </button>
@@ -348,11 +445,8 @@ export default function ChatInput({
           <textarea
             ref={textareaRef}
             className="flex-1 bg-transparent border-none outline-none text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary resize-none py-0 min-h-[20px] max-h-[200px] z-10 scrollbar-none font-sans"
-            placeholder={
-              canQueue
-                ? 'Reply streaming — type and press Enter to queue your next message…'
-                : placeholder || 'Ask anything... (@ to tag files, / for commands)'
-            }
+            aria-label={t('composer.inputAria')}
+            placeholder={canQueue ? t('composer.queuePlaceholder') : placeholder || t('composer.placeholder')}
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
@@ -365,8 +459,8 @@ export default function ChatInput({
               <button
                 onClick={handlePreview}
                 className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-all"
-                title="Preview context"
-                aria-label="Preview context"
+                title={t('composer.previewContext')}
+                aria-label={t('composer.previewContext')}
               >
                 <Eye size={16} />
               </button>
@@ -375,8 +469,8 @@ export default function ChatInput({
             <button
               onClick={() => setIsExpanded(true)}
               className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-all"
-              title="Expand editor"
-              aria-label="Expand editor"
+              title={t('composer.expandEditor')}
+              aria-label={t('composer.expandEditor')}
             >
               <Maximize2 size={16} />
             </button>
@@ -385,8 +479,8 @@ export default function ChatInput({
               <button
                 onClick={onCancel}
                 className="p-1.5 rounded-lg bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20 transition-all border border-semantic-error/20"
-                title="Stop generation"
-                aria-label="Stop generation"
+                title={t('composer.stopGeneration')}
+                aria-label={t('composer.stopGeneration')}
               >
                 <Square size={16} fill="currentColor" />
               </button>
@@ -395,7 +489,7 @@ export default function ChatInput({
                 onClick={handleSend}
                 disabled={!hasContent || isDisabled || atCap}
                 title={capTooltip}
-                aria-label="Send message"
+                aria-label={t('composer.sendMessage')}
                 className={clsx(
                   'p-1.5 rounded-lg transition-all',
                   hasContent && !atCap
@@ -409,54 +503,51 @@ export default function ChatInput({
           </div>
         </div>
 
-        {/* Footer info (optional context toggle) */}
-        {hasContent && !isDisabled && (
-          <div className="flex items-center justify-between px-3 py-1.5 bg-surface-3/50 rounded-b-xl border-t border-border-subtle/50">
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-1.5 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  className="w-3.5 h-3.5 rounded border-border-default bg-surface-2 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-2"
-                  checked={excludeContext}
-                  onChange={e => setExcludeContext(e.target.checked)}
-                />
-                <span className="text-[10px] font-medium text-text-tertiary group-hover:text-text-secondary transition-colors">
-                  Exclude context
-                </span>
-              </label>
-            </div>
-            <span className={clsx('text-[10px] tabular-nums', tokenClass)}>
-              ~{tokenEstimate.toLocaleString()} tokens
+        {/* Footer: ALWAYS rendered. Gating it on `hasContent` made the whole
+            conversation jump on the first keystroke and again on send. */}
+        <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-3/50 rounded-b-xl border-t border-border-subtle/50">
+          <label className="flex items-center gap-1.5 cursor-pointer group shrink-0">
+            <input
+              type="checkbox"
+              className="w-3.5 h-3.5 rounded border-border-default bg-surface-2 text-brand-500 focus:ring-brand-500 focus:ring-offset-surface-2"
+              checked={excludeContext}
+              onChange={e => setExcludeContext(e.target.checked)}
+            />
+            <span className="cq-exclude-label text-[10px] font-medium text-text-tertiary group-hover:text-text-secondary transition-colors">
+              {t('composer.excludeContext')}
             </span>
+          </label>
+          <div className="flex items-center gap-2 min-w-0">
+            {hasContent && (
+              <span className={clsx('text-[10px] tabular-nums shrink-0', tokenClass)}>
+                {t('composer.tokenEstimate', {count: tokenEstimate})}
+              </span>
+            )}
+            <ChatUsageMeter
+              promptTokens={promptTokens}
+              completionTokens={completionTokens}
+              inputCostPerM={inputCostPerM}
+              outputCostPerM={outputCostPerM}
+            />
           </div>
-        )}
+        </div>
 
-        {autocompleteQuery !== null && (
-          <FileAutocomplete
-            query={autocompleteQuery}
-            onSelect={handleSelectFile}
-            onClose={() => setAutocompleteQuery(null)}
-          />
-        )}
-
-        {slashQuery !== null && (
-          <SlashCommandAutocomplete
-            query={slashQuery}
-            onSelect={handleSelectCommand}
-            onClose={() => setSlashQuery(null)}
-          />
-        )}
+        {!isExpanded && menus}
       </div>
 
       {isExpanded && (
         <ExpandedChatInput
           value={value}
-          onChange={setValue}
+          textareaRef={expandedRef}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
           onSend={handleSend}
-          onPreview={handlePreview || (() => {})}
+          onPreview={onPreview ? handlePreview : undefined}
           onClose={() => setIsExpanded(false)}
           excludeContext={excludeContext}
           onExcludeContextChange={setExcludeContext}
+          canSend={hasContent && !isDisabled}
+          menus={menus}
         />
       )}
     </div>

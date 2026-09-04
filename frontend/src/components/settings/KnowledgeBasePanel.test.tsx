@@ -57,7 +57,9 @@ beforeEach(() => {
 describe('KnowledgeBasePanel', () => {
   it('shows upload + re-index controls to admins', async () => {
     seedStore('admin')
-    requestMock.mockResolvedValue([{id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 3, vectorIndexed: 3}])
+    requestMock.mockResolvedValue([
+      {id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 3, vectorIndexed: 3},
+    ])
     renderPanel()
 
     expect(await screen.findByText('guide.md')).toBeInTheDocument()
@@ -80,7 +82,9 @@ describe('KnowledgeBasePanel', () => {
 
   it('marks stranded documents (chunks but none searchable)', async () => {
     seedStore('admin')
-    requestMock.mockResolvedValue([{id: 'd1', filename: 'old.md', createdAt: new Date().toISOString(), chunkCount: 5, vectorIndexed: 0}])
+    requestMock.mockResolvedValue([
+      {id: 'd1', filename: 'old.md', createdAt: new Date().toISOString(), chunkCount: 5, vectorIndexed: 0},
+    ])
     renderPanel()
 
     expect(await screen.findByText('old.md')).toBeInTheDocument()
@@ -95,7 +99,9 @@ describe('KnowledgeBasePanel', () => {
 
   it('re-indexes after confirmation and reports the outcome', async () => {
     seedStore('admin')
-    requestMock.mockResolvedValue([{id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 2, vectorIndexed: 2}])
+    requestMock.mockResolvedValue([
+      {id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 2, vectorIndexed: 2},
+    ])
     renderPanel()
     // Toolbar trigger first (exact label avoids also matching the dialog's
     // confirm button once it opens).
@@ -105,7 +111,10 @@ describe('KnowledgeBasePanel', () => {
     fireEvent.click(within(dialog).getByRole('button', {name: 'Re-index'}))
 
     await waitFor(() =>
-      expect(requestMock).toHaveBeenCalledWith('/api/orgs/org-1/knowledge/reindex', expect.objectContaining({body: {}})),
+      expect(requestMock).toHaveBeenCalledWith(
+        '/api/orgs/org-1/knowledge/reindex',
+        expect.objectContaining({body: {}}),
+      ),
     )
     requestMock.mockResolvedValue({chunks: 7, docs: 2})
     // Toast content is opaque here; the call + no error state is the contract.
@@ -122,7 +131,10 @@ describe('KnowledgeBasePanel', () => {
 
     requestMock.mockRejectedValue(new ApiError('embedding provider not configured', 400, 'EMBEDDING_NOT_CONFIGURED'))
     await waitFor(() =>
-      expect(requestMock).toHaveBeenCalledWith('/api/orgs/org-1/knowledge/reindex', expect.objectContaining({body: {}})),
+      expect(requestMock).toHaveBeenCalledWith(
+        '/api/orgs/org-1/knowledge/reindex',
+        expect.objectContaining({body: {}}),
+      ),
     )
   })
 })

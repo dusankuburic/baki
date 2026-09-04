@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -42,9 +43,18 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 	// email (not user_id), and owned flows' blob content must be cleaned up.
 	var email string
 	if err := tx.QueryRowContext(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email); err != nil {
-		// B1.8: a transient scan error used to silently skip the
-		// org_invites cleanup keyed by email — a gap in an audited GDPR flow.
-		return fmt.Errorf("erasure: read user email: %w", err)
+		// B1.8: a TRANSIENT scan error used to silently skip the org_invites
+		// cleanup keyed by email — a gap in an audited GDPR flow, so it must
+		// propagate. But "no rows" is not transient: it is the documented
+		// idempotent case (the user is already erased, or never existed).
+		// Treating it as an error broke DeleteUser's idempotency contract.
+		// The email is simply unknown here, which the `if email != ""` guard
+		// on the org_invites delete below already handles — so fall through
+		// and let the remaining per-user sweeps run, which cleans up any
+		// residue a partial prior erasure left behind.
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("erasure: read user email: %w", err)
+		}
 	}
 
 	ownedFlowIDs, err := rowsOfStrings(ctx, tx, `SELECT id FROM flows WHERE owner_id = $1`, userID)
@@ -129,10 +139,22 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 	// default page size, so a single call would silently truncate the export
 	// for users with more flows than one page — unacceptable for a
 	// data-subject access request, which must be complete.
+	//
+	// FlowSortIDAsc, not the default: this walk pages with LIMIT/OFFSET, and
+	// the default ordering is on updated_at — a MUTABLE column. A flow saved
+	// while the export runs (the user in another tab, or a collaborator on a
+	// shared flow) jumps to the front of that ordering and pushes the row on
+	// the next page boundary out of the walk entirely. The completeness guards
+	// below then run only over the flows that survived it, so the export would
+	// pass every check it makes and still be missing data. Ordering on the
+	// immutable primary key means an update cannot move a row.
 	const exportPageSize = 500 // ListFlows' maximum page size
 	var flows []*interfaces.FlowDocument
 	for offset := 0; ; offset += exportPageSize {
-		page, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: userID, Limit: exportPageSize, Offset: offset})
+		page, err := b.ListFlows(ctx, interfaces.FlowFilter{
+			UserID: userID, SortBy: interfaces.FlowSortIDAsc,
+			Limit: exportPageSize, Offset: offset,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("export: list flows: %w", err)
 		}
@@ -218,8 +240,14 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 		return err
 	}
 	first := true
+	// Immutable ordering, for the same reason as ExportUserData above: a
+	// concurrent save must not be able to drop a flow from a data-subject
+	// export.
 	for offset := 0; ; offset += exportFlowPageSize {
-		page, err := b.ListFlows(ctx, interfaces.FlowFilter{UserID: userID, Limit: exportFlowPageSize, Offset: offset})
+		page, err := b.ListFlows(ctx, interfaces.FlowFilter{
+			UserID: userID, SortBy: interfaces.FlowSortIDAsc,
+			Limit: exportFlowPageSize, Offset: offset,
+		})
 		if err != nil {
 			return fmt.Errorf("export: list flows: %w", err)
 		}

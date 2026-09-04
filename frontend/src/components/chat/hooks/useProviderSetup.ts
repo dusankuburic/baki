@@ -3,7 +3,7 @@ import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, providersApi} from '@/api'
 import {logger} from '@/lib/logger'
-import type {ProviderID, ModelDetail, ProviderInfo} from '@/types'
+import type {AISettings, ProviderID, ModelDetail, ProviderInfo} from '@/types'
 
 export interface ProviderOption {
   id: string
@@ -81,7 +81,11 @@ export function useProviderSetup() {
   }, [setProvider, updateAI, providerEpoch])
 
   useEffect(() => {
-    const config = aiSettingsProvidersRef.current[provider as keyof typeof aiSettings.providers]
+    // Keyed off the TYPE, not the live `aiSettings` value: referencing the
+    // value here (even only in a type position) made exhaustive-deps demand
+    // `aiSettings` as a dependency, which would re-run this on every
+    // unrelated settings write.
+    const config = aiSettingsProvidersRef.current[provider as keyof AISettings['providers']]
     const prov = providers.find(p => p.id === provider)
     const model = config?.defaultModel || prov?.defaultModel || ''
     setSelectedModel(prev => (prev === model ? prev : model))
@@ -89,6 +93,8 @@ export function useProviderSetup() {
 
   useEffect(() => {
     if (provider !== 'demo') {
+      // Clears a remotely-sourced counter that does not apply to non-demo providers.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void setDemoRemaining(null)
       return
     }

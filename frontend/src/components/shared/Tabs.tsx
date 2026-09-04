@@ -23,7 +23,14 @@ interface TabsProps<T extends string> {
   className?: string
 }
 
-export default function Tabs<T extends string>({items, value, onChange, 'aria-label': ariaLabel, panelIdPrefix, className}: TabsProps<T>) {
+export default function Tabs<T extends string>({
+  items,
+  value,
+  onChange,
+  'aria-label': ariaLabel,
+  panelIdPrefix,
+  className,
+}: TabsProps<T>) {
   const stripRef = useRef<HTMLDivElement>(null)
 
   const focusAndSelect = (idx: number) => {
@@ -81,7 +88,9 @@ export default function Tabs<T extends string>({items, value, onChange, 'aria-la
               'flex-1 min-w-0 overflow-hidden flex items-center justify-center gap-1.5 h-7 px-2 text-xs font-medium',
               'rounded-md transition-colors duration-fast',
               'focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:outline-none',
-              selected ? 'bg-surface-3 text-text-primary shadow-xs' : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-2',
+              selected
+                ? 'bg-surface-3 text-text-primary shadow-xs'
+                : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-2',
             )}
             onClick={() => onChange(item.value)}
           >

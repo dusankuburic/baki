@@ -124,7 +124,18 @@ describe('ChatInput', () => {
 
   it('disables Send when streaming', () => {
     useChatStore.setState({
-      streams: {threadA: {streamId: 's1', messageId: 'm1', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []}},
+      streams: {
+        threadA: {
+          streamId: 's1',
+          messageId: 'm1',
+          text: '',
+          isThinking: true,
+          tokens: 0,
+          toolStatus: null,
+          toolCalls: [],
+          fixProposals: [],
+        },
+      },
     })
     render(<ChatInput onSend={vi.fn()} />)
 

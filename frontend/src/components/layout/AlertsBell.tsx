@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useEffect, useRef} from 'react'
 import {Bell, X, CheckCheck, Trash2, ChevronRight} from 'lucide-react'
 import clsx from 'clsx'
@@ -32,6 +33,7 @@ export default function AlertsBell() {
 }
 
 function AlertsBellInner() {
+  const {t} = useTranslation('shell')
   const unreadCount = useGovernanceStore(s => s.unreadCount)
   const panelOpen = useGovernanceStore(s => s.panelOpen)
   const openPanel = useGovernanceStore(s => s.openPanel)
@@ -62,8 +64,8 @@ function AlertsBellInner() {
       <button
         onClick={() => (panelOpen ? closePanel() : openPanel())}
         className="relative w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
-        title="Governance alerts"
-        aria-label="Governance alerts"
+        title={t('alerts.bell')}
+        aria-label={t('alerts.bell')}
         aria-expanded={panelOpen}
       >
         <Bell size={12} />
@@ -79,6 +81,7 @@ function AlertsBellInner() {
 }
 
 function AlertsPanel() {
+  const {t} = useTranslation('shell')
   const alerts = useGovernanceStore(s => s.alerts)
   const loading = useGovernanceStore(s => s.loading)
   const dismiss = useGovernanceStore(s => s.dismiss)
@@ -104,21 +107,21 @@ function AlertsPanel() {
   return (
     <div className="absolute right-0 top-7 w-80 max-h-96 flex flex-col bg-surface-1 border border-border-default rounded-md shadow-xl overflow-hidden z-modal animate-palette">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
-        <span className="text-xs font-medium text-text-secondary">Governance alerts</span>
+        <span className="text-xs font-medium text-text-secondary">{t('alerts.heading')}</span>
         <div className="flex items-center gap-1">
           {hasDismissed && (
             <button
               onClick={() => void clear()}
               className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast"
-              title="Clear dismissed alerts"
+              title={t('alerts.clearDismissed')}
             >
-              <Trash2 size={11} /> Clear
+              <Trash2 size={11} /> {t('alerts.clear')}
             </button>
           )}
           <button
             onClick={closePanel}
             className="w-5 h-5 flex items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast"
-            aria-label="Close alerts"
+            aria-label={t('alerts.close')}
           >
             <X size={12} />
           </button>
@@ -127,11 +130,11 @@ function AlertsPanel() {
 
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="py-8 text-center text-xs text-text-tertiary">Loading…</div>
+          <div className="py-8 text-center text-xs text-text-tertiary">{t('alerts.loading')}</div>
         ) : alerts.length === 0 ? (
           <div className="py-10 text-center text-xs text-text-tertiary flex flex-col items-center gap-2">
             <CheckCheck size={20} className="text-text-disabled" />
-            No governance alerts
+            {t('alerts.empty')}
           </div>
         ) : (
           alerts.map(a => (
@@ -157,10 +160,17 @@ function AlertRow({
   onDismiss: () => void
   onOpenFlow: () => void
 }) {
+  const {t} = useTranslation('shell')
   const isRegression = alert.type === 'health_regression'
   // Personal alert types get a friendlier chip than the raw severity: an
   // assignment is an action item, not an error state.
-  const chip = isRegression ? 'health' : alert.type === 'finding_assigned' ? 'assigned' : alert.type === 'comment_added' ? 'comment' : alert.severity
+  const chip = isRegression
+    ? 'health'
+    : alert.type === 'finding_assigned'
+      ? 'assigned'
+      : alert.type === 'comment_added'
+        ? 'comment'
+        : alert.severity
   return (
     <div
       className={clsx(
@@ -174,7 +184,7 @@ function AlertRow({
             'mt-0.5 px-1 py-0.5 rounded text-2xs font-medium shrink-0',
             alert.type === 'finding_assigned' || alert.type === 'comment_added'
               ? 'bg-brand-500/10 text-brand-400'
-              : sevChip[alert.severity] ?? sevChip.warning,
+              : (sevChip[alert.severity] ?? sevChip.warning),
           )}
         >
           {chip}
@@ -191,8 +201,8 @@ function AlertRow({
         <button
           onClick={onDismiss}
           className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast shrink-0"
-          title="Dismiss"
-          aria-label="Dismiss alert"
+          title={t('alerts.dismiss')}
+          aria-label={t('alerts.dismissAlert')}
         >
           <X size={11} />
         </button>

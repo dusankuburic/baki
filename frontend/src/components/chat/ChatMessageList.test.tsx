@@ -8,21 +8,27 @@ import type {ChatMessage} from '@/types'
 // with a passthrough that renders every row AND the footer, mirroring the
 // FindingsTab test convention. The tests assert on wiring (data →
 // itemContent, footer rendering), not on windowing behavior.
+//
+// `context` is forwarded exactly as the real Virtuoso does: it is how the
+// per-render footer reaches a components object that must keep a stable
+// identity (rebuilding that object remounts the whole scroller).
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data = [],
     itemContent,
     components,
+    context,
   }: {
     data?: unknown[]
     itemContent: (i: number, item: unknown) => ReactNode
-    components?: {Footer?: () => ReactNode}
+    components?: {Footer?: (props: {context?: unknown}) => ReactNode}
+    context?: unknown
   }) => (
     <div>
       {data.map((item, i) => (
         <div key={i}>{itemContent(i, item)}</div>
       ))}
-      {components?.Footer ? <components.Footer /> : null}
+      {components?.Footer ? <components.Footer context={context} /> : null}
     </div>
   ),
 }))

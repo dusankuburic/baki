@@ -53,8 +53,12 @@ func TestFlowService_FindBlockByID_nil_doc(t *testing.T) {
 
 func TestFlowService_FindBlockByID_found(t *testing.T) {
 	svc, doc := makeTestDoc(t, simpleFlow)
+	// Fatal, not Skip: simpleFlow is a fixture in this file, not an
+	// environment dependency. If it ever stops yielding blocks the parser has
+	// regressed — skipping would retire this test silently at exactly the
+	// moment it matters.
 	if len(doc.Subflows) == 0 || len(doc.Subflows[0].Blocks) == 0 {
-		t.Skip("no blocks parsed")
+		t.Fatal("fixture parsed to zero blocks — parser regression, or simpleFlow changed")
 	}
 	firstBlock := &doc.Subflows[0].Blocks[0]
 	found := svc.FindBlockByID(doc, firstBlock.ID)
@@ -75,8 +79,12 @@ func TestFlowService_FindBlockByID_unknown(t *testing.T) {
 
 func TestFlowService_FindSubflowForBlock_found(t *testing.T) {
 	svc, doc := makeTestDoc(t, simpleFlow)
+	// Fatal, not Skip: simpleFlow is a fixture in this file, not an
+	// environment dependency. If it ever stops yielding blocks the parser has
+	// regressed — skipping would retire this test silently at exactly the
+	// moment it matters.
 	if len(doc.Subflows) == 0 || len(doc.Subflows[0].Blocks) == 0 {
-		t.Skip("no blocks parsed")
+		t.Fatal("fixture parsed to zero blocks — parser regression, or simpleFlow changed")
 	}
 	firstBlock := &doc.Subflows[0].Blocks[0]
 	sf := svc.FindSubflowForBlock(doc, firstBlock.ID)

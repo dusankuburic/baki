@@ -77,10 +77,21 @@ func TestSearchKnowledge_Pgvector_ServerSideRanking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchKnowledge: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d chunks, want 3", len(got))
+	// "far" is exactly orthogonal to the query — cosine similarity 0.0, below
+	// the relevance floor both paths apply — so two chunks come back, ordered
+	// nearest first. The original expectation here was 3 with far last, which
+	// contradicted the documented cutoff on BOTH implementations; it went
+	// unnoticed because this test skips wherever pgvector is absent, including
+	// CI, so it had never executed.
+	if len(got) != 2 {
+		t.Fatalf("got %d chunks, want 2 (k-far is below the relevance floor)", len(got))
 	}
-	if got[0].ID != "k-near" || got[2].ID != "k-far" {
-		t.Errorf("server-side ranking = [%s %s %s], want near…far", got[0].ID, got[1].ID, got[2].ID)
+	if got[0].ID != "k-near" || got[1].ID != "k-mid" {
+		t.Errorf("server-side ranking = [%s %s], want [k-near k-mid]", got[0].ID, got[1].ID)
+	}
+	for _, c := range got {
+		if c.ID == "k-far" {
+			t.Error("orthogonal chunk k-far should have been filtered out as irrelevant")
+		}
 	}
 }

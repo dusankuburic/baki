@@ -168,9 +168,23 @@ type ServerConfig struct {
 	TrustedProxies []string // IPs of trusted reverse proxies for rate limiting
 	StaticDir      string   // Directory for static frontend assets
 	// MetricsToken, when set, additionally requires a matching bearer token on
-	// /metrics (defense-in-depth against a misconfigured NSG exposing the
-	// endpoint publicly). Empty = IP-allowlist only (default).
+	// /metrics and /debug/pprof (defense-in-depth against a misconfigured NSG
+	// exposing the endpoints publicly). Empty = IP-allowlist only (default).
+	//
+	// The IP allowlist alone is NOT sufficient behind a reverse proxy: it keys
+	// off r.RemoteAddr, which is the proxy's own (private) address for every
+	// external request. Set this whenever BehindProxy is true.
 	MetricsToken string
+	// PprofEnabled registers the /debug/pprof/* handlers. Default false.
+	//
+	// This is opt-in rather than always-on because a profile is a different
+	// class of exposure from a metrics scrape: /debug/pprof/heap dumps live
+	// process memory (JWT signing secret, decrypted provider API keys, flow
+	// content, chat history) and /debug/pprof/profile burns CPU on demand. The
+	// private-IP guard those handlers shared with /metrics is vacuous behind a
+	// proxy, so they were world-reachable on every ACA/reverse-proxy
+	// deployment. Enabling this REQUIRES MetricsToken (see Validate).
+	PprofEnabled bool
 	// KeyVaultURL is the URL of the Azure Key Vault to fetch secrets from.
 	// When set, secrets like PAD_AUTH_SECRET and PAD_DATABASE_URL will be
 	// retrieved from Key Vault if not already provided via ENV.

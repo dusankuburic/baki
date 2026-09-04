@@ -360,3 +360,61 @@ func TestPostgres_RLS_SaveKnowledgeChunks_EnforcesOrgMembership(t *testing.T) {
 		t.Error("RLS leak: outsider's SaveKnowledgeChunks succeeded — the H1 fix has regressed")
 	}
 }
+
+// TestPostgres_RLS_AllTablesForced is the regression guard for migration v19.
+//
+// `ENABLE ROW LEVEL SECURITY` exempts the table OWNER from its own policies;
+// only `FORCE` closes that. Because this deployment runs its migrations at
+// boot, the application role owns every table it queries — so a table with
+// ENABLE-but-no-FORCE has policies that are inert in production while still
+// looking protected in the schema. Ten tables were in that state.
+//
+// Unlike the isolation subtests below, this one is a catalog query, so it runs
+// even when connected as a superuser (which is how CI connects). That is
+// deliberate: it is the only RLS assertion in this file that is guaranteed to
+// execute in CI.
+func TestPostgres_RLS_AllTablesForced(t *testing.T) {
+	b := openTestDB(t)
+
+	rows, err := b.DB().QueryContext(context.Background(), `
+		SELECT c.relname
+		  FROM pg_class c
+		  JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = current_schema()
+		   AND c.relrowsecurity
+		   AND NOT c.relforcerowsecurity
+		 ORDER BY c.relname`)
+	if err != nil {
+		t.Fatalf("query pg_class: %v", err)
+	}
+	defer rows.Close()
+
+	var unforced []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		unforced = append(unforced, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(unforced) > 0 {
+		t.Errorf("tables have RLS enabled but not FORCED (their policies do not apply to the owning app role): %v\n"+
+			"add `ALTER TABLE <name> FORCE ROW LEVEL SECURITY;` in a new migration", unforced)
+	}
+
+	// Sanity: the query must actually be looking at RLS tables, otherwise an
+	// empty result would pass vacuously (e.g. wrong schema, migrations not run).
+	var enabled int
+	if err := b.DB().QueryRowContext(context.Background(), `
+		SELECT count(*) FROM pg_class c
+		  JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = current_schema() AND c.relrowsecurity`).Scan(&enabled); err != nil {
+		t.Fatalf("count rls tables: %v", err)
+	}
+	if enabled < 12 {
+		t.Errorf("expected >=12 RLS-enabled tables, found %d — migrations may not have run", enabled)
+	}
+}

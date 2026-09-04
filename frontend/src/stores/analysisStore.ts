@@ -114,10 +114,7 @@ interface AnalysisState {
   // triageFindingsBatch applies one triage patch (status and/or assignee) to
   // many findings: optimistic triageMap update + ONE persisted batch request
   // (U4.4 bulk triage). prev entries are snapshotted for rollback.
-  triageFindingsBatch: (
-    findings: Finding[],
-    patch: {status?: TriageStatus; assigneeId?: string | null},
-  ) => void
+  triageFindingsBatch: (findings: Finding[], patch: {status?: TriageStatus; assigneeId?: string | null}) => void
   assignFinding: (finding: Finding, assigneeId: string | null) => void
   loadBaseline: (flowId: string) => Promise<void>
   handleSetBaseline: () => Promise<void>

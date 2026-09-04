@@ -101,7 +101,7 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     ctx.fillStyle = brand
     ctx.fillRect(vpX1, vpY1, vpX2 - vpX1, vpY2 - vpY1)
     ctx.globalAlpha = 1
-  }, [cy, width, height, getDotColor])
+  }, [cy, width, height, getDotColor, tokens?.brand500])
 
   // Pan the main graph so the clicked/dragged minimap point is centered.
   const panToMinimapPoint = useCallback(

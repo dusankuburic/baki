@@ -38,6 +38,8 @@ export function useAsync<T>(fn: (signal: AbortSignal) => Promise<T>, deps: React
   useEffect(() => {
     const controller = new AbortController()
     let cancelled = false
+    // The generic async hook entering its own loading state — this IS the external sync.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsLoading(true)
     setError(null)
     fnRef

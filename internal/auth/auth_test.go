@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 const testSecret = "test-super-secret-key-for-tests"
@@ -349,4 +351,60 @@ func TestManager_RefreshToken_BothTokensValid(t *testing.T) {
 	if rc.UserID != "u1" {
 		t.Errorf("expected userID u1, got %s", rc.UserID)
 	}
+}
+
+// TestVerifyIgnoreExpiry_RejectsWrongAudience pins the audience-confusion fix.
+//
+// jwt/v5 joins claim-validation failures, so a token that is BOTH expired and
+// wrongly-audienced still satisfies errors.Is(err, jwt.ErrTokenExpired).
+// VerifyIgnoreExpiry tolerates expiry by design, so before the explicit
+// re-check it accepted an expired WS ticket / SSO ticket / refresh token — all
+// signed with the same secret — as a valid access token, role included.
+func TestVerifyIgnoreExpiry_RejectsWrongAudience(t *testing.T) {
+	const secret = "test-secret-that-is-long-enough-32bytes!!"
+	m := NewManagerWithTTL(secret, time.Minute, time.Hour, "iss", "aud", nil)
+
+	sign := func(t *testing.T, audience string, issuer string, exp time.Time) string {
+		t.Helper()
+		claims := Claims{UserID: "u1", Email: "u1@example.com", Role: RoleAdmin}
+		claims.RegisteredClaims = jwt.RegisteredClaims{
+			ID:        "jti-1",
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(exp),
+			Subject:   "u1",
+			Issuer:    issuer,
+			Audience:  jwt.ClaimStrings{audience},
+		}
+		s, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		return s
+	}
+
+	past := time.Now().Add(-time.Hour)
+
+	t.Run("expired wrong audience is rejected", func(t *testing.T) {
+		// wsTicketAudience is the WS connect-ticket audience.
+		if c, err := m.VerifyIgnoreExpiry(sign(t, wsTicketAudience, "iss", past)); err == nil {
+			t.Fatalf("expired wrong-audience token accepted: uid=%q role=%q", c.UserID, c.Role)
+		}
+	})
+
+	t.Run("expired wrong issuer is rejected", func(t *testing.T) {
+		if c, err := m.VerifyIgnoreExpiry(sign(t, "aud", "other-issuer", past)); err == nil {
+			t.Fatalf("expired wrong-issuer token accepted: uid=%q", c.UserID)
+		}
+	})
+
+	t.Run("expired correct audience is still accepted", func(t *testing.T) {
+		// The whole point of the function: expiry alone must not reject.
+		c, err := m.VerifyIgnoreExpiry(sign(t, "aud", "iss", past))
+		if err != nil {
+			t.Fatalf("expired access token rejected: %v", err)
+		}
+		if c.UserID != "u1" {
+			t.Errorf("UserID = %q, want u1", c.UserID)
+		}
+	})
 }

@@ -86,22 +86,25 @@ function BlockItemWrapperComponent({
     },
     [block.id],
   )
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes(BLOCK_DND_MIME)) {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-      setDropPos(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
-      // Edge auto-scroll (U3a.4): dragging past the viewport edge used to be
-      // a dead end — the target rows weren't rendered yet. dragover paces us.
-      const sc = scrollerEls.get(block.subflowId)
-      if (sc) {
-        const sr = sc.getBoundingClientRect()
-        if (e.clientY < sr.top + AUTOSCROLL_EDGE_PX) sc.scrollTop -= AUTOSCROLL_STEP_PX
-        else if (e.clientY > sr.bottom - AUTOSCROLL_EDGE_PX) sc.scrollTop += AUTOSCROLL_STEP_PX
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes(BLOCK_DND_MIME)) {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+        setDropPos(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
+        // Edge auto-scroll (U3a.4): dragging past the viewport edge used to be
+        // a dead end — the target rows weren't rendered yet. dragover paces us.
+        const sc = scrollerEls.get(block.subflowId)
+        if (sc) {
+          const sr = sc.getBoundingClientRect()
+          if (e.clientY < sr.top + AUTOSCROLL_EDGE_PX) sc.scrollTop -= AUTOSCROLL_STEP_PX
+          else if (e.clientY > sr.bottom - AUTOSCROLL_EDGE_PX) sc.scrollTop += AUTOSCROLL_STEP_PX
+        }
       }
-    }
-  }, [block.subflowId])
+    },
+    [block.subflowId],
+  )
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     // Child transitions fire dragleave on the row wrapper (F1.8): clearing
     // there made the indicator + gap animation flicker while crossing cards.
@@ -211,7 +214,13 @@ function BlockItemWrapperComponent({
       data-block-id={block.id}
     >
       {rails}
-      {dropPos === 'before' && <div className="absolute left-0 right-0 top-0 h-0.5 bg-brand-400 z-10" data-testid="drop-indicator" aria-hidden="true" />}
+      {dropPos === 'before' && (
+        <div
+          className="absolute left-0 right-0 top-0 h-0.5 bg-brand-400 z-10"
+          data-testid="drop-indicator"
+          aria-hidden="true"
+        />
+      )}
       {/* Gap-open drop affordance (U3a.3): the row's CONTENT slides away
           from the drop edge instead of only a 2px line flashing — the space
           the block will occupy opens up. */}
@@ -226,7 +235,13 @@ function BlockItemWrapperComponent({
       >
         {content}
       </div>
-      {dropPos === 'after' && <div className="absolute left-0 right-0 bottom-0 h-0.5 bg-brand-400 z-10" data-testid="drop-indicator" aria-hidden="true" />}
+      {dropPos === 'after' && (
+        <div
+          className="absolute left-0 right-0 bottom-0 h-0.5 bg-brand-400 z-10"
+          data-testid="drop-indicator"
+          aria-hidden="true"
+        />
+      )}
     </div>
   )
 }
@@ -363,7 +378,8 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       const args = groupMoveArgs(direction)
       if (!args) {
         toast.info('Group move needs a contiguous same-scope selection', {
-          description: 'Blocks in different containers (or with gaps) can’t move as one — drag or move them individually.',
+          description:
+            'Blocks in different containers (or with gaps) can’t move as one — drag or move them individually.',
         })
         return
       }
@@ -470,7 +486,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
           : (curIdx + delta + findingBlockIds.length) % findingBlockIds.length
       useFlowStore.getState().selectBlock(findingBlockIds[next])
     },
-    [flattened, selectedBlockId, findingCounts],
+    [flattened, selectedBlockId, findingCounts, report],
   )
 
   useKeyboard({
@@ -592,7 +608,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     if (searchActive && searchQuery.trim() && displayedFlattened.length > 0) {
       virtuosoRef.current?.scrollToIndex({index: 0, behavior: 'smooth', align: 'center'})
     }
-  }, [searchQuery, searchActive])
+  }, [searchQuery, searchActive, displayedFlattened.length])
 
   if (!document || flattened.length === 0) {
     return (
@@ -614,9 +630,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
           className="flex items-center gap-2 px-3 py-1.5 border-b border-brand-500/30 bg-brand-500/5 text-2xs"
           data-testid="bulk-bar"
         >
-          <span className="font-medium text-text-secondary">
-            {selectedCount} blocks selected
-          </span>
+          <span className="font-medium text-text-secondary">{selectedCount} blocks selected</span>
           <button
             onClick={() => handleGroupMove('up')}
             className="text-text-tertiary hover:text-text-secondary px-1.5 py-0.5 rounded hover:bg-surface-3 transition-colors"

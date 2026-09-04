@@ -56,17 +56,30 @@ describe('parseChatEvent', () => {
       parseChatEvent({
         streamId: 's1',
         type: 'fix_proposal',
-        data: {proposalId: 'p1', ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap'},
+        data: {
+          proposalId: 'p1',
+          ruleId: 'unhandled-error',
+          fixType: 'wrap-error-handler',
+          blockLabel: 'Call API',
+          line: 3,
+          summary: 'wrap',
+        },
       }),
     ).toEqual({
       kind: 'fix-proposal',
       proposalId: 'p1',
-      items: [{ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap'}],
+      items: [
+        {ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap'},
+      ],
     })
     // Batch: items[] pass through with per-item defaults; missing optional
     // fields degrade per item.
     expect(
-      parseChatEvent({streamId: 's1', type: 'fix_proposal', data: {proposalId: 'p2', batch: true, count: 2, items: [{ruleId: 'r1'}, {ruleId: 'r2', fixType: 'f'}]}}),
+      parseChatEvent({
+        streamId: 's1',
+        type: 'fix_proposal',
+        data: {proposalId: 'p2', batch: true, count: 2, items: [{ruleId: 'r1'}, {ruleId: 'r2', fixType: 'f'}]},
+      }),
     ).toEqual({
       kind: 'fix-proposal',
       proposalId: 'p2',
@@ -104,22 +117,43 @@ describe('parseChatEvent', () => {
     })
     // Items missing ruleId/status drop; no items → undefined.
     expect(
-      parseChatEvent({streamId: 's1', type: 'fix_decision', data: {proposalId: 'p', status: 'applied', items: [{status: 'applied'}, 'junk']}}),
+      parseChatEvent({
+        streamId: 's1',
+        type: 'fix_decision',
+        data: {proposalId: 'p', status: 'applied', items: [{status: 'applied'}, 'junk']},
+      }),
     ).toEqual({kind: 'fix-decision', proposalId: 'p', status: 'applied', message: undefined, items: undefined})
   })
 
   it('parseResumeEvents converts a resume journal into replayable events', () => {
     expect(
       parseResumeEvents([
-        {type: 'tool_result', data: {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'}},
-        {type: 'fix_proposal', data: {proposalId: 'p1', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}},
+        {
+          type: 'tool_result',
+          data: {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'},
+        },
+        {
+          type: 'fix_proposal',
+          data: {proposalId: 'p1', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'},
+        },
         {type: 'fix_decision', data: {proposalId: 'p1', status: 'applied'}},
         {type: 'chunk', data: {content: 'not replayable'}},
         'junk',
       ]),
     ).toEqual([
-      {kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'},
-      {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+      {
+        kind: 'tool-result',
+        name: 'search_flow',
+        label: 'Searching flow',
+        ok: true,
+        durationMs: 3,
+        summary: '2 matches',
+      },
+      {
+        kind: 'fix-proposal',
+        proposalId: 'p1',
+        items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+      },
       {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: undefined, items: undefined},
       // Chunks parse (a well-formed event) though the backend journal never
       // records them — the replay consumer ignores non-agentic kinds.
@@ -129,9 +163,9 @@ describe('parseChatEvent', () => {
   })
 
   it('parses a fix-decision envelope, requiring proposalId + status', () => {
-    expect(
-      parseChatEvent({streamId: 's1', type: 'fix_decision', data: {proposalId: 'p1', status: 'applied'}}),
-    ).toEqual({kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: undefined})
+    expect(parseChatEvent({streamId: 's1', type: 'fix_decision', data: {proposalId: 'p1', status: 'applied'}})).toEqual(
+      {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: undefined},
+    )
     expect(
       parseChatEvent({
         streamId: 's1',
@@ -150,7 +184,14 @@ describe('parseChatEvent', () => {
         type: 'tool_result',
         data: {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 12, summary: '3 matches'},
       }),
-    ).toEqual({kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 12, summary: '3 matches'})
+    ).toEqual({
+      kind: 'tool-result',
+      name: 'search_flow',
+      label: 'Searching flow',
+      ok: true,
+      durationMs: 12,
+      summary: '3 matches',
+    })
     // Missing fields degrade: label falls back to name, ok is only ever true
     // when the wire said so, duration defaults 0, summary ''.
     expect(parseChatEvent({streamId: 's1', type: 'tool_result', data: {name: 'read_doc'}})).toEqual({

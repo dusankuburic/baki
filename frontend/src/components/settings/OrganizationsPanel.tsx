@@ -1,10 +1,12 @@
 import {useEffect, useState, useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Building2, Plus, Trash2, UserPlus, X, AlertCircle, Clock, Mail} from 'lucide-react'
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useConfirm} from '@/components/shared'
 import OrgChannelsSection from './OrgChannelsSection'
+import OrgCustomRulesSection from './OrgCustomRulesSection'
 import {useAsync} from '@/hooks/useAsync'
 import {request} from '@/api/client'
 import {useToast} from '@/components/shared/Toast'
@@ -17,6 +19,7 @@ const ROLES: OrgRole[] = ['admin', 'member', 'viewer', 'guest']
  * roles. Gated by `!isTauri()` upstream in SettingsModal.
  */
 export default function OrganizationsPanel() {
+  const {t} = useTranslation('settings')
   const organisations = useOrgStore(s => s.organisations)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const isLoading = useOrgStore(s => s.isLoading)
@@ -69,7 +72,7 @@ export default function OrganizationsPanel() {
     // Client-side format gate (U4.3): a typo'd address used to burn a
     // round-trip and surface a raw server error.
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setInviteError('Enter a valid email address (name@example.com).')
+      setInviteError(t('orgs.inviteInvalidEmail'))
       return
     }
     setInviteError(null)
@@ -87,10 +90,10 @@ export default function OrganizationsPanel() {
   const handleRemoveMember = async (userId: string) => {
     if (!selected) return
     const ok = await confirm({
-      title: 'Remove member',
-      message: 'Remove this member from the organization?',
+      title: t('orgs.removeMemberTitle'),
+      message: t('orgs.removeMemberMessage'),
       danger: true,
-      confirmLabel: 'Remove',
+      confirmLabel: t('orgs.removeMemberConfirm'),
     })
     if (!ok) return
     try {
@@ -111,10 +114,10 @@ export default function OrganizationsPanel() {
 
   const handleDeleteOrg = async (org: Organisation) => {
     const ok = await confirm({
-      title: 'Delete organization',
-      message: `Delete organization "${org.name}"? This cannot be undone.`,
+      title: t('orgs.deleteTitle'),
+      message: t('orgs.deleteMessage', {name: org.name}),
       danger: true,
-      confirmLabel: 'Delete',
+      confirmLabel: t('orgs.deleteConfirm'),
     })
     if (!ok) return
     try {
@@ -130,7 +133,7 @@ export default function OrganizationsPanel() {
         <div>
           <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
             <Building2 size={20} className="text-brand-500" />
-            Organizations
+            {t('orgs.title')}
           </h2>
           <p className="text-sm text-text-secondary mt-1">
             Group flows and share them with teammates. Roles control who can view or edit.
@@ -142,7 +145,7 @@ export default function OrganizationsPanel() {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-brand-foreground text-sm font-medium transition-colors shrink-0"
           >
             <Plus size={14} />
-            New organization
+            {t('orgs.newOrg')}
           </button>
         )}
       </div>
@@ -155,14 +158,14 @@ export default function OrganizationsPanel() {
           <AlertCircle size={16} className="shrink-0 mt-0.5" />
           <span className="text-sm flex-1">{error}</span>
           <button onClick={clearError} className="text-xs hover:opacity-80">
-            Dismiss
+            {t('orgs.dismiss')}
           </button>
         </div>
       )}
 
       {creating && (
         <div className="p-4 border border-border-default rounded-xl bg-surface-1 space-y-3">
-          <label className="block text-sm font-medium text-text-primary">Organization name</label>
+          <label className="block text-sm font-medium text-text-primary">{t('orgs.nameLabel')}</label>
           <input
             autoFocus
             value={newName}
@@ -170,7 +173,7 @@ export default function OrganizationsPanel() {
             onKeyDown={e => {
               if (e.key === 'Enter') void handleCreate()
             }}
-            placeholder="e.g. Acme RPA"
+            placeholder={t('orgs.namePlaceholder')}
             className="w-full px-3 py-2 rounded-lg bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
           />
           <div className="flex gap-2 justify-end">
@@ -188,14 +191,14 @@ export default function OrganizationsPanel() {
               disabled={!newName.trim() || createBusy}
               className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-sm font-medium"
             >
-              {createBusy ? 'Creating…' : 'Create'}
+              {createBusy ? t('orgs.creating') : t('orgs.create')}
             </button>
           </div>
         </div>
       )}
 
       {isLoading && organisations.length === 0 ? (
-        <div className="py-8 text-center text-sm text-text-tertiary">Loading…</div>
+        <div className="py-8 text-center text-sm text-text-tertiary">{t('orgs.loading')}</div>
       ) : organisations.length === 0 ? (
         <div className="py-8 text-center">
           <Building2 size={32} className="mx-auto text-text-tertiary/50" />
@@ -242,8 +245,8 @@ export default function OrganizationsPanel() {
                         void handleDeleteOrg(org)
                       }}
                       className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors"
-                      title="Delete organization"
-                      aria-label="Delete organization"
+                      title={t('orgs.deleteAria')}
+                      aria-label={t('orgs.deleteAria')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -253,11 +256,14 @@ export default function OrganizationsPanel() {
                 {isActive && selected?.id === org.id && (
                   <div className="p-4 border-t border-border-subtle space-y-4 bg-surface-1/50">
                     <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} />
+                    <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
                     <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Members</h4>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">
+                        {t('orgs.members')}
+                      </h4>
                       <div className="border border-border-subtle rounded-lg overflow-hidden">
                         {org.members.length === 0 ? (
-                          <div className="p-3 text-xs text-text-tertiary text-center">No members yet.</div>
+                          <div className="p-3 text-xs text-text-tertiary text-center">{t('orgs.noMembers')}</div>
                         ) : (
                           org.members.map((m, j) => (
                             <div
@@ -301,8 +307,12 @@ export default function OrganizationsPanel() {
                                   onClick={() => void handleRemoveMember(m.userId)}
                                   disabled={m.userId === org.ownerId}
                                   className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
-                                  title={m.userId === org.ownerId ? 'Owner cannot be removed' : 'Remove member'}
-                                  aria-label={m.userId === org.ownerId ? 'Owner cannot be removed' : 'Remove member'}
+                                  title={
+                                    m.userId === org.ownerId ? t('orgs.ownerNotRemovable') : t('orgs.removeMemberAria')
+                                  }
+                                  aria-label={
+                                    m.userId === org.ownerId ? t('orgs.ownerNotRemovable') : t('orgs.removeMemberAria')
+                                  }
                                 >
                                   <X size={14} />
                                 </button>
@@ -315,7 +325,9 @@ export default function OrganizationsPanel() {
 
                     {canManageMembers && (
                       <div>
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Invite</h4>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">
+                          {t('orgs.invite')}
+                        </h4>
                         <div className="flex gap-2">
                           <input
                             value={inviteEmail}
@@ -326,7 +338,7 @@ export default function OrganizationsPanel() {
                             onKeyDown={e => {
                               if (e.key === 'Enter') void handleInvite()
                             }}
-                            placeholder="teammate@example.com"
+                            placeholder={t('orgs.inviteEmailPlaceholder')}
                             type="email"
                             aria-invalid={!!inviteError}
                             className={
@@ -351,7 +363,7 @@ export default function OrganizationsPanel() {
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-sm font-medium"
                           >
                             <UserPlus size={14} />
-                            {inviteBusy ? 'Inviting…' : 'Invite'}
+                            {inviteBusy ? t('orgs.inviting') : t('orgs.invite')}
                           </button>
                         </div>
                         {inviteError && (
@@ -386,6 +398,7 @@ interface OrgInvite {
 }
 
 function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<void>}) {
+  const {t} = useTranslation('settings')
   const {error: toastError, success: toastSuccess} = useToast()
   const {confirm} = useConfirm()
 
@@ -399,19 +412,19 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
 
   const handleRevoke = async (inviteId: string, email: string) => {
     const ok = await confirm({
-      title: 'Revoke invite',
-      message: `Revoke the pending invite for ${email}? They will no longer be able to accept it.`,
+      title: t('orgs.revokeTitle'),
+      message: t('orgs.revokeMessage', {email}),
       danger: true,
-      confirmLabel: 'Revoke',
+      confirmLabel: t('orgs.revokeConfirm'),
     })
     if (!ok) return
     setRevokingId(inviteId)
     try {
       await request(`/api/orgs/${orgId}/invites/${inviteId}`, {method: 'DELETE'})
-      toastSuccess('Invite revoked')
+      toastSuccess(t('orgs.revoked'))
       refetch()
     } catch (err) {
-      toastError('Failed to revoke invite: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      toastError(t('orgs.revokeFailed', {message: err instanceof Error ? err.message : 'Unknown error'}))
     } finally {
       setRevokingId(null)
     }
@@ -423,7 +436,7 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
 
   return (
     <div className="mt-3">
-      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">Pending Invites</h4>
+      <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">{t('orgs.pendingInvites')}</h4>
       <div className="border border-border-subtle rounded-lg overflow-hidden">
         {pending.map((inv, j) => {
           const expired = new Date(inv.expiresAt) < new Date()
@@ -445,9 +458,9 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
                   <span className="capitalize">{inv.role}</span>
                   {' · '}
                   {expired ? (
-                    <span className="text-red-400">Expired {formatDate(inv.expiresAt)}</span>
+                    <span className="text-red-400">{t('orgs.expired', {date: formatDate(inv.expiresAt)})}</span>
                   ) : (
-                    <>Expires {formatDate(inv.expiresAt)}</>
+                    <>{t('orgs.expires', {date: formatDate(inv.expiresAt)})}</>
                   )}
                 </p>
               </div>
@@ -455,8 +468,8 @@ function PendingInvites({orgId}: {orgId: string; onInviteSent?: () => Promise<vo
                 onClick={() => void handleRevoke(inv.id, inv.email)}
                 disabled={revokingId === inv.id}
                 className="p-1.5 rounded text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors disabled:opacity-30"
-                title="Revoke invite"
-                aria-label="Revoke invite"
+                title={t('orgs.revokeAria')}
+                aria-label={t('orgs.revokeAria')}
               >
                 <X size={14} />
               </button>

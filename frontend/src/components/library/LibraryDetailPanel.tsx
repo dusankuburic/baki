@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react'
+import {useState} from 'react'
 import {Activity, Calendar, Copy, FileCode, GitBranch, Pencil, Tag, Trash2, User, Users, X} from 'lucide-react'
 import {libraryApi, type LibraryFlow, type LibraryFlowVersion} from '@/api/library'
 import {Button, Spinner, ErrorState} from '@/components/shared'
@@ -24,7 +24,17 @@ interface DetailData {
   versions: LibraryFlowVersion[]
 }
 
-export default function LibraryDetailPanel({flowId, onOpen, onDelete, onRename, onDuplicate, onSaveTags, editingTags, setEditingTags, onClose}: Props) {
+export default function LibraryDetailPanel({
+  flowId,
+  onOpen,
+  onDelete,
+  onRename,
+  onDuplicate,
+  onSaveTags,
+  editingTags,
+  setEditingTags,
+  onClose,
+}: Props) {
   const orgs = useOrgStore(s => s.organisations)
 
   const {
@@ -181,15 +191,31 @@ function Row({icon: Icon, label, value}: {icon: typeof Activity; label: string; 
   )
 }
 
-
 // TagRow renders the flow's tags as chips with an inline editor
 // (comma-separated input → server-normalized set on save). Editing is
 // triggered by the pencil; empty input saves an empty set (untagged).
-function TagRow({flow, editing, setEditing, onSave}: {flow: LibraryFlow; editing: boolean; setEditing: (v: boolean) => void; onSave: (flow: LibraryFlow, tags: string[]) => void}) {
+function TagRow({
+  flow,
+  editing,
+  setEditing,
+  onSave,
+}: {
+  flow: LibraryFlow
+  editing: boolean
+  setEditing: (v: boolean) => void
+  onSave: (flow: LibraryFlow, tags: string[]) => void
+}) {
   const [draft, setDraft] = useState('')
-  useEffect(() => {
-    if (editing) setDraft((flow.tags ?? []).join(', '))
-  }, [editing, flow.tags])
+  // Seed the draft when edit mode opens (or the underlying tags change), adjusted
+  // during render. The composite key reproduces the previous effect's [editing,
+  // flow.tags] trigger exactly.
+  const tagsText = (flow.tags ?? []).join(', ')
+  const seedKey = `${editing}|${tagsText}`
+  const [lastSeedKey, setLastSeedKey] = useState<string | null>(null)
+  if (seedKey !== lastSeedKey) {
+    setLastSeedKey(seedKey)
+    if (editing) setDraft(tagsText)
+  }
 
   if (editing) {
     return (
@@ -199,7 +225,13 @@ function TagRow({flow, editing, setEditing, onSave}: {flow: LibraryFlow; editing
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') {
-              onSave(flow, draft.split(',').map((t: string) => t.trim()).filter(Boolean))
+              onSave(
+                flow,
+                draft
+                  .split(',')
+                  .map((t: string) => t.trim())
+                  .filter(Boolean),
+              )
               setEditing(false)
             }
             if (e.key === 'Escape') setEditing(false)
@@ -213,7 +245,13 @@ function TagRow({flow, editing, setEditing, onSave}: {flow: LibraryFlow; editing
           <button
             className="text-2xs text-brand-400 hover:text-brand-300"
             onClick={() => {
-              onSave(flow, draft.split(',').map((t: string) => t.trim()).filter(Boolean))
+              onSave(
+                flow,
+                draft
+                  .split(',')
+                  .map((t: string) => t.trim())
+                  .filter(Boolean),
+              )
               setEditing(false)
             }}
           >

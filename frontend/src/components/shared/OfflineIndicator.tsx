@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useEffect} from 'react'
 import {WifiOff} from 'lucide-react'
 import {useSyncStore} from '@/stores/syncStore'
@@ -8,6 +9,7 @@ import {useSyncStore} from '@/stores/syncStore'
 // When offline with pending sync operations, shows the queue depth so users
 // know how many changes will sync when they reconnect.
 export default function OfflineIndicator() {
+  const {t} = useTranslation()
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
   const pendingCount = useSyncStore(s => s.pendingCount)
 
@@ -31,8 +33,8 @@ export default function OfflineIndicator() {
       aria-live="polite"
     >
       <WifiOff size={12} />
-      You're offline — showing cached data. Some actions are unavailable.
-      {pendingCount > 0 && <span className="font-semibold"> ({pendingCount} changes queued)</span>}
+      {t('offline.banner')}
+      {pendingCount > 0 && <span className="font-semibold"> {t('offline.queued', {count: pendingCount})}</span>}
     </div>
   )
 }

@@ -7,7 +7,7 @@ export default function SuggestedPrompts({prompts, onSelect}: Props) {
   if (prompts.length === 0) return null
 
   return (
-    <div className="flex gap-2 px-3 py-2 overflow-x-auto scrollbar-none">
+    <div className="chat-prompt-strip flex gap-2 px-3 py-2 overflow-x-auto scrollbar-none">
       {prompts.map(p => (
         <button
           key={p}

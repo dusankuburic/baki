@@ -89,8 +89,17 @@ func (lsb *LocalStorageBackend) ListGovernanceAlerts(ctx context.Context, filter
 	if err != nil {
 		return nil, err
 	}
-	// Newest-first.
-	sort.Slice(alerts, func(i, j int) bool { return alerts[i].CreatedAt.After(alerts[j].CreatedAt) })
+	// Newest-first, tie-broken by ID — mirrors the postgres backend's
+	// `ORDER BY created_at DESC, id ASC`. The tiebreaker is load-bearing: this
+	// list is offset-paginated, sort.Slice is not stable, and one scanner tick
+	// records several alerts stamped from the same time.Now(), so without it
+	// paging dropped and repeated alerts.
+	sort.Slice(alerts, func(i, j int) bool {
+		if !alerts[i].CreatedAt.Equal(alerts[j].CreatedAt) {
+			return alerts[i].CreatedAt.After(alerts[j].CreatedAt)
+		}
+		return alerts[i].ID < alerts[j].ID
+	})
 
 	out := make([]*interfaces.GovernanceAlert, 0, len(alerts))
 	for _, a := range alerts {

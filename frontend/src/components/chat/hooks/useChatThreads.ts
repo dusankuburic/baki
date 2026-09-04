@@ -1,6 +1,12 @@
 import {useCallback} from 'react'
 import {useChatStore} from '@/stores/chatStore'
+import {chatApi} from '@/api'
+import {logger} from '@/lib/logger'
 import type {FlowDocument, SourceFileInfo} from '@/types'
+
+// Exchanges (user+assistant pairs) kept by Compact. Mirrored in the toolbar
+// copy, so keep the two in step.
+export const COMPACT_KEEP_PAIRS = 3
 
 interface UseChatThreadsOptions {
   doc: FlowDocument | null
@@ -38,8 +44,18 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
     [updateThread],
   )
 
+  // "Delete all messages in this thread" — the label promises a real clear, so
+  // it must reach the BACKEND too. buildRequest omits `messages` by default and
+  // the server replays its own stored conversation, so wiping only the local
+  // store left the model still seeing every prior turn: the panel looked empty
+  // while the next answer referred back to a conversation the user thought they
+  // had deleted. (/clear, via handleClearThread, always did this correctly.)
+  //
+  // The conversation key is (flowId, contextBlockId) — read it BEFORE the
+  // update below resets the scope, or the wrong conversation gets cleared.
   const handleClearContext = useCallback(() => {
     if (!activeThreadId) return
+    const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
     clearThreadMessages(activeThreadId)
     updateThread(activeThreadId, {
       contextBlockId: null,
@@ -47,12 +63,31 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
       tokensIn: 0,
       tokensOut: 0,
     })
-  }, [activeThreadId, clearThreadMessages, updateThread, sourceFiles])
+    if (doc) {
+      chatApi.clearConversation(doc.id, thread?.contextBlockId || 'flow').catch(err => {
+        logger.warn('Failed to clear conversation', err)
+      })
+    }
+  }, [activeThreadId, clearThreadMessages, updateThread, sourceFiles, doc])
 
+  // "Keep only the last N exchanges to reduce token usage". The saving only
+  // happens if the BACKEND's copy shrinks too: buildRequest omits `messages`
+  // and the server replays its own stored conversation, so trimming just the
+  // local store left every prompt exactly as expensive as before — the one
+  // thing this action exists to do.
+  //
+  // SaveConversation replaces the stored list wholesale, so writing the
+  // trimmed messages back is the compaction.
   const handleCompact = useCallback(() => {
     if (!activeThreadId) return
-    compactThread(activeThreadId, 3)
-  }, [activeThreadId, compactThread])
+    const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
+    compactThread(activeThreadId, COMPACT_KEEP_PAIRS)
+    if (!doc) return
+    const kept = useChatStore.getState().getMessages(activeThreadId)
+    chatApi.saveConversation(doc.id, thread?.contextBlockId || 'flow', [...kept]).catch(err => {
+      logger.warn('Failed to persist compacted conversation', err)
+    })
+  }, [activeThreadId, compactThread, doc])
 
   const setThreadContextBlock = useCallback(
     (blockId: string | null) => {

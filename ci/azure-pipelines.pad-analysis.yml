@@ -72,8 +72,17 @@ steps:
       code=$?
       set -e
       echo "##vso[task.setvariable variable=gateExitCode]$code"
-      if [ "$code" != "0" ] && [ "${{ parameters.failOn }}" != "none" ]; then
-        echo "##vso[task.logissue type=error]PAD analysis gate failed (fail-on=${{ parameters.failOn }})."
+      # A configured POLICY is authoritative and overrides failOn (the block
+      # above does not even pass -fail-on when one is set), so enforcement must
+      # not be conditioned on failOn alone — policy=<file> with failOn=none is
+      # the documented way to ask for policy-only gating, and it used to pass
+      # the build on a violation.
+      if [ "$code" != "0" ] && { [ "${{ parameters.failOn }}" != "none" ] || [ -n "${{ parameters.policy }}" ]; }; then
+        if [ -n "${{ parameters.policy }}" ]; then
+          echo "##vso[task.logissue type=error]PAD analysis gate failed (policy=${{ parameters.policy }})."
+        else
+          echo "##vso[task.logissue type=error]PAD analysis gate failed (fail-on=${{ parameters.failOn }})."
+        fi
       fi
     displayName: 'Analyze flows (SARIF + gate)'
 
@@ -109,5 +118,7 @@ steps:
       if [ "$code" != "0" ]; then
         exit "$code"
       fi
-    condition: and(always(), ne('${{ parameters.failOn }}', 'none'))
+    # Mirrors the shell guard above: enforce when a severity gate is active OR
+    # a policy is configured.
+    condition: and(always(), or(ne('${{ parameters.failOn }}', 'none'), ne('${{ parameters.policy }}', '')))
     displayName: 'Enforce gate'

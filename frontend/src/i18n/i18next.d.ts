@@ -1,4 +1,4 @@
-import type {common, shell, findings, auth} from './en'
+import type {common, shell, findings, auth, chat} from './en'
 import type {enSettings} from './en.settings'
 
 // Module augmentation: `t('findings.search.placeholder')` and friends are
@@ -12,6 +12,7 @@ declare module 'i18next' {
       shell: typeof shell
       findings: typeof findings
       auth: typeof auth
+      chat: typeof chat
       settings: typeof enSettings
     }
   }

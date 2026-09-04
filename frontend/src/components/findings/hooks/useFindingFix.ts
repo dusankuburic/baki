@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState} from 'react'
 import {analysisApi, flowApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
@@ -18,6 +19,7 @@ interface PreviewState {
 // just a UI hint) and the finding is resolved. Dispatches on finding.autoFix
 // (e.g. 'wrap-error-handler') or the explicit 'suppress' type.
 export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
+  const {t} = useTranslation('findings')
   const setDocument = useFlowStore(s => s.setDocument)
   const beginAnalyzing = useAnalysisStore(s => s.beginAnalyzing)
   const setAnalyzing = useAnalysisStore(s => s.setAnalyzing)
@@ -38,7 +40,7 @@ export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
           : undefined
       const result = await flowApi.previewFix(doc.id, finding.blockId, fixType, finding.ruleId, variable, property)
       setPreview({open: true, original: result.original, patched: result.patched, fixType})
-    } catch (err) {
+    } catch {
       // Preview failed (e.g. cloud mode where preview-fix is blocked) — apply
       // directly without a preview, preserving the original UX.
       await doApplyFix(fixType)
@@ -64,12 +66,12 @@ export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
       try {
         const r = await analysisApi.analyzeFlow()
         if (r) setReport(updated.id, r as AnalysisReport)
-        toast.success('Fix applied', {description: 'Flow file updated and re-analyzed.'})
+        toast.success(t('toasts.fixApplied'), {description: t('toasts.fixAppliedReanalyzed')})
       } catch {
-        toast.success('Fix applied', {description: 'Flow file updated. Click Analyze to refresh findings.'})
+        toast.success(t('toasts.fixApplied'), {description: t('toasts.fixAppliedNeedsAnalyze')})
       }
     } catch (err) {
-      toast.error('Could not apply fix', {description: String(err)})
+      toast.error(t('toasts.fixFailed'), {description: String(err)})
     } finally {
       if (useAnalysisStore.getState().analyzingGen === gen) setAnalyzing(false)
       setApplyingFix(false)

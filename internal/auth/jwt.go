@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -340,8 +341,22 @@ func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 }
 
 // VerifyIgnoreExpiry parses and validates an access token, returning its claims
-// even if the token has expired. It still verifies the cryptographic signature
-// and the audience.
+// even if the token has expired. It still verifies the cryptographic signature,
+// the audience, and the issuer.
+//
+// The audience/issuer re-check below is load-bearing, not belt-and-braces.
+// jwt/v5 JOINS all claim-validation failures into one error, so
+// errors.Is(err, ErrTokenExpired) reports true when the token is expired AND
+// its audience is wrong. Tolerating expiry by that test alone therefore
+// tolerated audience confusion: an expired WS ticket, SSO ticket, or refresh
+// token — all signed with the same secret — was accepted here as an access
+// token, claims and role included. Verified with a hand-signed expired
+// wsTicketAudience token; see TestVerifyIgnoreExpiry_RejectsWrongAudience.
+//
+// Both current callers only feed the result to Revoke (de-privileging, and
+// already behind an authenticated route), so this was not exploitable — but it
+// is exactly the primitive a future caller would misuse, and the doc comment
+// promised a guarantee the code did not deliver.
 func (m *Manager) VerifyIgnoreExpiry(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
 		jwt.WithAudience(m.audience), jwt.WithIssuer(m.issuer))
@@ -353,6 +368,14 @@ func (m *Manager) VerifyIgnoreExpiry(tokenStr string) (*Claims, error) {
 	claims, ok := token.Claims.(*Claims)
 	if !ok {
 		return nil, errors.New("auth: invalid token claims")
+	}
+
+	// Re-assert the two claims the joined-error path above can swallow.
+	if aud, aerr := claims.GetAudience(); aerr != nil || !slices.Contains(aud, m.audience) {
+		return nil, errors.New("auth: token audience mismatch")
+	}
+	if iss, ierr := claims.GetIssuer(); ierr != nil || iss != m.issuer {
+		return nil, errors.New("auth: token issuer mismatch")
 	}
 
 	if m.blacklist != nil && claims.ID != "" && m.blacklist.IsRevoked(claims.ID) {

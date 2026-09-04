@@ -9,6 +9,12 @@ services:
       - PAD_AUTH_ENABLED=true
       - PAD_STORAGE=database
       - PAD_DATABASE_URL=${PAD_DATABASE_URL:?PAD_DATABASE_URL must be set}
+      # Set EXPLICITLY, not left to the cloud-mode default: the base file turns
+      # this off so the local dev stack can talk to a TLS-less postgres
+      # container, and compose merges environment keys — without this line the
+      # production stack would silently inherit that and accept an unencrypted
+      # database connection. Your DSN must use sslmode=require or verify-full.
+      - PAD_DB_REQUIRE_SSL=true
       - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:?PAD_ALLOWED_ORIGINS must be set}
       # Azure Blob Storage offload (optional). Set both to enable it (Managed
       # Identity auth); the readiness probe (/readyz) gates traffic on blob
@@ -28,10 +34,16 @@ services:
           cpus: '0.5'
           memory: 1G
   db:
-    # Pin to an immutable digest in production (the base file's floating
-    # postgres:16-alpine can silently change). Bump deliberately when applying
-    # Postgres security patches.
-    image: postgres:16.14-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+    # Pin to an immutable digest in production (the base file's floating tag can
+    # silently change). Bump deliberately when applying Postgres security
+    # patches.
+    #
+    # Must stay on the SAME image family as the base file (pgvector), not plain
+    # postgres: the `vector` extension backs knowledge-base similarity search,
+    # and scripts/db-init installs it at first init. Overriding back to stock
+    # postgres would make that init fail and leave search on its slow in-Go
+    # fallback.
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     deploy:
       resources:
         limits:

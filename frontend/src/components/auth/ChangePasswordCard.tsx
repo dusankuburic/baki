@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback} from 'react'
 import {KeyRound} from 'lucide-react'
 import {authApi} from '@/api/auth'
@@ -6,6 +7,7 @@ import Input from '@/components/shared/Input'
 import {useToast} from '@/components/shared'
 
 export const ChangePasswordCard: React.FC = () => {
+  const {t} = useTranslation('auth')
   const toast = useToast()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -20,65 +22,65 @@ export const ChangePasswordCard: React.FC = () => {
     async (e: React.FormEvent) => {
       e.preventDefault()
       if (newPassword !== confirmPassword) {
-        setConfirmError('New passwords do not match')
+        setConfirmError(t('password.mismatch'))
         return
       }
       setConfirmError('')
       setIsSubmitting(true)
       try {
         await authApi.changePassword(currentPassword, newPassword)
-        toast.success('Password updated successfully')
+        toast.success(t('password.updated'))
         setCurrentPassword('')
         setNewPassword('')
         setConfirmPassword('')
       } catch (err) {
-        toast.error('Failed to update password', {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('password.updateFailed'), {description: err instanceof Error ? err.message : String(err)})
       } finally {
         setIsSubmitting(false)
       }
     },
-    [currentPassword, newPassword, confirmPassword, toast],
+    [currentPassword, newPassword, confirmPassword, toast, t],
   )
 
   return (
     <div className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
       <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
         <KeyRound size={13} className="text-text-tertiary" />
-        <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Change Password</h2>
+        <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">{t('password.heading')}</h2>
       </div>
 
       <form onSubmit={handleSubmit} className="p-5 space-y-3">
         <div>
           <label htmlFor="change-password-current" className="text-xs font-medium text-text-secondary block mb-1.5">
-            Current Password
+            {t('password.current')}
           </label>
           <Input
             id="change-password-current"
             type="password"
             value={currentPassword}
             onChange={e => setCurrentPassword(e.target.value)}
-            placeholder="Enter current password"
+            placeholder={t('password.currentPlaceholder')}
             autoComplete="current-password"
             required
           />
         </div>
         <div>
           <label htmlFor="change-password-new" className="text-xs font-medium text-text-secondary block mb-1.5">
-            New Password
+            {t('password.new')}
           </label>
           <Input
             id="change-password-new"
             type="password"
             value={newPassword}
             onChange={e => setNewPassword(e.target.value)}
-            placeholder="Enter new password"
+            placeholder={t('password.newPlaceholder')}
             autoComplete="new-password"
             required
           />
         </div>
         <div>
           <label htmlFor="change-password-confirm" className="text-xs font-medium text-text-secondary block mb-1.5">
-            Confirm New Password
+            {t('password.confirm')}
           </label>
           <Input
             id="change-password-confirm"
@@ -89,10 +91,10 @@ export const ChangePasswordCard: React.FC = () => {
               if (confirmError) setConfirmError('')
             }}
             onBlur={() => {
-              if (confirmPassword && newPassword !== confirmPassword) setConfirmError('New passwords do not match')
+              if (confirmPassword && newPassword !== confirmPassword) setConfirmError(t('password.mismatch'))
             }}
             error={confirmError || undefined}
-            placeholder="Confirm new password"
+            placeholder={t('password.confirmPlaceholder')}
             autoComplete="new-password"
             required
           />
@@ -105,7 +107,7 @@ export const ChangePasswordCard: React.FC = () => {
         )}
 
         <Button type="submit" variant="primary" size="md" fullWidth loading={isSubmitting}>
-          Update Password
+          {t('password.submit')}
         </Button>
       </form>
     </div>

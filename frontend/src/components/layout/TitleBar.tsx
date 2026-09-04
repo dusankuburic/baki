@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {Minus, Square, X, Settings, Menu, PanelRight} from 'lucide-react'
 import {createAdapter} from '@/platform/adapters'
 import {getPlatformCapabilities} from '@/platform/guards'
@@ -10,12 +11,13 @@ import AlertsBell from './AlertsBell'
 const platform = createAdapter()
 
 export default function TitleBar() {
+  const {t} = useTranslation('shell')
   const toggleSidebar = useUIStore(s => s.toggleSidebar)
   const toggleInspector = useUIStore(s => s.toggleInspector)
 
   // Shared derivation (U5a.3): same source as the interactive Breadcrumbs.
   const {flowName, path} = useBreadcrumbPath()
-  const breadcrumb = [flowName ?? 'PAD Analyzer', ...path.map(c => c.name)]
+  const breadcrumb = [flowName ?? t('titleBar.appName'), ...path.map(c => c.name)]
 
   const toggleSettings = useUIStore(s => s.toggleSettings)
 
@@ -28,8 +30,8 @@ export default function TitleBar() {
       <button
         onClick={toggleSidebar}
         className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast md:hidden"
-        title="Toggle sidebar"
-        aria-label="Toggle sidebar"
+        title={t('titleBar.toggleSidebar')}
+        aria-label={t('titleBar.toggleSidebar')}
       >
         <Menu size={14} />
       </button>
@@ -50,8 +52,8 @@ export default function TitleBar() {
         <button
           onClick={toggleInspector}
           className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast md:hidden"
-          title="Toggle inspector"
-          aria-label="Toggle inspector"
+          title={t('titleBar.toggleInspector')}
+          aria-label={t('titleBar.toggleInspector')}
         >
           <PanelRight size={14} />
         </button>
@@ -60,8 +62,8 @@ export default function TitleBar() {
         <button
           onClick={toggleSettings}
           className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
-          title="Settings (Ctrl+,)"
-          aria-label="Settings"
+          title={t('titleBar.settingsTitle')}
+          aria-label={t('titleBar.settings')}
         >
           <Settings size={12} />
         </button>

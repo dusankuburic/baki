@@ -159,7 +159,6 @@ export default React.memo(function BlockCard({
   const {moveBlock, duplicateBlock, removeBlock, renameBlock} = useBlockOperations()
   const ops = {moveBlock, duplicateBlock, removeBlock}
 
-
   const contextItems: ContextMenuItem[] = [
     {
       label: 'Explain with AI',

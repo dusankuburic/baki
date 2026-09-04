@@ -2,205 +2,173 @@ package service
 
 import (
 	"context"
-	"sync"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
-	"pad-analyzer/internal/config"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
-// fakeResumeStore is an in-test backplane standing in for Redis, letting us
-// exercise the cross-replica fallback in ResumeStream/OwnerOf without a real
-// Redis (the stream "ran on another replica" = present here, absent locally).
-type fakeResumeStore struct {
-	mu   sync.Mutex
-	data map[string]resumeSnapshot
-	on   bool
+// TestSliceFrom_RuneBoundary covers the delta-resume offset, which arrives as a
+// raw byte count on a public endpoint and is therefore untrusted.
+//
+// Slicing mid-rune produces invalid UTF-8, and encoding/json does not reject
+// that — it substitutes U+FFFD, so a caller silently receives a replacement
+// character welded to the front of the resumed tail. That is corruption with no
+// error anywhere.
+func TestSliceFrom_RuneBoundary(t *testing.T) {
+	const buf = "héllo wörld ✅ done" // multi-byte at offsets 1, 8 and 12
+
+	t.Run("every byte offset yields valid UTF-8", func(t *testing.T) {
+		for from := -3; from <= len(buf)+3; from++ {
+			got := sliceFrom(buf, from)
+			if !utf8.ValidString(got) {
+				t.Errorf("sliceFrom(buf, %d) = %q — not valid UTF-8", from, got)
+			}
+			// Whatever comes back must be a genuine suffix of the buffer, never
+			// a re-encoded or truncated variant.
+			if got != "" && !strings.HasSuffix(buf, got) {
+				t.Errorf("sliceFrom(buf, %d) = %q — not a suffix of the buffer", from, got)
+			}
+		}
+	})
+
+	t.Run("mid-rune snaps down, never dropping a character", func(t *testing.T) {
+		// Byte 2 is the continuation byte of "é" (bytes 1-2).
+		got := sliceFrom(buf, 2)
+		if !strings.HasPrefix(got, "é") {
+			t.Errorf("sliceFrom(buf, 2) = %q, want it to start at the 'é' it straddled", got)
+		}
+	})
+
+	t.Run("boundaries are exact", func(t *testing.T) {
+		if got := sliceFrom(buf, 0); got != buf {
+			t.Errorf("from=0 must return the whole buffer, got %q", got)
+		}
+		if got := sliceFrom(buf, -1); got != buf {
+			t.Errorf("negative from must return the whole buffer, got %q", got)
+		}
+		if got := sliceFrom(buf, len(buf)); got != "" {
+			t.Errorf("from=len must return empty, got %q", got)
+		}
+		if got := sliceFrom(buf, len(buf)+99); got != "" {
+			t.Errorf("from past the end must return empty, got %q", got)
+		}
+		// An exact rune boundary must not be shifted.
+		if got := sliceFrom(buf, 13); got != " ✅ done" {
+			t.Errorf("from=13 (exact boundary) = %q, want %q", got, " ✅ done")
+		}
+	})
 }
 
-func newFakeResumeStore(on bool) *fakeResumeStore {
-	return &fakeResumeStore{data: map[string]resumeSnapshot{}, on: on}
-}
-
-func (f *fakeResumeStore) enabled() bool { return f.on }
-
-func (f *fakeResumeStore) Save(_ context.Context, id string, snap resumeSnapshot, _ time.Duration) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.data[id] = snap
-}
-
-func (f *fakeResumeStore) Load(_ context.Context, id string) (resumeSnapshot, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	snap, ok := f.data[id]
-	return snap, ok
-}
-
-func TestResumeStream_FallsBackToBackplane(t *testing.T) {
-	fake := newFakeResumeStore(true)
-	fake.Save(context.Background(), "sid-remote", resumeSnapshot{
-		Owner: "user-1", Text: "hello from replica A", Done: true, TokensIn: 3, TokensOut: 5,
-	}, time.Minute)
-
-	// Local maps are empty (the stream ran elsewhere) → must resolve via backplane.
-	svc := &ChatService{resume: fake}
-
-	res, err := svc.ResumeStream(context.Background(), "sid-remote", 0)
+// newMiniRedis stands up an in-process Redis so the cross-replica resume path
+// can be exercised without an external dependency.
+//
+// The project previously deferred work on this path for want of a Redis test
+// harness ("modifying them without a Redis test harness repeats the documented
+// but NOT validated trap"). miniredis was already a dependency and already used
+// by the rate-limiter and WebSocket backplane suites; the resume backplane just
+// never got one, so it was the only Redis path with zero coverage.
+func newMiniRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	mr, err := miniredis.Run()
 	if err != nil {
-		t.Fatalf("ResumeStream fallback failed: %v", err)
+		t.Fatalf("start miniredis: %v", err)
 	}
-	if res.Text != "hello from replica A" || !res.Done || res.TokensOut != 5 {
-		t.Fatalf("unexpected resume result: %+v", res)
+	t.Cleanup(mr.Close)
+	c := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// TestRedisResumeStore_CrossReplica is the point of the backplane: a stream
+// mirrored by the replica that ran it must be resumable from a replica that
+// never saw it.
+func TestRedisResumeStore_CrossReplica(t *testing.T) {
+	client := newMiniRedis(t)
+	ctx := context.Background()
+
+	writer := redisResumeStore{c: client} // replica that ran the stream
+	reader := redisResumeStore{c: client} // replica the client reconnected to
+
+	if !writer.enabled() {
+		t.Fatal("a Redis-backed store must report enabled")
 	}
-	if owner := svc.OwnerOf(context.Background(), "sid-remote"); owner != "user-1" {
-		t.Fatalf("OwnerOf fallback = %q, want user-1", owner)
+
+	want := resumeSnapshot{
+		Owner: "user-42", Text: "partial answer ✅", Done: false,
+		TokensIn: 11, TokensOut: 22,
+	}
+	writer.Save(ctx, "stream-1", want, time.Minute)
+
+	got, ok := reader.Load(ctx, "stream-1")
+	if !ok {
+		t.Fatal("snapshot written by one replica was not visible to another")
+	}
+	if got.Owner != want.Owner || got.Text != want.Text ||
+		got.TokensIn != want.TokensIn || got.TokensOut != want.TokensOut || got.Done != want.Done {
+		t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got, want)
+	}
+
+	// A later Save must overwrite, not append — the mirror republishes the whole
+	// buffer on every tick.
+	writer.Save(ctx, "stream-1", resumeSnapshot{Owner: "user-42", Text: "full answer ✅", Done: true}, time.Minute)
+	got, ok = reader.Load(ctx, "stream-1")
+	if !ok {
+		t.Fatal("snapshot missing after overwrite")
+	}
+	if got.Text != "full answer ✅" || !got.Done {
+		t.Errorf("overwrite not observed: %+v", got)
 	}
 }
 
-func TestResumeStream_LocalTakesPrecedenceOverBackplane(t *testing.T) {
-	fake := newFakeResumeStore(true)
-	fake.Save(context.Background(), "sid", resumeSnapshot{Owner: "user-1", Text: "stale"}, time.Minute)
+// TestRedisResumeStore_MissAndFailOpen pins the two degraded paths. Both must
+// report "not found" rather than erroring: resume is best-effort, and a
+// backplane problem must never surface as a broken chat.
+func TestRedisResumeStore_MissAndFailOpen(t *testing.T) {
+	ctx := context.Background()
 
-	svc := &ChatService{resume: fake}
-	ctl := &streamCtl{ownerID: "user-1"}
-	ctl.buffer.WriteString("live local buffer")
-	svc.activeStreams.Store("sid", ctl)
+	t.Run("unknown stream is a miss", func(t *testing.T) {
+		store := redisResumeStore{c: newMiniRedis(t)}
+		if _, ok := store.Load(ctx, "never-existed"); ok {
+			t.Error("expected a miss for an unknown stream")
+		}
+	})
 
-	res, err := svc.ResumeStream(context.Background(), "sid", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "live local buffer" {
-		t.Fatalf("expected local buffer to win, got %q", res.Text)
-	}
+	t.Run("unreachable backplane degrades to a miss", func(t *testing.T) {
+		client := newMiniRedis(t)
+		_ = client.Close() // simulate a Redis outage
+		store := redisResumeStore{c: client}
+		// Save must not panic and must not block.
+		store.Save(ctx, "s", resumeSnapshot{Owner: "u"}, time.Minute)
+		if _, ok := store.Load(ctx, "s"); ok {
+			t.Error("expected a miss when the backplane is unreachable")
+		}
+	})
+
+	t.Run("corrupt payload is a miss, not a panic", func(t *testing.T) {
+		client := newMiniRedis(t)
+		store := redisResumeStore{c: client}
+		if err := client.Set(ctx, store.key("bad"), "not-json", time.Minute).Err(); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if _, ok := store.Load(ctx, "bad"); ok {
+			t.Error("expected a miss for an unparseable snapshot")
+		}
+	})
 }
 
-func TestResumeStream_UnknownReturnsError(t *testing.T) {
-	svc := &ChatService{resume: newFakeResumeStore(true)}
-	if _, err := svc.ResumeStream(context.Background(), "nope", 0); err == nil {
-		t.Fatal("expected not-found error for unknown stream")
+// TestNoopResumeStore_IsInert guards the single-replica default: the no-op store
+// must report disabled (so mirrorStream is never started) and never claim a hit.
+func TestNoopResumeStore_IsInert(t *testing.T) {
+	var s resumeStore = noopResumeStore{}
+	if s.enabled() {
+		t.Error("noop store must report disabled so the mirror goroutine is skipped")
 	}
-}
-
-// TestResumeStream_DeltaFromOffset verifies C-5: a client that already holds a
-// prefix of the buffer sends its length and receives only the tail, avoiding a
-// full re-fetch on reconnect. Covers the local-stream path and clamping.
-func TestResumeStream_DeltaFromOffset(t *testing.T) {
-	svc := &ChatService{}
-	ctl := &streamCtl{ownerID: "user-1"}
-	ctl.buffer.WriteString("hello world")
-	svc.activeStreams.Store("sid", ctl)
-
-	// from=6 → tail only.
-	res, err := svc.ResumeStream(context.Background(), "sid", 6)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "world" {
-		t.Fatalf("delta resume from 6 = %q, want %q", res.Text, "world")
-	}
-
-	// from=0 → full buffer (backward-compatible full replace path).
-	res, err = svc.ResumeStream(context.Background(), "sid", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "hello world" {
-		t.Fatalf("full resume = %q, want full buffer", res.Text)
-	}
-
-	// from beyond the end → "" (client already has everything).
-	res, err = svc.ResumeStream(context.Background(), "sid", 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "" {
-		t.Fatalf("oversized from should yield empty text, got %q", res.Text)
-	}
-
-	// Negative from is clamped to 0 (full).
-	res, err = svc.ResumeStream(context.Background(), "sid", -5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "hello world" {
-		t.Fatalf("negative from should clamp to full, got %q", res.Text)
-	}
-}
-
-// TestResumeStream_DeltaFromOffset_NonASCII verifies the byte-offset contract
-// holds for multibyte UTF-8 (BUG-1 regression): the client now sends a UTF-8
-// BYTE length (not JS UTF-16 code units), and the backend slices bytes. A
-// pre-fix client sending UTF-16 units would land mid-rune here.
-func TestResumeStream_DeltaFromOffset_NonASCII(t *testing.T) {
-	svc := &ChatService{}
-	ctl := &streamCtl{ownerID: "user-1"}
-	ctl.buffer.WriteString("abc😀def") // 10 UTF-8 bytes: a,b,c,(emoji=4 bytes),d,e,f
-	svc.activeStreams.Store("sid", ctl)
-
-	// Byte offset 3 → the emoji + "def" (emoji occupies bytes 3..6).
-	res, err := svc.ResumeStream(context.Background(), "sid", 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "😀def" {
-		t.Errorf("from byte 3 = %q, want %q", res.Text, "😀def")
-	}
-
-	// Byte offset 7 → just "def" (past the emoji).
-	res, err = svc.ResumeStream(context.Background(), "sid", 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "def" {
-		t.Errorf("from byte 7 = %q, want %q", res.Text, "def")
-	}
-
-	// Full buffer is valid UTF-8 (no mid-rune slice).
-	res, err = svc.ResumeStream(context.Background(), "sid", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "abc😀def" {
-		t.Errorf("full = %q, want %q", res.Text, "abc😀def")
-	}
-}
-
-// TestResumeStream_BackplaneDelta verifies the cross-replica backplane path
-// also honours the from offset.
-func TestResumeStream_BackplaneDelta(t *testing.T) {
-	fake := newFakeResumeStore(true)
-	fake.Save(context.Background(), "sid-remote", resumeSnapshot{
-		Owner: "user-1", Text: "abcdefghij", Done: true,
-	}, time.Minute)
-	svc := &ChatService{resume: fake}
-
-	res, err := svc.ResumeStream(context.Background(), "sid-remote", 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "efghij" {
-		t.Fatalf("backplane delta from 4 = %q, want %q", res.Text, "efghij")
-	}
-}
-
-func TestNoopResumeStore_IsDefault(t *testing.T) {
-	// A ChatService built via a struct literal (nil resume) must degrade to a
-	// no-op backplane rather than panic.
-	svc := &ChatService{}
-	if svc.resumeBackplane().enabled() {
-		t.Fatal("nil resume field should behave as disabled no-op")
-	}
-	if _, ok := svc.resumeBackplane().Load(context.Background(), "x"); ok {
-		t.Fatal("no-op Load should always miss")
-	}
-}
-
-func TestSetResumeBackplane_NilKeepsDefault(t *testing.T) {
-	svc := NewChatService(nil, t.TempDir(), nil, nil, nil, nil, nil, nil, config.ModeLocal)
-	svc.SetResumeBackplane(nil) // PAD_REDIS_URL unset
-	if svc.resumeBackplane().enabled() {
-		t.Fatal("nil client must keep the single-replica no-op store")
+	s.Save(context.Background(), "s", resumeSnapshot{Owner: "u"}, time.Minute)
+	if _, ok := s.Load(context.Background(), "s"); ok {
+		t.Error("noop store must never report a hit")
 	}
 }

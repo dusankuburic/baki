@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Plus, X, MessageSquare, Wrench, CircleCheck} from 'lucide-react'
 import {useState, useRef, useEffect, useMemo} from 'react'
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export default function ChatThreadBar({threads, activeThreadId, onSelect, onCreate, onClose, onRename}: Props) {
+  const {t} = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
   // Streaming thread ids — a Set so the `.has()` lookup in the render loop is
   // O(1) and the selector only emits a new reference when the set of streaming
@@ -21,11 +23,13 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
   const streamingKey = useChatStore(s => Object.keys(s.streams).sort().join('|'))
   const streamingIds = useMemo(() => new Set(streamingKey ? streamingKey.split('|') : []), [streamingKey])
 
+  // Keep the ACTIVE tab visible. Jumping to the far right on every count
+  // change scrolled the active tab out of view whenever a thread was created
+  // (or closed) while an earlier tab was selected.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth
-    }
-  }, [threads.length])
+    const el = scrollRef.current?.querySelector<HTMLElement>('[data-active-tab="true"]')
+    el?.scrollIntoView({block: 'nearest', inline: 'nearest'})
+  }, [activeThreadId, threads.length])
 
   if (threads.length === 0) {
     return null
@@ -46,9 +50,11 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
     <div className="flex items-center gap-0 border-b border-border-subtle">
       <div
         ref={scrollRef}
-        className="flex-1 flex items-center overflow-x-auto no-scrollbar"
+        // Overflow was completely invisible under no-scrollbar; the mask fades
+        // the edge so there is an affordance that more tabs exist.
+        className="flex-1 flex items-center overflow-x-auto no-scrollbar [mask-image:linear-gradient(to_right,transparent_0,black_8px,black_calc(100%-12px),transparent_100%)]"
         role="tablist"
-        aria-label="Chat threads"
+        aria-label={t('threads.barAria')}
       >
         {threads.map((thread, i) => (
           <ThreadTab
@@ -66,8 +72,8 @@ export default function ChatThreadBar({threads, activeThreadId, onSelect, onCrea
       <button
         className="flex items-center justify-center w-6 h-6 shrink-0 mr-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors"
         onClick={onCreate}
-        title="New chat thread"
-        aria-label="New chat thread"
+        title={t('threads.newThread')}
+        aria-label={t('threads.newThread')}
       >
         <Plus size={13} />
       </button>
@@ -92,6 +98,7 @@ function ThreadTab({
   onRename: (id: string, title: string) => void
   onKeyDown: (e: React.KeyboardEvent) => void
 }) {
+  const {t} = useTranslation('chat')
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(thread.title)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -103,7 +110,7 @@ function ThreadTab({
     }
   }, [editing])
 
-  const label = thread.title || 'New chat'
+  const label = thread.title || t('threads.untitled')
 
   const handleDoubleClick = () => {
     setEditing(true)
@@ -127,9 +134,10 @@ function ThreadTab({
     <div
       role="tab"
       aria-selected={isActive}
+      data-active-tab={isActive}
       tabIndex={isActive ? 0 : -1}
       className={clsx(
-        'group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px] outline-none focus-visible:ring-1 focus-visible:ring-brand-500',
+        'chat-thread-tab group flex items-center gap-1 px-2 py-1.5 cursor-pointer border-b-2 transition-colors shrink-0 max-w-[120px] min-w-[60px] outline-none focus-visible:ring-1 focus-visible:ring-brand-500',
         isActive ? 'border-brand-500 bg-brand-500/5' : 'border-transparent hover:bg-surface-2',
       )}
       onClick={() => !editing && onSelect(thread.id)}
@@ -140,14 +148,22 @@ function ThreadTab({
     >
       <MessageSquare size={11} className={clsx('shrink-0', isActive ? 'text-brand-400' : 'text-text-tertiary')} />
       {isStreaming && (
-        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" title="Generating…" />
+        <span
+          className="shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse"
+          title={t('threads.generating')}
+        />
       )}
       {/* Agentic badges: which conversations ran tools / landed approved
           fixes. aria-labels carry the meaning; the glyphs are decorative. */}
       {thread.appliedFixes ? (
-        <CircleCheck size={10} className="shrink-0 text-semantic-success/80" aria-label="Fixes applied in this thread" role="img" />
+        <CircleCheck
+          size={10}
+          className="shrink-0 text-semantic-success/80"
+          aria-label={t('threads.fixesApplied')}
+          role="img"
+        />
       ) : thread.usedTools ? (
-        <Wrench size={10} className="shrink-0 text-text-tertiary/70" aria-label="Tools used in this thread" role="img" />
+        <Wrench size={10} className="shrink-0 text-text-tertiary/70" aria-label={t('threads.toolsUsed')} role="img" />
       ) : null}
       {editing ? (
         <input
@@ -164,7 +180,7 @@ function ThreadTab({
         />
       ) : (
         <span
-          title={thread.title || 'New chat'}
+          title={thread.title || t('threads.untitled')}
           className={clsx('truncate text-2xs', isActive ? 'text-text-secondary font-medium' : 'text-text-tertiary')}
         >
           {label}
@@ -181,8 +197,8 @@ function ThreadTab({
           e.stopPropagation()
           onClose(thread.id)
         }}
-        title="Close thread"
-        aria-label={`Close ${label}`}
+        title={t('threads.close')}
+        aria-label={t('threads.closeNamed', {name: label})}
       >
         <X size={10} />
       </button>

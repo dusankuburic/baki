@@ -26,7 +26,18 @@ describe('LiveToolTrail', () => {
   it('renders nothing while streaming with no tool activity', () => {
     useChatStore.setState({
       activeThreadId: 't1',
-      streams: {t1: {streamId: 's1', messageId: 'm1', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []}},
+      streams: {
+        t1: {
+          streamId: 's1',
+          messageId: 'm1',
+          text: '',
+          isThinking: true,
+          tokens: 0,
+          toolStatus: null,
+          toolCalls: [],
+          fixProposals: [],
+        },
+      },
     })
     render(<LiveToolTrail />)
     act(() => {
@@ -38,21 +49,23 @@ describe('LiveToolTrail', () => {
   it('shows the current tool label plus the last finished calls', () => {
     useChatStore.setState({
       activeThreadId: 't1',
-      streams: {t1: {
-        streamId: 's1',
-        messageId: 'm1',
-        text: '',
-        isThinking: true,
-        tokens: 0,
-        toolStatus: 'Searching flow',
-        toolCalls: [
-          {name: 'read_doc', label: 'Reading document', ok: true, durationMs: 900, summary: 'ok'},
-          {name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 1100, summary: 'ok'},
-          {name: 'search_flow', label: 'Searching flow', ok: true, summary: 'ok'},
-          {name: 'get_block', label: 'Reading block', ok: false, durationMs: 50, summary: 'error'},
-        ],
-        fixProposals: [],
-      }},
+      streams: {
+        t1: {
+          streamId: 's1',
+          messageId: 'm1',
+          text: '',
+          isThinking: true,
+          tokens: 0,
+          toolStatus: 'Searching flow',
+          toolCalls: [
+            {name: 'read_doc', label: 'Reading document', ok: true, durationMs: 900, summary: 'ok'},
+            {name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 1100, summary: 'ok'},
+            {name: 'search_flow', label: 'Searching flow', ok: true, summary: 'ok'},
+            {name: 'get_block', label: 'Reading block', ok: false, durationMs: 50, summary: 'error'},
+          ],
+          fixProposals: [],
+        },
+      },
     })
     render(<LiveToolTrail />)
     act(() => {
@@ -74,12 +87,18 @@ describe('LiveToolTrail', () => {
   it('keeps the finished trail after the status clears (answer streaming)', () => {
     useChatStore.setState({
       activeThreadId: 't1',
-      streams: {t1: {
-        streamId: 's1', messageId: 'm1', text: 'partial answer', isThinking: false, tokens: 4,
-        toolStatus: null,
-        toolCalls: [{name: 'search_flow', label: 'Searching flow', ok: true, summary: '2 matches'}],
-        fixProposals: [],
-      }},
+      streams: {
+        t1: {
+          streamId: 's1',
+          messageId: 'm1',
+          text: 'partial answer',
+          isThinking: false,
+          tokens: 4,
+          toolStatus: null,
+          toolCalls: [{name: 'search_flow', label: 'Searching flow', ok: true, summary: '2 matches'}],
+          fixProposals: [],
+        },
+      },
     })
     render(<LiveToolTrail />)
     act(() => {
@@ -103,7 +122,18 @@ describe('LiveToolTrail expand (V1.3)', () => {
   it('shows the expand affordance when older calls are hidden, and expands', () => {
     useChatStore.setState({
       activeThreadId: 't1',
-      streams: {t1: {streamId: 's1', messageId: 'm1', text: '', isThinking: false, tokens: 0, toolCalls: five, toolStatus: null, fixProposals: []}},
+      streams: {
+        t1: {
+          streamId: 's1',
+          messageId: 'm1',
+          text: '',
+          isThinking: false,
+          tokens: 0,
+          toolCalls: five,
+          toolStatus: null,
+          fixProposals: [],
+        },
+      },
     })
     render(<LiveToolTrail />)
     act(() => {

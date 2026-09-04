@@ -55,6 +55,11 @@ type AnalysisService struct {
 	settings    SettingsProvider
 	history     *analyzer.HistoryStore
 	customRules []analyzer.Rule
+	// profiles resolves the per-org rule profile (which rules run, at what
+	// severity). Nil in desktop/local mode and in tests that don't need it, in
+	// which case analysis falls back to the deployment settings + the
+	// file-loaded custom rules — the pre-R4 behaviour.
+	profiles *RuleProfileResolver
 
 	mu      sync.Mutex
 	reports *lru.Cache[string, *reportPair]
@@ -82,6 +87,21 @@ func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, histo
 // built-in rules. Invalid entries are skipped with a startup WARNING each (a
 // silent skip used to leave operators believing a typo'd rule was enforcing);
 // a missing file is a no-op.
+// SetRuleProfileResolver injects the per-org rule resolver. Wired by DI in
+// cloud mode; left nil in local mode where there are no orgs. Call before the
+// service serves traffic.
+func (s *AnalysisService) SetRuleProfileResolver(r *RuleProfileResolver) {
+	s.profiles = r
+}
+
+// SetCustomRules installs already-compiled deployment rules. DI loads the file
+// once (ProvideDeploymentCustomRules) and hands the same slice to both this
+// service and the RuleProfileResolver, so the two cannot disagree about the
+// deployment layer.
+func (s *AnalysisService) SetCustomRules(rules DeploymentCustomRules) {
+	s.customRules = rules
+}
+
 func (s *AnalysisService) LoadCustomRules(path string) {
 	if path == "" {
 		return
@@ -131,10 +151,25 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 		return nil, err
 	}
 
-	settings := s.settings.Get()
-	rules := analyzer.AllRules()
-	if len(s.customRules) > 0 {
-		rules = append(rules, s.customRules...)
+	// Which rules run, and at what severity, is resolved for the flow's OWNING
+	// ORG. Before R4 both came from process-global state, so one tenant's rule
+	// toggle changed analysis for every other tenant in the deployment.
+	//
+	// The resolved rule set feeds analyzer.CachedAnalysisCtx below, whose key
+	// includes a digest of that set (analyzer.ruleSetDigest) — without it two
+	// orgs whose flows share a name and content would share a cached report and
+	// one would receive the other's custom-rule findings.
+	var settings *models.AppSettings
+	var rules []analyzer.Rule
+	if s.profiles != nil {
+		profile := s.profiles.Resolve(ctx, doc.OrganizationID)
+		settings, rules = profile.Settings, profile.Rules
+	} else {
+		settings = s.settings.Get()
+		rules = analyzer.AllRules()
+		if len(s.customRules) > 0 {
+			rules = append(rules, s.customRules...)
+		}
 	}
 
 	// Extract userID for per-user event delivery (prevents cross-tenant leaks).
@@ -218,6 +253,36 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 // PreviousReport returns the analysis run recorded immediately before the
 // current one for the flow, or (nil, false) when only zero or one distinct
 // runs have happened.
+// TestRule runs ONE candidate rule against a document and returns just its
+// findings. Nothing is cached, recorded, or emitted.
+//
+// It exists because "the rule compiles" and "the rule does anything" are
+// different questions, and only the first was answerable before: an author
+// could save a regex that never matches and believe the org was protected. That
+// is the same failure R1-5's suppression inventory was built to expose — a
+// directive that silently masks nothing.
+//
+// Deliberately NOT routed through CachedAnalysisCtx: a candidate rule is not
+// part of any org's profile, so caching its result would put an entry keyed on
+// a rule set that no analysis will ever request again.
+func (s *AnalysisService) TestRule(ctx context.Context, doc *models.FlowDocument, cfg analyzer.CustomRuleConfig) ([]models.Finding, error) {
+	if doc == nil {
+		return nil, fmt.Errorf("no flow loaded")
+	}
+	rule, err := analyzer.NewCustomRule(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid rule: %w", err)
+	}
+	// Settings are nil: a candidate rule has no configured enable/severity
+	// entry, and passing the org profile would let a DISABLED same-id rule
+	// silence the very thing being tested.
+	report := analyzer.RunAnalysisCtx(ctx, doc, []analyzer.Rule{rule}, nil, nil)
+	if report == nil {
+		return nil, fmt.Errorf("analysis produced no result")
+	}
+	return report.Findings, nil
+}
+
 func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
 	if s == nil || s.reports == nil {
 		return nil, false

@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import type {AnalysisReport, Severity} from '@/types'
 import {useAsync} from '@/hooks/useAsync'
@@ -26,6 +27,7 @@ const sevLabel: Record<Severity, string> = {
 }
 
 export default function SharedReportView() {
+  const {t} = useTranslation()
   const {
     data,
     isLoading: loading,
@@ -33,9 +35,9 @@ export default function SharedReportView() {
   } = useAsync<SharedData>(() => {
     const params = new URLSearchParams(window.location.search)
     const token = params.get('token')
-    if (!token) return Promise.reject(new Error('No share token provided.'))
+    if (!token) return Promise.reject(new Error(t('sharedReport.noToken')))
     return fetch(`/api/shared?token=${encodeURIComponent(token)}`).then(async res => {
-      if (!res.ok) throw new Error(res.status === 404 ? 'Invalid or expired link.' : 'Failed to load report.')
+      if (!res.ok) throw new Error(res.status === 404 ? t('sharedReport.invalidLink') : t('sharedReport.loadFailed'))
       return res.json() as Promise<SharedData>
     })
   }, [])
@@ -43,7 +45,7 @@ export default function SharedReportView() {
   if (loading) {
     return (
       <div className="min-h-screen bg-surface-1 text-text-primary flex items-center justify-center">
-        <p className="text-sm text-text-tertiary">Loading report…</p>
+        <p className="text-sm text-text-tertiary">{t('sharedReport.loading')}</p>
       </div>
     )
   }
@@ -52,7 +54,7 @@ export default function SharedReportView() {
     return (
       <div className="min-h-screen bg-surface-1 text-text-primary flex items-center justify-center">
         <div className="text-center space-y-2">
-          <p className="text-lg font-medium text-text-primary">Cannot open report</p>
+          <p className="text-lg font-medium text-text-primary">{t('sharedReport.cannotOpen')}</p>
           <p className="text-sm text-text-tertiary">{error}</p>
           <p className="text-xs text-text-disabled mt-4">
             The link may have expired or been revoked. Contact the flow owner for a new link.
@@ -83,26 +85,24 @@ export default function SharedReportView() {
       <div className="border-b border-border-subtle px-6 py-4">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-lg font-semibold">{data.flowName || 'Shared Report'}</span>
-            <span className="text-2xs text-text-disabled uppercase tracking-wider">Read-only</span>
+            <span className="text-lg font-semibold">{data.flowName || t('sharedReport.fallbackTitle')}</span>
+            <span className="text-2xs text-text-disabled uppercase tracking-wider">{t('sharedReport.readOnly')}</span>
           </div>
           {report.stats && (
             <div className="flex items-center gap-3 text-sm">
               {report.stats.errors > 0 && (
-                <span className="text-red-400">
-                  {report.stats.errors} error{report.stats.errors !== 1 ? 's' : ''}
-                </span>
+                <span className="text-red-400">{t('sharedReport.errors', {count: report.stats.errors})}</span>
               )}
               {report.stats.warnings > 0 && (
-                <span className="text-amber-400">
-                  {report.stats.warnings} warning{report.stats.warnings !== 1 ? 's' : ''}
-                </span>
+                <span className="text-amber-400">{t('sharedReport.warnings', {count: report.stats.warnings})}</span>
               )}
-              {report.stats.info > 0 && <span className="text-blue-400">{report.stats.info} info</span>}
-              {findings.length === 0 && <span className="text-emerald-400">No findings — the flow looks good!</span>}
+              {report.stats.info > 0 && (
+                <span className="text-blue-400">{t('sharedReport.info', {count: report.stats.info})}</span>
+              )}
+              {findings.length === 0 && <span className="text-emerald-400">{t('sharedReport.clean')}</span>}
               {report.metrics?.healthScore !== undefined && (
                 <span className="text-text-tertiary ml-auto">
-                  Health:{' '}
+                  {t('sharedReport.health')}{' '}
                   <span
                     className={clsx(
                       'font-medium',
@@ -125,7 +125,7 @@ export default function SharedReportView() {
       {/* Findings */}
       <div className="max-w-4xl mx-auto px-6 py-4 space-y-3">
         {sortedGroups.length === 0 ? (
-          <div className="text-center py-12 text-text-tertiary">No findings detected.</div>
+          <div className="text-center py-12 text-text-tertiary">{t('sharedReport.empty')}</div>
         ) : (
           sortedGroups.map(([ruleId, groupFindings]) => (
             <div key={ruleId} className="rounded-lg border border-border-subtle overflow-hidden">

@@ -61,11 +61,22 @@
       fi
       # Save the exit code for the after_script gate check
       echo "$code" > .gate-exit-code
-    # Fail the job if the gate failed (unless fail-on=none)
+    # Fail the job if the gate failed.
+    #
+    # The guard must also fire when a POLICY is set. POLICY is documented as the
+    # authoritative gate that overrides FAIL_ON — and the script above does not
+    # even pass -fail-on when one is configured — so POLICY=<file> with
+    # FAIL_ON=none is the natural way to ask for policy-only gating. Keying
+    # enforcement on FAIL_ON alone passed the pipeline on a policy violation.
     - |
-      if [ "$FAIL_ON" != "none" ]; then
+      if [ "$FAIL_ON" != "none" ] || [ -n "$POLICY" ]; then
         code=$(cat .gate-exit-code)
         if [ "$code" != "0" ]; then
+          if [ -n "$POLICY" ]; then
+            echo "PAD analysis gate failed (policy=$POLICY)."
+          else
+            echo "PAD analysis gate failed (fail-on=$FAIL_ON)."
+          fi
           exit "$code"
         fi
       fi

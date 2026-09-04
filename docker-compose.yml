@@ -8,7 +8,22 @@ services:
     ports:
       - "${PAD_PORT:-8080}:${PAD_PORT:-8080}"
     environment:
-      - PAD_DATABASE_URL=${PAD_DATABASE_URL:-postgres://postgres:postgres@db:5432/baki?sslmode=prefer}
+      # baki_app, NOT postgres: a superuser (or any BYPASSRLS role) ignores
+      # every Row-Level Security policy in the schema, which silently disables
+      # the second of the two tenant-isolation layers. scripts/db-init creates
+      # this role on first volume init. See that file for existing deployments.
+      - PAD_DATABASE_URL=${PAD_DATABASE_URL:-postgres://baki_app:baki_app@db:5432/baki?sslmode=disable}
+      # LOCAL DEVELOPMENT ONLY. The image ships PAD_MODE=cloud, and cloud mode
+      # defaults to requiring TLS on the database connection — so without this
+      # the app REFUSES TO START against the db service below, which serves no
+      # TLS at all. sslmode=prefer does not help: it is not in the accepted set
+      # (only require/verify-ca/verify-full are), and sslmode=require fails at
+      # the handshake because the server has no certificate.
+      #
+      # docker-compose.prod.yml sets PAD_DB_REQUIRE_SSL=true explicitly so a
+      # production stack can never inherit this relaxation. If you point this
+      # base file at a real database, drop this line and use sslmode=require.
+      - PAD_DB_REQUIRE_SSL=false
       - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
       - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080}
     depends_on:
@@ -30,7 +45,11 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgres:16-alpine
+    # pgvector, not plain postgres: the `vector` extension backs knowledge-base
+    # similarity search. On the stock image the extension does not exist, so
+    # migration v20 no-ops and search silently falls back to ranking chunks in
+    # Go. Matches the image CI runs against.
+    image: pgvector/pgvector:pg16
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -39,6 +58,12 @@ services:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Runs ONLY on an empty data volume (postgres entrypoint behaviour):
+      # creates the unprivileged baki_app role, hands it ownership so its
+      # migrations can FORCE ROW LEVEL SECURITY, and pre-installs pgvector
+      # (untrusted, so it needs the superuser). Read-only mount — nothing in
+      # here should ever be writable by the container.
+      - ./scripts/db-init:/docker-entrypoint-initdb.d:ro
     # no-new-privileges only: the entrypoint's root bootstrap (chown on the
     # data dir) still needs capabilities, so cap_drop stays off for db.
     security_opt: ["no-new-privileges:true"]

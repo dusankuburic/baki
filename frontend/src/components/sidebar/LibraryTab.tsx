@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState, useEffect} from 'react'
 import {Library, Search, Trash2, FolderOpen, Save, RefreshCw} from 'lucide-react'
 import {libraryApi, type LibraryFlow} from '@/api/library'
@@ -12,6 +13,7 @@ import {relativeTime, absoluteTime} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
 
 export default function LibraryTab() {
+  const {t} = useTranslation(['shell', 'common'])
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [isSaving, setIsSaving] = useState(false)
@@ -60,8 +62,8 @@ export default function LibraryTab() {
       })
       setMainPaneView('block')
     } catch (err) {
-      toast.error('Failed to load flow', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+      toast.error(t('libraryTab.loadFailed'), {
+        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
       })
     }
   }
@@ -70,20 +72,18 @@ export default function LibraryTab() {
     e.stopPropagation()
     const name = flows.find(f => f.id === id)?.name
     const ok = await confirm({
-      title: 'Delete flow',
-      message: name
-        ? `Delete "${name}" from the library? This cannot be undone.`
-        : 'Delete this flow from the library? This cannot be undone.',
+      title: t('libraryTab.deleteTitle'),
+      message: name ? t('libraryTab.deleteNamed', {name}) : t('libraryTab.deleteUnnamed'),
       danger: true,
-      confirmLabel: 'Delete',
+      confirmLabel: t('common:delete'),
     })
     if (!ok) return
     try {
       await libraryApi.delete(id)
       setFlows(flows.filter(f => f.id !== id))
     } catch (err) {
-      toast.error('Failed to delete', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+      toast.error(t('libraryTab.deleteFailed'), {
+        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
       })
     }
   }
@@ -93,10 +93,10 @@ export default function LibraryTab() {
       const [fullDoc, meta] = await Promise.all([libraryApi.getContent(id), libraryApi.get(id)])
       setDocument(fullDoc as FlowDocument)
       useFlowStore.setState({libraryVersion: meta.version})
-      toast.success('Reloaded latest version')
+      toast.success(t('libraryTab.reloaded'))
     } catch (err) {
-      toast.error('Failed to reload', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+      toast.error(t('libraryTab.reloadFailed'), {
+        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
       })
     }
   }
@@ -112,21 +112,21 @@ export default function LibraryTab() {
           version: libraryVersion,
         })
         useFlowStore.setState({libraryVersion: updated.version})
-        toast.success('Flow updated')
+        toast.success(t('libraryTab.updated'))
         fetchLibrary()
       } catch (err) {
         if (err instanceof VersionConflictError) {
-          toast.warning('Flow was modified by another user', {
-            description: 'Reload the latest version to see their changes.',
+          toast.warning(t('libraryTab.conflictTitle'), {
+            description: t('libraryTab.conflictBody'),
             duration: 15000,
             action: {
-              label: 'Reload',
+              label: t('libraryTab.reload'),
               onClick: () => reloadFromLibrary(libraryFlowId),
             },
           })
         } else {
-          toast.error('Failed to update flow', {
-            description: err instanceof Error ? err.message : 'Unknown error',
+          toast.error(t('libraryTab.updateFailed'), {
+            description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
           })
         }
       } finally {
@@ -136,10 +136,10 @@ export default function LibraryTab() {
     }
 
     const name = await prompt({
-      title: 'Save to library',
-      label: 'Flow name',
+      title: t('libraryTab.savePromptTitle'),
+      label: t('libraryTab.savePromptLabel'),
       initialValue: currentDoc.name,
-      placeholder: 'Enter a name for the library flow',
+      placeholder: t('libraryTab.savePromptPlaceholder'),
       confirmLabel: 'Save',
     })
     if (!name) return
@@ -155,11 +155,11 @@ export default function LibraryTab() {
         libraryFlowId: created.id,
         libraryVersion: created.version,
       })
-      toast.success('Flow saved to library')
+      toast.success(t('libraryTab.saved'))
       fetchLibrary()
     } catch (err) {
-      toast.error('Failed to save to library', {
-        description: err instanceof Error ? err.message : 'Unknown error',
+      toast.error(t('libraryTab.saveFailed'), {
+        description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
       })
     } finally {
       setIsSaving(false)
@@ -173,7 +173,7 @@ export default function LibraryTab() {
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
           <input
             type="text"
-            placeholder="Search library..."
+            placeholder={t('libraryTab.searchPlaceholder')}
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full bg-surface-2 border border-border-default rounded-md py-1.5 pl-8 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-brand-500"
@@ -187,7 +187,7 @@ export default function LibraryTab() {
             className="flex items-center justify-center gap-1.5 w-full py-1.5 bg-brand-600 text-brand-foreground rounded-md text-xs font-medium hover:bg-brand-700 transition-colors shadow-sm disabled:opacity-50"
           >
             {isSaving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
-            {libraryFlowId ? 'Update library flow' : 'Save current to library'}
+            {libraryFlowId ? t('libraryTab.updateFlow') : t('libraryTab.saveCurrent')}
           </button>
         )}
       </div>
@@ -235,7 +235,7 @@ export default function LibraryTab() {
                   {f.isSharedWithMe && (
                     <>
                       <span>·</span>
-                      <span className="text-blue-500 font-medium">Shared</span>
+                      <span className="text-blue-500 font-medium">{t('libraryTab.shared')}</span>
                     </>
                   )}
                 </div>
@@ -245,7 +245,7 @@ export default function LibraryTab() {
         ) : (
           <div className="flex flex-col items-center justify-center p-8 text-center text-text-tertiary">
             <Library size={24} className="mb-2 opacity-20" />
-            <p className="text-xs">No flows found in your library.</p>
+            <p className="text-xs">{t('libraryTab.empty')}</p>
           </div>
         )}
       </div>

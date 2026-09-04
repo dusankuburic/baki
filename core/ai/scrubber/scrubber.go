@@ -299,6 +299,20 @@ func ScrubText(text string) string {
 	return result
 }
 
+// HasCompleteSecret reports whether b already contains a finished secret
+// match. The stream scrubber uses it to distinguish "still waiting to find out
+// whether this is a secret" from "this IS a secret and we are only deciding
+// how much trailing text the redaction covers" — the second case can be
+// released early without weakening detection.
+func HasCompleteSecret(b []byte) bool {
+	for _, pat := range secretRegexes {
+		if pat.Match(b) {
+			return true
+		}
+	}
+	return false
+}
+
 func maskMatch(pat *regexp.Regexp, match string) string {
 	// If the regex has a submatch (capture group), we only mask the capture group.
 	// Otherwise, we mask the whole string.

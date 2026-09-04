@@ -45,7 +45,9 @@ export default function HomeDashboard() {
   const loadIdRef = useRef(0)
   const hasDataRef = useRef(false)
   const toastRef = useRef(toast)
-  toastRef.current = toast
+  useEffect(() => {
+    toastRef.current = toast
+  })
 
   const load = useCallback(() => {
     loadIdRef.current++
@@ -83,10 +85,16 @@ export default function HomeDashboard() {
 
   useEffect(() => {
     hasDataRef.current = false
+    // Enters the loading state for an async fetch (external system).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setError(null)
     load()
     return () => {
+      // Incrementing the LIVE ref is the point — this invalidates whatever
+      // request is in flight. The rule's suggested local copy would pin a
+      // stale id and stop cancelling anything.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       loadIdRef.current++
     }
   }, [load, activeOrgId, docId])

@@ -137,7 +137,9 @@ export const flowApi = {
   // Snapshot (undo) API: every fix/batch/source-save captures the pre-mutation
   // source server-side; restore writes it back (desktop: file; cloud: OCC
   // persist) and returns the re-loaded document.
-  listSnapshots: (flowId: string): Promise<{snapshots: {id: string; label: string; createdAt: string; bytes: number}[]}> =>
+  listSnapshots: (
+    flowId: string,
+  ): Promise<{snapshots: {id: string; label: string; createdAt: string; bytes: number}[]}> =>
     request(`/api/flow/snapshots${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
 
   restoreSnapshot: (flowId: string, snapshotId: string): Promise<{document: FlowDocument}> =>
@@ -146,8 +148,11 @@ export const flowApi = {
   // Property editing + reordering (R3-2): targeted in-line property replaces
   // (other properties' text untouched) and sibling moves. Same undo/parse-gate
   // guarantees as the other block edits.
-  updateBlockProperties: (flowId: string, blockId: string, changes: Record<string, string>): Promise<{document: FlowDocument}> =>
-    request('/api/flow/block/properties', {body: {flowId, blockId, changes}}),
+  updateBlockProperties: (
+    flowId: string,
+    blockId: string,
+    changes: Record<string, string>,
+  ): Promise<{document: FlowDocument}> => request('/api/flow/block/properties', {body: {flowId, blockId, changes}}),
 
   moveBlock: (flowId: string, blockId: string, direction: 'up' | 'down'): Promise<{document: FlowDocument}> =>
     request('/api/flow/block/move', {body: {flowId, blockId, direction}}),
@@ -173,7 +178,11 @@ export const flowApi = {
     request('/api/flow/block/remove-batch', {body: {flowId, blockIds}}),
 
   // renameBlock renames LABEL/COMMENT blocks; labels rewrite their GOTO refs.
-  renameBlock: (flowId: string, blockId: string, name: string): Promise<{document: FlowDocument; gotoRefsUpdated: number}> =>
+  renameBlock: (
+    flowId: string,
+    blockId: string,
+    name: string,
+  ): Promise<{document: FlowDocument; gotoRefsUpdated: number}> =>
     request('/api/flow/block/rename', {body: {flowId, blockId, name}}),
 
   duplicateBlock: (flowId: string, blockId: string): Promise<{document: FlowDocument}> =>

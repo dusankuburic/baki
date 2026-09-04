@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useEffect, useState} from 'react'
 import {Check, User, Shield, Radio} from 'lucide-react'
 import {Spinner} from '@/components/shared'
@@ -9,6 +10,7 @@ import {useSyncStore} from '@/stores/syncStore'
 import {subscribeConnectionState, type EventConnectionState} from '@/api/client'
 
 export default function StatusBar() {
+  const {t} = useTranslation('shell')
   const document = useFlowStore(s => s.document)
   const isParsing = useFlowStore(s => s.isParsing)
   const parseProgress = useFlowStore(s => s.parseProgress)
@@ -35,49 +37,53 @@ export default function StatusBar() {
         {document ? (
           <>
             <Check size={12} className="text-semantic-success" />
-            <span>
-              Parsed {blockCount} blocks · {subflowCount} subflows
-            </span>
+            <span>{t('status.parsed', {blocks: blockCount, subflows: subflowCount})}</span>
             {isAnalyzing && (
               <span className="flex items-center gap-1 ml-2">
                 <Spinner size={10} />
-                Analyzing... {progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0}%
+                {t('status.analyzing', {
+                  percent: progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0,
+                })}
               </span>
             )}
             {!isAnalyzing && report && (
               <span className="ml-2">
-                · {findingTotal} findings ({report.stats.errors} errors, {report.stats.warnings} warnings)
+                {t('status.findingsSummary', {
+                  total: findingTotal,
+                  errors: report.stats.errors,
+                  warnings: report.stats.warnings,
+                })}
               </span>
             )}
           </>
         ) : isParsing ? (
           <span className="flex items-center gap-1">
             <Spinner size={10} />
-            Parsing... {parseProgress > 0 ? `${parseProgress}%` : ''}
+            {t('status.parsing', {percent: parseProgress > 0 ? `${parseProgress}%` : ''})}
           </span>
         ) : (
-          <span>Ready</span>
+          <span>{t('status.ready')}</span>
         )}
       </div>
       <div className="flex items-center gap-4">
         {conn === 'open' && (
-          <span className="flex items-center gap-1 text-semantic-success" title="Live updates connected">
+          <span className="flex items-center gap-1 text-semantic-success" title={t('status.liveTitle')}>
             <Radio size={10} />
-            <span>Live</span>
+            <span>{t('status.live')}</span>
           </span>
         )}
         {(conn === 'reconnecting' || conn === 'connecting') && (
-          <span className="flex items-center gap-1 text-semantic-warning" title="Live updates connection">
+          <span className="flex items-center gap-1 text-semantic-warning" title={t('status.connectionTitle')}>
             <Spinner size={10} />
-            {conn === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+            {conn === 'reconnecting' ? t('status.reconnecting') : t('status.connecting')}
           </span>
         )}
         {pendingCount > 0 && (
           <span
             className="flex items-center gap-1 text-semantic-warning"
-            title={`${pendingCount} change(s) pending sync`}
+            title={t('status.pendingTitle', {count: pendingCount})}
           >
-            <span>⇅ {pendingCount} unsaved</span>
+            <span>{t('status.unsaved', {count: pendingCount})}</span>
           </span>
         )}
         {user && (
@@ -86,16 +92,16 @@ export default function StatusBar() {
               <button
                 onClick={() => setMainPaneView('admin')}
                 className="flex items-center gap-1 hover:text-text-secondary transition-colors"
-                title="Admin Dashboard"
+                title={t('status.adminTitle')}
               >
                 <Shield size={12} />
-                <span>Admin</span>
+                <span>{t('status.admin')}</span>
               </button>
             )}
             <button
               onClick={() => setMainPaneView('profile')}
               className="flex items-center gap-1 hover:text-text-secondary transition-colors"
-              title="User Profile"
+              title={t('status.profileTitle')}
             >
               <User size={12} />
               <span>{user.email}</span>

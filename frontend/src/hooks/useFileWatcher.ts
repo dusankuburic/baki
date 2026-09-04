@@ -86,8 +86,7 @@ export function useFileWatcher(doc: FlowDocument | null) {
         return
       }
       const base = baselineRef.current
-      const changed =
-        meta.files !== base.files || meta.size !== base.size || meta.modTime !== base.modTime
+      const changed = meta.files !== base.files || meta.size !== base.size || meta.modTime !== base.modTime
       if (!changed) {
         settlingRef.current = false
         return

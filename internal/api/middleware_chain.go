@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"pad-analyzer/internal/config"
 	"pad-core/logger"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -106,7 +108,9 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		middleware.Recovery(
 			middleware.RequestTimeout(timeoutDur)(
 				middleware.Compress(
-					middleware.AccessLog(cfg.Server.TrustedProxies)(middleware.Metrics(routerWithLimits)),
+					middleware.AccessLog(cfg.Server.TrustedProxies)(
+						middleware.Metrics(routerWithLimits, staticRoutePatterns(router.mux)),
+					),
 				),
 			),
 		),
@@ -154,11 +158,47 @@ var expensiveGetPaths = map[string]struct{}{
 	"/api/shared": {},
 }
 
+// canonicalRequestPath returns the path the router will ACTUALLY dispatch on,
+// given a raw inbound request path. It is the single definition of that
+// normalization, shared by two callers that must never disagree:
+//
+//   - registerRoutes's version-alias middleware (inside the chi mux), and
+//   - rateLimitGroup, which runs in BuildHandler's layer 7 — OUTSIDE the mux,
+//     and therefore before any of this has been applied to r.URL.Path.
+//
+// That ordering was a rate-limit bypass. The classifier saw the raw string, so
+// `POST /api/v1/auth/login` and `POST /api/auth/./login` both routed to the
+// real login handler but classified as "general" (60/min by default) instead
+// of "auth" (5/min) — a 12x brute-force and password-reset-email
+// amplification. The same trick moved chat spend and uploads off their
+// dedicated buckets. Any future normalization the router grows belongs here,
+// so the classifier inherits it automatically.
+//
+// The two steps mirror the router exactly and in the same order: path.Clean
+// (Router.ServeHTTP) collapses ".", "..", and duplicate slashes; the /api/v1
+// alias strip (registerRoutes) follows. "/api/v1" must be a whole segment —
+// "/api/v1foo" is a distinct path and is left alone.
+func canonicalRequestPath(p string) string {
+	p = path.Clean(p)
+	if rest := strings.TrimPrefix(p, "/api/v1/"); rest != p {
+		return "/api/" + rest
+	}
+	if p == "/api/v1" {
+		return "/api"
+	}
+	return p
+}
+
 // rateLimitGroup classifies a request into its rate-limit group. It is a pure
 // function (no I/O) so the routing policy can be unit-tested independently of
 // the fx wiring. Order matters only in that the explicit checks take precedence
 // over the general fallback.
+//
+// The path is normalized first: this runs outside the mux, so a raw
+// non-canonical spelling would otherwise be classified on a string that never
+// reaches a handler (see canonicalRequestPath).
 func rateLimitGroup(method, path string) string {
+	path = canonicalRequestPath(path)
 	if _, ok := authRateLimitPaths[path]; ok {
 		return rlGroupAuth
 	}
@@ -177,4 +217,30 @@ func rateLimitGroup(method, path string) string {
 		}
 	}
 	return rlGroupGeneral
+}
+
+// staticRoutePatterns returns the set of registered route patterns that carry
+// no dynamic segment, read from the router's own chi route tree.
+//
+// It bounds the Prometheus "route" label (see middleware.Metrics). Deriving it
+// from the live tree rather than a hand-written list is the point: the list
+// cannot drift from the routes, and a route added tomorrow is recognized
+// without anyone remembering to update a second place.
+func staticRoutePatterns(mux *chi.Mux) map[string]struct{} {
+	out := make(map[string]struct{}, 192)
+	// Walk only errors if the walk function does; ours never does.
+	_ = chi.Walk(mux, func(_ string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if strings.ContainsAny(route, "{*") {
+			return nil // dynamic — handled by an explicit collapse, or routeOther
+		}
+		// chi reports nested subrouter patterns with a trailing slash
+		// ("/api/orgs/" for a Route group's own index); requests arrive
+		// path.Clean'd, which strips it.
+		if route != "/" {
+			route = strings.TrimSuffix(route, "/")
+		}
+		out[route] = struct{}{}
+		return nil
+	})
+	return out
 }

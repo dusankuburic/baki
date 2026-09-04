@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useEffect} from 'react'
 import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
@@ -9,6 +10,7 @@ import {useToast} from '@/components/shared'
 import type {RecentFile} from '@/types'
 
 export function useFileOpen() {
+  const {t} = useTranslation('shell')
   const document = useFlowStore(s => s.document)
   const setDocument = useFlowStore(s => s.setDocument)
   const setFolderFiles = useFlowStore(s => s.setFolderFiles)
@@ -51,7 +53,7 @@ export function useFileOpen() {
     const gen = beginDocLoad()
     setIsLoadingState()
     try {
-      const doc = await flowApi.uploadFlow('Untitled flow', {
+      const doc = await flowApi.uploadFlow(t('files.untitledFlow'), {
         'Main.txt': '#Region "Main"\n#EndRegion\n',
       })
       if (doc && isDocLoadCurrent(gen)) {
@@ -59,16 +61,18 @@ export function useFileOpen() {
         setFolderFiles([])
         setSelectedFilePath(doc.filePath)
         checkView()
-        toast.success('New flow created', {description: 'Start in the source editor: Add action builds PAD lines for you.'})
+        toast.success(t('files.created'), {
+          description: t('files.createdHint'),
+        })
       }
     } catch (err) {
       logger.warn('Failed to create flow:', err)
       if (isDocLoadCurrent(gen))
-        toast.error('Failed to create flow', {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.createFailed'), {description: err instanceof Error ? err.message : String(err)})
     } finally {
       if (isDocLoadCurrent(gen)) endLoad()
     }
-  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast])
+  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, endLoad, setIsLoadingState, t])
 
   const handleOpenFile = useCallback(async () => {
     const gen = beginDocLoad()
@@ -84,11 +88,11 @@ export function useFileOpen() {
     } catch (err) {
       logger.warn('Failed to open file:', err)
       if (isDocLoadCurrent(gen))
-        toast.error('Failed to open file', {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.openFileFailed'), {description: err instanceof Error ? err.message : String(err)})
     } finally {
       if (isDocLoadCurrent(gen)) endLoad()
     }
-  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, setIsLoadingState, endLoad])
+  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, setIsLoadingState, endLoad, t])
 
   const handleOpenFolder = useCallback(async () => {
     const gen = beginDocLoad()
@@ -106,11 +110,11 @@ export function useFileOpen() {
     } catch (err) {
       logger.warn('Failed to open folder:', err)
       if (isDocLoadCurrent(gen))
-        toast.error('Failed to open folder', {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.openFolderFailed'), {description: err instanceof Error ? err.message : String(err)})
     } finally {
       if (isDocLoadCurrent(gen)) endLoad()
     }
-  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, setIsLoadingState, endLoad])
+  }, [setDocument, setFolderFiles, setSelectedFilePath, checkView, toast, setIsLoadingState, endLoad, t])
 
   const handleSelectFolderFile = useCallback(
     async (path: string) => {
@@ -127,7 +131,7 @@ export function useFileOpen() {
       }
 
       if (!getPlatformCapabilities().fileSystem) {
-        toast.error('This action requires the desktop app')
+        toast.error(t('files.desktopOnly'))
         return
       }
 
@@ -142,12 +146,12 @@ export function useFileOpen() {
       } catch (err) {
         logger.warn('Failed to load file:', err)
         if (isDocLoadCurrent(gen))
-          toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
+          toast.error(t('files.loadFailed'), {description: err instanceof Error ? err.message : String(err)})
       } finally {
         if (isDocLoadCurrent(gen)) endLoad()
       }
     },
-    [setDocument, setSelectedFilePath, openInGroup, checkView, toast, setIsLoadingState, endLoad],
+    [setDocument, setSelectedFilePath, openInGroup, checkView, toast, setIsLoadingState, endLoad, t],
   )
 
   const handleLoadRecent = useCallback(
@@ -172,12 +176,12 @@ export function useFileOpen() {
       } catch (err) {
         logger.warn('Failed to load recent item:', err)
         if (isDocLoadCurrent(gen))
-          toast.error('Failed to load file', {description: err instanceof Error ? err.message : String(err)})
+          toast.error(t('files.loadFailed'), {description: err instanceof Error ? err.message : String(err)})
       } finally {
         if (isDocLoadCurrent(gen)) endLoad()
       }
     },
-    [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast, setIsLoadingState, endLoad],
+    [setDocument, setFolderFiles, setSelectedFilePath, recentFiles, checkView, toast, setIsLoadingState, endLoad, t],
   )
 
   const handleRemoveRecent = useCallback(async (path: string) => {
@@ -204,17 +208,17 @@ export function useFileOpen() {
   const handleRevealFile = useCallback(
     async (path: string) => {
       if (!getPlatformCapabilities().fileSystem) {
-        toast.error('This action requires the desktop app')
+        toast.error(t('files.desktopOnly'))
         return
       }
       try {
         await flowApi.revealInFileManager(path)
       } catch (err) {
         logger.warn('Failed to reveal file:', err)
-        toast.error('Failed to reveal file', {description: err instanceof Error ? err.message : String(err)})
+        toast.error(t('files.revealFailed'), {description: err instanceof Error ? err.message : String(err)})
       }
     },
-    [toast],
+    [toast, t],
   )
 
   // handleReloadFile force-reloads a subflow file from disk, bypassing the
@@ -223,7 +227,7 @@ export function useFileOpen() {
   const handleReloadFile = useCallback(
     async (path: string) => {
       if (!getPlatformCapabilities().fileSystem) {
-        toast.error('This action requires the desktop app')
+        toast.error(t('files.desktopOnly'))
         return
       }
       const gen = beginDocLoad()
@@ -233,17 +237,17 @@ export function useFileOpen() {
         if (doc && isDocLoadCurrent(gen)) {
           setDocument(doc)
           checkView()
-          toast.success('Reloaded from disk')
+          toast.success(t('files.reloaded'))
         }
       } catch (err) {
         logger.warn('Failed to reload file:', err)
         if (isDocLoadCurrent(gen))
-          toast.error('Failed to reload file', {description: err instanceof Error ? err.message : String(err)})
+          toast.error(t('files.reloadFailed'), {description: err instanceof Error ? err.message : String(err)})
       } finally {
         if (isDocLoadCurrent(gen)) endLoad()
       }
     },
-    [setDocument, checkView, toast, setIsLoadingState, endLoad],
+    [setDocument, checkView, toast, setIsLoadingState, endLoad, t],
   )
 
   return {

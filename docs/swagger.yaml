@@ -1,0 +1,5560 @@
+basePath: /
+info:
+  contact: {}
+  description: Static analysis, auto-fix, and AI-assisted review for Power Automate
+    Desktop flows.
+  title: PAD Analyzer API
+  version: "1.0"
+paths:
+  /api/admin/audit:
+    get:
+      description: Returns the audit trail (logins, settings changes, admin actions).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Audit entries
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List audit log entries
+      tags:
+      - admin
+  /api/admin/ingester/ingest:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Ingest from PAD cloud
+      tags:
+      - admin
+  /api/admin/migration/start:
+    post:
+      description: Kicks off the local→database flow migration (admin only, cloud
+        mode). Idempotent and non-blocking.
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start data migration
+      tags:
+      - admin
+  /api/admin/migration/status:
+    get:
+      description: Returns the status/result of the most recent data migration (admin
+        only).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Data migration status
+      tags:
+      - admin
+  /api/admin/powerplatform/poll:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Poll Power Platform OAuth
+      tags:
+      - admin
+  /api/admin/powerplatform/start:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start Power Platform OAuth
+      tags:
+      - admin
+  /api/admin/powerplatform/status:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Status
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Power Platform connection status
+      tags:
+      - admin
+  /api/admin/scanner/scan:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Run environment scanner
+      tags:
+      - admin
+  /api/admin/system/health:
+    get:
+      description: handleAdminSystemHealth returns a structured per-subsystem health
+        breakdown. Admin-only (the public /readyz is the orchestrator-facing verdict).
+        Reuses the same probes as readiness but reports each independently rather
+        than collapsing to one pass/fail, and does NOT apply the consecutive-failure
+        smoothing — an admin querying health wants the live picture, not a flap-dampened
+        one.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Health detail
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Detailed system health
+      tags:
+      - admin
+  /api/admin/users/{id}/role:
+    put:
+      consumes:
+      - application/json
+      description: Changes the role of the user with the given ID (admin only).
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Role payload
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set a user role
+      tags:
+      - admin
+  /api/admin/users/list:
+    get:
+      description: Returns a list of all registered users. Only available to system
+        admins.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List all users
+      tags:
+      - admin
+  /api/analysis/analyze:
+    post:
+      description: Runs all enabled analysis rules on the current flow document.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Analyze current flow
+      tags:
+      - analysis
+  /api/analysis/analyze-raw:
+    post:
+      consumes:
+      - application/json
+      description: 'handleAnalyzeRaw analyzes raw PAD flow text WITHOUT requiring
+        a pre-stored flow, so CI pipelines and wrappers can POST flow text and get
+        findings JSON (or SARIF) back in one call — no library upload, no Go CLI install.
+        Works in both modes (auth via PAT in cloud; open in local). Body: {files,
+        name, format?} where format is "json" (default) or "sarif". Nothing is persisted.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Analyze raw PAD source
+      tags:
+      - analysis
+  /api/analysis/baseline/clear:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Clear the baseline for a flow
+      tags:
+      - baseline
+  /api/analysis/baseline/drift:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Compare current analysis against the baseline
+      tags:
+      - baseline
+  /api/analysis/baseline/get:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Get the baseline snapshot for a flow
+      tags:
+      - baseline
+  /api/analysis/baseline/set:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Set the current analysis as the baseline
+      tags:
+      - baseline
+  /api/analysis/batch:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Folder path
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Batch results
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Batch-analyze a folder
+      tags:
+      - analysis
+  /api/analysis/comments/add:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Add a comment to a finding
+      tags:
+      - comments
+  /api/analysis/comments/delete:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Delete a comment
+      tags:
+      - comments
+  /api/analysis/comments/list:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: List comments for a finding
+      tags:
+      - comments
+  /api/analysis/compare:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Compare two analyses
+      tags:
+      - analysis
+  /api/analysis/custom-rules/test:
+    post:
+      consumes:
+      - application/json
+      description: Runs one unsaved rule against a flow and returns the findings it
+        would produce.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Matches
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test a candidate custom rule against a flow
+      tags:
+      - analysis
+  /api/analysis/custom-rules/validate:
+    post:
+      consumes:
+      - application/json
+      description: 'Validates custom-rule JSON without installing it: per-entry validity,
+        errors, and skip warnings.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Results
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Validate custom rules
+      tags:
+      - analysis
+  /api/analysis/dashboard:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Dashboard
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Portfolio dashboard stats
+      tags:
+      - analysis
+  /api/analysis/dataflow:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Dataflow analysis
+      tags:
+      - analysis
+  /api/analysis/deduplicate:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Deduplicate findings
+      tags:
+      - analysis
+  /api/analysis/dependencies:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Dependencies
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Subflow dependency graph
+      tags:
+      - analysis
+  /api/analysis/diff:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Diff current vs. stored report
+      tags:
+      - analysis
+  /api/analysis/export/csv:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Export findings as CSV
+      tags:
+      - export
+  /api/analysis/export/junit:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Export analysis results as JUnit XML
+      tags:
+      - export
+  /api/analysis/export/sarif:
+    post:
+      consumes:
+      - application/json
+      description: SARIF 2.1.0 report for GitHub Code Scanning.
+      parameters:
+      - description: Flow reference
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: SARIF document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Export SARIF report
+      tags:
+      - analysis
+  /api/analysis/graph:
+    post:
+      description: Returns a graph representation of the flow's execution path.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get execution graph
+      tags:
+      - analysis
+  /api/analysis/history:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Analysis snapshot history
+      tags:
+      - analysis
+  /api/analysis/lineage:
+    post:
+      consumes:
+      - application/json
+      description: Returns the history and dependencies of a specific variable within
+        the flow.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get variable lineage
+      tags:
+      - analysis
+  /api/analysis/metrics:
+    post:
+      consumes:
+      - application/json
+      description: Complexity/cognitive metrics and health score for the flow.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Flow metrics
+      tags:
+      - analysis
+  /api/analysis/policy/delete:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Delete a policy
+      tags:
+      - policy
+  /api/analysis/policy/evaluate:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Evaluate a flow against an inline policy
+      tags:
+      - policy
+  /api/analysis/policy/evaluate-by-id:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Evaluate a flow against a persisted policy
+      tags:
+      - policy
+  /api/analysis/policy/get:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Get a single policy by ID
+      tags:
+      - policy
+  /api/analysis/policy/list:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: List policies for an organization
+      tags:
+      - policy
+  /api/analysis/policy/save:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Save a named policy for an organization
+      tags:
+      - policy
+  /api/analysis/related:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Related findings
+      tags:
+      - analysis
+  /api/analysis/rule/config:
+    post:
+      consumes:
+      - application/json
+      description: Updates the configuration parameters for a specific analysis rule.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update analysis rule config
+      tags:
+      - analysis
+  /api/analysis/rule/enabled:
+    post:
+      consumes:
+      - application/json
+      description: Enables or disables a specific analysis rule by ID.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Enable/disable analysis rule
+      tags:
+      - analysis
+  /api/analysis/rules:
+    get:
+      description: Returns all available analysis rules and their current configuration.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      summary: List analysis rules
+      tags:
+      - analysis
+  /api/analysis/rules/summary:
+    get:
+      description: All rules with severity, category, and auto-fix availability.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Rules
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Rule catalog summary
+      tags:
+      - analysis
+  /api/analysis/subflow-hashes:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Subflow content hashes
+      tags:
+      - analysis
+  /api/analysis/triage/clear:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Clear triage status for a finding
+      tags:
+      - triage
+  /api/analysis/triage/list:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: List finding triage statuses for a flow
+      tags:
+      - triage
+  /api/analysis/triage/set:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Set triage status for a finding
+      tags:
+      - triage
+  /api/analysis/triage/set-batch:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Batch-set triage statuses for multiple findings
+      tags:
+      - triage
+  /api/auth/account:
+    delete:
+      consumes:
+      - application/json
+      description: Self-service account erasure.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete account (GDPR)
+      tags:
+      - auth
+  /api/auth/account/export:
+    get:
+      description: GDPR data-subject export of everything stored about the user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Account data
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Export account data
+      tags:
+      - auth
+  /api/auth/change-password:
+    post:
+      consumes:
+      - application/json
+      description: Changes the password for the currently authenticated user.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Change password
+      tags:
+      - auth
+  /api/auth/forgot-password:
+    post:
+      consumes:
+      - application/json
+      description: handleAuthForgotPassword issues a password-reset token and emails
+        its link. It always responds 200 with the same body whether or not the email
+        exists, so the endpoint cannot be used to enumerate accounts.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Request password reset
+      tags:
+      - auth
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates a user and returns access and refresh tokens.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Login user
+      tags:
+      - auth
+  /api/auth/logout:
+    post:
+      description: Logs out the current user. In stateless JWT mode, this is primarily
+        a client-side operation.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Logout user
+      tags:
+      - auth
+  /api/auth/me:
+    get:
+      description: Returns information about the currently authenticated user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get current user info
+      tags:
+      - auth
+  /api/auth/profile:
+    put:
+      consumes:
+      - application/json
+      description: handleAuthUpdateProfile lets a user set their own display name
+        and avatar URL. Both fields are optional and may be cleared by sending an
+        empty string.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update profile
+      tags:
+      - auth
+  /api/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Returns a new access token using a valid refresh token.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Refresh access token
+      tags:
+      - auth
+  /api/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new user account with email and password.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
+  /api/auth/reset-password:
+    post:
+      consumes:
+      - application/json
+      description: handleAuthResetPassword redeems a reset token and sets a new password,
+        revoking all of the user's existing sessions.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reset password with token
+      tags:
+      - auth
+  /api/auth/sessions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      summary: List active sessions for the current user
+      tags:
+      - auth
+  /api/auth/sessions/{id}:
+    delete:
+      description: handleAuthSessionRevoke revokes one of the caller's own sessions
+        (refresh tokens) by ID, e.g. to sign out a lost device.
+      parameters:
+      - description: Session JTI
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Revoke a session
+      tags:
+      - auth
+  /api/auth/sso/callback:
+    get:
+      description: handleSSOCallback receives the IdP redirect, validates state, exchanges
+        the code for a verified identity, finds or creates the local user, and bounces
+        the browser back to the SPA with a short-lived single-use exchange ticket
+        in the URL fragment (fragments are not sent to servers or logged).
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: Redirect
+          schema:
+            type: string
+      summary: SSO provider callback
+      tags:
+      - sso
+  /api/auth/sso/exchange:
+    post:
+      consumes:
+      - application/json
+      description: handleSSOExchange swaps a single-use SSO ticket for a regular token
+        pair — the SSO equivalent of handleAuthLogin's response.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Exchange SSO ticket for JWT
+      tags:
+      - sso
+  /api/auth/sso/info:
+    get:
+      description: handleSSOInfo tells the SPA whether to render the SSO login button.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: SSO config
+          schema:
+            additionalProperties: true
+            type: object
+      summary: SSO provider info
+      tags:
+      - sso
+  /api/auth/sso/start:
+    get:
+      description: 'handleSSOStart begins the OIDC authorization-code flow: it stores
+        the state/nonce/PKCE-verifier in an HttpOnly cookie and redirects the browser
+        to the IdP.'
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: Redirect
+          schema:
+            type: string
+      summary: Start SSO login
+      tags:
+      - sso
+  /api/auth/tokens:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      summary: List API tokens for the current user
+      tags:
+      - auth
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created token
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create API token
+      tags:
+      - auth
+  /api/auth/tokens/{id}:
+    delete:
+      parameters:
+      - description: Token ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke API token
+      tags:
+      - auth
+  /api/auth/verify-email:
+    post:
+      consumes:
+      - application/json
+      description: handleAuthVerifyEmail redeems an email-verification token and marks
+        the user's email verified.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Verify email address
+      tags:
+      - auth
+  /api/chat/begin:
+    post:
+      consumes:
+      - application/json
+      description: Signals the backend to start sending events for the specified stream
+        ID.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Begin stream
+      tags:
+      - chat
+  /api/chat/cancel:
+    post:
+      consumes:
+      - application/json
+      description: Cancels an active streaming session.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Cancel stream
+      tags:
+      - chat
+  /api/chat/clear:
+    post:
+      consumes:
+      - application/json
+      description: Deletes the chat history for a specific flow and provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Clear conversation history
+      tags:
+      - chat
+  /api/chat/demo-remaining:
+    get:
+      description: Returns the number of demo AI requests remaining for the current
+        session.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: integer
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get remaining demo requests
+      tags:
+      - chat
+  /api/chat/export:
+    post:
+      consumes:
+      - application/json
+      description: Exports the chat history to a file. Only available in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export conversation
+      tags:
+      - chat
+  /api/chat/fix-decision:
+    post:
+      consumes:
+      - application/json
+      description: Delivers the user's approve/decline for an apply_fix proposal pending
+        in one of the caller's chat streams. First decision wins; unknown or already-decided
+        proposals return 404.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Respond to a fix approval prompt
+      tags:
+      - chat
+  /api/chat/get:
+    post:
+      consumes:
+      - application/json
+      description: Retrieves the chat history for a specific flow and provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get conversation history
+      tags:
+      - chat
+  /api/chat/preview-context:
+    post:
+      consumes:
+      - application/json
+      description: Returns a preview of the context that will be sent to the AI provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview AI context
+      tags:
+      - chat
+  /api/chat/resume:
+    post:
+      consumes:
+      - application/json
+      description: Reconnect to an in-flight AI stream and catch up on missed chunks.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Resume a chat stream
+      tags:
+      - chat
+  /api/chat/save:
+    post:
+      consumes:
+      - application/json
+      description: Saves the chat history for a specific flow and provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save conversation history
+      tags:
+      - chat
+  /api/chat/stream:
+    post:
+      consumes:
+      - application/json
+      description: Initiates a streaming chat session with an AI provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Stream ID
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stream chat message
+      tags:
+      - chat
+  /api/chat/suggested-prompts:
+    post:
+      consumes:
+      - application/json
+      description: Returns suggested prompts based on the current flow state.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get suggested prompts
+      tags:
+      - chat
+  /api/dashboard/home:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      summary: Aggregated dashboard data for the home view
+      tags:
+      - dashboard
+  /api/events:
+    get:
+      description: Long-lived SSE channel for analysis, chat, and collaboration events.
+        Chunks stream incrementally; reconnect with Last-Event-ID to resume.
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: Event stream
+          schema:
+            type: string
+      summary: Server-sent events stream
+      tags:
+      - realtime
+  /api/export/compare:
+    post:
+      consumes:
+      - application/json
+      description: Returns a diff between the currently loaded flow and a flow at
+        the specified path. Only available in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Compare current flow with another
+      tags:
+      - export
+  /api/export/html:
+    post:
+      consumes:
+      - application/json
+      description: Self-contained HTML report (base64 response); server-side file
+        write is desktop-only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Base64 HTML
+          schema:
+            additionalProperties: true
+            type: object
+        "409":
+          description: No analysis report
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export HTML report
+      tags:
+      - export
+  /api/export/markdown:
+    post:
+      consumes:
+      - application/json
+      description: Exports the specified flow to a Markdown file. Returns base64 encoded
+        data. Only available in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export flow as Markdown
+      tags:
+      - export
+  /api/export/pdf:
+    post:
+      consumes:
+      - application/json
+      description: Exports the specified flow to a PDF file. Returns base64 encoded
+        data. Only available in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export flow as PDF
+      tags:
+      - export
+  /api/flow/apply-fix:
+    post:
+      consumes:
+      - application/json
+      description: handleApplyFix applies a deterministic auto-fix (e.g. wrap-in-error-handler)
+        to a block in the flow's source file, re-parses, and returns the updated document.
+        Desktop/local only. The finding carries the available fixType in its AutoFix
+        field; the frontend shows "Apply fix" only when that is set.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Apply an auto-fix
+      tags:
+      - flow
+  /api/flow/apply-fix-batch:
+    post:
+      consumes:
+      - application/json
+      description: handleApplyFixBatch applies multiple auto-fixes in one pass (iterative
+        loop, persisted once). The frontend's bulk-action bar derives the rule set
+        from the selected findings; the server fixes every auto-fixable finding whose
+        rule is in that set (re-parsing between fixes so line shifts don't corrupt
+        targets).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Apply fixes in bulk
+      tags:
+      - flow
+  /api/flow/block/duplicate:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Duplicate a block
+      tags:
+      - flow
+  /api/flow/block/move:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Move a block
+      tags:
+      - flow
+  /api/flow/block/move-to:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Move a block relative to another
+      tags:
+      - flow
+  /api/flow/block/properties:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Update block properties
+      tags:
+      - flow
+  /api/flow/block/remove:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Remove a block
+      tags:
+      - flow
+  /api/flow/block/remove-batch:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Bulk delete blocks
+      tags:
+      - flow
+  /api/flow/block/rename:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document + gotoRefsUpdated
+          schema:
+            additionalProperties: true
+            type: object
+      tags:
+      - flow
+  /api/flow/clear-recent:
+    post:
+      description: Clears the entire list of recently opened flow documents.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Clear recent files
+      tags:
+      - flow
+  /api/flow/load-folder:
+    post:
+      consumes:
+      - application/json
+      description: Loads a flow document from the specified local folder path. Only
+        available in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Load flow folder
+      tags:
+      - flow
+  /api/flow/load-path:
+    post:
+      consumes:
+      - application/json
+      description: Loads a flow document from the specified local file path. Only
+        available in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Load flow from path
+      tags:
+      - flow
+  /api/flow/open-from-system:
+    post:
+      consumes:
+      - application/json
+      description: Notifies the application that a file was opened via the operating
+        system.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Handle file open from system
+      tags:
+      - flow
+  /api/flow/preview-fix:
+    post:
+      consumes:
+      - application/json
+      description: handlePreviewFix returns the before/after source text for a fix
+        WITHOUT writing. The frontend renders a diff so the user can review the change
+        before committing. Works in both desktop (local source file) and cloud (stored
+        raw source) modes for single-file flows.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview an auto-fix diff
+      tags:
+      - flow
+  /api/flow/read-sources:
+    post:
+      consumes:
+      - application/json
+      description: Reads the content of specified source files.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Read source files
+      tags:
+      - flow
+  /api/flow/recent:
+    get:
+      description: Returns a list of recently opened flow documents.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get recent files
+      tags:
+      - flow
+  /api/flow/reimport:
+    post:
+      consumes:
+      - application/json
+      description: handleReimport re-reads the currently-loaded flow's source file
+        (desktop), re-parses it, and returns the fresh document — so a user who fixed
+        something in Power Automate Desktop can re-import + re-analyze in one click
+        without navigating the file picker. Uses doc.FilePath (the already-loaded
+        path), so there's no path-injection surface. Cloud flows have no on-disk source
+        → 403.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Re-import flow from disk
+      tags:
+      - flow
+  /api/flow/remove-recent:
+    post:
+      consumes:
+      - application/json
+      description: Removes a file from the list of recently opened flow documents.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove recent file
+      tags:
+      - flow
+  /api/flow/reveal:
+    post:
+      consumes:
+      - application/json
+      description: Opens the system file manager at the specified path. Only available
+        in local mode.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reveal in file manager
+      tags:
+      - flow
+  /api/flow/save-source:
+    post:
+      consumes:
+      - application/json
+      description: handleSaveSource replaces the flow's raw source text (from the
+        in-app source editor), re-parses, and returns the updated document. Editor
+        access.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save edited flow source
+      tags:
+      - flow
+  /api/flow/search:
+    post:
+      consumes:
+      - application/json
+      description: Performs a search for text or patterns within a specific flow document.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Search within flow
+      tags:
+      - flow
+  /api/flow/search-library:
+    post:
+      consumes:
+      - application/json
+      description: handleSearchLibrary runs a query across every flow the caller can
+        access (cross-flow / org-wide search), merging per-flow hits into one result
+        set. Each hit is stamped with its source flowId/flowName so the UI can group
+        them.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Search cloud library
+      tags:
+      - flow
+  /api/flow/share/create:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Create a public share link for a flow
+      tags:
+      - sharing
+  /api/flow/share/list:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: List active share links for a flow
+      tags:
+      - sharing
+  /api/flow/share/revoke:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            type: object
+      summary: Revoke a share link
+      tags:
+      - sharing
+  /api/flow/snapshots:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Snapshots
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List undo snapshots
+      tags:
+      - flow
+  /api/flow/snapshots/restore:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Restore undo snapshot
+      tags:
+      - flow
+  /api/flow/source:
+    get:
+      description: 'handleGetSource returns the raw PAD source text for the flow.
+        Desktop: reads the file. Cloud: returns the stored source. Viewer access.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Source
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get raw flow source
+      tags:
+      - flow
+  /api/flow/source-files:
+    get:
+      description: Returns a list of source files related to the current flow.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get source files
+      tags:
+      - flow
+  /api/flow/source-meta:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Meta
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get flow file change signal
+      tags:
+      - flow
+  /api/flow/suppress-in-source:
+    post:
+      consumes:
+      - application/json
+      description: 'handleSuppressInSource writes a `# pad-ignore[ruleId]` directive
+        into the flow''s source file before the given block, re-parses, and returns
+        the updated document. Desktop/local only — cloud flows have no on-disk source.
+        This is the first end-to-end apply-fix: the suppression travels with the file
+        (honored by the analyzer, CLI gate, baselines, CI), unlike a UI-only suppression.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Insert pad-ignore directive
+      tags:
+      - flow
+  /api/flow/tags:
+    put:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Tags
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Set flow tags
+      tags:
+      - flow
+  /api/flow/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Parsed document
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Upload flow file
+      tags:
+      - flow
+  /api/flows/{flowId}/collaborators:
+    get:
+      description: Returns a list of users who have access to the specified flow.
+        Only the flow owner can view collaborators.
+      parameters:
+      - description: flowId
+        in: path
+        name: flowId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List flow collaborators
+      tags:
+      - sharing
+    post:
+      consumes:
+      - application/json
+      description: Grants access to a flow to another user. Only the flow owner can
+        add collaborators.
+      parameters:
+      - description: flowId
+        in: path
+        name: flowId
+        required: true
+        type: string
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add flow collaborator
+      tags:
+      - sharing
+  /api/flows/{flowId}/collaborators/{userId}:
+    delete:
+      description: Revokes a user's access to a specific flow. Only the flow owner
+        can remove collaborators.
+      parameters:
+      - description: flowId
+        in: path
+        name: flowId
+        required: true
+        type: string
+      - description: userId
+        in: path
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove flow collaborator
+      tags:
+      - sharing
+    put:
+      consumes:
+      - application/json
+      description: Updates the permission level for an existing flow collaborator.
+        Only the flow owner can update permissions.
+      parameters:
+      - description: flowId
+        in: path
+        name: flowId
+        required: true
+        type: string
+      - description: userId
+        in: path
+        name: userId
+        required: true
+        type: string
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update flow collaborator permission
+      tags:
+      - sharing
+  /api/governance/alerts:
+    delete:
+      description: handleClearGovernanceAlerts — DELETE /api/governance/alerts Permanently
+        removes the caller's visible dismissed alerts.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Cleared
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Clear all alerts
+      tags:
+      - governance
+    get:
+      description: handleListGovernanceAlerts — GET /api/governance/alerts Returns
+        visible alerts newest-first. ?includeDismissed=true surfaces dismissed alerts
+        too; ?limit/&offset paginate (default/cap via clampListLimit).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Alerts
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List governance alerts
+      tags:
+      - governance
+  /api/governance/alerts/dismiss:
+    post:
+      consumes:
+      - application/json
+      description: handleDismissGovernanceAlert — POST /api/governance/alerts/dismiss
+        {id}
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Dismiss alert
+      tags:
+      - governance
+  /api/governance/alerts/read:
+    post:
+      consumes:
+      - application/json
+      description: handleMarkGovernanceAlertRead — POST /api/governance/alerts/read
+        {id}
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Mark alert read
+      tags:
+      - governance
+  /api/governance/alerts/read-all:
+    post:
+      consumes:
+      - application/json
+      description: handleMarkAllGovernanceAlertsRead — POST /api/governance/alerts/read-all
+        The "open the panel → clear the badge" action.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Mark all alerts read
+      tags:
+      - governance
+  /api/governance/alerts/unread-count:
+    get:
+      description: 'handleUnreadGovernanceAlertCount — GET /api/governance/alerts/unread-count
+        Returns {"count": N} for the bell badge (lighter than listing).'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Count
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Unread alert count
+      tags:
+      - governance
+  /api/health:
+    get:
+      description: Returns 200 when downstream dependencies (DB) are reachable, 503
+        otherwise.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Readiness probe
+      tags:
+      - system
+  /api/integrations/ci:
+    post:
+      consumes:
+      - application/json
+      description: Token-authenticated CI integration endpoint.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: CI webhook
+      tags:
+      - analysis
+  /api/invites/{token}/accept:
+    post:
+      consumes:
+      - application/json
+      description: handleInviteAccept redeems an invite token, adding the calling
+        user to the invite's organisation with the role specified in the invite.
+      parameters:
+      - description: Invite token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Accept an invite
+      tags:
+      - org
+  /api/keys/delete:
+    post:
+      consumes:
+      - application/json
+      description: Deletes an API key for a given provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete API key
+      tags:
+      - keys
+  /api/keys/has:
+    post:
+      consumes:
+      - application/json
+      description: Checks if an API key for a given provider is saved.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: boolean
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Check if API key exists
+      tags:
+      - keys
+  /api/keys/save:
+    post:
+      consumes:
+      - application/json
+      description: Saves an API key for a given provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save API key
+      tags:
+      - keys
+  /api/library:
+    get:
+      description: Returns a list of flow documents stored in the library, with optional
+        filtering by organization and search query.
+      parameters:
+      - description: orgId
+        in: query
+        name: orgId
+        type: string
+      - description: q
+        in: query
+        name: q
+        type: string
+      - description: limit
+        in: query
+        name: limit
+        type: integer
+      - description: offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List library flows
+      tags:
+      - library
+    post:
+      consumes:
+      - application/json
+      description: Saves a new flow document to the library.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create library flow
+      tags:
+      - library
+  /api/library/{id}:
+    delete:
+      description: Deletes a specific flow document from the library. Only the owner
+        can delete.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete library flow
+      tags:
+      - library
+    get:
+      description: Returns the metadata for a specific library flow.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get library flow metadata
+      tags:
+      - library
+    put:
+      consumes:
+      - application/json
+      description: Updates the name, description, or content of a specific library
+        flow. Only the owner can update.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update library flow
+      tags:
+      - library
+  /api/library/{id}/content:
+    get:
+      description: Returns the raw JSON content of a specific library flow.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get library flow content
+      tags:
+      - library
+  /api/library/{id}/versions:
+    get:
+      description: handleListFlowVersions returns the version history for a library
+        flow.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Versions
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List flow versions
+      tags:
+      - library
+    post:
+      consumes:
+      - application/json
+      description: handleSaveFlowVersion snapshots the current flow content as a new
+        version.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Snapshot a flow version
+      tags:
+      - library
+  /api/library/{id}/versions/{vn}:
+    get:
+      description: handleGetFlowVersion loads a specific historical version.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Version number
+        in: path
+        name: vn
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Version
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get a flow version
+      tags:
+      - library
+  /api/library/{id}/versions/{vn}/diff:
+    get:
+      description: handleDiffFlowVersion returns the structural diff between a historical
+        version and the current flow content. Read-only (viewer access). Uses parser.DiffFlows
+        on the two unmarshaled FlowDocuments.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Version number
+        in: path
+        name: vn
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Diff
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Diff version vs. current
+      tags:
+      - library
+  /api/library/{id}/versions/{vn}/restore:
+    post:
+      consumes:
+      - application/json
+      description: handleRestoreFlowVersion reverts the current flow's content to
+        a historical version's content. The historical content is written as a new
+        current version (SaveFlow bumps the version atomically), so the restore is
+        itself recoverable via the version history. Requires editor access.
+      parameters:
+      - description: Flow ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Version number
+        in: path
+        name: vn
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Restored
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Restore a flow version
+      tags:
+      - library
+  /api/library/portfolio:
+    get:
+      description: 'handlePortfolio returns the org-wide governance portfolio: every
+        flow the caller can access (optionally filtered by ?orgId=), ranked worst-health-first.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Portfolio
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Flow portfolio view
+      tags:
+      - library
+  /api/local-config:
+    get:
+      description: Returns the pre-shared token in local (non-JWT) mode so a web client
+        can self-configure. 404 in cloud mode.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Local backend config
+      tags:
+      - system
+  /api/orgs:
+    get:
+      description: Returns a list of organizations the currently authenticated user
+        belongs to.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List user's organizations
+      tags:
+      - organization
+    post:
+      consumes:
+      - application/json
+      description: Creates a new organization. Only available to system admins.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create organization
+      tags:
+      - organization
+  /api/orgs/{id}:
+    delete:
+      description: Deletes an existing organization. Only organization admins can
+        delete.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete organization
+      tags:
+      - organization
+    get:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Organization
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get organization
+      tags:
+      - org
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Updated
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Update organization
+      tags:
+      - org
+  /api/orgs/{id}/channels:
+    get:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Channels
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List org notification channels
+      tags:
+      - org
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Channel
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Create/update an org notification channel
+      tags:
+      - org
+  /api/orgs/{id}/channels/{channelId}:
+    delete:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Channel ID
+        in: path
+        name: channelId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete an org notification channel
+      tags:
+      - org
+  /api/orgs/{id}/channels/{channelId}/test:
+    post:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Channel ID
+        in: path
+        name: channelId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Delivered
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test an org notification channel
+      tags:
+      - org
+  /api/orgs/{id}/invites:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      summary: List pending invites for an organization
+      tags:
+      - orgs
+    post:
+      consumes:
+      - application/json
+      description: handleOrgInviteCreate creates a pending invite for an email to
+        join the organisation. Only org admins may create invites. The raw invite
+        token is returned exactly once in this response — only its hash is persisted,
+        so it cannot be recovered later. The caller is responsible for delivering
+        it to the invitee (e.g. via an emailed accept link).
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Invite
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Create org invite
+      tags:
+      - org
+  /api/orgs/{id}/invites/{inviteId}:
+    delete:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            type: object
+      summary: Revoke a pending invite
+      tags:
+      - orgs
+  /api/orgs/{id}/knowledge:
+    get:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Documents
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List knowledge base docs
+      tags:
+      - org
+  /api/orgs/{id}/knowledge/{docId}:
+    delete:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Document ID
+        in: path
+        name: docId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Deleted
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Delete knowledge doc
+      tags:
+      - org
+  /api/orgs/{id}/knowledge/reindex:
+    post:
+      description: Re-embeds every knowledge chunk with the currently configured embedding
+        provider — the recovery path after switching embedding provider/model, which
+        strands the existing corpus at the old dimension (searches silently return
+        nothing).
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Re-indexed
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Embedding provider not configured
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Re-index org knowledge base
+      tags:
+      - org
+  /api/orgs/{id}/knowledge/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Uploaded
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Upload knowledge doc
+      tags:
+      - org
+  /api/orgs/{id}/members:
+    get:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Members
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List org members
+      tags:
+      - org
+    post:
+      consumes:
+      - application/json
+      description: Adds a user to an organization with a specific role. Only organization
+        admins can add members.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Add organization member
+      tags:
+      - organization
+  /api/orgs/{id}/members/{userId}:
+    delete:
+      description: Removes a user from an organization. Only organization admins can
+        remove members.
+      parameters:
+      - description: id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: userId
+        in: path
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove organization member
+      tags:
+      - organization
+  /api/orgs/{id}/members/{userId}/role:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: User ID
+        in: path
+        name: userId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Updated
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Change member role
+      tags:
+      - org
+  /api/orgs/{id}/rules:
+    get:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Rules
+          schema:
+            items:
+              type: object
+            type: array
+      summary: List an org's custom analyzer rules
+      tags:
+      - org
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Rule
+          schema:
+            type: object
+      summary: Create or update an org custom analyzer rule
+      tags:
+      - org
+  /api/orgs/{id}/rules/{ruleId}:
+    delete:
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Rule row ID
+        in: path
+        name: ruleId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete an org custom analyzer rule
+      tags:
+      - org
+  /api/orgs/{id}/rules/export:
+    get:
+      description: Returns the org's rule profile + custom rules as a .bakirc.json
+        document consumable by bakicli.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Config
+          schema:
+            type: object
+      summary: Export an org's analysis configuration for CI
+      tags:
+      - org
+  /api/providers/copilot/poll:
+    post:
+      consumes:
+      - application/json
+      description: Polls GitHub for the status of the Copilot device flow authentication.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Poll Copilot OAuth
+      tags:
+      - providers
+  /api/providers/copilot/revoke:
+    post:
+      description: Revokes the GitHub Copilot authentication for the current user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke Copilot OAuth
+      tags:
+      - providers
+  /api/providers/copilot/start:
+    post:
+      description: Initiates the GitHub Copilot device flow authentication.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start Copilot OAuth
+      tags:
+      - providers
+  /api/providers/copilot/user:
+    get:
+      description: Returns information about the currently authenticated Copilot user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Copilot user info
+      tags:
+      - providers
+  /api/providers/github/poll:
+    post:
+      consumes:
+      - application/json
+      description: Polls GitHub for the status of the device flow authentication.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Poll GitHub OAuth
+      tags:
+      - providers
+  /api/providers/github/revoke:
+    post:
+      description: Revokes the GitHub authentication for the current user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke GitHub OAuth
+      tags:
+      - providers
+  /api/providers/github/start:
+    post:
+      description: Initiates the GitHub device flow authentication.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start GitHub OAuth
+      tags:
+      - providers
+  /api/providers/github/user:
+    get:
+      description: Returns information about the currently authenticated GitHub user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get GitHub user info
+      tags:
+      - providers
+  /api/providers/list:
+    get:
+      description: Returns a list of supported AI providers and their current status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List AI providers
+      tags:
+      - providers
+  /api/providers/test:
+    post:
+      consumes:
+      - application/json
+      description: Tests the connection to a specific AI provider.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test provider connection
+      tags:
+      - providers
+  /api/shared:
+    get:
+      description: Unauthenticated read-only report for share-link holders.
+      parameters:
+      - description: Share token
+        in: query
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Report
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: View shared report
+      tags:
+      - share
+  /api/system/features:
+    get:
+      description: Which optional capabilities are enabled in this deployment.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Features
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Feature flags
+      tags:
+      - system
+  /api/system/info:
+    get:
+      description: Returns information about the application.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get app info
+      tags:
+      - system
+  /api/system/log-error:
+    post:
+      consumes:
+      - application/json
+      description: Records a client-side error for server-side observability.
+      parameters:
+      - description: error
+        in: body
+        name: error
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Log a frontend error
+      tags:
+      - system
+  /api/system/settings:
+    get:
+      description: Returns the current application settings.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get app settings
+      tags:
+      - system
+    post:
+      consumes:
+      - application/json
+      description: Updates the application settings.
+      parameters:
+      - description: settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update app settings
+      tags:
+      - system
+    put:
+      consumes:
+      - application/json
+      description: Updates the application settings.
+      parameters:
+      - description: settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update app settings
+      tags:
+      - system
+  /api/system/settings/org/{id}:
+    get:
+      description: handleGetOrgSettings returns org-wide settings. Reading requires
+        org membership — settings carry operational details (budgets, provider configuration)
+        that must not leak across tenants.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Settings
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get org settings
+      tags:
+      - system
+    post:
+      consumes:
+      - application/json
+      description: handleUpdateOrgSettings overwrites org-wide settings. Writing requires
+        org admin.
+      parameters:
+      - description: Org ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Updated
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Update org settings
+      tags:
+      - system
+  /api/system/settings/user:
+    get:
+      description: Returns the current application settings.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get app settings
+      tags:
+      - system
+    post:
+      consumes:
+      - application/json
+      description: Updates the application settings.
+      parameters:
+      - description: settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update app settings
+      tags:
+      - system
+  /api/ws-ticket:
+    post:
+      description: Returns a short-lived, single-use ticket the client exchanges for
+        a WebSocket connection, keeping the access token out of the WS URL.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Issue a WebSocket connect ticket
+      tags:
+      - auth
+  /healthz:
+    get:
+      description: Returns 200 if the process is up. Does not touch the database.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness probe
+      tags:
+      - system
+  /readyz:
+    get:
+      description: Returns 200 when downstream dependencies (DB) are reachable, 503
+        otherwise.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Readiness probe
+      tags:
+      - system
+  /ws:
+    get:
+      description: Authenticated WebSocket for collaborative presence and live updates;
+        obtain a one-time ticket via /api/ws-ticket.
+      produces:
+      - application/json
+      responses:
+        "101":
+          description: Switching Protocols
+          schema:
+            type: string
+      summary: WebSocket gateway
+      tags:
+      - realtime
+swagger: "2.0"

@@ -79,11 +79,24 @@ export function OperationsSection({visible}: Props) {
         <HealthTile
           icon={connected ? Wifi : WifiOff}
           label="Power Platform"
-          comp={connected === null ? undefined : {status: connected ? 'ok' : 'error', error: connected ? undefined : 'not connected'}}
+          comp={
+            connected === null
+              ? undefined
+              : {status: connected ? 'ok' : 'error', error: connected ? undefined : 'not connected'}
+          }
         />
       </div>
       {health && (
-        <p className={clsx('text-2xs mb-3', health.overall === 'ok' ? 'text-semantic-success' : health.overall === 'degraded' ? 'text-semantic-warning' : 'text-semantic-error')}>
+        <p
+          className={clsx(
+            'text-2xs mb-3',
+            health.overall === 'ok'
+              ? 'text-semantic-success'
+              : health.overall === 'degraded'
+                ? 'text-semantic-warning'
+                : 'text-semantic-error',
+          )}
+        >
           Overall: {health.overall}
         </p>
       )}
@@ -93,7 +106,13 @@ export function OperationsSection({visible}: Props) {
         <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => void trigger('scan')} disabled={scanBusy}>
           {scanBusy ? 'Starting…' : 'Run governance scan'}
         </Button>
-        <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => void trigger('ingest')} disabled={ingestBusy}>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={RefreshCw}
+          onClick={() => void trigger('ingest')}
+          disabled={ingestBusy}
+        >
           {ingestBusy ? 'Starting…' : 'Ingest cloud flows'}
         </Button>
       </div>
@@ -101,7 +120,15 @@ export function OperationsSection({visible}: Props) {
   )
 }
 
-function HealthTile({icon: Icon, label, comp}: {icon: typeof Database; label: string; comp?: {status: string; error?: string}}) {
+function HealthTile({
+  icon: Icon,
+  label,
+  comp,
+}: {
+  icon: typeof Database
+  label: string
+  comp?: {status: string; error?: string}
+}) {
   const status = comp?.status ?? 'unknown'
   const tone =
     status === 'ok' || status === 'skipped'
@@ -112,7 +139,10 @@ function HealthTile({icon: Icon, label, comp}: {icon: typeof Database; label: st
         ? 'text-semantic-error'
         : 'text-text-tertiary/40'
   return (
-    <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border-subtle bg-surface-2" title={comp?.error ?? label}>
+    <div
+      className="flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border-subtle bg-surface-2"
+      title={comp?.error ?? label}
+    >
       <Icon size={13} className={tone} />
       <div className="min-w-0">
         <div className="text-xs text-text-secondary truncate">{label}</div>

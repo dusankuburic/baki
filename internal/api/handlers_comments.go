@@ -125,7 +125,8 @@ func (h *AnalysisHandler) recordCommentAlerts(req struct {
 	if h.backend == nil {
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+	defer cancel()
 	targets := map[string]bool{}
 	// Assignee.
 	if statuses, err := h.backend.ListFindingStatuses(ctx, req.FlowID); err == nil {
@@ -192,7 +193,7 @@ func (h *AnalysisHandler) notifyFindingComment(flowID, findingKey, commenterID, 
 	// Bound the detached work so a slow DB/SMTP can't keep the process (or a DB
 	// connection) alive indefinitely on shutdown. Mirrors the context.WithTimeout
 	// pattern used by the other detached background handlers (audit, providers).
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
 	defer cancel()
 
 	// Find the assignee for this finding.

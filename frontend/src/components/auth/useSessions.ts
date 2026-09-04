@@ -1,9 +1,11 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useMemo} from 'react'
 import {authApi, type SessionInfo} from '@/api/auth'
 import {getCurrentSessionId} from '@/stores/authStore'
 import {useAsync} from '@/hooks/useAsync'
 
 export function useSessions() {
+  const {t} = useTranslation('auth')
   const [actionError, setActionError] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
   const [revokingOthers, setRevokingOthers] = useState(false)
@@ -32,12 +34,12 @@ export function useSessions() {
         // session until the next refetch).
         setSessions(prev => (prev ?? []).filter(s => s.id !== id))
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : 'Failed to revoke session')
+        setActionError(err instanceof Error ? err.message : t('sessions.revokeFailed'))
       } finally {
         setRevokingId(null)
       }
     },
-    [setSessions],
+    [setSessions, t],
   )
 
   // revokeOthers signs out every session except the current one. There's no
@@ -56,10 +58,10 @@ export function useSessions() {
     const revokedIds = new Set(others.filter((_, i) => results[i].status === 'fulfilled').map(s => s.id))
     setSessions(prev => (prev ?? []).filter(s => !revokedIds.has(s.id)))
     if (revokedIds.size < others.length) {
-      setActionError('Some sessions could not be signed out — try again.')
+      setActionError(t('sessions.revokeOthersPartial'))
     }
     setRevokingOthers(false)
-  }, [sessions, currentSessionId, setSessions])
+  }, [sessions, currentSessionId, setSessions, t])
 
   return {sessions, loading, error, revokingId, revoke, currentSessionId, revokingOthers, revokeOthers}
 }

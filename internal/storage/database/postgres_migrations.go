@@ -71,6 +71,9 @@ var migrations = []migration{
 	{version: 16, name: "gov_alert_targets", sql: govAlertTargetsSQL, downSQL: govAlertTargetsDownSQL},
 	{version: 17, name: "org_channels", sql: orgChannelsSQL, downSQL: orgChannelsDownSQL},
 	{version: 18, name: "flows_content_trgm_index", sql: flowsContentTrgmSQL, downSQL: flowsContentTrgmDownSQL},
+	{version: 19, name: "rls_force_all_tables", sql: rlsForceSQL, downSQL: rlsForceDownSQL},
+	{version: 20, name: "pgvector_knowledge_repair", sql: pgvectorRepairSQL, downSQL: pgvectorRepairDownSQL},
+	{version: 21, name: "org_custom_rules", sql: orgCustomRulesSQL, downSQL: orgCustomRulesDownSQL},
 }
 
 // flowBlockCountIndexSQL adds an expression index matching the FlowSortBlocksDesc
@@ -1425,7 +1428,7 @@ CREATE TABLE IF NOT EXISTS org_channels (
 );
 CREATE INDEX IF NOT EXISTS org_channels_org_idx ON org_channels (org_id);
 
-ALTER TABLE org_channels ENABLE ROWS LEVEL SECURITY;
+ALTER TABLE org_channels ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS rls_org_channels_visible ON org_channels;
 CREATE POLICY rls_org_channels_visible ON org_channels FOR ALL USING (
@@ -1439,6 +1442,55 @@ CREATE POLICY rls_org_channels_visible ON org_channels FOR ALL USING (
 
 const orgChannelsDownSQL = `
 DROP TABLE IF EXISTS org_channels;
+`
+
+// orgCustomRulesSQL (R4): per-org user-authored analyzer rules. Custom rules
+// previously came from ONE deployment-global JSON file (PAD_CUSTOM_RULES, read
+// once at boot), so a tenant could not express its own policy and could not
+// author one without a process restart.
+//
+// config holds an analyzer.CustomRuleConfig verbatim (declarative matchers +
+// optional autoFix). Storing it as JSONB rather than shredding it into columns
+// keeps the storage layer out of the rule schema: the analyzer owns that shape,
+// and every write is validated through analyzer.NewCustomRule before it lands,
+// so an unparseable rule can never reach the table.
+//
+// rule_id is the AUTHOR'S id (what appears on findings) and is unique PER ORG,
+// not globally — two orgs may legitimately both define "house-style". The
+// analysis cache accounts for that (see analyzer.ruleSetDigest); a global
+// unique constraint here would be wrong.
+//
+// RLS is ENABLE + FORCE in this same migration. B8 (v19) had to retrofit FORCE
+// onto ten tables that shipped with ENABLE only — under ENABLE alone the table
+// OWNER is exempt, and the app owns its tables, so the policy did nothing.
+const orgCustomRulesSQL = `
+CREATE TABLE IF NOT EXISTS org_custom_rules (
+    id         TEXT        PRIMARY KEY,
+    org_id     TEXT        NOT NULL,
+    rule_id    TEXT        NOT NULL,
+    config     JSONB       NOT NULL,
+    enabled    BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, rule_id)
+);
+CREATE INDEX IF NOT EXISTS org_custom_rules_org_idx ON org_custom_rules (org_id);
+
+ALTER TABLE org_custom_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_custom_rules FORCE  ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rls_org_custom_rules_visible ON org_custom_rules;
+CREATE POLICY rls_org_custom_rules_visible ON org_custom_rules FOR ALL USING (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_custom_rules.org_id AND om.user_id = app_current_user_id())
+) WITH CHECK (
+    NOT app_rls_active()
+    OR EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = org_custom_rules.org_id AND om.user_id = app_current_user_id())
+);
+`
+
+const orgCustomRulesDownSQL = `
+DROP TABLE IF EXISTS org_custom_rules;
 `
 
 // flowsContentTrgmSQL (R3-5a) backs library content-search pushdown: an
@@ -1456,4 +1508,165 @@ CREATE INDEX IF NOT EXISTS flows_content_trgm_idx ON flows USING gin ((content::
 
 const flowsContentTrgmDownSQL = `
 DROP INDEX IF EXISTS flows_content_trgm_idx;
+`
+
+// rlsForceSQL closes a silent hole in the Row-Level Security layer.
+//
+// `ENABLE ROW LEVEL SECURITY` does NOT apply policies to the table's OWNER —
+// only `FORCE ROW LEVEL SECURITY` does. This deployment runs its own
+// migrations at boot, so the application role owns every table it reads. Ten
+// of the twelve RLS-protected tables had ENABLE without FORCE, which means
+// their policies were inert in exactly the configuration the app ships in.
+// (finding_comments and policies already carried FORCE, which is what makes
+// this an oversight rather than a design choice.)
+//
+// Verified against postgres:16 — with ENABLE alone, the owner reads all rows
+// through a `USING (false)` deny-all policy; with FORCE, the same query
+// returns none.
+//
+// Adding FORCE does NOT break the maintenance paths that legitimately span
+// tenants (GDPR erasure, retention sweeps, the blob cleaner, the scanner).
+// Every policy is written as `NOT app_rls_active() OR <predicate>`, so the
+// bypass is earned by leaving app.current_user_id unset — it never relied on
+// owner-exemption. All 12 policies were checked for that guard before this
+// migration was written.
+//
+// Idempotent: FORCE is a no-op when already set.
+const rlsForceSQL = `
+ALTER TABLE flows                 FORCE ROW LEVEL SECURITY;
+ALTER TABLE conversations         FORCE ROW LEVEL SECURITY;
+ALTER TABLE flow_versions         FORCE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_documents   FORCE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_chunks      FORCE ROW LEVEL SECURITY;
+ALTER TABLE flow_analysis_history FORCE ROW LEVEL SECURITY;
+ALTER TABLE finding_status        FORCE ROW LEVEL SECURITY;
+ALTER TABLE flow_baselines        FORCE ROW LEVEL SECURITY;
+ALTER TABLE gov_alerts            FORCE ROW LEVEL SECURITY;
+ALTER TABLE org_channels          FORCE ROW LEVEL SECURITY;
+`
+
+// rlsForceDownSQL reverses v19, returning the ten tables to owner-exempt RLS.
+// Not data-lossy, but it does re-open the hole — it exists for migration
+// round-trip symmetry, not as an operational recommendation.
+const rlsForceDownSQL = `
+ALTER TABLE flows                 NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE conversations         NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE flow_versions         NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_documents   NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_chunks      NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE flow_analysis_history NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE finding_status        NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE flow_baselines        NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE gov_alerts            NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE org_channels          NO FORCE ROW LEVEL SECURITY;
+`
+
+// pgvectorRepairSQL fixes v11, whose pgvector setup could never succeed.
+//
+// v11 put the column add, the backfill and the HNSW index creation inside ONE
+// PL/pgSQL block with a single `EXCEPTION WHEN OTHERS` handler. The index step
+// always failed — `CREATE INDEX ... USING hnsw` requires a fixed dimension and
+// v11 deliberately adds a DIMENSIONLESS `vector` column, so pgvector rejects it
+// with "column does not have dimensions". Catching that exception rolls back
+// the ENTIRE block, including the ALTER TABLE that had already succeeded. Net
+// result on every deployment with pgvector installed: no embedding_vec column,
+// no index, detectPgvector() false, and the server-side similarity pushdown
+// silently inert — while v11 recorded itself as applied, so it never retried.
+// The one integration test that would have caught it skips whenever pgvector is
+// absent, which included CI (postgres:16-alpine ships no vector extension).
+//
+// v11 is NOT edited: its SQL is checksummed, and changing an applied
+// migration's text fails boot via verifyChecksums.
+//
+// The repair is structural — each step gets its OWN block, so a failure in one
+// can no longer undo another:
+//
+//  1. extension  — best-effort; may now succeed where it didn't at v11 time
+//     (e.g. a DBA installed it afterwards, which v11 would never notice).
+//  2. column     — the step that actually matters: SearchKnowledge's
+//     `ORDER BY embedding_vec <=> $2 LIMIT n` pushdown needs only this. Without
+//     it the query falls back to loading every candidate chunk into Go, which
+//     is the cost v11 existed to remove.
+//  3. backfill   — a malformed embedding row can no longer cost us the column.
+//  4. index      — attempted ONLY when the column carries a dimension
+//     (atttypmod > 0). On the dimensionless column this is genuinely
+//     impossible, so it is skipped with a notice instead of failing forever.
+//     Server-side ordering still works without it; the index is an
+//     optimization on top, and a deployment that pins the column to its
+//     PAD_EMBEDDING_DIM gets it automatically on the next boot.
+//
+// Idempotent throughout: safe to re-run, and a no-op where v11 somehow landed.
+const pgvectorRepairSQL = `
+DO $$ BEGIN
+	CREATE EXTENSION IF NOT EXISTS vector;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector extension unavailable; knowledge search stays Go-side';
+END $$;
+
+DO $$ BEGIN
+	IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+		ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_vec vector;
+	END IF;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector embedding_vec column not added: %', SQLERRM;
+END $$;
+
+DO $$ BEGIN
+	IF EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding_vec'
+	) THEN
+		UPDATE knowledge_chunks
+		SET embedding_vec = ('[' ||
+			(SELECT string_agg(e, ',') FROM jsonb_array_elements_text(embedding) AS e)
+			|| ']')::vector
+		WHERE embedding_vec IS NULL
+		  AND jsonb_typeof(embedding) = 'array';
+	END IF;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector backfill skipped: %', SQLERRM;
+END $$;
+
+DO $$
+DECLARE dims int;
+BEGIN
+	SELECT a.atttypmod INTO dims
+	  FROM pg_attribute a
+	  JOIN pg_class c ON c.oid = a.attrelid
+	 WHERE c.relname = 'knowledge_chunks' AND a.attname = 'embedding_vec';
+
+	IF dims IS NULL THEN
+		RAISE NOTICE 'pgvector index skipped: embedding_vec column absent';
+	ELSIF dims < 1 THEN
+		-- Dimensionless by design (mixed-width chunks coexist). HNSW cannot
+		-- index it; server-side ordering works regardless.
+		RAISE NOTICE 'pgvector index skipped: embedding_vec has no fixed dimension';
+	ELSE
+		CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_hnsw
+			ON knowledge_chunks USING hnsw (embedding_vec vector_cosine_ops);
+	END IF;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector index not created: %', SQLERRM;
+END $$;
+`
+
+// pgvectorRepairDownSQL reverses v20, mirroring v11's own reverse: drop the
+// embedding_vec column (its HNSW index goes with it) but never DROP the vector
+// EXTENSION, which is database-wide and may serve other uses.
+//
+// Rolling back to v19 should leave the schema as v11..v19 actually left it —
+// and v11's setup always failed, so "no column" is the correct target state.
+// Data loss is nominal: embedding_vec is derived from the JSONB embedding
+// column, which stays, so SearchKnowledge falls back to the Go-side ranker and
+// re-applying v20 rebuilds the column from source. Idempotent; a down without
+// the column is a no-op.
+const pgvectorRepairDownSQL = `
+DO $$ BEGIN
+	IF EXISTS (SELECT 1 FROM information_schema.columns
+	           WHERE table_name = 'knowledge_chunks' AND column_name = 'embedding_vec') THEN
+		ALTER TABLE knowledge_chunks DROP COLUMN embedding_vec;
+	END IF;
+EXCEPTION WHEN OTHERS THEN
+	RAISE NOTICE 'pgvector repair rollback skipped: %', SQLERRM;
+END $$;
 `

@@ -123,6 +123,38 @@ func (m *EventManager) HasSubscriber(userID string) bool {
 	return false
 }
 
+// Event delivery priority. The SSE channel is shared by every event class,
+// and chat streams sit behind the same 512-slot buffer as analysis progress —
+// which arrives in bursts of hundreds during a large analysis. A burst used to
+// push the buffer to capacity and silently drop whatever came next, including
+// chat chunks; the client noticed via the done-event's chunk count and
+// recovered with a full-buffer resume, i.e. the whole answer re-rendered and
+// reflowed at the end of the stream.
+//
+// Shedding is by class, at enqueue time: once the buffer crosses the
+// high-water mark, droppable events are discarded to keep headroom for the
+// ones that cannot be reconstructed from a later message.
+//
+// sheddableNum/sheddableDen express the high-water mark as a fraction of the
+// buffer: droppable events are shed once it is more than two-thirds full,
+// leaving the last third as headroom for chat.
+const (
+	sheddableNum = 2
+	sheddableDen = 3
+)
+
+// sheddable reports whether an event may be dropped early to protect the
+// buffer. Progress ticks are pure UI polish and each is superseded by the
+// next; a completion or a chat frame is not recoverable this way.
+func sheddable(name string) bool {
+	switch name {
+	case "analysis:progress":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *EventManager) deliver(ev Event) {
 	// Encode the SSE frame ONCE for all recipients: encoding per connected
 	// client would multiply encode cost (and its allocations) by the number of
@@ -135,11 +167,18 @@ func (m *EventManager) deliver(ev Event) {
 	frame := append(append(make([]byte, 0, len(data)+16), "data: "...), data...)
 	frame = append(frame, '\n', '\n')
 
+	droppable := sheddable(ev.Name)
+
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
 	for ch, clientUser := range m.clients {
 		// Filter by target user when one is specified.
 		if ev.TargetUser != "" && clientUser != ev.TargetUser {
+			continue
+		}
+		// Shed low-priority events before the buffer is exhausted so a
+		// progress burst cannot starve a chat chunk queued right behind it.
+		if droppable && len(ch)*sheddableDen > cap(ch)*sheddableNum {
 			continue
 		}
 		select {

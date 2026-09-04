@@ -1,8 +1,20 @@
+// Translated through the i18next instance rather than the hook: these strings
+// are produced inside long-lived streaming callbacks whose dependency arrays
+// are deliberately stable, and re-creating them per language change would tear
+// down live SSE subscriptions.
+import i18n from '@/i18n'
 import {useEffect, useRef, useCallback} from 'react'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {utf8ByteLength} from '@/lib/utf8'
-import {parseChatEvent, chatEventStreamId, parseResumeEvents, FixProposalPayload, ToolResultPayload, ChatEvent} from '@/lib/chatEvent'
+import {
+  parseChatEvent,
+  chatEventStreamId,
+  parseResumeEvents,
+  FixProposalPayload,
+  ToolResultPayload,
+  ChatEvent,
+} from '@/lib/chatEvent'
 import {subscribeToEvents, subscribeConnectionState, EventConnectionState, getEventConnectionState} from '@/api/client'
 
 // registerStream gives up waiting for SSE 'open' after this (token refresh +
@@ -17,7 +29,12 @@ const STALL_PROBE_LIMIT = 3
 
 // Callbacks receive the streamId they were dispatched for, so handlers can
 // reject stale-stream events.
-interface StreamHandler {
+//
+// EXPORTED deliberately: a test that re-declares this shape locally cannot
+// detect a signature drift, and one did exactly that — its private copy carried
+// a 5-argument onFixDecision that the dispatcher below never called with 5
+// arguments, so a real bug sat behind a green test. Bind to this type.
+export interface StreamHandler {
   onChunk: (text: string, streamId: string) => void
   onReplace: (text: string, streamId: string) => void
   onDone: (tokensOut: number, tokensIn: number, streamId: string) => void
@@ -33,7 +50,16 @@ interface StreamHandler {
   // apply_fix human-in-the-loop: a proposal awaits the user's decision, and
   // its resolution (applying/applied/declined/timeout/error) lands here.
   onFixProposal?: (proposal: FixProposalPayload, streamId: string) => void
-  onFixDecision?: (proposalId: string, status: string, message: string | undefined, streamId: string) => void
+  // `items` carries a BATCH decision's per-fix outcomes (parseChatEvent builds
+  // it from the wire's items[]). Omitted for single-fix decisions, whose one
+  // item mirrors the card status.
+  onFixDecision?: (
+    proposalId: string,
+    status: string,
+    message: string | undefined,
+    streamId: string,
+    items?: {ruleId: string; status: string; message?: string}[],
+  ) => void
   // Delta-resume path; when absent, resumeInto falls back to a full onReplace.
   onAppend?: (delta: string, streamId: string) => void
   // UTF-8 byte length of accumulated text, so a delta-resume requests only the tail.
@@ -178,10 +204,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       const before = handlerRef.current.getAccLength?.(streamId) ?? 0
       const miss = () => {
         if (++sub.probeMisses >= STALL_PROBE_LIMIT) {
-          handlerRef.current.onError(
-            'The response stalled — the connection to the backend may have been lost.',
-            streamId,
-          )
+          handlerRef.current.onError(i18n.t('chat:errors.stalled'), streamId)
         } else {
           armStall(streamId)
         }
@@ -301,7 +324,7 @@ export function useStreamingMessage(handler: StreamHandler) {
           case 'fix-decision':
             sub.probeMisses = 0
             armStall(streamId)
-            handlerRef.current.onFixDecision?.(parsed.proposalId, parsed.status, parsed.message, streamId)
+            handlerRef.current.onFixDecision?.(parsed.proposalId, parsed.status, parsed.message, streamId, parsed.items)
             break
         }
       })
@@ -338,9 +361,7 @@ export function useStreamingMessage(handler: StreamHandler) {
               return
             }
             teardownStream(streamId)
-            settle(
-              new Error('Could not connect to the event stream — the backend may still be starting. Please try again.'),
-            )
+            settle(new Error(i18n.t('chat:errors.cannotConnect')))
           }, OPEN_WAIT_TIMEOUT_MS)
           openWaitTimersRef.current.add(timer)
           const check = (state: EventConnectionState) => {

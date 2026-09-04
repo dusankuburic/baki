@@ -733,15 +733,20 @@ END
 			break
 		}
 	}
+	// Fatal, not Skip: the fixture above is a nested HTTP action inside a LOOP,
+	// which the rule set is expected to flag (missing timeout / retry). If no
+	// nested finding appears, either the fixture or the rules changed — and a
+	// skip would quietly retire the whole nested-indentation assertion below
+	// rather than reporting that.
 	if nestedFinding == nil {
-		t.Skip("no finding on a nested block — adjust fixture")
+		t.Fatal("no finding on a nested block — the fixture or the rule set changed")
 	}
 	block := doc.BlocksByID[nestedFinding.BlockID]
 	if block == nil {
 		t.Fatalf("block not found")
 	}
 	if block.Indent == 0 {
-		t.Skip("block is at indent 0; need a nested fixture")
+		t.Fatal("selected block is at indent 0 — the nested-block search above is broken")
 	}
 
 	patched := ApplyPatch(source, SuppressFindingPatch(block, nestedFinding.RuleID))

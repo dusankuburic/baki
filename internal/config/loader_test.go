@@ -212,6 +212,51 @@ func TestValidate_TLSConfig(t *testing.T) {
 	})
 }
 
+// TestValidate_PprofRequiresMetricsToken locks in the fail-closed half of the
+// pprof exposure fix. The route-registration half is covered by
+// api.TestPprof_NotRegisteredByDefault; this covers the case where an operator
+// deliberately turns profiling on and would otherwise get no gate at all,
+// because MetricsGuard's IP allowlist is vacuous behind a reverse proxy.
+func TestValidate_PprofRequiresMetricsToken(t *testing.T) {
+	t.Run("disabled needs no token", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.PprofEnabled = false
+		cfg.Server.MetricsToken = ""
+		if err := Validate(cfg); err != nil {
+			t.Errorf("pprof off should not require a token, got %v", err)
+		}
+	})
+	t.Run("enabled without a token is rejected", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.PprofEnabled = true
+		cfg.Server.MetricsToken = ""
+		err := Validate(cfg)
+		if err == nil {
+			t.Fatal("expected validation error: profiling on with no PAD_METRICS_TOKEN")
+		}
+		// The operator needs to know WHICH variable to set.
+		if !strings.Contains(err.Error(), "PAD_METRICS_TOKEN") {
+			t.Errorf("error must name the variable to set, got %q", err)
+		}
+	})
+	t.Run("whitespace-only token is not a token", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.PprofEnabled = true
+		cfg.Server.MetricsToken = "   "
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected validation error for a blank token")
+		}
+	})
+	t.Run("enabled with a token passes", func(t *testing.T) {
+		cfg := cloudCfg()
+		cfg.Server.PprofEnabled = true
+		cfg.Server.MetricsToken = "a-real-shared-secret"
+		if err := Validate(cfg); err != nil {
+			t.Errorf("pprof on with a token should pass, got %v", err)
+		}
+	})
+}
+
 func TestValidate_TrustedProxies(t *testing.T) {
 	cases := []struct {
 		name    string

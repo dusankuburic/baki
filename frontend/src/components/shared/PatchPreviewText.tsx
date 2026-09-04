@@ -31,7 +31,13 @@ function classify(text: string): Seg[] {
 export default function PatchPreviewText({text, className}: {text: string; className?: string}) {
   const segs = useMemo(() => classify(text), [text])
   return (
-    <div className={clsx('overflow-auto whitespace-pre-wrap rounded bg-surface-2 p-1.5 text-2xs leading-relaxed', className)} data-testid="patch-preview">
+    <div
+      className={clsx(
+        'overflow-auto whitespace-pre-wrap rounded bg-surface-2 p-1.5 text-2xs leading-relaxed',
+        className,
+      )}
+      data-testid="patch-preview"
+    >
       {segs.map((seg, i) => (
         <div
           key={i}

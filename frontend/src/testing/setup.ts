@@ -32,3 +32,11 @@ class MemoryStorage implements Storage {
 
 Object.defineProperty(globalThis, 'localStorage', {value: new MemoryStorage(), writable: true, configurable: true})
 Object.defineProperty(globalThis, 'sessionStorage', {value: new MemoryStorage(), writable: true, configurable: true})
+
+// jsdom implements no layout, so Element.prototype.scrollIntoView is absent.
+// Several components call it to keep the active row visible (CommandPalette,
+// GlobalSearchOverlay, ChatMessageList); without this stub, merely rendering
+// them throws "scrollIntoView is not a function" from inside an effect.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {}
+}

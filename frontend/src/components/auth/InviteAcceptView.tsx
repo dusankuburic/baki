@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useEffect, useState} from 'react'
 import {CheckCircle2, XCircle} from 'lucide-react'
 import Button from '@/components/shared/Button'
@@ -14,6 +15,7 @@ interface InviteAcceptViewProps {
 // store) on mount and shows the result. Acceptance requires a logged-in user,
 // so ProtectedRoute only renders this once authenticated.
 export default function InviteAcceptView({token, onDone}: InviteAcceptViewProps) {
+  const {t} = useTranslation('auth')
   const acceptInvite = useOrgStore(s => s.acceptInvite)
   const [status, setStatus] = useState<'pending' | 'ok' | 'error'>('pending')
   const [error, setError] = useState<string | null>(null)
@@ -26,7 +28,7 @@ export default function InviteAcceptView({token, onDone}: InviteAcceptViewProps)
       })
       .catch((err: unknown) => {
         if (!active) return
-        setError(err instanceof Error ? err.message : 'Could not accept the invitation')
+        setError(err instanceof Error ? err.message : null)
         setStatus('error')
       })
     return () => {
@@ -40,26 +42,26 @@ export default function InviteAcceptView({token, onDone}: InviteAcceptViewProps)
         {status === 'pending' && (
           <>
             <Spinner size={32} />
-            <p className="text-sm text-text-tertiary">Accepting your invitation…</p>
+            <p className="text-sm text-text-tertiary">{t('invite.pending')}</p>
           </>
         )}
         {status === 'ok' && (
           <>
             <CheckCircle2 className="text-semantic-success" size={40} />
-            <h1 className="text-xl font-semibold text-text-primary">Invitation accepted</h1>
-            <p className="text-sm text-text-tertiary">You've joined the organization.</p>
+            <h1 className="text-xl font-semibold text-text-primary">{t('invite.okTitle')}</h1>
+            <p className="text-sm text-text-tertiary">{t('invite.okBody')}</p>
             <Button type="button" variant="primary" fullWidth onClick={onDone}>
-              Continue
+              {t('invite.continue')}
             </Button>
           </>
         )}
         {status === 'error' && (
           <>
             <XCircle className="text-semantic-error" size={40} />
-            <h1 className="text-xl font-semibold text-text-primary">Invitation failed</h1>
-            <p className="text-sm text-text-tertiary">{error ?? 'This invite is invalid or has expired.'}</p>
+            <h1 className="text-xl font-semibold text-text-primary">{t('invite.errorTitle')}</h1>
+            <p className="text-sm text-text-tertiary">{error ?? t('invite.errorBody')}</p>
             <Button type="button" variant="secondary" fullWidth onClick={onDone}>
-              Continue
+              {t('invite.continue')}
             </Button>
           </>
         )}

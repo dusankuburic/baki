@@ -373,6 +373,20 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 	return nil
 }
 
+// knowledgeMinSimilarity is the relevance floor for knowledge-base retrieval:
+// a chunk must reach this cosine similarity to the query to be returned at
+// all, so a question with no genuinely-relevant documents yields nothing
+// rather than noise.
+//
+// knowledgeMaxCosineDistance is the identical cutoff in pgvector's units.
+// pgvector's <=> operator is cosine DISTANCE, which is 1 - similarity, so the
+// two must be defined together — expressing the same threshold twice by hand
+// is what let the Go and pgvector paths drift apart.
+const (
+	knowledgeMinSimilarity     float32 = 0.5
+	knowledgeMaxCosineDistance         = 1 - float64(knowledgeMinSimilarity)
+)
+
 func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	// pgvector path: push the similarity ordering + LIMIT into the database so
 	// we don't load hundreds of embeddings into Go. Only same-dimension chunks
@@ -389,9 +403,22 @@ func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID stri
 	return b.searchKnowledgeGo(ctx, orgID, queryEmbedding, limit)
 }
 
-// searchKnowledgeVector runs the server-side similarity search. A cosine
-// distance threshold of 1.0 (max distance = 2.0) excludes irrelevant chunks
-// — a query with no genuinely-relevant docs returns empty instead of noise.
+// searchKnowledgeVector runs the server-side similarity search.
+//
+// The relevance cutoff MUST match the Go fallback's, because pgvector is a
+// performance optimization and an optimization that changes results is a bug.
+// It previously did not. pgvector's <=> is cosine DISTANCE (= 1 - similarity),
+// so the old `<=> < 1.0` predicate kept everything with similarity > 0, while
+// rankKnowledgeChunks keeps similarity >= 0.5 — i.e. distance <= 0.5. Any
+// chunk scoring between 0 and 0.5 was returned by one path and dropped by the
+// other, so the same query answered differently depending on whether the
+// extension happened to be installed. (A comment on the Go side asserted the
+// two were equivalent: "0.5 cosine = 1.0 cosine distance". They are not.)
+// Nothing caught it: the one test covering this path skipped wherever pgvector
+// was absent, which included CI.
+//
+// knowledgeMaxCosineDistance is the single definition of that cutoff.
+//
 // The SELECT deliberately omits c.embedding (the ~15-30KB JSONB copy): the
 // ranking already happened in SQL and the caller only uses content/filename
 // — transferring + parsing megabytes of embeddings per query bought nothing.
@@ -402,9 +429,9 @@ func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgI
 		JOIN knowledge_documents d ON c.doc_id = d.id
 		WHERE d.org_id = $1
 		  AND c.embedding_vec IS NOT NULL
-		  AND c.embedding_vec <=> $2::vector < 1.0
+		  AND c.embedding_vec <=> $2::vector <= $4
 		ORDER BY c.embedding_vec <=> $2::vector
-		LIMIT $3`, orgID, FormatVector(queryEmbedding), limit)
+		LIMIT $3`, orgID, FormatVector(queryEmbedding), limit, knowledgeMaxCosineDistance)
 	if err != nil {
 		return nil, err
 	}
@@ -642,10 +669,13 @@ func rankKnowledgeChunks(orgID string, chunks []interfaces.KnowledgeChunk, query
 		return scoredChunks[i].sim > scoredChunks[j].sim
 	})
 
-	// Filter by minimum similarity (0.5 cosine = 1.0 cosine distance, matching
-	// the pgvector path's threshold). Chunks below this are noise.
+	// Filter by minimum similarity. Chunks below this are noise. The pgvector
+	// path applies the SAME cutoff expressed as cosine distance
+	// (knowledgeMaxCosineDistance = 1 - knowledgeMinSimilarity); keep the two
+	// in step or the extension's presence silently changes what a query
+	// returns.
 	cutoff := 0
-	for cutoff < len(scoredChunks) && scoredChunks[cutoff].sim >= 0.5 {
+	for cutoff < len(scoredChunks) && scoredChunks[cutoff].sim >= knowledgeMinSimilarity {
 		cutoff++
 	}
 	scoredChunks = scoredChunks[:cutoff]

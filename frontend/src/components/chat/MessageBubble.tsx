@@ -1,6 +1,10 @@
+import {useTranslation} from 'react-i18next'
+// MentionPill is a module-level markdown component and deliberately hook-free,
+// so its copy goes through the i18next instance rather than the hook.
+import i18n from '@/i18n'
 import clsx from 'clsx'
 import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash} from 'lucide-react'
-import {useState, useCallback, memo} from 'react'
+import {useCallback, memo} from 'react'
 import ReactMarkdown, {defaultUrlTransform} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types'
@@ -18,6 +22,10 @@ interface Props {
   isLastAssistant?: boolean
   onRegenerate?: () => void
   onRetry?: () => void
+  // Active search query — occurrences are <mark>ed in the rendered text.
+  highlight?: string
+  // True for the match the search bar is currently stepping through.
+  isActiveMatch?: boolean
 }
 
 function formatTime(ts: string): string {
@@ -42,8 +50,8 @@ const MentionPill = ({path}: {path: string}) => {
     <button
       type="button"
       onClick={handleClick}
-      title={`Go to ${filename}`}
-      aria-label={`Go to ${filename}`}
+      title={i18n.t('chat:message.goTo', {name: filename})}
+      aria-label={i18n.t('chat:message.goTo', {name: filename})}
       className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-400 border border-brand-500/20 hover:bg-brand-500/20 font-medium text-[0.9em] mx-0.5 transition-colors"
     >
       @{filename}
@@ -113,13 +121,131 @@ interface MarkdownCodeProps {
   children?: React.ReactNode
 }
 
-interface MarkdownTextProps {
-  children?: React.ReactNode
-}
-
-const MENTION_REGEX = /@([a-zA-Z0-9_./\\-]+)/g
+// The @-mention shape, shared by the highlighter below. Kept as a source
+// fragment (not a RegExp) because it is spliced into a larger alternation.
+const MENTION_PATTERN = String.raw`@[a-zA-Z0-9_./\\-]+`
 
 const markdownPlugins = [remarkGfm]
+
+// escapeRegExp: the search query is user input and goes straight into a RegExp.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// segmentPattern builds the alternation used to split a text run into
+// @-mentions and (when searching) query hits. Returns null when there is
+// nothing to look for.
+function segmentPattern(text: string, highlight?: string): {re: RegExp; q?: string} | null {
+  const hasMention = text.includes('@')
+  const q = highlight?.trim()
+  if (!hasMention && !q) return null
+  const alt = [q ? `(${escapeRegExp(q)})` : null, hasMention ? `(${MENTION_PATTERN})` : null].filter(Boolean).join('|')
+  return {re: new RegExp(alt, 'gi'), q}
+}
+
+// --- hast plumbing -------------------------------------------------------
+//
+// react-markdown's `components` map is keyed by ELEMENT name, so a `text` entry
+// is silently ignored — the previous `components.text` override never ran, and
+// @-mentions in assistant answers rendered as plain text for as long as it has
+// been there (user messages looked right only because they bypass markdown).
+//
+// Splitting text therefore has to happen in the tree, before rendering: this
+// rehype plugin rewrites text nodes into custom elements that `components`
+// below can then map to real React components.
+
+interface HastNode {
+  type: string
+  tagName?: string
+  value?: string
+  properties?: Record<string, unknown>
+  children?: HastNode[]
+}
+
+const MENTION_TAG = 'chat-mention'
+const MARK_TAG = 'chat-mark'
+// Code keeps its literal text: a pill or a highlight inside a snippet would
+// misrepresent what the model actually wrote.
+const OPAQUE_TAGS = new Set(['code', 'pre'])
+
+function splitTextNode(value: string, highlight?: string): HastNode[] | null {
+  const found = segmentPattern(value, highlight)
+  if (!found) return null
+  const parts = value.split(found.re).filter(p => p !== undefined && p !== '')
+
+  let changed = false
+  const nodes = parts.map<HastNode>(part => {
+    if (found.q && part.toLowerCase() === found.q.toLowerCase()) {
+      changed = true
+      return {type: 'element', tagName: MARK_TAG, properties: {}, children: [{type: 'text', value: part}]}
+    }
+    if (part.startsWith('@') && part.length > 1) {
+      changed = true
+      return {
+        type: 'element',
+        tagName: MENTION_TAG,
+        properties: {path: part.slice(1)},
+        children: [{type: 'text', value: part}],
+      }
+    }
+    return {type: 'text', value: part}
+  })
+
+  // Bail only when nothing was actually wrapped. Counting parts instead missed
+  // the case where the WHOLE text node is the match (e.g. the sole child of a
+  // <strong>), which split() returns as a single part.
+  return changed ? nodes : null
+}
+
+function rehypeChatText(highlight?: string) {
+  return () => (tree: HastNode) => {
+    const walk = (node: HastNode) => {
+      if (!node.children) return
+      if (node.tagName && OPAQUE_TAGS.has(node.tagName)) return
+      const next: HastNode[] = []
+      for (const child of node.children) {
+        if (child.type === 'text' && typeof child.value === 'string') {
+          const replacement = splitTextNode(child.value, highlight)
+          if (replacement) {
+            next.push(...replacement)
+            continue
+          }
+        }
+        walk(child)
+        next.push(child)
+      }
+      node.children = next
+    }
+    walk(tree)
+  }
+}
+
+// renderTextSegment is the same transformation for PLAIN text (user messages,
+// which never go through markdown), so both sides of the conversation
+// highlight and pill identically.
+function renderTextSegment(text: string, highlight?: string): React.ReactNode {
+  const found = segmentPattern(text, highlight)
+  if (!found) return text
+  const parts = text.split(found.re).filter(p => p !== undefined && p !== '')
+
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (found.q && part.toLowerCase() === found.q.toLowerCase()) {
+          return (
+            <mark key={i} className="chat-search-hit">
+              {part}
+            </mark>
+          )
+        }
+        if (part.startsWith('@') && part.length > 1) {
+          return <MentionPill key={i} path={part.slice(1)} />
+        }
+        return <span key={i}>{part}</span>
+      })}
+    </>
+  )
+}
 
 // react-markdown strips URLs with unknown schemes by default; allow our
 // internal "block:" / "finding:" deep-link schemes through so BlockLink can
@@ -127,6 +253,21 @@ const markdownPlugins = [remarkGfm]
 // transform.
 const urlTransform = (url: string) =>
   url.startsWith('block:') || url.startsWith('finding:') ? url : defaultUrlTransform(url)
+
+// The plugin list must keep a stable identity per query — react-markdown
+// re-parses everything when it changes. Searching is a discrete mode (never
+// concurrent with streaming), so a one-entry cache keeps re-renders off the
+// streaming path. The components map is query-independent.
+let pluginCacheKey: string | undefined
+let pluginCacheValue: [ReturnType<typeof rehypeChatText>] | undefined
+
+function getRehypePlugins(highlight?: string) {
+  const key = highlight ?? ''
+  if (pluginCacheKey === key && pluginCacheValue) return pluginCacheValue
+  pluginCacheKey = key
+  pluginCacheValue = [rehypeChatText(highlight)]
+  return pluginCacheValue
+}
 
 const markdownComponents = {
   pre({children}: MarkdownPreProps) {
@@ -144,12 +285,13 @@ const markdownComponents = {
 
     return <CodeBlock language={language} value={value} />
   },
+  // Inline code. Its look is owned by `.prose-chat code` in index.css —
+  // repeating it in utilities here was misleading, because `.prose-chat code`
+  // (0-1-1) outranks a single-class utility (0-1-0), so the background,
+  // padding and size declared here never actually applied.
   code({inline: _inline, className, children, ...props}: MarkdownCodeProps) {
     return (
-      <code
-        className={clsx('px-1.5 py-0.5 rounded bg-surface-3 text-brand-300 font-mono text-[0.85em]', className)}
-        {...props}
-      >
+      <code className={className} {...props}>
         {children}
       </code>
     )
@@ -157,23 +299,13 @@ const markdownComponents = {
   a({href, children}: {href?: string; children?: React.ReactNode}) {
     return <BlockLink href={href}>{children}</BlockLink>
   },
-  text({children}: MarkdownTextProps) {
-    const text = String(children)
-    if (!text.includes('@')) return <>{text}</>
-
-    const parts = text.split(MENTION_REGEX)
-    const matches = text.match(MENTION_REGEX) || []
-
-    return (
-      <>
-        {parts.map((part, i) => (
-          <span key={i}>
-            {part}
-            {matches[i] && <MentionPill path={matches[i].slice(1)} />}
-          </span>
-        ))}
-      </>
-    )
+  // The elements rehypeChatText produced. `components` is keyed by element
+  // name, which is why these work where a `text` key could not.
+  [MENTION_TAG]({path, children}: {path?: string; children?: React.ReactNode}) {
+    return path ? <MentionPill path={path} /> : <>{children}</>
+  },
+  [MARK_TAG]({children}: {children?: React.ReactNode}) {
+    return <mark className="chat-search-hit">{children}</mark>
   },
 }
 
@@ -181,9 +313,14 @@ const markdownComponents = {
 // compares strings by value). During streaming the completed portion of the
 // message routes through it, so react-markdown re-parses only the growing
 // tail on each animation-frame flush instead of the whole message.
-const StableMarkdown = memo(function StableMarkdown({content}: {content: string}) {
+const StableMarkdown = memo(function StableMarkdown({content, highlight}: {content: string; highlight?: string}) {
   return (
-    <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} urlTransform={urlTransform}>
+    <ReactMarkdown
+      remarkPlugins={markdownPlugins}
+      rehypePlugins={getRehypePlugins(highlight)}
+      components={markdownComponents}
+      urlTransform={urlTransform}
+    >
       {content}
     </ReactMarkdown>
   )
@@ -204,29 +341,52 @@ export function splitStreamingContent(content: string): [head: string, tail: str
   return [head, content.slice(idx + 2)]
 }
 
-function renderContent(content: string, isUser: boolean, isStreaming?: boolean) {
-  if (isUser) {
-    const parts = content.split(MENTION_REGEX)
-    const matches = content.match(MENTION_REGEX) || []
+// splitOpenFence locates an UNTERMINATED ``` fence and returns the prose
+// before it plus the code accumulated so far. While a fence is open,
+// splitStreamingContent deliberately refuses to advance the memoized head, so
+// without this the entire message was re-parsed by react-markdown AND
+// re-tokenized by Prism on every animation frame. `before` cannot change until
+// the fence closes, so it memoizes perfectly and the only per-frame work left
+// is appending text to a plain <pre>.
+export function splitOpenFence(content: string): {before: string; lang: string; code: string} | null {
+  const fences = content.match(/```/g)
+  if (!fences || fences.length % 2 === 0) return null
+  const idx = content.lastIndexOf('```')
+  const rest = content.slice(idx + 3)
+  const nl = rest.indexOf('\n')
+  return {
+    before: content.slice(0, idx),
+    lang: (nl === -1 ? rest : rest.slice(0, nl)).trim(),
+    code: nl === -1 ? '' : rest.slice(nl + 1),
+  }
+}
 
-    return (
-      <div className="whitespace-pre-wrap break-words">
-        {parts.map((part, i) => (
-          <span key={i}>
-            {part}
-            {matches[i] && <MentionPill path={matches[i].slice(1)} />}
-          </span>
-        ))}
-      </div>
-    )
+function renderContent(content: string, isUser: boolean, isStreaming?: boolean, highlight?: string) {
+  if (isUser) {
+    return <div className="whitespace-pre-wrap break-words">{renderTextSegment(content, highlight)}</div>
   }
 
   if (isStreaming) {
+    const open = splitOpenFence(content)
+    if (open) {
+      return (
+        <div className="prose-chat break-words is-streaming">
+          {open.before !== '' && <StableMarkdown content={open.before} highlight={highlight} />}
+          <CodeBlock language={open.lang} value={open.code} plain />
+          <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
+        </div>
+      )
+    }
     const [head, tail] = splitStreamingContent(content)
     return (
       <div className="prose-chat break-words is-streaming">
-        {head !== '' && <StableMarkdown content={head} />}
-        <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} urlTransform={urlTransform}>
+        {head !== '' && <StableMarkdown content={head} highlight={highlight} />}
+        <ReactMarkdown
+          remarkPlugins={markdownPlugins}
+          rehypePlugins={getRehypePlugins(highlight)}
+          components={markdownComponents}
+          urlTransform={urlTransform}
+        >
           {tail}
         </ReactMarkdown>
         <span className="streaming-cursor inline-block w-[3px] h-[1.2em] bg-brand-400 ml-0.5 align-text-bottom" />
@@ -236,19 +396,33 @@ function renderContent(content: string, isUser: boolean, isStreaming?: boolean) 
 
   return (
     <div className="prose-chat break-words">
-      <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} urlTransform={urlTransform}>
+      <ReactMarkdown
+        remarkPlugins={markdownPlugins}
+        rehypePlugins={getRehypePlugins(highlight)}
+        components={markdownComponents}
+        urlTransform={urlTransform}
+      >
         {content}
       </ReactMarkdown>
     </div>
   )
 }
 
-function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onRegenerate, onRetry}: Props) {
+function MessageBubble({
+  message,
+  isStreaming,
+  isThinking,
+  isLastAssistant,
+  onRegenerate,
+  onRetry,
+  highlight,
+  isActiveMatch,
+}: Props) {
+  const {t} = useTranslation('chat')
   const isUser = message.role === 'user'
   const isError = message.finishReason === 'error'
   const isInterrupted = message.finishReason === 'interrupted'
   const {copied, copy} = useCopy()
-  const [showActions, setShowActions] = useState(false)
 
   const handleCopy = useCallback(() => {
     copy(message.content)
@@ -258,7 +432,7 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
 
   if (isThinking) {
     return (
-      <div className="flex flex-col items-start gap-1 animate-fade-in" role="status">
+      <div className="flex flex-col items-start gap-1" role="status">
         <div className="flex items-center gap-1.5 px-1">
           <Bot size={11} className="text-text-tertiary" />
           <span className="text-2xs font-medium text-text-tertiary">AI</span>
@@ -276,7 +450,7 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
                 style={{animationDelay: '300ms'}}
               />
             </div>
-            <span className="text-xs text-text-tertiary">Thinking...</span>
+            <span className="text-xs text-text-tertiary">{t('message.thinking')}</span>
           </div>
         </div>
       </div>
@@ -284,30 +458,40 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
   }
 
   return (
+    // No mount animation: inside a virtualized list, items mount whenever they
+    // scroll back into view, so animate-message-in made history flicker.
     <div
-      className={clsx('group flex flex-col gap-1 animate-message-in', isUser ? 'items-end' : 'items-start')}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
+      className={clsx(
+        'group flex flex-col gap-1 rounded-lg transition-shadow',
+        isUser ? 'items-end' : 'items-start',
+        isActiveMatch && 'ring-1 ring-brand-500/50 ring-offset-2 ring-offset-surface-1',
+      )}
     >
       <div className="flex items-center gap-1.5 px-1">
         {isUser ? <User size={11} className="text-text-tertiary" /> : <Bot size={11} className="text-text-tertiary" />}
-        <span className="text-2xs font-medium text-text-tertiary">{isUser ? 'You' : 'AI'}</span>
+        <span className="text-2xs font-medium text-text-tertiary">
+          {isUser ? t('message.roleUser') : t('message.roleAssistant')}
+        </span>
         {message.model && !isUser && <span className="text-2xs text-text-tertiary/60">· {message.model}</span>}
         {time && <span className="text-2xs text-text-tertiary/40">{time}</span>}
       </div>
 
+      {/* The user's turn keeps a bubble (it is short and benefits from the
+          right-aligned shape). The assistant runs full-bleed: in a 280-560px
+          panel, a border + 12px of horizontal padding was a measurable bite
+          out of an already narrow measure, for no information. Errors keep a
+          left accent so they still read as set apart. */}
       <div
         className={clsx(
-          'relative px-3 py-2.5 max-w-full text-sm leading-relaxed',
+          'relative max-w-full text-sm leading-relaxed',
           isUser
-            ? 'bg-brand-500/12 border border-brand-500/20 rounded-2xl rounded-tr-sm'
+            ? 'px-3 py-2.5 max-w-[85%] bg-brand-500/12 border border-brand-500/20 rounded-2xl rounded-tr-sm'
             : isError
-              ? 'bg-red-500/8 border border-red-500/15 rounded-2xl rounded-tl-sm'
-              : 'bg-surface-2 border border-border-subtle rounded-2xl rounded-tl-sm',
-          isStreaming && 'border-brand-500/20',
+              ? 'w-full py-1 pl-3 border-l-2 border-semantic-error/50 text-text-secondary'
+              : 'w-full',
         )}
       >
-        {renderContent(message.content, isUser, isStreaming)}
+        {renderContent(message.content, isUser, isStreaming, highlight)}
       </div>
 
       {!isUser &&
@@ -329,24 +513,23 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
       {isInterrupted && (
         <div className="flex items-center gap-1 px-1 text-2xs text-text-tertiary">
           <CircleSlash size={10} />
-          <span>Stopped</span>
+          <span>{t('message.stopped')}</span>
         </div>
       )}
 
       {!isStreaming && (
         <div
-          className={clsx(
-            // U1.6: actions reveal on hover AND on keyboard focus-within —
-            // hover-only opacity left keyboard users with invisible-but-
-            // focusable buttons (the FindingsList pattern).
-            'flex items-center gap-1 px-1 transition-opacity duration-150',
-            showActions ? 'opacity-100' : 'opacity-0 focus-within:opacity-100',
-          )}
+          // U1.6: actions reveal on hover AND on keyboard focus-within —
+          // hover-only opacity left keyboard users with invisible-but-
+          // focusable buttons (the FindingsList pattern). Pure CSS off the
+          // container's `group`: the old useState re-rendered a markdown-heavy
+          // component on every pointer enter/leave.
+          className="flex items-center gap-1 px-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
         >
           <button
             className="p-1 rounded hover:bg-surface-2 text-text-tertiary hover:text-text-secondary transition-colors"
             onClick={handleCopy}
-            aria-label={copied ? 'Copied' : 'Copy'}
+            aria-label={copied ? t('message.copied') : t('message.copy')}
           >
             {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
           </button>
@@ -356,7 +539,7 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
               onClick={onRetry}
             >
               <RotateCcw size={11} />
-              <span>Retry</span>
+              <span>{t('message.retry')}</span>
             </button>
           )}
           {isLastAssistant && !isError && onRegenerate && (
@@ -365,7 +548,7 @@ function MessageBubble({message, isStreaming, isThinking, isLastAssistant, onReg
               onClick={onRegenerate}
             >
               <RefreshCw size={11} />
-              <span>Regenerate</span>
+              <span>{t('message.regenerate')}</span>
             </button>
           )}
         </div>
@@ -387,6 +570,8 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.isThinking === nextProps.isThinking &&
     prevProps.isLastAssistant === nextProps.isLastAssistant &&
     prevProps.onRegenerate === nextProps.onRegenerate &&
-    prevProps.onRetry === nextProps.onRetry
+    prevProps.onRetry === nextProps.onRetry &&
+    prevProps.highlight === nextProps.highlight &&
+    prevProps.isActiveMatch === nextProps.isActiveMatch
   )
 })

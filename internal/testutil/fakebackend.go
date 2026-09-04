@@ -28,6 +28,8 @@ type FakeBackend struct {
 	FlowTags map[string][]string
 	// OrgChannels backs the in-memory org-channel store (R2-3 tests).
 	OrgChannels map[string]*interfaces.OrgChannel
+	// OrgCustomRules backs the in-memory per-org custom-rule store (R4 tests).
+	OrgCustomRules map[string]*interfaces.OrgCustomRule
 	// KnowledgeDocs / KnowledgeChunks back the in-memory knowledge methods
 	// (upload/replace/re-index round-trips in rag service tests).
 	KnowledgeDocs   map[string]*interfaces.KnowledgeDocument
@@ -802,10 +804,72 @@ func (m *FakeBackend) ClearGovernanceAlerts(_ context.Context, _ string) error {
 	return nil
 }
 
+// OrgCustomRules backs the per-org custom-rule store in memory (R4 tests).
+//
+// The (OrgID, RuleID) uniqueness and the org-ownership guard mirror the
+// Postgres upsert exactly. B8 showed what happens when a fake is laxer than the
+// real backend: the fake reported success on precisely the cross-tenant write
+// the real one rejects, so every service-level test written against it agreed
+// with the bug.
+func (m *FakeBackend) SaveOrgCustomRule(_ context.Context, rule *interfaces.OrgCustomRule) error {
+	if m.OrgCustomRules == nil {
+		m.OrgCustomRules = make(map[string]*interfaces.OrgCustomRule)
+	}
+	// Composite key wins: re-saving the same (org, ruleID) replaces in place.
+	for _, existing := range m.OrgCustomRules {
+		if existing.OrgID == rule.OrgID && existing.RuleID == rule.RuleID {
+			rule.ID = existing.ID
+			break
+		}
+	}
+	if existing, ok := m.OrgCustomRules[rule.ID]; ok && existing.OrgID != rule.OrgID {
+		return interfaces.ErrNotFound
+	}
+	cp := *rule
+	m.OrgCustomRules[rule.ID] = &cp
+	return nil
+}
+
+func (m *FakeBackend) DeleteOrgCustomRule(_ context.Context, orgID, id string) error {
+	if r, ok := m.OrgCustomRules[id]; ok && r.OrgID == orgID {
+		delete(m.OrgCustomRules, id)
+	}
+	return nil
+}
+
+func (m *FakeBackend) ListOrgCustomRules(_ context.Context, orgID string, enabledOnly bool) ([]*interfaces.OrgCustomRule, error) {
+	var out []*interfaces.OrgCustomRule
+	for _, r := range m.OrgCustomRules {
+		if r.OrgID == orgID && (!enabledOnly || r.Enabled) {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	// Deterministic order — the analysis path compiles these into a rule set
+	// whose digest feeds the cache key, so a map-iteration order would make the
+	// key unstable across calls.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
 // OrgChannels backs the org-channel store in memory (R2-3 tests).
+//
+// The org-ownership check mirrors the Postgres upsert's
+// `WHERE org_channels.org_id = EXCLUDED.org_id`: an id that already exists under
+// a DIFFERENT org is ErrNotFound, never a silent overwrite. Without it the fake
+// would report success on exactly the cross-tenant hijack the real backend now
+// rejects, and any service-level test written against the fake would be wrong.
 func (m *FakeBackend) SaveOrgChannel(_ context.Context, ch *interfaces.OrgChannel) error {
 	if m.OrgChannels == nil {
 		m.OrgChannels = make(map[string]*interfaces.OrgChannel)
+	}
+	if existing, ok := m.OrgChannels[ch.ID]; ok && existing.OrgID != ch.OrgID {
+		return interfaces.ErrNotFound
 	}
 	cp := *ch
 	m.OrgChannels[ch.ID] = &cp

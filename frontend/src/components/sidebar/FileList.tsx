@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useMemo, useRef, useCallback} from 'react'
 import {
   FileText,
@@ -43,6 +44,7 @@ export default function FileList({
   onRevealFile,
   onReloadFile,
 }: FileListProps) {
+  const {t} = useTranslation('shell')
   const [filter, setFilter] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('name')
   const [focusedIndex, setFocusedIndex] = useState(-1)
@@ -89,7 +91,7 @@ export default function FileList({
   const menuItems: ContextMenuItem[] = ctxMenu
     ? [
         {
-          label: 'Copy path',
+          label: t('files.copyPath'),
           icon: Copy,
           onClick: () => {
             void writeClipboard(ctxMenu.file.path)
@@ -98,7 +100,7 @@ export default function FileList({
         ...(onRevealFile
           ? [
               {
-                label: 'Reveal in file manager',
+                label: t('files.revealInFileManager'),
                 icon: ExternalLink,
                 onClick: () => onRevealFile(ctxMenu.file.path),
               },
@@ -107,7 +109,7 @@ export default function FileList({
         ...(onReloadFile
           ? [
               {
-                label: 'Reload from disk',
+                label: t('files.reloadFromDisk'),
                 icon: RotateCw,
                 onClick: () => onReloadFile(ctxMenu.file.path),
               },
@@ -133,7 +135,7 @@ export default function FileList({
             <input
               value={filter}
               onChange={e => setFilter(e.target.value)}
-              placeholder="Filter files…"
+              placeholder={t('files.filterPlaceholder')}
               className="flex-1 min-w-0 bg-transparent text-2xs text-text-primary placeholder:text-text-disabled outline-none"
             />
           </div>
@@ -155,7 +157,7 @@ export default function FileList({
         tabIndex={0}
         onKeyDown={handleKeyDown}
         role="listbox"
-        aria-label="Flow files"
+        aria-label={t('files.listAria')}
       >
         {visibleFiles.length === 0 ? (
           <div className="px-3 py-4 text-2xs text-text-tertiary text-center">No files match "{filter}"</div>

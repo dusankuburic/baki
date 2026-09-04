@@ -1,6 +1,29 @@
-import {useRef, useEffect, useCallback} from 'react'
+import {useTranslation} from 'react-i18next'
+import {useRef, useEffect} from 'react'
 import clsx from 'clsx'
 import Portal from './Portal'
+import {useDialogFocus} from '@/hooks/useDialogFocus'
+
+// Body-scroll lock is REFCOUNTED across every Modal instance. Modals nest
+// (Settings → a confirm dialog inside it), and the previous per-instance
+// cleanup reset body overflow unconditionally — so tearing down the INNER
+// modal unlocked scrolling behind the outer one that was still open.
+let scrollLockCount = 0
+let previousBodyOverflow = ''
+
+function acquireScrollLock(): void {
+  if (scrollLockCount === 0) {
+    previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+  }
+  scrollLockCount++
+}
+
+function releaseScrollLock(): void {
+  if (scrollLockCount === 0) return
+  scrollLockCount--
+  if (scrollLockCount === 0) document.body.style.overflow = previousBodyOverflow
+}
 
 type ModalProps = {
   isOpen: boolean
@@ -43,52 +66,18 @@ export default function Modal({
   children,
   footer,
 }: ModalProps) {
+  const {t} = useTranslation()
   const modalRef = useRef<HTMLDivElement>(null)
-  const previousFocusRef = useRef<HTMLElement | null>(null)
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (closeOnEsc && e.key === 'Escape') {
-        onClose()
-        return
-      }
-      if (e.key === 'Tab' && modalRef.current) {
-        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        )
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault()
-          last?.focus()
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault()
-          first?.focus()
-        }
-      }
-    },
-    [closeOnEsc, onClose],
-  )
+  // Focus trap, Esc-to-close and focus restoration come from the shared hook —
+  // <Modal> used to carry a byte-identical private copy of all three.
+  useDialogFocus({isOpen, onClose, closeOnEsc, containerRef: modalRef})
 
   useEffect(() => {
-    if (isOpen) {
-      previousFocusRef.current = document.activeElement as HTMLElement
-      document.body.style.overflow = 'hidden'
-      document.addEventListener('keydown', handleKeyDown)
-      const firstFocusable = modalRef.current?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      )
-      requestAnimationFrame(() => firstFocusable?.focus())
-    } else {
-      document.body.style.overflow = ''
-      document.removeEventListener('keydown', handleKeyDown)
-      previousFocusRef.current?.focus()
-    }
-    return () => {
-      document.body.style.overflow = ''
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isOpen, handleKeyDown])
+    if (!isOpen) return
+    acquireScrollLock()
+    return releaseScrollLock
+  }, [isOpen])
 
   if (!isOpen) return null
 
@@ -120,7 +109,7 @@ export default function Modal({
               <button
                 onClick={onClose}
                 className="w-7 h-7 flex items-center justify-center rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-2 transition-colors duration-fast"
-                aria-label="Close"
+                aria-label={t('close')}
               >
                 ✕
               </button>

@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useMemo, useRef, useEffect} from 'react'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -5,6 +6,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, ApiError} from '@/api'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
+import {uuid} from '@/lib/uuid'
 import {conversationToMarkdown, downloadTextFile, safeFilename} from '@/lib/chatExport'
 import {useChatConversations} from './useChatConversations'
 import {useChatThreads} from './useChatThreads'
@@ -19,6 +21,7 @@ interface UseAIChatOptions {
 const EMPTY_ARRAY: ChatMessage[] = []
 
 export function useAIChat({selectedModel}: UseAIChatOptions) {
+  const {t} = useTranslation('chat')
   const doc = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
 
@@ -79,8 +82,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       // with a toast so the user gets immediate feedback rather than a rejected
       // POST after a round-trip.
       if (!useChatStore.getState().canStartStream()) {
-        toast.warning('Chats are busy', {
-          description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
+        toast.warning(t('errors.busyTitle'), {
+          description: t('errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
         })
         return
       }
@@ -90,7 +93,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       const isFirstMessage = getMessages(activeThread.id).length === 0
 
       const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         role: 'user',
         content: text,
         timestamp: new Date().toISOString(),
@@ -103,10 +106,10 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       // No save-on-send — the backend reconstructs history; save-on-done
       // persists the full user+assistant pair.
 
-      const msgId = crypto.randomUUID()
+      const msgId = uuid()
       const threadId = activeThread.id
       const myGen = bumpGen(threadId)
-      const sid = crypto.randomUUID()
+      const sid = uuid()
       startStream(threadId, sid, msgId)
       beginAcc(sid, threadId)
 
@@ -139,9 +142,9 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
           cancelStream(sid)
           endStream(threadId)
           appendMessage(threadId, {
-            id: crypto.randomUUID(),
+            id: uuid(),
             role: 'assistant',
-            content: '*Error: No response stream was created. Please check your connection and try again.*',
+            content: t('errors.noStream'),
             timestamp: new Date().toISOString(),
             provider,
             model: selectedModel,
@@ -153,7 +156,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         // are dispatched by the handlers registered in useChatStreamEngine.
       } catch (e: unknown) {
         if (!isCurrentGen(threadId, myGen)) return
-        const errMsg = e instanceof Error ? e.message : String(e) || 'Failed to send message'
+        const errMsg = e instanceof Error ? e.message : String(e) || t('errors.sendFailed')
         // Classify by the envelope's machine-readable code first, falling back
         // to the message regex for older backends. Capacity errors are
         // transient — toast + clean up, no *Error* bubble in history.
@@ -162,8 +165,8 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
         const budgetExceeded =
           apiErr?.code === 'AI_BUDGET_EXCEEDED' || (/budget/i.test(errMsg) && !/check unavailable/i.test(errMsg))
         if (capacityReached) {
-          toast.warning('Chats are busy', {
-            description: `${MAX_CONCURRENT_STREAMS} chats are already generating — wait for one to finish or stop it, then try again.`,
+          toast.warning(t('errors.busyTitle'), {
+            description: t('errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
           })
         } else if (budgetExceeded) {
           // Daily AI budget hit: surface a dedicated, actionable message instead
@@ -171,14 +174,13 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
           // user needs to know it resets at midnight, not that something broke.
           const amounts = errMsg.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
           const detail = amounts ? ` (${amounts[0]})` : ''
-          toast.warning("You've reached today's AI budget" + detail, {
-            description:
-              'AI requests are capped per day per organization. The budget resets at midnight UTC; contact an admin to raise it.',
+          toast.warning(t('errors.budgetTitle', {detail}), {
+            description: t('errors.budgetBody'),
           })
           appendMessage(threadId, {
-            id: crypto.randomUUID(),
+            id: uuid(),
             role: 'assistant',
-            content: `🛑 **Daily AI budget reached${detail}.** It resets at midnight UTC. Contact an admin to adjust the limit.`,
+            content: t('errors.budgetBubble', {detail}),
             timestamp: new Date().toISOString(),
             provider,
             model: selectedModel,
@@ -189,9 +191,9 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
           // knows their message didn't go through.
           logger.warn('chat stream create failed', e)
           appendMessage(threadId, {
-            id: crypto.randomUUID(),
+            id: uuid(),
             role: 'assistant',
-            content: `*Error: ${errMsg}*`,
+            content: t('errors.generic', {message: errMsg}),
             timestamp: new Date().toISOString(),
             provider,
             model: selectedModel,
@@ -223,10 +225,11 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       dropAcc,
       beginAcc,
       cancelStream,
+      t,
     ],
   )
 
-// Queued follow-up drain (U1.6): when the ACTIVE thread's stream ends,
+  // Queued follow-up drain (U1.6): when the ACTIVE thread's stream ends,
   // auto-send the message composed while it was streaming. The edge detect
   // (not a subscription) means switching threads mid-stream doesn't misfire.
   const wasActiveStreaming = useRef(false)
@@ -239,8 +242,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
       // into executeSend's early-returns (stream cap / no doc / empty request)
       // silently lost the message. Blocked sends stay queued — the chip keeps
       // its promise for the next drain.
-      const blocked =
-        !queued || !tid || !doc || !!st.streams[tid] || !st.canStartStream()
+      const blocked = !queued || !tid || !doc || !!st.streams[tid] || !st.canStartStream()
       if (!blocked) {
         st.takeQueuedMessage(tid)
         void executeSend(queued.text, queued.files.length ? queued.files : undefined, queued.excludeContext)
@@ -272,9 +274,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const cancelQueued = useCallback(() => {
     if (activeThreadId) useChatStore.getState().clearQueuedMessage(activeThreadId)
   }, [activeThreadId])
-  const queuedForActiveThread = useChatStore(
-    s => (s.activeThreadId ? s.queuedByThread[s.activeThreadId] : undefined),
-  )
+  const queuedForActiveThread = useChatStore(s => (s.activeThreadId ? s.queuedByThread[s.activeThreadId] : undefined))
 
   const handlePreviewContext = useCallback(
     async (text: string, files: string[], excludeContext?: boolean) => {
@@ -319,9 +319,9 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
     if (!activeThread) return
     const messages = getMessages(activeThread.id) as ChatMessage[]
     if (messages.length === 0) return
-    const title = activeThread.title || 'Chat conversation'
+    const title = activeThread.title || t('export.defaultTitle')
     downloadTextFile(safeFilename(title), conversationToMarkdown(title, messages))
-  }, [activeThread, getMessages])
+  }, [activeThread, getMessages, t])
 
   // handleClearThread empties the active thread locally and on the backend,
   // using the same (flowId, scope) key the save/get path uses. Backing the

@@ -222,7 +222,10 @@ func StableFlowIDForPath(path string) string {
 // analyzerVersion participates in the analysis cache key (not FlowHash, which
 // history.go uses for pure content identity). Bump when rule logic or parser
 // output changes so stale cached reports are not served after an upgrade.
-const analyzerVersion = "2"
+// Bumped to "3" when the rule SET joined the key (ruleSetDigest): reports
+// cached under the old two-part key were computed with an unknown rule set and
+// must not be served now that the set can vary per org.
+const analyzerVersion = "3"
 
 // settingsDigest folds the analysis-relevant settings (rule enabled/severity/
 // options) into the cache key. Without it the key is content-only, so toggling
@@ -256,6 +259,58 @@ func settingsDigest(settings *models.AppSettings) string {
 	return fmt.Sprintf("%x", h.Sum(nil))[:8]
 }
 
+// RuleDigester is implemented by rules whose behaviour comes from CONFIGURATION
+// rather than from compiled code — today, CustomRule. Built-in rules need no
+// digest beyond their ID: their logic is fixed for a given binary, and
+// analyzerVersion covers a logic change across binaries. A configured rule can
+// differ between two callers while keeping the same ID, so it has to contribute
+// its configuration.
+type RuleDigester interface {
+	RuleDigest() string
+}
+
+// ruleSetDigest folds the identity of the ACTIVE RULE SET into the cache key.
+//
+// Without it the key says nothing about which rules ran, and none of the other
+// components cover it: StableFlowID falls through to the parser's StableID for
+// path-less docs (uploads, /api/analysis/analyze-raw), and that ID hashes the
+// FILE NAMES ONLY — deliberately, so an edited re-upload keeps one identity.
+// Two tenants both uploading `Main.txt` (the name PAD exports by default) with
+// the same content therefore land on the same id AND the same FlowHash.
+// settingsDigest folds in settings.Analysis.Rules, but custom rules are not in
+// that map — they arrive as a separate []Rule appended to the slice.
+//
+// While custom rules are deployment-global that collision is a legitimate
+// dedup: the report would be identical anyway. As soon as rules can differ per
+// org it is a cross-tenant leak, and it is invisible — the second tenant simply
+// receives the first tenant's findings. See
+// TestCachedAnalysis_RuleSetParticipatesInKey.
+//
+// Sorted, so a set reordered by a caller (AutoFixableRules preserves input
+// order; the resolver appends org rules last) still shares one entry.
+func ruleSetDigest(rules []Rule) string {
+	if len(rules) == 0 {
+		// Not the same as "the default set": runAnalysisCore iterates exactly
+		// what it is given, so an empty slice really does run no rules.
+		return "none"
+	}
+	ids := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if d, ok := r.(RuleDigester); ok {
+			ids = append(ids, r.ID()+"@"+d.RuleDigest())
+			continue
+		}
+		ids = append(ids, r.ID())
+	}
+	sort.Strings(ids)
+	h := sha256.New()
+	for _, id := range ids {
+		io.WriteString(h, id)
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))[:8]
+}
+
 func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
 	return CachedAnalysisCtx(context.Background(), doc, rules, settings, onProgress)
 }
@@ -265,7 +320,7 @@ func CachedAnalysis(doc *models.FlowDocument, rules []Rule, settings *models.App
 // per-request deadline (raw-analyze endpoint) stops burning CPU once it elapses.
 // Cache lookup/put are unaffected (they're cheap relative to the walk).
 func CachedAnalysisCtx(gctx context.Context, doc *models.FlowDocument, rules []Rule, settings *models.AppSettings, onProgress func(int, int, string)) *models.AnalysisReport {
-	hash := analyzerVersion + ":" + FlowHash(doc) + ":" + settingsDigest(settings)
+	hash := analyzerVersion + ":" + FlowHash(doc) + ":" + settingsDigest(settings) + ":" + ruleSetDigest(rules)
 	id := StableFlowID(doc)
 	if cached := DefaultCache.Get(id, hash); cached != nil {
 		return cached

@@ -80,6 +80,27 @@ export const analysisApi = {
   updateRuleConfig: (ruleId: string, config: RuleConfig): Promise<void> =>
     request('/api/analysis/rule/config', {body: {ruleId, config}}),
 
+  /**
+   * Validates custom-rule configs against the SERVER's analyzer — the same
+   * construction path the save endpoint and the analysis engine use, so the
+   * editor's verdict cannot disagree with either.
+   *
+   * Returns one entry per input rule, in order.
+   */
+  validateCustomRules: (rules: unknown[]): Promise<CustomRuleValidation> =>
+    request('/api/analysis/custom-rules/validate', {body: {rules}}),
+
+  /**
+   * Runs an UNSAVED rule against one of the caller's flows and reports what it
+   * would match.
+   *
+   * Distinct from validateCustomRules on purpose: that answers "does this
+   * compile", this answers "does it do anything". A regex that compiles and
+   * matches nothing is a policy the org believes is enforced and is not.
+   */
+  testCustomRule: (rule: unknown, flowId: string): Promise<CustomRuleTestResult> =>
+    request('/api/analysis/custom-rules/test', {body: {rule, flowId}}),
+
   setRuleEnabled: (ruleId: string, enabled: boolean): Promise<void> =>
     request('/api/analysis/rule/enabled', {body: {ruleId, enabled}}),
 
@@ -176,4 +197,26 @@ export const analysisApi = {
 
   evaluatePolicyById: (flowId: string, orgId: string, id: string): Promise<PolicyResult> =>
     request('/api/analysis/policy/evaluate-by-id', {body: {flowId, orgId, id}}),
+}
+
+/** Per-entry result from POST /api/analysis/custom-rules/validate. */
+export interface CustomRuleValidationEntry {
+  index: number
+  id: string
+  valid: boolean
+  error?: string
+  loaded: boolean
+}
+
+export interface CustomRuleValidation {
+  entries: CustomRuleValidationEntry[]
+  valid: number
+  invalid: number
+}
+
+/** Result of POST /api/analysis/custom-rules/test. */
+export interface CustomRuleTestResult {
+  matches: number
+  flowName: string
+  findings: {ruleId: string; title: string; blockId: string}[]
 }

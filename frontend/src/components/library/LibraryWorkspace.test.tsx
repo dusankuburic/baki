@@ -144,9 +144,7 @@ describe('LibraryWorkspace', () => {
     fireEvent.change(input, {target: {value: 'Renamed'}})
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', {name: 'Rename'}))
-    await waitFor(() =>
-      expect(update).toHaveBeenCalledWith('a', {name: 'Renamed', version: 1}),
-    )
+    await waitFor(() => expect(update).toHaveBeenCalledWith('a', {name: 'Renamed', version: 1}))
   })
 
   it('duplicates a flow as "<name> (copy)" in the same org', async () => {

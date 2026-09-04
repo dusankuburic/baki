@@ -28,11 +28,20 @@ jobs:
     name: Fuzz Tests
     runs-on: ubuntu-latest
     strategy:
+      # Each target must name its OWN package. `go test -fuzz` refuses a
+      # pattern that matches more than one package — `./core/...` matched
+      # several, so every run died instantly with "cannot use -fuzz flag with
+      # multiple packages". Combined with the continue-on-error that used to be
+      # on the step below, the job reported success nightly while never once
+      # fuzzing anything.
       matrix:
-        target:
-          - FuzzApplyPatch
-          - FuzzFixerPipeline
-          - FuzzParser
+        include:
+          - target: FuzzApplyPatch
+            package: ./core/analyzer
+          - target: FuzzFixerPipeline
+            package: ./core/analyzer
+          - target: FuzzParser
+            package: ./core/parser
       fail-fast: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -40,11 +49,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # No continue-on-error: a crasher is the whole point of running this, and
+      # a nightly job that cannot fail reports nothing.
       - name: Run fuzzer
-        run: go test -fuzz=${{ matrix.target }} -fuzztime=5m -run=^${{ matrix.target }}$ ./core/...
-        continue-on-error: true
+        run: go test -fuzz=${{ matrix.target }} -fuzztime=5m -run=^${{ matrix.target }}$ ${{ matrix.package }}
+      # `!cancelled()`, not `failure()`. Under the previous `continue-on-error:
+      # true` the step's conclusion was always success, so `failure()` never
+      # evaluated true and the crash corpus was discarded on exactly the runs
+      # that produced one. Uploading unconditionally also preserves newly
+      # discovered interesting inputs, which are worth seeding back.
       - name: Upload crash corpus
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: fuzz-crashers-${{ matrix.target }}

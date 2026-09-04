@@ -51,9 +51,13 @@ type Router struct {
 	AllowedOrigins []string
 	trustedProxies []string
 	metricsToken   string
-	staticDir      string
-	hub            *wshub.Hub
-	flowChecker    wshub.FlowAccessChecker
+	// pprofEnabled gates registration of /debug/pprof/* (PAD_PPROF_ENABLED,
+	// default false). Config validation guarantees metricsToken is non-empty
+	// whenever this is true.
+	pprofEnabled bool
+	staticDir    string
+	hub          *wshub.Hub
+	flowChecker  wshub.FlowAccessChecker
 
 	// perUserLimiter caps one authenticated user's total write throughput.
 	// Constructed in BuildHandler (cloud mode only); nil in local mode, in which
@@ -86,6 +90,7 @@ func NewRouter(
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		trustedProxies: cfg.Server.TrustedProxies,
 		metricsToken:   cfg.Server.MetricsToken,
+		pprofEnabled:   cfg.Server.PprofEnabled,
 		staticDir:      cfg.Server.StaticDir,
 		// nil client (PAD_REDIS_URL unset) → in-memory hub; otherwise a Redis
 		// pub/sub + presence backplane so presence/broadcasts span replicas.

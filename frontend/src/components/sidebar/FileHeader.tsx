@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useRef} from 'react'
 import {FolderOpen, ChevronDown, FilePlus, Loader2} from 'lucide-react'
 import clsx from 'clsx'
@@ -28,6 +29,7 @@ export default function FileHeader({
   onRemoveRecent,
   onClearRecent,
 }: FileHeaderProps) {
+  const {t} = useTranslation('shell')
   const [menuOpen, setMenuOpen] = useState(false)
   // The recents menu is anchored to the whole header row (matching its
   // previous left-0/right-0 width), not just the chevron that opens it.
@@ -49,10 +51,10 @@ export default function FileHeader({
             onClick={onNewFlow}
             disabled={isLoading}
             className="flex items-center gap-1.5 h-8 px-3 text-sm font-medium text-text-secondary bg-surface-3 border border-border-default rounded-md hover:bg-surface-4 transition-colors duration-fast disabled:opacity-50 disabled:cursor-wait shrink-0"
-            title="Create a blank flow and build it in-app"
+            title={t('files.newTitle')}
           >
             <FilePlus size={14} />
-            <span>New</span>
+            <span>{t('files.new')}</span>
           </button>
         )}
         <button
@@ -61,7 +63,7 @@ export default function FileHeader({
           className="flex items-center gap-2 flex-1 h-8 px-3 text-sm font-medium text-brand-400 bg-brand-500/10 border border-brand-500/30 rounded-md hover:bg-brand-500/15 transition-colors duration-fast disabled:opacity-50 disabled:cursor-wait"
         >
           {isLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-          <span>{isLoading ? 'Loading…' : 'Open file'}</span>
+          <span>{isLoading ? t('files.loading') : t('files.openFile')}</span>
         </button>
         <button
           onClick={onOpenFolder}
@@ -69,7 +71,7 @@ export default function FileHeader({
           className="flex items-center gap-2 h-8 px-3 text-sm font-medium text-text-secondary bg-surface-3 border border-border-default rounded-md hover:bg-surface-4 transition-colors duration-fast disabled:opacity-50 disabled:cursor-wait"
         >
           {isLoading ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-          <span>Folder</span>
+          <span>{t('files.folder')}</span>
         </button>
       </div>
     )
@@ -83,8 +85,8 @@ export default function FileHeader({
       <button
         onClick={onOpenFolder}
         className="w-6 h-6 flex items-center justify-center rounded-sm text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast"
-        title="Open folder"
-        aria-label="Open folder"
+        title={t('files.openFolder')}
+        aria-label={t('files.openFolder')}
       >
         <FolderOpen size={14} />
       </button>

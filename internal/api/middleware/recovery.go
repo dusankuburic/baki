@@ -31,7 +31,7 @@ func Recovery(h http.Handler) http.Handler {
 func AttrsFromRequest(r *http.Request) errreport.Attrs {
 	attrs := errreport.Attrs{
 		"method": r.Method,
-		"path":   r.URL.Path,
+		"path":   redactPath(r.URL.Path),
 	}
 	if rid := r.Header.Get("X-Request-Id"); rid != "" {
 		attrs["request_id"] = rid

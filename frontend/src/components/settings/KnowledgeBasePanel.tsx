@@ -125,7 +125,8 @@ export default function KnowledgeBasePanel() {
     if (!activeOrgId) return
     const ok = await confirm({
       title: 'Re-index knowledge base?',
-      message: 'Every document is re-embedded with the currently configured embedding provider. This consumes embedding API usage for all indexed content.',
+      message:
+        'Every document is re-embedded with the currently configured embedding provider. This consumes embedding API usage for all indexed content.',
       confirmLabel: 'Re-index',
     })
     if (!ok) return
@@ -134,11 +135,14 @@ export default function KnowledgeBasePanel() {
       const res = await request<{chunks: number; docs: number}>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
         body: {},
       })
-      toastSuccess(res && res.chunks > 0 ? `Re-indexed ${res.chunks} chunks across ${res.docs} documents` : 'Nothing to re-index')
+      toastSuccess(
+        res && res.chunks > 0 ? `Re-indexed ${res.chunks} chunks across ${res.docs} documents` : 'Nothing to re-index',
+      )
       loadDocs()
     } catch (e) {
       logger.warn(e)
-      const embeddingMissing = (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
+      const embeddingMissing =
+        (e instanceof ApiError && e.code === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
       toastError(embeddingMissing ? 'Re-index needs an embedding-capable provider key' : 'Re-index failed')
     } finally {
       setReindexing(false)
@@ -239,7 +243,10 @@ export default function KnowledgeBasePanel() {
                     <div className="text-xs text-text-tertiary" title={absoluteTime(doc.createdAt)}>
                       Indexed {relativeTime(doc.createdAt)}
                       {doc.chunkCount != null && doc.chunkCount > 0 && (
-                        <> · {doc.chunkCount} chunks{doc.vectorIndexed != null && ` (${doc.vectorIndexed} searchable)`}</>
+                        <>
+                          {' '}
+                          · {doc.chunkCount} chunks{doc.vectorIndexed != null && ` (${doc.vectorIndexed} searchable)`}
+                        </>
                       )}
                     </div>
                     {(doc.chunkCount ?? 0) > 0 && (doc.vectorIndexed ?? 0) === 0 && (

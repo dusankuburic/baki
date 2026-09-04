@@ -359,7 +359,12 @@ func (h *AnalysisHandler) handleGetRulesSummary(w http.ResponseWriter, r *http.R
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/analysis/rule/enabled [post]
 func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleMember) {
+	// System admin, not member. This endpoint writes the DEPLOYMENT-WIDE
+	// settings singleton: before R4 any member of any org could disable a rule
+	// here and silently change analysis for every tenant in the deployment,
+	// with nothing surfacing that it had happened. Per-org configuration lives
+	// at /api/orgs/{id}/rules and is gated on org admin.
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
 	// The frontend sends "ruleId"; "id" is kept for compatibility. Decoding
@@ -386,6 +391,63 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// handleTestCustomRule runs a CANDIDATE rule against one of the caller's flows
+// and reports what it would match.
+//
+// The validate endpoint answers "does this compile"; this answers "does it do
+// anything". An author who cannot tell the two apart can save a regex that
+// never matches and believe a policy is being enforced — the same class of
+// silent no-op R1-5's suppression inventory exists to surface.
+//
+// Member-level and flow-authorized: it analyzes a flow the caller can already
+// read, with a rule they supplied, and stores nothing.
+// @Summary      Test a candidate custom rule against a flow
+// @Description  Runs one unsaved rule against a flow and returns the findings it would produce.
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "Matches"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Router       /api/analysis/custom-rules/test [post]
+func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleMember) {
+		return
+	}
+	var req struct {
+		Rule   analyzer.CustomRuleConfig `json:"rule"`
+		FlowID string                    `json:"flowId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.Rule.ID == "" {
+		render.Error(w, fmt.Errorf("rule.id is required"), http.StatusBadRequest)
+		return
+	}
+	if req.FlowID == "" {
+		render.Error(w, fmt.Errorf("flowId is required — pick a flow to test the rule against"), http.StatusBadRequest)
+		return
+	}
+
+	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, h.security.CallerID(r), "viewer")
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	findings, err := h.analysisSvc.TestRule(r.Context(), doc, req.Rule)
+	if err != nil {
+		// A rule that does not compile is the AUTHOR's error, not a server
+		// fault — same 400 the save endpoint gives for the same input.
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	render.JSON(w, map[string]any{
+		"matches":  len(findings),
+		"findings": findings,
+		"flowName": doc.Name,
+	})
+}
+
 // @Summary      Update analysis rule config
 // @Description  Updates the configuration parameters for a specific analysis rule.
 // @Tags         analysis
@@ -397,7 +459,9 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/analysis/rule/config [post]
 func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.Request) {
-	if !h.security.RequireRole(w, r, auth.RoleMember) {
+	// System admin — same reasoning as handleSetRuleEnabled: this writes the
+	// deployment-wide settings singleton, not the caller's own org.
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
 	// Same id/ruleId compatibility shim as handleSetRuleEnabled.

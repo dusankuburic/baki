@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState} from 'react'
 import clsx from 'clsx'
 import {ChevronRight, GitCompareArrows, PlusCircle, CheckCircle2, MinusCircle, ArrowLeft} from 'lucide-react'
@@ -31,6 +32,7 @@ function DiffSection({
   blockLookup: BlockLookup
   onFixWithAI?: (f: Finding) => void
 }) {
+  const {t} = useTranslation('findings')
   const [open, setOpen] = useState(def.defaultOpen)
   const Icon = def.icon
 
@@ -50,7 +52,9 @@ function DiffSection({
         <span className="text-2xs font-bold text-text-tertiary tabular-nums">{def.findings.length}</span>
         <span className="text-2xs text-text-tertiary ml-auto">{def.hint}</span>
       </button>
-      {open && def.findings.length === 0 && <div className="px-9 pb-2.5 text-2xs text-text-tertiary">None</div>}
+      {open && def.findings.length === 0 && (
+        <div className="px-9 pb-2.5 text-2xs text-text-tertiary">{t('diff.none')}</div>
+      )}
       {open &&
         def.findings.map(f => (
           <FindingCard
@@ -67,6 +71,7 @@ function DiffSection({
 // AnalysisDiffView shows the findings-level delta between the previous and
 // current analysis run: what's new, what got fixed, what persists.
 export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI}: Props) {
+  const {t} = useTranslation('findings')
   const sections: SectionDef[] = [
     {
       key: 'added',
@@ -79,7 +84,7 @@ export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI
     },
     {
       key: 'removed',
-      label: 'Fixed',
+      label: t('diff.fixed'),
       hint: 'no longer reported',
       icon: CheckCircle2,
       accent: 'border-l-semantic-success [&_svg]:text-semantic-success',
@@ -88,7 +93,7 @@ export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI
     },
     {
       key: 'persisted',
-      label: 'Persisted',
+      label: t('diff.persisted'),
       hint: 'unchanged',
       icon: MinusCircle,
       accent: 'border-l-border-strong [&_svg]:text-text-tertiary',
@@ -117,7 +122,7 @@ export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI
       {!diff.hasPrevious ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-2 p-6 text-center">
           <GitCompareArrows size={22} className="text-text-tertiary" />
-          <span className="text-sm text-text-secondary">First analysis of this flow</span>
+          <span className="text-sm text-text-secondary">{t('diff.firstAnalysis')}</span>
           <span className="text-2xs text-text-tertiary">
             Change the flow and re-analyze — this view will then show which findings are new, fixed, or unchanged.
           </span>

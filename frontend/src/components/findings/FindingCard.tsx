@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState} from 'react'
 import clsx from 'clsx'
 import type {Finding} from '@/types'
@@ -23,6 +24,7 @@ interface Props {
 }
 
 function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
+  const {t} = useTranslation('findings')
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const doc = useFlowStore(s => s.document)
@@ -46,8 +48,8 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   }
 
   const handleSuppress = () => {
-    suppressFinding(finding, 'Dismissed by user')
-    toast.warning('Finding suppressed', {
+    suppressFinding(finding, t('card.dismissedByUser'))
+    toast.warning(t('toasts.findingSuppressed'), {
       action: {label: 'Undo', onClick: () => unsuppressFinding(finding)},
     })
   }
@@ -80,7 +82,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
                 title={
                   finding.confidence === 'low'
                     ? 'Low-confidence heuristic — possible false positive'
-                    : 'High-confidence detection'
+                    : t('card.highConfidence')
                 }
               >
                 {finding.confidence}
@@ -110,7 +112,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
               ? 'text-brand-400 bg-brand-500/10'
               : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
           )}
-          title="Show related findings for this block"
+          title={t('card.showRelated')}
         >
           <GitBranch size={10} />
           Related
@@ -124,8 +126,8 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
               ? 'text-brand-400 bg-brand-500/10'
               : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
           )}
-          title="Comments on this finding"
-          aria-label="Comments on this finding"
+          title={t('card.comments')}
+          aria-label={t('card.comments')}
           aria-pressed={showComments}
         >
           <MessageSquare size={10} />
@@ -137,7 +139,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
             onClick={() => setShowHint(h => !h)}
             aria-expanded={showHint}
             className="flex items-center gap-1 text-2xs text-semantic-success hover:text-semantic-success px-1.5 py-1 rounded hover:bg-semantic-success/10 transition-colors shrink-0"
-            title="Show fix suggestion"
+            title={t('card.showFix')}
           >
             <Wrench size={10} />
             Fix
@@ -162,14 +164,10 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
             }}
             disabled={applyingFix}
             className="flex items-center gap-1 text-2xs text-semantic-success hover:text-semantic-success px-1.5 py-1 rounded hover:bg-semantic-success/10 transition-colors shrink-0 disabled:opacity-50"
-            title={
-              isDesktop
-                ? 'Apply this fix to the flow source file and re-analyze'
-                : 'Apply this fix to the stored flow source and re-analyze'
-            }
+            title={isDesktop ? t('card.applyFixLocalTitle') : t('card.applyFixCloudTitle')}
           >
             <Wrench size={10} />
-            {applyingFix ? 'Applying…' : 'Apply fix'}
+            {applyingFix ? t('card.applying') : t('card.applyFix')}
           </button>
         )}
 
@@ -178,18 +176,18 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
             onClick={() => handleApplyFix('suppress')}
             disabled={applyingFix}
             className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-1.5 py-1 rounded hover:bg-brand-500/10 transition-colors shrink-0 disabled:opacity-50"
-            title="Write a pad-ignore directive into the flow source file and re-analyze"
+            title={t('card.suppressInFileTitle')}
           >
             <FilePen size={10} />
-            {applyingFix ? 'Applying…' : 'Suppress in file'}
+            {applyingFix ? t('card.applying') : t('card.suppressInFile')}
           </button>
         )}
 
         <button
           onClick={handleSuppress}
-          aria-label="Suppress this finding"
+          aria-label={t('card.suppressAria')}
           className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
-          title="Suppress this finding (UI only)"
+          title={t('card.suppressTitle')}
         >
           <EyeOff size={10} />
         </button>

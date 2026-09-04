@@ -36,8 +36,22 @@ function batchCard(overrides: Partial<CardState> = {}): CardState {
     line: 0,
     summary: '',
     items: [
-      {ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap', status: 'pending'},
-      {ruleId: 'missing-retry', fixType: 'wrap-in-retry', blockLabel: 'Sync API', line: 8, summary: 'retry', status: 'pending'},
+      {
+        ruleId: 'unhandled-error',
+        fixType: 'wrap-error-handler',
+        blockLabel: 'Call API',
+        line: 3,
+        summary: 'wrap',
+        status: 'pending',
+      },
+      {
+        ruleId: 'missing-retry',
+        fixType: 'wrap-in-retry',
+        blockLabel: 'Sync API',
+        line: 8,
+        summary: 'retry',
+        status: 'pending',
+      },
     ],
     ...overrides,
   }
@@ -136,8 +150,23 @@ describe('FixProposalCard', () => {
             status: 'applied-unresolved',
             message: 'review needed',
             items: [
-              {ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap', status: 'applied'},
-              {ruleId: 'missing-retry', fixType: 'wrap-in-retry', blockLabel: 'Sync API', line: 8, summary: 'retry', status: 'applied-unresolved', message: 'still appears'},
+              {
+                ruleId: 'unhandled-error',
+                fixType: 'wrap-error-handler',
+                blockLabel: 'Call API',
+                line: 3,
+                summary: 'wrap',
+                status: 'applied',
+              },
+              {
+                ruleId: 'missing-retry',
+                fixType: 'wrap-in-retry',
+                blockLabel: 'Sync API',
+                line: 8,
+                summary: 'retry',
+                status: 'applied-unresolved',
+                message: 'still appears',
+              },
             ],
           })}
           onRespond={vi.fn()}

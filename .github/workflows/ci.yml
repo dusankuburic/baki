@@ -21,9 +21,15 @@ jobs:
     # Postgres backs the storage contract / RLS / DB+blob E2E tests (they skip
     # when DATABASE_URL is unset). A service container is fine here — unlike
     # Azurite it needs no command override.
+    #
+    # pgvector/pgvector:pg16, not postgres:16-alpine: the stock image ships no
+    # `vector` extension, so the server-side knowledge-search pushdown could
+    # never initialize and its integration test skipped on every CI run. That
+    # blind spot hid a real result divergence between the pgvector and Go
+    # ranking paths. Same Postgres 16, plus the extension.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: baki
@@ -55,12 +61,37 @@ jobs:
             (exec 3<>/dev/tcp/127.0.0.1/10000) 2>/dev/null && { echo "azurite ready"; break; }
             sleep 1
           done
+      # The Postgres suite must NOT connect as a superuser. Superusers and
+      # BYPASSRLS roles ignore Row-Level Security entirely, so every negative
+      # RLS assertion (`skipIfRLSBypassed`) silently SKIPPED — the isolation
+      # guarantees the policies exist to provide had never once been checked in
+      # CI. Owning the database also reproduces production's table ownership,
+      # which is what makes the difference between ENABLE and FORCE ROW LEVEL
+      # SECURITY observable at all: without FORCE, policies do not apply to the
+      # owner, and the app runs as the owner because it runs its own
+      # migrations. Ten tables were in that state and CI could not see it.
+      #
+      # NOSUPERUSER NOBYPASSRLS is the whole point — do not "simplify" this
+      # back to the postgres superuser.
+      - name: Create unprivileged app role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE baki_app LOGIN PASSWORD 'baki_app' NOSUPERUSER NOBYPASSRLS;" \
+            -c "CREATE DATABASE baki_app OWNER baki_app;"
+          # `vector` is not a trusted extension, so the unprivileged role cannot
+          # install it — exactly as in production, where a DBA does this once.
+          # Without it the app's best-effort CREATE EXTENSION no-ops and the
+          # pgvector path stays dark.
+          psql -h localhost -U postgres -d baki_app -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
       - name: Vet
         run: go vet ./... ./core/...
       - name: Test
         env:
           AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-          DATABASE_URL: "postgres://postgres:postgres@localhost:5432/baki?sslmode=disable"
+          DATABASE_URL: "postgres://baki_app:baki_app@localhost:5432/baki_app?sslmode=disable"
         run: go test -race -count=1 -coverprofile=coverage.out ./... ./core/...
       - name: Upload coverage
         if: github.event_name == 'push'
@@ -145,9 +176,15 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
-      - run: npx eslint src/ --quiet
+      # --max-warnings 0, NOT --quiet. Every rule that fires in this config is a
+      # warning, and --quiet reports errors only — so the previous invocation
+      # could not fail no matter how many problems accumulated (63 at the time
+      # this was changed). Suppressions must be explicit and justified in code.
+      - run: npx eslint src/ --max-warnings 0
       - run: npx prettier --check src
-      - run: npx vitest run
+      # --coverage so the floor in vitest.config.ts is actually enforced. A
+      # threshold nothing runs is the same decorative gate as `eslint --quiet`.
+      - run: npx vitest run --coverage
       - name: Production build
         run: npm run build
 

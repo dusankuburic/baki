@@ -64,23 +64,28 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
       const res = await flowApi.updateBlockProperties(doc.id, block.id, changes)
       if (res?.document) refresh(res.document)
       if (undoId) {
-        toast.success(`Updated ${Object.keys(changes).length} propert${Object.keys(changes).length === 1 ? 'y' : 'ies'}`, {
-          action: {
-            label: 'Undo',
-            onClick: () => {
-              void (async () => {
-                try {
-                  const r = await flowApi.restoreSnapshot(doc.id, undoId)
-                  if (r?.document) refresh(r.document)
-                } catch (e) {
-                  toast.error('Undo failed', {description: String(e)})
-                }
-              })()
+        toast.success(
+          `Updated ${Object.keys(changes).length} propert${Object.keys(changes).length === 1 ? 'y' : 'ies'}`,
+          {
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                void (async () => {
+                  try {
+                    const r = await flowApi.restoreSnapshot(doc.id, undoId)
+                    if (r?.document) refresh(r.document)
+                  } catch (e) {
+                    toast.error('Undo failed', {description: String(e)})
+                  }
+                })()
+              },
             },
           },
-        })
+        )
       } else {
-        toast.success(`Updated ${Object.keys(changes).length} propert${Object.keys(changes).length === 1 ? 'y' : 'ies'}`)
+        toast.success(
+          `Updated ${Object.keys(changes).length} propert${Object.keys(changes).length === 1 ? 'y' : 'ies'}`,
+        )
       }
       onClose()
     } catch (e) {
@@ -103,7 +108,11 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
             Cancel
           </Button>
           <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={() => void handleSave()}>
-            {saving ? 'Saving…' : dirty ? `Save ${Object.keys(changes).length} change${Object.keys(changes).length === 1 ? '' : 's'}` : 'Save'}
+            {saving
+              ? 'Saving…'
+              : dirty
+                ? `Save ${Object.keys(changes).length} change${Object.keys(changes).length === 1 ? '' : 's'}`
+                : 'Save'}
           </Button>
         </>
       }

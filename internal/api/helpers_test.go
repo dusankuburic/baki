@@ -66,10 +66,17 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 
 // newTestRouterSSO is newTestRouter with SSO collaborators injected into the
 // auth handler (nil/nil = SSO disabled, the common case).
-func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClient SSOClient, identityStore IdentityStore) *Router {
+//
+// tweak lets a caller adjust the config the router is built from (e.g. to turn
+// on PAD_PPROF_ENABLED). Variadic so the existing four-arg call sites are
+// unaffected.
+func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClient SSOClient, identityStore IdentityStore, tweak ...func(*config.Config)) *Router {
 	cfg := config.Default()
 	cfg.Auth.Enabled = jwtEnabled
 	cfg.Auth.Secret = testToken
+	for _, fn := range tweak {
+		fn(cfg)
+	}
 
 	notifier := &mockNotifier{}
 	settings, _ := storage.NewSettingsStore()
@@ -130,7 +137,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc)
 	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
 	handlers := Handlers{
-		Sys:       NewSystemHandler(sysSvc, security, backend, nil),
+		Sys:       NewSystemHandler(sysSvc, security, backend, nil, nil),
 		Flow:      NewFlowHandler(flowSvc, docProv, backend, security),
 		Library:   NewLibraryHandler(libSvc, backend, security),
 		Chat:      NewChatHandler(chatSvc, flowSvc, security),
@@ -144,7 +151,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		Auth:     NewAuthHandler(newMockTokenStore(), backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
 		Admin:    NewAdminHandler(backend, security, NewMigrationRunner(nil), nil, nil, nil),
 		Provider: NewProviderHandler(providerSvc, security),
-		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal)),
+		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil),
 		Sharing:  NewSharingHandler(backend, flowSvc, security),
 	}
 

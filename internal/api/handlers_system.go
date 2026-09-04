@@ -57,6 +57,14 @@ type SystemHandler struct {
 	// pod stays in rotation reporting "ready" while losing shared state.
 	redisPinger RedisPinger
 
+	// ruleProfiles is invalidated when an org's settings change, because
+	// AppSettings.Analysis.Rules IS the org's rule profile — enable/disable and
+	// severity overrides. Without this a rule toggle would not take effect
+	// until the resolver's TTL elapsed, so an admin would toggle a rule,
+	// re-analyze, see no change, and reasonably conclude the feature is broken.
+	// Nil in local mode and in tests that don't exercise it.
+	ruleProfiles *service.RuleProfileResolver
+
 	readyMu       sync.Mutex
 	readyFailures int
 
@@ -71,8 +79,8 @@ type RedisPinger interface {
 	Ping(ctx context.Context) error
 }
 
-func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend, redisPinger RedisPinger) *SystemHandler {
-	return &SystemHandler{sysSvc: sysSvc, security: security, backend: backend, redisPinger: redisPinger}
+func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, backend storageif.StorageBackend, redisPinger RedisPinger, ruleProfiles *service.RuleProfileResolver) *SystemHandler {
+	return &SystemHandler{sysSvc: sysSvc, security: security, backend: backend, redisPinger: redisPinger, ruleProfiles: ruleProfiles}
 }
 
 // @Summary      Get app settings
@@ -160,6 +168,15 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 	var req models.AppSettings
 	if !decodeBody(w, r, &req) {
 		return
+	}
+	if h.ruleProfiles != nil {
+		// Deferred, so it runs AFTER the write lands. That ordering is the
+		// correct one: an analysis that resolves before the write caches the
+		// old profile and this clears it, while one that resolves after the
+		// write already reads the new settings. Invalidating BEFORE the write
+		// would leave the opposite race — a resolve landing in the gap would
+		// re-cache the stale profile and hold it for the full TTL.
+		defer h.ruleProfiles.Invalidate(orgID)
 	}
 	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)

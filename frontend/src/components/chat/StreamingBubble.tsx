@@ -9,6 +9,9 @@ import MessageBubble from './MessageBubble'
 const StreamingBubble = memo(() => {
   const slot = useChatStore(s => (s.activeThreadId ? s.streams[s.activeThreadId] : undefined))
   // Stable timestamp per stream (avoids the displayed time flickering at 60fps)
+  // messageId is the reset key for a value deliberately captured once per
+  // stream; recomputing it per chunk is exactly what this prevents.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const timestamp = useMemo(() => new Date().toISOString(), [slot?.messageId])
 
   if (!slot || !slot.text) return null

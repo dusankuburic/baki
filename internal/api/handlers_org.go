@@ -15,6 +15,7 @@ import (
 	"pad-analyzer/internal/collaboration"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/rag"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -25,10 +26,14 @@ type OrgHandler struct {
 	knowledge *rag.KnowledgeService
 	security  *SecurityConfig
 	email     *mailer.Service
+	// ruleProfiles is invalidated when an org's custom rules change so the next
+	// analysis re-resolves instead of serving a cached profile. Nil in local
+	// mode and in tests that don't exercise the rule endpoints.
+	ruleProfiles *service.RuleProfileResolver
 }
 
-func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service) *OrgHandler {
-	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security, email: email}
+func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, ruleProfiles *service.RuleProfileResolver) *OrgHandler {
+	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security, email: email, ruleProfiles: ruleProfiles}
 }
 
 // knowledgeBackendAvailable gates the Knowledge Base routes on a real storage

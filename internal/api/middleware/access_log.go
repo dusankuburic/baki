@@ -71,7 +71,7 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 			logAt(level, "access",
 				"request_id", reqID,
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", redactPath(r.URL.Path),
 				"status", sr.status,
 				"bytes", sr.bytes,
 				"latency_ms", latency.Milliseconds(),
@@ -126,4 +126,30 @@ func maybeHijackable(sr *ResponseRecorder) http.ResponseWriter {
 		return &hijackableRecorder{ResponseRecorder: sr, Hijacker: h}
 	}
 	return sr
+}
+
+// redactPath removes credentials that live in a URL PATH segment before the
+// path is written to a log line.
+//
+// Only one route embeds a secret this way: /api/invites/{token}/accept, where
+// the segment is the single-use invite credential mailed to the recipient.
+// Logs are shipped, retained, and read by more people than the mail is, so a
+// full-path access line effectively republished a live invite. Query strings
+// are already excluded from the access log (r.URL.Path, not RequestURI), which
+// is why no other route needs handling here.
+//
+// The path shape is preserved so the line stays useful for debugging.
+func redactPath(p string) string {
+	const invitePrefix = "/api/invites/"
+	if !strings.HasPrefix(p, invitePrefix) {
+		return p
+	}
+	rest := p[len(invitePrefix):]
+	if rest == "" {
+		return p
+	}
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		return invitePrefix + "[redacted]" + rest[i:]
+	}
+	return invitePrefix + "[redacted]"
 }

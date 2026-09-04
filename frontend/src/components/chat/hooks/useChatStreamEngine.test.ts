@@ -2,21 +2,12 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {renderHook, act} from '@testing-library/react'
 import {useChatStore} from '@/stores/chatStore'
 
-// StreamHandler is not exported from useStreamingMessage, so define a local
-// type matching its shape for the captured handler.
-interface StreamHandler {
-  onChunk: (text: string, streamId: string) => void
-  onReplace: (text: string, streamId: string) => void
-  onDone: (tokensOut: number, tokensIn: number, streamId: string) => void
-  onError: (error: string, streamId: string) => void
-  onToolStatus?: (label: string, streamId: string) => void
-  onToolResult?: (record: {kind: 'tool-result'; name: string; label: string; ok: boolean; durationMs: number; summary: string}, streamId: string) => void
-  onFixProposal?: (proposal: {kind: 'fix-proposal'; proposalId: string; items: {ruleId: string; fixType: string; blockLabel: string; line: number; summary: string}[]}, streamId: string) => void
-  onFixDecision?: (proposalId: string, status: string, message: string | undefined, streamId: string, items?: {ruleId: string; status: string; message?: string}[]) => void
-  onResumeState?: (events: unknown[], streamId: string) => void
-  onAppend?: (delta: string, streamId: string) => void
-  getAccLength?: (streamId: string) => number
-}
+// Bind to the REAL StreamHandler contract. This test used to declare a private
+// copy of the shape, whose onFixDecision took a 5th `items` argument that the
+// production dispatcher never actually passed — so the batch-decision test below
+// drove a contract no code implemented and stayed green over a live bug.
+// Importing the real type turns any future drift into a typecheck failure.
+import type {StreamHandler} from '@/hooks/useStreamingMessage'
 
 let capturedHandler: StreamHandler | null = null
 
@@ -94,8 +85,26 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamB', 'threadB')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
-            threadB: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
+            threadB: {
+              streamId: 'streamB',
+              messageId: 'mB',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -115,7 +124,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -160,7 +178,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
         capturedHandler!.onChunk('héllo→😀', 'streamA')
@@ -196,7 +223,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -229,7 +265,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamB',
+              messageId: 'mB',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
         capturedHandler!.onChunk('text', 'streamA')
@@ -263,7 +308,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -299,7 +353,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamB', messageId: 'mB', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamB',
+              messageId: 'mB',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
         capturedHandler!.onChunk('text', 'streamA')
@@ -378,7 +441,16 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
         result.current.beginAcc('streamA', 'threadA')
@@ -426,7 +498,16 @@ describe('useChatStreamEngine', () => {
             },
           ],
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -441,7 +522,13 @@ describe('useChatStreamEngine', () => {
             kind: 'fix-proposal',
             proposalId: 'p1',
             items: [
-              {ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap lines 3-3'},
+              {
+                ruleId: 'unhandled-error',
+                fixType: 'wrap-error-handler',
+                blockLabel: 'Call API',
+                line: 3,
+                summary: 'wrap lines 3-3',
+              },
             ],
           },
           'streamA',
@@ -467,13 +554,27 @@ describe('useChatStreamEngine', () => {
     it('a second proposal appends instead of replacing the first card', () => {
       setupFixStream()
       act(() => {
-        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r1', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]}, 'streamA')
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [{ruleId: 'r1', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
+          'streamA',
+        )
       })
       act(() => {
         capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
       })
       act(() => {
-        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p2', items: [{ruleId: 'r2', fixType: 'f2', blockLabel: 'b2', line: 5, summary: 's2'}]}, 'streamA')
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p2',
+            items: [{ruleId: 'r2', fixType: 'f2', blockLabel: 'b2', line: 5, summary: 's2'}],
+          },
+          'streamA',
+        )
       })
       const slot = useChatStore.getState().streams.threadA
       expect(slot.fixProposals).toHaveLength(2)
@@ -487,7 +588,11 @@ describe('useChatStreamEngine', () => {
     // idempotence).
     it('replaying the same proposalId does not duplicate the card', () => {
       setupFixStream()
-      const payload = {kind: 'fix-proposal' as const, proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]}
+      const payload = {
+        kind: 'fix-proposal' as const,
+        proposalId: 'p1',
+        items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+      }
       act(() => {
         capturedHandler!.onFixProposal!(payload, 'streamA')
       })
@@ -501,14 +606,17 @@ describe('useChatStreamEngine', () => {
     it('batch decision items patch per-item statuses', () => {
       setupFixStream()
       act(() => {
-        capturedHandler!.onFixProposal!({
-          kind: 'fix-proposal',
-          proposalId: 'batch-1',
-          items: [
-            {ruleId: 'r1', fixType: 'f', blockLabel: 'b1', line: 1, summary: 's'},
-            {ruleId: 'r2', fixType: 'f', blockLabel: 'b2', line: 2, summary: 's'},
-          ],
-        }, 'streamA')
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            proposalId: 'batch-1',
+            items: [
+              {ruleId: 'r1', fixType: 'f', blockLabel: 'b1', line: 1, summary: 's'},
+              {ruleId: 'r2', fixType: 'f', blockLabel: 'b2', line: 2, summary: 's'},
+            ],
+          },
+          'streamA',
+        )
       })
       act(() => {
         capturedHandler!.onFixDecision!('batch-1', 'applied-unresolved', 'review', 'streamA', [
@@ -531,15 +639,28 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onResumeState!(
           [
-            {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
-            {kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'},
+            {
+              kind: 'fix-proposal',
+              proposalId: 'p1',
+              items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            },
+            {
+              kind: 'tool-result',
+              name: 'search_flow',
+              label: 'Searching flow',
+              ok: true,
+              durationMs: 4,
+              summary: '2 matches',
+            },
             {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: 'verified'},
           ],
           'streamA',
         )
       })
       const slot = useChatStore.getState().streams.threadA
-      expect(slot.toolCalls).toEqual([{name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'}])
+      expect(slot.toolCalls).toEqual([
+        {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'},
+      ])
       expect(slot.fixProposals).toHaveLength(1)
       expect(slot.fixProposals[0].status).toBe('applied')
 
@@ -547,7 +668,11 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onResumeState!(
           [
-            {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+            {
+              kind: 'fix-proposal',
+              proposalId: 'p1',
+              items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            },
           ],
           'streamA',
         )
@@ -560,7 +685,11 @@ describe('useChatStreamEngine', () => {
       setupFixStream()
       act(() => {
         capturedHandler!.onFixProposal!(
-          {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
           'streamA',
         )
       })
@@ -580,7 +709,11 @@ describe('useChatStreamEngine', () => {
       const {result} = setupFixStream()
       act(() => {
         capturedHandler!.onFixProposal!(
-          {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
           'streamA',
         )
       })
@@ -603,7 +736,11 @@ describe('useChatStreamEngine', () => {
       const {result} = setupFixStream()
       act(() => {
         capturedHandler!.onFixProposal!(
-          {kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]},
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
           'streamA',
         )
       })
@@ -638,7 +775,16 @@ describe('useChatStreamEngine', () => {
           ],
           conversations: new Map([['threadA', []]]),
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: null, toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -648,8 +794,28 @@ describe('useChatStreamEngine', () => {
     it('onToolResult accumulates records on the slot', () => {
       setupToolStream()
       act(() => {
-        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 7, summary: '3 matches'}, 'streamA')
-        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'read_doc', label: 'Reading document', ok: false, durationMs: 1, summary: 'error: no doc'}, 'streamA')
+        capturedHandler!.onToolResult!(
+          {
+            kind: 'tool-result',
+            name: 'search_flow',
+            label: 'Searching flow',
+            ok: true,
+            durationMs: 7,
+            summary: '3 matches',
+          },
+          'streamA',
+        )
+        capturedHandler!.onToolResult!(
+          {
+            kind: 'tool-result',
+            name: 'read_doc',
+            label: 'Reading document',
+            ok: false,
+            durationMs: 1,
+            summary: 'error: no doc',
+          },
+          'streamA',
+        )
       })
       expect(useChatStore.getState().streams.threadA.toolCalls).toEqual([
         {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 7, summary: '3 matches'},
@@ -665,7 +831,16 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA')
         useChatStore.setState({
           streams: {
-            threadA: {streamId: 'streamA', messageId: 'mA', text: '', isThinking: true, tokens: 0, toolStatus: 'Searching flow', toolCalls: [], fixProposals: []},
+            threadA: {
+              streamId: 'streamA',
+              messageId: 'mA',
+              text: '',
+              isThinking: true,
+              tokens: 0,
+              toolStatus: 'Searching flow',
+              toolCalls: [],
+              fixProposals: [],
+            },
           },
         })
       })
@@ -681,7 +856,17 @@ describe('useChatStreamEngine', () => {
     it('onError pins the accumulated tool trail onto the error message', () => {
       setupToolStream()
       act(() => {
-        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'}, 'streamA')
+        capturedHandler!.onToolResult!(
+          {
+            kind: 'tool-result',
+            name: 'search_flow',
+            label: 'Searching flow',
+            ok: true,
+            durationMs: 3,
+            summary: '2 matches',
+          },
+          'streamA',
+        )
       })
       act(() => {
         capturedHandler!.onError('the AI provider is temporarily unavailable', 'streamA')
@@ -689,13 +874,18 @@ describe('useChatStreamEngine', () => {
       const msgs = useChatStore.getState().conversations.get('threadA')!
       expect(msgs).toHaveLength(1)
       expect(msgs[0].finishReason).toBe('error')
-      expect(msgs[0].toolCalls).toEqual([{name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'}])
+      expect(msgs[0].toolCalls).toEqual([
+        {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 3, summary: '2 matches'},
+      ])
     })
 
     it('onToolResult ignores an unknown streamId', () => {
       setupToolStream()
       act(() => {
-        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'x', label: 'x', ok: true, durationMs: 0, summary: ''}, 'ghost')
+        capturedHandler!.onToolResult!(
+          {kind: 'tool-result', name: 'x', label: 'x', ok: true, durationMs: 0, summary: ''},
+          'ghost',
+        )
       })
       expect(useChatStore.getState().streams.threadA.toolCalls).toHaveLength(0)
     })
@@ -704,8 +894,33 @@ describe('useChatStreamEngine', () => {
       setupToolStream()
       act(() => {
         capturedHandler!.onChunk('Fixed it', 'streamA')
-        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'}, 'streamA')
-        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap'}]}, 'streamA')
+        capturedHandler!.onToolResult!(
+          {
+            kind: 'tool-result',
+            name: 'list_findings',
+            label: 'Listing findings',
+            ok: true,
+            durationMs: 3,
+            summary: '1 finding',
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [
+              {
+                ruleId: 'unhandled-error',
+                fixType: 'wrap-error-handler',
+                blockLabel: 'Call API',
+                line: 3,
+                summary: 'wrap',
+              },
+            ],
+          },
+          'streamA',
+        )
         capturedHandler!.onFixDecision!('p1', 'applied', 'verified gone', 'streamA')
       })
       act(() => {
@@ -716,7 +931,9 @@ describe('useChatStreamEngine', () => {
       expect(msgs).toHaveLength(1)
       const committed = msgs[0]
       expect(committed.content).toBe('Fixed it')
-      expect(committed.toolCalls).toEqual([{name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'}])
+      expect(committed.toolCalls).toEqual([
+        {name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'},
+      ])
       expect(committed.fixProposals).toHaveLength(1)
       expect(committed.fixProposals![0]).toMatchObject({
         proposalId: 'p1',
@@ -733,7 +950,9 @@ describe('useChatStreamEngine', () => {
       expect(chatApi.saveConversation).toHaveBeenCalledWith(
         'flow-1',
         'flow',
-        expect.arrayContaining([expect.objectContaining({toolCalls: committed.toolCalls, fixProposals: committed.fixProposals})]),
+        expect.arrayContaining([
+          expect.objectContaining({toolCalls: committed.toolCalls, fixProposals: committed.fixProposals}),
+        ]),
       )
       // Slot is gone after done — the message carries the record now.
       expect(useChatStore.getState().streams.threadA).toBeUndefined()
@@ -744,8 +963,25 @@ describe('useChatStreamEngine', () => {
       setupToolStream()
       act(() => {
         capturedHandler!.onChunk('Fixed it', 'streamA')
-        capturedHandler!.onToolResult!({kind: 'tool-result', name: 'list_findings', label: 'Listing findings', ok: true, durationMs: 3, summary: '1 finding'}, 'streamA')
-        capturedHandler!.onFixProposal!({kind: 'fix-proposal', proposalId: 'p1', items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}]}, 'streamA')
+        capturedHandler!.onToolResult!(
+          {
+            kind: 'tool-result',
+            name: 'list_findings',
+            label: 'Listing findings',
+            ok: true,
+            durationMs: 3,
+            summary: '1 finding',
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            proposalId: 'p1',
+            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
+          'streamA',
+        )
         capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
       })
       act(() => {

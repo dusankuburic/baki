@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useState} from 'react'
 import clsx from 'clsx'
 import {userInitials, userColor} from '@/lib/avatar'
 
@@ -30,9 +30,14 @@ export default function Avatar({name, colorSeed, avatarUrl, size = 'md', classNa
 
   // A failed load only condemns the URL that failed — when avatarUrl changes
   // (e.g. the user is typing a new one in the profile form), try again.
-  useEffect(() => {
+  // Adjusted DURING render rather than in an effect: React re-runs this
+  // component before committing, so the reset never reaches the DOM as an
+  // extra painted frame the way an effect-then-rerender would.
+  const [lastUrl, setLastUrl] = useState(avatarUrl)
+  if (avatarUrl !== lastUrl) {
+    setLastUrl(avatarUrl)
     setImgFailed(false)
-  }, [avatarUrl])
+  }
 
   const showImage = !!avatarUrl && !imgFailed
 

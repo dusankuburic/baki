@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useRef, useCallback, useEffect} from 'react'
 import {Search, X} from 'lucide-react'
 import Kbd from '@/components/shared/Kbd'
@@ -22,6 +23,7 @@ export default function SearchBar({
   onNextResult,
   onPrevResult,
 }: SearchBarProps) {
+  const {t} = useTranslation('shell')
   const inputRef = useRef<HTMLInputElement>(null)
   const focusRequest = useSearchStore(s => s.focusRequest)
 
@@ -67,7 +69,7 @@ export default function SearchBar({
           onChange={e => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          placeholder="Search blocks, variables, values…"
+          placeholder={t('sidebar.searchPlaceholder')}
           className="flex-1 text-sm bg-transparent outline-none text-text-primary placeholder:text-text-tertiary disabled:opacity-50 disabled:cursor-not-allowed"
         />
         {value && (

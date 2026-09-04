@@ -147,6 +147,7 @@ var envBindings = []envBinding{
 	strEnv("PAD_TLS_CERT", func(c *Config, v string) { c.Server.TLSCert = v }),
 	strEnv("PAD_TLS_KEY", func(c *Config, v string) { c.Server.TLSKey = v }),
 	boolEnv("PAD_BEHIND_PROXY", func(c *Config, b bool) { c.Server.BehindProxy = b }),
+	boolEnv("PAD_PPROF_ENABLED", func(c *Config, b bool) { c.Server.PprofEnabled = b }),
 
 	// Governance
 	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d string) { c.Governance.ScanInterval = d }),
@@ -499,6 +500,30 @@ func Validate(cfg *Config) error {
 	}
 	if err := validateTLSConfig(cfg); err != nil {
 		return err
+	}
+	if err := validateProfilingConfig(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateProfilingConfig refuses to expose the profiler without a shared
+// secret.
+//
+// /debug/pprof/* is guarded by MetricsGuard, whose private-IP allowlist keys off
+// r.RemoteAddr. Behind a reverse proxy — PAD_BEHIND_PROXY=true, the posture the
+// Dockerfile and infra/main.bicep ship — RemoteAddr is the proxy, which is
+// always private, so that check passes for every request off the public
+// internet. The bearer token is then the only real gate, and /debug/pprof/heap
+// hands out a dump of live process memory: the JWT signing secret, decrypted
+// provider keys, flow content, chat history.
+//
+// So: profiling on, token off is refused outright rather than warned about.
+// There is no deployment shape where that combination is safe and no default we
+// could pick on the operator's behalf.
+func validateProfilingConfig(cfg *Config) error {
+	if cfg.Server.PprofEnabled && strings.TrimSpace(cfg.Server.MetricsToken) == "" {
+		return errors.New("config: PAD_PPROF_ENABLED=true requires PAD_METRICS_TOKEN — /debug/pprof/heap dumps live process memory (auth secret, provider API keys, flow content), and the private-IP allowlist that would otherwise guard it is bypassed whenever a reverse proxy is in front (PAD_BEHIND_PROXY)")
 	}
 	return nil
 }

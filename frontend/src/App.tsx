@@ -131,7 +131,23 @@ function AppInner() {
   const showShortcuts = useCallback(() => setShortcutsHelpOpen(true), [])
   useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts: showShortcuts})
 
-  const pane = usePaneResize()
+  // Destructured rather than kept as a `pane` object: react-hooks/refs taints
+  // EVERY property access on an object that holds a ref, so `sidebarWidth`
+  // (a number) and `handleSidebarDrag` (a useCallback) were both reported
+  // as "cannot access ref value during render". Individual bindings let the rule
+  // see what each value actually is.
+  const {
+    sidebarRef,
+    inspectorRef,
+    sidebarWidth,
+    inspectorWidth,
+    handleSidebarDrag,
+    handleSidebarResizeEnd,
+    handleSidebarReset,
+    handleInspectorDrag,
+    handleInspectorResizeEnd,
+    handleInspectorReset,
+  } = usePaneResize()
   const {dragOver, handleDragOver, handleDragLeave, handleDrop} = useFileDrop(openDocument)
 
   useAppShortcuts({openDocument, toggleTheme, toast, setShortcutsHelpOpen})
@@ -158,9 +174,9 @@ function AppInner() {
           {isDesktop && !sidebarCollapsed && (
             <>
               <div
-                ref={pane.sidebarRef}
+                ref={sidebarRef}
                 className="flex-shrink-0 overflow-hidden border-r border-border-subtle print:hidden"
-                style={{width: pane.sidebarWidth}}
+                style={{width: sidebarWidth}}
                 role="navigation"
                 aria-label="Flow library and navigation"
               >
@@ -169,9 +185,9 @@ function AppInner() {
                 </ErrorBoundary>
               </div>
               <PaneDivider
-                onDrag={pane.handleSidebarDrag}
-                onResizeEnd={pane.handleSidebarResizeEnd}
-                onDoubleClick={pane.handleSidebarReset}
+                onDrag={handleSidebarDrag}
+                onResizeEnd={handleSidebarResizeEnd}
+                onDoubleClick={handleSidebarReset}
               />
             </>
           )}
@@ -189,14 +205,14 @@ function AppInner() {
           {isDesktop && !inspectorCollapsed && (
             <>
               <PaneDivider
-                onDrag={pane.handleInspectorDrag}
-                onResizeEnd={pane.handleInspectorResizeEnd}
-                onDoubleClick={pane.handleInspectorReset}
+                onDrag={handleInspectorDrag}
+                onResizeEnd={handleInspectorResizeEnd}
+                onDoubleClick={handleInspectorReset}
               />
               <div
-                ref={pane.inspectorRef}
+                ref={inspectorRef}
                 className="flex-shrink-0 overflow-hidden border-l border-border-subtle print:hidden"
-                style={{width: pane.inspectorWidth}}
+                style={{width: inspectorWidth}}
                 role="complementary"
                 aria-label="Inspector"
               >

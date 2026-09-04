@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback, useRef, useMemo} from 'react'
 import clsx from 'clsx'
 import Modal from './Modal'
@@ -38,6 +39,7 @@ const ConfirmContext = React.createContext<ConfirmActions | null>(null)
  * destructive confirms) — never the destructive Confirm action.
  */
 export function ConfirmProvider({children}: {children: React.ReactNode}) {
+  const {t} = useTranslation()
   const [state, setState] = useState<DialogState | null>(null)
   const [inputValue, setInputValue] = useState('')
   const resolverRef = useRef<((value: boolean | string | null) => void) | null>(null)
@@ -82,8 +84,8 @@ export function ConfirmProvider({children}: {children: React.ReactNode}) {
     settle(isPrompt ? inputValue.trim() : true)
   }, [settle, isPrompt, inputValue, canConfirm])
 
-  const confirmLabel = state?.confirmLabel ?? (danger ? 'Delete' : isPrompt ? 'Save' : 'Confirm')
-  const cancelLabel = state?.cancelLabel ?? 'Cancel'
+  const confirmLabel = state?.confirmLabel ?? (danger ? t('delete') : isPrompt ? t('save') : t('confirm'))
+  const cancelLabel = state?.cancelLabel ?? t('cancel')
 
   return (
     <ConfirmContext.Provider value={actions}>

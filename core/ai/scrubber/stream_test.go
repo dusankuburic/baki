@@ -169,3 +169,86 @@ func TestStreamScrubber_HoldCapReleases(t *testing.T) {
 		t.Fatalf("the capped emit leaked the key=value lead-in unmasked")
 	}
 }
+
+// TestStreamScrubber_MatchedHoldReleasesProse: the connection-string
+// pattern's value runs to end of line and its terminal byte class accepts
+// spaces, so a single "Password = " in an explanation used to hold the entire
+// rest of the paragraph — up to streamMaxHold — before anything reached the
+// screen.
+//
+// Note what this does and does not change. ScrubText itself redacts to end of
+// line, so the prose caught inside the released buffer is masked either way;
+// that is whole-text behaviour, not a streaming artifact. What the tighter
+// budget fixes is LATENCY and BLAST RADIUS: the hold ends after
+// streamMatchedHold bytes instead of streamMaxHold, and everything after the
+// release point streams normally instead of piling up behind the mask.
+func TestStreamScrubber_MatchedHoldReleasesProse(t *testing.T) {
+	s := NewStreamScrubber()
+	var out strings.Builder
+	out.WriteString(s.Write("The connection uses Password = hunter2 "))
+	// A paragraph's worth of ordinary prose on the same line: over the
+	// matched-hold budget, but well under the old 4096-byte ceiling.
+	out.WriteString(s.Write(strings.Repeat("and then the flow continues. ", 12)))
+
+	released := out.Len()
+	if released == 0 {
+		t.Fatal("hold did not release: the stream is still frozen behind the match")
+	}
+	if released > streamMatchedHold+128 {
+		t.Fatalf("released %d bytes; the budget should have cut the hold near %d", released, streamMatchedHold)
+	}
+	if strings.Contains(out.String(), "hunter2") {
+		t.Fatalf("credential leaked: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "[REDACTED]") {
+		t.Fatalf("credential was not masked: %q", out.String())
+	}
+
+	// The hold is gone, so continuation prose now streams as it arrives.
+	tail := s.Write("The next block validates the input.")
+	if !strings.Contains(tail+s.Flush(), "The next block validates the input.") {
+		t.Fatalf("prose after the release point was still withheld: %q", tail)
+	}
+}
+
+// TestStreamScrubber_MatchedHoldStillMasksGrowingSecret: the tighter budget
+// must not release a value that has NOT yet completed a match. A short secret
+// still growing byte by byte stays held until it is masked.
+func TestStreamScrubber_MatchedHoldStillMasksGrowingSecret(t *testing.T) {
+	s := NewStreamScrubber()
+	var out strings.Builder
+	for _, c := range "token=abcdefgh12345678" {
+		out.WriteString(s.Write(string(c)))
+	}
+	if strings.Contains(out.String(), "abcdefgh") {
+		t.Fatalf("growing secret leaked before completion: %q", out.String())
+	}
+	out.WriteString(s.Flush())
+	if strings.Contains(out.String(), "abcdefgh") {
+		t.Fatalf("secret leaked after flush: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "[REDACTED]") {
+		t.Fatalf("secret was not masked: %q", out.String())
+	}
+}
+
+// TestStreamScrubber_ProseKeywordsNotHeldPastTheirWord: the anchor keywords
+// this assistant writes constantly must not accumulate a hold across a
+// sentence — each is released as soon as the next word proves it is prose.
+func TestStreamScrubber_ProseKeywordsNotHeldPastTheirWord(t *testing.T) {
+	s := NewStreamScrubber()
+	var out strings.Builder
+	for _, chunk := range []string{
+		"Check the password field, then the secret ",
+		"store, then the access key list, and finally the token ",
+		"cache before rerunning the flow.",
+	} {
+		out.WriteString(s.Write(chunk))
+	}
+	out.WriteString(s.Flush())
+	want := "Check the password field, then the secret store, then the access key list, " +
+		"and finally the token cache before rerunning the flow."
+	if out.String() != want {
+		t.Fatalf("prose was altered:\n got %q\nwant %q", out.String(), want)
+	}
+}

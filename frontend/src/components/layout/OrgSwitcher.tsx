@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {Building2, ChevronDown} from 'lucide-react'
 import {isTauri} from '@/platform/guards'
 import {useOrgStore} from '@/stores/orgStore'
@@ -12,6 +13,7 @@ import Dropdown, {type DropdownItem} from '@/components/shared/Dropdown'
 // Org loading is handled by ProtectedRoute so orgs are available before any
 // data-fetching components mount.
 export default function OrgSwitcher() {
+  const {t} = useTranslation('shell')
   const organisations = useOrgStore(s => s.organisations)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const setActiveOrg = useOrgStore(s => s.setActiveOrg)
@@ -25,7 +27,7 @@ export default function OrgSwitcher() {
   const items: DropdownItem[] = [
     {
       type: 'item',
-      label: activeOrgId === null ? '✓ Personal' : 'Personal',
+      label: activeOrgId === null ? t('org.personalActive') : t('org.personal'),
       onSelect: () => setActiveOrg(null),
     },
     ...organisations.map<DropdownItem>(org => ({
@@ -36,7 +38,7 @@ export default function OrgSwitcher() {
     {type: 'separator'},
     {
       type: 'item',
-      label: 'Manage organizations…',
+      label: t('org.manage'),
       onSelect: () => toggleSettings(),
     },
   ]
@@ -46,10 +48,10 @@ export default function OrgSwitcher() {
       trigger={
         <button
           className="flex items-center gap-1 h-6 px-2 rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast text-xs"
-          title="Switch organization"
+          title={t('org.switch')}
         >
           <Building2 size={12} />
-          <span className="max-w-[120px] truncate">{activeOrg ? activeOrg.name : 'Personal'}</span>
+          <span className="max-w-[120px] truncate">{activeOrg ? activeOrg.name : t('org.personal')}</span>
           <ChevronDown size={10} />
         </button>
       }

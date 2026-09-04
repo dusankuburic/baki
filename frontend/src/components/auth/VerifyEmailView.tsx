@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useEffect, useState} from 'react'
 import {CheckCircle2, XCircle} from 'lucide-react'
 import Button from '@/components/shared/Button'
@@ -12,6 +13,7 @@ interface VerifyEmailViewProps {
 // VerifyEmailView consumes a #verifyEmail=<token> deep link: it redeems the
 // token on mount and shows the result. The effect runs once for the given token.
 export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
+  const {t} = useTranslation('auth')
   const [status, setStatus] = useState<'pending' | 'ok' | 'error'>('pending')
   const [error, setError] = useState<string | null>(null)
 
@@ -24,7 +26,7 @@ export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
       })
       .catch((err: unknown) => {
         if (!active) return
-        setError(err instanceof Error ? err.message : 'Verification failed')
+        setError(err instanceof Error ? err.message : null)
         setStatus('error')
       })
     return () => {
@@ -38,26 +40,26 @@ export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
         {status === 'pending' && (
           <>
             <Spinner size={32} />
-            <p className="text-sm text-text-tertiary">Verifying your email…</p>
+            <p className="text-sm text-text-tertiary">{t('verify.pending')}</p>
           </>
         )}
         {status === 'ok' && (
           <>
             <CheckCircle2 className="text-semantic-success" size={40} />
-            <h1 className="text-xl font-semibold text-text-primary">Email verified</h1>
-            <p className="text-sm text-text-tertiary">Thanks — your email address is now confirmed.</p>
+            <h1 className="text-xl font-semibold text-text-primary">{t('verify.okTitle')}</h1>
+            <p className="text-sm text-text-tertiary">{t('verify.okBody')}</p>
             <Button type="button" variant="primary" fullWidth onClick={onDone}>
-              Continue to sign in
+              {t('verify.continueToSignIn')}
             </Button>
           </>
         )}
         {status === 'error' && (
           <>
             <XCircle className="text-semantic-error" size={40} />
-            <h1 className="text-xl font-semibold text-text-primary">Verification failed</h1>
-            <p className="text-sm text-text-tertiary">{error ?? 'This link is invalid or has expired.'}</p>
+            <h1 className="text-xl font-semibold text-text-primary">{t('verify.errorTitle')}</h1>
+            <p className="text-sm text-text-tertiary">{error ?? t('verify.errorBody')}</p>
             <Button type="button" variant="secondary" fullWidth onClick={onDone}>
-              Back to sign in
+              {t('verify.backToSignIn')}
             </Button>
           </>
         )}

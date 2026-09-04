@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"pad-core/logger"
 
@@ -220,12 +221,27 @@ func (s *ChatService) mirrorStream(ctx context.Context, streamID string, ctl *st
 
 // sliceFrom returns s[from:] clamped to the string bounds. from beyond the end
 // returns "" (a delta resume for an offset the client already has).
+//
+// from is a BYTE offset supplied by the client over a public endpoint, so it
+// is not trusted to land on a rune boundary. Slicing mid-rune yields invalid
+// UTF-8, and encoding/json does not reject that — it substitutes U+FFFD, so
+// the caller silently receives a replacement character welded to the front of
+// the resumed tail instead of an error. The shipped frontend computes a real
+// UTF-8 byte length (see lib/utf8.ts), but any other client, an older cached
+// bundle, or a hand-rolled integration can pass an arbitrary int.
+//
+// The boundary is snapped DOWNWARD: the client re-receives the few bytes of
+// the rune it straddled, which its append/replace handles, whereas snapping up
+// would silently discard a character.
 func sliceFrom(s string, from int) string {
 	if from <= 0 {
 		return s
 	}
 	if from >= len(s) {
 		return ""
+	}
+	for from > 0 && !utf8.RuneStart(s[from]) {
+		from--
 	}
 	return s[from:]
 }

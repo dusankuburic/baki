@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback, useRef, useEffect, useMemo} from 'react'
 import clsx from 'clsx'
 
@@ -29,12 +30,30 @@ const variantIcons: Record<string, string> = {
 }
 
 function Toast({id, variant = 'info', title, description, action, duration = 4000, onClose}: ToastProps) {
+  const {t} = useTranslation()
   const [exiting, setExiting] = useState(false)
+  // Handle for the exit-animation timer. Without it the deferred onClose had no
+  // way to be cancelled and fired against a torn-down tree when the provider
+  // unmounted inside the 200ms window.
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleClose = useCallback(() => {
+    // Ignore a second dismiss (manual click racing the auto-dismiss timer);
+    // re-arming would schedule a duplicate onClose.
+    if (exitTimerRef.current !== null) return
     setExiting(true)
-    setTimeout(() => onClose(id), 200)
+    exitTimerRef.current = setTimeout(() => {
+      exitTimerRef.current = null
+      onClose(id)
+    }, 200)
   }, [id, onClose])
+
+  useEffect(
+    () => () => {
+      if (exitTimerRef.current !== null) clearTimeout(exitTimerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     if (duration > 0) {
@@ -50,7 +69,6 @@ function Toast({id, variant = 'info', title, description, action, duration = 400
         variantColors[variant],
         exiting ? 'animate-toast-out' : 'animate-toast-in',
       )}
-      role="status"
     >
       <span className="text-base flex-shrink-0">{variantIcons[variant]}</span>
       <div className="flex-1 min-w-0">
@@ -65,7 +83,7 @@ function Toast({id, variant = 'info', title, description, action, duration = 400
       <button
         onClick={handleClose}
         className="text-text-tertiary hover:text-text-secondary flex-shrink-0 text-sm"
-        aria-label="Dismiss"
+        aria-label={t('dismiss')}
       >
         ✕
       </button>
@@ -85,6 +103,7 @@ const ToastActionsContext = React.createContext<ToastActions | null>(null)
 const ToastListContext = React.createContext<ToastData[]>([])
 
 function ToastList() {
+  const {t} = useTranslation()
   const toasts = React.useContext(ToastListContext)
   const actions = React.useContext(ToastActionsContext)
   if (!actions) return null
@@ -93,7 +112,7 @@ function ToastList() {
     <div
       className="fixed bottom-4 right-4 z-toast flex flex-col-reverse gap-2"
       role="region"
-      aria-label="Notifications"
+      aria-label={t('notifications')}
       aria-live="polite"
     >
       {toasts.map(toast => (
@@ -112,8 +131,7 @@ export function ToastProvider({children}: {children: React.ReactNode}) {
     // Duration policy (V1.2): toasts carrying an ACTION (Undo/Retry) and
     // errors need time to be read and acted on — the 4s default fired the
     // undo away before users reached it. Everything else keeps 4s.
-    const duration =
-      toast.duration ?? (toast.action || toast.variant === 'error' ? 8000 : 4000)
+    const duration = toast.duration ?? (toast.action || toast.variant === 'error' ? 8000 : 4000)
     setToasts(prev => [...prev, {...toast, duration, id}])
   }, [])
 
@@ -136,14 +154,18 @@ export function ToastProvider({children}: {children: React.ReactNode}) {
 export function useToast() {
   const ctx = React.useContext(ToastActionsContext)
   if (!ctx) throw new Error('useToast must be used within ToastProvider')
+  // Extracted so the dependency is the function itself. `[ctx.addToast]` made
+  // exhaustive-deps ask for the whole `ctx` object, which would rebuild this
+  // façade — and every consumer memo keyed on it — on any context change.
+  const {addToast} = ctx
   return useMemo(
     () => ({
-      toast: ctx.addToast,
-      success: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'success', title, ...opts}),
-      error: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'error', title, ...opts}),
-      warning: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'warning', title, ...opts}),
-      info: (title: string, opts?: Partial<ToastData>) => ctx.addToast({variant: 'info', title, ...opts}),
+      toast: addToast,
+      success: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'success', title, ...opts}),
+      error: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'error', title, ...opts}),
+      warning: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'warning', title, ...opts}),
+      info: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'info', title, ...opts}),
     }),
-    [ctx.addToast],
+    [addToast],
   )
 }

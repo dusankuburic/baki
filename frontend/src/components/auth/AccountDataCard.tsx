@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import React, {useState} from 'react'
 import {Download, AlertTriangle} from 'lucide-react'
 import {authApi} from '@/api/auth'
@@ -12,6 +13,7 @@ import {useToast, useConfirm} from '@/components/shared'
 // self-service account-erasure flow. Kept on the profile page so account
 // management lives in one place instead of split across two panes.
 export const AccountDataCard: React.FC = () => {
+  const {t} = useTranslation('auth')
   const user = useAuthStore(s => s.user)
   const logout = useAuthStore(s => s.logout)
   const toast = useToast()
@@ -38,7 +40,7 @@ export const AccountDataCard: React.FC = () => {
       URL.revokeObjectURL(url)
     } catch (err) {
       logger.warn('data export failed', err)
-      toast.error('Export failed', {description: err instanceof Error ? err.message : String(err)})
+      toast.error(t('account.exportFailed'), {description: err instanceof Error ? err.message : String(err)})
     } finally {
       setExporting(false)
     }
@@ -48,14 +50,14 @@ export const AccountDataCard: React.FC = () => {
     setDeleteErr(null)
     if (!user) return
     if (confirmEmail.trim().toLowerCase() !== user.email.toLowerCase()) {
-      setDeleteErr('Type your email exactly as shown to confirm.')
+      setDeleteErr(t('account.confirmMismatch'))
       return
     }
     const ok = await confirm({
-      title: 'Delete account',
-      message: 'This permanently erases your account and your flows. This cannot be undone. Continue?',
+      title: t('account.deleteTitle'),
+      message: t('account.deleteMessage'),
       danger: true,
-      confirmLabel: 'Delete account',
+      confirmLabel: t('account.deleteTitle'),
     })
     if (!ok) return
     setDeleting(true)
@@ -66,7 +68,7 @@ export const AccountDataCard: React.FC = () => {
       await logout()
     } catch (err) {
       setDeleting(false)
-      setDeleteErr(err instanceof Error ? err.message : 'Deletion failed')
+      setDeleteErr(err instanceof Error ? err.message : t('account.deleteFailed'))
     }
   }
 
@@ -74,32 +76,28 @@ export const AccountDataCard: React.FC = () => {
     <div className="bg-surface-2 border border-border-default rounded-xl overflow-hidden">
       <div className="px-5 py-3 border-b border-border-subtle flex items-center gap-2">
         <Download size={13} className="text-text-tertiary" />
-        <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">Account Data</h2>
+        <h2 className="text-xs font-semibold text-text-primary uppercase tracking-wide">{t('account.heading')}</h2>
       </div>
 
       <div className="p-5 space-y-4">
         <div>
-          <span className="text-sm font-medium text-text-primary">Download your data</span>
-          <p className="text-xs text-text-tertiary mt-0.5 mb-3">
-            Export a copy of your account profile, flows, settings, API tokens, and audit history (data-subject access /
-            portability).
-          </p>
+          <span className="text-sm font-medium text-text-primary">{t('account.downloadTitle')}</span>
+          <p className="text-xs text-text-tertiary mt-0.5 mb-3">{t('account.downloadBody')}</p>
           <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
-            Download my data
+            {t('account.downloadButton')}
           </Button>
         </div>
 
         <div className="pt-4 border-t border-border-subtle">
           <span className="text-sm font-medium text-semantic-error flex items-center gap-1.5">
             <AlertTriangle size={14} />
-            Danger zone
+            {t('account.dangerZone')}
           </span>
-          <p className="text-xs text-text-tertiary mt-1 mb-3">
-            Permanently erase your account and all of your flows. Personal data is removed from shared records; security
-            audit trails are retained but anonymized. This cannot be undone.
-          </p>
+          <p className="text-xs text-text-tertiary mt-1 mb-3">{t('account.dangerBody')}</p>
           <label className="block text-xs text-text-secondary mb-1.5">
-            Type your email (<span className="select-all">{user.email}</span>) to confirm:
+            {t('account.confirmEmailPrefix')}
+            <span className="select-all">{user.email}</span>
+            {t('account.confirmEmailSuffix')}
           </label>
           <Input
             type="email"
@@ -110,7 +108,7 @@ export const AccountDataCard: React.FC = () => {
             className="mb-3"
           />
           <Button variant="danger" size="sm" onClick={handleDelete} loading={deleting} disabled={!confirmEmail.trim()}>
-            Permanently delete my account
+            {t('account.deleteButton')}
           </Button>
           {deleteErr && <p className="text-xs text-semantic-error mt-2">{deleteErr}</p>}
         </div>

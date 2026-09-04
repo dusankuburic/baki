@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState} from 'react'
 import {Lock, KeyRound, CheckCircle2} from 'lucide-react'
 import Button from '@/components/shared/Button'
@@ -14,6 +15,7 @@ interface ResetPasswordViewProps {
 // new password and submits it with the single-use token. The backend enforces
 // the full password policy and returns a message on failure.
 export default function ResetPasswordView({token, onDone}: ResetPasswordViewProps) {
+  const {t} = useTranslation('auth')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -24,7 +26,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
     e.preventDefault()
     setError(null)
     if (password !== confirm) {
-      setError('Passwords do not match')
+      setError(t('reset.mismatch'))
       return
     }
     if (password.length < 12) {
@@ -36,7 +38,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
       await authApi.resetPassword(token, password)
       setDone(true)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Reset failed')
+      setError(err instanceof Error ? err.message : t('reset.failed'))
     } finally {
       setLoading(false)
     }
@@ -49,20 +51,18 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
           <>
             <div className="flex flex-col items-center gap-3 text-center">
               <CheckCircle2 className="text-semantic-success" size={40} />
-              <h1 className="text-xl font-semibold text-text-primary">Password updated</h1>
-              <p className="text-sm text-text-tertiary">
-                Your password has been reset and all other sessions were signed out.
-              </p>
+              <h1 className="text-xl font-semibold text-text-primary">{t('reset.doneTitle')}</h1>
+              <p className="text-sm text-text-tertiary">{t('reset.doneBody')}</p>
             </div>
             <Button type="button" variant="primary" fullWidth onClick={onDone}>
-              Back to sign in
+              {t('reset.backToSignIn')}
             </Button>
           </>
         ) : (
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
             <div className="flex flex-col gap-1 mb-2">
-              <h1 className="text-xl font-semibold text-text-primary">Choose a new password</h1>
-              <p className="text-sm text-text-tertiary">Enter a new password for your account.</p>
+              <h1 className="text-xl font-semibold text-text-primary">{t('reset.formTitle')}</h1>
+              <p className="text-sm text-text-tertiary">{t('reset.formSubtitle')}</p>
             </div>
 
             {error && (
@@ -80,7 +80,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
             <Input
               id="new-password"
               type="password"
-              placeholder="New password"
+              placeholder={t('reset.newPassword')}
               icon={Lock}
               value={password}
               onChange={e => setPassword(e.target.value)}
@@ -94,7 +94,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
             <Input
               id="confirm-password"
               type="password"
-              placeholder="Confirm new password"
+              placeholder={t('reset.confirmPassword')}
               icon={Lock}
               value={confirm}
               onChange={e => setConfirm(e.target.value)}
@@ -115,7 +115,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
 
             <div className="text-center text-sm text-text-tertiary">
               <button type="button" className="text-brand-500 hover:underline font-medium" onClick={onDone}>
-                Back to sign in
+                {t('reset.backToSignIn')}
               </button>
             </div>
           </form>

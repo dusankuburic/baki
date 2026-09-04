@@ -57,7 +57,9 @@ export default function FlowTree({
   // rows snapshot for the stable select handler (focus-index lookup without
   // re-creating the callback when rows change).
   const rowsRef = useRef(rows)
-  rowsRef.current = rows
+  useEffect(() => {
+    rowsRef.current = rows
+  })
 
   useEffect(() => {
     const el = containerRef.current
@@ -148,6 +150,8 @@ export default function FlowTree({
   )
 
   useEffect(() => {
+    // Resets the keyboard focus index when the row list changes underneath it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void setFocusedIndex(-1)
   }, [rows])
 

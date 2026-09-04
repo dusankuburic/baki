@@ -35,7 +35,6 @@ const LineGutter = memo(function LineGutter({lineCount}: {lineCount: number}) {
 // standard syntax-highlighting grammar.
 export default function SourceEditor({onClose}: SourceEditorProps) {
   const document = useFlowStore(s => s.document)
-  const setDocument = useFlowStore(s => s.setDocument)
   const setReport = useAnalysisStore(s => s.setReport)
   const toast = useToast()
   const {confirm} = useConfirm()
@@ -53,6 +52,8 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   useEffect(() => {
     if (!document) return
     let cancelled = false
+    // Enters the loading state for an async source fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void setLoading(true)
     flowApi
       .getSource(document.id)
@@ -70,6 +71,10 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     return () => {
       cancelled = true
     }
+    // Keyed on document IDENTITY only. `document` is replaced on every
+    // save/reparse, and re-running this would re-fetch and overwrite the user's
+    // unsaved edits; `toast` is only used on the failure path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [document?.id])
 
   const dirty = source !== original
@@ -98,7 +103,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     } finally {
       setSaving(false)
     }
-  }, [document, source, dirty, saving, setDocument, setOriginal, setReport, toast])
+  }, [document, source, dirty, saving, setOriginal, setReport, toast])
 
   const handleRevert = useCallback(() => {
     setSource(original)
@@ -109,14 +114,11 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   // subflow region (the structured-editing slice): users who don't know PAD's
   // text format still build flows; power users see the raw line in the
   // editor before saving.
-  const handleInsertAction = useCallback(
-    (line: string) => {
-      setSource(prev => insertBeforeLastRegionEnd(prev, line))
-      setAddingAction(false)
-      textareaRef.current?.focus()
-    },
-    [],
-  )
+  const handleInsertAction = useCallback((line: string) => {
+    setSource(prev => insertBeforeLastRegionEnd(prev, line))
+    setAddingAction(false)
+    textareaRef.current?.focus()
+  }, [])
 
   // Guard: confirm before discarding unsaved edits when switching to Block view.
   const handleClose = useCallback(async () => {
@@ -176,7 +178,11 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
             onClick={() => setAddingAction(a => !a)}
             disabled={saving || !!document?.isFolder || readOnly}
             className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
-            title={document?.isFolder ? 'Structured editing is single-file for now' : 'Compose a PAD action line and insert it'}
+            title={
+              document?.isFolder
+                ? 'Structured editing is single-file for now'
+                : 'Compose a PAD action line and insert it'
+            }
           >
             <Plus size={12} />
             Add action
@@ -206,9 +212,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
         </div>
       </div>
 
-      {addingAction && (
-        <AddActionForm onInsert={handleInsertAction} onClose={() => setAddingAction(false)} />
-      )}
+      {addingAction && <AddActionForm onInsert={handleInsertAction} onClose={() => setAddingAction(false)} />}
 
       {/* Editor: line-number gutter + textarea */}
       <div className="flex flex-1 overflow-hidden font-mono text-xs">

@@ -153,8 +153,14 @@ func (m *Migrator) migrateFlows(ctx context.Context, res *Result) error {
 	for {
 		batch, err := m.src.ListFlows(ctx, interfaces.FlowFilter{
 			AllFlows: true, // operational enumeration: copy every flow, unscoped
-			Limit:    m.batchSize,
-			Offset:   offset,
+			// Order by the immutable primary key, not the default
+			// updated_at DESC. This walk pages with LIMIT/OFFSET, and any
+			// ordering on a mutable column lets rows shift between pages —
+			// silently skipping flows while the run still reports success and
+			// no errors. That is data loss presented as a clean migration.
+			SortBy: interfaces.FlowSortIDAsc,
+			Limit:  m.batchSize,
+			Offset: offset,
 		})
 		if err != nil {
 			return fmt.Errorf("list flows (offset %d): %w", offset, err)

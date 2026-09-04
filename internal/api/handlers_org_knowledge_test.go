@@ -19,7 +19,7 @@ import (
 func newNilBackendOrgHandler() *OrgHandler {
 	security := &SecurityConfig{}
 	orgSvc := collaboration.NewOrgService(nil) // unused — the guards return before reaching it
-	return NewOrgHandler(orgSvc, nil /*backend*/, rag.NewKnowledgeService(nil, nil, nil), security, mail.NewService(config.EmailConfig{}, config.ModeLocal))
+	return NewOrgHandler(orgSvc, nil /*backend*/, rag.NewKnowledgeService(nil, nil, nil), security, mail.NewService(config.EmailConfig{}, config.ModeLocal), nil)
 }
 
 // Regression (H8/Track 6): the Knowledge Base handlers must return 503 when the

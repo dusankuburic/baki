@@ -175,6 +175,8 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     // let the effect re-run against the updated rows.
     const g = groups.find(group => group.findings.some(f => findingKey(f) === focusedFindingKey))
     if (g && collapsed.has(g.ruleId)) {
+      // Deliberately iterative: expands the collapsed group so the deep-linked finding renders, then re-runs against the updated rows.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCollapsed(prev => {
         const n = new Set(prev)
         n.delete(g.ruleId)
@@ -194,11 +196,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
         data={rows}
         computeItemKey={(_index, row) => (row.kind === 'header' ? `h:${row.group.ruleId}` : row.finding.id)}
         itemContent={(_index, row) => {
-          const frame = clsx(
-            'border-l-2',
-            rowBar(row.group.severity),
-            row.groupEnd && 'border-b border-border-subtle',
-          )
+          const frame = clsx('border-l-2', rowBar(row.group.severity), row.groupEnd && 'border-b border-border-subtle')
           if (row.kind === 'header') {
             const {group, collapsed: isCollapsed} = row
             return (

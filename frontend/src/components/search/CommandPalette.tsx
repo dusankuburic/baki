@@ -12,6 +12,9 @@ type Command = {
   onSelect: () => void
 }
 
+const LISTBOX_ID = 'command-palette-listbox'
+const optionId = (commandId: string) => `command-palette-option-${commandId}`
+
 type CommandPaletteProps = {
   isOpen: boolean
   onClose: () => void
@@ -63,6 +66,8 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
 
   useEffect(() => {
     if (isOpen) {
+      // Resets overlay state on open; the panel is not remounted per open.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery('')
       setActiveIndex(0)
       requestAnimationFrame(() => inputRef.current?.focus())
@@ -87,6 +92,9 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
         ref={paletteRef}
         className="relative w-full max-w-[640px] max-md:max-w-none max-md:h-full max-md:rounded-none bg-surface-1 border border-border-default rounded-xl shadow-xl overflow-hidden animate-palette"
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
       >
         <div className="flex items-center px-4 border-b border-border-subtle">
           <span className="text-text-tertiary mr-2 text-sm">&#x1F50D;</span>
@@ -98,13 +106,24 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
             onKeyDown={handleKeyDown}
             placeholder="Type a command..."
             className="flex-1 bg-transparent py-3 text-sm outline-none text-text-primary placeholder:text-text-disabled"
+            role="combobox"
+            aria-expanded
+            aria-controls={LISTBOX_ID}
+            aria-autocomplete="list"
+            aria-label="Type a command"
+            aria-activedescendant={
+              activeIndex >= 0 && flatItems[activeIndex] ? optionId(flatItems[activeIndex].id) : undefined
+            }
           />
         </div>
-        <div ref={listRef} className="max-h-64 overflow-y-auto py-1">
+        <div ref={listRef} className="max-h-64 overflow-y-auto py-1" role="listbox" id={LISTBOX_ID}>
           {Object.keys(grouped).length > 0 ? (
             Object.entries(grouped).map(([section, cmds]) => (
-              <div key={section}>
-                <div className="text-2xs font-medium uppercase tracking-wider text-text-tertiary px-4 py-1.5">
+              <div key={section} role="group" aria-labelledby={`cmdk-section-${section}`}>
+                <div
+                  id={`cmdk-section-${section}`}
+                  className="text-2xs font-medium uppercase tracking-wider text-text-tertiary px-4 py-1.5"
+                >
                   {section}
                 </div>
                 {cmds.map(cmd => {
@@ -112,6 +131,7 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
                   return (
                     <div
                       key={cmd.id}
+                      id={optionId(cmd.id)}
                       role="option"
                       aria-selected={idx === activeIndex}
                       data-active={idx === activeIndex}
@@ -135,7 +155,9 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
               </div>
             ))
           ) : (
-            <div className="py-8 text-center text-sm text-text-tertiary">No commands found</div>
+            <div role="status" className="py-8 text-center text-sm text-text-tertiary">
+              No commands found
+            </div>
           )}
         </div>
       </div>

@@ -386,6 +386,7 @@ type UserTokenStore interface {
 type StorageBackend interface {
 	FlowStore
 	OrgChannelStore
+	OrgCustomRuleStore
 	FlowVersionStore
 	AppSettingsStore
 	ConversationStore
@@ -517,6 +518,25 @@ const (
 	FlowSortNameAsc
 	FlowSortNameDesc
 	FlowSortBlocksDesc
+	// FlowSortIDAsc orders by the primary key. It is not a user-facing sort —
+	// it exists for callers that WALK THE WHOLE TABLE with LIMIT/OFFSET and
+	// need each row exactly once: the storage migrator and the governance
+	// scanner.
+	//
+	// Every other sort orders by a MUTABLE column. Under offset pagination that
+	// is unsound even with a unique tiebreaker: a flow saved mid-walk gets a
+	// fresh updated_at, jumps to the front of an `updated_at DESC` ordering, and
+	// shifts every later row down one — so the row sitting on the next page
+	// boundary is never returned. Verified against Postgres: a single UPDATE
+	// between two pages of a 30-row walk skipped one row and repeated another.
+	// id never changes, so an UPDATE cannot move a row in this ordering.
+	//
+	// Residual, deliberately not solved here: rows INSERTED mid-walk can still
+	// land before the cursor and shift it. Truly exact enumeration needs keyset
+	// pagination (WHERE id > $last). For the migrator the source is quiesced;
+	// for the scanner a brand-new flow has no baseline to drift from and is
+	// picked up on the next tick.
+	FlowSortIDAsc
 )
 
 // FlowFilter defines filtering options for listing flows
@@ -1071,6 +1091,40 @@ type OrgChannel struct {
 	Secret    string    `json:"-"` // HMAC key; never serialized to clients
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// OrgCustomRule is one user-authored analyzer rule owned by an org.
+//
+// Config is an analyzer.CustomRuleConfig serialized as JSON. It is carried
+// opaquely here on purpose: the rule schema belongs to the analyzer, and the
+// storage layer should not need a release to learn a new matcher field. The API
+// validates every write through the analyzer before it reaches storage, so an
+// unparseable config cannot land.
+//
+// RuleID is the author's rule id — the one that appears on findings. It is
+// unique PER ORG, not globally: two orgs may both define "house-style", and the
+// analysis cache accounts for that (analyzer.ruleSetDigest folds each rule's
+// full config, not just its id).
+type OrgCustomRule struct {
+	ID        string          `json:"id"`
+	OrgID     string          `json:"orgId"`
+	RuleID    string          `json:"ruleId"`
+	Config    json.RawMessage `json:"config"`
+	Enabled   bool            `json:"enabled"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+}
+
+// OrgCustomRuleStore covers per-org custom analyzer rules.
+type OrgCustomRuleStore interface {
+	// SaveOrgCustomRule upserts a rule. The (org_id, rule_id) pair is unique,
+	// so re-saving the same author id under one org replaces it; the same id
+	// under a DIFFERENT org is a distinct rule and must not collide.
+	SaveOrgCustomRule(ctx context.Context, rule *OrgCustomRule) error
+	DeleteOrgCustomRule(ctx context.Context, orgID, id string) error
+	// ListOrgCustomRules returns the org's rules; enabledOnly for the analysis
+	// path, which must not compile disabled rules.
+	ListOrgCustomRules(ctx context.Context, orgID string, enabledOnly bool) ([]*OrgCustomRule, error)
 }
 
 // OrgChannelStore covers per-org notification channel management.

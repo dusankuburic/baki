@@ -1,3 +1,5 @@
+import {useTranslation} from 'react-i18next'
+import type {TFunction} from 'i18next'
 import {FIX_DECISION_WINDOW_S} from '@/lib/constants'
 import {useEffect, useRef, useState} from 'react'
 import type {FixProposalCard as FixProposalCardState, FixProposalItem} from '@/stores/chatStore'
@@ -15,22 +17,8 @@ interface FixProposalCardProps {
 // the window visible so the timeout isn't a surprise.
 const DECISION_WINDOW_S = FIX_DECISION_WINDOW_S
 
-// Status line copy for resolved proposals (pending/applying render inline).
-const STATUS_TEXT: Record<string, string> = {
-  applying: 'Applying the fix…',
-  applied: 'Fix applied and verified.',
-  'applied-unresolved': 'Applied, but the finding still appears — review recommended.',
-  declined: 'Declined — nothing was changed.',
-  timeout: 'No response in time — nothing was changed.',
-  error: 'Fix failed.',
-}
-
-const ITEM_STATUS_TEXT: Record<string, string> = {
-  applied: 'applied',
-  'applied-unresolved': 'applied — still appears',
-  error: 'failed',
-  'already-resolved': 'already resolved',
-}
+// Status copy lives in chat:fixCard.status.* / chat:fixCard.itemStatus.*, keyed
+// by the same status strings the backend sends. Only tone stays here.
 
 const ITEM_STATUS_TONE: Record<string, string> = {
   applied: 'text-semantic-success',
@@ -39,8 +27,10 @@ const ITEM_STATUS_TONE: Record<string, string> = {
   'already-resolved': 'text-text-tertiary',
 }
 
-function itemStatusLine(item: FixProposalItem): string {
-  return ITEM_STATUS_TEXT[item.status] ?? item.status
+// Takes `t` rather than calling a hook: this is a plain helper, and an unknown
+// status still renders its raw wire value instead of a blank cell.
+function itemStatusLine(item: FixProposalItem, t: TFunction<'chat'>): string {
+  return t(`fixCard.itemStatus.${item.status}`, {defaultValue: item.status})
 }
 
 /**
@@ -51,8 +41,9 @@ function itemStatusLine(item: FixProposalItem): string {
  * on the rows when the batch decision resolves.
  */
 export default function FixProposalCard({proposal, onRespond}: FixProposalCardProps) {
+  const {t} = useTranslation('chat')
   const pending = proposal.status === 'pending'
-  const statusText = STATUS_TEXT[proposal.status]
+  const statusText = t(`fixCard.status.${proposal.status}`, {defaultValue: ''})
   const batch = proposal.items.length > 1
   const cardRef = useRef<HTMLDivElement>(null)
   const [remaining, setRemaining] = useState(DECISION_WINDOW_S)
@@ -96,7 +87,9 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
       className="mx-3 my-2 rounded-lg border border-brand-500/40 bg-brand-500/5 p-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
       data-testid="fix-proposal-card"
       role="alertdialog"
-      aria-label={batch ? `Proposed ${proposal.items.length} fixes: approval needed` : `Proposed fix: ${proposal.fixType}`}
+      aria-label={
+        batch ? `Proposed ${proposal.items.length} fixes: approval needed` : `Proposed fix: ${proposal.fixType}`
+      }
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-2xs font-semibold uppercase tracking-wide text-brand-300">
@@ -104,10 +97,14 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
         </span>
         {batch ? (
           <span className="text-2xs text-text-tertiary">
-            {pending && excluded.size > 0 ? `applying ${includedCount} of ${proposal.items.length}` : 'select the fixes to apply'}
+            {pending && excluded.size > 0
+              ? `applying ${includedCount} of ${proposal.items.length}`
+              : 'select the fixes to apply'}
           </span>
         ) : (
-          <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-brand-300">{proposal.fixType}</code>
+          <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-brand-300">
+            {proposal.fixType}
+          </code>
         )}
       </div>
 
@@ -130,7 +127,7 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
                         })
                       }
                       className="mt-0.5 shrink-0 accent-brand-500"
-                      aria-label={`Include fix for ${item.blockLabel}`}
+                      aria-label={t('fixCard.includeFix', {name: item.blockLabel})}
                       data-testid={`include-item-${i}`}
                     />
                   )}
@@ -139,12 +136,17 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
                     {item.line > 0 && <span className="text-text-tertiary"> · line {item.line}</span>}
                   </span>
                 </span>
-                <code className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-brand-300">{item.fixType}</code>
+                <code className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-2xs text-brand-300">
+                  {item.fixType}
+                </code>
               </div>
               {item.summary && <PatchPreviewText text={item.summary} className="mt-1 max-h-24" />}
               {item.status !== 'pending' && (
-                <p className={'mt-1 text-2xs ' + (ITEM_STATUS_TONE[item.status] ?? 'text-text-tertiary')} data-testid="fix-item-status">
-                  {itemStatusLine(item)}
+                <p
+                  className={'mt-1 text-2xs ' + (ITEM_STATUS_TONE[item.status] ?? 'text-text-tertiary')}
+                  data-testid="fix-item-status"
+                >
+                  {itemStatusLine(item, t)}
                   {item.message ? ` — ${item.message}` : ''}
                 </p>
               )}
@@ -171,21 +173,21 @@ export default function FixProposalCard({proposal, onRespond}: FixProposalCardPr
             onClick={() => onRespond(true, proposal.proposalId, batch ? [...excluded] : undefined)}
             disabled={batch && includedCount === 0}
           >
-            {batch ? `Approve & apply ${includedCount} ${includedCount !== 1 ? 'fixes' : 'fix'}` : 'Approve & apply'}
+            {batch ? t('fixCard.approveBatch', {count: includedCount}) : t('fixCard.approve')}
           </button>
           <button
             type="button"
             className="rounded border border-border-default bg-surface-3 px-3 py-1 text-2xs font-medium text-text-secondary transition-colors hover:bg-surface-4 hover:text-text-primary disabled:opacity-50"
             onClick={() => onRespond(false, proposal.proposalId)}
           >
-            Dismiss
+            {t('fixCard.dismiss')}
           </button>
           <span
             className={remaining <= 10 ? 'text-2xs text-semantic-warning' : 'text-2xs text-text-tertiary/70'}
             aria-live="off"
-            title="The proposal is declined automatically when this window expires"
+            title={t('fixCard.expiryTitle')}
           >
-            {remaining > 0 ? `${remaining}s to decide` : 'expiring…'}
+            {remaining > 0 ? t('fixCard.secondsToDecide', {count: remaining}) : t('fixCard.expiring')}
           </span>
         </div>
       ) : (

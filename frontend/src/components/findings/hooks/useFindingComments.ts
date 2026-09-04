@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useState, useCallback} from 'react'
 import {analysisApi} from '@/api'
 import {useToast} from '@/components/shared'
@@ -5,6 +6,7 @@ import {findingKey} from '@/stores/analysisStore'
 import type {Finding, FlowDocument, FindingComment} from '@/types'
 
 export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
+  const {t} = useTranslation('findings')
   const toast = useToast()
   const [showComments, setShowComments] = useState(false)
   const [comments, setComments] = useState<FindingComment[] | null>(null)
@@ -40,9 +42,9 @@ export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
       const comment = await analysisApi.addComment(doc.id, key, body)
       setComments(prev => [...(prev ?? []), comment])
     } catch (err) {
-      toast.error('Failed to add comment', {description: String(err)})
+      toast.error(t('toasts.commentFailed'), {description: String(err)})
     }
-  }, [commentBody, doc, finding, toast])
+  }, [commentBody, doc, finding, toast, t])
 
   return {showComments, comments, commentBody, setCommentBody, commentLoading, handleComments, handleSubmitComment}
 }

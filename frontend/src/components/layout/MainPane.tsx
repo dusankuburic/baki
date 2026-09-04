@@ -1,3 +1,4 @@
+import {Trans, useTranslation} from 'react-i18next'
 import {Fragment, lazy, Suspense, memo, useState, useMemo, useEffect} from 'react'
 import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle, Code2} from 'lucide-react'
 import {MainPaneToolbar} from '@/components/flow'
@@ -41,11 +42,16 @@ export default function MainPane() {
 // groups for the loaded document. Editor-group state and divider math come from
 // the useEditorGroups hook.
 function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
+  const {t} = useTranslation('shell')
   const document = useFlowStore(s => s.document)
   const parseError = useFlowStore(s => s.parseError)
   const setDocument = useFlowStore(s => s.setDocument)
   const toast = useToast()
   const editor = useEditorGroups()
+  // Pulled out of `editor` before use: react-hooks/refs taints every property
+  // access on an object that holds a ref, so `editor.containerRef` was reported
+  // as a ref read during render (see the same note in App.tsx).
+  const {containerRef: editorContainerRef} = editor
   const [loadingSample, setLoadingSample] = useState(false)
   const showHelp = useUIStore(s => s.showHelpOverlay)
   const setShowHelp = useUIStore(s => s.setShowHelpOverlay)
@@ -76,10 +82,10 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
       if (doc) {
         setDocument(doc)
       } else {
-        toast.error('Could not load the sample flow')
+        toast.error(t('mainPane.sampleFailed'))
       }
     } catch (err) {
-      toast.error('Could not load the sample flow', {description: String(err)})
+      toast.error(t('mainPane.sampleFailed'), {description: String(err)})
     } finally {
       setLoadingSample(false)
     }
@@ -95,49 +101,48 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
               <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
                 <AlertTriangle size={28} className="text-red-400" />
               </div>
-              <div className="text-xl font-medium text-text-secondary mb-2">Failed to load flow</div>
+              <div className="text-xl font-medium text-text-secondary mb-2">{t('mainPane.loadFailedTitle')}</div>
               <div className="text-sm text-red-400/90 max-w-md text-center break-words">{parseError}</div>
-              <div className="text-sm text-text-tertiary mt-2">Try another file from the sidebar</div>
+              <div className="text-sm text-text-tertiary mt-2">{t('mainPane.loadFailedHint')}</div>
             </>
           ) : (
             <>
               <div className="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4">
                 <FolderOpen size={28} className="text-text-tertiary" />
               </div>
-              <div className="text-xl font-medium text-text-secondary mb-2">Open a flow to begin</div>
-              <div className="text-sm text-text-tertiary mb-5">Choose from the sidebar or drag a file here</div>
+              <div className="text-xl font-medium text-text-secondary mb-2">{t('mainPane.emptyTitle')}</div>
+              <div className="text-sm text-text-tertiary mb-5">{t('mainPane.emptyHint')}</div>
               <button
                 onClick={handleOpenSample}
                 disabled={loadingSample}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500 text-brand-foreground text-sm font-medium shadow-lg shadow-brand-500/20 hover:bg-brand-600 transition-colors disabled:opacity-50"
               >
                 {loadingSample ? <Spinner size={14} /> : <FlaskConical size={16} />}
-                {loadingSample ? 'Loading sample…' : 'Try a sample flow'}
+                {loadingSample ? t('mainPane.loadingSample') : t('mainPane.trySample')}
               </button>
               <button
                 onClick={() => setShowHelp(!showHelp)}
                 className="mt-4 flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
               >
                 <HelpCircle size={12} />
-                How do I export a flow from Power Automate Desktop?
+                {t('mainPane.exportHelpToggle')}
               </button>
               {showHelp && (
                 <div className="mt-3 max-w-md text-xs text-text-tertiary bg-surface-2 border border-border-subtle rounded-lg p-4 leading-relaxed">
                   <ol className="list-decimal list-inside space-y-1">
                     <li>
-                      Open your flow in the <strong>Power Automate Desktop</strong> designer.
+                      <Trans t={t} i18nKey="mainPane.exportStep1" components={{strong: <strong />}} />
                     </li>
-                    <li>Select the actions you want (or the whole flow via the canvas).</li>
+                    <li>{t('mainPane.exportStep2')}</li>
                     <li>
-                      Right-click → <strong>Copy</strong> (or <code>Ctrl+C</code>), then paste into a <code>.txt</code>{' '}
-                      file — or use the designer's <strong>export</strong> option.
+                      <Trans t={t} i18nKey="mainPane.exportStep3" components={{strong: <strong />, code: <code />}} />
                     </li>
                     <li>
-                      Save the file and open it here with <strong>Open file</strong>, or drag it onto the window.
+                      <Trans t={t} i18nKey="mainPane.exportStep4" components={{strong: <strong />}} />
                     </li>
                   </ol>
                   <p className="mt-2 text-text-tertiary/80">
-                    The analyzer reads PAD's text export format; a folder of subflow <code>.txt</code> files works too.
+                    <Trans t={t} i18nKey="mainPane.exportNote" components={{code: <code />}} />
                   </p>
                 </div>
               )}
@@ -168,7 +173,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
             <button
               onClick={() => setShowSource(true)}
               className="flex items-center gap-1 text-2xs px-2 py-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors"
-              title="Edit raw source"
+              title={t('mainPane.editRawSource')}
             >
               <Code2 size={12} />
               Source
@@ -177,7 +182,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
         )}
       </div>
       <ParseErrorsBanner />
-      <div ref={editor.containerRef} className="flex-1 flex overflow-hidden">
+      <div ref={editorContainerRef} className="flex-1 flex overflow-hidden">
         {groups.map((group, gi) => (
           <Fragment key={`group-${gi}`}>
             {gi > 0 && (
@@ -295,6 +300,7 @@ const GroupTabStrip = memo(function GroupTabStrip({
   onCloseOtherTabs: (subflowId: string) => void
   onCloseGroup: () => void
 }) {
+  const {t} = useTranslation('shell')
   const [menuPos, setMenuPos] = useState<{x: number; y: number; tabId: string} | null>(null)
   const subflowMap = useMemo(() => {
     const m = new Map<string, (typeof document.subflows)[0]>()
@@ -322,17 +328,17 @@ const GroupTabStrip = memo(function GroupTabStrip({
 
           const contextItems: ContextMenuItem[] = [
             {
-              label: 'Close',
+              label: t('mainPane.closeTab'),
               icon: X,
               onClick: () => onCloseTab(tabId),
             },
             {
-              label: 'Close Others',
+              label: t('mainPane.closeOthers'),
               icon: MinusSquare,
               onClick: () => onCloseOtherTabs(tabId),
             },
             {
-              label: 'Close All',
+              label: t('mainPane.closeAll'),
               icon: XCircle,
               onClick: () => onCloseAllTabs(),
             },
@@ -393,7 +399,7 @@ const GroupTabStrip = memo(function GroupTabStrip({
             e.stopPropagation()
             onCloseGroup()
           }}
-          title="Close group"
+          title={t('mainPane.closeGroup')}
         >
           <X size={14} />
         </button>

@@ -1,3 +1,4 @@
+import {useTranslation} from 'react-i18next'
 import {useEffect} from 'react'
 import {syncManager} from '@/services/sync/SyncManager'
 import {useToast} from '@/components/shared'
@@ -13,16 +14,14 @@ import {useToast} from '@/components/shared'
 // syncManager subscription once for the component's lifetime (the [warning] dep
 // never re-fires in practice).
 export default function SyncDropNotifier() {
+  const {t} = useTranslation()
   const {warning} = useToast()
   useEffect(() => {
     return syncManager.onDroppedOps((count, reason) => {
-      warning(`${count} change(s) not synced`, {
-        description:
-          reason === 'expired'
-            ? 'You were offline past the 60s sync window. Recent positions are kept; stale ones were discarded.'
-            : 'The pending-change buffer was full; oldest entries were discarded to keep the latest state.',
+      warning(t('syncDrop.title', {count}), {
+        description: reason === 'expired' ? t('syncDrop.expired') : t('syncDrop.overflow'),
       })
     })
-  }, [warning])
+  }, [warning, t])
   return null
 }

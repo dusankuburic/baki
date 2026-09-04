@@ -137,3 +137,28 @@ func TestRequestIDFromContext_EmptyWhenMiddlewareNotApplied(t *testing.T) {
 		t.Errorf("expected empty when middleware wasn't applied, got %q", got)
 	}
 }
+
+// TestRedactPath_InviteToken guards the one route whose PATH segment is a live
+// credential. The access log and the panic reporter both write the request
+// path; before redaction, accepting an invite republished the emailed
+// single-use token into log storage.
+func TestRedactPath_InviteToken(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/api/invites/s3cret-token/accept", "/api/invites/[redacted]/accept"},
+		{"/api/invites/s3cret-token", "/api/invites/[redacted]"},
+		// Shape preserved, nothing else touched.
+		{"/api/invites/", "/api/invites/"},
+		{"/api/auth/login", "/api/auth/login"},
+		{"/api/library/abc123", "/api/library/abc123"},
+		{"/", "/"},
+	}
+	for _, c := range cases {
+		if got := redactPath(c.in); got != c.want {
+			t.Errorf("redactPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// The secret must not survive anywhere in the output.
+	if got := redactPath("/api/invites/s3cret-token/accept"); strings.Contains(got, "s3cret-token") {
+		t.Errorf("token leaked through redactPath: %q", got)
+	}
+}

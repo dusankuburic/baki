@@ -2,6 +2,7 @@ package di
 
 import (
 	"context"
+	"pad-core/logger"
 	"path/filepath"
 
 	"github.com/redis/go-redis/v9"
@@ -141,14 +142,42 @@ var ServiceModule = fx.Options(
 			return service.NewProviderService(auth, copilot, factory, secrets)
 		},
 	),
-	// Custom-rules loading: a DECORATOR (not a second provider of the same
-	// type — fx hard-fails that graph with "already provided"). It wraps the
-	// AnalysisService the constructor built, loading the operator's custom
-	// rules when PAD_CUSTOM_RULES is configured.
-	fx.Decorate(func(cfg *config.Config, svc *service.AnalysisService) *service.AnalysisService {
-		if cfg.Server.CustomRulesPath != "" {
-			svc.LoadCustomRules(cfg.Server.CustomRulesPath)
-		}
+	// R4: the deployment custom-rule file is its OWN graph node rather than
+	// something the AnalysisService loads for itself. Two consumers need the
+	// same compiled slice — the service (as its fallback layer) and the
+	// RuleProfileResolver (as its base layer) — and making the resolver read it
+	// off the service would be a cycle, since the service also needs the
+	// resolver.
+	fx.Provide(ProvideDeploymentCustomRules),
+	fx.Provide(service.NewRuleProfileResolver),
+	// A DECORATOR, not a second provider of *AnalysisService — fx hard-fails
+	// that graph with "already provided". It wires both dependencies into the
+	// service the constructor built.
+	fx.Decorate(func(rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, svc *service.AnalysisService) *service.AnalysisService {
+		svc.SetCustomRules(rules)
+		svc.SetRuleProfileResolver(resolver)
 		return svc
 	}),
 )
+
+// ProvideDeploymentCustomRules compiles PAD_CUSTOM_RULES once at boot.
+//
+// Invalid entries are SKIPPED WITH A WARNING EACH, never silently: R0-5 was
+// motivated by exactly that failure mode — a typo'd regex quietly removed a
+// rule the operator believed was enforcing. A missing/unset path is a no-op.
+func ProvideDeploymentCustomRules(cfg *config.Config) service.DeploymentCustomRules {
+	path := cfg.Server.CustomRulesPath
+	if path == "" {
+		return nil
+	}
+	rules, warnings, err := analyzer.LoadCustomRules(path)
+	if err != nil {
+		// Don't fail boot: the deployment still has its 44 built-in rules.
+		logger.Error("custom rules load failed; continuing with built-in rules only", "path", path, "error", err)
+		return nil
+	}
+	for _, w := range warnings {
+		logger.Warn("custom rule skipped", "file", path, "detail", w)
+	}
+	return rules
+}
