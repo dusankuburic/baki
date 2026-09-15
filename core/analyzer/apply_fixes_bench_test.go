@@ -40,7 +40,7 @@ func BenchmarkApplyFixesToSource(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		src := source
-		n, err := ApplyFixesToSource(&src, "Main.txt", nil, 500, nil)
+		n, err := ApplyFixesToSource(&src, "Main.txt", FixOptions{Limit: 500})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -112,7 +112,7 @@ func TestApplyFixesToSource_StallGuardStopsOscillatingFixers(t *testing.T) {
 		"HTTPClient.InvokeUrl Method: GET Url: 'https://api.example.com/x' => R\n" +
 		"WAIT 0\n" +
 		"#EndRegion\n"
-	n, err := ApplyFixesToSource(&source, "Main.txt", nil, 100, nil)
+	n, err := ApplyFixesToSource(&source, "Main.txt", FixOptions{Limit: 100})
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}

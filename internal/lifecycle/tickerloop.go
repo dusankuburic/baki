@@ -1,9 +1,9 @@
 // Package lifecycle holds small, generic scheduling primitives shared by the
-// app's background loops (the governance scanner, the Power Platform
-// connector's ingest sweep, …). Extracted because those two loops had
-// independently reimplemented the identical "cancelable ticker with panic
-// recovery" scaffolding, down to the same comments explaining why Stop derives
-// from a root context — one place to get the shutdown-race handling right.
+// app's background loops (the governance scanner, the retention purge, …).
+// Extracted because two loops had independently reimplemented the identical
+// "cancelable ticker with panic recovery" scaffolding, down to the same
+// comments explaining why Stop derives from a root context — one place to get
+// the shutdown-race handling right.
 package lifecycle
 
 import (
@@ -25,12 +25,30 @@ import (
 // before Stop has any effect; calling Stop before Start (or on a TickerLoop
 // that never started, e.g. because the caller's own enable-check short-
 // circuited) is safe and a no-op.
+// stopDrainBudget bounds how long Stop waits for an in-flight fn to return.
+//
+// Stop used to return the instant it signalled, so fx would proceed to close the
+// database pool while a governance sweep or an ingest pass was still querying
+// it — the tick then failed on a closed pool during every shutdown, which looks
+// like a transient error and is actually a guaranteed one. The budget is well
+// inside the app's 25s fx.StopTimeout, leaving room for the HTTP and WebSocket
+// drains that follow; a tick that outlasts it is abandoned (the root context is
+// already cancelled) rather than blocking shutdown indefinitely.
+const stopDrainBudget = 5 * time.Second
+
 type TickerLoop struct {
+	// mu guards the fields below. sync.Once orders other Do calls, NOT a
+	// concurrent reader — so Stop reading rootCancel/stop while Start writes
+	// them inside startOnce.Do was a genuine data race. It is latent today
+	// because fx orders OnStart before OnStop, but nothing in this type said so.
+	mu         sync.Mutex
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 	stop       chan struct{}
-	startOnce  sync.Once
-	stopOnce   sync.Once
+	// done is closed when run returns, so Stop can wait for an in-flight fn.
+	done      chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 // Start launches fn on the given interval in a background goroutine. If
@@ -39,37 +57,58 @@ type TickerLoop struct {
 // others deliberately don't: waiting for the first tick avoids doing
 // duplicate work right after a restart for a caller whose interval is short
 // relative to typical process lifetime). onPanic, if non-nil, is called with
-// the recovered value if fn panics on any invocation; the loop then continues
-// to the next tick rather than dying.
+// the recovered value if fn panics.
+//
+// A panic that escapes fn ENDS the loop — it is reported once and the goroutine
+// exits. This comment previously claimed the loop "continues to the next tick
+// rather than dying", which is the opposite of what the code does and of what
+// TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop asserts. The backstop is
+// for an unexpected panic in the scaffolding; callers that want to survive a bad
+// ITEM recover around their own per-item work, which both of them do.
 //
 // Idempotent: a second Start call (any arguments) is a no-op, matching
 // sync.Once semantics — callers that gate Start behind their own "am I
 // enabled" check don't need their own idempotency guard on top.
 func (l *TickerLoop) Start(interval time.Duration, runImmediately bool, fn func(ctx context.Context), onPanic func(recovered any)) {
 	l.startOnce.Do(func() {
+		l.mu.Lock()
 		l.rootCtx, l.rootCancel = context.WithCancel(context.Background())
 		l.stop = make(chan struct{})
-		go l.run(interval, runImmediately, fn, onPanic)
+		l.done = make(chan struct{})
+		rootCtx, stop, done := l.rootCtx, l.stop, l.done
+		l.mu.Unlock()
+		go l.run(rootCtx, stop, done, interval, runImmediately, fn, onPanic)
 	})
 }
 
-func (l *TickerLoop) run(interval time.Duration, runImmediately bool, fn func(ctx context.Context), onPanic func(recovered any)) {
+// run owns the loop. It takes the channels as parameters rather than reading
+// the struct, so it needs no lock and cannot observe a half-initialised value.
+func (l *TickerLoop) run(rootCtx context.Context, stop, done chan struct{}, interval time.Duration, runImmediately bool, fn func(ctx context.Context), onPanic func(recovered any)) {
+	defer close(done)
+
+	// Function-scoped ON PURPOSE: a panic that escapes fn is reported once and
+	// ENDS the loop. This is a backstop for an unexpected panic, not a "keep
+	// going no matter what" supervisor — both callers already recover around
+	// their own per-item work (the ingester per flow, the scanner per sweep), so
+	// a panic reaching here means the loop's own scaffolding is broken and
+	// continuing to tick would just repeat it. Pinned by
+	// TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop.
 	defer func() {
 		if r := recover(); r != nil && onPanic != nil {
 			onPanic(r)
 		}
 	}()
 	if runImmediately {
-		fn(l.rootCtx)
+		fn(rootCtx)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-l.stop:
+		case <-stop:
 			return
 		case <-ticker.C:
-			fn(l.rootCtx)
+			fn(rootCtx)
 		}
 	}
 }
@@ -80,11 +119,24 @@ func (l *TickerLoop) run(interval time.Duration, runImmediately bool, fn func(ct
 // unconditionally call Stop during its own shutdown.
 func (l *TickerLoop) Stop() {
 	l.stopOnce.Do(func() {
-		if l.rootCancel != nil {
-			l.rootCancel()
+		l.mu.Lock()
+		cancel, stop, done := l.rootCancel, l.stop, l.done
+		l.mu.Unlock()
+
+		if cancel != nil {
+			cancel()
 		}
-		if l.stop != nil {
-			close(l.stop)
+		if stop != nil {
+			close(stop)
+		}
+		if done == nil {
+			return // never started
+		}
+		// Wait for the in-flight tick so the caller's dependencies (the DB pool,
+		// the blob client) are still alive while it unwinds.
+		select {
+		case <-done:
+		case <-time.After(stopDrainBudget):
 		}
 	})
 }

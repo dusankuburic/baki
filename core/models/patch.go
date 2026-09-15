@@ -62,4 +62,11 @@ type PatchOp struct {
 	// replace
 	Old string `json:"old,omitempty"`
 	New string `json:"new,omitempty"`
+	// Property anchors a replace to one `Key: value` pair on the line. Without
+	// it the replace is a whole-line ReplaceAll, which rewrites every occurrence
+	// of Old — so replacing the bare value "50" for property X in
+	// `Window: 'Order 1050' X: 50 Y: 150` also rewrote the window title and Y.
+	// Empty keeps the unanchored behaviour, which is correct for values that
+	// carry their own delimiters (a %variable% reference, a full http:// URL).
+	Property string `json:"property,omitempty"`
 }

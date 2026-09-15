@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"unicode/utf8"
 
 	"pad-analyzer/internal/config"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -116,8 +117,53 @@ func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, set
 	if err := s.backend.SaveOrgSettings(ctx, orgID, s.fromModel(&settings)); err != nil {
 		return err
 	}
-	s.notifier.Emit("settings:changed", settings)
+	s.emitOrgSettingsChanged(ctx, orgID, settings)
 	return nil
+}
+
+// emitOrgSettingsChanged notifies one org's members that their analysis
+// configuration changed.
+//
+// This used to be a bare Emit, which fans out to EVERY connected SSE client in
+// the deployment — so one org's rule profile (which rules it has disabled, at
+// what severity, with what thresholds) was delivered to every other tenant's
+// users. EmitTo is the documented requirement for anything user-scoped, and
+// UpdateUserSettings above already honours it; org settings are scoped too,
+// just to a set of users rather than one.
+//
+// The EventManager indexes clients by user, not by org, so the fan-out happens
+// here: load the org, address each member. That costs one storage read on a
+// write path an admin triggers by hand, which is the right trade for not
+// having to maintain an org→client index that would have to stay correct
+// across membership changes and reconnects.
+//
+// Best-effort by design: the settings are already persisted when this runs, so
+// a failure to notify must not fail the update. It is logged, never silent.
+func (s *SystemService) emitOrgSettingsChanged(ctx context.Context, orgID string, settings models.AppSettings) {
+	org, err := s.backend.LoadOrg(ctx, orgID)
+	if err != nil || org == nil {
+		logger.Warn("org settings saved but members could not be notified",
+			"orgId", orgID, "error", err)
+		return
+	}
+	// The owner is not necessarily in Members, so address them explicitly and
+	// dedupe — a double EmitTo would deliver the event twice to one client.
+	seen := make(map[string]bool, len(org.Members)+1)
+	for _, id := range append([]string{org.OwnerID}, memberIDs(org.Members)...) {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		s.notifier.EmitTo(id, "settings:changed", settings)
+	}
+}
+
+func memberIDs(members []storageif.OrgMember) []string {
+	out := make([]string, 0, len(members))
+	for _, m := range members {
+		out = append(out, m.UserID)
+	}
+	return out
 }
 
 // toModel/fromModel bridge the storage-layer and domain settings structs, which
@@ -173,13 +219,30 @@ func (s *SystemService) AppInfo() (info *models.AppInfo, err error) {
 	}, nil
 }
 
+// maxFrontendErrorField caps each field of a client error report in the log.
+// The HTTP layer bounds the whole body (64 KiB); this keeps one field from
+// being the whole budget — a log line is read by people, not stored blobs.
+const maxFrontendErrorField = 8 << 10
+
 func (s *SystemService) LogError(payload models.FrontendError) {
 	logger.Error("frontend error",
-		"message", payload.Message,
-		"stack", payload.Stack,
-		"componentStack", payload.ComponentStack,
-		"url", payload.URL,
+		"message", truncateForLog(payload.Message, maxFrontendErrorField),
+		"stack", truncateForLog(payload.Stack, maxFrontendErrorField),
+		"componentStack", truncateForLog(payload.ComponentStack, maxFrontendErrorField),
+		"url", truncateForLog(payload.URL, 2048),
 	)
+}
+
+// truncateForLog cuts s to max bytes with a visible marker, on a rune boundary.
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("…[truncated %d bytes]", len(s)-cut)
 }
 
 func (s *SystemService) SaveApiKey(scope, provider string, key string) (err error) {

@@ -73,12 +73,25 @@ var ruleAutoFix = map[string]string{
 	"dead-code":        "remove-block",
 	"dead-data":        "remove-block",
 	"empty-branch":     "remove-block",
-	"empty-subflow":    "remove-block",
-	"uncalled-subflow": "remove-block",
-	"unused-variable":  "remove-block",
-	"disabled-block":   "remove-block",
-	"wait-zero":        "remove-block",
-	"todo-in-comment":  "remove-block",
+	// empty-subflow and uncalled-subflow deliberately have NO auto-fix.
+	//
+	// Both attach their finding to subflow.Blocks[0] as a stand-in for "this
+	// subflow", but remove-block deletes exactly that one block. The finding then
+	// re-fires on the new first block with a different content fingerprint (the
+	// fingerprint hashes RawType/Name/LineNumber), so neither the no-progress
+	// guard nor the stall guard recognises it as the same problem — and each
+	// deletion removes that block's other findings too, which resets the stall
+	// counter's minimum. The loop stripped the subflow one action per iteration.
+	//
+	// A remove-subflow fix spanning #Region…#EndRegion would delete the right
+	// span, but it should still not run unattended: "nothing calls this" is a
+	// STATIC observation, and a subflow can be invoked dynamically or run by an
+	// operator. Both findings carry a Suggestion that says what to do; deciding
+	// whether it is really unused needs knowledge the analyzer does not have.
+	"unused-variable": "remove-block",
+	"disabled-block":  "remove-block",
+	"wait-zero":       "remove-block",
+	"todo-in-comment": "remove-block",
 	// replace-with-variable: swap a hardcoded literal for %input_<key>%.
 	"hardcoded-credential": "replace-with-variable",
 	"hardcoded-filepath":   "replace-with-variable",
@@ -710,25 +723,7 @@ func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Ru
 				if len(flow.Subflows) > 0 {
 					anchorSF = flow.Subflows[0].ID
 				}
-				for _, pe := range flow.ParseErrors {
-					sev := models.SeverityError
-					switch pe.Severity {
-					case "warning":
-						sev = models.SeverityWarning
-					case "info":
-						sev = models.SeverityInfo
-					}
-					findings = append(findings, models.Finding{
-						RuleID:      "parse-error",
-						Severity:    sev,
-						Title:       "Parse error (line " + itoa(pe.Line) + ")",
-						Description: pe.Message,
-						BlockID:     anchorID,
-						SubflowID:   anchorSF,
-						Suggestion:  "Fix the syntax error so the parser can produce a complete block tree.",
-						Metadata:    map[string]interface{}{"line": pe.Line, "column": pe.Column, "snippet": pe.Snippet},
-					})
-				}
+				findings = append(findings, buildParseErrorFindings(flow.ParseErrors, anchorID, anchorSF)...)
 			}
 		}
 	}

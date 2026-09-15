@@ -20,7 +20,9 @@ describe('MessageBubble search highlighting', () => {
   })
 
   it('marks matches inside rendered markdown', () => {
-    render(<MessageBubble message={msg('assistant', 'Set the **timeout** and the timeout again.')} highlight="timeout" />)
+    render(
+      <MessageBubble message={msg('assistant', 'Set the **timeout** and the timeout again.')} highlight="timeout" />,
+    )
     expect(document.querySelectorAll('mark.chat-search-hit')).toHaveLength(2)
   })
 

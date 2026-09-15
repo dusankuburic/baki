@@ -31,7 +31,7 @@ func TestStreamScrubber_MatchesScrubTextForAnyChunking(t *testing.T) {
 		"Set PWD = hunter2secret99; Initial Catalog=db; done",
 		"line one has password=abcdef123456\nline two is normal prose",
 		"header Authorization: Bearer abc123def456ghi789 was sent",
-		"use sk_live_abcdefghijklmnopqrstu for billing",
+		"use " + fakeStripeLiveKey + " for billing",
 		"pat is ghp_" + strings.Repeat("a1B2", 9) + " here",
 		"api_key: 'abcdef123456' trailing prose",
 		"private-key = \"MIIEvQIBADANBg81u\" end",

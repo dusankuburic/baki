@@ -75,8 +75,8 @@ function parseFixProposal(raw: unknown): FixProposalSnapshot | null {
 // It returns null only when the payload lacks the identity/timestamp a stored
 // message needs; an empty content (e.g. an interrupted assistant turn) is kept.
 //
-// This is the type-safety guard for backend conversation responses
-// (docs/IMPROVEMENTS.md, F5): it replaces unchecked `as ChatMessage` casts at
+// This is the type-safety guard for backend conversation responses: it
+// replaces unchecked `as ChatMessage` casts at
 // the read boundary so a malformed server/fixture message can't reach the chat
 // store with a missing id, an unknown role, or a non-string content.
 export function parseChatMessage(raw: unknown): ChatMessage | null {

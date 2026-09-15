@@ -188,6 +188,54 @@ func TestServeStatic_MissingAssetReturns404(t *testing.T) {
 	}
 }
 
+// TestServeStatic_SourceMapsAreNeverServed pins the fix for a source-disclosure
+// bug: vite builds with sourcemap:'hidden', which only omits the
+// //# sourceMappingURL comment — the .map files are still written into dist/,
+// they carry sourcesContent (the app's complete original TypeScript), and this
+// handler serves whatever is under the static dir. Appending ".map" to a bundle
+// URL returned the source. The Dockerfile strips maps from the image, but a
+// compose stack or a PAD_STATIC_DIR pointed at a local build has the same
+// exposure, so the handler refuses them regardless of what is on disk.
+func TestServeStatic_SourceMapsAreNeverServed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "assets"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>app</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	const secret = `{"sourcesContent":["const apiKey = internalDetail()"]}`
+	// Present on disk, and readable — the guard must not depend on absence.
+	for _, name := range []string{"index-AbCd12.js.map", "index-AbCd12.css.map"} {
+		if err := os.WriteFile(filepath.Join(dir, "assets", name), []byte(secret), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "assets", "index-AbCd12.js"), []byte("// bundle"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rt := makeStaticRouter(t, dir)
+
+	for _, path := range []string{
+		"/assets/index-AbCd12.js.map",
+		"/assets/index-AbCd12.css.map",
+	} {
+		rr := doRequestWithAuth(t, rt, http.MethodGet, path, "", nil)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("%s: expected 404, got %d", path, rr.Code)
+		}
+		if strings.Contains(rr.Body.String(), "sourcesContent") {
+			t.Errorf("%s: response leaked source map content", path)
+		}
+	}
+
+	// The bundle itself still serves — the guard is on .map, not on /assets/.
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/assets/index-AbCd12.js", "", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("bundle: expected 200, got %d", rr.Code)
+	}
+}
+
 // TestServeStatic_DirectoryListingRefused verifies that requests for a
 // directory without an explicit index file get the SPA fallback rather
 // than a directory listing, which would leak server-side layout.

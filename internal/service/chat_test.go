@@ -664,7 +664,7 @@ func TestEnforceBudget_FailsClosedOnStoreError(t *testing.T) {
 		backend:  backend,
 		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
 	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0); err == nil {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0, nil); err == nil {
 		t.Fatal("enforceBudget with a store error returned nil, want a fail-closed error")
 	}
 }
@@ -677,7 +677,7 @@ func TestEnforceBudget_AllowsUnderBudget(t *testing.T) {
 		backend:  backend,
 		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
 	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0); err != nil {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0, nil); err != nil {
 		t.Fatalf("enforceBudget under budget returned error: %v", err)
 	}
 }
@@ -1139,9 +1139,19 @@ func (nilSettings) ClearRecentFiles() error           { return nil }
 // TestStreamChatMessage_PersistsUserTurnAtStart covers BUG-5: on the
 // reconstruction path (client omitted Messages), the backend persists
 // [history + new user turn] at stream start, so closing the app mid-stream
-// (before any client save-on-done) retains the typed message. Uses the demo
-// provider to drive a real successful stream end-to-end without network.
+// (before any client save-on-done) retains the typed message. Uses a scripted
+// provider registered with the factory to drive a real stream end-to-end
+// without network.
+// registerFakeProvider makes "fake" resolvable through ai.NewProviderFactory:
+// one scripted assistant turn, no network. Idempotent.
+func registerFakeProvider() {
+	ai.RegisterProvider("fake", func(string) ai.Provider {
+		return &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "ok", TokensIn: 1, TokensOut: 1}}}
+	})
+}
+
 func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
+	registerFakeProvider()
 	dir := t.TempDir()
 	notifier := &testutil.CountingNotifier{}
 	factory := ai.NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
@@ -1168,14 +1178,14 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 	// Stream with NO Messages (→ reconstruction path) and a fresh user turn.
 	// No ClientStreamID, so the legacy begin-gated path runs; call BeginStream.
 	id, err := svc.StreamChatMessage(context.Background(), "test", doc, nil, models.ChatRequest{
-		Provider: "demo", Model: "demo", UserMessage: "fresh question",
+		Provider: "fake", Model: "fake-model", UserMessage: "fresh question",
 	})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
 	svc.BeginStream(context.Background(), id)
 
-	// Wait for the demo stream to finish.
+	// Wait for the stream to finish.
 	deadline := time.After(5 * time.Second)
 	for {
 		if _, ok := svc.activeStreams.Load(id); !ok {
@@ -1183,7 +1193,7 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatal("demo stream did not finish within 5s")
+			t.Fatal("stream did not finish within 5s")
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -1212,6 +1222,7 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 // Messages (legacy / resend override), the backend must NOT overwrite the store
 // (the client owns persistence on that path).
 func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
+	registerFakeProvider()
 	dir := t.TempDir()
 	notifier := &testutil.CountingNotifier{}
 	factory := ai.NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
@@ -1230,7 +1241,7 @@ func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
 
 	// Client supplies its OWN Messages (override path) — different from store.
 	id, err := svc.StreamChatMessage(context.Background(), "test", doc, nil, models.ChatRequest{
-		Provider: "demo", Model: "demo", UserMessage: "override",
+		Provider: "fake", Model: "fake-model", UserMessage: "override",
 		Messages: []models.ChatMessage{{ID: "c1", Role: "user", Content: "client-side history"}},
 	})
 	if err != nil {

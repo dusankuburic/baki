@@ -20,19 +20,21 @@ import (
 // ---- Organisation operations ----
 
 func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
-	tx, err := b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return b.withTx(ctx, func(tx *sql.Tx) error { return b.upsertOrgInTx(ctx, tx, org) })
+}
 
+// upsertOrgInTx is SaveOrg's body: an INSERT ... ON CONFLICT upsert. Distinct
+// from saveOrgInTx, which is MutateOrg's plain UPDATE of a row it already holds
+// under FOR UPDATE. Neither commits -- withTx owns that, so both compose with a
+// caller-supplied transaction.
+func (b *PostgresStorageBackend) upsertOrgInTx(ctx context.Context, tx *sql.Tx, org *interfaces.Organisation) error {
 	now := time.Now().UTC()
 	if org.CreatedAt.IsZero() {
 		org.CreatedAt = now
 	}
 	org.UpdatedAt = now
 
-	_, err = tx.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO organisations (id, name, owner_id, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (id) DO UPDATE SET
@@ -44,11 +46,7 @@ func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Or
 		return fmt.Errorf("upsert org: %w", err)
 	}
 
-	if err := syncOrgMembers(ctx, tx, org, now); err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	return syncOrgMembers(ctx, tx, org, now)
 }
 
 // syncOrgMembers reconciles org_members to exactly org.Members without the
@@ -175,23 +173,16 @@ func (b *PostgresStorageBackend) DeleteOrg(ctx context.Context, id string) error
 }
 
 func (b *PostgresStorageBackend) MutateOrg(ctx context.Context, id string, fn func(*interfaces.Organisation) error) error {
-	tx, err := b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("mutate org begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	org, err := b.loadOrgForUpdate(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	if err := fn(org); err != nil {
-		return err
-	}
-	if err := b.saveOrgInTx(ctx, tx, org); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return b.withTx(ctx, func(tx *sql.Tx) error {
+		org, err := b.loadOrgForUpdate(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err := fn(org); err != nil {
+			return err
+		}
+		return b.saveOrgInTx(ctx, tx, org)
+	})
 }
 
 func (b *PostgresStorageBackend) loadOrgForUpdate(ctx context.Context, tx *sql.Tx, id string) (*interfaces.Organisation, error) {
@@ -255,7 +246,7 @@ func (b *PostgresStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Conte
 // provider/dimension switch — the management UI surfaces it and offers
 // re-index. embedding_vec IS NOT NULL counts only rows the HNSW index can
 // compare (mismatched dims are stored NULL; see SaveKnowledgeChunks).
-func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
+func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string, limit int) ([]*interfaces.KnowledgeDocument, error) {
 	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT d.id, d.org_id, d.filename, d.created_at,
 		       COUNT(c.id) AS chunk_count,
@@ -264,7 +255,8 @@ func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, org
 		LEFT JOIN knowledge_chunks c ON c.doc_id = d.id
 		WHERE d.org_id = $1
 		GROUP BY d.id
-		ORDER BY d.created_at DESC`, orgID)
+		ORDER BY d.created_at DESC
+		LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END`, orgID, limit)
 	if err != nil {
 		return nil, err
 	}

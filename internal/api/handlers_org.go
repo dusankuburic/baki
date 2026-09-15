@@ -30,10 +30,35 @@ type OrgHandler struct {
 	// analysis re-resolves instead of serving a cached profile. Nil in local
 	// mode and in tests that don't exercise the rule endpoints.
 	ruleProfiles *service.RuleProfileResolver
+
+	// notifyPolicy decides whether an org notification channel may point at
+	// loopback. Resolved once at construction from JWTEnabled — the same "is this
+	// a multi-user deployment" gate the other handlers use — because that is the
+	// property that matters: the risk is a TENANT aiming a webhook at the
+	// server's own network. Config validation rejects cloud mode without auth, so
+	// cloud always lands on the strict policy, while a single-user desktop run
+	// keeps the localhost hatch that makes local webhooks useful.
+	notifyPolicy notify.TargetPolicy
+}
+
+// channelPolicy maps the deployment's auth posture onto the egress policy.
+func channelPolicy(security *SecurityConfig) notify.TargetPolicy {
+	if security != nil && security.JWTEnabled {
+		return notify.BlockInternalTargets
+	}
+	return notify.AllowLoopbackTargets
 }
 
 func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, ruleProfiles *service.RuleProfileResolver) *OrgHandler {
-	return &OrgHandler{orgSvc: orgSvc, backend: backend, knowledge: knowledge, security: security, email: email, ruleProfiles: ruleProfiles}
+	return &OrgHandler{
+		orgSvc:       orgSvc,
+		backend:      backend,
+		knowledge:    knowledge,
+		security:     security,
+		email:        email,
+		ruleProfiles: ruleProfiles,
+		notifyPolicy: channelPolicy(security),
+	}
 }
 
 // knowledgeBackendAvailable gates the Knowledge Base routes on a real storage
@@ -116,13 +141,10 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), chi.URLParam(r, "id"))
+	docs, err := h.backend.ListKnowledgeDocuments(r.Context(), chi.URLParam(r, "id"), limit)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if len(docs) > limit {
-		docs = docs[:limit]
 	}
 	render.JSON(w, docs)
 }
@@ -307,7 +329,7 @@ func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fail fast on a bad URL (the notify builder validates HTTPS + localhost
 	// carve-outs) so a typo never silently disables the channel.
-	if _, err := notify.BuildChannelNotifier(req.Kind, req.URL, req.Secret); err != nil {
+	if _, err := notify.BuildChannelNotifier(req.Kind, req.URL, req.Secret, h.notifyPolicy); err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
@@ -394,12 +416,16 @@ func (h *OrgHandler) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("channel not found"), http.StatusNotFound)
 		return
 	}
-	n, err := notify.BuildChannelNotifier(target.Kind, target.URL, target.Secret)
+	n, err := notify.BuildChannelNotifier(target.Kind, target.URL, target.Secret, h.notifyPolicy)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 	done := make(chan error, 1)
+	// #nosec G118 -- a detached, explicitly bounded context is correct here. The
+	// channel test dials an operator-supplied endpoint; binding it to r.Context()
+	// would let a client abort mid-dial and leave the delivery in an unknown
+	// state, and the handler below already waits on `done` with its own deadline.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -435,15 +461,31 @@ func (h *OrgHandler) handleOrgList(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary      Create organization
-// @Description  Creates a new organization. Only available to system admins.
+// @Description  Creates a new organization owned by the caller, who becomes its
+// @Description  first admin. Available to ANY authenticated user: org creation is
+// @Description  self-serve, and the settings UI offers it to every cloud user.
 // @Tags         organization
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/orgs [post]
+//
+// NOTE ON THE PREVIOUS DOCUMENTATION. This block used to read "Only available to
+// system admins" and declare a 403 the handler cannot produce. No such check
+// existed, and adding one would have broken the shipped product: SettingsModal
+// renders OrganizationsPanel for every authenticated cloud user, and its create
+// form is ungated (the isAdmin flag in that panel is ORG-scoped membership, not
+// a system role). The documentation was wrong, not the code — but a comment that
+// asserts an authorization boundary is worse than no comment, because a reviewer
+// reads it as protection that is already in place.
+//
+// The self-serve model does leave an unmetered surface: creation is unlimited
+// (OrgService.Create applies no quota), and each org unlocks invites,
+// notification channels, custom rules and knowledge uploads — the last of which
+// spends real money on embeddings. That is a quota/billing decision, not an
+// authorization one, and it is deliberately left to the product owner.
 func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`

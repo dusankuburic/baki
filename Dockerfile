@@ -7,6 +7,17 @@ COPY frontend/ ./
 ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
+# Ship the bundle without its source maps. vite's sourcemap:'hidden' only drops
+# the //# sourceMappingURL comment; the .map files are still written to dist/,
+# they carry sourcesContent (the complete original TypeScript), and the final
+# stage serves every file under the static dir — so shipping dist/ verbatim
+# published the app's source at a guessable URL. They were also ~9.6 MB of a
+# 14 MB dist, for a build nothing symbolicates.
+#
+# Stripped into a separate directory rather than deleted in place, so
+# `--target frontend-builder` still has the maps for anyone who wants to
+# upload them to an error tracker.
+RUN cp -a dist dist-nomaps && find dist-nomaps -name '*.map' -delete
 
 # Stage 2: Build the backend
 FROM golang:1.25-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS backend-builder
@@ -47,7 +58,7 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a
 
 WORKDIR /app
 COPY --from=backend-builder --chown=nonroot:nonroot /app/baki-backend .
-COPY --from=frontend-builder --chown=nonroot:nonroot /app/frontend/dist ./frontend/dist
+COPY --from=frontend-builder --chown=nonroot:nonroot /app/frontend/dist-nomaps ./frontend/dist
 
 ENV PAD_MODE=cloud
 ENV PAD_HOST=0.0.0.0

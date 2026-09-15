@@ -79,6 +79,11 @@ func isHTTPS(r *http.Request) bool {
 }
 
 func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
+	// #nosec G124 -- HttpOnly and SameSite are both set; only Secure is
+	// conditional, and deliberately so. The desktop build serves plain HTTP on
+	// loopback, where a hard Secure:true makes the browser drop the refresh
+	// cookie and breaks login entirely. isHTTPS(r) honours the proxy headers in
+	// cloud mode, where it resolves to true.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    token,
@@ -91,6 +96,11 @@ func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expi
 }
 
 func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- HttpOnly and SameSite are both set; only Secure is
+	// conditional, and deliberately so. The desktop build serves plain HTTP on
+	// loopback, where a hard Secure:true makes the browser drop the refresh
+	// cookie and breaks login entirely. isHTTPS(r) honours the proxy headers in
+	// cloud mode, where it resolves to true.
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    "",

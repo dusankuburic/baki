@@ -26,28 +26,7 @@ func (r *ParseErrorRule) Check(block *models.Block, ctx *RuleContext) []models.F
 		return nil
 	}
 
-	findings := make([]models.Finding, 0, len(ctx.Flow.ParseErrors))
-	for _, pe := range ctx.Flow.ParseErrors {
-		sev := models.SeverityError
-		switch pe.Severity {
-		case "warning":
-			sev = models.SeverityWarning
-		case "info":
-			sev = models.SeverityInfo
-		}
-		findings = append(findings, models.Finding{
-			RuleID:      r.ID(),
-			Severity:    sev,
-			Title:       "Parse error (line " + itoa(pe.Line) + ")",
-			Description: pe.Message,
-			BlockID:     block.ID,
-			SubflowID:   block.SubflowID,
-			Suggestion:  "Fix the syntax error so the parser can produce a complete block tree.",
-			Metadata:    map[string]interface{}{"line": pe.Line, "column": pe.Column, "snippet": pe.Snippet},
-		})
-	}
-
-	return findings
+	return buildParseErrorFindings(ctx.Flow.ParseErrors, block.ID, block.SubflowID)
 }
 
 func init() { registerRule(&ParseErrorRule{}) }

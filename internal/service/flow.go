@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,13 @@ type FlowService struct {
 	// InvalidateSearchIndex. It is a bounded LRU so a long-lived process opening
 	// many distinct flows can't grow it without limit.
 	idxCache cache.Cache
+
+	// profiles resolves the per-org rule profile (which rules run, at what
+	// severity) for the batch-fix path, so "fix all" cannot apply a fix for a
+	// rule the org disabled. Nil in desktop/local mode and in tests, where the
+	// deployment settings are the whole answer. Injected by DI, mirroring
+	// AnalysisService.SetRuleProfileResolver.
+	profiles *RuleProfileResolver
 
 	// snapshots is the in-memory undo ring (see flow_snapshots.go): the last
 	// maxSnapshotsPerFlow pre-mutation source states per flow, captured by
@@ -83,6 +91,36 @@ func NewFlowService(notifier EventNotifier, settings SettingsProvider, docProvid
 		idxCache:    idxCache,
 		snapshots:   newSnapshotStore(),
 	}
+}
+
+// SetRuleProfileResolver injects the per-org rule resolver. Wired by DI after
+// construction (the resolver needs the storage backend, which is built from the
+// same graph), exactly as on AnalysisService.
+func (s *FlowService) SetRuleProfileResolver(r *RuleProfileResolver) {
+	s.profiles = r
+}
+
+// fixOptions builds the fix loop's configuration for doc.
+//
+// The loop used to run on models.DefaultSettings() and the built-in rule set,
+// which meant "fix all" could rewrite a flow to resolve a finding the caller's
+// configuration had disabled — the analysis said nothing was wrong and the
+// fixer changed the file anyway. Resolving the same profile the analysis path
+// resolves keeps the two in step.
+func (s *FlowService) fixOptions(ctx context.Context, doc *models.FlowDocument, ruleFilter map[string]bool, limit int) analyzer.FixOptions {
+	opts := analyzer.FixOptions{RuleFilter: ruleFilter, Limit: limit}
+	if s.profiles != nil {
+		profile := s.profiles.Resolve(ctx, doc.OrganizationID)
+		opts.Settings, opts.Rules = profile.Settings, profile.Rules
+		return opts
+	}
+	// No resolver (desktop/local, tests): the deployment settings are the whole
+	// configuration. A nil provider leaves Settings nil, which the loop reads as
+	// the built-in defaults — the pre-existing behaviour.
+	if s.settings != nil {
+		opts.Settings = s.settings.Get()
+	}
+	return opts
 }
 
 // patchFileLock is a refcounted per-file patch lock (B1.13).
@@ -326,11 +364,29 @@ func (s *FlowService) LoadAllFromFolder(ctx context.Context, folderPath string) 
 	return docs, loadErrors, nil
 }
 
-func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName string) (doc *models.FlowDocument, err error) {
+// LoadFlowFiles parses an uploaded flow, memoising the result in the AST cache.
+//
+// callerID scopes that cache entry to one identity and must be the
+// authenticated caller ("" in local/desktop mode, where there is one user).
+// Keying on content alone let byte-identical uploads from UNRELATED users
+// collide, and a cached document carries its ID — so the second uploader
+// received the first's flow ID, and SaveUploadedFlow then upserted a row
+// belonging to someone else: the victim's OCC version bumped and their name and
+// source overwritten on every upload, while the second uploader's own flow was
+// silently never created (HTTP 200, no row). Identical uploads are ordinary —
+// a shared vendor template, or the same PAD export circulating in a team.
+func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string, rootName, callerID string) (doc *models.FlowDocument, err error) {
 	defer logger.Guard("App.LoadFlowFiles", &err)
 
 	// Generate a combined hash of all files to use as a cache key
 	h := sha256.New()
+	// Caller identity first, length-prefixed so it cannot be confused with file
+	// content: without a separator, callerID "ab" + file "c" and callerID "a" +
+	// file "bc" would hash alike and the scoping would be defeated by a chosen
+	// user id.
+	h.Write([]byte(strconv.Itoa(len(callerID))))
+	h.Write([]byte(":"))
+	h.Write([]byte(callerID))
 	// Sort keys for a deterministic hash — Go's map iteration order is random,
 	// so without this the same upload hashes differently and never cache-hits.
 	fileNames := make([]string, 0, len(files))
@@ -352,12 +408,16 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 				docCopy := *doc
 				doc = &docCopy
 				s.docProvider.SetCurrentDoc(doc)
-				// NOTE: Emit (broadcast) is safe here — LoadFlowFiles is a desktop-only
-				// code path that reads from the local filesystem. Cloud mode loads flows
-				// from Postgres via separate handlers. If this ever becomes reachable from
-				// a JWT/cloud handler, switch to EmitTo with the user's ID to prevent
-				// cross-tenant data leaks.
-				s.notifier.Emit("flow:loaded", doc)
+				// EmitTo, not Emit: the premise of the note that stood here --
+				// "LoadFlowFiles is a desktop-only code path ... if this ever
+				// becomes reachable from a JWT/cloud handler, switch to EmitTo
+				// with the user's ID to prevent cross-tenant data leaks" -- has
+				// not held since POST /api/flow/upload started calling it. Emit
+				// broadcasts to EVERY connected SSE client, so each upload
+				// shipped the whole parsed document to every other tenant.
+				// EmitTo("") is identical to Emit in local mode, so the desktop
+				// path is unchanged.
+				s.notifier.EmitTo(callerID, "flow:loaded", doc)
 				logger.Info("flow files loaded from cache", "root", rootName)
 				return doc, nil
 			}
@@ -382,7 +442,7 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 	}
 
 	s.docProvider.SetCurrentDoc(doc)
-	s.notifier.Emit("flow:loaded", doc)
+	s.notifier.EmitTo(callerID, "flow:loaded", doc)
 	return doc, nil
 }
 
@@ -993,7 +1053,7 @@ func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, bl
 // source file. Cloud: returns doc.Source. Used by the in-app source editor.
 func (s *FlowService) GetSource(doc *models.FlowDocument) (string, error) {
 	if doc.FilePath == "" {
-		// Cloud: stored source; for INGESTED flows (padcloud — parsed content
+		// Cloud: stored source; for IMPORTED flows (parsed content
 		// only, Source never set) fall back to the serializer so the source
 		// view works instead of showing empty.
 		if doc.Source != "" {
@@ -1055,10 +1115,42 @@ func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, 
 // derives it from the selected findings' rules. Returns the re-parsed doc and
 // the number of fixes applied. Works in desktop (file) and cloud (stored
 // source) modes for single-file flows.
-func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocument, ruleFilter map[string]bool, limit int) (*models.FlowDocument, int, error) {
-	if limit <= 0 {
-		limit = 100 // safety cap matching the CLI default band
+// Fix-batch limits. The loop re-parses and re-analyses the WHOLE document once
+// per applied fix, so its cost is O(limit x document) — measured at ~9 ms/fix on
+// a 15 KB flow and ~350 ms/fix on a 1 MB one.
+//
+// limit arrives straight off the request body (handleApplyFixBatch decodes
+// `{"limit": N}`), and only the low side was clamped: `if limit <= 0 { limit =
+// 100 }`, with a comment calling 100 a "safety cap" that nothing enforced as a
+// maximum. Cost is exactly linear in limit — 25/50/100/200/400 measured at
+// 294 ms / 528 ms / 1.06 s / 1.96 s / 3.75 s — so `{"limit": 100000}` against a
+// 1 MB flow buys roughly 9.7 hours of CPU on a single request. The server sets
+// no write timeout and the loop takes no context, so nothing interrupts it, and
+// for folder flows the limit is applied per member file, multiplying again.
+//
+// maxFixBatchLimit bounds that. It is not free even so — 500 fixes on a 1 MB
+// flow is still tens of seconds — but it converts an unbounded request into a
+// bounded one. Making the loop cheap (batching independent patches per pass) is
+// the real fix; this is the guard that should exist regardless.
+const (
+	defaultFixBatchLimit = 100
+	maxFixBatchLimit     = 500
+)
+
+// clampFixBatchLimit bounds a caller-supplied fix limit at BOTH ends.
+func clampFixBatchLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return defaultFixBatchLimit
+	case limit > maxFixBatchLimit:
+		return maxFixBatchLimit
+	default:
+		return limit
 	}
+}
+
+func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocument, ruleFilter map[string]bool, limit int) (*models.FlowDocument, int, error) {
+	limit = clampFixBatchLimit(limit)
 
 	// Resolve the source text to patch.
 	var source, targetPath string
@@ -1091,7 +1183,7 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 	// One loop pass replaces four parses: the loop itself parses the original
 	// (first iteration) and the fixed source (last iteration), and reports both
 	// error counts — no separate before/after parseErrorCount calls needed.
-	res, err := analyzer.ApplyFixesToSourceDoc(&source, doc.Name, ruleFilter, limit, nil)
+	res, err := analyzer.ApplyFixesToSourceDoc(&source, doc.Name, s.fixOptions(ctx, doc, ruleFilter, limit))
 	if err != nil {
 		return nil, res.Fixed, err
 	}

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"pad-core/models"
+	"pad-core/parser"
 )
 
 type InfiniteLoopRiskRule struct{}
@@ -18,6 +19,22 @@ func (r *InfiniteLoopRiskRule) Category() string                 { return "Relia
 
 func (r *InfiniteLoopRiskRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	if block.Type != models.BlockTypeLoop {
+		return nil
+	}
+
+	// A loop that terminates BY CONSTRUCTION cannot run forever, whatever its
+	// body does. `LOOP FOREACH x IN Collection` consumes a fixed collection and
+	// `LOOP i FROM a TO b` has an end; neither needs an Exit Loop, and demanding
+	// one is simply wrong.
+	//
+	// This rule is Error severity, which is the GitHub Action's default
+	// fail-on threshold, and it previously judged every loop by
+	// hasExitCondition alone — a predicate that only understands `SET x TO y`.
+	// On the sample corpus it produced 204 of the 204 total Error findings, all
+	// on bounded loops: the default CI gate failed on essentially every real PAD
+	// flow, because a for-each loop is the most common construct there is.
+	switch block.Properties[parser.LoopKindProperty] {
+	case parser.LoopKindForEach, parser.LoopKindCounted:
 		return nil
 	}
 
@@ -112,6 +129,17 @@ func loopConditionVarModified(loop *models.Block) bool {
 		// actually progresses toward the bound.
 		out := b.Properties["_output"]
 		if out == "" || !condVars[out] {
+			return
+		}
+		// PAD's idiomatic counter step is an ACTION, not a SET:
+		// `Variables.IncreaseVariable Value: 1 Name: Counter`. It carries no
+		// _value referencing the variable, so the reference test below could
+		// never see it — and `LOOP WHILE %Counter% < 5` with exactly that body
+		// was reported as possibly infinite. Increase/Decrease move the variable
+		// monotonically, which is precisely progress toward a bound.
+		switch b.RawType {
+		case "Variables.IncreaseVariable", "Variables.DecreaseVariable":
+			modified = true
 			return
 		}
 		val := b.Properties["_value"]

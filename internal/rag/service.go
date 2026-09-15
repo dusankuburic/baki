@@ -175,9 +175,22 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	// Replace semantics: re-uploading a filename supersedes the old version
 	// (chunks cascade with the document). Before this, both versions were
 	// listed AND both were retrieved — stale content kept influencing chat
-	// until manually deleted. Deleted AFTER embedding succeeded so an
-	// embedding failure never destroys the existing index.
-	if err := s.store.DeleteKnowledgeDocumentByName(ctx, orgID, filename); err != nil {
+	// until manually deleted.
+	//
+	// ORDERING: write the new version FIRST, delete the old one only once the
+	// new document AND its chunks have committed. The previous order deleted
+	// first, on the reasoning that embedding had already succeeded — true, but
+	// the delete still preceded both writes, so a failure in
+	// SaveKnowledgeDocument or SaveKnowledgeChunks left the org with NEITHER
+	// version, and the rollback below removed the NEW document when the old one
+	// was already gone. There is no cross-call transaction available here, so
+	// write-new-then-delete-old is what makes a failed re-upload a no-op.
+	//
+	// Superseded IDs are captured up front and deleted BY ID, because
+	// DeleteKnowledgeDocumentByName would also match the document we are about
+	// to write.
+	superseded, err := s.supersededDocIDs(ctx, orgID, filename)
+	if err != nil {
 		return fmt.Errorf("replace existing document: %w", err)
 	}
 	if err := s.store.SaveKnowledgeDocument(ctx, doc); err != nil {
@@ -202,11 +215,38 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	}
 
 	if err := s.store.SaveKnowledgeChunks(ctx, userID, knowledgeChunks); err != nil {
-		// Roll back the orphaned document so it doesn't appear "indexed" with no chunks.
+		// Roll back the orphaned document so it doesn't appear "indexed" with no
+		// chunks. The previous version is untouched and still serves retrieval.
 		_ = s.store.DeleteKnowledgeDocument(ctx, orgID, doc.ID)
 		return err
 	}
+
+	// The new version is durable; retire the ones it supersedes. A failure here
+	// leaves a duplicate rather than a gap — the safe direction, and visible in
+	// the document list rather than silent.
+	for _, id := range superseded {
+		if err := s.store.DeleteKnowledgeDocument(ctx, orgID, id); err != nil {
+			logger.Warn("knowledge: failed to remove superseded document version",
+				"orgId", orgID, "filename", filename, "docId", id, "error", err)
+		}
+	}
 	return nil
+}
+
+// supersededDocIDs returns the IDs of existing documents in orgID sharing
+// filename — the versions a re-upload replaces.
+func (s *KnowledgeService) supersededDocIDs(ctx context.Context, orgID, filename string) ([]string, error) {
+	docs, err := s.store.ListKnowledgeDocuments(ctx, orgID, 0)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, d := range docs {
+		if d != nil && d.Filename == filename {
+			ids = append(ids, d.ID)
+		}
+	}
+	return ids, nil
 }
 
 func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query string) (string, error) {

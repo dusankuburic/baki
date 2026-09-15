@@ -217,6 +217,13 @@ jobs:
   go-vulncheck:
     name: Go Vulnerability Check
     runs-on: ubuntu-latest
+    # Advisory, not gating. govulncheck reports against a live database, so a
+    # CVE published overnight turns a commit that was green yesterday red
+    # today with no code change — and deploy.yml gates on this whole workflow
+    # (workflow_call), so an advisory would block a delivery that fixes
+    # something unrelated. The report is still produced and visible on every
+    # run; it is reviewed, not enforced.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
@@ -232,6 +239,11 @@ jobs:
   npm-audit:
     name: npm Audit
     runs-on: ubuntu-latest
+    # Advisory for the same reason as go-vulncheck, plus one of its own: the
+    # audit endpoint is nondeterministic (it has failed and passed on the SAME
+    # commit within minutes). A gate that flips without a code change is not a
+    # gate, it is a retry button.
+    continue-on-error: true
     defaults:
       run:
         working-directory: frontend
@@ -327,7 +339,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - uses: actions/setup-python@39cd14951b084f0666df65f1f0f12f4f3d006d64  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: '3.12'
       - name: Verify swagger.json and swagger.yaml are in sync

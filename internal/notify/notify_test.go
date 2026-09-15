@@ -182,7 +182,7 @@ func TestDispatcher_FansOutIncludingSlack(t *testing.T) {
 	}))
 	defer slack.Close()
 
-	d, err := New(Config{WebhookURL: webhook.URL, SlackURL: slack.URL})
+	d, err := New(Config{WebhookURL: webhook.URL, SlackURL: slack.URL, Policy: AllowLoopbackTargets})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestDispatcher_FansOutToAllChannels(t *testing.T) {
 	}))
 	defer teams.Close()
 
-	d, err := New(Config{WebhookURL: webhook.URL, TeamsURL: teams.URL})
+	d, err := New(Config{WebhookURL: webhook.URL, TeamsURL: teams.URL, Policy: AllowLoopbackTargets})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestDispatcher_FailingChannelDoesNotPropagateOrBlockOthers(t *testing.T) {
 	defer good.Close()
 
 	// webhook (bad) first, teams (good) second — the good channel must still fire.
-	d, err := New(Config{WebhookURL: bad.URL, TeamsURL: good.URL})
+	d, err := New(Config{WebhookURL: bad.URL, TeamsURL: good.URL, Policy: AllowLoopbackTargets})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -291,18 +291,29 @@ func TestNew_RejectsPlaintextAlertURL(t *testing.T) {
 	cases := []struct {
 		name    string
 		url     string
+		policy  TargetPolicy
 		wantErr bool
 	}{
-		{"https accepted", "https://hooks.example.com/baki", false},
-		{"http localhost accepted (dev)", "http://localhost:9000/hook", false},
-		{"http 127.0.0.1 accepted (dev)", "http://127.0.0.1:9000/hook", false},
-		{"plaintext remote rejected", "http://hooks.internal.local/baki", true},
-		{"ftp rejected", "ftp://hooks.example.com/baki", true},
-		{"empty accepted (channel disabled)", "", false},
+		{"https accepted", "https://hooks.example.com/baki", BlockInternalTargets, false},
+		{"ftp rejected", "ftp://hooks.example.com/baki", BlockInternalTargets, true},
+		{"plaintext remote rejected", "http://hooks.internal.local/baki", BlockInternalTargets, true},
+		{"empty accepted (channel disabled)", "", BlockInternalTargets, false},
+
+		// The desktop hatch, and the fact that it is a hatch. These four rows are
+		// the regression gate for the SSRF: under the default (cloud) policy a
+		// tenant-supplied loopback URL must not be constructible at all, which is
+		// what turned the channel-test endpoint into a loopback port scanner.
+		{"http localhost accepted on desktop", "http://localhost:9000/hook", AllowLoopbackTargets, false},
+		{"http 127.0.0.1 accepted on desktop", "http://127.0.0.1:9000/hook", AllowLoopbackTargets, false},
+		{"http localhost REJECTED in cloud", "http://localhost:9000/hook", BlockInternalTargets, true},
+		{"http 127.0.0.1 REJECTED in cloud", "http://127.0.0.1:9000/hook", BlockInternalTargets, true},
+		// Not relaxed by the hatch: the loopback allowance is loopback only.
+		{"link-local rejected even on desktop", "https://169.254.169.254/meta", AllowLoopbackTargets, true},
+		{"RFC1918 rejected even on desktop", "https://10.0.0.5/hook", AllowLoopbackTargets, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := New(Config{WebhookURL: c.url})
+			_, err := New(Config{WebhookURL: c.url, Policy: c.policy})
 			// Offline CI: the public-name https cases now resolve DNS (B1.9
 			// SSRF check); a resolution failure is not a validation verdict.
 			if err != nil && !c.wantErr && strings.Contains(err.Error(), "does not resolve") {
@@ -326,17 +337,62 @@ func TestValidateAlertURL_PrivateTargets(t *testing.T) {
 		"https://192.168.1.10/hook",
 		"https://127.0.0.1/hook",
 	}
-	for _, u := range denied {
-		if _, err := validateAlertURL(u); err == nil {
-			t.Errorf("private target %q accepted", u)
+	// Denied under BOTH policies: AllowLoopbackTargets relaxes loopback only, so
+	// link-local (cloud metadata) and RFC1918 stay refused even on desktop.
+	for _, policy := range []TargetPolicy{BlockInternalTargets, AllowLoopbackTargets} {
+		for _, u := range denied[:3] {
+			if _, err := validateAlertURL(u, policy); err == nil {
+				t.Errorf("private target %q accepted under policy %v", u, policy)
+			}
 		}
 	}
-	// Public DNS name + the documented loopback dev names pass. (Offline CI:
-	// a resolution failure is not a validation rejection.)
-	if _, err := validateAlertURL("https://example.com/hook"); err != nil && !strings.Contains(err.Error(), "does not resolve") {
-		t.Errorf("public https target rejected: %v", err)
+	// https://127.0.0.1 is loopback: refused when blocking, allowed when the
+	// desktop hatch is opted into.
+	if _, err := validateAlertURL("https://127.0.0.1/hook", BlockInternalTargets); err == nil {
+		t.Error("loopback https target accepted under BlockInternalTargets")
 	}
-	if _, err := validateAlertURL("http://localhost:9999/dev"); err != nil {
-		t.Errorf("loopback dev target rejected: %v", err)
+	// Public DNS name passes under both. (Offline CI: a resolution failure is not
+	// a validation rejection.)
+	for _, policy := range []TargetPolicy{BlockInternalTargets, AllowLoopbackTargets} {
+		if _, err := validateAlertURL("https://example.com/hook", policy); err != nil &&
+			!strings.Contains(err.Error(), "does not resolve") {
+			t.Errorf("public https target rejected under policy %v: %v", policy, err)
+		}
+	}
+	if _, err := validateAlertURL("http://localhost:9999/dev", AllowLoopbackTargets); err != nil {
+		t.Errorf("loopback dev target rejected under AllowLoopbackTargets: %v", err)
+	}
+}
+
+// TestNotifier_DoesNotFollowRedirects is the second half of the SSRF fix.
+//
+// Only the CONFIGURED URL passes through validateAlertURL — a redirect target
+// never did. 307/308 replay the method AND the body, so a perfectly legitimate,
+// policy-passing https endpoint could answer "307 -> http://127.0.0.1:2379/..."
+// and have the signed governance payload delivered there instead. The dial guard
+// would refuse the loopback hop, but the general shape (an external host
+// steering delivery somewhere the operator never configured) is what redirects
+// have to be refused for.
+func TestNotifier_DoesNotFollowRedirects(t *testing.T) {
+	var followed int32
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&followed, 1)
+		w.WriteHeader(200)
+	}))
+	defer final.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	d, err := New(Config{WebhookURL: redirector.URL, Policy: AllowLoopbackTargets})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d.Dispatch(context.Background(), Event{Type: EventTest, Title: "t", Message: "m"})
+
+	if n := atomic.LoadInt32(&followed); n != 0 {
+		t.Errorf("redirect was followed %d time(s); the payload reached a host the operator never configured", n)
 	}
 }

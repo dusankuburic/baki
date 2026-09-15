@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -642,7 +643,7 @@ func (b *LocalStorageBackend) DeleteKnowledgeDocument(ctx context.Context, orgID
 func (b *LocalStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Context, orgID, filename string) error {
 	return nil
 }
-func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
+func (b *LocalStorageBackend) ListKnowledgeDocuments(ctx context.Context, orgID string, limit int) ([]*interfaces.KnowledgeDocument, error) {
 	return nil, nil
 }
 func (b *LocalStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID string, chunks []interfaces.KnowledgeChunk) error {
@@ -669,9 +670,24 @@ func (b *LocalStorageBackend) ListAuditEvents(ctx context.Context, filter interf
 	return []*interfaces.AuditEvent{}, nil
 }
 
+// ErrPoliciesUnsupported is returned by the policy methods that would otherwise
+// have to invent a result. Named policies are an org-scoped, cloud-mode feature;
+// this backend has no orgs and nowhere to put them.
+var ErrPoliciesUnsupported = errors.New("named policies require cloud mode (this deployment stores flows locally)")
+
 // Policies — not persisted in local mode (no orgs).
+//
+// SavePolicy and DeletePolicy used to return nil, i.e. SUCCESS, and do nothing.
+// Desktop mode has a backend (this one), and the handler's availability guard
+// only checks for a nil backend, so the path is reachable: a user saved a policy,
+// was told it worked, and it was gone — with every later run silently gating on
+// a policy that did not exist. A silent success is worse than an error, because
+// it leaves the caller nothing to act on.
+//
+// Get/List keep returning "nothing here", which is accurate: there genuinely are
+// no stored policies, and callers already handle the empty case.
 func (b *LocalStorageBackend) SavePolicy(ctx context.Context, p *models.Policy) error {
-	return nil
+	return ErrPoliciesUnsupported
 }
 func (b *LocalStorageBackend) GetPolicy(ctx context.Context, orgID, id string) (*models.Policy, error) {
 	return nil, interfaces.ErrNotFound
@@ -680,7 +696,7 @@ func (b *LocalStorageBackend) ListPolicies(ctx context.Context, orgID string) ([
 	return []*models.Policy{}, nil
 }
 func (b *LocalStorageBackend) DeletePolicy(ctx context.Context, orgID, id string) error {
-	return nil
+	return ErrPoliciesUnsupported
 }
 
 // Flow versioning — not supported in local desktop mode.
@@ -820,10 +836,6 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 		},
 		AI: interfaces.AISettings{
 			ActiveProvider: "claude",
-			DemoMode: interfaces.DemoModeSettings{
-				Enabled:    true,
-				DailyLimit: 5,
-			},
 		},
 		Parser: interfaces.ParserSettings{
 			MaxFileSizeMB: 50,
@@ -1182,10 +1194,14 @@ func (lsb *LocalStorageBackend) MutateOrg(ctx context.Context, id string, fn fun
 // Copy-on-read/copy-on-write like the user/org stores above: readers get
 // fresh slices of value copies; writers store copies.
 
-func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID string) ([]*interfaces.Collaborator, error) {
+func (lsb *LocalStorageBackend) ListCollaborators(ctx context.Context, flowID string, limit int) ([]*interfaces.Collaborator, error) {
 	lsb.mu.RLock()
 	defer lsb.mu.RUnlock()
-	return cloneCollabs(lsb.sharing[flowID]), nil
+	out := cloneCollabs(lsb.sharing[flowID])
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (lsb *LocalStorageBackend) ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*interfaces.Collaborator, error) {

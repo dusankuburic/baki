@@ -26,39 +26,6 @@ paths:
       summary: List audit log entries
       tags:
       - admin
-  /api/admin/ingester/ingest:
-    post:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Ingest from PAD cloud
-      tags:
-      - admin
   /api/admin/migration/start:
     post:
       description: Kicks off the local→database flow migration (admin only, cloud
@@ -106,96 +73,6 @@ paths:
               type: string
             type: object
       summary: Data migration status
-      tags:
-      - admin
-  /api/admin/powerplatform/poll:
-    post:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Poll Power Platform OAuth
-      tags:
-      - admin
-  /api/admin/powerplatform/start:
-    post:
-      consumes:
-      - application/json
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "202":
-          description: Accepted
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Start Power Platform OAuth
-      tags:
-      - admin
-  /api/admin/powerplatform/status:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Status
-          schema:
-            additionalProperties: true
-            type: object
-        "403":
-          description: Forbidden
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Power Platform connection status
       tags:
       - admin
   /api/admin/scanner/scan:
@@ -2045,26 +1922,6 @@ paths:
       summary: Clear conversation history
       tags:
       - chat
-  /api/chat/demo-remaining:
-    get:
-      description: Returns the number of demo AI requests remaining for the current
-        session.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            type: integer
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get remaining demo requests
-      tags:
-      - chat
   /api/chat/export:
     post:
       consumes:
@@ -3368,7 +3225,7 @@ paths:
   /api/flows/{flowId}/collaborators:
     get:
       description: Returns a list of users who have access to the specified flow.
-        Only the flow owner can view collaborators.
+        Any user with at least viewer access to the flow can view its collaborators.
       parameters:
       - description: flowId
         in: path
@@ -4354,7 +4211,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a new organization. Only available to system admins.
+      description: |-
+        Creates a new organization owned by the caller, who becomes its
+        first admin. Available to ANY authenticated user: org creation is
+        self-serve, and the settings UI offers it to every cloud user.
       parameters:
       - description: request
         in: body
@@ -4372,12 +4232,6 @@ paths:
             type: object
         "400":
           description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "403":
-          description: Forbidden
           schema:
             additionalProperties:
               type: string

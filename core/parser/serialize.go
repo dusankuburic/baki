@@ -98,7 +98,18 @@ func serializeChildList(sb *strings.Builder, depth int, children []models.Block)
 			// Structural artifact of the parse; containers re-emit their own.
 			continue
 		case models.BlockTypeElse:
-			sb.WriteString(ind + "ELSE\n")
+			// An ELSE IF rung carries its condition in Name and shares the
+			// chain's single END, so it is emitted here (no END of its own)
+			// rather than through the BlockTypeCondition path.
+			if strings.EqualFold(b.RawType, "ELSE IF") && b.Name != "" {
+				line := b.Name
+				if endsWithThenSuffix(b) {
+					line += " THEN"
+				}
+				sb.WriteString(ind + line + "\n")
+			} else {
+				sb.WriteString(ind + "ELSE\n")
+			}
 			serializeChildList(sb, depth+1, b.Children)
 		case models.BlockTypeDefault:
 			sb.WriteString(ind + "DEFAULT\n")
@@ -163,14 +174,31 @@ func serializeBlock(sb *strings.Builder, depth int, b *models.Block) {
 		//      Emit the original BLOCK framing so re-parse promotes again
 		//      into the identical tree.
 		if artifact := indexOfOnBlockErrorChild(b); artifact >= 0 {
-			// Promotion MERGES the BLOCK and the handler into one construct:
-			// re-parse closes BOTH with a single END (skipNextEnd pops the
-			// promoted handler). Two ENDs would over-close into the parent.
+			// Promotion holds TWO containers in one node -- the BLOCK and its
+			// handler section -- and PAD closes them with two ENDs: the first
+			// ends the handler, the second ends the block. The children are laid
+			// out in that order, so the first BlockTypeEnd after the marker is
+			// the boundary between the handler section and the protected body.
+			//
+			// This previously emitted a single END, matching a parser that
+			// closed both on the first one. That round-tripped only because both
+			// halves agreed to discard the body: everything after the handler
+			// was re-emitted INSIDE the handler and re-parsed back to root.
 			sb.WriteString(ind + "BLOCK " + sanitizeRegionName(b.Name) + "\n")
 			serializeChildList(sb, depth+1, b.Children[:artifact])
-			sb.WriteString(ind + padIndentUnit + "ON BLOCK ERROR\n")
-			serializeChildList(sb, depth+2, b.Children[artifact+1:])
-			sb.WriteString(ind + padIndentUnit + "END\n")
+			sb.WriteString(ind + "ON BLOCK ERROR\n")
+
+			handlerEnd := artifact + 1
+			for handlerEnd < len(b.Children) && b.Children[handlerEnd].Type != models.BlockTypeEnd {
+				handlerEnd++
+			}
+			serializeChildList(sb, depth+1, b.Children[artifact+1:handlerEnd])
+			sb.WriteString(ind + "END\n")
+
+			if handlerEnd < len(b.Children) {
+				serializeChildList(sb, depth+1, b.Children[handlerEnd+1:])
+			}
+			sb.WriteString(ind + "END\n")
 			return
 		}
 		sb.WriteString(ind + "ON BLOCK ERROR\n")

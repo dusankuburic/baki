@@ -129,7 +129,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "EmptyList",
             "Item",

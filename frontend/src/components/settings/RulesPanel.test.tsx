@@ -164,3 +164,48 @@ describe('RulesPanel scoping (R4)', () => {
     expect(Object.keys(sent.analysis.rules).length).toBeGreaterThan(1)
   })
 })
+
+describe('RulesPanel thresholds', () => {
+  // Deployment scope: the scoping tests above leave an org admin signed in,
+  // which would route the write through the org endpoint instead.
+  beforeEach(() => {
+    useAuthStore.setState({user: null, isAuthenticated: false})
+    useOrgStore.setState({organisations: []})
+  })
+
+  // Thresholds were honoured by the analyzer but reachable only by hand-editing
+  // the settings JSON; the panel showed enable + severity and nothing else.
+  it('renders a numeric input per threshold and writes it back merged with severity', async () => {
+    getRules.mockResolvedValue([
+      {
+        id: 'deep-nesting',
+        name: 'Deeply nested logic',
+        description: 'Detects deep nesting.',
+        defaultSeverity: 'info',
+        category: 'Style',
+        enabled: true,
+        options: {maxDepth: 6},
+      },
+    ])
+    updateRuleConfig.mockResolvedValue(undefined)
+    renderPanel()
+    const box = await screen.findByTestId('thresholds-deep-nesting')
+    expect(box).toHaveTextContent('maxDepth')
+    const input = screen.getByDisplayValue('6')
+    fireEvent.change(input, {target: {value: '3'}})
+    fireEvent.blur(input)
+    await waitFor(() =>
+      expect(updateRuleConfig).toHaveBeenCalledWith('deep-nesting', {
+        enabled: true,
+        severity: 'info',
+        options: {maxDepth: 3},
+      }),
+    )
+  })
+
+  it('shows no threshold block for a rule without options', async () => {
+    renderPanel()
+    await screen.findByText('Deeply nested logic')
+    expect(screen.queryByTestId('thresholds-deep-nesting')).toBeNull()
+  })
+})

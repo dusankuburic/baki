@@ -379,7 +379,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 20,
-          "properties": {},
+          "properties": {
+            "_loopKind": "while"
+          },
           "variables": [
             "RetryCount",
             "MaxRetries"

@@ -104,7 +104,7 @@ var (
 	backgroundLoopTick = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_background_loop_tick_total",
-			Help: "Iterations of each long-running periodic background loop (scanner, padcloud_ingest, retention_purge). Stops increasing ⇒ the loop has hung. Recommended alert: time() - pad_background_loop_last_tick_timestamp_seconds > 2 * expected_interval. Worker-pool loops (blob_cleaner, audit_pool) are not periodic — they're driven by enqueue — so are not labelled here.",
+			Help: "Iterations of each long-running periodic background loop (scanner, retention_purge). Stops increasing ⇒ the loop has hung. Recommended alert: time() - pad_background_loop_last_tick_timestamp_seconds > 2 * expected_interval. Worker-pool loops (blob_cleaner, audit_pool) are not periodic — they're driven by enqueue — so are not labelled here.",
 		},
 		[]string{"loop"},
 	)
@@ -247,15 +247,48 @@ var (
 		},
 		[]string{"provider", "model"},
 	)
-	// Per-tenant observability: who is driving AI spend? Labelled by user+org so
-	// on-call can see which tenant dominates cost/load — the deep-dive's biggest
-	// observability gap (every other metric was per-instance or global).
-	aiUsageCostTotal = prometheus.NewCounterVec(
+	// Total AI spend. GLOBAL — deliberately unlabelled.
+	//
+	// This was labelled {user_id, org_id} to answer "which tenant drives spend?".
+	// Both are raw UUIDs, so it minted one permanent Prometheus series per
+	// (user, org) pair that ever made an AI call — counters are never deleted, so
+	// a departed user's series survives the whole retention window. At a few
+	// thousand users the scrape crosses its timeout, the target flips to DOWN,
+	// and EVERY metric from the process disappears — including pad_panics_total
+	// and pad_audit_dropped_total, during exactly the incident that caused the
+	// AI traffic surge. It also published the customer roster and per-tenant
+	// spend to anyone with scrape access, which is typically a much wider group
+	// than anyone with database access.
+	//
+	// The attribution was redundant anyway: audited.go writes a UsageMetric row
+	// per call carrying UserID, OrgID, Provider, Model and EstimatedCost, so
+	// per-tenant cost is a SQL query away. A time series is the wrong store for
+	// high-cardinality attribution; the table is the right one.
+	aiUsageCostTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "pad_ai_usage_estimated_cost_total",
-			Help: "Estimated USD cost of AI usage attributed to the calling user/org. Lets on-call see which tenant drives spend without querying the usage_metrics table.",
+			Help: "Estimated USD cost of AI usage across the deployment. Per-tenant attribution lives in the usage_metrics table (see UsageMetric), which is queryable and does not cost a time series per user.",
 		},
-		[]string{"user_id", "org_id"},
+	)
+	// aiRetryAttemptsTotal counts RETRIED provider attempts (the second and
+	// later tries), labelled by provider and by the condition that triggered
+	// them.
+	//
+	// Retries were entirely invisible: no counter, no log aggregate, nothing. An
+	// operator could not see a retry storm, could not explain latency inflated by
+	// backoff, and had no signal that a provider was degraded short of user
+	// complaints — while PAD_RETRY_MAX_ATTEMPTS has no upper bound.
+	//
+	// Both labels are closed sets: provider comes from the fixed providerCtors
+	// registry, and reason is one of the two retryable sentinels. Neither is
+	// caller-supplied, so this cannot become a cardinality bomb the way a model
+	// or user label would.
+	aiRetryAttemptsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pad_ai_retry_attempts_total",
+			Help: "Retried AI provider attempts (second and later tries), by provider and trigger.",
+		},
+		[]string{"provider", "reason"},
 	)
 	// Queue depths: surface backlog growth (bulk import, audit overflow) so it's
 	// visible before it becomes a problem. Gauges (Set on each change/tick).
@@ -312,6 +345,7 @@ var registry = func() *prometheus.Registry {
 		chatFixDecisionsTotal,
 		chatRAGLookupsTotal,
 		aiUsageCostTotal,
+		aiRetryAttemptsTotal,
 		blobCleanerPending,
 		auditSpillDepth,
 		collectors.NewGoCollector(),
@@ -405,7 +439,7 @@ func RecordRulesSkipped(n int) {
 }
 
 // RecordBackgroundLoopTick records a completed iteration of one of the long-
-// running background loops (scanner, padcloud_ingest, retention_purge,
+// running background loops (scanner, retention_purge,
 // blob_cleaner, audit_pool). The recommended alert is
 //
 //	time() - pad_background_loop_last_tick_timestamp_seconds{loop="X"} > 2 * expected_interval
@@ -521,8 +555,8 @@ func AuditSpilledCount() float64 {
 // RecordAIUsageCost attributes estimated AI spend (USD) to the calling user/org
 // so on-call can see per-tenant cost without querying the usage_metrics table.
 // Empty user/org is allowed (local/unauth) — it aggregates under the empty label.
-func RecordAIUsageCost(userID, orgID string, cost float64) {
-	aiUsageCostTotal.WithLabelValues(userID, orgID).Add(cost)
+func RecordAIUsageCost(cost float64) {
+	aiUsageCostTotal.Add(cost)
 }
 
 // SetBlobCleanerPending sets the blob-cleaner pending-heap depth gauge.
@@ -622,4 +656,21 @@ func RecordUsageDropped(reason string) {
 // should be updated.
 func RecordPricingFallback(provider, model string) {
 	aiPricingFallbackTotal.WithLabelValues(provider, model).Inc()
+}
+
+// RecordAIRetryAttempt counts one retried provider attempt. reason must be a
+// closed-set string ("rate_limited" or "provider_down"), never raw error text —
+// error strings carry provider detail and would make this unbounded.
+func RecordAIRetryAttempt(provider, reason string) {
+	aiRetryAttemptsTotal.WithLabelValues(provider, reason).Inc()
+}
+
+// Gather returns the current metric families from the package registry.
+//
+// Exported so packages that emit metrics can assert their own instrumentation
+// end to end — through the real registry rather than a local variable, which is
+// what catches a metric that is defined but never registered, or registered but
+// never incremented.
+func Gather() ([]*dto.MetricFamily, error) {
+	return registry.Gather()
 }

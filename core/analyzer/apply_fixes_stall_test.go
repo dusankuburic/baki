@@ -35,7 +35,7 @@ func TestApplyFixesToSource_SecondPassOnFixedSource(t *testing.T) {
 
 	for pass := 1; pass <= 3; pass++ {
 		before := countFixableFindings(t, src)
-		n, err := ApplyFixesToSource(&src, "Main.txt", nil, 100, nil)
+		n, err := ApplyFixesToSource(&src, "Main.txt", FixOptions{Limit: 100})
 		if err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
 		}
@@ -73,7 +73,14 @@ func countFixableFindings(t *testing.T, src string) int {
 	report := RunAnalysis(doc, AllRules(), nil, nil)
 	n := 0
 	for _, f := range report.Findings {
-		if f.AutoFix != "" {
+		// Count what the DEFAULT loop is eligible to apply, which is the pool
+		// this test's "drives to zero" assertion is about. A finding whose fix
+		// is behaviour-changing is gated behind IncludeBehaviourChanging and so
+		// legitimately remains after the loop quiesces — counting it would
+		// assert that the loop applies fixes it is deliberately designed not to
+		// apply unattended. This mirrors the `eligible` predicate in
+		// ApplyFixesToSourceDoc.
+		if f.AutoFix != "" && !IsBehaviourChangingFix(f.AutoFix) {
 			n++
 		}
 	}
@@ -92,7 +99,7 @@ func TestApplyFixesToSource_NestedHandlerOscillation(t *testing.T) {
 		"END\n" +
 		"WAIT 0\n" +
 		"#EndRegion\n"
-	n, err := ApplyFixesToSource(&src, "Main.txt", nil, 100, nil)
+	n, err := ApplyFixesToSource(&src, "Main.txt", FixOptions{Limit: 100})
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}

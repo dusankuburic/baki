@@ -60,7 +60,6 @@ export default function AITab() {
     providers,
     selectedModel,
     setSelectedModel,
-    demoRemaining,
     handleSetProvider,
     currentModels,
     currentModelDetail,
@@ -234,7 +233,7 @@ export default function AITab() {
   }
 
   const selectedSourceFiles = activeThread?.selectedSourceFiles ?? []
-  const configuredProviders = providers.filter(p => p.configured || p.id === 'demo')
+  const configuredProviders = providers.filter(p => p.configured)
   const showCost = aiSettings.showCostEstimates && currentModelDetail && currentModelDetail.inputCostPerM > 0
   const messages = activeThreadMessages
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming
@@ -258,11 +257,10 @@ export default function AITab() {
             models={currentModels}
             selectedModel={selectedModel}
             onSelectModel={setSelectedModel}
-            demoRemaining={demoRemaining}
             isStreaming={isCurrentThreadStreaming}
             messageCount={messages.length}
             useTools={activeThread?.useTools ?? false}
-            onToggleTools={provider === 'demo' ? undefined : toggleTools}
+            onToggleTools={toggleTools}
             onNewChat={handleCreateThread}
             onClearContext={handleClearContext}
             onCompact={handleCompact}

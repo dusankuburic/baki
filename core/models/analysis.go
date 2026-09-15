@@ -10,6 +10,34 @@ const (
 	SeverityInfo    Severity = "info"
 )
 
+// Valid reports whether s is one of the three severities the product actually
+// handles.
+//
+// Every consumer switches or ranks over exactly these values and silently drops
+// anything else: the Markdown, HTML and PDF exporters iterate a fixed
+// severityOrder so an off-list bucket is never rendered; JUnit emits a
+// <failure> only for error/warning, so an off-list finding is a PASSING
+// testcase; SARIF's level mapping defaults to "warning"; and bakicli's
+// shouldFail ranks an unknown severity 0, which is below every threshold. A
+// custom rule declaring severity "critical" therefore vanished from every
+// human-readable report, turned CI green, and reported Health Score 100/100.
+//
+// Severity is a plain string type so it can round-trip through JSON configs,
+// which means the type system cannot enforce this — validate at the boundary
+// where a string becomes a Severity.
+func (s Severity) Valid() bool {
+	switch s {
+	case SeverityError, SeverityWarning, SeverityInfo:
+		return true
+	}
+	return false
+}
+
+// ValidSeverities lists the accepted values, for error messages.
+func ValidSeverities() []Severity {
+	return []Severity{SeverityError, SeverityWarning, SeverityInfo}
+}
+
 // Confidence expresses how sure a rule is about a given finding — separating
 // "we're sure" (regex secret match, an open without a close) from "maybe"
 // (Shannon-entropy guess, name-heuristic uninitialized variable). Findings sort
@@ -155,6 +183,11 @@ type Rule struct {
 	// apply in one click, or "" when the rule has no auto-fixer. Lets the
 	// dashboard compute "auto-fixable rule" counts.
 	AutoFix string `json:"autoFix,omitempty"`
+	// Options are the rule's numeric thresholds (maxDepth, minRepeats,
+	// maxBlocks) as currently configured — the deployment override when one
+	// exists, else the built-in default — so a settings UI can render inputs
+	// for exactly the keys the rule honours. Absent for rules without any.
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
 // RuleSummary is the catalog-level rollup the dashboard consumes for its

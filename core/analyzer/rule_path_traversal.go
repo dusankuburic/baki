@@ -31,17 +31,23 @@ var fileActionPrefixes = []string{
 	"archive.",
 }
 
-// pathPropertyKeys — property keys carrying the target path.
-var pathPropertyKeys = map[string]bool{
-	"path":        true,
-	"filepath":    true,
-	"filename":    true,
-	"destination": true,
-	"source":      true,
-	"directory":   true,
-	"folderpath":  true,
-	"outputpath":  true,
-	"inputpath":   true,
+// pathPropertySuffixes — property keys that carry a path, matched by SUFFIX
+// (lower-cased) because PAD names them per action: File.WriteText → File,
+// File.Delete → Files, File.Copy → FilesToCopy + Destination, Folder.Create →
+// FolderPath, Folder.GetFiles → Folder, Archive.Zip → ArchivePath. The rule
+// used to hold an exact allow-list (path, filepath, destination, folderpath…)
+// that named NONE of the keys the parser emits for the common actions, so on
+// real flows it never fired — a security rule that could not fire.
+var pathPropertySuffixes = []string{"file", "files", "folder", "folders", "path", "paths", "destination", "source", "directory"}
+
+func isPathProperty(key string) bool {
+	k := strings.ToLower(key)
+	for _, suf := range pathPropertySuffixes {
+		if strings.HasSuffix(k, suf) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *PathTraversalRiskRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
@@ -57,13 +63,14 @@ func (r *PathTraversalRiskRule) Check(block *models.Block, ctx *RuleContext) []m
 		return nil
 	}
 	for key, val := range block.Properties {
-		if !pathPropertyKeys[strings.ToLower(key)] {
+		if !isPathProperty(key) {
 			continue
 		}
-		// A variable reference in the path is the traversal vector. A literal
-		// path (even with ../) is not a dynamic-traversal risk and is left to
-		// the hardcoded-path portability rule.
-		if strings.Contains(val, "%") {
+		// A %Variable% reference in the path is the traversal vector. A
+		// literal path (even with ../) is not a dynamic-traversal risk and is
+		// left to the hardcoded-path portability rule; %% is PAD's literal
+		// percent escape, not a variable.
+		if sqlVarRef.MatchString(val) {
 			return []models.Finding{{
 				RuleID:      r.ID(),
 				Severity:    r.DefaultSeverity(),

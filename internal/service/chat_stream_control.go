@@ -81,6 +81,16 @@ type streamCtl struct {
 	tokensIn  int
 	tokensOut int
 	ownerID   string // caller identity (scope) that created this stream
+	// orgID is the budget scope the stream is attributed to ("" = personal).
+	// Set once prepareTurn resolves it; read by othersInFlight.
+	orgID string
+	// inflightCost is what THIS stream has spent so far plus one more maximum
+	// response it may still produce, in dollars, for OTHER streams' budget
+	// checks. The daily budget used to be read-then-act against the store
+	// alone, and usage rows land asynchronously after each turn, so N streams
+	// started together all passed the same read — measured 10× overspend on
+	// a $1 budget. Guarded by mu.
+	inflightCost float64
 	// cancelReason is the client-facing explanation for a deliberate
 	// cancellation (user stop, watchdog, shutdown); it replaces the provider's
 	// raw "context canceled" wrapping when the failure is reported.
@@ -95,6 +105,20 @@ type streamCtl struct {
 
 // touch records provider activity for the idle timeout.
 func (c *streamCtl) touch() { c.lastActivity.Store(time.Now().UnixNano()) }
+
+// setInflight publishes this stream's spend-so-far plus reservation for
+// concurrent streams' budget checks (see inflightCost).
+func (c *streamCtl) setInflight(cost float64) {
+	c.mu.Lock()
+	c.inflightCost = cost
+	c.mu.Unlock()
+}
+
+func (c *streamCtl) inflight() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inflightCost
+}
 
 // cancelWithReason records why the stream is being deliberately cancelled,
 // then cancels it. The first reason wins.

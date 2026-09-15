@@ -185,9 +185,11 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 		EstimatedCost:    inputCost + outputCost,
 		CreatedAt:        time.Now(),
 	}
-	// Attribute the spend to the caller's user+org so on-call can see per-tenant
-	// cost without querying the usage_metrics table.
-	metrics.RecordAIUsageCost(p.scope, orgID, inputCost+outputCost)
+	// Deployment-wide spend only. Per-tenant attribution is the UsageMetric row
+	// built just above — labelling the metric by user+org minted one permanent
+	// Prometheus series per user and would eventually take the whole scrape down
+	// with it (see the metric's definition).
+	metrics.RecordAIUsageCost(inputCost + outputCost)
 
 	// Asynchronously record the usage so it doesn't block the caller.
 	//
@@ -213,6 +215,10 @@ func (p *auditedProvider) record(ctx context.Context, modelID, orgID string, tok
 			"provider", p.providerID, "model", modelID)
 		return
 	}
+	// #nosec G118 -- usage accounting must survive the request that generated it.
+	// Binding this to the caller's context would drop the spend record for exactly
+	// the turns a user cancels, under-counting the daily budget the chat path then
+	// enforces. The semaphore above bounds concurrency instead.
 	go func() {
 		defer func() {
 			<-p.recordSem

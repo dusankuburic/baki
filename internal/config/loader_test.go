@@ -341,7 +341,6 @@ func TestApplyEnvVars_BadDurationRejected(t *testing.T) {
 		{"bad retry base delay", "PAD_RETRY_BASE_DELAY"},
 		{"bad request timeout", "PAD_REQUEST_TIMEOUT"},
 		{"bad DB conn lifetime", "PAD_DB_CONN_MAX_LIFETIME"},
-		{"bad PP ingest interval", "PAD_PP_INGEST_INTERVAL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

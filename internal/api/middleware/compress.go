@@ -171,9 +171,35 @@ func parseFloat(s string) (float64, bool) {
 
 // Pools reuse expensive encoder allocations across requests. Brotli and gzip
 // writers are the costly part; deflate reuses gzip's flate pool indirectly.
+// brotliQuality is the encoder level for dynamic responses.
+//
+// It was brotli.BestCompression (q11), which is pathological on content an
+// attacker controls. Measured on a 2 MB body, same machine:
+//
+//	                    q11              q5
+//	high-entropy        2.601s, 1.3x     64ms, 1.3x     <- 40x the CPU, IDENTICAL ratio
+//	realistic JSON      104ms, 23831x    10ms, 17190x   <- 10x the CPU, 1.4x the ratio
+//
+// On the adversarial case q11 buys literally nothing: incompressible input
+// cannot be compressed, so the extra effort is pure waste, and at ~0.8 MB/s a
+// few-megabyte response pins a core for seconds. Flow content reaches response
+// bodies (rule metadata, parse-error snippets, block names), so the payload is
+// caller-influenced. On the realistic case the body is already compressing
+// ~17,000x, which is far past the point where more ratio matters.
+//
+// q5 is the level nginx and most CDNs use for dynamic content, for the same
+// reason.
+const brotliQuality = 5
+
+// NOTE on a minimum-size gate: there deliberately isn't one. render.JSON streams
+// through json.NewEncoder and sets no Content-Length, so skipping small bodies
+// would mean buffering every response until a threshold is reached — changing
+// streaming behaviour for SSE and large reports to save microseconds. At q5 the
+// per-request cost on a small body is negligible; q11 was the whole problem.
+
 var (
 	brotliPool = sync.Pool{
-		New: func() any { return brotli.NewWriterLevel(nil, brotli.BestCompression) },
+		New: func() any { return brotli.NewWriterLevel(nil, brotliQuality) },
 	}
 	gzipPool = sync.Pool{
 		New: func() any {

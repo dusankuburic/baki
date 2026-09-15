@@ -23,7 +23,33 @@ import (
 //
 // Consecutive comment directives stack and all apply to the next non-comment
 // sibling block.
-var rePadIgnore = regexp.MustCompile(`(?i)\bpad-ignore(?:-next-line)?\b\s*(?:\[([^\]]*)\])?`)
+// Two patterns, because the two forms carry very different risk.
+//
+// rePadIgnoreRules (targeted) may appear anywhere in the comment: naming
+// explicit rule IDs is self-evidently deliberate, and writing the justification
+// first — "reviewed, false positive pad-ignore[sql-injection-risk]" — is a
+// documented and tested usage.
+//
+// rePadIgnoreAll (blanket) must be the ENTIRE comment. This is the fail-open
+// that mattered: the old single pattern was unanchored with an OPTIONAL bracket
+// group, so any mention of the word anywhere matched with an empty capture and
+// fell through to "suppress every rule". A comment reading
+//
+//	COMMENT TODO: never use pad-ignore in production flows
+//
+// disabled all 45 rules on the next action, Security rules included — and
+// bakicli is the product's CI gate, so it failed open exactly where it must
+// not. Requiring the blanket form to stand alone removes the ambiguity without
+// touching the targeted form.
+//
+// A malformed list now matches NEITHER pattern rather than degrading to
+// suppress-all: `pad-ignore[unhandled-error` (missing `]`) suppresses nothing.
+// That is the safe direction and it is self-correcting — the finding the author
+// meant to silence still appears, so the typo is visible.
+var (
+	rePadIgnoreRules = regexp.MustCompile(`(?i)\bpad-ignore(?:-next-line)?\[([^\]]*)\]`)
+	rePadIgnoreAll   = regexp.MustCompile(`^(?i)pad-ignore(?:-next-line)?$`)
+)
 
 // suppressAll is the sentinel rule key meaning "every rule is suppressed on this
 // block". It cannot collide with a real rule ID (those are kebab-case words).
@@ -33,16 +59,34 @@ const suppressAll = "*"
 // whether it suppresses all rules (all=true) or a specific set (rules). A
 // directive with an empty or whitespace-only bracket list suppresses all rules.
 func parsePadIgnore(text string) (all bool, rules []string, ok bool) {
-	m := rePadIgnore.FindStringSubmatch(text)
+	// Block comments keep their /# framing in Name; strip it so `/# pad-ignore #/`
+	// is honoured the same as the single-line forms, whose marker the tokenizer
+	// has already removed.
+	t := strings.TrimSpace(text)
+	t = strings.TrimPrefix(t, "/#")
+	t = strings.TrimSuffix(t, "#/")
+	t = strings.TrimSpace(t)
+
+	m := rePadIgnoreRules.FindStringSubmatch(t)
 	if m == nil {
+		// No well-formed rule list: only a comment that IS the bare directive
+		// suppresses anything, and it suppresses everything.
+		if rePadIgnoreAll.MatchString(t) {
+			return true, nil, true
+		}
 		return false, nil, false
 	}
 	inside := strings.TrimSpace(m[1])
 	if inside == "" {
+		// `pad-ignore[]` — explicit and unambiguous, so it still means "all".
 		return true, nil, true
 	}
 	for _, part := range strings.Split(inside, ",") {
-		if p := strings.TrimSpace(part); p != "" {
+		// Lower-cased because rule IDs are kebab-case and this directive is
+		// documented as case-insensitive. The (?i) flag only ever covered the
+		// keyword, so `pad-ignore[UNHANDLED-ERROR]` captured the uppercase text
+		// verbatim, matched no rule ID, and silently suppressed nothing.
+		if p := strings.ToLower(strings.TrimSpace(part)); p != "" {
 			rules = append(rules, p)
 		}
 	}

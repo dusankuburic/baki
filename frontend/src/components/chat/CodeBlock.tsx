@@ -86,10 +86,7 @@ function CodeBlock({language, value, plain}: Props) {
       ) : (
         <Highlight theme={prismTheme} code={code} language={language || 'text'}>
           {({className, style, tokens, getLineProps, getTokenProps}) => (
-            <pre
-              className={className}
-              style={{...style, ...PRE_STYLE}}
-            >
+            <pre className={className} style={{...style, ...PRE_STYLE}}>
               {tokens.map((line, i) => {
                 const lineProps = getLineProps({line})
                 return (

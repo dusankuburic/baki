@@ -63,8 +63,8 @@ func (a *AuthzService) CheckFlowAccess(ctx context.Context, flowID, ownerID, org
 		return ErrPermissionDenied
 	}
 
-	// Ownerless legacy flows (pre-dating per-user ownership; the padcloud
-	// ingester mints them when PAD_PP_OWNER_USER is unset): readable by
+	// Ownerless legacy flows (pre-dating per-user ownership, or written by a
+	// bulk importer without an owner): readable by
 	// INSTANCE ADMINS only. They used to be world-readable to every tenant —
 	// any registered user could enumerate another org's ingested flow content
 	// by UUID. Admins keep triage access; a regular user gets a denial
@@ -92,7 +92,7 @@ func (a *AuthzService) CheckFlowAccess(ctx context.Context, flowID, ownerID, org
 	}
 
 	// Explicit per-flow collaborator grant.
-	collabs, err := a.storage.ListCollaborators(ctx, flowID)
+	collabs, err := a.storage.ListCollaborators(ctx, flowID, 0)
 	if err != nil {
 		return ErrPermissionDenied
 	}
@@ -170,7 +170,7 @@ func (a *AuthzService) FlowPermissions(ctx context.Context, flowID, ownerID, org
 	}
 	// Only consult collaborators if the org role hasn't already granted top tier.
 	if rank < permRank("admin") {
-		if collabs, err := a.storage.ListCollaborators(ctx, flowID); err == nil {
+		if collabs, err := a.storage.ListCollaborators(ctx, flowID, 0); err == nil {
 			for _, c := range collabs {
 				if c.UserID == userID {
 					if r := permRank(c.Permission); r > rank {

@@ -3,7 +3,7 @@
 // Standalone module: deploy separately from main.bicep when you want the database
 // itself provisioned/as-code (otherwise pass an existing server's FQDN to
 // main.bicep via PAD_DATABASE_URL). The backup policy here is the IaC half of
-// PRODUCTION_READINESS.md #12 — geo-redundant backups + a pinned retention
+// the recovery story — geo-redundant backups + a pinned retention
 // window so PITR/geo-restore (see docs/DR_RUNBOOK.md) is always available and
 // the config is reproducible rather than a portal-only setting.
 //

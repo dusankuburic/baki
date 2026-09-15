@@ -972,7 +972,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 11,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "CurrentItem",
             "ConfigData"
@@ -1406,7 +1408,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 25,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "CurrentItem",
             "ConfigData"
@@ -1974,25 +1978,43 @@
                 }
               ],
               "children": []
+            },
+            {
+              "name": "Call Framework_CloseAllApplications",
+              "type": "SUBFLOW",
+              "rawType": "CALL",
+              "indent": 4,
+              "lineNumber": 8,
+              "properties": {},
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "subflow",
+                  "value": "Framework_CloseAllApplications",
+                  "target": "Framework_CloseAllApplications"
+                }
+              ],
+              "children": []
+            },
+            {
+              "name": "End On Block Error",
+              "type": "END",
+              "rawType": "END",
+              "indent": 0,
+              "lineNumber": 9,
+              "properties": {
+                "_parentType": "ERROR_HANDLER"
+              },
+              "variables": [],
+              "tokens": [
+                {
+                  "type": "text",
+                  "value": "End On Block Error"
+                }
+              ],
+              "children": []
             }
           ]
-        },
-        {
-          "name": "Call Framework_CloseAllApplications",
-          "type": "SUBFLOW",
-          "rawType": "CALL",
-          "indent": 4,
-          "lineNumber": 8,
-          "properties": {},
-          "variables": [],
-          "tokens": [
-            {
-              "type": "subflow",
-              "value": "Framework_CloseAllApplications",
-              "target": "Framework_CloseAllApplications"
-            }
-          ],
-          "children": []
         },
         {
           "name": "Call Framework_InitAllApplications",
@@ -2827,7 +2849,7 @@
     }
   ],
   "metadata": {
-    "blockCount": 115,
+    "blockCount": 116,
     "subflowCount": 13,
     "maxDepth": 5,
     "rawLineCount": 127

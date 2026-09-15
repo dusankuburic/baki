@@ -2,6 +2,7 @@ package ai
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/config"
@@ -79,9 +80,6 @@ func (f *ProviderFactory) wrapChain(p Provider, scope, providerID string) Provid
 }
 
 func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
-	if providerID == "demo" {
-		return f.wrapChain(NewDemoProvider(), scope, providerID), nil
-	}
 	if providerID == "copilot" {
 		p, err := f.forCopilot(scope)
 		if err != nil {
@@ -89,7 +87,7 @@ func (f *ProviderFactory) For(scope, providerID string) (Provider, error) {
 		}
 		return f.wrapChain(p, scope, providerID), nil
 	}
-	ctor, ok := providerCtors[providerID]
+	ctor, ok := lookupProviderCtor(providerID)
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerID)
 	}
@@ -113,19 +111,16 @@ type embedModelSetter interface {
 }
 
 // ForEmbedding is like For but applies an embedding-model override to the
-// constructed provider. Providers that don't support an override (copilot, demo)
+// constructed provider. Providers that don't support an override (copilot)
 // ignore the model and behave as For. The override is applied BEFORE wrapping
 // (circuit breaker / retry / tracing / audit) so the inner provider carries it.
 func (f *ProviderFactory) ForEmbedding(scope, providerID, embeddingModel string) (Provider, error) {
-	if providerID == "demo" {
-		return f.For(scope, providerID)
-	}
 	if providerID == "copilot" {
 		// Copilot has no embeddings; the override is meaningless. Use the normal
 		// path so dual-auth still resolves correctly.
 		return f.For(scope, providerID)
 	}
-	ctor, ok := providerCtors[providerID]
+	ctor, ok := lookupProviderCtor(providerID)
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerID)
 	}
@@ -150,13 +145,10 @@ func (f *ProviderFactory) ForEmbedding(scope, providerID, embeddingModel string)
 // The returned value intentionally omits Chat and Stream — use ProviderFactory.For
 // to obtain a fully functional Provider.
 func GetMetadataProvider(providerID string) MetadataProvider {
-	if providerID == "demo" {
-		return NewDemoProvider()
-	}
 	if providerID == "copilot" {
 		return NewCopilotProvider("")
 	}
-	if ctor, ok := providerCtors[providerID]; ok {
+	if ctor, ok := lookupProviderCtor(providerID); ok {
 		return ctor("")
 	}
 	return nil
@@ -179,4 +171,25 @@ func (f *ProviderFactory) forCopilot(scope string) (Provider, error) {
 	}
 
 	return nil, fmt.Errorf("copilot not configured: no OAuth token or PAT found")
+}
+
+// providerMu guards providerCtors against RegisterProvider racing a lookup.
+var providerMu sync.RWMutex
+
+func lookupProviderCtor(id string) (func(key string) Provider, bool) {
+	providerMu.RLock()
+	defer providerMu.RUnlock()
+	ctor, ok := providerCtors[id]
+	return ctor, ok
+}
+
+// RegisterProvider adds (or replaces) a provider constructor at runtime so a
+// scripted provider is reachable through the normal factory path. It exists
+// for tests — the removed "demo" provider used to play that role, driving a
+// real stream end to end without network — and is not a plugin API: the
+// catalog, pricing and capability tables are not consulted for it.
+func RegisterProvider(id string, ctor func(key string) Provider) {
+	providerMu.Lock()
+	defer providerMu.Unlock()
+	providerCtors[id] = ctor
 }

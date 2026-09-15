@@ -24,6 +24,33 @@ const (
 	// caused silent drops under normal use. 256 gives modest headroom
 	// while still bounding worst-case memory.
 	sendBufferCap = 256
+	// inboundRate / inboundBurst throttle messages ACCEPTED from one connection.
+	//
+	// Connection count is capped (maxConnsPerUser) and the outgoing buffer is
+	// bounded, but the inbound RATE was not — and each accepted message is
+	// amplified: one 64 KB block.update costs a JSON unmarshal, K marshals and
+	// sends (K = room size), and a 64 KB Redis PUBLISH that every replica then
+	// decodes. An authorized collaborator flooding the socket at line rate turned
+	// into room-sized CPU amplification plus a line-rate stream into Redis.
+	//
+	// Sizing is taken from this file's own evidence rather than guessed.
+	// sendBufferCap above is 256 because "collab events can burst — 64 was too
+	// tight and caused silent drops under normal use"; those outbound bursts are
+	// DRIVEN by inbound messages, so the inbound burst must be at least as large
+	// or the same normal use is shed on the way in.
+	//
+	// An earlier attempt at 50/s with a burst of 100 was measurably too tight: it
+	// failed the existing 100-message broadcast stress test about 2 runs in 15
+	// (the test sends 100 updates plus a connect frame, so a tight loop finishing
+	// inside one refill interval sheds the last one). Bypassing the shed path
+	// took that to 0 in 15, which is what identified the limiter as the cause.
+	//
+	// This is a coarse backstop against line-rate flooding — thousands per second
+	// — not a quota. 200/s sustained still lets one connection push ~12 MB/s of
+	// 64 KiB frames, so it bounds the amplification without pretending to be a
+	// fair-share scheduler.
+	inboundRate  = 200
+	inboundBurst = 512
 )
 
 // Client represents a single WebSocket connection.
@@ -47,6 +74,11 @@ type Client struct {
 	// is revoked. readPump checks it per-message so a revoked user can't inject
 	// events in the window between revocation detection and connection close.
 	authorized atomic.Bool
+	// canEdit mirrors the "editor" rank the HTTP write endpoints require. It is
+	// set at connect time and refreshed by the re-authz loop, so a demotion
+	// from editor to viewer takes effect on a live connection rather than
+	// lasting until the socket happens to close.
+	canEdit atomic.Bool
 
 	// done is closed when Run returns, so Hub.Shutdown can wait for every
 	// client's pumps to fully exit before reporting shutdown complete.
@@ -85,7 +117,7 @@ func (c *Client) GetSelectedBlockID() string {
 }
 
 // NewClient wraps an already-upgraded WebSocket connection.
-func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID string) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID string, canEdit bool) *Client {
 	c := &Client{
 		UserID:      userID,
 		DisplayName: displayName,
@@ -97,6 +129,7 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 		done:        make(chan struct{}),
 	}
 	c.authorized.Store(true)
+	c.canEdit.Store(canEdit)
 	return c
 }
 
@@ -189,6 +222,15 @@ func (c *Client) runReauthzLoop(ctx context.Context, checker FlowAccessChecker, 
 					c.conn.Close()
 					return
 				}
+				// Refresh the write rank on the same cadence. A demotion from
+				// editor to viewer keeps read access, so the check above does
+				// NOT fire — without this the demoted user would keep write
+				// rights on this socket until they happened to disconnect.
+				if canEdit := checker.CanEdit(ctx, c.flowID, c.UserID); canEdit != c.canEdit.Load() {
+					slog.Info("websocket: client write permission changed",
+						"flowId", c.flowID, "userID", c.UserID, "canEdit", canEdit)
+					c.canEdit.Store(canEdit)
+				}
 			}
 		}
 	}
@@ -233,10 +275,27 @@ func (c *Client) readPump() {
 		return nil
 	})
 
+	limiter := newInboundLimiter(inboundRate, inboundBurst)
+
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			break
+		}
+
+		// Shed before doing any work on the message: unmarshal, fan-out and the
+		// Redis publish all happen below, and shedding after them would defeat
+		// the point. A client that sustains the overrun is told once and then
+		// silently dropped, so the error path cannot itself become the flood.
+		if !limiter.allow() {
+			if limiter.shouldWarn() {
+				c.Send(Envelope{
+					Type:      EventError,
+					Timestamp: time.Now(),
+					Payload:   ErrorPayload{Code: "rate_limited", Message: "too many messages; slow down"},
+				})
+			}
+			continue
 		}
 
 		// Per-message authz: if the re-authz goroutine has flagged this
@@ -318,7 +377,26 @@ func (c *Client) handleIncoming(env Envelope) {
 		}
 		c.hub.Broadcast(c.flowID, c.UserID, env, c)
 
-	case EventCursorMove, EventBlockUpdate, EventBlockCreate, EventBlockDelete:
+	case EventCursorMove:
+		// Presence-class traffic: viewer rank is exactly what it is for.
+		c.hub.Broadcast(c.flowID, c.UserID, env, c)
+
+	case EventBlockUpdate, EventBlockCreate, EventBlockDelete:
+		// Mutations require the same rank as the HTTP write endpoints. Without
+		// this, a read-only collaborator refused by POST /api/flow/save-source
+		// could send the identical edit here and have it relayed verbatim to
+		// every member of the room and out over the Redis backplane.
+		if !c.canEdit.Load() {
+			c.Send(Envelope{
+				Type:      EventError,
+				Timestamp: time.Now(),
+				Payload: ErrorPayload{
+					Code:    "permission_denied",
+					Message: "editor access is required to modify this flow",
+				},
+			})
+			return
+		}
 		c.hub.Broadcast(c.flowID, c.UserID, env, c)
 
 	default:
@@ -345,4 +423,50 @@ func parsePayload[T any](raw any) (T, bool) {
 		return zero, false
 	}
 	return zero, true
+}
+
+// inboundLimiter is a token bucket over accepted inbound messages, owned by one
+// readPump goroutine — so it needs no lock.
+type inboundLimiter struct {
+	rate     float64 // tokens per second
+	burst    float64
+	tokens   float64
+	last     time.Time
+	warned   bool
+	warnedAt time.Time
+}
+
+func newInboundLimiter(rate, burst int) *inboundLimiter {
+	return &inboundLimiter{
+		rate:   float64(rate),
+		burst:  float64(burst),
+		tokens: float64(burst),
+		last:   time.Now(),
+	}
+}
+
+func (l *inboundLimiter) allow() bool {
+	now := time.Now()
+	l.tokens += now.Sub(l.last).Seconds() * l.rate
+	if l.tokens > l.burst {
+		l.tokens = l.burst
+	}
+	l.last = now
+	if l.tokens < 1 {
+		return false
+	}
+	l.tokens--
+	return true
+}
+
+// shouldWarn rate-limits the rate-limit notice itself to once every 5s, so a
+// flooding client cannot turn the warning into an outbound flood.
+func (l *inboundLimiter) shouldWarn() bool {
+	now := time.Now()
+	if l.warned && now.Sub(l.warnedAt) < 5*time.Second {
+		return false
+	}
+	l.warned = true
+	l.warnedAt = now
+	return true
 }

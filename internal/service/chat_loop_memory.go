@@ -45,19 +45,19 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 	if isFixTool(name) && m.declined[sig] {
 		m.mu.Unlock()
 		const out = "error: the user already DECLINED this exact fix — nothing was changed. Do not propose it again unless they explicitly ask; explain the change or move on."
-		metrics.RecordChatToolResult(name, false)
+		metrics.RecordChatToolResult(metricToolLabel(name), false)
 		return out
 	}
 	cached, seen := m.results[sig]
 	m.mu.Unlock()
 
 	if seen {
-		metrics.RecordChatToolResult(name, !strings.HasPrefix(cached, "error:"))
+		metrics.RecordChatToolResult(metricToolLabel(name), !strings.HasPrefix(cached, "error:"))
 		return cached + "\n(note: this exact call was already answered above — change tactic or give your final answer)"
 	}
 
 	result := ai.ExecuteTool(name, input, *tctx)
-	metrics.RecordChatToolResult(name, !strings.HasPrefix(result, "error:"))
+	metrics.RecordChatToolResult(metricToolLabel(name), !strings.HasPrefix(result, "error:"))
 
 	m.mu.Lock()
 	m.results[sig] = result
@@ -66,4 +66,25 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 	}
 	m.mu.Unlock()
 	return result
+}
+
+// knownToolNames is the closed label set for pad_chat_tool_results_total{tool}.
+// The label used to be the model-emitted tool name verbatim, so a hallucinated
+// name minted a permanent time series per request — the cardinality bomb this
+// codebase has already had to fix twice (route labels, invite tokens).
+var knownToolNames = func() map[string]bool {
+	m := map[string]bool{}
+	for _, d := range ai.ToolDefinitions() {
+		m[d.Name] = true
+	}
+	return m
+}()
+
+// metricToolLabel maps a tool name to its metric label: itself when it is a
+// registered tool, "other" for anything the model made up.
+func metricToolLabel(name string) string {
+	if knownToolNames[name] {
+		return name
+	}
+	return "other"
 }

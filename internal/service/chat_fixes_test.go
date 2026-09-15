@@ -358,7 +358,7 @@ func TestRunToolLoop_ApplyFixEndToEnd(t *testing.T) {
 // semantics: wrong stream rejected, first decision wins, unknown rejected.
 func TestResolveFixDecision_OwnershipAndFirstWins(t *testing.T) {
 	svc, _ := newFixTestService(fixTestDoc(), nil)
-	st := &fixDecisionState{streamID: "stream-1", decided: make(chan bool, 1)}
+	st := &fixDecisionState{streamID: "stream-1", decided: make(chan fixDecision, 1)}
 	svc.pendingFixDecisions.Store("prop-1", st)
 
 	if err := svc.ResolveFixDecision("other-stream", "prop-1", true, nil); !errors.Is(err, ErrNoPendingFix) {
@@ -373,7 +373,7 @@ func TestResolveFixDecision_OwnershipAndFirstWins(t *testing.T) {
 	if err := svc.ResolveFixDecision("stream-1", "prop-1", false, nil); err != nil {
 		t.Fatalf("second decision should not error (first wins), got %v", err)
 	}
-	if decided := <-st.decided; !decided {
+	if dec := <-st.decided; !dec.approved {
 		t.Error("first decision (true) must win over the later false")
 	}
 }

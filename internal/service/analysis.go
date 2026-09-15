@@ -380,10 +380,6 @@ func (s *AnalysisService) DiffReports(old, new *models.AnalysisReport) *models.A
 	return analyzer.DiffReports(old, new)
 }
 
-func (s *AnalysisService) GenerateBatchHTMLReport(batch *models.BatchAnalysis) string {
-	return analyzer.GenerateBatchHTMLReport(batch)
-}
-
 func (s *AnalysisService) GetDependencyAnalysis() *models.DependencyAnalysis {
 	return analyzer.AnalyzeRuleDependencies()
 }
@@ -439,6 +435,7 @@ func (s *AnalysisService) GetRules() (result []models.Rule) {
 	if len(s.customRules) > 0 {
 		rules = append(rules, s.customRules...)
 	}
+	defaults := models.DefaultSettings()
 	result = make([]models.Rule, len(rules))
 	for i, r := range rules {
 		result[i] = models.Rule{
@@ -460,6 +457,17 @@ func (s *AnalysisService) GetRules() (result []models.Rule) {
 				if rc.Severity != "" {
 					result[i].DefaultSeverity = models.Severity(rc.Severity)
 				}
+				if len(rc.Options) > 0 {
+					result[i].Options = rc.Options
+				}
+			}
+		}
+		// Thresholds were reachable only by hand-editing the settings JSON:
+		// the catalog never said which rules had any. Surface the built-in
+		// defaults for rules that carry them, configured overrides above.
+		if result[i].Options == nil {
+			if d, ok := defaults.Analysis.Rules[r.ID()]; ok && len(d.Options) > 0 {
+				result[i].Options = d.Options
 			}
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -68,6 +69,13 @@ type Config struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+	// StatementTimeout is applied to every pooled connection as Postgres
+	// statement_timeout AND lock_timeout, so a runaway query or a lock wait
+	// is cancelled server-side. The per-request Go deadline does not
+	// reliably cancel a backend mid-statement, and streaming routes carry a
+	// much longer deadline. 0 disables (a maintenance escape hatch).
+	// Migrations lift it for their own session (see liftSessionTimeouts).
+	StatementTimeout time.Duration
 	// RequireSSL, when true, refuses to open a DSN whose sslmode does not
 	// enforce an encrypted connection (sslmode=disable/allow/prefer or unset).
 	// This is a fail-fast guard so a misconfigured cloud deployment carrying
@@ -93,6 +101,8 @@ func DefaultConfig(dsn string) Config {
 		MaxIdleConns:    5,
 		ConnMaxLifetime: time.Hour,
 		ConnMaxIdleTime: 5 * time.Minute,
+		// Bounded by default: an unbounded query is the outage nobody can see.
+		StatementTimeout: 30 * time.Second,
 	}
 }
 
@@ -168,6 +178,20 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 				"container", cfg.AzureStorageContainer, "error", err)
 		}
 		slog.Info("azure: blob storage enabled", "account", cfg.AzureStorageAccount, "container", cfg.AzureStorageContainer)
+	}
+
+	// Server-side statement and lock budgets on every connection (both the
+	// password and the Managed-Identity connector copy pgxCfg, RuntimeParams
+	// included). Deliberately NOT idle_in_transaction_session_timeout: the RLS
+	// middleware holds a transaction open for the whole handler, and a chat
+	// stream legitimately idles in it for minutes.
+	if cfg.StatementTimeout > 0 {
+		if pgxCfg.RuntimeParams == nil {
+			pgxCfg.RuntimeParams = map[string]string{}
+		}
+		ms := strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
+		pgxCfg.RuntimeParams["statement_timeout"] = ms
+		pgxCfg.RuntimeParams["lock_timeout"] = ms
 	}
 
 	otelOpts := []otelsql.Option{

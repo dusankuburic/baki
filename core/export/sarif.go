@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"path/filepath"
 
 	"pad-core/models"
 )
@@ -262,8 +263,13 @@ func artifactURI(f models.Finding, doc *models.FlowDocument) string {
 			return sf.SourceFile
 		}
 	}
-	if f.SubflowID != "" {
-		return f.SubflowID + ".txt"
+	// Deliberately NOT falling back to the subflow ID: that is a parser-minted
+	// UUID, regenerated on every parse, so it produced a filename that matched
+	// nothing in the repo and differed run to run. A fixed, obviously-synthetic
+	// name is better than a plausible-looking wrong one — it at least groups
+	// consistently and is greppable when someone asks why the alert has no file.
+	if doc != nil && doc.FilePath != "" {
+		return filepath.Base(doc.FilePath)
 	}
 	return "flow.txt"
 }

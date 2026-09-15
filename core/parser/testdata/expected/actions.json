@@ -616,7 +616,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 3,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "CurrentItem",
             "List"
@@ -692,7 +694,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 6,
-          "properties": {},
+          "properties": {
+            "_loopKind": "counted"
+          },
           "variables": [
             "LoopIndex"
           ],
@@ -782,7 +786,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 9,
-          "properties": {},
+          "properties": {
+            "_loopKind": "while"
+          },
           "variables": [],
           "tokens": [
             {
@@ -845,7 +851,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 12,
-          "properties": {},
+          "properties": {
+            "_loopKind": "while"
+          },
           "variables": [],
           "tokens": [
             {
@@ -924,7 +932,9 @@
           "rawType": "LOOP",
           "indent": 0,
           "lineNumber": 16,
-          "properties": {},
+          "properties": {
+            "_loopKind": "counted"
+          },
           "variables": [
             "LoopIndex"
           ],

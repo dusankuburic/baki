@@ -118,18 +118,48 @@ func InitAuditPool(backend storageif.StorageBackend) {
 	})
 }
 
+// auditShutdownBudget bounds how long ShutdownAuditPool waits for the workers
+// to flush. The wait used to be unbounded: eight workers flushing to a slow or
+// unreachable database blew past fx's 25s StopTimeout and the process was
+// SIGKILLed mid-shutdown — taking the storage close that follows with it.
+// Events still queued when the budget expires are dropped from the audit log
+// with a warning; losing a few audit rows is the lesser harm. A var so tests
+// can shorten it.
+var auditShutdownBudget = 5 * time.Second
+
 func ShutdownAuditPool() {
 	if auditCh == nil {
 		return
 	}
 	auditClosed.Store(true)
 	close(auditCh)
-	auditWg.Wait()
+	if !waitWithBudget(&auditWg, auditShutdownBudget) {
+		slog.Warn("audit: workers did not drain within the shutdown budget; remaining queued events are dropped", "budget", auditShutdownBudget)
+		return
+	}
 	// Stop the reaper AFTER the workers have drained, so a final sweep can push
 	// any remaining spill into the closing channel (no-op if nothing's left).
 	if spillStopCh != nil {
 		close(spillStopCh)
-		spillReaperWg.Wait()
+		if !waitWithBudget(&spillReaperWg, auditShutdownBudget) {
+			slog.Warn("audit: spill reaper did not stop within the shutdown budget", "budget", auditShutdownBudget)
+		}
+	}
+}
+
+// waitWithBudget waits for wg for at most d. Returns false on timeout; the
+// helper goroutine it leaves behind exits when wg eventually completes.
+func waitWithBudget(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
 

@@ -19,16 +19,7 @@ func (r *WideLoopRule) Check(block *models.Block, ctx *RuleContext) []models.Fin
 		return nil
 	}
 
-	maxBlocks := 20
-	if ctx.Settings != nil {
-		if rc, ok := ctx.Settings.Analysis.Rules[r.ID()]; ok {
-			if mb, ok := rc.Options["maxBlocks"]; ok {
-				if f, ok := mb.(float64); ok && f > 0 {
-					maxBlocks = int(f)
-				}
-			}
-		}
-	}
+	maxBlocks := ruleOptionInt(ctx.Settings, r.ID(), "maxBlocks", 20, 1)
 
 	// O(1) subtree size from the precomputed DescendantCount index (the old
 	// per-LOOP subtree walk re-visited every nested loop's body once per

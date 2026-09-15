@@ -59,10 +59,32 @@ type Scanner struct {
 	mu      sync.Mutex
 	lastSig map[string]string // (flowID|eventType) -> last alert signature, for dedup
 
-	// orgChannels caches per-org notification channels for the current sweep
-	// (R2-3); orgChMu guards it. See dispatchOrgChannels.
-	orgChMu     sync.Mutex
-	orgChannels map[string][]*storageif.OrgChannel
+	// orgNotifiers caches the BUILT notifiers per org for the current sweep
+	// (R2-3); orgChMu guards it. Caching the notifier rather than the channel row
+	// matters: BuildChannelNotifier clones http.DefaultTransport, so building one
+	// per event per channel meant a fresh connection pool every time — no keep-
+	// alive reuse, and every one of those transports leaving idle connections
+	// behind with nothing to call CloseIdleConnections on. See dispatchOrgChannels.
+	orgChMu      sync.Mutex
+	orgNotifiers map[string][]notify.AlertNotifier
+
+	// notifyPolicy decides whether org-channel deliveries may reach loopback /
+	// private addresses. Set from the deployment mode at construction; the zero
+	// value blocks them, so a caller that forgets gets the safe behaviour.
+	notifyPolicy notify.TargetPolicy
+
+	// deliverySem bounds concurrent org-channel deliveries and deliveryWG lets
+	// Stop wait for them.
+	//
+	// Deliveries used to be bare `go` statements detached with
+	// context.WithoutCancel: a sweep where 5000 flows alert across 3 channels
+	// each launched 15000 goroutines, 15000 transports and 15000 DNS lookups at
+	// once, and Stop neither waited for nor cancelled any of them — so shutdown
+	// silently dropped whatever was in flight. Blocking on a full semaphore
+	// applies backpressure to the sweep, which is the correct trade: a slow sweep
+	// is better than an unbounded fan-out.
+	deliverySem chan struct{}
+	deliveryWG  sync.WaitGroup
 
 	loop lifecycle.TickerLoop
 }
@@ -70,15 +92,27 @@ type Scanner struct {
 // New creates a Scanner. interval <= 0 disables periodic scanning (Start is a
 // no-op), but ScanOnce can still be invoked directly (e.g. from a test or an
 // admin "scan now" action).
-func New(backend storageif.StorageBackend, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration) *Scanner {
+func New(backend storageif.StorageBackend, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration, notifyPolicy notify.TargetPolicy) *Scanner {
 	return &Scanner{
-		backend:  backend,
-		analyze:  analyze,
-		notifier: notifier,
-		interval: interval,
-		lastSig:  make(map[string]string),
+		backend:      backend,
+		analyze:      analyze,
+		notifier:     notifier,
+		interval:     interval,
+		lastSig:      make(map[string]string),
+		notifyPolicy: notifyPolicy,
+		deliverySem:  make(chan struct{}, maxConcurrentDeliveries),
 	}
 }
+
+// maxConcurrentDeliveries bounds in-flight org-channel POSTs across the whole
+// scanner. High enough that a normal sweep never blocks, low enough that a
+// pathological one cannot exhaust file descriptors.
+const maxConcurrentDeliveries = 32
+
+// deliveryDrainBudget bounds how long Stop waits for in-flight deliveries,
+// mirroring lifecycle.stopDrainBudget so the two together stay inside the app's
+// 25s fx.StopTimeout.
+const deliveryDrainBudget = 5 * time.Second
 
 // SetEventNotifier injects an SSE push sink so newly-detected alerts reach
 // connected clients in real time (the notifications bell updates instantly
@@ -93,7 +127,7 @@ func (s *Scanner) enabled() bool {
 
 // Start launches the periodic scan loop in a background goroutine. It returns
 // immediately and is a no-op when scanning is disabled. The loop runs until
-// Stop. Unlike the padcloud ingester, Scanner does not sweep immediately on
+// Stop. Scanner does not sweep immediately on
 // Start — it waits for the first tick.
 func (s *Scanner) Start() {
 	if !s.enabled() {
@@ -120,6 +154,20 @@ func (s *Scanner) Start() {
 // disabled scanner).
 func (s *Scanner) Stop() {
 	s.loop.Stop()
+
+	// Then wait for deliveries the last sweep spawned: they are deliberately
+	// detached from the sweep context (cancelling mid-POST would abandon a
+	// half-sent alert), so without this they were simply dropped on shutdown.
+	done := make(chan struct{})
+	go func() {
+		s.deliveryWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(deliveryDrainBudget):
+		logger.Warn("scanner: gave up waiting for in-flight alert deliveries", "budget", deliveryDrainBudget)
+	}
 }
 
 // ScanOnce scans every stored flow once, paginating to cover the entire
@@ -133,7 +181,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	// missed until the next sweep (acceptable) but a DELETED one must stop
 	// receiving promptly, and a stale cache would keep delivering to it.
 	s.orgChMu.Lock()
-	s.orgChannels = nil
+	s.orgNotifiers = nil
 	s.orgChMu.Unlock()
 	const pageSize = 100
 	offset := 0
@@ -286,7 +334,7 @@ func (s *Scanner) alertRecipients(ctx context.Context, lf *storageif.FlowDocumen
 	}
 	add(lf.OwnerID)
 	if s.backend != nil {
-		if cols, err := s.backend.ListCollaborators(ctx, lf.ID); err == nil {
+		if cols, err := s.backend.ListCollaborators(ctx, lf.ID, 0); err == nil {
 			for _, c := range cols {
 				add(c.UserID)
 			}
@@ -452,32 +500,70 @@ func (s *Scanner) dispatchOrgChannels(ctx context.Context, lf *storageif.FlowDoc
 	if s.backend == nil || lf.OrganizationID == "" {
 		return
 	}
-	s.orgChMu.Lock()
-	cached, ok := s.orgChannels[lf.OrganizationID]
-	s.orgChMu.Unlock()
+	notifiers, ok := s.notifiersForOrg(ctx, lf.OrganizationID)
 	if !ok {
-		channels, err := s.backend.ListOrgChannels(ctx, lf.OrganizationID, true)
-		if err != nil {
-			logger.Warn("scanner: list org channels failed", "orgId", lf.OrganizationID, "err", err)
-			return
-		}
-		cached = channels
-		s.orgChMu.Lock()
-		if s.orgChannels == nil {
-			s.orgChannels = make(map[string][]*storageif.OrgChannel)
-		}
-		s.orgChannels[lf.OrganizationID] = cached
-		s.orgChMu.Unlock()
+		return
 	}
-	for _, ch := range cached {
-		n, err := notify.BuildChannelNotifier(ch.Kind, ch.URL, ch.Secret)
-		if err != nil {
-			logger.Warn("scanner: invalid org channel", "orgId", lf.OrganizationID, "channel", ch.Name, "err", err)
-			continue
-		}
+	for _, n := range notifiers {
 		// Detach from the per-flow scan context: it is canceled the moment
 		// scanFlow returns, which would kill the delivery goroutine mid-POST.
 		// The dispatcher's own timeout bounds the work.
-		go notify.Deliver(context.WithoutCancel(ctx), n, ev)
+		delivery := context.WithoutCancel(ctx)
+
+		// Acquire BEFORE spawning, so a sweep with thousands of alerting flows
+		// slows down instead of launching a goroutine per alert. Honour the
+		// sweep context while waiting: on shutdown, stop queueing new work.
+		select {
+		case s.deliverySem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		s.deliveryWG.Add(1)
+		go func(n notify.AlertNotifier) {
+			defer s.deliveryWG.Done()
+			defer func() { <-s.deliverySem }()
+			notify.Deliver(delivery, n, ev)
+		}(n)
 	}
+}
+
+// notifiersForOrg returns the org's built notifiers, constructing them at most
+// once per sweep. The second return is false when the org's channels could not
+// be listed (already logged).
+//
+// The build is cached, not just the channel rows: BuildChannelNotifier clones
+// http.DefaultTransport, so one per event per channel meant a brand-new
+// connection pool for every alert — no keep-alive reuse, a fresh DNS lookup
+// each time (validateAlertURL resolves), and a transport left behind with idle
+// connections nobody closes.
+func (s *Scanner) notifiersForOrg(ctx context.Context, orgID string) ([]notify.AlertNotifier, bool) {
+	s.orgChMu.Lock()
+	cached, ok := s.orgNotifiers[orgID]
+	s.orgChMu.Unlock()
+	if ok {
+		return cached, true
+	}
+
+	channels, err := s.backend.ListOrgChannels(ctx, orgID, true)
+	if err != nil {
+		logger.Warn("scanner: list org channels failed", "orgId", orgID, "err", err)
+		return nil, false
+	}
+	built := make([]notify.AlertNotifier, 0, len(channels))
+	for _, ch := range channels {
+		n, err := notify.BuildChannelNotifier(ch.Kind, ch.URL, ch.Secret, s.notifyPolicy)
+		if err != nil {
+			logger.Warn("scanner: invalid org channel", "orgId", orgID, "channel", ch.Name, "err", err)
+			continue
+		}
+		built = append(built, n)
+	}
+
+	s.orgChMu.Lock()
+	if s.orgNotifiers == nil {
+		s.orgNotifiers = make(map[string][]notify.AlertNotifier)
+	}
+	s.orgNotifiers[orgID] = built
+	s.orgChMu.Unlock()
+	return built, true
 }

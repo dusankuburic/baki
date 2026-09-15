@@ -34,6 +34,16 @@ services:
           cpus: '0.5'
           memory: 1G
   db:
+    environment:
+      # No default, unlike the base file's local-dev value: an unset variable
+      # must stop the stack rather than silently initialise the application role
+      # with a password anyone can read in this repository. Must match the
+      # credentials in PAD_DATABASE_URL above.
+      #
+      # Only consumed on FIRST init of an empty volume. A stack already
+      # initialised from the old 01-app-role.sql has the published password and
+      # needs an explicit ALTER ROLE — see scripts/db-init/01-app-role.sh.
+      - BAKI_APP_PASSWORD=${BAKI_APP_PASSWORD:?BAKI_APP_PASSWORD must be set}
     # Pin to an immutable digest in production (the base file's floating tag can
     # silently change). Bump deliberately when applying Postgres security
     # patches.

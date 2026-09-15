@@ -20,17 +20,6 @@ func TestStorageKey_OtherProviders(t *testing.T) {
 	}
 }
 
-func TestProviderFactory_For_Demo(t *testing.T) {
-	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, nil, nil, nil)
-	p, err := f.For("", "demo")
-	if err != nil {
-		t.Fatalf("For(%q): %v", "demo", err)
-	}
-	if p.ID() != "demo" {
-		t.Errorf("expected demo provider, got %q", p.ID())
-	}
-}
-
 func TestProviderFactory_For_Unknown(t *testing.T) {
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, nil, nil, nil)
 	_, err := f.For("", "nonexistent-provider")

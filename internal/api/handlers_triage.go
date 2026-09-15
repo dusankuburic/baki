@@ -151,6 +151,9 @@ func (h *AnalysisHandler) handleSetFindingStatus(w http.ResponseWriter, r *http.
 		if doc != nil {
 			flowName = doc.Name
 		}
+		// #nosec G118 -- deliberately detached: the assignment email must outlive
+		// the response, and notifyFindingAssignment builds its own bounded context
+		// (bestEffortTimeout) rather than running unbounded.
 		go h.notifyFindingAssignment(req.AssigneeID, userID, flowName, req.RuleID)
 		// In-app bell alert too (R2-5): the email only reaches users watching
 		// their inbox; the assignee's badge should light up either way.

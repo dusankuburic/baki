@@ -36,12 +36,61 @@ type FixLoopResult struct {
 // each insert shifts line numbers, so content fingerprints never repeat.
 const fixLoopStallLimit = 3
 
+// FixOptions carries the analysis configuration the fix loop runs under.
+//
+// It exists because the loop used to hardcode models.DefaultSettings() and the
+// built-in rule set, which made it disagree with the analysis that produced the
+// findings in the first place: a rule disabled in .bakirc.json (or in an org's
+// profile) reported nothing, yet `bakicli fix` still rewrote the flow to
+// "resolve" it, and a custom rule carrying an autoFix was never applied at all.
+// The loop must see the SAME configuration the analyze pass saw.
+//
+// The zero value reproduces the pre-options behaviour exactly (built-in rules,
+// default settings, no filter), so a caller with nothing to configure can pass
+// FixOptions{Limit: n}.
+type FixOptions struct {
+	// RuleFilter nil ⇒ every auto-fixable rule; otherwise only findings whose
+	// RuleID is in the set are fixed (the UI's "fix all selected rules",
+	// `bakicli fix -rule`).
+	RuleFilter map[string]bool
+	// Settings gates which rules run and at what severity/options, exactly as
+	// in the analysis path. Nil ⇒ models.DefaultSettings().
+	Settings *models.AppSettings
+	// Rules is the COMPLETE rule set to run — built-ins plus any configured
+	// custom rules, exactly as assembled for the analysis pass. Nil ⇒
+	// AllRules(). It is not "extra rules appended to the built-ins": the
+	// resolved set a caller already holds (an org profile, the CLI's
+	// selectRules) contains the built-ins, and appending it would dispatch
+	// every built-in twice.
+	Rules []Rule
+	// Limit bounds the number of fix iterations (safety cap against a fixer
+	// that never resolves its finding). <= 0 ⇒ no fixes are attempted.
+	Limit int
+	// IncludeBehaviourChanging opts into fixes that alter what the flow DOES at
+	// runtime rather than how it handles failure — see IsBehaviourChangingFix.
+	// Off by default, because this loop runs unattended from `bakicli fix` and
+	// the UI's "fix all", and those fixes need a human to accept the trade.
+	IncludeBehaviourChanging bool
+	// OnFix (nullable) is invoked per applied fix for progress logging.
+	OnFix func(ruleID, fixType string, line int)
+}
+
+// settingsOrDefault is the loop's single read of opts.Settings. Nil means "the
+// caller has no opinion", which is the built-in defaults — NOT "no settings",
+// which would leave every rule's severity and options unresolved.
+func (o FixOptions) settingsOrDefault() *models.AppSettings {
+	if o.Settings != nil {
+		return o.Settings
+	}
+	return models.DefaultSettings()
+}
+
 // ApplyFixesToSourceDoc runs the iterative auto-fix loop on source in place
 // (mutating *source) and returns the loop's final parse plus the parse-error
 // counts it already computed. See ApplyFixesToSource for the loop's semantics;
 // this variant exists so server/CLI callers can reuse the final doc and the
 // before/after error gate instead of re-parsing the source two extra times.
-func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[string]bool, limit int, onFix func(ruleID, fixType string, line int)) (FixLoopResult, error) {
+func ApplyFixesToSourceDoc(source *string, fileName string, opts FixOptions) (FixLoopResult, error) {
 	var res FixLoopResult
 	// No-progress guard: track the last applied fix's signature. If the next
 	// iteration picks a finding with the same signature, the previous fix
@@ -51,6 +100,22 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 	// content fingerprint) so they aren't retried every iteration. A declined
 	// fixer won't resolve its finding, but other fixable findings still can.
 	skipped := make(map[string]bool)
+	// eligible mirrors every filter the pick scan applies. The stall guard counts
+	// "the pool a fix has to shrink", so if it counted candidates the picker
+	// then skipped, the pool could never reach zero and the loop would spin to
+	// its limit.
+	eligible := func(f *models.Finding) bool {
+		if f.AutoFix == "" {
+			return false
+		}
+		if opts.RuleFilter != nil && !opts.RuleFilter[f.RuleID] {
+			return false
+		}
+		if !opts.IncludeBehaviourChanging && IsBehaviourChangingFix(f.AutoFix) {
+			return false
+		}
+		return true
+	}
 	// Stall detection (see fixLoopStallLimit): applied fixes that fail to
 	// drive the remaining-fixable pool to a NEW MINIMUM. The guard must count
 	// from the minimum, not from the previous iteration: an oscillator whose
@@ -61,18 +126,28 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 	// next shrink (6,5,4,3,2,2,1,0 stalls at most once).
 	stall := 0
 	minFixable := -1
-	// The loop only ever selects findings with a non-empty AutoFix, so it only
-	// needs the rules that can emit one — this cuts per-iteration rule
-	// dispatch by more than half with no behavior change (the remaining rules'
+	// The caller's rule set (nil ⇒ the built-ins), narrowed to the rules that
+	// can emit an AutoFix: the loop only ever selects findings with one, so
+	// dispatching the rest is wasted work — this cuts per-iteration rule
+	// dispatch by more than half with no behavior change (the dropped rules'
 	// findings are never selected, and dedup keys on block+title+subject, so
 	// dropping them cannot reorder or fold the fixable findings).
-	rules := AutoFixableRules(AllRules())
+	//
+	// Settings then gate which of those actually run: RunAnalysis skips a rule
+	// the caller disabled, which is what keeps the loop in step with the
+	// analysis that produced the findings.
+	ruleSet := opts.Rules
+	if ruleSet == nil {
+		ruleSet = AllRules()
+	}
+	rules := AutoFixableRules(ruleSet)
+	settings := opts.settingsOrDefault()
 	// docIsCurrent tracks whether Doc is the parse of the current *source.
 	// Each iteration's parse sets it; applying a patch invalidates it (the
 	// post-patch source hasn't been parsed yet). If the loop exits right
 	// after an apply (limit exhausted), one final parse brings Doc current.
 	docIsCurrent := false
-	for iter := 0; iter < limit; iter++ {
+	for iter := 0; iter < opts.Limit; iter++ {
 		doc, err := parser.ParseText(*source, fileName, int64(len(*source)))
 		if err != nil {
 			return res, fmt.Errorf("parse error during fix loop: %w", err)
@@ -82,7 +157,7 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 		if iter == 0 {
 			res.BeforeErrors = countParseErrors(doc)
 		}
-		report := RunAnalysis(doc, rules, models.DefaultSettings(), nil)
+		report := RunAnalysis(doc, rules, settings, nil)
 
 		// Stall check BEFORE picking: count the un-skipped fixable candidates
 		// this iteration. The pick scan below mirrors these filters, so the
@@ -90,10 +165,7 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 		fixable := 0
 		for i := range report.Findings {
 			f := &report.Findings[i]
-			if f.AutoFix == "" {
-				continue
-			}
-			if ruleFilter != nil && !ruleFilter[f.RuleID] {
+			if !eligible(f) {
 				continue
 			}
 			sig := f.Fingerprint
@@ -124,10 +196,7 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 		)
 		for i := range report.Findings {
 			f := &report.Findings[i]
-			if f.AutoFix == "" {
-				continue
-			}
-			if ruleFilter != nil && !ruleFilter[f.RuleID] {
+			if !eligible(f) {
 				continue
 			}
 			sig := f.Fingerprint
@@ -169,8 +238,8 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 		}
 		lastFixSig = curSig
 
-		if onFix != nil {
-			onFix(pick.RuleID, pick.AutoFix, pickBlock.LineNumber)
+		if opts.OnFix != nil {
+			opts.OnFix(pick.RuleID, pick.AutoFix, pickBlock.LineNumber)
 		}
 		*source = ApplyPatch(*source, patch)
 		res.Fixed++
@@ -206,11 +275,10 @@ func ApplyFixesToSourceDoc(source *string, fileName string, ruleFilter map[strin
 // un-skipped fixable finding remains, the same finding reappears unchanged
 // after an applied fix (no-progress guard), or the limit is hit.
 //
-// ruleFilter nil ⇒ all auto-fixable rules; otherwise only findings whose RuleID
-// is in the set are fixed (used by "fix all selected rules"). onFix (nullable)
-// is invoked per applied fix for progress logging.
-func ApplyFixesToSource(source *string, fileName string, ruleFilter map[string]bool, limit int, onFix func(ruleID, fixType string, line int)) (int, error) {
-	res, err := ApplyFixesToSourceDoc(source, fileName, ruleFilter, limit, onFix)
+// See FixOptions for what the loop can be configured with; its zero value plus
+// a Limit reproduces the built-in rules at their default settings.
+func ApplyFixesToSource(source *string, fileName string, opts FixOptions) (int, error) {
+	res, err := ApplyFixesToSourceDoc(source, fileName, opts)
 	return res.Fixed, err
 }
 

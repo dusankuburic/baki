@@ -18,7 +18,7 @@ func TestApplyFixesToSource_ResolvesFindings(t *testing.T) {
 		"HTTPClient.InvokeUrl Method: GET Url: 'https://api.example.com/x'\n" +
 		"#EndRegion\n"
 
-	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", nil, 50, nil)
+	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", analyzer.FixOptions{Limit: 50})
 	if err != nil {
 		t.Fatalf("applyFixesToSource: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestApplyFixesToSource_ResolvesFindings(t *testing.T) {
 func TestApplyFixesToSource_DryRunDoesNotMutateInputObject(t *testing.T) {
 	original := "#Region \"Main\"\nSET X TO %X%\n#EndRegion\n"
 	source := original
-	_, err := analyzer.ApplyFixesToSource(&source, "Main.txt", nil, 50, nil)
+	_, err := analyzer.ApplyFixesToSource(&source, "Main.txt", analyzer.FixOptions{Limit: 50})
 	if err != nil {
 		t.Fatalf("applyFixesToSource: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestApplyFixesToSource_RuleFilter(t *testing.T) {
 	source := "#Region \"Main\"\nSET X TO %X%\nSET Unused TO '1'\n#EndRegion\n"
 	only := map[string]bool{"redundant-action": true}
 
-	if _, err := analyzer.ApplyFixesToSource(&source, "Main.txt", only, 50, nil); err != nil {
+	if _, err := analyzer.ApplyFixesToSource(&source, "Main.txt", analyzer.FixOptions{RuleFilter: only, Limit: 50}); err != nil {
 		t.Fatalf("applyFixesToSource: %v", err)
 	}
 	// The filtered rule's block is gone; the unfiltered rule's block remains.
@@ -85,7 +85,7 @@ func TestApplyFixesToSource_RuleFilter(t *testing.T) {
 func TestApplyFixesToSource_NoFixableFindings(t *testing.T) {
 	source := "#Region \"Main\"\nDisplay.ShowMessageBox Message: 'hi'\n#EndRegion\n"
 	original := source
-	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", nil, 50, nil)
+	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", analyzer.FixOptions{Limit: 50})
 	if err != nil {
 		t.Fatalf("applyFixesToSource: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestApplyFixesToSource_DeclinedFixerDoesNotBlockOthers(t *testing.T) {
 		"SET X TO %X%\n" +
 		"#EndRegion\n"
 
-	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", nil, 50, nil)
+	fixed, err := analyzer.ApplyFixesToSource(&source, "Main.txt", analyzer.FixOptions{Limit: 50})
 	if err != nil {
 		t.Fatalf("ApplyFixesToSource: %v", err)
 	}

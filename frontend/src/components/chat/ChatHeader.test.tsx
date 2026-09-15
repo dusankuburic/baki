@@ -27,7 +27,6 @@ function renderHeader(overrides: Partial<Parameters<typeof ChatHeader>[0]> = {})
     models,
     selectedModel: 'm1',
     onSelectModel: vi.fn(),
-    demoRemaining: null,
     messageCount: 3,
     useTools: false,
     onNewChat: vi.fn(),
@@ -103,31 +102,5 @@ describe('ChatHeader', () => {
     for (const name of ['Clear', 'Compact', 'Export conversation', 'Search messages']) {
       expect(screen.getByRole('menuitem', {name})).toHaveAttribute('aria-disabled', 'true')
     }
-  })
-
-  it('shows the demo quota as a badge only for the demo provider', () => {
-    const {unmount} = render(
-      <ConfirmProvider>
-        <ChatHeader
-          providers={providers}
-          selectedProvider="claude"
-          onSelectProvider={vi.fn()}
-          models={models}
-          selectedModel="m1"
-          onSelectModel={vi.fn()}
-          demoRemaining={null}
-          messageCount={0}
-          useTools={false}
-          onNewChat={vi.fn()}
-          onClearContext={vi.fn()}
-          onCompact={vi.fn()}
-        />
-      </ConfirmProvider>,
-    )
-    expect(screen.queryByText('4')).not.toBeInTheDocument()
-    unmount()
-
-    renderHeader({demoRemaining: 4})
-    expect(screen.getByTitle('4 demo messages left today')).toBeInTheDocument()
   })
 })

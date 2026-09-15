@@ -7,26 +7,39 @@ import (
 	"time"
 )
 
+// StreamRequestTimeout is the outer deadline for chat/analysis streaming
+// responses (*/stream). A model reply can legitimately take minutes, so these
+// are exempt from the normal per-request deadline — but "exempt" used to mean
+// "no deadline at all", and a stalled upstream then held the goroutine, the
+// RLS transaction, and its pooled connection forever. Generous, and finite.
+const StreamRequestTimeout = 15 * time.Minute
+
 func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isStreamingPath(r.URL.Path) {
+			if isLongLivedPath(r.URL.Path) {
+				// WebSocket and SSE sessions live as long as the tab does.
 				next.ServeHTTP(w, r)
 				return
 			}
-			ctx, cancel := context.WithTimeout(r.Context(), d)
+			deadline := d
+			if isStreamingPath(r.URL.Path) {
+				deadline = StreamRequestTimeout
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), deadline)
 			defer cancel()
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
+// isLongLivedPath: connections that are open-ended by design and get no
+// deadline (the client, not a timer, ends them).
+func isLongLivedPath(path string) bool {
+	return path == "/ws" || path == "/api/events"
+}
+
+// isStreamingPath: request/response streams that are long but bounded.
 func isStreamingPath(path string) bool {
-	switch {
-	case path == "/ws",
-		path == "/api/events",
-		strings.HasSuffix(path, "/stream"):
-		return true
-	}
-	return false
+	return strings.HasSuffix(path, "/stream")
 }

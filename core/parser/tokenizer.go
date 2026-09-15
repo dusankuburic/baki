@@ -165,7 +165,60 @@ func Tokenize(text string) []Token {
 		tokens = append(tokens, tok)
 	}
 
+	// EOF with a multi-line span still open. Both branches above consume every
+	// remaining line into a builder and emit nothing until the closing marker
+	// arrives; before this flush, a marker that never arrived meant the builder
+	// was simply dropped at return. A flow whose first line opened a /# that was
+	// never closed by #/ therefore tokenized to nothing, parsed to zero blocks
+	// AND zero parse errors, and was reported clean -- one line at the top of an
+	// uploaded flow hid the whole file from every rule. Flush the consumed text
+	// so it still reaches the tree, and record the cause at error severity so
+	// the verdict is "malformed", never "clean".
+	if inBlockComment {
+		fullText := commentRaw.String()
+		tokens = append(tokens, Token{
+			Kind:    TokComment,
+			Line:    commentStartLine,
+			EndLine: lineNum - 1,
+			Indent:  commentIndent,
+			Raw:     fullText,
+			Content: fullText,
+			Name:    strings.TrimSpace(fullText),
+			RawType: "COMMENT",
+		})
+		tokens = append(tokens, unterminatedToken(commentStartLine, commentIndent,
+			"unterminated block comment: /# was never closed by #/"))
+	}
+
+	if inTripleQuote {
+		combined := tripleRaw.String()
+		trimmed := strings.TrimRight(combined, " \t\r")
+		indent := computeIndent(trimmed)
+		content := strings.TrimLeft(trimmed, " \t")
+		tok := classifyLine(tripleStartLine, indent, indent+1, combined, content)
+		tok.EndLine = lineNum - 1
+		tokens = append(tokens, tok)
+		tokens = append(tokens, unterminatedToken(tripleStartLine, indent,
+			"unterminated triple-quoted string: ''' was never closed"))
+	}
+
 	return tokens
+}
+
+// unterminatedToken builds the diagnostic half of an EOF flush. It carries
+// RawType "UNTERMINATED" so recordMalformedLine reports it at error severity
+// with this specific cause, rather than as the generic warning-level "malformed
+// line" -- the distinction matters because CountParseErrors, and so the CI gate
+// and the fix loop's regression guard, count only error-severity problems.
+func unterminatedToken(line, indent int, msg string) Token {
+	return Token{
+		Kind:    TokError,
+		Line:    line,
+		Column:  indent + 1,
+		Indent:  indent,
+		Name:    msg,
+		RawType: "UNTERMINATED",
+	}
 }
 
 func countTripleQuotes(line string) int {
@@ -515,6 +568,25 @@ func classifyCondition(b tokenBase) (Token, bool) {
 			Content: content,
 			Name:    name,
 			RawType: rawType,
+		}, true
+	}
+
+	if reElseIf.MatchString(content) {
+		// Carry the condition text in Name, with the trailing THEN stripped the
+		// same way the IF branch above strips it, so the branch condition
+		// reaches newBlock's extractVariables instead of being discarded.
+		name := content
+		if len(name) >= 5 && strings.EqualFold(name[len(name)-5:], " THEN") {
+			name = strings.TrimSpace(name[:len(name)-5])
+		}
+		return Token{
+			Kind:    TokConditionElse,
+			Line:    b.lineNum,
+			Indent:  b.indent,
+			Raw:     b.raw,
+			Content: content,
+			Name:    name,
+			RawType: "ELSE IF",
 		}, true
 	}
 

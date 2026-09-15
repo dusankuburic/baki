@@ -202,7 +202,7 @@ func TestHandleSharingRemove_SelfRemovalByCollaborator(t *testing.T) {
 	checkStatus(t, rr, http.StatusOK)
 
 	// And she's actually gone.
-	collabs, err := rt.security.Backend.ListCollaborators(context.Background(), "flow-1")
+	collabs, err := rt.security.Backend.ListCollaborators(context.Background(), "flow-1", 0)
 	if err != nil {
 		t.Fatalf("ListCollaborators: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestHandleSharingRemove_OutsiderForbidden(t *testing.T) {
 	checkStatus(t, rr, http.StatusForbidden)
 
 	// Alice is still a collaborator.
-	collabs, err := rt.security.Backend.ListCollaborators(context.Background(), "flow-1")
+	collabs, err := rt.security.Backend.ListCollaborators(context.Background(), "flow-1", 0)
 	if err != nil {
 		t.Fatalf("ListCollaborators: %v", err)
 	}

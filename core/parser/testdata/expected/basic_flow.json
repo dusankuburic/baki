@@ -290,7 +290,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 15,
-          "properties": {},
+          "properties": {
+            "_loopKind": "while"
+          },
           "variables": [
             "Counter"
           ],
@@ -400,7 +402,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 23,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ExcelData",
             "CurrentRow",

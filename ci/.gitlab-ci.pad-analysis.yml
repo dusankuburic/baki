@@ -13,21 +13,48 @@
 #       # BASELINE: 'baseline.json'   # ratchet: fail only on NEW findings
 #       # POLICY: 'policy.json'       # authoritative gate (overrides FAIL_ON)
 #
-# This template builds bakicli from source, runs analysis with SARIF output,
-# publishes the SARIF report as a GitLab artifact, and fails the pipeline on
-# threshold breach.
+# This template downloads the bakicli release binary (checksum-verified), runs
+# analysis with SARIF output, publishes the SARIF report as a GitLab artifact,
+# and fails the pipeline on threshold breach.
+#
+# It used to run `go build ./cmd/bakicli` inside $CI_PROJECT_DIR — the
+# CONSUMER's repository, which has no cmd/bakicli — so it failed in
+# before_script for every consumer, every time. Pin BAKI_VERSION to a release
+# tag for reproducible gates; "latest" follows the newest release.
 
 .pad-analysis:
-  image: golang:1.25-alpine
+  image: alpine:3.20
   variables:
     FLOW_PATH: '.'
     FAIL_ON: 'error'
     BASELINE: ''
     POLICY: ''
     SARIF_FILE: 'pad-analysis.sarif'
+    BAKI_REPO: 'dusankuburic/baki'
+    BAKI_VERSION: 'latest'
   before_script:
-    - apk add --no-cache jq
-    - cd "$CI_PROJECT_DIR" && go build -o /usr/local/bin/bakicli ./cmd/bakicli
+    - apk add --no-cache jq curl bash
+    - |
+      set -euo pipefail
+      case "$(uname -m)" in
+        x86_64) goarch=amd64 ;;
+        aarch64|arm64) goarch=arm64 ;;
+        *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
+      esac
+      asset="bakicli-linux-${goarch}.tar.gz"
+      if [ "$BAKI_VERSION" = "latest" ]; then
+        base="https://github.com/${BAKI_REPO}/releases/latest/download"
+      else
+        base="https://github.com/${BAKI_REPO}/releases/download/${BAKI_VERSION}"
+      fi
+      tmp="$(mktemp -d)"
+      curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset"
+      curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256"
+      ( cd "$tmp" && sha256sum -c "$asset.sha256" )
+      tar -xzf "$tmp/$asset" -C "$tmp"
+      mv "$tmp/bakicli-linux-${goarch}" /usr/local/bin/bakicli
+      chmod +x /usr/local/bin/bakicli
+      bakicli -version || true
   script:
     - |
       set -euo pipefail

@@ -83,6 +83,15 @@ func hasTimeoutConfigured(block *models.Block) bool {
 	// used to iterate (timeout, timeoutInSeconds, connectionTimeout, ... all
 	// contain "timeout"), so one scan over Properties suffices.
 	for k, v := range block.Properties {
+		// Skip parser-synthesized metadata. These are not action parameters, and
+		// one of them actively lies here: _retryWait is the pause BETWEEN retry
+		// attempts (from `ON ERROR REPEAT n TIMES WAIT m`), not a timeout on the
+		// operation. Matching it meant any action with a native retry was treated
+		// as having a timeout configured, so missing-timeout silently stopped
+		// firing on it.
+		if strings.HasPrefix(k, "_") {
+			continue
+		}
 		kl := strings.ToLower(k)
 		if (strings.Contains(kl, "timeout") || strings.Contains(kl, "wait")) && v != "" && v != "0" {
 			return true

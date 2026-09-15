@@ -276,7 +276,7 @@ func (m *FakeBackend) ListOrgsForUser(_ context.Context, _ string) ([]*interface
 func (m *FakeBackend) DeleteOrg(_ context.Context, _ string) error { return nil }
 
 // ---- Sharing operations ----
-func (m *FakeBackend) ListCollaborators(_ context.Context, _ string) ([]*interfaces.Collaborator, error) {
+func (m *FakeBackend) ListCollaborators(_ context.Context, _ string, _ int) ([]*interfaces.Collaborator, error) {
 	return nil, nil
 }
 func (m *FakeBackend) ListCollaboratorsBatch(_ context.Context, _ []string) (map[string][]*interfaces.Collaborator, error) {
@@ -375,7 +375,7 @@ func (m *FakeBackend) DeleteKnowledgeDocumentByName(_ context.Context, orgID, fi
 	}
 	return nil
 }
-func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string) ([]*interfaces.KnowledgeDocument, error) {
+func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string, limit int) ([]*interfaces.KnowledgeDocument, error) {
 	m.initKnowledge()
 	var out []*interfaces.KnowledgeDocument
 	for _, d := range m.KnowledgeDocs {
@@ -388,6 +388,9 @@ func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string) ([
 			}
 			out = append(out, &cp)
 		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

@@ -1,6 +1,6 @@
 // AI provider catalogue + auth flows (OAuth device-code, GitHub Copilot/Models).
 
-export type ProviderID = 'claude' | 'openai' | 'gemini' | 'xai' | 'glm' | 'github-models' | 'copilot' | 'demo'
+export type ProviderID = 'claude' | 'openai' | 'gemini' | 'xai' | 'glm' | 'github-models' | 'copilot'
 
 export type AuthType = 'api_key' | 'oauth'
 

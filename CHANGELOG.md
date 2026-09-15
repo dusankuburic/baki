@@ -6,6 +6,219 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Production readiness — features that reported states they did not have
+
+- `bakicli watch` analysed with default settings while loading `.bakirc.json`
+  for everything else, so the per-rule `ruleConfig` profile was silently
+  ignored in the local preview. It now runs the same profile `analyze` does.
+- `.bakirc.json` had no field for rule thresholds (`maxDepth`, `minRepeats`,
+  `maxBlocks`); a threshold in the file was dropped by the decoder and the rule
+  kept its default. `ruleConfig.<rule>.options` is now honoured, `bakicli init`
+  writes the defaults, and the org rule export carries them. Threshold rules
+  accept int-typed options as well as JSON floats.
+- The offline banner said "N changes queued" over a queue that holds
+  cursor/presence updates only; edits made offline were never saved. It now
+  says saves are disabled, and the API client refuses mutations while offline
+  with the same message instead of failing after retries.
+- The library detail panel rendered "No saved versions yet." when the versions
+  call failed (desktop mode returns 503). It shows the error; on desktop the
+  section is hidden.
+- An older binary against a newer schema booted clean and logged "schema up to
+  date" with its own version. Migration now refuses a schema newer than the
+  binary knows, and logs the database's version.
+- Admin "scan now" / "ingest now" ran without a panic guard; a panic there
+  took the process down. They now recover, log, and count under
+  `pad_panics_total{location="admin.scan-now"|"admin.ingest-now"}`.
+- Handler panics produced no access-log line and no `http_requests_total{5xx}`
+  sample (Recovery sat outside AccessLog and Metrics). An inner Recovery now
+  wraps the router.
+- Nothing bounded a runaway query: `statement_timeout` and `lock_timeout` are
+  set on every pooled connection (`PAD_DB_STATEMENT_TIMEOUT`, default 30s;
+  migrations lift it for their own session). `*/stream` routes get a 15-minute
+  outer deadline instead of none; `/ws` and `/api/events` stay unbounded.
+- Concurrent chat streams each passed the same daily-budget read (usage rows
+  land after the turn). Active streams now publish spend-so-far plus one
+  reserved response, and every check counts the other streams'.
+- Desktop hid nothing that did not work: the AI daily-budget setting (no usage
+  store, never enforced) and the audit section (no backend) are hidden in
+  local mode. Cloud apply-fix on a folder import is disabled with the reason
+  instead of failing after the click.
+- JUnit: info findings now carry the `<system-out>` body the format promised,
+  and testcase names are unique per finding (`@fingerprint`) so N findings no
+  longer collapse into one flapping test.
+- `path-traversal-risk` keyed on property names PAD never emits and could not
+  fire; it now matches the parser's real keys (File, Files, FolderPath, …).
+  `Scripting.*` (PowerShell/VBScript/Python/JavaScript) is covered by
+  `command-injection-risk`. The "Taint Paths" panel is labelled as the
+  name-based hint it is.
+- Shutdown: the audit flush is bounded (5s), the retention purge runs on the
+  shared `TickerLoop` and drains on stop, and the HTTP drain no longer consumes
+  the whole 25s budget.
+- Access log lines carry `trace_id` when a span is present.
+- Removed the experimental Dataverse / PAD-cloud connector
+  (`internal/connector/padcloud`, the `/api/admin/powerplatform/*` and
+  `/api/admin/ingester/ingest` routes, `PAD_PP_*` config, the admin
+  "Ingest cloud flows" button). It was self-declared unvalidated against a real
+  tenant and its device-code auth had no UI; it lives in git history.
+- CI/infra: govulncheck and npm audit are advisory; the Bicep sets registry
+  pull credentials (was `registries: []`), a `PAD_METRICS_TOKEN`, and defaults
+  `provisionRedis` to false (single replica; a Redis blip was a hard boot
+  failure); two log-query alerts (ERROR burst, readiness failing); `latest` is
+  only tagged after the image passes the vulnerability scan; the reusable
+  workflow and the GitLab/Azure DevOps templates use a released binary instead
+  of building from the consumer's checkout; a Windows desktop build workflow.
+
+### Cleanup — growth and honesty items
+
+- Retention purge now also removes expired share links and ages out governance
+  alerts (with `PAD_AUDIT_RETENTION_DAYS`), and runs by default every 24h in
+  cloud mode (`PAD_RETENTION_PURGE_INTERVAL`, `0s` to disable). Conversations,
+  knowledge documents and comments are user content and are never purged by age.
+- Collaborator and knowledge-document listings apply their limit in SQL instead
+  of fetching the whole set and slicing.
+- `POST /api/system/log-error` is bounded at 64 KiB (413 above) and each field
+  is truncated in the log; it used to accept 10 MiB into the ERROR log.
+- `pad_chat_tool_results_total{tool}` is a closed label set: unregistered tool
+  names the model invents collapse to `other`.
+- Rule thresholds (`maxDepth`, `minRepeats`, `maxBlocks`) are editable in the
+  Rules settings panel at deployment and org scope; the catalog reports them.
+- `docs/CONFIGURATION.md` documents every environment variable with its
+  default; forty of them were documented nowhere.
+- Removed the Key Vault resource and loader path: nothing ever provisioned a
+  secret into it, so every boot did six lookups, six 404s, six warnings, and
+  used the Container App secrets anyway. Secrets are Container App secrets.
+- Removed the demo AI provider (unreachable in every shipped build — its proxy
+  URL was set only in tests — with a live rate limiter, endpoint and UI button
+  attached to nothing) and the batch HTML report (no route, no consumer).
+- The collaborator-list API doc says viewer access, which is what it enforces.
+
+### Fixed — Unbounded fan-out
+
+- The governance scanner built a new HTTP client (and connection pool, and DNS
+  lookup) for every alert on every channel, and launched an unbounded detached
+  goroutine per delivery that shutdown neither waited for nor cancelled. Notifiers
+  are now built once per org per sweep, deliveries are capped at 32 concurrent,
+  and Stop drains in-flight ones within 5s instead of dropping them.
+- WebSocket connections had no inbound message rate limit. Each message is
+  amplified into one marshal per room member plus a Redis publish every replica
+  decodes, so a flooding collaborator caused room-sized CPU amplification. A
+  per-connection token bucket (50/s, burst 100) now sheds before that work.
+
+### Fixed — Background sweeps could crash or stall the server
+
+- The PAD-cloud ingester guarded its incremental-sync map with a mutex declared
+  inside the sweep function, so it protected nothing between sweeps. Triggering
+  "ingest now" while the periodic sweep was running was a concurrent map
+  read+write — a fatal error that `recover()` cannot catch, taking the process
+  down. Overlapping sweeps are now refused outright rather than duplicating every
+  Dataverse call and store write.
+- Background loops (`governance scanner`, ingester) did not wait for an in-flight
+  tick on shutdown, so the database pool could close underneath a running sweep.
+  Stop now drains, bounded by 5s.
+- Dataverse pagination followed `@odata.nextLink` to any host with the tenant
+  access token attached, and had no page limit. Off-origin and plaintext hops are
+  refused, page/flow counts are bounded, and the token is re-read per page so a
+  long enumeration cannot fail halfway on an expired one.
+
+### Security — SSRF via org notification channels (cloud mode)
+
+- Any authenticated user can create an org and administer it, so a notification
+  channel URL is tenant-supplied. The dial guard omitted loopback entirely and
+  the `http://localhost` dev carve-out was not gated on deployment mode, so a
+  channel could point at `127.0.0.1` and the synchronous channel-test endpoint
+  would report whether the connection was refused, non-2xx or 2xx — a loopback
+  port scanner, and a way to POST attacker-influenced JSON at internal services.
+  Cloud deployments now refuse loopback, private, link-local and unspecified
+  targets at both validation and dial time. Desktop/local keeps the localhost
+  hatch, which is what makes local webhooks useful there.
+- Notification deliveries no longer follow redirects. Only the configured URL was
+  ever validated, and 307/308 replay the method and body, so an external endpoint
+  could steer a signed governance payload to an address the operator never set.
+
+### Security — Parser hardening against adversarial flow files
+
+- A single long token in a flow file made the property scanners quadratic: they
+  re-scanned each run of key characters on every byte instead of skipping it. At
+  the 2 MB `/api/analysis/analyze-raw` limit that was tens of minutes of pinned
+  CPU per request, which the handler timeout could not interrupt. Now linear;
+  parsing behaviour is unchanged for valid input.
+- Nested `ON BLOCK ERROR` bypassed the 200-level nesting cap — it was the only
+  block-opening construct that did not check it — so a crafted upload could build
+  a block tree thousands deep and drive every recursive walker to that depth.
+
+### Fixed — Verification gates
+
+- The documented test command (`AGENTS.md`) never ran the `core` module. This is a
+  two-module `go.work` workspace and `./...` resolves within one module, so
+  `core/parser`, `core/export`, `core/models`, `core/search`, `core/ai/scrubber`,
+  `core/cache` and `core/logger` were silently skipped by anyone following the
+  documented workflow. CI was always correct; the docs had drifted.
+- `golangci-lint` was failing on 8 pre-existing `gosec` findings surfaced by newer
+  rules — CI installs `version: latest`, so its lint job was already red. None were
+  real defects, but the suppressions had rotted: one `#nosec` was attached to the
+  wrong statement (twice), another named a rule that does not apply to its finding.
+  All now sit on the reported line with the correct rule and a stated reason.
+- `go build`/`go vet`/lint were processing a third-party Go package vendored inside
+  `frontend/node_modules`; Go does not skip `node_modules` the way it skips `vendor`.
+- `sqlclosecheck` and `rowserrcheck` are now enforced (both were already clean).
+
+### Security — Org settings are no longer broadcast across tenants
+
+- `POST /api/system/settings/org/{id}` emitted its `settings:changed` event to
+  every connected SSE client in the deployment, so one org's rule profile
+  (which rules it disabled, at what severity) reached other tenants' users. It
+  is now delivered to that org's owner and members only.
+- `scripts/db-init` takes the application role's password from
+  `BAKI_APP_PASSWORD` instead of hardcoding `baki_app`. A compose-based
+  production stack initialised from an empty volume previously came up with a
+  credential published in this repository. **Existing deployments are not
+  affected by the change and are not fixed by it** — rotate with
+  `ALTER ROLE baki_app PASSWORD '<new>'` and update `PAD_DATABASE_URL`.
+
+### Fixed
+
+- `bakicli watch` validated `-fail-on` before merging `.bakirc.json`, so an
+  invalid `failOn` in the config slipped through and silently fell back to
+  error-gating — the local preview then showed a different gate than the one
+  configured.
+
+### Added
+
+- Dependabot now covers the `core` Go module, which was never receiving
+  dependency updates.
+
+### Fixed — Auto-fix ran on a configuration nobody chose
+
+- `bakicli fix` now reads `.bakirc.json` (new `-config` and `-custom-rules`
+  flags, matching `analyze`). It previously ignored the config entirely, so a
+  rule disabled in `ruleConfig` was not reported by `analyze` yet was still
+  auto-fixed — the tool rewrote flows to resolve findings a team had switched
+  off — and a custom rule carrying an `autoFix` was reported but never applied.
+  This also restores the `GET /orgs/{id}/rules/export` → CI parity promise: the
+  exported profile now governs fixing as well as gating.
+- The server's batch apply-fix (`POST /api/flow/apply-fix-batch`) resolves the
+  same per-org rule profile the analysis path resolves, so "fix all" can no
+  longer apply a fix for a rule the org disabled, and org custom rules with an
+  `autoFix` are applied. The UI was already safe (it sends the selected
+  findings' rule ids); a direct API call with no `rules` was not.
+
+### Security — Source maps are no longer published
+
+- The production image shipped `dist/**/*.map` (~9.6 MB of a 14 MB bundle) with
+  `sourcesContent` populated, and the static handler served anything under the
+  static dir — so appending `.map` to a bundle URL returned the application's
+  complete original TypeScript. vite's `sourcemap: 'hidden'` only omits the
+  `//# sourceMappingURL` comment; it does not prevent a direct fetch. The
+  handler now refuses `.map` requests regardless of what is on disk, and the
+  Dockerfile ships a stripped `dist`.
+
+### Security — Dependency updates
+
+- `google.golang.org/grpc` 1.81.1 → 1.82.1 (GO-2026-6061) and
+  `golang.org/x/text` 0.37.0 → 0.39.0 (GO-2026-5970, infinite loop on invalid
+  input). Both were reachable from application code, so `govulncheck` — and
+  therefore the CI gate that blocks deploys — was failing.
+
 ### Added — Frontend tests & hygiene (Phase C)
 - Component tests for the previously untested core editor surface:
   `BlockCard` (keyboard interaction, aria-pressed state, context menu,

@@ -22,14 +22,14 @@ func TestEnforceBudget_InFlightTerm(t *testing.T) {
 		backend:  backend,
 		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 1.0}}},
 	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0); err != nil {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0, nil); err != nil {
 		t.Fatalf("store-only read should pass (0.9 < 1.0): %v", err)
 	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2); err == nil {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2, nil); err == nil {
 		t.Fatal("in-flight spend (0.9 + 0.2 ≥ 1.0) must trip the budget")
 	}
 	// And the error mentions the combined figure.
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2); !strings.Contains(err.Error(), "1.10") {
+	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2, nil); !strings.Contains(err.Error(), "1.10") {
 		t.Errorf("error should report combined usage: %v", err)
 	}
 }

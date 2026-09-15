@@ -81,6 +81,35 @@ func FlowHash(doc *models.FlowDocument) string {
 			}
 		})
 	}
+
+	// Parse errors are part of the content identity, not incidental metadata.
+	//
+	// Hashing blocks alone meant two documents that produce NO blocks hashed
+	// identically however different their source was — and a document made
+	// entirely of unparseable lines is exactly that case. Combined with
+	// StableFlowID, which for an upload is sha256 of the FILE NAMES only, two
+	// different callers uploading a "Main.txt" that fails to parse collided on
+	// the WHOLE cache key. DefaultCache is process-global with no tenant in the
+	// key, so the first caller's report was served to the second — and a
+	// parse-error finding carries ParseError.Snippet, which is up to 200 bytes
+	// of VERBATIM SOURCE:
+	//
+	//	victim   files-d853cb879382d063 / f99cfeb7f192406e  (2 parse errors)
+	//	attacker files-d853cb879382d063 / f99cfeb7f192406e  (1 parse error)
+	//	-> attacker received "CASE 'PROD_DB_PASSWORD=hunter2-do-not-share'"
+	//
+	// Severity and Message are included too: they distinguish reports that
+	// differ in how a line failed, not just where.
+	for _, pe := range doc.ParseErrors {
+		fmt.Fprintf(h, "%d:%d", pe.Line, pe.Column)
+		h.Write([]byte{0})
+		io.WriteString(h, pe.Severity)
+		h.Write([]byte{0})
+		io.WriteString(h, pe.Message)
+		h.Write([]byte{0})
+		io.WriteString(h, pe.Snippet)
+		h.Write([]byte{0})
+	}
 	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
 

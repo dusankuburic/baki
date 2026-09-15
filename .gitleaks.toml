@@ -1,0 +1,54 @@
+# gitleaks configuration.
+#
+# WHY THIS FILE EXISTS
+#
+# The Secret Scan job has been red continuously, and a gate that can never go
+# green is a gate nobody reads — a real leak tomorrow would look exactly like
+# today's noise. Every finding it reports was audited by hand before this file
+# was written; none was a real credential. They fall into two groups, and both
+# are allowlisted narrowly rather than by silencing the rule.
+#
+# 1. Published constants that are secret-SHAPED but public by design:
+#    - the Azurite storage emulator's account key, documented by Microsoft and
+#      identical on every machine that runs the emulator;
+#    - Azure built-in role-definition GUIDs (e.g. Key Vault Secrets User), which
+#      are public identifiers, not secrets.
+#
+# 2. Test fixtures in the packages whose whole job is handling credentials — the
+#    secret scrubber and the AI provider/keystore code. Their tests must contain
+#    credential-shaped literals in order to assert that they are masked,
+#    encrypted or rejected. Paths cover BOTH the current core/ai/scrubber
+#    location and the historical internal/ai/scrubber one, because the scan runs
+#    over full history (fetch-depth: 0).
+#
+# Scope is deliberately kept to these packages: a blanket "ignore all _test.go"
+# would hide a genuine leak committed into any test anywhere.
+title = "baki"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Audited false positives: published constants and credential-handling test fixtures."
+
+regexes = [
+  # Azurite emulator account key — published by Microsoft, same everywhere.
+  '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==''',
+  # devstoreaccount1 is the emulator's fixed account name.
+  '''AccountName=devstoreaccount1''',
+  # Azure built-in role definition GUIDs are public identifiers.
+  '''4633458b-17d3-44ce-994d-c8e757160771''',
+]
+
+paths = [
+  # The scrubber: its tests exist to prove credential-shaped strings get masked.
+  '''core/ai/scrubber/.*_test\.go''',
+  '''internal/ai/scrubber/.*_test\.go''',
+  # AI provider auth + the encrypted keystore: fixtures are fake tokens/keys.
+  '''internal/ai/.*_test\.go''',
+  '''internal/storage/database/keystore_test\.go''',
+  '''internal/storage/database/postgres_blob_test\.go''',
+  # Analyzer fixtures for hardcoded-credential and friends.
+  '''core/analyzer/.*_test\.go''',
+  '''core/parser/testdata/.*''',
+]

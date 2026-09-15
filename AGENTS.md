@@ -4,9 +4,19 @@
 
 ```bash
 # Backend (Go)
-go build ./...                          # Build everything
-go test ./...                           # Run all tests
-go test -race ./core/analyzer/... ./internal/api/... ./internal/service/... ./internal/storage/...
+#
+# BOTH module patterns, always. This is a go.work workspace with two modules:
+# the root `pad-analyzer` and `core/` = `pad-core`. `./...` resolves within the
+# current module only, so `go test ./...` alone runs ZERO core packages —
+# core/parser, core/export, core/models, core/search, core/ai/scrubber,
+# core/cache and core/logger are silently not run. Verify with:
+#   go list ./... | grep -c '^pad-core'   # 0
+# This file used to say `go test ./...  # Run all tests`, which meant anyone
+# following it — human or agent — got a green they had not earned. CI has
+# always used both patterns; the documented workflow had drifted from it.
+go build ./... ./core/...               # Build everything
+go test ./... ./core/...                # Run all tests
+go test -race ./... ./core/...          # Race detector (what CI runs)
 golangci-lint run                       # Lint (must be 0 issues)
 
 # Frontend (React/TS)
@@ -17,7 +27,40 @@ npm run lint                            # ESLint (must be 0 errors)
 npm run e2e                             # Playwright E2E (needs dev server)
 
 # Full verification (run before declaring done)
-go test ./... && go test -race ./core/analyzer/... ./internal/api/... ./internal/service/... && golangci-lint run && cd frontend && npx tsc --noEmit && npm test && npm run lint
+#
+# DATABASE_URL / AZURITE_CONNECTION_STRING gate the Postgres and blob suites —
+# without them ~170 storage tests SKIP rather than fail, so an unset variable
+# looks identical to a pass. See "Integration test harness" below.
+go build ./... ./core/... && \
+go vet ./... ./core/... && \
+go test -race -count=1 ./... ./core/... && \
+test -z "$(gofmt -l . | grep -v node_modules)" && \
+golangci-lint run && \
+cd frontend && npx tsc --noEmit && npm test && npm run lint
+```
+
+## Integration test harness
+
+The DB- and blob-gated suites skip silently when their environment variables are
+unset. A green `go test` with them unset is weak evidence — it is the state in
+which the worst storage bugs have historically hidden. Bring both up first:
+
+```bash
+podman run -d --name baki-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres \
+  -e POSTGRES_DB=baki -p 55432:5432 docker.io/pgvector/pgvector:pg16
+# NOT the postgres superuser: superusers and BYPASSRLS roles ignore every RLS
+# policy, so every negative RLS assertion would skip. This mirrors CI.
+podman exec -e PGPASSWORD=postgres baki-pg psql -U postgres -d postgres \
+  -c "CREATE ROLE baki_app LOGIN PASSWORD 'baki_app' NOSUPERUSER NOBYPASSRLS;" \
+  -c "CREATE DATABASE baki_app OWNER baki_app;"
+podman exec -e PGPASSWORD=postgres baki-pg psql -U postgres -d baki_app \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"   # untrusted ext, needs superuser
+podman run -d --name baki-azurite -p 10000:10000 \
+  mcr.microsoft.com/azure-storage/azurite \
+  azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck
+
+export DATABASE_URL="postgres://baki_app:baki_app@localhost:55432/baki_app?sslmode=disable"
+export AZURITE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
 ```
 
 ## Project Structure
@@ -30,7 +73,6 @@ core/export/       SARIF 2.1.0 + report serializers
 internal/api/      HTTP handlers (chi router), 170+ endpoints
 internal/service/  Business logic (FlowService, AnalysisService, ChatService)
 internal/storage/  StorageBackend interface + Postgres + filesystem implementations
-internal/connector/padcloud/  PAD-cloud ingestion (auth + client + ingester + cloud-format Converter)
 cmd/bakicli/       CLI with -format sarif/json/text, -baseline, -policy gates
 frontend/src/      React 18 + TypeScript + Zustand + Tailwind + Tauri
 ci/                Azure DevOps + GitLab CI templates

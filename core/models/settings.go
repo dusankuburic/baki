@@ -81,7 +81,6 @@ type AISettings struct {
 	// model swap doesn't require a re-index (mismatched dims are excluded at insert).
 	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
-	DemoMode                DemoModeSettings            `json:"demoMode"`
 	ShowCostEstimates       bool                        `json:"showCostEstimates"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
@@ -99,13 +98,6 @@ type AIProviderConfig struct {
 	Temperature        float64 `json:"temperature"`
 	MaxTokens          int     `json:"maxTokens"`
 	ContextTokenBudget int     `json:"contextTokenBudget"`
-}
-
-type DemoModeSettings struct {
-	Enabled    bool   `json:"enabled"`
-	DailyLimit int    `json:"dailyLimit"`
-	DailyUsed  int    `json:"dailyUsed"`
-	ResetDate  string `json:"resetDate"`
 }
 
 type ParserSettings struct {
@@ -208,10 +200,6 @@ func DefaultSettings() *AppSettings {
 					MaxTokens:          4096,
 					ContextTokenBudget: 4000,
 				},
-			},
-			DemoMode: DemoModeSettings{
-				Enabled:    true,
-				DailyLimit: 5,
 			},
 			ShowCostEstimates:       true,
 			SaveConversationHistory: true,

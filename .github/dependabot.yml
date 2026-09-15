@@ -14,6 +14,25 @@ updates:
           - patch
           - minor
 
+  # The core analyzer/parser is its OWN Go module (core/go.mod, module
+  # pad-core), and a gomod entry only covers the directory it names — so
+  # without this block core's dependencies were never offered an update. It is
+  # the module that does the actual parsing and analysis, i.e. the one that
+  # handles untrusted input.
+  - package-ecosystem: gomod
+    directory: /core
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+
   - package-ecosystem: npm
     directory: /frontend
     schedule:

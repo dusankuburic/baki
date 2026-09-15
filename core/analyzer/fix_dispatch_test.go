@@ -32,7 +32,10 @@ func TestPatchForFix(t *testing.T) {
 		{"init-variable", "init-variable", leaf, "", "MyVar", "", false, "insert"},
 		{"insert-error-log", "insert-error-log", leaf, "", "", "", false, "insert"},
 		{"replace-with-variable", "replace-with-variable", &models.Block{LineNumber: 1, Properties: map[string]string{"password": "hunter2"}}, "", "", "password", false, "replace"},
-		{"wrap-in-retry", "wrap-in-retry", leaf, "", "", "", false, "wrap"},
+		// "insert", not "wrap": wrap-in-retry now appends PAD's native
+		// `ON ERROR REPEAT N TIMES WAIT M` instead of wrapping the action in a
+		// counting loop, which repeated the action unconditionally three times.
+		{"wrap-in-retry", "wrap-in-retry", leaf, "", "", "", false, "insert"},
 		{"insert-exit-condition", "insert-exit-condition", &models.Block{LineNumber: 2, Children: []models.Block{{LineNumber: 3}}}, "", "", "", false, "insert"},
 		{"remove-block", "remove-block", leaf, "", "", "", false, "remove"},
 		{"parameterize-sql", "parameterize-sql", &models.Block{LineNumber: 1, Properties: map[string]string{"Sql": "SELECT * FROM t WHERE id = %X%"}}, "", "", "Sql", false, "replace"},

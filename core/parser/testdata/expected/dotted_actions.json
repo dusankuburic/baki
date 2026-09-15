@@ -122,7 +122,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "Item",
@@ -452,7 +454,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 25,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ExcelData",
             "CurrentRow",

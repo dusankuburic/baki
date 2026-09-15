@@ -182,6 +182,14 @@ func findReadersAfter(varName string, ctx *RuleContext, writerID string) []strin
 	return readers
 }
 
+// computeTaintPaths is a NAME-BASED heuristic, not a data-flow analysis, and
+// the UI labels it as such. A "source" is a variable produced by a dialog/
+// prompt block or named with an Input_/UserInput_ prefix; a "path" is that
+// variable read DIRECTLY by a sink block — zero hops. One intermediate
+// `SET Copy TO %Input_X%` breaks the trail. It is useful as a hint and was
+// presented as taint analysis; in a security tool that overclaim is worse
+// than the gap, so the name stays in the code and the API for compatibility
+// while every user-facing label says what it is.
 func computeTaintPaths(doc *models.FlowDocument, ctx *RuleContext) []models.TaintPath {
 	var sources []string
 	for _, b := range ctx.AllBlocks {

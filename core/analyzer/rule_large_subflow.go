@@ -26,16 +26,7 @@ func (r *LargeSubflowRule) Check(block *models.Block, ctx *RuleContext) []models
 		return nil
 	}
 
-	threshold := defaultLargeSubflowThreshold
-	if ctx.Settings != nil {
-		if rc, ok := ctx.Settings.Analysis.Rules[r.ID()]; ok {
-			if mb, ok := rc.Options["maxBlocks"]; ok {
-				if f, ok := mb.(float64); ok && f > 0 {
-					threshold = int(f)
-				}
-			}
-		}
-	}
+	threshold := ruleOptionInt(ctx.Settings, r.ID(), "maxBlocks", defaultLargeSubflowThreshold, 1)
 
 	sf := ctx.SubflowByID[block.SubflowID]
 	if sf == nil {

@@ -13,16 +13,7 @@ func (r *DeepNestingRule) DefaultSeverity() models.Severity { return models.Seve
 func (r *DeepNestingRule) Category() string                 { return "Style" }
 
 func (r *DeepNestingRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	maxDepth := 6
-	if ctx.Settings != nil {
-		if rc, ok := ctx.Settings.Analysis.Rules[r.ID()]; ok {
-			if md, ok := rc.Options["maxDepth"]; ok {
-				if f, ok := md.(float64); ok && f > 0 {
-					maxDepth = int(f)
-				}
-			}
-		}
-	}
+	maxDepth := ruleOptionInt(ctx.Settings, r.ID(), "maxDepth", 6, 1)
 
 	depth := ctx.BlockDepth[block.ID]
 	if depth <= maxDepth {

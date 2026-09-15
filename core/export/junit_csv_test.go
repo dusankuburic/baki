@@ -153,3 +153,66 @@ func TestReportToCSV_NewlineSanitized(t *testing.T) {
 		t.Errorf("description still contains newline: %q", rows[1][3])
 	}
 }
+
+// TestReportToJUnit_InfoFindingsCarrySystemOut: the doc comment promised info
+// findings "appear as passing testcases (noted via <system-out>)"; the struct
+// had no such field, so every info testcase was a bare name.
+func TestReportToJUnit_InfoFindingsCarrySystemOut(t *testing.T) {
+	report := &models.AnalysisReport{Findings: []models.Finding{
+		{RuleID: "hardcoded-url", Severity: models.SeverityInfo, Title: "Hardcoded URL", Description: "the body", Suggestion: "use a variable"},
+	}}
+	out, err := ReportToJUnit(report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root junitRoot
+	if err := xml.Unmarshal(out, &root); err != nil {
+		t.Fatalf("invalid JUnit XML: %v", err)
+	}
+	tc := root.Suites[0].Testcases[0]
+	if tc.Failure != nil {
+		t.Fatal("an info finding must not be a failure")
+	}
+	if tc.SystemOut == nil || !strings.Contains(tc.SystemOut.Content, "the body") || !strings.Contains(tc.SystemOut.Content, "use a variable") {
+		t.Fatalf("info testcase has no <system-out> body:\n%s", out)
+	}
+}
+
+// TestReportToJUnit_TestcaseNamesAreUniquePerFinding: CI systems key on
+// classname+name, so two findings of one rule with one name were ONE test
+// that flapped. Names must be unique per finding and stable across runs.
+func TestReportToJUnit_TestcaseNamesAreUniquePerFinding(t *testing.T) {
+	mk := func() *models.AnalysisReport {
+		return &models.AnalysisReport{Findings: []models.Finding{
+			{RuleID: "unhandled-error", Severity: models.SeverityWarning, Title: "Unhandled error", Fingerprint: "aaaaaaaaaaaaaaaa", BlockID: "b1"},
+			{RuleID: "unhandled-error", Severity: models.SeverityWarning, Title: "Unhandled error", Fingerprint: "bbbbbbbbbbbbbbbb", BlockID: "b2"},
+		}}
+	}
+	names := func(rep *models.AnalysisReport) []string {
+		out, err := ReportToJUnit(rep, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root junitRoot
+		if err := xml.Unmarshal(out, &root); err != nil {
+			t.Fatal(err)
+		}
+		var ns []string
+		for _, tc := range root.Suites[0].Testcases {
+			ns = append(ns, tc.Name)
+		}
+		return ns
+	}
+	first := names(mk())
+	if len(first) != 2 || first[0] == first[1] {
+		t.Fatalf("two findings collapsed into one testcase name: %v", first)
+	}
+	if second := names(mk()); second[0] != first[0] || second[1] != first[1] {
+		t.Errorf("names are not stable across renders: %v vs %v", first, second)
+	}
+	// A finding built without a fingerprint still gets a per-block name.
+	rep := &models.AnalysisReport{Findings: []models.Finding{{RuleID: "r", Title: "T", BlockID: "block-1"}}}
+	if n := names(rep); !strings.Contains(n[0], "block-1") {
+		t.Errorf("fingerprint-less finding must fall back to its block id, got %q", n[0])
+	}
+}

@@ -29,19 +29,29 @@ const streamMatchedHold = 256
 // could begin. It is the union of their fixed lead-ins (key names, "Bearer",
 // well-known token prefixes); a tail with no anchor cannot be the start of a
 // future match and is safe to emit.
-var anchorRegex = regexp.MustCompile(`(?i)password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|Bearer|sk_|pk_|ghp_|glpat_`)
+var anchorRegex = regexp.MustCompile(`(?i)password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|Bearer|sk_|pk_|ghp_|glpat_|AKIA|ASIA|AIza|xox|eyJ|-----BEGIN`)
 
 // anchorLiterals expands anchorRegex's alternation into plain strings so a
 // keyword split across chunk boundaries ("passw" + "ord=…") is detected as a
 // partial anchor and held until the next chunk resolves it. Common single-
 // letter suffixes ("s" → "secret") hold at most a few bytes for one chunk.
 //
-// Anchors for the prefix-based secret patterns (AKIA/ASIA, AIza, xox, eyJ,
-// -----BEGIN) are NOT in this list: they are matched by their own dedicated
-// viablePrefixRegexes entries which the streaming scan consults after seeing
-// the anchor's first character. The anchorsByFirst table is built from this
-// list; the new prefix anchors are looked up directly by first byte ('A' for
-// AKIA/AIza, 'x' for xox, 'e' for eyJ, '-' for the PEM marker).
+// The prefix-based patterns (AKIA/ASIA, AIza, xox, eyJ, -----BEGIN) MUST be
+// here. A previous version of this comment claimed they were "looked up
+// directly by first byte" via viablePrefixRegexes — they were not.
+// anchorsByFirst is built from THIS list and nothing else (see the init below),
+// and partialAnchorStart only ever matches a proper prefix (len(a) > k), so a
+// fully-arrived AKIA literal had no anchor at all and release() emitted it
+// verbatim. Measured, streaming at 4-byte deltas the way providers actually
+// stream, five of the nine secret classes leaked to the browser while
+// ScrubText masked every one of them:
+//
+//	AWS AKIA / Google AIza / Slack xox* / JWT / PEM  -> LEAK
+//	ghp_ / password=                                 -> masked
+//
+// Since providers stream token-at-a-time, the leaking path was the normal one.
+// The repo's own TestSecretPatternRepresentationsStayInSync did not catch it:
+// it asserts len(secretRegexes) == len(viablePrefixRegexes), which stayed 9==9.
 var anchorLiterals = []string{
 	"password", "passwd", "pwd", "secret", "token",
 	"apikey", "api_key", "api-key",
@@ -88,14 +98,40 @@ var viablePrefixRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`^(?:AKIA|ASIA)[0-9A-Z]*$`),
 	// Google API key (AIza + up to 35 base64url chars).
 	regexp.MustCompile(`^AIza[0-9A-Za-z_-]*$`),
-	// Slack token (xox[abprs]- + up to N chars).
-	regexp.MustCompile(`^xox[abprs]-[A-Za-z0-9-]*$`),
-	// JWT (3 dot-separated segments, each starting with eyJ for header/payload).
-	// Segments 2 and 3 are optional in a partial buffer.
-	regexp.MustCompile(`^eyJ[A-Za-z0-9_-]*(?:\.eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*)?)?$`),
-	// PEM private key block. Held from BEGIN marker until END arrives; spans
-	// multiple lines, so [\s\S] is required (not just `.`).
-	regexp.MustCompile(`^-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z ]+)PRIVATE KEY-----)?$`),
+	// Slack token (xox[abprs]- + up to N chars). EVERY component after the
+	// "xox" lead-in must be optional: the anchor fires the moment "xox"
+	// arrives, and a regex requiring the type letter and the hyphen declared
+	// the anchor dead on that first look. Dead anchors are never revisited, so
+	// the token was released in pieces that individually match nothing.
+	regexp.MustCompile(`^xox(?:[abprs](?:-[A-Za-z0-9-]*)?)?$`),
+	// JWT. Expressed as "the lead-in, then any character the real pattern could
+	// still consume" rather than as progressive optional groups.
+	//
+	// Spelling out the segment structure with each part made optional looks
+	// more precise and is a trap: viability must hold for EVERY prefix of a
+	// match, including ones that end mid-separator ("…9.") or mid-marker
+	// ("….ey"). Two successive attempts here got it wrong in exactly those two
+	// places, and each time the anchor was declared dead — permanently, since
+	// dead anchors are never revisited — and the token streamed out in
+	// fragments that individually match nothing. Whether it leaked depended
+	// only on where the provider's chunk boundaries happened to fall.
+	//
+	// Over-holding is bounded by the hold cap and resolved by ScrubText, which
+	// makes the real decision; under-holding leaks. So the class is deliberately
+	// wider than the secret pattern.
+	regexp.MustCompile(`^eyJ[A-Za-z0-9_.-]*$`),
+	// PEM private key block. Held from the BEGIN marker until END arrives;
+	// spans multiple lines, so [\s\S] is required (not just `.`).
+	//
+	// Deliberately permissive after "-----BEGIN": the anchor fires on that
+	// marker alone, and spelling out progressive prefixes of
+	// " RSA PRIVATE KEY-----" would be unreadable and easy to get wrong — which
+	// is exactly how the previous pattern failed, rejecting its own anchor and
+	// releasing key material in fragments. Holding anything that opens with
+	// "-----BEGIN" is the safe direction; the hold cap bounds the delay for
+	// prose that merely contains the marker, and capOverflow runs the whole
+	// buffer through ScrubText rather than releasing a split match.
+	regexp.MustCompile(`^-----BEGIN[\s\S]*$`),
 }
 
 // byteClass is a 256-entry membership table — the per-byte fast path for a
@@ -170,6 +206,16 @@ type StreamScrubber struct {
 	kind    holdKind
 	// terminal is the byte class of the held tail's trailing run when the
 	// viable hold is inside one (see terminalStates); nil forces a rescan.
+	// draining is set when capOverflow emitted a COMPLETE secret that was still
+	// arriving — it holds the byte class of that secret's value run, and every
+	// subsequent byte still in the class is swallowed as part of the value we
+	// already masked. Without it the cap masked the first streamMatchedHold
+	// bytes, reset to holdNone, and the REST of the same secret streamed out in
+	// clear: measured leaks of exactly len(secret)-256 bytes (44 / 244 / 464 raw
+	// characters for 300- / 500- / 720-character values) while ScrubText masked
+	// all of them to 23 bytes. It is the long credentials that are hit — JWTs,
+	// PEM bodies, GCP service-account JSON, Azure SAS URLs.
+	draining *byteClass
 	terminal *byteClass
 }
 
@@ -183,6 +229,21 @@ func (s *StreamScrubber) Write(chunk string) string {
 	if chunk == "" {
 		return ""
 	}
+	// Draining the tail of a secret the cap already emitted as masked. These
+	// bytes belong to that value; emitting them would leak the part of the
+	// credential that did not fit in the hold budget.
+	if s.draining != nil {
+		i := 0
+		for i < len(chunk) && s.draining[chunk[i]] {
+			i++
+		}
+		chunk = chunk[i:]
+		if chunk == "" {
+			return ""
+		}
+		s.draining = nil // a byte outside the class ends the value
+	}
+
 	// Fast path: the hold is inside a terminal character run and every new
 	// byte continues it — extend the hold without any regex work.
 	if s.kind == holdViable && s.terminal != nil && allInClass(chunk, s.terminal) {
@@ -198,7 +259,7 @@ func (s *StreamScrubber) Write(chunk string) string {
 func (s *StreamScrubber) Flush() string {
 	out := ScrubText(string(s.pending))
 	s.pending = s.pending[:0]
-	s.kind, s.terminal = holdNone, nil
+	s.kind, s.terminal, s.draining = holdNone, nil, nil
 	return out
 }
 
@@ -277,6 +338,15 @@ func (s *StreamScrubber) release() string {
 	// leaking its lead-in. Value bytes that arrive afterwards stream unheld
 	// (the documented cap tradeoff).
 	if n-boundary > holdBudget(s.pending[boundary:]) {
+		// Same drain-arming rule as capOverflow: this is the OTHER place the
+		// matched-hold budget fires (capOverflow only runs on Write's
+		// all-in-class fast path, so a chunk large enough to carry the key AND
+		// part of the value lands here instead). Missing it left the leak alive
+		// at larger chunk sizes — 216 and 1496 raw characters at a 512-byte
+		// delta — while the small-delta path was already fixed.
+		if s.terminal != nil && !s.terminal[' '] && HasCompleteSecret(s.pending[boundary:]) {
+			s.draining = s.terminal
+		}
 		boundary = n
 		s.kind, s.terminal = holdNone, nil
 	}
@@ -356,6 +426,20 @@ func (s *StreamScrubber) capOverflow() string {
 		return ""
 	}
 	out := ScrubText(string(s.pending[:boundary]))
+	// If the cap fired on a COMPLETE secret whose value run was still open,
+	// remember that run's byte class: the rest of the value is still coming and
+	// must be swallowed, not emitted, now that its key prefix has been consumed.
+	// Armed ONLY for value classes that cannot contain a space. That is the
+	// line between a credential and a sentence: the connection-string pattern's
+	// value is `[^;\r\n]+`, which runs to end of line and accepts spaces, so
+	// draining it would swallow the rest of the paragraph — exactly the
+	// behaviour streamMatchedHold exists to prevent, and what
+	// TestStreamScrubber_MatchedHoldReleasesProse pins. The long secrets that
+	// actually leak here (JWTs, PEM base64, API keys, bearer tokens) are all
+	// space-free by construction, so this catches them without touching prose.
+	if s.terminal != nil && !s.terminal[' '] && HasCompleteSecret(s.pending[:boundary]) {
+		s.draining = s.terminal
+	}
 	m := copy(s.pending, s.pending[boundary:])
 	s.pending = s.pending[:m]
 	s.kind, s.terminal = holdNone, nil

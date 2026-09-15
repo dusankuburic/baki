@@ -91,3 +91,48 @@ func TestPathTraversalRisk(t *testing.T) {
 		t.Errorf("non-file action: got %d findings, want 0", len(got))
 	}
 }
+
+// TestPathTraversalRisk_RealPADPropertyNames: the rule keyed on property names
+// PAD never emits (destination, folderpath, filepath…); the parser emits File,
+// Files, FilesToCopy, FolderPath, Folder, SpecialFolder. It never fired on a
+// real flow.
+func TestPathTraversalRisk_RealPADPropertyNames(t *testing.T) {
+	r := &PathTraversalRiskRule{}
+	ctx := &RuleContext{}
+	cases := []struct {
+		name  string
+		typ   string
+		props map[string]string
+		want  int
+	}{
+		{"File.WriteText File", "File.WriteText", map[string]string{"File": "%OutPath%", "TextToWrite": "x"}, 1},
+		{"File.Delete Files", "File.Delete", map[string]string{"Files": "%Target%"}, 1},
+		{"File.Copy Destination", "File.Copy", map[string]string{"FilesToCopy": "C:\\a.txt", "Destination": "%Dest%"}, 1},
+		{"Folder.Create FolderPath", "Folder.Create", map[string]string{"FolderPath": "%Root%", "FolderName": "x"}, 1},
+		{"variable only in a non-path property", "File.WriteText", map[string]string{"File": "C:\\log.txt", "TextToWrite": "%Body%"}, 0},
+		{"enum special folder", "Folder.GetSpecialFolder", map[string]string{"SpecialFolder": "Folder.SpecialFolder.Desktop"}, 0},
+		{"literal percent escape", "File.WriteText", map[string]string{"File": "C:\\100%% done.txt"}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := r.Check(secBlock("b", c.typ, c.props), ctx); len(got) != c.want {
+				t.Errorf("got %d findings, want %d", len(got), c.want)
+			}
+		})
+	}
+}
+
+// TestCommandInjectionRisk_ScriptingActions: Scripting.* hands a string to an
+// interpreter exactly as RunDOSCommand does, and was matched by no rule.
+func TestCommandInjectionRisk_ScriptingActions(t *testing.T) {
+	r := &CommandInjectionRiskRule{}
+	ctx := &RuleContext{}
+	for _, typ := range []string{"Scripting.RunPowershellScript", "Scripting.RunVBScript", "Scripting.RunPythonScript", "Scripting.RunJavascript"} {
+		if got := r.Check(secBlock("b", typ, map[string]string{"Script": "Get-Item %Path%"}), ctx); len(got) != 1 {
+			t.Errorf("%s with a variable: got %d findings, want 1", typ, len(got))
+		}
+		if got := r.Check(secBlock("b", typ, map[string]string{"Script": "Get-Date"}), ctx); len(got) != 0 {
+			t.Errorf("%s without a variable: got %d findings, want 0", typ, len(got))
+		}
+	}
+}

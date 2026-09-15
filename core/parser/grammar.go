@@ -12,6 +12,13 @@ var (
 	reLoopStart    = regexp.MustCompile(`^(?i)(LOOP\s+.+|Loop\.\w+)`)
 	reIfStart      = regexp.MustCompile(`^(?i)(IF\s+.+|If\.\w+|Text\.If\b|Variables\.If\b|Display\.If\b)`)
 	reElse         = regexp.MustCompile(`^(?i)(ELSE|Else\b|Text\.Else\b|Variables\.Else\b|Display\.Else\b)\s*$`)
+	// reElseIf matches the else-if rung of an IF chain. It must be tested before
+	// both reIfStart (anchored on a leading IF, so it never matches) and reElse
+	// (anchored with \s*$, so it never matches either) -- which is why, before
+	// this pattern existed, `ELSE IF x THEN` matched NOTHING and fell through to
+	// the UNKNOWN branch: no block, a warning-only diagnostic, and every action
+	// in the else-if branch silently re-parented into the THEN branch.
+	reElseIf       = regexp.MustCompile(`^(?i)ELSE\s+IF\s+.+`)
 	reOnErrorStart = regexp.MustCompile(`^(?i)ON\s+(BLOCK\s+)?ERROR\b`)
 	// reOnErrorInline matches "ON ERROR REPEAT N TIMES WAIT M" with optional trailing params
 	// (e.g. RetryType: RetryType.Exponential MinInterval: 2 MaxInterval: 360).
@@ -57,7 +64,17 @@ var (
 	//   group 4: STEP value (optional, e.g. "2" or "%Step%")
 	// The value pattern (-?%?[\w.]+%?) covers plain numbers, negative numbers,
 	// and percent-wrapped variable references.
-	reLoopRange = regexp.MustCompile(`(?i)^LOOP\s+(\w+)\s+FROM\s+(-?%?[\w.]+%?)\s+TO\s+(-?%?[\w.]+%?)(?:\s+STEP\s+(-?%?[\w.]+%?))?`)
+	// reLoopWhile matches the conditional loop form. Together with reLoopForEach
+	// and reLoopRange it gives every loop a KIND, which is what lets
+	// infinite-loop-risk distinguish a loop that CAN run forever from one that
+	// terminates by construction.
+	reLoopWhile = regexp.MustCompile(`(?i)^LOOP\s+WHILE\b`)
+	// reLoopRangeAnon is the counted form WITHOUT a named counter
+	// (`LOOP FROM 2 TO %FreeRow% - 1 STEP 1`). reLoopRange requires a counter
+	// name because it exists to EXTRACT that variable; this one exists only to
+	// recognise the shape, which is bounded either way.
+	reLoopRangeAnon = regexp.MustCompile(`(?i)^LOOP\s+FROM\s+`)
+	reLoopRange     = regexp.MustCompile(`(?i)^LOOP\s+(\w+)\s+FROM\s+(-?%?[\w.]+%?)\s+TO\s+(-?%?[\w.]+%?)(?:\s+STEP\s+(-?%?[\w.]+%?))?`)
 	// **REGION / **ENDREGION — alternative inline region syntax used in some PAD exports.
 	reStarRegionStart = regexp.MustCompile(`(?i)^\*\*REGION\s*(.*)`)
 	reStarRegionEnd   = regexp.MustCompile(`(?i)^\*\*ENDREGION`)

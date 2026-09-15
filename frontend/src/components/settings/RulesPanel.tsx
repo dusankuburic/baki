@@ -2,7 +2,7 @@ import {useCallback, useMemo, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {analysisApi} from '@/api'
 import type {Rule, RuleConfig, Severity} from '@/types'
-import {Switch} from '@/components/shared'
+import {Switch, NumberField} from '@/components/shared'
 import {Shield, AlertCircle, AlertTriangle, Info, Zap} from 'lucide-react'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import {useSettingsStore} from '@/stores/settingsStore'
@@ -76,13 +76,14 @@ export default function RulesPanel() {
   // Effective config for a rule under the current scope: the org's override
   // when it has one, otherwise what the server reported (the deployment layer).
   const effective = useCallback(
-    (rule: Rule): {enabled: boolean; severity: Severity; overridden: boolean} => {
+    (rule: Rule): {enabled: boolean; severity: Severity; overridden: boolean; options?: Record<string, number>} => {
       const ov = isOrgScope ? overrides[rule.id] : undefined
-      if (!ov) return {enabled: rule.enabled, severity: rule.defaultSeverity, overridden: false}
+      if (!ov) return {enabled: rule.enabled, severity: rule.defaultSeverity, overridden: false, options: rule.options}
       return {
         enabled: ov.enabled,
         severity: (ov.severity || rule.defaultSeverity) as Severity,
         overridden: true,
+        options: {...(rule.options ?? {}), ...((ov.options as Record<string, number> | undefined) ?? {})},
       }
     },
     [isOrgScope, overrides],
@@ -133,6 +134,27 @@ export default function RulesPanel() {
       setRules(rules.map(r => (r.id === ruleId ? {...r, defaultSeverity: severity} : r)))
     } catch (err) {
       toast.error(t('rules.severityFailed', {message: (err as Error).message}))
+    }
+  }
+
+  // Thresholds (maxDepth, minRepeats, maxBlocks) were honoured by the rules
+  // and reachable only by hand-editing the settings JSON. The catalog now
+  // reports them per rule; this writes one back at the current scope, merged
+  // over the others so a single edit never drops a sibling threshold.
+  const handleOptionChange = async (ruleId: string, key: string, n: number) => {
+    const rule = rules.find(r => r.id === ruleId)
+    if (!rule) return
+    const eff = effective(rule)
+    const options = {...(eff.options ?? {}), [key]: n}
+    try {
+      if (isOrgScope) {
+        await writeOrgOverride(ruleId, {enabled: eff.enabled, severity: eff.severity, options})
+        return
+      }
+      await analysisApi.updateRuleConfig(ruleId, {enabled: rule.enabled, severity: rule.defaultSeverity, options})
+      setRules(rules.map(r => (r.id === ruleId ? {...r, options} : r)))
+    } catch (err) {
+      toast.error(t('rules.updateFailed', {message: (err as Error).message}))
     }
   }
 
@@ -265,6 +287,29 @@ export default function RulesPanel() {
                     ]}
                     className="bg-surface-2"
                   />
+                </div>
+              )}
+
+              {eff.enabled && eff.options && Object.keys(eff.options).length > 0 && (
+                <div className="flex flex-wrap items-center gap-4 animate-fade-in" data-testid={`thresholds-${rule.id}`}>
+                  <span className="text-2xs font-bold uppercase text-text-tertiary">{t('rules.thresholds')}</span>
+                  {Object.entries(eff.options).map(([key, val]) => (
+                    <label key={key} className="flex items-center gap-2 text-xs text-text-secondary">
+                      <span className="font-mono">{key}</span>
+                      {canEdit ? (
+                        <div className="w-20">
+                          <NumberField
+                            value={Number(val)}
+                            min={1}
+                            fallback={Number(rule.options?.[key] ?? 1)}
+                            onCommit={n => void handleOptionChange(rule.id, key, n)}
+                          />
+                        </div>
+                      ) : (
+                        <span className="font-mono text-text-primary">{String(val)}</span>
+                      )}
+                    </label>
+                  ))}
                 </div>
               )}
             </div>

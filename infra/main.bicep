@@ -7,7 +7,7 @@
 //     --parameters @infra/main.parameters.json \
 //     --parameters authSecret=<...> databaseUrl=<...>
 //
-// Severity rationale (PRODUCTION_READINESS.md): single-replica deployment, so
+// Severity rationale: single-replica deployment, so
 // the per-instance rate-limiter / WS presence hub / chat-resume state are
 // acceptable. Scale min=max=1 by default — raise maxReplicas only after adding
 // the shared backplane the review calls for.
@@ -50,8 +50,19 @@ param encryptionKey string = ''
 @secure()
 param databaseUrl string
 
-@description('Optional Azure Key Vault URL. When set (non-empty), the app resolves pad-auth-secret / pad-database-url from Key Vault. Empty string = unused.')
-param keyVaultUrl string = ''
+@description('Container registry the image is pulled from. GHCR by default (deploy.yml pushes there).')
+param registryServer string = 'ghcr.io'
+
+@description('Registry username. GHCR is a private registry for this repo, so ACA needs pull credentials at every revision create AND every restart/scale event — managed identity cannot authenticate to GHCR. Leave both empty only if the package is public.')
+param registryUsername string = ''
+
+@secure()
+@description('Registry password/token. For GHCR: a classic PAT with read:packages (deploy.yml passes secrets.GHCR_PULL_TOKEN). The workflow GITHUB_TOKEN is NOT usable: it expires when the run ends, and ACA pulls again on every restart.')
+param registryPassword string = ''
+
+@secure()
+@description('Bearer token that gates GET /metrics. Behind the ACA ingress every request arrives from a private address, so the app\'s private-network allowance is satisfied by everyone; this token is the only real gate. Empty leaves /metrics public (the app logs a warning at boot).')
+param metricsToken string = ''
 
 @description('Optional resource ID of an existing storage account. When provided (non-empty), the app uses it and provisionStorage is ignored.')
 param storageAccountResourceId string = ''
@@ -59,8 +70,8 @@ param storageAccountResourceId string = ''
 @description('Provision a dedicated storage account + blob container for flow-content offload when storageAccountResourceId is empty. Default true.')
 param provisionStorage bool = true
 
-@description('Provision an Azure Cache for Redis (the shared backplane for rate-limiting, WS presence, chat-resume across replicas). Required when maxReplicas > 1.')
-param provisionRedis bool = true
+@description('Provision an Azure Cache for Redis (the shared backplane for rate-limiting, WS presence, chat-resume across replicas). Required when maxReplicas > 1; OFF by default because the default template is single-replica (maxReplicas = 1) and redisx refuses to boot when PAD_REDIS_URL is set but unreachable — so a Redis blip was a hard startup failure for a backplane the deployment did not use. Set true when scaling out.')
+param provisionRedis bool = false
 
 @description('Redis SKU.')
 param redisSku string = 'Basic'
@@ -70,9 +81,6 @@ param redisFamily string = 'C'
 
 @description('Redis capacity (0 = 250MB Basic; size up for production.')
 param redisCapacity int = 0
-
-@description('Provision a Key Vault to hold pad-auth-secret / pad-database-url / pad-encryption-key (the app resolves them by name via PAD_KEYVAULT_URL). When false, the container secrets below are used directly.')
-param provisionKeyVault bool = true
 
 @description('Comma-separated email addresses for operational alerts (Action Group recipients). Leave empty to skip alert provisioning.')
 param alertEmails string = ''
@@ -217,36 +225,11 @@ resource redis 'Microsoft.Cache/redis@2023-08-01' = if (provisionRedis) {
 // Container App secret (never as a plain env var).
 var redisPrimaryKey = provisionRedis ? listKeys(redis.id, redis.apiVersion).primaryKey : ''
 
-// ── Key Vault (secret store) ────────────────────────────────────────────────
-// Holds pad-auth-secret / pad-encryption-key / pad-database-url. The app
-// resolves them by name when PAD_KEYVAULT_URL is set (RBAC — no access policy
-// needed; the MI gets the Key Vault Secrets User role below).
-var keyVaultName = toLower(replace('${appName}-kv', '-', ''))
-
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (provisionKeyVault) {
-  name: keyVaultName
-  location: location
-  properties: {
-    sku: { family: 'A', name: 'standard' }
-    tenantId: tenant().tenantId
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 7
-    enablePurgeProtection: false // allow purge during teardown; set true in prod-stable
-    publicNetworkAccess: 'Enabled'
-  }
-}
-
-var keyVaultSecretsUserRoleRoleId = '4633458b-17d3-44ce-994d-c8e757160771' // built-in 'Key Vault Secrets User'
-resource keyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionKeyVault) {
-  name: guid(keyVault.id, identity.id, keyVaultSecretsUserRoleRoleId)
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleRoleId)
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// Secrets live in Container App secrets (below), sourced from GitHub Actions
+// secrets at deploy time. A Key Vault used to be provisioned here as well, but
+// nothing ever wrote a secret into it: every boot did six lookups, got six
+// 404s, logged six warnings, and fell back to exactly these container secrets.
+// Removed rather than finished — ACA secrets already do the job honestly.
 
 // ── Container App ──────────────────────────────────────────────────────────
 resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
@@ -280,8 +263,20 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         // Redis primary key composed into the rediss:// URL below (TLS endpoint).
         { name: 'redis-key', value: redisPrimaryKey }
         { name: 'redis-url', value: provisionRedis ? 'rediss://:${redisPrimaryKey}@${redis.properties.hostName}:6380' : '' }
+        { name: 'registry-password', value: registryPassword }
+        { name: 'metrics-token', value: metricsToken }
       ]
-      registries: []
+      // Pull credentials for the private image. This used to be `registries: []`,
+      // which meant the FIRST successful deploy would have gone straight to
+      // ImagePullBackOff on the private GHCR image — the pipeline had never run
+      // far enough to show it.
+      registries: empty(registryUsername) ? [] : [
+        {
+          server: registryServer
+          username: registryUsername
+          passwordSecretRef: 'registry-password'
+        }
+      ]
     }
     template: {
       containers: [
@@ -312,8 +307,6 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             { name: 'PAD_BEHIND_PROXY', value: 'true' }
             // Tell DefaultAzureCredential which managed identity to use.
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
-            // Empty value = unused (the app treats an empty PAD_KEYVAULT_URL as unset).
-            { name: 'PAD_KEYVAULT_URL', value: provisionKeyVault ? keyVault.properties.vaultUri : keyVaultUrl }
             { name: 'PAD_AUTH_SECRET', secretRef: 'auth-secret' }
             { name: 'PAD_ENCRYPTION_KEY', secretRef: 'encryption-key' }
             { name: 'PAD_DATABASE_URL', secretRef: 'database-url' }
@@ -321,6 +314,8 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             // uses its in-memory fallback). ACA secret interpolation composes
             // the key into the URL without surfacing it as a plain env value.
             { name: 'PAD_REDIS_URL', secretRef: 'redis-url' }
+            // Gates /metrics (see metricsToken). Empty = public, with a boot warning.
+            { name: 'PAD_METRICS_TOKEN', secretRef: 'metrics-token' }
             // Storage (Managed-Identity auth, no secret): the account name +
             // container the app writes flow-content blobs to.
             { name: 'PAD_AZURE_STORAGE_ACCOUNT', value: provisionStorage && empty(storageAccountResourceId) ? storage.name : '' }
@@ -411,10 +406,82 @@ resource restartAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(
   }
 }
 
+// Log-query alerts on the Log Analytics workspace the environment already
+// ships console/system logs to. These are the "one alert" the readiness
+// review asked for: the app has ~40 Prometheus metrics that nothing scrapes,
+// so until a scrape pipeline exists the structured JSON log IS the signal.
+//   - error burst: > 20 level=ERROR lines in 15 minutes (the app logs at
+//     ERROR only for failures an operator should see; access-log 5xx lines
+//     are included, panics are included).
+//   - readiness failing: ACA reports readiness probe failures in the system
+//     log; > 3 in 10 minutes means the pod is out of rotation and, single-
+//     replica, the app is down.
+// Both need alertEmails; the workspace is 'workspace' above.
+resource errorBurstAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = if (!empty(alertEmails)) {
+  name: '${appName}-error-burst'
+  location: location
+  properties: {
+    displayName: '${appName}: ERROR log burst'
+    description: 'More than 20 ERROR-level log lines in 15 minutes. Open the workspace and filter ContainerAppConsoleLogs_CL on level ERROR; each line carries request_id and trace_id.'
+    severity: 2
+    enabled: true
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    scopes: [workspace.id]
+    criteria: {
+      allOf: [
+        {
+          query: 'ContainerAppConsoleLogs_CL | where ContainerAppName_s == "${appName}" | where Log_s contains \'"level":"ERROR"\''
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 20
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [actionGroup.id]
+    }
+  }
+}
+
+resource readinessAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = if (!empty(alertEmails)) {
+  name: '${appName}-readiness-failing'
+  location: location
+  properties: {
+    displayName: '${appName}: readiness probe failing'
+    description: 'ACA reported readiness probe failures for the app more than 3 times in 10 minutes. With one replica this means the app is out of rotation: check /readyz (DB, blob, Redis) and the ERROR log.'
+    severity: 1
+    enabled: true
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT10M'
+    scopes: [workspace.id]
+    criteria: {
+      allOf: [
+        {
+          query: 'ContainerAppSystemLogs_CL | where ContainerAppName_s == "${appName}" | where Log_s contains "readiness" and Log_s contains "fail"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 3
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [actionGroup.id]
+    }
+  }
+}
+
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
 output containerAppName string = containerApp.name
 output managedIdentityClientId string = identity.properties.clientId
 output managedIdentityPrincipalId string = identity.properties.principalId
 output storageAccountName string = provisionStorage && empty(storageAccountResourceId) ? storage.name : ''
 output redisName string = provisionRedis ? redis.name : ''
-output keyVaultUri string = provisionKeyVault ? keyVault.properties.vaultUri : ''

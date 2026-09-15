@@ -31,6 +31,11 @@ permissions:
   # Required for the analyzer to publish findings to the Security tab and to
   # annotate changed lines inline on pull requests.
   security-events: write
+  # Required by the action's "Comment on pull request" step, which is on by
+  # default (comment-on-pr). Without this the token cannot post and the step
+  # 403s — and because it runs under always(), that failed the whole job even
+  # when the analysis itself passed.
+  pull-requests: write
 
 jobs:
   analyze:
@@ -41,8 +46,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
+      # A pinned, fully-qualified reference — NOT `uses: ./`. This workflow is
+      # also offered to other repositories via workflow_call, and a relative
+      # `./` resolves against the CALLER's checkout, which has no action.yml,
+      # so every consumer run failed with "Can't find action.yml". The tag
+      # must exist (release.yml publishes it); bump it when cutting a release.
       - name: Analyze PAD flows
-        uses: ./
+        uses: dusankuburic/baki@v0.1.0
         with:
           flow-path: ${{ inputs.flow_path || '.' }}
           fail-on: ${{ inputs.fail_on || 'error' }}

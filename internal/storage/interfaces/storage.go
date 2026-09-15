@@ -107,6 +107,8 @@ type PurgeResult struct {
 	FlowAnalysisHistory int `json:"flowAnalysisHistory"`
 	UsageMetrics        int `json:"usageMetrics"`
 	TokenBlacklist      int `json:"tokenBlacklist"`
+	ShareTokens         int `json:"shareTokens"`
+	GovAlerts           int `json:"govAlerts"`
 }
 
 // StorageBackend defines the interface for storage implementations
@@ -223,7 +225,10 @@ type OrgStore interface {
 
 // SharingStore covers per-flow collaborator management.
 type SharingStore interface {
-	ListCollaborators(ctx context.Context, flowID string) ([]*Collaborator, error)
+	// ListCollaborators returns up to limit rows (limit <= 0 = all). The
+	// handler clamps its response; without a limit here the store still
+	// fetched and allocated the whole set first.
+	ListCollaborators(ctx context.Context, flowID string, limit int) ([]*Collaborator, error)
 	ListCollaboratorsBatch(ctx context.Context, flowIDs []string) (map[string][]*Collaborator, error)
 	AddCollaborator(ctx context.Context, flowID string, c *Collaborator) error
 	UpdateCollaborator(ctx context.Context, flowID, userID string, permission string) error
@@ -264,7 +269,8 @@ type KnowledgeStore interface {
 	// DeleteKnowledgeDocumentByName removes every document with the given
 	// filename in the org — re-upload REPLACE semantics (chunks cascade).
 	DeleteKnowledgeDocumentByName(ctx context.Context, orgID, filename string) error
-	ListKnowledgeDocuments(ctx context.Context, orgID string) ([]*KnowledgeDocument, error)
+	// ListKnowledgeDocuments returns up to limit rows (limit <= 0 = all).
+	ListKnowledgeDocuments(ctx context.Context, orgID string, limit int) ([]*KnowledgeDocument, error)
 	// SaveKnowledgeChunks inserts chunk rows RLS-scoped to userID so the
 	// knowledge_chunks WITH CHECK policy enforces org membership. userID is
 	// the calling user's identity ("" only in non-authenticated local mode).
@@ -939,7 +945,6 @@ type AISettings struct {
 	// in parity or the settings round-trip drops the value silently.
 	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
-	DemoMode                DemoModeSettings            `json:"demoMode"`
 	ShowCostEstimates       bool                        `json:"showCostEstimates"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
@@ -979,13 +984,6 @@ type RecentFile struct {
 	Size     int64     `json:"size"`
 	LastOpen time.Time `json:"lastOpen"`
 	IsFolder bool      `json:"isFolder"`
-}
-
-type DemoModeSettings struct {
-	Enabled    bool   `json:"enabled"`
-	DailyLimit int    `json:"dailyLimit"`
-	DailyUsed  int    `json:"dailyUsed"`
-	ResetDate  string `json:"resetDate"`
 }
 
 // AuditEvent records a user action for compliance and security visibility.

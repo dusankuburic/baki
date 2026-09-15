@@ -103,15 +103,7 @@ export const defaultSettings: AppSettings = {
         maxTokens: 4096,
         contextTokenBudget: 4000,
       },
-      demo: {
-        enabled: false,
-        defaultModel: 'demo',
-        temperature: 0.3,
-        maxTokens: 4096,
-        contextTokenBudget: 4000,
-      },
     },
-    demoMode: {enabled: true, dailyLimit: 5, dailyUsed: 0, resetDate: ''},
     showCostEstimates: true,
     saveConversationHistory: true,
     dailyBudget: 5.0,
@@ -299,11 +291,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
               providers: {
                 ...defaultSettings.ai.providers,
                 ...(loaded.ai?.providers ?? {}),
-              },
-              demoMode: {
-                ...defaultSettings.ai.demoMode,
-                ...(loaded.ai?.demoMode ?? {}),
-                dailyLimit: loaded.ai?.demoMode?.dailyLimit || defaultSettings.ai.demoMode.dailyLimit,
               },
               prompts: {
                 block: loaded.ai?.prompts?.block ?? defaultSettings.ai.prompts.block,

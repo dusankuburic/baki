@@ -46,7 +46,9 @@ func newCapture(t *testing.T) *capture {
 // are always valid http://127.0.0.1 so the error can't fire here.
 func mustNotifier(t *testing.T, url string) *notify.Dispatcher {
 	t.Helper()
-	d, err := notify.New(notify.Config{WebhookURL: url})
+	// The capture servers are httptest, i.e. loopback — the policy has to be
+	// opted into explicitly, which is the point of the zero value being strict.
+	d, err := notify.New(notify.Config{WebhookURL: url, Policy: notify.AllowLoopbackTargets})
 	if err != nil {
 		t.Fatalf("notify.New: %v", err)
 	}
@@ -106,7 +108,7 @@ func TestScanOnce_DriftAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -126,7 +128,7 @@ func TestScanOnce_NoBaselineNoAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -143,7 +145,7 @@ func TestScanOnce_HealthRegression(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -164,7 +166,7 @@ func TestScanOnce_NoRegressionWhenHealthImproves(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -183,7 +185,7 @@ func TestScanOnce_DedupsRepeatAlerts(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 
 	s.ScanOnce(context.Background())
 	s.ScanOnce(context.Background()) // identical state — must not re-alert
@@ -209,7 +211,7 @@ func TestScanOnce_PrunesDedupEntriesForDeletedFlows(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 
 	s.ScanOnce(context.Background())
 	s.mu.Lock()
@@ -246,7 +248,7 @@ func TestScanOnce_PersistsAlertToInbox(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	// One external dispatch AND one persisted inbox row.
@@ -327,7 +329,7 @@ func TestScanOnce_PushesAlertOverSSE(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(context.Background())
@@ -390,7 +392,7 @@ func TestScanOnce_OrgChannelRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0)
+	s := New(b, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
 	s.ScanOnce(context.Background())
 
 	// Org delivery runs on detached goroutines (parity with the global

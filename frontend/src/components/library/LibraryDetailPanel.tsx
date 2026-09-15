@@ -6,6 +6,7 @@ import {logger} from '@/lib/logger'
 import {relativeTime, absoluteTime} from '@/lib/time'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAsync} from '@/hooks/useAsync'
+import {isTauri} from '@/platform/guards'
 
 interface Props {
   flowId: string | null
@@ -22,7 +23,15 @@ interface Props {
 interface DetailData {
   flow: LibraryFlow
   versions: LibraryFlowVersion[]
+  // Set when the versions call failed. Rendered as an error, never as an
+  // empty list: "No saved versions yet." over a 503 told the user their
+  // history was empty when the feature was unavailable.
+  versionsError: string | null
 }
+
+// Local mode (desktop) has no version store — the server answers 503 — so
+// the section is not rendered at all rather than shown empty or erroring.
+const versioningAvailable = () => !isTauri()
 
 export default function LibraryDetailPanel({
   flowId,
@@ -44,8 +53,17 @@ export default function LibraryDetailPanel({
     refetch: load,
   } = useAsync<DetailData | null>(() => {
     if (!flowId) return Promise.resolve(null)
-    return Promise.all([libraryApi.get(flowId), libraryApi.versions(flowId, 10).catch(() => [])])
-      .then(([flow, versions]) => ({flow, versions}))
+    const versionsP: Promise<Pick<DetailData, 'versions' | 'versionsError'>> = versioningAvailable()
+      ? libraryApi.versions(flowId, 10).then(
+          versions => ({versions, versionsError: null}),
+          (e: unknown) => {
+            logger.warn('Library: versions load failed', e)
+            return {versions: [], versionsError: e instanceof Error ? e.message : String(e)}
+          },
+        )
+      : Promise.resolve({versions: [], versionsError: null})
+    return Promise.all([libraryApi.get(flowId), versionsP])
+      .then(([flow, v]) => ({flow, ...v}))
       .catch(e => {
         logger.warn('Library: detail load failed', e)
         throw e
@@ -53,6 +71,7 @@ export default function LibraryDetailPanel({
   }, [flowId])
   const flow = data?.flow ?? null
   const versions = data?.versions ?? []
+  const versionsError = data?.versionsError ?? null
 
   if (!flowId) {
     return <div className="p-6 text-center text-sm text-text-tertiary">Select a flow to see its details.</div>
@@ -131,8 +150,13 @@ export default function LibraryDetailPanel({
           </Section>
         )}
 
+        {versioningAvailable() && (
         <Section title={`Version history${versions.length ? ` (${versions.length})` : ''}`}>
-          {versions.length === 0 ? (
+          {versionsError ? (
+            <p className="text-xs text-semantic-error" role="alert">
+              Version history unavailable: {versionsError}
+            </p>
+          ) : versions.length === 0 ? (
             <p className="text-xs text-text-tertiary">No saved versions yet.</p>
           ) : (
             <ul className="space-y-1.5">
@@ -150,6 +174,7 @@ export default function LibraryDetailPanel({
             </ul>
           )}
         </Section>
+        )}
 
         <div className="flex items-center gap-2 pt-3 border-t border-border-subtle flex-wrap">
           <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onRename(flow)}>

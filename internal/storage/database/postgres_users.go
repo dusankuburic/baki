@@ -516,9 +516,23 @@ func (b *PostgresStorageBackend) SaveAuditEvents(ctx context.Context, events []*
 }
 
 func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
+	// A cap clamps DOWN to the maximum; it does not fall back to the default.
+	//
+	// This read `if limit <= 0 || limit > 500 { limit = 100 }`, so asking for
+	// MORE than the maximum silently returned five times FEWER than the maximum.
+	// The GDPR data-subject export (postgres_retention.go) asks for 1000 and was
+	// therefore shipping exactly 100 audit events, with no error and no
+	// truncation marker — a compliance export quietly omitting records.
+	const (
+		defaultAuditLimit = 100
+		maxAuditLimit     = 500
+	)
 	limit := filter.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 100
+	switch {
+	case limit <= 0:
+		limit = defaultAuditLimit
+	case limit > maxAuditLimit:
+		limit = maxAuditLimit
 	}
 	offset := filter.Offset
 	if offset < 0 {

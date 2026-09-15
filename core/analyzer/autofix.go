@@ -253,8 +253,45 @@ func applyReplace(lines []string, op models.PatchOp) []string {
 			return lines
 		}
 	}
+	if op.Property != "" {
+		lines[idx] = replaceInProperty(lines[idx], op.Property, old, op.New)
+		return lines
+	}
 	lines[idx] = strings.ReplaceAll(lines[idx], old, op.New)
 	return lines
+}
+
+// replaceInProperty replaces the FIRST occurrence of old that appears after
+// `property:` on the line, leaving every other occurrence alone.
+//
+// The key must start at a word boundary so a replace aimed at "X" cannot match
+// inside "MaxX". If the key or the value is not found the line is returned
+// unchanged — declining is the right failure mode for a fixer that cannot locate
+// its target precisely.
+func replaceInProperty(line, property, old, replacement string) string {
+	keyAt := -1
+	for i := 0; ; {
+		j := strings.Index(line[i:], property+":")
+		if j < 0 {
+			break
+		}
+		at := i + j
+		if at == 0 || line[at-1] == ' ' || line[at-1] == '\t' {
+			keyAt = at
+			break
+		}
+		i = at + 1
+	}
+	if keyAt < 0 {
+		return line
+	}
+	valueFrom := keyAt + len(property) + 1
+	rel := strings.Index(line[valueFrom:], old)
+	if rel < 0 {
+		return line
+	}
+	at := valueFrom + rel
+	return line[:at] + replacement + line[at+len(old):]
 }
 
 // applyAppend appends op.Lines[0] to the end of the 1-based line StartLine.
@@ -476,36 +513,42 @@ func ReplaceWithVariablePatch(block *models.Block, propKey string) models.Patch 
 	return models.Patch{Ops: []models.PatchOp{{
 		Kind:      "replace",
 		StartLine: block.LineNumber,
+		Property:  propKey,
 		Old:       propValue,
 		New:       "%" + varName + "%",
 	}}}
 }
 
-// WrapInRetryPatch builds a Patch that wraps the block in a retry loop with a
-// counter, resolving missing-retry. The loop name contains "RetryCount" so the
-// missing-retry rule's isInsideRetryLoop heuristic detects it as a retry loop.
-// Uses a multi-line header (SET counter + LOOP) and multi-line footer (counter
-// increment + END) via the wrap op's newline-splitting support.
+// WrapInRetryPatch appends PAD's native inline retry to the action, resolving
+// missing-retry.
 //
-// Structure produced:
+//	<action>
+//	ON ERROR REPEAT 3 TIMES WAIT 5
+//
+// It used to emit a counting loop instead:
 //
 //	SET RetryCount TO 0
 //	LOOP WHILE %RetryCount% < 3
 //	    <action re-indented>
 //	    SET RetryCount TO %RetryCount% + 1
 //	END
+//
+// That is not a retry. There is no error check and no success exit, so the
+// action ran three times UNCONDITIONALLY — and missing-retry's targets are
+// Outlook/Email send, Database.ExecuteSqlStatement, HTTPClient calls. The fix
+// meant three invoices to the customer, three inserts, three paid API calls. It
+// passed its round-trip gate throughout, because that gate only asks whether the
+// finding disappeared, never whether the flow still means the same thing.
+//
+// The native construct is conditional on failure, which is what "retry" means,
+// and the parser already folds it into the action's _retryCount/_retryWait
+// (see handleAction in core/parser/parser.go) — which is what lets
+// missing-retry and unhandled-error see it and stand down.
 func WrapInRetryPatch(block *models.Block) models.Patch {
-	indent := indentCols(block)
-	inner := indentColsDeeper(block, 1)
-	header := indent + "SET RetryCount TO 0\n" + indent + "LOOP WHILE %RetryCount% < 3"
-	footer := inner + "SET RetryCount TO %RetryCount% + 1\n" + indent + "END"
 	return models.Patch{Ops: []models.PatchOp{{
-		Kind:        "wrap",
-		StartLine:   block.LineNumber,
-		EndLine:     blockEndLine(block),
-		Header:      header,
-		Footer:      footer,
-		IndentDelta: 1,
+		Kind:       "insert",
+		BeforeLine: blockEndLine(block) + 1,
+		Lines:      []string{indentCols(block) + "ON ERROR REPEAT 3 TIMES WAIT 5"},
 	}}}
 }
 

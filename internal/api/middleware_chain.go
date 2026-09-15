@@ -30,11 +30,13 @@ import (
 // The full, resolved middleware order (outermost/first-to-run at top):
 //
 //  1. otelhttp            — OpenTelemetry tracing span
-//  2. middleware.Recovery  — panic recovery (must wrap everything below)
+//  2. middleware.Recovery  — panic recovery for the middleware layers below
 //  3. middleware.RequestTimeout — per-request deadline
 //  4. middleware.Compress  — response compression
 //  5. middleware.AccessLog — structured request logging
 //  6. middleware.Metrics   — Prometheus request metrics
+//     6b. middleware.Recovery — panic recovery for HANDLERS, inside 5-6 so a
+//     panicking request is still logged and counted as a 500
 //  7. rate limiting (cloud mode only) — per-group token bucket, dispatched by
 //     rateLimitGroup(method, path); local mode skips this layer entirely
 //     -- inside the *Router (chi.Mux), applied via registerRoutes's r.Use() --
@@ -109,7 +111,17 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 			middleware.RequestTimeout(timeoutDur)(
 				middleware.Compress(
 					middleware.AccessLog(cfg.Server.TrustedProxies)(
-						middleware.Metrics(routerWithLimits, staticRoutePatterns(router.mux)),
+						middleware.Metrics(
+							// Inner Recovery, INSIDE AccessLog and Metrics. Neither of
+							// those defers its bookkeeping, so with only the outer
+							// Recovery a handler panic unwound straight past both: no
+							// access-log line and no http_requests_total{5xx} sample
+							// for exactly the requests a 5xx alert exists for. The
+							// outer Recovery stays as the guard for the middleware
+							// layers themselves.
+							middleware.Recovery(routerWithLimits),
+							staticRoutePatterns(router.mux),
+						),
 					),
 				),
 			),

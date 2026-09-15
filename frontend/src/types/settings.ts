@@ -75,7 +75,6 @@ export interface AISettings {
   /** Override the embedding model name; empty keeps the provider default. */
   embeddingModel?: string
   providers: Record<ProviderID, AIProviderConfig>
-  demoMode: DemoModeSettings
   showCostEstimates: boolean
   saveConversationHistory: boolean
   systemPromptSuffix?: string
@@ -89,13 +88,6 @@ export interface AIProviderConfig {
   temperature: number
   maxTokens: number
   contextTokenBudget: number
-}
-
-export interface DemoModeSettings {
-  enabled: boolean
-  dailyLimit: number
-  dailyUsed: number
-  resetDate: string
 }
 
 export interface ParserSettings {

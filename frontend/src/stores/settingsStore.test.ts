@@ -77,7 +77,7 @@ describe('loadFromBackend', () => {
       appearance: {theme: '', density: '', codeFont: '', uiFont: ''},
       parser: {maxFileSizeMB: 0, spacesPerIndent: 0},
       layout: {sidebarWidth: 0, inspectorWidth: 0, lastActiveInspectorTab: '', lastViewMode: ''},
-      ai: {activeProvider: '', embeddingProvider: '', dailyBudget: 0, demoMode: {dailyLimit: 0}},
+      ai: {activeProvider: '', embeddingProvider: '', dailyBudget: 0},
       analysis: {autoAnalyzeOnOpen: false},
     })
 
@@ -92,7 +92,6 @@ describe('loadFromBackend', () => {
     expect(s.appearance.uiFont).toBeTruthy()
     expect(s.ai.activeProvider).toBeTruthy()
     expect(s.ai.dailyBudget).toBeGreaterThan(0)
-    expect(s.ai.demoMode.dailyLimit).toBeGreaterThan(0)
     expect(s.layout.sidebarWidth).toBeGreaterThan(0)
     expect(s.layout.inspectorWidth).toBeGreaterThan(0)
     expect(s.layout.lastActiveInspectorTab).toBeTruthy()

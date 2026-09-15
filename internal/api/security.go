@@ -27,6 +27,11 @@ type SecurityConfig struct {
 // gate on flags without importing config.
 type FeatureFlags struct {
 	DisableSignUp bool
+	// LocalConfigEndpoint allows GET /api/local-config to return the session
+	// token. Off unless a browser-based local dev server explicitly enables it —
+	// see config.ServerConfig.LocalConfigEndpoint for why the desktop app must
+	// never turn it on.
+	LocalConfigEndpoint bool
 }
 
 func (c *SecurityConfig) CallerID(r *http.Request) string {

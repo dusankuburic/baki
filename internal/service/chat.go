@@ -74,7 +74,9 @@ func inFlightCost(p ai.Provider, tokensIn, tokensOut int) float64 {
 	return float64(tokensIn)/1e6*price.InputCostPerM + float64(tokensOut)/1e6*price.OutputCostPerM
 }
 
-func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, inflight float64) error {
+// self is the calling stream (nil before it is registered): its own ledger
+// entry is excluded because the caller passes its own spend as inflight.
+func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, inflight float64, self *streamCtl) error {
 	if s.settings == nil {
 		return nil // no settings provider wired (bare-struct tests/local) — unlimited
 	}
@@ -86,8 +88,17 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 	if err != nil {
 		return fmt.Errorf("daily AI budget check unavailable: %w", err)
 	}
-	if usage+inflight >= settings.AI.DailyBudget {
-		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f)", usage+inflight, settings.AI.DailyBudget)
+	// Concurrent streams' in-flight spend (their spend so far plus one
+	// reserved maximum response each). Without this term N streams started
+	// together all passed the same store read; usage rows only land after
+	// each turn completes.
+	orgOthers, userOthers := s.othersInFlight(scope, orgID, self)
+	concurrent := userOthers
+	if orgID != "" {
+		concurrent = orgOthers
+	}
+	if total := usage + inflight + concurrent; total >= settings.AI.DailyBudget {
+		return fmt.Errorf("daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.DailyBudget, concurrent)
 	}
 
 	// When org-scoped, also enforce a per-user sub-limit so one member can't
@@ -98,11 +109,44 @@ func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, in
 		if err != nil {
 			return fmt.Errorf("per-user AI budget check unavailable: %w", err)
 		}
-		if userUsage+inflight >= settings.AI.PerUserDailyBudget {
-			return fmt.Errorf("per-user daily AI budget exceeded ($%.2f / $%.2f)", userUsage+inflight, settings.AI.PerUserDailyBudget)
+		if total := userUsage + inflight + userOthers; total >= settings.AI.PerUserDailyBudget {
+			return fmt.Errorf("per-user daily AI budget exceeded ($%.2f / $%.2f, of which $%.2f is in flight on other streams)", total, settings.AI.PerUserDailyBudget, userOthers)
 		}
 	}
 	return nil
+}
+
+// othersInFlight sums the in-flight ledger of every active stream other than
+// self: orgSum over streams attributed to orgID (when non-empty), userSum over
+// streams owned by scope.
+func (s *ChatService) othersInFlight(scope, orgID string, self *streamCtl) (orgSum, userSum float64) {
+	s.activeStreams.Range(func(_, v interface{}) bool {
+		c, ok := v.(*streamCtl)
+		if !ok || c == self {
+			return true
+		}
+		cost := c.inflight()
+		if cost <= 0 {
+			return true
+		}
+		if c.ownerID == scope {
+			userSum += cost
+		}
+		if orgID != "" && c.orgID == orgID {
+			orgSum += cost
+		}
+		return true
+	})
+	return orgSum, userSum
+}
+
+// maxOutputTokens is the per-response reservation basis: the request's cap,
+// or the providers' common default when the caller left it unset.
+func maxOutputTokens(req ai.Request) int {
+	if req.MaxTokens > 0 {
+		return req.MaxTokens
+	}
+	return 4096
 }
 
 // errStreamIDInUse is returned by tryStartStream when a client-provided stream
@@ -153,7 +197,24 @@ func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *mo
 	mu := s.convMutexFor(doc.ID, convKey)
 	mu.Lock()
 	defer mu.Unlock()
-	req.Messages = s.reconstructHistory(ctx, doc, *req)
+	history, err := s.reconstructHistory(ctx, doc, *req)
+	if err != nil {
+		// Do NOT persist. persistInitialUserTurn writes req.Messages + the new
+		// turn through SaveConversation, which is a FULL REPLACE
+		// (`ON CONFLICT (flow_id, scope) DO UPDATE SET messages`). Persisting a
+		// history we failed to read therefore deletes whatever was stored and
+		// leaves only the message just typed — measured at 10 messages down to
+		// 1 from a single transient load error, behind a log line nobody reads.
+		//
+		// The turn still proceeds with no prior context: a degraded answer is a
+		// far better outcome than a destroyed record, and the next successful
+		// turn restores full context because nothing was overwritten.
+		logger.Warn("chat: history load failed; answering without prior context and "+
+			"skipping persistence so the stored conversation is not overwritten", "error", err)
+		req.Messages = nil
+		return
+	}
+	req.Messages = history
 	s.persistInitialUserTurn(ctx, doc, *req)
 }
 
@@ -235,7 +296,6 @@ type ChatService struct {
 	analysisCache *AnalysisService
 	settings      SettingsProvider
 	factory       *ai.ProviderFactory
-	demoLimiter   *ai.DemoLimiter
 	backend       chatStore
 	// mode selects where conversations persist: ModeLocal uses the on-disk file
 	// store (desktop), cloud routes through the backend (Postgres + RLS).
@@ -304,7 +364,6 @@ func NewChatService(
 	analysisCache *AnalysisService,
 	settings SettingsProvider,
 	factory *ai.ProviderFactory,
-	demoLimiter *ai.DemoLimiter,
 	backend chatStore,
 	mode config.DeploymentMode,
 ) *ChatService {
@@ -315,7 +374,6 @@ func NewChatService(
 		analysisCache: analysisCache,
 		settings:      settings,
 		factory:       factory,
-		demoLimiter:   demoLimiter,
 		backend:       backend,
 		mode:          mode,
 		resume:        noopResumeStore{},
@@ -362,7 +420,7 @@ type turnSetup struct {
 }
 
 // prepareTurn resolves the provider, computes org attribution, enforces the
-// daily AI budget, reserves a demo-mode slot when applicable, and — if a
+// daily AI budget, and — if a
 // knowledge base is configured for the flow's org — kicks off the per-turn RAG
 // guidelines lookup concurrently so its embedding API call overlaps with these
 // checks instead of gating first token (C-3). The returned ragDone channel (if
@@ -405,14 +463,8 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 		orgID = doc.OrganizationID
 	}
 
-	if err := s.enforceBudget(ctx, scope, orgID, 0); err != nil {
+	if err := s.enforceBudget(ctx, scope, orgID, 0, nil); err != nil {
 		return turnSetup{}, err
-	}
-
-	if req.Provider == "demo" && s.demoLimiter != nil {
-		if _, err := s.demoLimiter.ReserveForDisplay(); err != nil {
-			return turnSetup{}, err
-		}
 	}
 
 	return turnSetup{provider: provider, orgID: orgID, ragDone: ragDone}, nil
@@ -648,7 +700,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			emit("error", map[string]interface{}{"message": msg})
 		}
 
-		// C-3: RAG lookup, provider resolution, budget, and demo-limiter checks.
+		// C-3: RAG lookup, provider resolution and budget checks.
 		ts, err := s.prepareTurn(ctx, scope, doc, req)
 		if err != nil {
 			fail(err.Error())
@@ -682,6 +734,12 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		if !ok {
 			return // ctx cancelled while waiting on RAG
 		}
+		// Reserve one maximum response on the concurrent-stream ledger before
+		// the first provider call, so a burst of streams started together can
+		// no longer each pass the same store read. The loops below refresh it
+		// per iteration with the actual spend so far plus one more response.
+		ctl.orgID = ts.orgID
+		ctl.setInflight(inFlightCost(ts.provider, 0, maxOutputTokens(aiReq)))
 
 		// When the caller opted into tools, run the agentic loop. Native
 		// function-calling providers use runToolLoop; providers without it
@@ -827,6 +885,7 @@ func (s *ChatService) runToolLoop(
 	// bleed between turns.
 	out := newScrubbedEmitter(ctl, emit)
 	mem := newLoopToolMemory()
+	reserve := inFlightCost(provider, 0, maxOutputTokens(base))
 	for i := 0; i < maxToolIterations; i++ {
 		metrics.RecordChatToolIteration()
 		// Re-check the daily AI budget every iteration: a tool loop multiplies
@@ -834,7 +893,9 @@ func (s *ChatService) runToolLoop(
 		// alone would let one approved request run past the cap mid-loop. The
 		// in-flight term covers this stream's async-unwritten spend (see
 		// inFlightCost).
-		if err := s.enforceBudget(ctx, scope, base.OrgID, inFlightCost(provider, totalIn, totalOut)); err != nil {
+		own := inFlightCost(provider, totalIn, totalOut)
+		ctl.setInflight(own + reserve)
+		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
 			fail("response stopped: " + err.Error())
 			return
 		}
@@ -998,11 +1059,14 @@ func (s *ChatService) runPromptToolLoop(
 	var totalIn, totalOut int
 	out := newScrubbedEmitter(ctl, emit)
 	mem := newLoopToolMemory()
+	reserve := inFlightCost(provider, 0, maxOutputTokens(base))
 	for i := 0; i < maxToolIterations; i++ {
 		metrics.RecordChatToolIteration()
 		// Same per-iteration budget re-check as runToolLoop (in-flight term
 		// included).
-		if err := s.enforceBudget(ctx, scope, base.OrgID, inFlightCost(provider, totalIn, totalOut)); err != nil {
+		own := inFlightCost(provider, totalIn, totalOut)
+		ctl.setInflight(own + reserve)
+		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
 			fail("response stopped: " + err.Error())
 			return
 		}
@@ -1136,14 +1200,6 @@ func emitToolResult(emit func(string, map[string]interface{}), name, result stri
 		"durationMs": took.Milliseconds(),
 		"summary":    toolSummary(result),
 	})
-}
-
-func (s *ChatService) GetDemoRemaining() (int, error) {
-	if s.demoLimiter == nil {
-		return 0, nil
-	}
-	rem, _ := s.demoLimiter.Remaining()
-	return rem, nil
 }
 
 func (s *ChatService) GetSuggestedPrompts(hasBlock, hasFindings bool) (prompts []string, err error) {

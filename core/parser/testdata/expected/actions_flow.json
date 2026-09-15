@@ -385,7 +385,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 21,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "Items",
             "CurrentItem",

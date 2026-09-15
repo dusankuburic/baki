@@ -131,6 +131,9 @@ func (s *auditSpillStore) Drain(max int) []*interfaces.AuditEvent {
 	// nothing drained and let the reaper retry, rather than risk replaying
 	// duplicates or corrupting the queue.
 	tmp := s.path + ".drain.tmp"
+	// #nosec G703 -- s.path is the operator-configured spill file
+	// (PAD_AUDIT_SPILL_DIR, or a temp dir), fixed at boot. No request data
+	// reaches it; the only appended component is this constant suffix.
 	if err := os.WriteFile(tmp, remaining, 0o600); err != nil {
 		logger.Warn("audit spill: drain rewrite failed; leaving spill file intact",
 			"path", s.path, "err", err)

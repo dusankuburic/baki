@@ -112,10 +112,7 @@ function ChatMessageList({messages, renderMessage, footer, isStreaming, scrollTo
     virtuosoRef.current?.scrollToIndex({index: scrollTo.index, align: 'center', behavior: 'smooth'})
   }, [scrollTo])
 
-  const context = useMemo<ListContext>(
-    () => ({footer, footerRef, label: t('a11y.conversation')}),
-    [footer, t],
-  )
+  const context = useMemo<ListContext>(() => ({footer, footerRef, label: t('a11y.conversation')}), [footer, t])
 
   return (
     <div className="flex-1 overflow-hidden relative">

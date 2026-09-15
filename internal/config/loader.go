@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -62,7 +61,7 @@ func LoadRaw(path string) (*Config, error) {
 
 // LoadFromEnvRaw reads PAD_* environment variables into a Config without
 // validating. The caller is responsible for calling Validate on the result.
-// Use this when you need to resolve additional secrets (e.g. Azure Key Vault)
+// Use this when you need to adjust the config (e.g. inject secrets)
 // before the config is validated.
 func LoadFromEnvRaw() (*Config, error) {
 	cfg := Default()
@@ -132,7 +131,7 @@ func boolEnv(key string, set func(*Config, bool)) envBinding {
 }
 
 // envBindings is the declarative table of every simple one-variable→one-field
-// binding. Variables needing bespoke handling (list-splitting, the PowerPlatform
+// binding. Variables needing bespoke handling (list-splitting, the
 // block, PAD_STORAGE normalisation, the PAD_AUDIT_RETENTION_DAYS >= 0 guard) are
 // applied separately in applyEnvVars.
 var envBindings = []envBinding{
@@ -140,7 +139,6 @@ var envBindings = []envBinding{
 	strEnv("PAD_MODE", func(c *Config, v string) { c.Mode = DeploymentMode(v) }),
 	strEnv("PAD_HOST", func(c *Config, v string) { c.Server.Host = v }),
 	strEnv("PAD_STATIC_DIR", func(c *Config, v string) { c.Server.StaticDir = v }),
-	strEnv("PAD_KEYVAULT_URL", func(c *Config, v string) { c.Server.KeyVaultURL = v }),
 	strEnv("PAD_CUSTOM_RULES", func(c *Config, v string) { c.Server.CustomRulesPath = v }),
 	intEnv("PAD_PORT", func(c *Config, n int) { c.Server.Port = n }),
 	strEnv("PAD_METRICS_TOKEN", func(c *Config, v string) { c.Server.MetricsToken = v }),
@@ -148,6 +146,7 @@ var envBindings = []envBinding{
 	strEnv("PAD_TLS_KEY", func(c *Config, v string) { c.Server.TLSKey = v }),
 	boolEnv("PAD_BEHIND_PROXY", func(c *Config, b bool) { c.Server.BehindProxy = b }),
 	boolEnv("PAD_PPROF_ENABLED", func(c *Config, b bool) { c.Server.PprofEnabled = b }),
+	boolEnv("PAD_LOCAL_CONFIG_ENDPOINT", func(c *Config, b bool) { c.Server.LocalConfigEndpoint = b }),
 
 	// Governance
 	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d string) { c.Governance.ScanInterval = d }),
@@ -190,6 +189,7 @@ var envBindings = []envBinding{
 	intEnv("PAD_DB_MAX_IDLE_CONNS", func(c *Config, n int) { c.Storage.DBMaxIdleConns = n }),
 	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d string) { c.Storage.DBConnMaxLifetime = d }),
 	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d string) { c.Storage.DBConnMaxIdleTime = d }),
+	durEnv("PAD_DB_STATEMENT_TIMEOUT", func(c *Config, d string) { c.Storage.DBStatementTimeout = d }),
 	// Knowledge-base embedding dimension. Sets the contract for which chunks are
 	// pgvector-searchable; mismatched embeddings are excluded from the vector
 	// index rather than corrupting similarity search.
@@ -258,7 +258,7 @@ func applyEnvVars(cfg *Config) error {
 	if err := applyAuditRetentionEnv(cfg); err != nil {
 		return err
 	}
-	return applyPowerPlatformEnv(cfg)
+	return nil
 }
 
 // applyListEnv appends the trimmed, non-empty comma-separated entries of key
@@ -308,36 +308,6 @@ func applyAuditRetentionEnv(cfg *Config) error {
 		return fmt.Errorf("config: PAD_AUDIT_RETENTION_DAYS=%q must be >= 0", v)
 	}
 	cfg.Governance.AuditRetentionDays = days
-	return nil
-}
-
-// applyPowerPlatformEnv wires the optional Power Platform connector (desktop-flow
-// ingestion; EXPERIMENTAL — see config.PowerPlatformConfig). The bare
-// assignments intentionally overwrite defaults even with empty values. The
-// core auth/client fields plus DataverseURL and IngestInterval must be set
-// to enable the periodic pull.
-func applyPowerPlatformEnv(cfg *Config) error {
-	cfg.PowerPlatform.TenantID = os.Getenv("PAD_PP_TENANT_ID")
-	cfg.PowerPlatform.ClientID = os.Getenv("PAD_PP_CLIENT_ID")
-	cfg.PowerPlatform.DataverseURL = os.Getenv("PAD_PP_DATAVERSE_URL")
-	cfg.PowerPlatform.Scope = os.Getenv("PAD_PP_SCOPE")
-	if cfg.PowerPlatform.Scope == "" {
-		cfg.PowerPlatform.Scope = "https://api.powerplatform.com/.default"
-		// The default scope grants access to the ENTIRE Power Platform API
-		// surface, not just the intended Dataverse environment. A leaked token
-		// could access other environments, Power Apps, etc. Set PAD_PP_SCOPE
-		// to an environment-specific scope for least-privilege.
-		slog.Warn("PAD_PP_SCOPE unset — using broad /.default scope; set PAD_PP_SCOPE to an environment-specific scope for least-privilege")
-	}
-	if v := os.Getenv("PAD_PP_INGEST_INTERVAL"); v != "" {
-		d, err := parseDurationOrError("PAD_PP_INGEST_INTERVAL", v)
-		if err != nil {
-			return err
-		}
-		cfg.PowerPlatform.IngestInterval = d
-	}
-	cfg.PowerPlatform.OwnerUserID = os.Getenv("PAD_PP_OWNER_USER")
-	cfg.PowerPlatform.OwnerOrgID = os.Getenv("PAD_PP_OWNER_ORG")
 	return nil
 }
 

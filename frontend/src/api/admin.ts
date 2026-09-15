@@ -71,13 +71,8 @@ export const adminApi = {
   setUserRole: (userId: string, role: string): Promise<void> =>
     request(`/api/admin/users/${userId}/role`, {body: {role}, method: 'PUT'}),
 
-  // ── Operations (R2-6): connector control, scanner/ingester triggers,
-  // per-subsystem health. Instance-admin only.
+  // ── Operations (R2-6): scanner trigger, per-subsystem health. Instance-admin only.
   triggerScannerScan: (): Promise<{started: boolean}> => request('/api/admin/scanner/scan', {body: {}}),
-
-  triggerIngesterIngest: (): Promise<{started: boolean}> => request('/api/admin/ingester/ingest', {body: {}}),
-
-  ppStatus: (): Promise<{connected: boolean}> => request('/api/admin/powerplatform/status', {method: 'GET'}),
 
   systemHealth: (): Promise<SystemHealth> => request('/api/admin/system/health', {method: 'GET'}),
 

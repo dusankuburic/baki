@@ -20,16 +20,7 @@ func (r *DuplicateActionRule) DefaultSeverity() models.Severity { return models.
 func (r *DuplicateActionRule) Category() string                 { return "Style" }
 
 func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	minRepeats := 3
-	if ctx.Settings != nil {
-		if rc, ok := ctx.Settings.Analysis.Rules[r.ID()]; ok {
-			if mr, ok := rc.Options["minRepeats"]; ok {
-				if f, ok := mr.(float64); ok && f >= 2 {
-					minRepeats = int(f)
-				}
-			}
-		}
-	}
+	minRepeats := ruleOptionInt(ctx.Settings, r.ID(), "minRepeats", 3, 2)
 
 	siblings := GetSiblings(ctx, block)
 	if len(siblings) < minRepeats {

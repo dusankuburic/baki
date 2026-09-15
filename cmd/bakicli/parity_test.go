@@ -169,3 +169,109 @@ func TestWatch_ConfigDiscovery(t *testing.T) {
 		t.Errorf("watch with config: no gate output: %q", out)
 	}
 }
+
+// runWatchIn runs `bakicli watch` with the working directory set to dir (so
+// .bakirc.json auto-discovery applies) and returns the combined output of the
+// first run. The process is killed on timeout; that is the success path.
+func runWatchIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	var outBuf strings.Builder
+	cmd := exec.CommandContext(ctx, bakicliBin, append([]string{"watch", "-interval", "10s"}, args...)...)
+	cmd.Dir = dir
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	_ = cmd.Run()
+	return outBuf.String()
+}
+
+// TestWatch_RuleConfigApplies pins the fix for a config-parity hole: watch
+// loaded .bakirc.json for fail-on/rules/policy but analysed with
+// models.DefaultSettings(), so the per-rule `ruleConfig` profile — the thing
+// the org export writes — was IGNORED in watch while analyze honoured it. The
+// local preview ran a different gate than the CI it claims to mirror.
+func TestWatch_RuleConfigApplies(t *testing.T) {
+	dir := t.TempDir()
+	flow := filepath.Join(dir, "flow.txt")
+	if err := os.WriteFile(flow, []byte(dirtyFlow), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// dirtyFlow trips two warning-severity rules (unhandled-error,
+	// missing-timeout) and two info ones. Disable the warnings through the
+	// profile; with fail-on=warning only info findings remain, so PASS.
+	cfg := `{"failOn":"warning","ruleConfig":{"unhandled-error":{"enabled":false},"missing-timeout":{"enabled":false}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".bakirc.json"), []byte(cfg), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := runWatchIn(t, dir, flow)
+	if strings.Contains(out, "Unhandled error in fallible action") {
+		t.Errorf("watch reported a finding the config disables:\n%s", out)
+	}
+	if !strings.Contains(out, "gate PASS") {
+		t.Errorf("watch must PASS once ruleConfig disables the warning rules:\n%s", out)
+	}
+}
+
+// nestedFlow returns a Main region with n IF blocks nested inside each other.
+func nestedFlow(n int) string {
+	var b strings.Builder
+	b.WriteString("#Region \"Main\"\n")
+	for i := 1; i <= n; i++ {
+		b.WriteString(strings.Repeat("    ", i) + "IF %A% = 1 THEN\n")
+	}
+	b.WriteString(strings.Repeat("    ", n+1) + "SET Ok TO 1\n")
+	for i := n; i >= 1; i-- {
+		b.WriteString(strings.Repeat("    ", i) + "END\n")
+	}
+	b.WriteString("#EndRegion\n")
+	return b.String()
+}
+
+// ruleIDsOf decodes an analyze -format json report and returns its finding rule IDs.
+func ruleIDsOf(t *testing.T, out string) map[string]int {
+	t.Helper()
+	var rep struct {
+		Findings []struct {
+			RuleID string `json:"ruleId"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("decode report: %v\n%s", err, out)
+	}
+	ids := map[string]int{}
+	for _, f := range rep.Findings {
+		ids[f.RuleID]++
+	}
+	return ids
+}
+
+// TestAnalyze_ThresholdFromConfig pins the fix for a silent no-op: bakiRuleConf
+// was {enabled, severity} only, so a threshold written in .bakirc.json
+// (`"deep-nesting": {"options": {"maxDepth": 2}}`) was dropped by the JSON
+// decoder and the rule kept its default. The CI gate then enforced a LOOSER
+// threshold than the one committed next to the flows, with no warning.
+func TestAnalyze_ThresholdFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	flow := filepath.Join(dir, "flow.txt")
+	if err := os.WriteFile(flow, []byte(nestedFlow(3)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// The default maxDepth is 6: three levels are clean.
+	out, stderr, code := runBakicli(t, "-config", "", "-format", "json", "-quiet", flow)
+	if code != 0 {
+		t.Fatalf("baseline analyze: exit %d stderr=%q", code, stderr)
+	}
+	if n := ruleIDsOf(t, out)["deep-nesting"]; n != 0 {
+		t.Fatalf("depth-3 flow must be clean at the default threshold, got %d deep-nesting finding(s)", n)
+	}
+
+	cfgPath := filepath.Join(dir, ".bakirc.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"ruleConfig":{"deep-nesting":{"options":{"maxDepth":2}}}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = runBakicli(t, "-config", cfgPath, "-format", "json", "-quiet", flow)
+	if n := ruleIDsOf(t, out)["deep-nesting"]; n == 0 {
+		t.Errorf("maxDepth=2 from .bakirc.json was ignored — the flow nests 3 deep and must be flagged:\n%s", out)
+	}
+}

@@ -6,9 +6,12 @@ import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {DataFlowAnalysis, TaintPath} from '@/types'
 
-// TaintPathsPanel renders the full set of source→sink taint flows.
-// Each row shows the source variable, the sink type, and a
-// path-length badge; clicking jumps to the sink block for review.
+// TaintPathsPanel renders the input→sink HINTS the analyzer computes. The API
+// field is still called taintPaths for compatibility, but what it holds is a
+// name-based heuristic: a variable produced by a dialog/prompt block or named
+// Input_*/UserInput_* that is read DIRECTLY by a sink action — zero hops. One
+// intermediate SET breaks the trail. The label says so; calling this "taint
+// analysis" in a security tool overclaimed.
 function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (id: string) => void}) {
   const [showAll, setShowAll] = React.useState(false)
   const INITIAL = 5
@@ -18,8 +21,13 @@ function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (
   return (
     <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-bold text-amber-400">Taint Paths ({paths.length})</span>
-        <span className="text-2xs text-text-tertiary">untrusted input → sensitive sink</span>
+        <span className="text-xs font-bold text-amber-400">Input → sink hints ({paths.length})</span>
+        <span
+          className="text-2xs text-text-tertiary"
+          title="Name-based: Input_*/dialog variables read directly by a sink action. Not a data-flow trace — an intermediate SET is not followed."
+        >
+          name-based, direct reads only
+        </span>
       </div>
       {visible.map((tp, i) => (
         <button

@@ -28,17 +28,41 @@ import (
 // user's flows — including those they only collaborated on — while the Go layer
 // has already authenticated the caller. Idempotent: a missing user is not an
 // error.
-func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) (err error) {
-	tx, err := b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("delete user: begin: %w", err)
+func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) error {
+	var ownedFlowIDs []string
+	if err := b.withTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		ownedFlowIDs, err = b.deleteUserInTx(ctx, tx, userID)
+		return err
+	}); err != nil {
+		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
 
+	// Best-effort blob cleanup for the flows that were just removed. Deferred
+	// via RegisterPostCommit rather than run inline: when this request carries
+	// the middleware's RLS transaction, withTx JOINS it and nothing is durable
+	// until the middleware commits, so deleting blobs here would orphan content
+	// belonging to rows that a rollback puts back. RegisterPostCommit runs fn
+	// inline when there is no registry (autocommit -- the write is already
+	// durable), so the standalone path is unchanged.
+	if b.blobClient != nil {
+		for _, fid := range ownedFlowIDs {
+			flowID := fid
+			RegisterPostCommit(ctx, func() {
+				b.scheduleBlobCleanup(time.Now(), "delete-user-flow:"+flowID, func(ctx context.Context) {
+					if err := b.deleteBlobs(ctx, fmt.Sprintf("flows/%s/", flowID)); err != nil {
+						logger.Warn("DeleteUser: failed to delete flow blobs", "flow_id", flowID, "error", err)
+					}
+				})
+			})
+		}
+	}
+	return nil
+}
+
+// deleteUserInTx performs the erasure inside tx and returns the IDs of the
+// flows it removed, so the caller can schedule blob cleanup after the commit.
+func (b *PostgresStorageBackend) deleteUserInTx(ctx context.Context, tx *sql.Tx, userID string) (ownedFlowIDs []string, err error) {
 	// Capture email + owned flow IDs before deleting: org_invites is keyed by
 	// email (not user_id), and owned flows' blob content must be cleaned up.
 	var email string
@@ -53,34 +77,34 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 		// and let the remaining per-user sweeps run, which cleans up any
 		// residue a partial prior erasure left behind.
 		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("erasure: read user email: %w", err)
+			return nil, fmt.Errorf("erasure: read user email: %w", err)
 		}
 	}
 
-	ownedFlowIDs, err := rowsOfStrings(ctx, tx, `SELECT id FROM flows WHERE owner_id = $1`, userID)
+	ownedFlowIDs, err = rowsOfStrings(ctx, tx, `SELECT id FROM flows WHERE owner_id = $1`, userID)
 	if err != nil {
-		return fmt.Errorf("erasure: list owned flows: %w", err)
+		return nil, fmt.Errorf("erasure: list owned flows: %w", err)
 	}
 
 	// Owned flows: ON DELETE CASCADE removes their versions, analysis history,
 	// triage, baselines, conversations and collaborator rows.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM flows WHERE owner_id = $1`, userID); err != nil {
-		return fmt.Errorf("delete user flows: %w", err)
+		return nil, fmt.Errorf("delete user flows: %w", err)
 	}
 
 	// Anonymize PII on surviving rows. The events/versions are kept for
 	// forensic integrity; only personal data is stripped.
 	if _, err = tx.ExecContext(ctx, `UPDATE audit_events SET email = '', ip = '', user_id = '' WHERE user_id = $1`, userID); err != nil {
-		return fmt.Errorf("anonymize audit_events: %w", err)
+		return nil, fmt.Errorf("anonymize audit_events: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE flow_versions SET created_by = '' WHERE created_by = $1`, userID); err != nil {
-		return fmt.Errorf("anonymize flow_versions: %w", err)
+		return nil, fmt.Errorf("anonymize flow_versions: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE finding_status SET updated_by = '' WHERE updated_by = $1`, userID); err != nil {
-		return fmt.Errorf("anonymize finding_status: %w", err)
+		return nil, fmt.Errorf("anonymize finding_status: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE flow_baselines SET created_by = '' WHERE created_by = $1`, userID); err != nil {
-		return fmt.Errorf("anonymize flow_baselines: %w", err)
+		return nil, fmt.Errorf("anonymize flow_baselines: %w", err)
 	}
 
 	// Per-user rows that have no ON DELETE CASCADE foreign key.
@@ -91,39 +115,23 @@ func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) 
 		`DELETE FROM org_members WHERE user_id = $1`,
 	} {
 		if _, err = tx.ExecContext(ctx, stmt, userID); err != nil {
-			return fmt.Errorf("delete per-user rows: %w", err)
+			return nil, fmt.Errorf("delete per-user rows: %w", err)
 		}
 	}
 	if email != "" {
 		if _, err = tx.ExecContext(ctx, `DELETE FROM org_invites WHERE email = $1`, email); err != nil {
-			return fmt.Errorf("delete org_invites: %w", err)
+			return nil, fmt.Errorf("delete org_invites: %w", err)
 		}
 	}
 
 	// The user row last; api_tokens, user_settings, identity_links and
 	// flow_collaborators cascade via their ON DELETE CASCADE foreign keys.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
-		return fmt.Errorf("delete user: %w", err)
+		return nil, fmt.Errorf("delete user: %w", err)
 	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("delete user: commit: %w", err)
-	}
-
-	// Best-effort blob cleanup for the flows that were just removed. Runs only
-	// after the DB commit so a rolled-back erasure never orphans surviving
-	// content. Detached + bounded so a slow/hung blob store can't block
-	// request teardown or leak.
-	if b.blobClient != nil {
-		for _, fid := range ownedFlowIDs {
-			flowID := fid
-			b.scheduleBlobCleanup(time.Now(), "delete-user-flow:"+flowID, func(ctx context.Context) {
-				if err := b.deleteBlobs(ctx, fmt.Sprintf("flows/%s/", flowID)); err != nil {
-					logger.Warn("DeleteUser: failed to delete flow blobs", "flow_id", flowID, "error", err)
-				}
-			})
-		}
-	}
-	return nil
+	// The commit belongs to withTx, which may be joining the request's RLS
+	// transaction rather than owning one.
+	return ownedFlowIDs, nil
 }
 
 // ExportUserData assembles the user's personal data for a data-subject access /
@@ -318,7 +326,14 @@ func (b *PostgresStorageBackend) PurgeExpiredData(ctx context.Context, auditRete
 		// previously this was only done by a per-process goroutine that could
 		// die or be absent on some replicas, letting the table grow unbounded.
 		{`DELETE FROM token_blacklist WHERE expires_at < NOW()`, &out.TokenBlacklist},
+		// An expired share link can never be redeemed again (the lookup
+		// checks expires_at), so its row is dead weight — and one that still
+		// names a flow. Rows with no expiry are permanent links; kept.
+		{`DELETE FROM share_tokens WHERE expires_at IS NOT NULL AND expires_at < NOW()`, &out.ShareTokens},
 	}
+	// Deliberately NOT purged by age: conversations, knowledge documents and
+	// finding comments are user content, not telemetry. They go when their
+	// flow/org goes (ON DELETE CASCADE), never on a timer.
 	for _, s := range stmts {
 		res, err := b.db.ExecContext(ctx, s.sql)
 		if err != nil {
@@ -342,6 +357,10 @@ func (b *PostgresStorageBackend) PurgeExpiredData(ctx context.Context, auditRete
 			// the same dashboard's cost/trend views; age it out on the same
 			// retention window.
 			{`DELETE FROM usage_metrics WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`, &out.UsageMetrics},
+			// gov_alerts is one row per alert per sweep, forever — the
+			// scanner's in-memory dedup does not read the table back, so
+			// ageing rows out cannot cause a re-alert. Same window as audit.
+			{`DELETE FROM gov_alerts WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`, &out.GovAlerts},
 		}
 		for _, s := range aged {
 			res, err := b.db.ExecContext(ctx, s.sql, auditRetentionDays)

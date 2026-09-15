@@ -14,6 +14,23 @@ import (
 // Security-Policy header on HTML responses, and rejects directory-listing
 // requests. The path argument is the request path (URL.Path).
 func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path string) {
+	// Source maps are never served, whatever is on disk.
+	//
+	// vite builds with sourcemap:'hidden', which only omits the
+	// //# sourceMappingURL comment — the .map files are still emitted into
+	// dist/, and this handler serves anything under staticDir, so
+	// GET /assets/index-<hash>.js.map returned a map with sourcesContent
+	// populated: the application's complete original TypeScript, to anyone who
+	// can reach the app. "hidden" stops a browser from fetching them
+	// automatically; it does not stop a fetch. The Dockerfile also strips them
+	// from the image, but that only covers the image — a compose stack or a
+	// PAD_STATIC_DIR pointed at a local build has the same exposure, so the
+	// guard belongs here too.
+	if strings.HasSuffix(path, ".map") {
+		http.NotFound(w, r)
+		return
+	}
+
 	indexPath := rt.staticDir + "/index.html"
 	servedFile := rt.staticDir + path
 	isFallback := false
@@ -78,10 +95,6 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 	}
 
-	// #nosec G703 -- path is validated by http.Dir.Open (rejects traversal) above;
-	// any miss falls back to the constant index.html.
-	// #nosec G703 -- path is validated by http.Dir.Open (rejects traversal) above;
-	// any miss falls back to the constant index.html.
 	if isFallback && path == "/shared" {
 		// The share viewer is an SPA route, so this is always the index.html
 		// fallback. Give link unfurlers (Slack, Teams, iMessage) a real
@@ -91,6 +104,12 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 			return
 		}
 	}
+	// #nosec G703 -- servedFile is either the constant indexPath or staticDir+path
+	// where path already round-tripped through http.Dir.Open above, which rejects
+	// traversal; a miss falls back to indexPath. The annotation sits on THIS line
+	// deliberately: it previously sat (twice) on the `if isFallback` statement
+	// above, where it applied to nothing, which is why it stopped suppressing the
+	// moment gosec renumbered the rule.
 	http.ServeFile(w, r, servedFile)
 }
 

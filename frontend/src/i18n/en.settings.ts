@@ -76,6 +76,7 @@ export const enSettings = {
     autoAnalyzeHint: 'Run all enabled rules automatically as soon as a flow finishes loading.',
     severityTooltip: 'Severity changes apply to the next analysis run',
     reportAs: 'Report as:',
+    thresholds: 'Thresholds',
     severity: {
       error: 'Error',
       warning: 'Warning',

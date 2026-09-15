@@ -435,7 +435,7 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, []any, int) {
 // the walk silently skips some while returning others twice.
 //
 // Ties are ordinary, not exotic: updated_at is TIMESTAMPTZ (microsecond
-// resolution), so any bulk write — an import, the padcloud ingester, a
+// resolution), so any bulk write — an import, a
 // migration — produces groups of rows sharing a timestamp. lower(name) and
 // BlockCount tie far more easily still.
 //
@@ -718,13 +718,14 @@ func (b *PostgresStorageBackend) DeleteConversation(ctx context.Context, flowID,
 }
 
 // ListCollaborators returns the collaborators for a flow.
-func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID string) ([]*interfaces.Collaborator, error) {
+func (b *PostgresStorageBackend) ListCollaborators(ctx context.Context, flowID string, limit int) ([]*interfaces.Collaborator, error) {
 	rows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT c.user_id, u.email, c.permission, c.granted_at
 		FROM flow_collaborators c
 		JOIN users u ON c.user_id = u.id
 		WHERE c.flow_id = $1
-		ORDER BY c.granted_at ASC`, flowID)
+		ORDER BY c.granted_at ASC
+		LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END`, flowID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query collaborators: %w", err)
 	}

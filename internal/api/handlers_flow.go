@@ -135,7 +135,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	doc, err := h.flowSvc.LoadFlowFiles(r.Context(), req.Files, req.Name)
+	doc, err := h.flowSvc.LoadFlowFiles(r.Context(), req.Files, req.Name, h.security.CallerID(r))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

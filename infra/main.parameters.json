@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Example parameter file. The deploy workflow (.github/workflows/deploy.yml) passes parameters INLINE (az deployment group create ... --parameters appName=... image=...), so this file is NOT used by CI — it exists only for manual `az deployment group create --parameters @infra/main.parameters.json`. Replace the SUB placeholder + appName/image for a manual deploy. By default the template now provisions a storage account, Redis cache, and Key Vault (provisionStorage/provisionRedis/provisionKeyVault default true); set those to false to bring your own. alertEmails is empty by default — set it to receive operational alerts.",
+  "_comment": "Example parameter file. The deploy workflow (.github/workflows/deploy.yml) passes parameters INLINE (az deployment group create ... --parameters appName=... image=...), so this file is NOT used by CI — it exists only for manual `az deployment group create --parameters @infra/main.parameters.json`. Replace the placeholders + appName/image for a manual deploy. By default the template provisions a storage account (provisionStorage default true); set it to false to bring your own. Secrets are Container App secrets passed as parameters (no Key Vault). provisionRedis defaults FALSE: the template is single-replica and the app refuses to boot when PAD_REDIS_URL is set but unreachable, so Redis is only worth its cost and its failure mode once maxReplicas > 1. registryUsername/registryPassword (a GHCR PAT with read:packages) are required unless the image package is public; metricsToken gates GET /metrics. alertEmails is empty by default — set it to receive operational alerts.",
   "parameters": {
     "appName":                  { "value": "baki-backend" },
     "image":                    { "value": "ghcr.io/ORG/baki-backend:latest" },
@@ -10,12 +10,14 @@
     "cpu":                      { "value": "0.5" },
     "memory":                   { "value": "1.0Gi" },
     "provisionStorage":         { "value": true },
-    "provisionRedis":           { "value": true },
-    "provisionKeyVault":        { "value": true },
+    "provisionRedis":           { "value": false },
     "alertEmails":              { "value": "" },
-    "keyVaultUrl":              { "value": "" },
+    "registryServer":           { "value": "ghcr.io" },
+    "registryUsername":         { "value": "ORG" },
+    "registryPassword":         { "value": "<GHCR PAT with read:packages>" },
+    "metricsToken":             { "value": "<random token for GET /metrics>" },
     "storageAccountResourceId": { "value": "" },
-    "authSecret":               { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-auth-secret" } },
-    "databaseUrl":              { "reference": { "keyVault": { "id": "/subscriptions/SUB/resourceGroups/rg-baki-prod/providers/Microsoft.KeyVault/vaults/kv-baki" }, "secretName": "pad-database-url" } }
+    "authSecret":               { "value": "<openssl rand -hex 32>" },
+    "databaseUrl":              { "value": "postgres://baki_app:<password>@<host>:5432/baki?sslmode=require" }
   }
 }

@@ -10,7 +10,7 @@ import (
 	"pad-core/parser"
 )
 
-// ingestedDoc mimics a padcloud-ingested flow: parsed subflows/content, no
+// ingestedDoc mimics a bulk-imported flow: parsed subflows/content, no
 // stored Source, no FilePath (cloud), single-file.
 // newFlowTestService builds a FlowService with a local doc provider (holding
 // doc) and a FakeBackend storage so the cloud persist path is exercised.

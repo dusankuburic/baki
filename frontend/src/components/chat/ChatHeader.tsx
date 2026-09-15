@@ -14,7 +14,6 @@ import {
   Settings,
   Trash2,
   Wrench,
-  Zap,
 } from 'lucide-react'
 import {Dropdown, useConfirm, type DropdownItem} from '@/components/shared'
 import {useUIStore} from '@/stores/uiStore'
@@ -35,7 +34,6 @@ interface Props {
   models: ModelDetail[]
   selectedModel: string
   onSelectModel: (modelId: string) => void
-  demoRemaining: number | null
   isStreaming?: boolean
   messageCount: number
   useTools: boolean
@@ -93,7 +91,6 @@ export default function ChatHeader({
   models,
   selectedModel,
   onSelectModel,
-  demoRemaining,
   isStreaming,
   messageCount,
   useTools,
@@ -262,8 +259,6 @@ export default function ChatHeader({
     onClearContext,
   ])
 
-  const demoLow = demoRemaining !== null && demoRemaining <= 5
-
   return (
     <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border-subtle">
       <Dropdown
@@ -288,23 +283,6 @@ export default function ChatHeader({
           </button>
         }
       />
-
-      {demoRemaining !== null && (
-        <span
-          className={clsx(
-            'shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md text-2xs tabular-nums',
-            demoRemaining <= 0
-              ? 'bg-semantic-error/10 text-semantic-error'
-              : demoLow
-                ? 'bg-semantic-warning/10 text-semantic-warning'
-                : 'bg-brand-500/10 text-brand-400',
-          )}
-          title={demoRemaining <= 0 ? t('provider.demoLimitReached') : t('provider.demoRemaining', {count: demoRemaining})}
-        >
-          <Zap size={10} />
-          {demoRemaining}
-        </span>
-      )}
 
       {messageCount > 0 && (
         <span className="cq-count shrink-0 text-2xs text-text-tertiary/60 tabular-nums px-1">{messageCount}</span>

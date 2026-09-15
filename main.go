@@ -27,9 +27,9 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/connector/padcloud"
 	"pad-analyzer/internal/di"
 	"pad-analyzer/internal/errreport"
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/mail"
 	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/migration"
@@ -84,10 +84,7 @@ func main() {
 			provideNotifier,
 			provideScanner,
 			provideMigrationRunner,
-			provideIngester,
-			providePadCloudAuth,
 			provideScanNowFunc,
-			provideIngestNowFunc,
 			provideKeyStore,
 		),
 		di.ServiceModule,
@@ -98,7 +95,6 @@ func main() {
 			initTelemetry,
 			initAuditPool,
 			initScanner,
-			initIngester,
 			initRetentionPurge,
 			startServer,
 		),
@@ -113,7 +109,7 @@ func loadConfig() (*config.Config, error) {
 	var cfg *config.Config
 
 	if path := os.Getenv("PAD_CONFIG"); path != "" {
-		// Raw load so Key Vault resolution can happen before validation.
+		// Raw load: validation runs below, after env overrides are applied.
 		c, err := config.LoadRaw(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load config from %s: %w", path, err)
@@ -127,16 +123,6 @@ func loadConfig() (*config.Config, error) {
 		cfg = c
 	} else {
 		cfg = config.Default()
-	}
-
-	// Resolve secrets from Azure Key Vault BEFORE validation so that
-	// secrets stored in Key Vault (pad-auth-secret, pad-database-url) can
-	// satisfy validation requirements without being duplicated in env vars.
-	if cfg.Server.KeyVaultURL != "" {
-		if err := config.ResolveAzureSecrets(context.Background(), cfg); err != nil {
-			// Non-fatal: warn and continue — secrets may already be in env vars.
-			fmt.Fprintf(os.Stderr, "warning: Azure Key Vault resolution incomplete: %v\n", err)
-		}
 	}
 
 	if err := config.Validate(cfg); err != nil {
@@ -155,6 +141,20 @@ func provideShutdownCh() chan struct{} {
 // A non-HTTPS alert URL is a configuration error (governance payloads carry
 // internal flow details and must not be sent in plaintext) — fail startup so
 // the operator fixes the URL rather than silently leaking alerts.
+// egressPolicy is the deployment's single answer to "may an outbound
+// notification reach this server's own machine or private network".
+//
+// Cloud is multi-tenant: an org's channel URL is untrusted input (any
+// authenticated user can create an org and administer it), so loopback and
+// private targets are refused. Local/desktop is the single user's own machine,
+// where a webhook pointing at localhost is exactly what they meant.
+func egressPolicy(cfg *config.Config) notify.TargetPolicy {
+	if cfg.Mode == config.ModeLocal {
+		return notify.AllowLoopbackTargets
+	}
+	return notify.BlockInternalTargets
+}
+
 func provideNotifier(cfg *config.Config, mailer *mail.Service) (*notify.Dispatcher, error) {
 	// Backward compatibility: the legacy PAD_WEBHOOK_URL (read directly by the
 	// old service.WebhookNotifier) sent Slack-format payloads. Map it onto the
@@ -174,6 +174,7 @@ func provideNotifier(cfg *config.Config, mailer *mail.Service) (*notify.Dispatch
 		emailSender = mailSvcAdapter{svc: mailer}
 	}
 	d, err := notify.New(notify.Config{
+		Policy:        egressPolicy(cfg),
 		WebhookURL:    cfg.Governance.NotifyWebhookURL,
 		WebhookSecret: cfg.Governance.NotifyWebhookSecret,
 		TeamsURL:      cfg.Governance.NotifyTeamsURL,
@@ -210,7 +211,7 @@ func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analys
 	if analysisSvc != nil {
 		analyze = analysisSvc.AnalyzeFlow
 	}
-	s := scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval))
+	s := scanner.New(backend, analyze, notifier, scanInterval(cfg.Governance.ScanInterval), egressPolicy(cfg))
 	// Real-time SSE push: a newly-detected alert pings connected clients who
 	// can see the flow so the bell updates instantly. EventManager is always
 	// non-nil in the fx graph; safe even in local mode (no scanner runs there).
@@ -267,91 +268,6 @@ func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend) *a
 	return runner
 }
 
-// providePadCloudAuth builds the optional Power Platform device-flow
-// authenticator. Returns nil when the connector isn't configured (cloud mode
-// required + all of tenant/clientID/dataverseURL/ingestInterval). The same
-// authenticator is shared between the ingester (for sweeps) and the admin
-// endpoints (for the one-time device-flow bootstrap).
-func providePadCloudAuth(cfg *config.Config, backend storageif.StorageBackend) *padcloud.Authenticator {
-	pc := cfg.PowerPlatform
-	if backend == nil || cfg.Mode != config.ModeCloud {
-		return nil
-	}
-	if pc.TenantID == "" || pc.ClientID == "" || pc.DataverseURL == "" || pc.IngestInterval == "" {
-		return nil
-	}
-	// DB-backed token store so the token (access + refresh) survives process
-	// restarts. Without this, every restart loses auth and requires manual
-	// re-approval of the device-code flow. Tokens are encrypted at rest with
-	// the same key selection as the provider keystore (dedicated encryption
-	// key, falling back to the auth secret).
-	var store padcloud.TokenStore
-	if sqlBackend, ok := backend.(storagedb.SQLProvider); ok {
-		encKey := cfg.Auth.EncryptionKey
-		if encKey == "" {
-			encKey = cfg.Auth.Secret
-		}
-		s, err := padcloud.NewDBTokenStore(sqlBackend.DB(), []byte(encKey))
-		if err != nil {
-			// Refuse to persist tokens in plaintext — run the authenticator
-			// in-memory only (no cross-restart persistence) instead.
-			slog.Warn("padcloud: disabling token persistence — using in-memory auth", "error", err)
-		} else {
-			store = s
-		}
-	}
-	return padcloud.NewAuthenticator(pc.TenantID, pc.ClientID, pc.Scope, nil, store)
-}
-
-// provideIngester wires the optional Power Platform (PAD-cloud) connector.
-// EXPERIMENTAL: the cloud→FlowDocument converter and Dataverse endpoints are
-// built defensively and are NOT yet validated against a real tenant — enable
-// only for evaluation. It requires cloud mode, a DB backend, and the
-// authenticator (providePadCloudAuth) to be configured; otherwise it returns
-// nil (disabled) and the lifecycle hook is a no-op.
-func provideIngester(auth *padcloud.Authenticator, cfg *config.Config, backend storageif.StorageBackend) *padcloud.Ingester {
-	if auth == nil || backend == nil || cfg.Mode != config.ModeCloud {
-		return nil
-	}
-	client := padcloud.NewHTTPClient(auth, cfg.PowerPlatform.DataverseURL)
-	// An empty owner makes every ingested flow "unowned" — visible through the
-	// admin/portfolio surfaces rather than scoped to a service account. Fine
-	// for evaluation, but loud enough that nobody ships a tenant that way
-	// without noticing.
-	if cfg.PowerPlatform.OwnerUserID == "" {
-		logger.Warn("padcloud: PAD_PP_OWNER_USER is not set — ingested flows will be unowned (broadly visible); point it at a service account before real-tenant use")
-	}
-	store := padcloud.NewLibraryStore(backend, cfg.PowerPlatform.OwnerUserID, cfg.PowerPlatform.OwnerOrgID)
-	return padcloud.NewIngester(client, padcloud.NewCloudConverter(), store)
-}
-
-// initIngester starts/stops the periodic PAD-cloud ingest loop. No-op when the
-// connector isn't configured (nil ingester) or the interval is invalid.
-func initIngester(lc fx.Lifecycle, ing *padcloud.Ingester, auth *padcloud.Authenticator, cfg *config.Config) {
-	if ing == nil {
-		return
-	}
-	interval := parseGovernanceDuration("PAD_PP_INGEST_INTERVAL", cfg.PowerPlatform.IngestInterval)
-	if interval <= 0 {
-		return
-	}
-	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
-			// Restore the persisted token so a restart doesn't lose auth and
-			// require manual re-approval of the device-code flow.
-			if auth != nil {
-				if err := auth.LoadCachedToken(ctx); err != nil {
-					logger.Warn("padcloud: failed to load cached token — manual re-auth may be needed", "error", err)
-				}
-			}
-			logger.Info("starting Power Platform connector (experimental)", "interval", interval)
-			ing.Start(interval)
-			return nil
-		},
-		OnStop: func(context.Context) error { ing.Stop(); return nil },
-	})
-}
-
 // provideScanNowFunc wires the admin "scan now" action to the scanner. The
 // scanner is always constructed, but a manual trigger is only meaningful in
 // cloud mode (governance is a cloud feature); in local mode it returns nil so
@@ -361,29 +277,6 @@ func provideScanNowFunc(s *scanner.Scanner, cfg *config.Config) api.ScanNowFunc 
 		return nil
 	}
 	return s.ScanOnce
-}
-
-// provideIngestNowFunc wires the admin "ingest now" action to the PAD-cloud
-// ingester. Nil (→ 503) when the connector isn't configured. The wrapper logs
-// per-pass errors so an async trigger is still observable.
-func provideIngestNowFunc(ing *padcloud.Ingester) api.IngestNowFunc {
-	if ing == nil {
-		return nil
-	}
-	return func(ctx context.Context) {
-		res, err := ing.Ingest(ctx)
-		if err != nil {
-			logger.Error("padcloud: manual ingest failed", "error", err)
-			return
-		}
-		if res.Failed > 0 {
-			logger.Warn("padcloud: manual ingest completed with failures",
-				"ingested", res.Ingested, "failed", res.Failed, "skipped", res.Skipped)
-		} else {
-			logger.Info("padcloud: manual ingest completed",
-				"ingested", res.Ingested, "skipped", res.Skipped)
-		}
-	}
 }
 
 // parseGovernanceDuration parses an optional duration string, returning 0
@@ -406,17 +299,25 @@ func parseGovernanceDuration(env, val string) time.Duration {
 // clears stale rows right away.
 func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.StorageBackend) {
 	interval := parseGovernanceDuration("PAD_RETENTION_PURGE_INTERVAL", cfg.Governance.RetentionPurgeInterval)
-	if interval <= 0 || backend == nil {
+	// Cloud only: the filesystem backend's purge is a no-op, and with the
+	// interval now defaulting on, desktop would otherwise log a "purge
+	// complete" line of zeros every day.
+	if interval <= 0 || backend == nil || cfg.Mode != config.ModeCloud {
 		return
 	}
-	stop := make(chan struct{})
-	sweep := func() {
+	// lifecycle.TickerLoop, like the scanner: its Stop cancels
+	// the in-flight sweep AND waits (up to 5s) for it to return. The old loop
+	// just closed a channel, so storage's OnStop — which runs after this one —
+	// could close the pool under a sweep still deleting; the sweep survived
+	// (recover + retry next tick) but every shutdown logged a spurious failure.
+	var loop lifecycle.TickerLoop
+	sweep := func(ctx context.Context) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Error("retention purge panicked", "err", r)
 			}
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		res, err := backend.PurgeExpiredData(ctx, cfg.Governance.AuditRetentionDays)
 		if err != nil {
@@ -428,27 +329,18 @@ func initRetentionPurge(lc fx.Lifecycle, cfg *config.Config, backend storageif.S
 			"user_tokens", res.UserTokens, "org_invites", res.OrgInvites,
 			"audit_events", res.AuditEvents,
 			"flow_analysis_history", res.FlowAnalysisHistory,
-			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist)
+			"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
+			"share_tokens", res.ShareTokens, "gov_alerts", res.GovAlerts)
 		padmetrics.RecordBackgroundLoopTick("retention_purge")
 	}
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
-			go sweep()
-			go func() {
-				t := time.NewTicker(interval)
-				defer t.Stop()
-				for {
-					select {
-					case <-stop:
-						return
-					case <-t.C:
-						sweep()
-					}
-				}
-			}()
+			loop.Start(interval, true, sweep, func(r any) {
+				logger.Error("retention purge loop stopped after a panic", "err", r)
+			})
 			return nil
 		},
-		OnStop: func(context.Context) error { close(stop); return nil },
+		OnStop: func(context.Context) error { loop.Stop(); return nil },
 	})
 }
 
@@ -583,6 +475,13 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 			return StorageResult{}, fmt.Errorf("invalid PAD_DB_CONN_MAX_IDLE_TIME %q: %w", cfg.Storage.DBConnMaxIdleTime, err)
 		}
 		dbCfg.ConnMaxIdleTime = d
+	}
+	if cfg.Storage.DBStatementTimeout != "" {
+		d, err := time.ParseDuration(cfg.Storage.DBStatementTimeout)
+		if err != nil {
+			return StorageResult{}, fmt.Errorf("invalid PAD_DB_STATEMENT_TIMEOUT %q: %w", cfg.Storage.DBStatementTimeout, err)
+		}
+		dbCfg.StatementTimeout = d
 	}
 
 	// Apply Azure Blob Storage config if available. Blob storage is enabled when a
@@ -791,16 +690,20 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			// silently. Budget: 5s — enough for clients to receive the Close
 			// frame + pumps to exit; the remainder of shutdownCtx goes to
 			// server.Shutdown for non-WS requests.
-			wsCtx, wsCancel := context.WithTimeout(ctx, 5*time.Second)
+			wsCtx, wsCancel := context.WithTimeout(ctx, 3*time.Second)
 			if err := router.ShutdownWebSocket(wsCtx); err != nil {
 				logger.Warn("websocket shutdown exceeded budget or was cancelled", "error", err)
 			}
 			wsCancel()
-			// fx.StopTimeout (25s) bounds the parent context. Reserve a small
-			// budget for the goroutines above to finish their teardown, then
-			// give server.Shutdown the remainder. If ctx already has a short
-			// deadline (rapid restart loop) we still respect it.
-			shutdownCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			// fx.StopTimeout (25s) bounds EVERY OnStop hook together, and this
+			// hook runs first (hooks stop in reverse start order). It used to
+			// take 5s WS + 20s HTTP = the whole budget, leaving nothing for the
+			// hooks after it — the audit flush (5s), the background loops
+			// (≤5s each, usually instant) and the pool close — so a slow HTTP
+			// drain turned into a SIGKILL during audit flush. Now 3s + 12s here,
+			// ~10s for everything else. A request still in flight after 12s is
+			// cut off; that beats losing the audit tail and the clean pool close.
+			shutdownCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			defer cancel()
 			return server.Shutdown(shutdownCtx)
 		},
@@ -886,7 +789,12 @@ func runHealthcheck() int {
 		port = "8080"
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://localhost:" + port + "/readyz") // #nosec G114 -- short-timeout local probe of a known endpoint
+	// #nosec G704 -- not attacker-controlled: a fixed loopback host and a
+	// constant path, with only the port coming from this process's own
+	// PAD_PORT. This is the container healthcheck probing its own server.
+	// (The annotation previously said G114 — the rule for a server without
+	// timeouts — so it suppressed nothing here.)
+	resp, err := client.Get("http://localhost:" + port + "/readyz")
 	if err != nil {
 		return 1
 	}

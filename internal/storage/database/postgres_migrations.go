@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 // migrationChecksum returns the hex-encoded SHA-256 of a migration's SQL. It is
@@ -379,6 +381,12 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	}
 	defer conn.Close()
 
+	restore, err := liftSessionTimeouts(ctx, conn)
+	if err != nil {
+		return err
+	}
+	defer restore()
+
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
 		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
@@ -394,6 +402,19 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	current, err := currentVersion(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	// Refuse a schema this binary does not know. Without this an OLD binary
+	// against a NEWER database booted clean and logged "schema up to date"
+	// with ITS OWN max version — so a rollback (the one recovery move an
+	// operator actually makes) ran queries against tables and columns it had
+	// never seen, silently. Rolling the binary back requires rolling the
+	// schema back first (`bakicli migrate down`), or the app must be redeployed
+	// at a version that knows the schema.
+	latest := migrations[len(migrations)-1].version
+	if current > latest {
+		return fmt.Errorf("schema is at v%d, newer than the v%d this binary knows: refusing to run against an unknown schema (roll the schema back to v%d with `bakicli migrate down %d`, or deploy a binary that knows v%d)",
+			current, latest, latest, latest, current)
 	}
 
 	// Integrity gate: verify that every already-applied migration's SQL still
@@ -417,13 +438,45 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 		applied++
 	}
 
-	latest := migrations[len(migrations)-1].version
 	if applied == 0 {
-		slog.Info("schema up to date", "version", latest)
+		slog.Info("schema up to date", "version", current)
 	} else {
-		slog.Info("schema migrations complete", "version", latest)
+		slog.Info("schema migrations complete", "version", current)
 	}
 	return nil
+}
+
+// liftSessionTimeouts clears statement_timeout and lock_timeout on the
+// migration's dedicated session and returns a func that restores them. The
+// pool applies both to every connection (see New), which is right for
+// request traffic and wrong for migrations: a CREATE INDEX on a real table
+// can legitimately outrun a 30s statement budget, and a replica waiting on
+// the migration advisory lock would be killed by lock_timeout and fail its
+// boot. RESET on the way out matters because sql.Conn.Close returns the
+// connection to the pool, where the next request would otherwise inherit an
+// unbounded session.
+func liftSessionTimeouts(ctx context.Context, conn *sql.Conn) (restore func(), err error) {
+	if _, err := conn.ExecContext(ctx, "SET statement_timeout = 0"); err != nil {
+		return nil, fmt.Errorf("lift statement_timeout for migration: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "SET lock_timeout = 0"); err != nil {
+		return nil, fmt.Errorf("lift lock_timeout for migration: %w", err)
+	}
+	return func() {
+		// Use a fresh context: the caller's may already be cancelled, and a
+		// pooled connection with the timeouts still lifted is the bug.
+		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(rctx, "RESET statement_timeout"); err != nil {
+			slog.Warn("migration: RESET statement_timeout failed; closing connection", "err", err)
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			return
+		}
+		if _, err := conn.ExecContext(rctx, "RESET lock_timeout"); err != nil {
+			slog.Warn("migration: RESET lock_timeout failed; closing connection", "err", err)
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}, nil
 }
 
 // ensureMigrationsTable creates the version-tracking table if it does not yet
@@ -595,6 +648,12 @@ func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion 
 		return nil, fmt.Errorf("acquire migration conn: %w", err)
 	}
 	defer conn.Close()
+
+	restore, err := liftSessionTimeouts(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
 
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
 		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)

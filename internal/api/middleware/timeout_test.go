@@ -90,14 +90,16 @@ func TestIsStreamingPath(t *testing.T) {
 		path     string
 		expected bool
 	}{
-		{"/ws", true},
-		{"/api/events", true},
+		// Bounded streams (*/stream) get the generous outer deadline …
 		{"/api/chat/stream", true},
 		{"/api/analysis/stream", true},
+		{"/stream", true},
+		// … open-ended sessions are long-lived, not streaming (no deadline).
+		{"/ws", false},
+		{"/api/events", false},
 		{"/api/something", false},
 		{"/", false},
 		{"/api/flows/123", false},
-		{"/stream", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -105,5 +107,13 @@ func TestIsStreamingPath(t *testing.T) {
 				t.Errorf("isStreamingPath(%q) = %v, want %v", tt.path, got, tt.expected)
 			}
 		})
+	}
+	for _, p := range []string{"/ws", "/api/events"} {
+		if !isLongLivedPath(p) {
+			t.Errorf("isLongLivedPath(%q) = false; WebSocket/SSE sessions must stay unbounded", p)
+		}
+	}
+	if isLongLivedPath("/api/chat/stream") {
+		t.Error("a chat stream is bounded, not long-lived")
 	}
 }

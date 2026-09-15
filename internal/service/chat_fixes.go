@@ -46,11 +46,23 @@ var ErrNoPendingFix = errors.New("no pending fix proposal for this stream")
 // find it full and are dropped).
 type fixDecisionState struct {
 	streamID string
-	decided  chan bool
-	// excludedBatchIdx carries per-item OPT-OUTS for a batch approval
-	// (U4.1): indices into the card's item list the user deselected. Written
-	// BEFORE the channel send (ResolveFixDecision) and read AFTER the receive
-	// (the batch consumer) — the channel gives the happens-before edge.
+	decided  chan fixDecision
+}
+
+// fixDecision is one user verdict, delivered whole on the channel.
+//
+// excludedBatchIdx carries per-item OPT-OUTS for a batch approval (U4.1):
+// indices into the card's item list the user deselected. It used to live on
+// fixDecisionState, written before the send and read after the receive, on the
+// theory that the channel supplied the happens-before edge. It does — but only
+// for the caller whose send SUCCEEDS. Every caller wrote the field, including
+// the ones whose send lands in the `default:` arm and is dropped, so a
+// double-clicked Approve or a client retry raced the consumer on an
+// unsynchronised slice header (proven under -race). Carrying the payload in the
+// message means only the winning decision is ever published, and there is no
+// shared mutable state left to race on.
+type fixDecision struct {
+	approved         bool
 	excludedBatchIdx []int
 }
 
@@ -92,7 +104,7 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 	if a.touch != nil {
 		a.touch()
 	}
-	st := &fixDecisionState{streamID: a.streamID, decided: make(chan bool, 1)}
+	st := &fixDecisionState{streamID: a.streamID, decided: make(chan fixDecision, 1)}
 	a.svc.pendingFixDecisions.Store(prop.ProposalID, st)
 	defer a.svc.pendingFixDecisions.Delete(prop.ProposalID)
 
@@ -117,7 +129,8 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 wait:
 	for {
 		select {
-		case approved = <-st.decided:
+		case dec := <-st.decided:
+			approved = dec.approved
 			break wait
 		case <-keepalive.C:
 			if a.touch != nil {
@@ -195,7 +208,7 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 		a.touch()
 	}
 	batchID := props[0].ProposalID + "-batch-" + uuid.NewString()[:8]
-	st := &fixDecisionState{streamID: a.streamID, decided: make(chan bool, 1)}
+	st := &fixDecisionState{streamID: a.streamID, decided: make(chan fixDecision, 1)}
 	a.svc.pendingFixDecisions.Store(batchID, st)
 	defer a.svc.pendingFixDecisions.Delete(batchID)
 
@@ -218,6 +231,8 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 	})
 
 	var approved bool
+	// excluded is the winning decision's per-item opt-outs, received with it.
+	var excluded []int
 	var timedOut bool
 	timeout := time.NewTimer(a.svc.decisionWait())
 	defer timeout.Stop()
@@ -226,7 +241,9 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 wait:
 	for {
 		select {
-		case approved = <-st.decided:
+		case dec := <-st.decided:
+			approved = dec.approved
+			excluded = dec.excludedBatchIdx
 			break wait
 		case <-keepalive.C:
 			if a.touch != nil {
@@ -251,9 +268,9 @@ wait:
 
 	// Per-item opt-out (U4.1): apply only the items the user left checked.
 	// Indices are positions in the emitted item list (== props order).
-	if len(st.excludedBatchIdx) > 0 {
-		skip := make(map[int]bool, len(st.excludedBatchIdx))
-		for _, i := range st.excludedBatchIdx {
+	if len(excluded) > 0 {
+		skip := make(map[int]bool, len(excluded))
+		for _, i := range excluded {
 			if i >= 0 && i < len(props) {
 				skip[i] = true
 			}
@@ -458,11 +475,12 @@ func (s *ChatService) ResolveFixDecision(streamID, proposalID string, approved b
 	if st.streamID != streamID {
 		return ErrNoPendingFix
 	}
-	if approved && len(excludedBatchIdx) > 0 {
-		st.excludedBatchIdx = excludedBatchIdx
+	dec := fixDecision{approved: approved}
+	if approved {
+		dec.excludedBatchIdx = excludedBatchIdx
 	}
 	select {
-	case st.decided <- approved:
+	case st.decided <- dec:
 	default: // already decided — first decision wins
 	}
 	return nil

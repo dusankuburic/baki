@@ -29,11 +29,7 @@ export default function FileAutocomplete({query, files, onSelect, onClose, onMat
   // Same keyboard contract as SlashCommandAutocomplete: arrows move, Enter/Tab
   // select, Escape closes. Before this the @-menu had no key handling at all
   // while ChatInput still swallowed every key it saw.
-  const {
-    activeIndex,
-    setActiveIndex,
-    handleKeyDown,
-  } = useListNavigation({
+  const {activeIndex, setActiveIndex, handleKeyDown} = useListNavigation({
     count: filtered.length,
     onSelect: i => {
       if (filtered[i]) onSelect(filtered[i].filename)

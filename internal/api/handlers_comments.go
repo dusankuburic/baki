@@ -104,6 +104,11 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 	// Best-effort comment notification: if the finding has an assignee who is
 	// NOT the commenter, email them so they discover the comment asynchronously.
 	// Detached so the response isn't delayed by SMTP.
+	//
+	// #nosec G118 -- the request context is deliberately NOT used. This work must
+	// outlive the response: inheriting r.Context() would cancel the email the
+	// instant the handler returns. notifyFindingComment builds its own bounded
+	// context (bestEffortTimeout) rather than running unbounded.
 	go h.notifyFindingComment(req.FlowID, req.FindingKey, userID, req.Body)
 
 	// In-app bell alerts (R2-5): the assignee AND prior distinct commenters

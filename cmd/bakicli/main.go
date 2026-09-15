@@ -48,6 +48,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -123,6 +125,7 @@ func runAnalyze() {
 	customRulesFlag := flag.String("custom-rules", "", "path to custom rules JSON file")
 	policyFlag := flag.String("policy", "", "policy JSON file; gate on its rules + gateSeverity (overrides -fail-on)")
 	baselineFlag := flag.String("baseline", "", "baseline JSON file (finding fingerprints); gate on NEW findings only (ratchet)")
+	newFromRev := flag.String("new-from-rev", "", "git revision (e.g. origin/main); gate only on findings NOT present at that revision")
 	updateBaseline := flag.String("update-baseline", "", "write the current run's findings as the baseline to this file and exit 0 (accept current state)")
 	configFlag := flag.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
 	quiet := flag.Bool("quiet", false, "suppress informational output")
@@ -137,6 +140,11 @@ func runAnalyze() {
 	// with -baseline/-update-baseline silently drops the baseline behavior (no
 	// file written, no drift gate). Reject the combination up front so an
 	// operator's intent isn't quietly ignored — run them as separate steps.
+	if *newFromRev != "" && (*baselineFlag != "" || *updateBaseline != "" || *policyFlag != "") {
+		fmt.Fprintln(os.Stderr, "bakicli: -new-from-rev cannot be combined with -baseline, -update-baseline or -policy "+
+			"(they are three different ways to decide what counts as a violation; pick one)")
+		os.Exit(2)
+	}
 	if *policyFlag != "" && (*baselineFlag != "" || *updateBaseline != "") {
 		fmt.Fprintln(os.Stderr, "bakicli: -policy cannot be combined with -baseline or -update-baseline (the policy gate short-circuits the baseline ratchet); run them as separate invocations")
 		os.Exit(2)
@@ -171,9 +179,8 @@ func runAnalyze() {
 		}
 	}
 
-	validSeverities := map[string]bool{"error": true, "warning": true, "info": true}
-	if !validSeverities[*failOn] {
-		fmt.Fprintf(os.Stderr, "bakicli: unknown -fail-on value %q (must be error, warning, or info)\n", *failOn)
+	if !isValidFailOn(*failOn) {
+		fmt.Fprintf(os.Stderr, "bakicli: unknown -fail-on value %q (%s)\n", *failOn, failOnUsage)
 		os.Exit(2)
 	}
 
@@ -265,6 +272,50 @@ func runAnalyze() {
 		}
 		if !*quiet {
 			fmt.Printf("baseline written: %d findings → %s\n", len(report.Findings), *updateBaseline)
+		}
+		return
+	}
+
+	// -new-from-rev: gate on findings that did not exist at a git revision. This
+	// is the baseline ratchet without a committed artifact — it needs no file to
+	// maintain and works correctly on the very first run, which is what lets a
+	// team with thousands of existing findings adopt a gate today rather than
+	// "next quarter". The comparison analyses the SAME files as they were at
+	// that revision and reuses ComputeDrift, so "new" means exactly the same
+	// thing it means for -baseline.
+	if *newFromRev != "" {
+		oldFiles, err := flowFilesAtRev(target, *newFromRev)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: -new-from-rev: %v\n", err)
+			os.Exit(2)
+		}
+		var keys []string
+		if len(oldFiles) > 0 {
+			oldDoc, perr := parser.ParseFiles(oldFiles, filepath.Base(target))
+			if perr != nil {
+				fmt.Fprintf(os.Stderr, "bakicli: -new-from-rev: parse at %s: %v\n", *newFromRev, perr)
+				os.Exit(2)
+			}
+			oldReport := analyzer.RunAnalysis(oldDoc, rules, settings, nil)
+			seen := map[string]bool{}
+			for _, f := range oldReport.Findings {
+				k := f.Fingerprint
+				if k == "" {
+					k = f.Key()
+				}
+				if !seen[k] {
+					seen[k] = true
+					keys = append(keys, k)
+				}
+			}
+		}
+		drift := analyzer.ComputeDrift(report.FlowID, report, keys)
+		if !*quiet {
+			fmt.Printf("new since %s: %d (%d errors, %d warnings, %d info) out of %d total\n",
+				*newFromRev, len(drift.New), drift.NewErrors, drift.NewWarnings, drift.NewInfo, len(report.Findings))
+		}
+		if shouldFail(drift.New, *failOn) {
+			os.Exit(1)
 		}
 		return
 	}
@@ -365,30 +416,91 @@ func load(target string) (*models.FlowDocument, error) {
 // analyze/diff previously hard-wired ParseFolder (.txt only, ignore-blind), so
 // a file excluded from `fix` still failed the `analyze` gate and .pad members
 // were silently invisible — one folder, two disagreeing file sets.
+// loadFolder reads every .txt/.pad flow under dir, RECURSIVELY.
+//
+// It used to be os.ReadDir with `if e.IsDir() { continue }`, so a repository
+// whose flows live in subdirectories — the normal layout — analysed only
+// whatever happened to sit at the top level and said nothing about the files it
+// never opened. A repo organised as billing/, hr/, teamA/ failed outright with
+// "no .txt or .pad files found"; one with a single stray top-level file reported
+// a clean pass having looked at almost none of the input. For a CI gate that is
+// the worst possible failure mode.
+//
+// Keys are paths RELATIVE to dir (slash-separated), not bare base names, so
+// teamA/Main.txt and teamB/Main.txt stay distinct instead of one silently
+// replacing the other in the map. shouldIgnoreFile already took a relative path
+// and already understood directory-prefix patterns like "vendor/", so the
+// recursive shape was designed for and simply never wired up.
 func loadFolder(dir string) (*models.FlowDocument, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read folder: %w", err)
-	}
 	ignorePatterns := loadIgnorePatterns(dir)
 	files := make(map[string]string)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+
+	// Reads go through a root-scoped handle rather than the raw walked path.
+	// bakicli runs on untrusted content in CI (the GitHub Action analyses PR
+	// branches), and ParseError.Snippet embeds VERBATIM SOURCE into the SARIF
+	// that is uploaded to code scanning — so a symlink committed as
+	// flows/x.txt -> /etc/passwd or at a CI secret file would have its contents
+	// parsed and published. os.Root refuses any traversal that escapes dir, and
+	// it closes the symlink TOCTOU window that gosec G122 flags.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open folder: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
 		}
-		name := e.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".txt" && ext != ".pad" {
-			continue
-		}
-		if shouldIgnoreFile(name, ignorePatterns) {
-			continue
-		}
-		data, rerr := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- member of the folder the operator pointed at
+		rel, rerr := filepath.Rel(dir, path)
 		if rerr != nil {
-			return nil, fmt.Errorf("read %s: %w", name, rerr)
+			return rerr
 		}
-		files[name] = string(data)
+		rel = filepath.ToSlash(rel)
+
+		if d.IsDir() {
+			if rel == "." {
+				return nil
+			}
+			// Skip dot-directories (.git, .github, …): descending into them is
+			// slow and never yields a flow the operator meant to analyse.
+			if strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir
+			}
+			// An ignored directory is pruned rather than walked, so "vendor/"
+			// costs nothing on a large tree.
+			if shouldIgnoreFile(rel+"/", ignorePatterns) || shouldIgnoreFile(rel, ignorePatterns) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if ext != ".txt" && ext != ".pad" {
+			return nil
+		}
+		if shouldIgnoreFile(rel, ignorePatterns) {
+			return nil
+		}
+		// Symlinks are skipped outright: WalkDir reports them via Lstat, and a
+		// flow that is a link adds nothing an operator intended to analyse.
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		f, readErr := root.Open(rel)
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", rel, readErr)
+		}
+		data, readErr := io.ReadAll(f)
+		_ = f.Close()
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", rel, readErr)
+		}
+		files[rel] = string(data)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read folder: %w", err)
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no .txt or .pad files found in %s", dir)
@@ -452,6 +564,31 @@ func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRule
 	return out
 }
 
+// isValidFailOn reports whether s is a threshold the gate understands.
+//
+// It matters that this is checked rather than tolerated: shouldFail falls back
+// to error-gating for anything it does not recognise, so an unvalidated typo
+// ("warnings", "none", "high") does not fail loudly — it quietly gates on a
+// different severity than the one asked for, which is the CI failure mode this
+// repo keeps finding. Every entry point that accepts a threshold, from a flag
+// OR from .bakirc.json, runs it through here first.
+//
+// "none" is deliberately NOT accepted. The GitHub Action documents it, but it
+// handles the semantics itself (it maps none→info for the CLI and skips the
+// failure step entirely), so the CLI seeing "none" means someone expects
+// report-only behaviour it does not implement — better to say so than to gate
+// on errors and look like it worked.
+func isValidFailOn(s string) bool {
+	switch s {
+	case string(models.SeverityError), string(models.SeverityWarning), string(models.SeverityInfo):
+		return true
+	default:
+		return false
+	}
+}
+
+const failOnUsage = "must be error, warning, or info"
+
 func shouldFail(findings []models.Finding, threshold string) bool {
 	rank := map[string]int{
 		string(models.SeverityInfo):    1,
@@ -463,7 +600,19 @@ func shouldFail(findings []models.Finding, threshold string) bool {
 		min = rank[string(models.SeverityError)]
 	}
 	for _, f := range findings {
-		if rank[string(f.Severity)] >= min {
+		r, known := rank[string(f.Severity)]
+		if !known {
+			// Fail CLOSED on a severity this binary does not recognise. The
+			// zero value from a plain map lookup ranks below every threshold,
+			// so an unrecognised severity used to mean "never trips the gate" —
+			// the single worst direction for a CI gate to guess in. Custom
+			// rules are now validated at load (analyzer.NewCustomRule), so
+			// reaching here implies a newer producer than this binary; treat
+			// that as at least as severe as the threshold rather than ignoring
+			// it.
+			return true
+		}
+		if r >= min {
 			return true
 		}
 	}
@@ -503,12 +652,6 @@ func runWatch(args []string) {
 	}
 	target := fs.Arg(0)
 
-	validSeverities := map[string]bool{"error": true, "warning": true, "info": true}
-	if !validSeverities[*failOn] {
-		fmt.Fprintf(os.Stderr, "bakicli watch: unknown -fail-on value %q (must be error, warning, or info)\n", *failOn)
-		os.Exit(2)
-	}
-
 	// Config discovery + defaults, identical to analyze: CLI flags win, the
 	// .bakirc.json fills unset ones. Watch previously ignored the config and
 	// the baseline/policy gates entirely, so the local feedback loop was
@@ -542,6 +685,14 @@ func runWatch(args []string) {
 				*policyFlag = cfg.Policy
 			}
 		}
+	}
+	// AFTER the config merge, not before it. The check used to run against the
+	// flag alone, so a typo'd `failOn` in .bakirc.json passed validation and
+	// then replaced the validated value — leaving watch previewing an
+	// error-severity gate while the config asked for something else, silently.
+	if !isValidFailOn(*failOn) {
+		fmt.Fprintf(os.Stderr, "bakicli watch: unknown -fail-on value %q (%s)\n", *failOn, failOnUsage)
+		os.Exit(2)
 	}
 
 	var policy models.Policy
@@ -582,7 +733,12 @@ func runWatch(args []string) {
 			fmt.Fprintf(os.Stderr, "bakicli watch: parse error: %v\n", err)
 			return
 		}
-		report := analyzer.RunAnalysis(doc, rules, models.DefaultSettings(), nil)
+		// The config's per-rule profile (enabled/severity/thresholds), not
+		// DefaultSettings(): watch loaded the file for fail-on/rules/policy but
+		// analysed with defaults, so `ruleConfig` was silently ignored here
+		// while analyze honoured it — the local preview ran a different gate
+		// than the CI it claims to mirror.
+		report := analyzer.RunAnalysis(doc, rules, buildSettingsFromConfig(watchCfg), nil)
 		if !*quiet {
 			fmt.Println(separator())
 			printText(report, false)
@@ -786,6 +942,22 @@ func runFix(args []string) {
 	limit := fs.Int("limit", 50, "maximum fix iterations (safety cap against a fixer that doesn't resolve)")
 	format := fs.String("format", "text", "summary format: text, json")
 	quiet := fs.Bool("quiet", false, "suppress per-fix log")
+	// `fix` reads the SAME .bakirc.json as `analyze`. Without this the two
+	// commands disagreed about the rule set: a rule disabled in the config was
+	// not reported by `analyze` but was still auto-fixed here, rewriting the
+	// flow to resolve a finding the team had switched off — and a custom rule
+	// carrying an autoFix was reported but never applied. That also broke the
+	// org-rules-export → CI parity promise documented on bakiConfig.
+	configFlag := fs.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
+	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
+	// Off by default: these fixes change what the flow DOES at runtime, not how
+	// it handles failure. sanitize-command-vars strips the variables out of a
+	// command line (`robocopy %Src% %Dst% /MIR` becomes `robocopy   /MIR`) and
+	// mask-sensitive-variable swaps a live credential for a literal. Both are
+	// legitimate "stop the bleed" actions, and neither should happen to a
+	// developer who typed `bakicli fix` expecting a tidy-up.
+	unsafeFlag := fs.Bool("unsafe", false,
+		"also apply fixes that change runtime behaviour (command sanitisation, credential masking)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: bakicli fix [flags] <file.txt> [file2.txt ...] [folder]")
 		fs.PrintDefaults()
@@ -796,7 +968,23 @@ func runFix(args []string) {
 		os.Exit(2)
 	}
 
-	ruleFilter := parseRuleSet(*rule)
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	var cfg *bakiConfig
+	if *configFlag != "" {
+		loaded, err := loadConfig(*configFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: config: %v\n", err)
+			os.Exit(2)
+		}
+		cfg = loaded
+	}
+	if cfg != nil && !setFlags["custom-rules"] && cfg.CustomRules != "" {
+		*customRulesFlag = cfg.CustomRules
+	}
+
+	opts := buildFixOptions(cfg, *rule, *customRulesFlag, *limit)
+	opts.IncludeBehaviourChanging = *unsafeFlag
 	totalFixed := 0
 	filesProcessed := 0
 
@@ -808,7 +996,7 @@ func runFix(args []string) {
 			os.Exit(2)
 		}
 		for _, file := range files {
-			n, err := fixOneFile(file, *apply, ruleFilter, *limit, *quiet)
+			n, err := fixOneFile(file, *apply, opts, *quiet)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "bakicli fix: %s: %v\n", file, err)
 				os.Exit(1)
@@ -863,17 +1051,18 @@ func expandFixTargets(path string) ([]string, error) {
 
 // fixOneFile loads, fixes, and optionally writes a single flow file. Returns
 // the number of fixes applied.
-func fixOneFile(file string, apply bool, ruleFilter map[string]bool, limit int, quiet bool) (int, error) {
+func fixOneFile(file string, apply bool, opts analyzer.FixOptions, quiet bool) (int, error) {
 	data, err := os.ReadFile(file) // #nosec G304 -- path is a CLI argument supplied by the operator
 	if err != nil {
 		return 0, err
 	}
 	source := string(data)
-	fixed, err := analyzer.ApplyFixesToSource(&source, filepath.Base(file), ruleFilter, limit, func(ruleID, fixType string, line int) {
+	opts.OnFix = func(ruleID, fixType string, line int) {
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "fix: [%s] %s %s (line %d)\n", ruleID, fixType, filepath.Base(file), line)
 		}
-	})
+	}
+	fixed, err := analyzer.ApplyFixesToSource(&source, filepath.Base(file), opts)
 	if err != nil {
 		return 0, err
 	}
@@ -1535,6 +1724,13 @@ type bakiConfig struct {
 type bakiRuleConf struct {
 	Enabled  *bool  `json:"enabled,omitempty"`
 	Severity string `json:"severity,omitempty"`
+	// Options carries a rule's thresholds (deep-nesting maxDepth,
+	// duplicate-action minRepeats, wide-loop/large-subflow maxBlocks). This
+	// field did not exist: a threshold written in .bakirc.json was dropped by
+	// the JSON decoder and the rule kept its default, so the committed config
+	// and the enforced gate disagreed on exactly the number nobody re-checks.
+	// Mirrors models.RuleConfig.Options and the org export's `options`.
+	Options map[string]any `json:"options,omitempty"`
 }
 
 func buildDefaultConfig() bakiConfig {
@@ -1553,7 +1749,13 @@ func buildDefaultConfig() bakiConfig {
 			}
 			enabled = rc.Enabled
 		}
-		cfg.RuleCfg[r.ID()] = bakiRuleConf{Severity: string(sev), Enabled: &enabled}
+		rc := bakiRuleConf{Severity: string(sev), Enabled: &enabled}
+		// Emit the thresholds the rule honours, so `init` documents that
+		// they exist and what they default to.
+		if d, ok := defaults.Analysis.Rules[r.ID()]; ok && len(d.Options) > 0 {
+			rc.Options = maps.Clone(d.Options)
+		}
+		cfg.RuleCfg[r.ID()] = rc
 	}
 	return cfg
 }
@@ -1627,9 +1829,39 @@ func buildSettingsFromConfig(cfg *bakiConfig) *models.AppSettings {
 		if rc.Enabled != nil {
 			enabled = *rc.Enabled
 		}
-		rules[id] = models.RuleConfig{Enabled: enabled, Severity: rc.Severity}
+		mrc := models.RuleConfig{Enabled: enabled, Severity: rc.Severity}
+		// Copy, don't alias: rules read Options while a watch loop may reload.
+		if len(rc.Options) > 0 {
+			mrc.Options = maps.Clone(rc.Options)
+		}
+		rules[id] = mrc
 	}
 	return &models.AppSettings{Analysis: models.AnalysisSettings{Rules: rules}}
+}
+
+// buildFixOptions assembles the fix loop's configuration from the config file
+// and the `fix` flags. Extracted from runFix so the wiring itself is testable:
+// the bug this exists to prevent was not in the loop but in the caller, which
+// never handed the loop a configuration at all.
+//
+// The rule set is assembled exactly as `analyze` assembles it (built-ins +
+// custom rules from the flag and from the config's inline block), so a fix run
+// can never see a different set of rules than the run that reported the
+// findings.
+func buildFixOptions(cfg *bakiConfig, ruleFlag, customRulesPath string, limit int) analyzer.FixOptions {
+	// -rule scopes WHICH findings get fixed. When it is not given, the config's
+	// `rules` selection stands in: a config that narrows analysis to a rule set
+	// means the same thing for a fix run.
+	ruleFilter := parseRuleSet(ruleFlag)
+	if ruleFilter == nil && cfg != nil && cfg.Rules != "" {
+		ruleFilter = parseRuleSet(cfg.Rules)
+	}
+	return analyzer.FixOptions{
+		RuleFilter: ruleFilter,
+		Settings:   buildSettingsFromConfig(cfg),
+		Rules:      selectRules("", customRulesPath, inlineRulesOf(cfg)),
+		Limit:      limit,
+	}
 }
 
 // runDiffReports compares two saved analysis runs at the FINDINGS level
@@ -1651,9 +1883,8 @@ func runDiffReports(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
-	validSeverities := map[string]bool{"error": true, "warning": true, "info": true}
-	if !validSeverities[*failOn] {
-		fmt.Fprintf(os.Stderr, "bakicli diff-reports: unknown -fail-on value %q\n", *failOn)
+	if !isValidFailOn(*failOn) {
+		fmt.Fprintf(os.Stderr, "bakicli diff-reports: unknown -fail-on value %q (%s)\n", *failOn, failOnUsage)
 		os.Exit(2)
 	}
 

@@ -198,19 +198,23 @@ END
 	if err != nil {
 		t.Fatalf("re-parse: %v\n%s", err, patched)
 	}
+	// The fixer no longer introduces a LOOP: it appends PAD's native
+	// `ON ERROR REPEAT n TIMES WAIT m`, which the parser folds onto the action as
+	// _retryCount. The old counting-loop shape ran the action three times
+	// unconditionally. What indentation has to preserve is therefore the action's
+	// EXISTING nesting (still inside the IF) plus the retry landing on the action
+	// rather than on an enclosing block.
 	click2 := findBlockByRaw(t, doc2, "WebAutomation.ClickElement")
-	sawLoop, sawIf := false, false
+	sawIf := false
 	for _, parentID := range ancestorsOf(doc2, click2) {
-		if p := doc2.BlocksByID[parentID]; p != nil {
-			if p.RawType == "LOOP" {
-				sawLoop = true
-			}
-			if p.RawType == "IF" {
-				sawIf = true
-			}
+		if p := doc2.BlocksByID[parentID]; p != nil && p.RawType == "IF" {
+			sawIf = true
 		}
 	}
-	if !sawLoop || !sawIf {
-		t.Errorf("after retry wrap: click inside LOOP=%v inside IF=%v (want both):\n%s", sawLoop, sawIf, patched)
+	if !sawIf {
+		t.Errorf("after the retry fix the click is no longer nested inside the IF:\n%s", patched)
+	}
+	if got := click2.Properties["_retryCount"]; got != "3" {
+		t.Errorf("retry attached to the wrong block: click _retryCount = %q, want \"3\":\n%s", got, patched)
 	}
 }

@@ -127,6 +127,18 @@ func (s *parseState) requireDepth(tok Token) bool {
 }
 
 func (s *parseState) recordMalformedLine(tok Token) {
+	// An unterminated multi-line span is not an ordinary unclassifiable line.
+	// One malformed line loses one entry; an unclosed /# or ''' consumed every
+	// line after it, so the tree is missing arbitrary amounts of content. Report
+	// the specific cause at error severity, which is the severity CountParseErrors
+	// (and so the CI gate and the fix loop's regression guard) actually counts.
+	if tok.RawType == "UNTERMINATED" {
+		s.parseErrors = append(s.parseErrors, models.ParseError{
+			Line: tok.Line, Column: tok.Column, Message: tok.Name,
+			Severity: "error", Snippet: truncate(tok.Raw, 200),
+		})
+		return
+	}
 	s.parseErrors = append(s.parseErrors, models.ParseError{
 		Line: tok.Line, Column: tok.Column, Message: "malformed line",
 		Severity: "warning", Snippet: truncate(tok.Raw, 200),
@@ -188,6 +200,21 @@ func (s *parseState) handleErrorHandlerStart(tok Token) {
 		top.ChildPtrs = append(top.ChildPtrs, blk)
 
 		s.skipNextEnd = true
+		return
+	}
+	// The depth guard sits HERE, not at the top of the function like its five
+	// peers (handleBlockStart, handleSwitchStart, ...). The early-return path
+	// above converts an already-accepted BLOCK into an error handler and pushes
+	// nothing, so guarding the whole function would reject that conversion at
+	// max depth for a block that is already on the stack. Only this path grows
+	// it.
+	//
+	// Without any guard, nested ON BLOCK ERROR was the one opener that could
+	// exceed maxNestingDepth — a 10 MB upload builds a tree thousands deep, and
+	// every recursive walker downstream (toValueTree, CountDescendants,
+	// computeMaxDepth, the search indexer, the serializer, the analyzer) then
+	// runs at that depth.
+	if !s.requireDepth(tok) {
 		return
 	}
 	blk := newBlock(tok, s.current.id, models.BlockTypeErrorHandler)
@@ -255,11 +282,50 @@ func (s *parseState) handleDefault(tok Token) {
 	s.stack = append(s.stack, stackEntry{indent: tok.Indent + 1, block: defBlock})
 }
 
+// loopKindProperty names the parser-derived loop kind on a LOOP block. The
+// leading underscore marks it as parser metadata rather than a PAD property,
+// matching _retryCount / _output / _var.
+// LoopKindProperty is exported so analyzer rules can read the kind.
+const LoopKindProperty = "_loopKind"
+
+// Loop kinds. foreach and counted are bounded BY CONSTRUCTION — a FOREACH
+// consumes a fixed collection and a counted range has an end — so neither can
+// run forever regardless of what its body does. while is conditional and may
+// not terminate; other covers dotted (Loop.X) and unrecognised headers, which
+// are treated conservatively like while.
+const (
+	LoopKindForEach = "foreach"
+	LoopKindCounted = "counted"
+	LoopKindWhile   = "while"
+	LoopKindOther   = "other"
+)
+
+// classifyLoopKind derives the kind from a loop header line.
+func classifyLoopKind(content string) string {
+	switch {
+	case reLoopForEach.MatchString(content):
+		return LoopKindForEach
+	case reLoopRange.MatchString(content), reLoopRangeAnon.MatchString(content):
+		return LoopKindCounted
+	case reLoopWhile.MatchString(content):
+		return LoopKindWhile
+	default:
+		return LoopKindOther
+	}
+}
+
 func (s *parseState) handleLoopStart(tok Token) {
 	if !s.requireSubflow(tok, "loop") || !s.requireDepth(tok) {
 		return
 	}
 	blk := newBlock(tok, s.current.id, models.BlockTypeLoop)
+	// Record the loop KIND alongside the variables. Kind is what distinguishes a
+	// loop that can run forever from one that terminates by construction, and it
+	// was being discarded at parse time — so infinite-loop-risk had to infer it
+	// from variable modification, could not, and fired on every FOREACH and
+	// counted loop in the corpus (204 of 204 Error findings, i.e. the entire
+	// default CI gate, on provably bounded loops).
+	blk.Properties[LoopKindProperty] = classifyLoopKind(tok.Content)
 	// Track loop-declared variables so analysis rules can detect scope and usage.
 	if m := reLoopForEach.FindStringSubmatch(tok.Content); m != nil {
 		// LOOP FOREACH CurrentItem IN List
@@ -297,11 +363,29 @@ func (s *parseState) handleEnd(tok Token) {
 			}
 			endBlk.Tokens = tokenizeBlock(endBlk)
 			top.ChildPtrs = append(top.ChildPtrs, endBlk)
-			// Pop the ErrorHandler itself, mirroring the normal branch below
-			// (line ~299). Without this the ErrorHandler stays on the stack:
-			// recordUnclosedBlocks then flags it as "unclosed" and following
-			// siblings parent under it until popStack clears them.
-			s.stack = s.stack[:len(s.stack)-1]
+			// Deliberately NOT popped. `BLOCK` + `ON BLOCK ERROR` is two
+			// containers sharing one promoted node, and PAD closes them with
+			// two ENDs:
+			//
+			//	BLOCK
+			//	ON BLOCK ERROR all
+			//	END            <- this one: closes the HANDLER section only
+			//	    <protected body>
+			//	END            <- closes the BLOCK
+			//
+			// Popping here closed the whole construct on the first END, so the
+			// protected body -- 33 of the 42 lines in the browsercloser sample,
+			// Microsoft's own published flow -- landed at ROOT level as
+			// siblings. HasErrorHandlerAncestor then returned false for every
+			// action inside a correctly handled block, so unhandled-error and
+			// file-op-no-error-handler both fired on it. The earlier comment
+			// here read the body as "following siblings parenting under it";
+			// they are the block's contents, and nesting them is the point.
+			//
+			// The BLOCK stays on the stack with its own indent, so the body
+			// nests under it and the second END closes it through the normal
+			// branch below. A missing second END now correctly reports an
+			// unclosed block rather than silently discarding the body.
 		}
 		return
 	}
@@ -362,12 +446,12 @@ func (s *parseState) handleConditionElse(tok Token) {
 	for s.stack[len(s.stack)-1].block.Type != models.BlockTypeCondition {
 		s.stack = s.stack[:len(s.stack)-1]
 	}
-	elseBlock := &models.Block{
-		ID: uuid.NewString(), Name: "Else", Type: models.BlockTypeElse,
-		RawType: "ELSE", Indent: tok.Indent, LineNumber: tok.Line,
-		SubflowID: s.current.id, Properties: map[string]string{}, Variables: []string{},
-	}
-	elseBlock.Tokens = tokenizeBlock(elseBlock)
+	// Built through newBlock rather than by hand so an ELSE IF rung gets the
+	// same treatment as any other condition -- in particular extractVariables
+	// over the branch condition, which a hardcoded Name/RawType discarded. For a
+	// plain ELSE the token already carries Name "Else" / RawType "ELSE", so this
+	// produces exactly the block the hand-built literal did.
+	elseBlock := newBlock(tok, s.current.id, models.BlockTypeElse)
 	parent := s.stack[len(s.stack)-1].block
 	elseBlock.ParentID = parent.ID
 	parent.ChildPtrs = append(parent.ChildPtrs, elseBlock)
@@ -482,6 +566,17 @@ func buildDocument(text, fileName string, fileSize int64, subflows []models.Subf
 
 	for i := range doc.Subflows {
 		sf := &doc.Subflows[i]
+		// Stamp the source file on every subflow that does not already carry one.
+		//
+		// ParseFiles/ParseFolder set this per member file; the single-file
+		// ParseText path never did, and SARIF's artifactLocation.uri falls back
+		// to SubflowID+".txt" when it is empty — a UUID the parser MINTS ON
+		// EVERY PARSE. GitHub Code Scanning resolves that against the repo,
+		// finds nothing, and cannot place the alert; and because the name
+		// changes each run, nothing correlates between runs either.
+		if sf.SourceFile == "" {
+			sf.SourceFile = fileName
+		}
 		doc.SubflowsByID[sf.ID] = sf
 		for j := range sf.Blocks {
 			indexBlockInDoc(doc, sf, &sf.Blocks[j])

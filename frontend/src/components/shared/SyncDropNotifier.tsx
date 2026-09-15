@@ -3,12 +3,11 @@ import {useEffect} from 'react'
 import {syncManager} from '@/services/sync/SyncManager'
 import {useToast} from '@/components/shared'
 
-// SyncDropNotifier surfaces silent sync-queue drops as a toast. Without it, the
-// offline sync queue can discard ops (TTL expiry > 60s offline, or overflow
-// past 200 queued) with no signal: the OfflineIndicator count silently goes to
-// 0 and the user believes stale changes were delivered when they were discarded.
-// This is the client-side half of the fix; a true end-to-end delivery guarantee
-// would additionally need a backend send-ack.
+// SyncDropNotifier surfaces silent sync-queue drops as a toast. The queue holds
+// cursor/presence updates for the collaboration socket — nothing else is ever
+// queued offline — and it can discard them (TTL expiry > 60s offline, or
+// overflow past 200 queued) with no signal. The toast names what was dropped
+// so nobody reads "changes not synced" as lost edits.
 //
 // `warning` from useToast is a stable memoized callback, so the effect binds the
 // syncManager subscription once for the component's lifetime (the [warning] dep

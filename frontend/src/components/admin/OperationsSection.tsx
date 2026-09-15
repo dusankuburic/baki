@@ -1,13 +1,13 @@
 import {useCallback, useState} from 'react'
-import {Activity, Database, HardDrive, RefreshCw, Server, Wifi, WifiOff} from 'lucide-react'
+import {Activity, Database, HardDrive, RefreshCw, Server} from 'lucide-react'
 import {adminApi, type SystemHealth} from '@/api/admin'
 import {Button, useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import clsx from 'clsx'
 
 // OperationsSection (R2-6): the admin console's ops surface — per-subsystem
-// health, connector status, and one-click scanner/ingester triggers. These
-// endpoints existed with NO frontend consumer; admins had to curl with a JWT.
+// health and a one-click governance-scan trigger. These endpoints existed with
+// NO frontend consumer; admins had to curl with a JWT.
 
 interface Props {
   visible: boolean
@@ -17,16 +17,12 @@ export function OperationsSection({visible}: Props) {
   const toast = useToast()
   const [health, setHealth] = useState<SystemHealth | null>(null)
   const [loading, setLoading] = useState(false)
-  const [connected, setConnected] = useState<boolean | null>(null)
   const [scanBusy, setScanBusy] = useState(false)
-  const [ingestBusy, setIngestBusy] = useState(false)
 
   const loadHealth = useCallback(async () => {
     setLoading(true)
     try {
-      const [h, pp] = await Promise.all([adminApi.systemHealth(), adminApi.ppStatus()])
-      setHealth(h)
-      setConnected(pp?.connected ?? null)
+      setHealth(await adminApi.systemHealth())
     } catch (e) {
       logger.warn(e)
       setHealth(null)
@@ -42,22 +38,17 @@ export function OperationsSection({visible}: Props) {
     void loadHealth()
   }
 
-  const trigger = useCallback(
-    async (what: 'scan' | 'ingest') => {
-      const setBusy = what === 'scan' ? setScanBusy : setIngestBusy
-      setBusy(true)
-      try {
-        if (what === 'scan') await adminApi.triggerScannerScan()
-        else await adminApi.triggerIngesterIngest()
-        toast.success(what === 'scan' ? 'Governance scan started' : 'Cloud ingest started')
-      } catch (e) {
-        toast.error('Trigger failed', {description: String(e)})
-      } finally {
-        setBusy(false)
-      }
-    },
-    [toast],
-  )
+  const trigger = useCallback(async () => {
+    setScanBusy(true)
+    try {
+      await adminApi.triggerScannerScan()
+      toast.success('Governance scan started')
+    } catch (e) {
+      toast.error('Trigger failed', {description: String(e)})
+    } finally {
+      setScanBusy(false)
+    }
+  }, [toast])
 
   return (
     <section className="border border-border-default rounded-xl p-4 bg-surface-1" data-testid="operations-section">
@@ -72,19 +63,10 @@ export function OperationsSection({visible}: Props) {
       </div>
 
       {/* Subsystem health */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
         <HealthTile icon={Database} label="Database" comp={health?.database} />
         <HealthTile icon={HardDrive} label="Blob storage" comp={health?.blob} />
         <HealthTile icon={Server} label="Redis" comp={health?.redis} />
-        <HealthTile
-          icon={connected ? Wifi : WifiOff}
-          label="Power Platform"
-          comp={
-            connected === null
-              ? undefined
-              : {status: connected ? 'ok' : 'error', error: connected ? undefined : 'not connected'}
-          }
-        />
       </div>
       {health && (
         <p
@@ -101,19 +83,10 @@ export function OperationsSection({visible}: Props) {
         </p>
       )}
 
-      {/* One-click triggers */}
+      {/* One-click trigger */}
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => void trigger('scan')} disabled={scanBusy}>
+        <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => void trigger()} disabled={scanBusy}>
           {scanBusy ? 'Starting…' : 'Run governance scan'}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          icon={RefreshCw}
-          onClick={() => void trigger('ingest')}
-          disabled={ingestBusy}
-        >
-          {ingestBusy ? 'Starting…' : 'Ingest cloud flows'}
         </Button>
       </div>
     </section>

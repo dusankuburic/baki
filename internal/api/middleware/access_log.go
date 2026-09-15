@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 	"pad-analyzer/internal/auth"
 	"pad-core/logger"
 )
@@ -68,7 +69,7 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 			}
 
 			level := levelFor(r.URL.Path, sr.status)
-			logAt(level, "access",
+			args := []any{
 				"request_id", reqID,
 				"method", r.Method,
 				"path", redactPath(r.URL.Path),
@@ -77,7 +78,15 @@ func AccessLog(trustedProxies []string) func(http.Handler) http.Handler {
 				"latency_ms", latency.Milliseconds(),
 				"user_id", userID,
 				"remote_ip", ClientIP(r, trustedProxies),
-			)
+			}
+			// trace_id lets an operator pivot from a trace (App Insights /
+			// any OTLP backend) to this request's log lines and back. otelhttp
+			// is the outermost layer, so the span is already on the context
+			// here; without this the two telemetry streams shared no key.
+			if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
+				args = append(args, "trace_id", sc.TraceID().String())
+			}
+			logAt(level, "access", args...)
 		})
 	}
 }

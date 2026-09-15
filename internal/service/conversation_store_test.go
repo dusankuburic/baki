@@ -206,20 +206,29 @@ func TestReconstructHistory(t *testing.T) {
 	}
 
 	// No ContextBlockID → key falls back to "flow" → loads the stored history.
-	got := svc.reconstructHistory(context.Background(), doc, models.ChatRequest{})
+	got, err := svc.reconstructHistory(context.Background(), doc, models.ChatRequest{})
+	if err != nil {
+		t.Fatalf("reconstructHistory: %v", err)
+	}
 	if len(got) != 2 || got[0].Content != "previous question" {
 		t.Fatalf("expected stored history, got %+v", got)
 	}
 
 	// A contextBlockId keys its own conversation slot; absent → empty (not error).
-	gotBlock := svc.reconstructHistory(context.Background(), doc, models.ChatRequest{ContextBlockID: "block-7"})
+	// This distinction is load-bearing: reconstructAndPersistUserTurn persists on
+	// the empty case and deliberately does NOT on the error case, because
+	// SaveConversation is a full replace.
+	gotBlock, err := svc.reconstructHistory(context.Background(), doc, models.ChatRequest{ContextBlockID: "block-7"})
+	if err != nil {
+		t.Fatalf("an absent conversation must be empty-and-nil-error, not an error: %v", err)
+	}
 	if len(gotBlock) != 0 {
 		t.Fatalf("expected empty history for an unknown contextBlockId, got %d msgs", len(gotBlock))
 	}
 
 	// nil doc → nil (no panic, no store access).
-	if got := svc.reconstructHistory(context.Background(), nil, models.ChatRequest{}); got != nil {
-		t.Errorf("expected nil for nil doc, got %+v", got)
+	if got, err := svc.reconstructHistory(context.Background(), nil, models.ChatRequest{}); got != nil || err != nil {
+		t.Errorf("expected (nil, nil) for nil doc, got (%+v, %v)", got, err)
 	}
 
 	// Persist a block-scoped conversation and confirm it loads by that key.
@@ -227,7 +236,10 @@ func TestReconstructHistory(t *testing.T) {
 	if err := svc.SaveConversation(context.Background(), doc, "block-7", blockMsgs); err != nil {
 		t.Fatalf("SaveConversation block: %v", err)
 	}
-	gotBlock2 := svc.reconstructHistory(context.Background(), doc, models.ChatRequest{ContextBlockID: "block-7"})
+	gotBlock2, err := svc.reconstructHistory(context.Background(), doc, models.ChatRequest{ContextBlockID: "block-7"})
+	if err != nil {
+		t.Fatalf("reconstructHistory block: %v", err)
+	}
 	if len(gotBlock2) != 1 || gotBlock2[0].Content != "block question" {
 		t.Fatalf("expected block-scoped history, got %+v", gotBlock2)
 	}

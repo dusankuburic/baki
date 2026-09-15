@@ -12,6 +12,12 @@ services:
       # every Row-Level Security policy in the schema, which silently disables
       # the second of the two tenant-isolation layers. scripts/db-init creates
       # this role on first volume init. See that file for existing deployments.
+      #
+      # The password here is the local-dev default of BAKI_APP_PASSWORD (see the
+      # db service below) and the two must agree. Compose cannot interpolate a
+      # variable inside another variable's default, so setting BAKI_APP_PASSWORD
+      # means setting PAD_DATABASE_URL to match — which a real deployment does
+      # anyway, since docker-compose.prod.yml requires both explicitly.
       - PAD_DATABASE_URL=${PAD_DATABASE_URL:-postgres://baki_app:baki_app@db:5432/baki?sslmode=disable}
       # LOCAL DEVELOPMENT ONLY. The image ships PAD_MODE=cloud, and cloud mode
       # defaults to requiring TLS on the database connection — so without this
@@ -54,6 +60,14 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - POSTGRES_DB=${POSTGRES_DB:-baki}
+      # Password for the unprivileged application role that scripts/db-init
+      # creates on first volume init. It used to be a literal inside that
+      # script, which meant a production stack built on this file came up with a
+      # credential published in this repository. The throwaway default here is
+      # scoped to local development — this file serves plaintext HTTP against a
+      # TLS-less database and says so at the top. docker-compose.prod.yml makes
+      # the variable mandatory with no default.
+      - BAKI_APP_PASSWORD=${BAKI_APP_PASSWORD:-baki_app}
     ports:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:

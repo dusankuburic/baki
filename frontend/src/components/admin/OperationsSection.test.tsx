@@ -4,16 +4,12 @@ import {OperationsSection} from './OperationsSection'
 import {ToastProvider} from '@/components/shared/Toast'
 
 const systemHealth = vi.fn()
-const ppStatus = vi.fn()
 const triggerScannerScan = vi.fn()
-const triggerIngesterIngest = vi.fn()
 
 vi.mock('@/api/admin', () => ({
   adminApi: {
     systemHealth: (...a: unknown[]) => systemHealth(...a),
-    ppStatus: (...a: unknown[]) => ppStatus(...a),
     triggerScannerScan: (...a: unknown[]) => triggerScannerScan(...a),
-    triggerIngesterIngest: (...a: unknown[]) => triggerIngesterIngest(...a),
   },
 }))
 
@@ -34,17 +30,14 @@ describe('OperationsSection (R2-6)', () => {
       redis: {status: 'error', error: 'connection refused'},
       overall: 'degraded',
     })
-    ppStatus.mockResolvedValue({connected: true})
     triggerScannerScan.mockResolvedValue({started: true})
-    triggerIngesterIngest.mockResolvedValue({started: true})
   })
 
-  it('loads health + connector status on first visibility and renders per-subsystem tiles', async () => {
+  it('loads health on first visibility and renders per-subsystem tiles', async () => {
     renderSection()
     expect(await screen.findByText('Database')).toBeInTheDocument()
     expect(screen.getByText('Blob storage')).toBeInTheDocument()
     expect(screen.getByText('Redis')).toBeInTheDocument()
-    expect(screen.getByText('Power Platform')).toBeInTheDocument()
     expect(screen.getByText(/Overall: degraded/)).toBeInTheDocument()
     // Error detail on hover title.
     expect(screen.getByTitle('connection refused')).toBeInTheDocument()
@@ -57,13 +50,6 @@ describe('OperationsSection (R2-6)', () => {
     await waitFor(() => expect(triggerScannerScan).toHaveBeenCalledTimes(1))
   })
 
-  it('triggers a cloud ingest on click', async () => {
-    renderSection()
-    await screen.findByText('Database')
-    fireEvent.click(screen.getByRole('button', {name: /ingest cloud flows/i}))
-    await waitFor(() => expect(triggerIngesterIngest).toHaveBeenCalledTimes(1))
-  })
-
   it('refresh re-fetches health', async () => {
     renderSection()
     await screen.findByText('Database')
@@ -73,9 +59,8 @@ describe('OperationsSection (R2-6)', () => {
 
   it('renders unknown-state tiles while health has not loaded', async () => {
     systemHealth.mockReturnValue(new Promise(() => {})) // pending
-    ppStatus.mockReturnValue(new Promise(() => {})) // pending too
     renderSection()
     expect(await screen.findByText('Database')).toBeInTheDocument()
-    expect(screen.getAllByText('unknown').length).toBeGreaterThanOrEqual(4)
+    expect(screen.getAllByText('unknown').length).toBeGreaterThanOrEqual(3)
   })
 })

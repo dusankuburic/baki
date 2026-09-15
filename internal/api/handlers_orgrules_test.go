@@ -349,3 +349,38 @@ func TestTestCustomRule_ReportsWhatItWouldMatch(t *testing.T) {
 		t.Error("rule-test analyzed a flow the caller has no access to")
 	}
 }
+
+// TestOrgRules_ExportCarriesThresholds: an org's rule thresholds (maxDepth,
+// minRepeats, maxBlocks) are part of the profile the export hands to CI. The
+// export used to emit {enabled, severity} only, so a team that tightened a
+// threshold in the UI-visible settings saw CI gate on the default — the
+// profile and the gate drifted apart on exactly the field nobody re-checks.
+func TestOrgRules_ExportCarriesThresholds(t *testing.T) {
+	env := newChannelEnv(t)
+	rt, admin, orgID := env.rt, env.admin, env.orgID
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/system/settings/org/"+orgID, admin,
+		map[string]any{"analysis": map[string]any{"rules": map[string]any{
+			"deep-nesting": map[string]any{"enabled": true, "severity": "warning", "options": map[string]any{"maxDepth": 2}},
+		}}})
+	checkStatus(t, rr, http.StatusOK)
+
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/orgs/"+orgID+"/rules/export", admin, nil)
+	checkStatus(t, rr, http.StatusOK)
+	var export struct {
+		RuleConfig map[string]struct {
+			Severity string         `json:"severity"`
+			Options  map[string]any `json:"options"`
+		} `json:"ruleConfig"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&export); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	rc, ok := export.RuleConfig["deep-nesting"]
+	if !ok {
+		t.Fatal("export dropped the deep-nesting override")
+	}
+	if got := rc.Options["maxDepth"]; got != 2.0 {
+		t.Errorf("export lost the threshold: options=%v (want maxDepth 2)", rc.Options)
+	}
+}

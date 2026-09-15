@@ -10,7 +10,6 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/connector/padcloud"
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
@@ -38,6 +37,14 @@ func (c *authzFlowChecker) CheckAccess(ctx context.Context, flowID, userID strin
 	default:
 		return err
 	}
+}
+
+// CanEdit reports whether the user holds the "editor" rank on the flow — the
+// same rank the HTTP write endpoints require. Room joins are deliberately
+// gated lower (at "viewer"), so this is what keeps a read-only collaborator
+// from sending block mutations over the socket.
+func (c *authzFlowChecker) CanEdit(ctx context.Context, flowID, userID string) bool {
+	return c.authz.CheckFlowAccessByID(ctx, flowID, userID, "editor") == nil
 }
 
 func ProvideFlowAccessChecker(authz *service.AuthzService, backend storageif.StorageBackend) wshub.FlowAccessChecker {
@@ -73,7 +80,10 @@ func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend st
 		Backend:        backend,
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
-		Features:       api.FeatureFlags{DisableSignUp: cfg.Features.DisableSignUp},
+		Features: api.FeatureFlags{
+			DisableSignUp:       cfg.Features.DisableSignUp,
+			LocalConfigEndpoint: cfg.Server.LocalConfigEndpoint,
+		},
 	}
 }
 
@@ -156,14 +166,6 @@ var APIModule = fx.Options(
 				return is
 			}
 			return nil
-		},
-		// Power Platform auth: nil unless the connector is configured (cloud
-		// mode + tenant/client/dataverse). Admin endpoints treat nil as 503.
-		func(auth *padcloud.Authenticator) api.PadCloudAuth {
-			if auth == nil {
-				return nil
-			}
-			return auth
 		},
 		api.NewRouter,
 	),

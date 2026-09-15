@@ -45,6 +45,14 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const readOnly = useFlowStore(s => s.readOnly)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // loadError is what stops a FAILED load from presenting as an EMPTY flow.
+  // Without it the catch below only toasted, leaving source and original at
+  // '' while loading cleared — so the editor rendered a fully interactive
+  // blank textarea. One keystroke made it dirty (original was ''), which armed
+  // Save, which sent that single character as the entire PAD source. A
+  // transient 500 on load therefore destroyed the flow.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadNonce, setReloadNonce] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const gutterRef = useRef<HTMLDivElement>(null)
 
@@ -55,6 +63,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     // Enters the loading state for an async source fetch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void setLoading(true)
+    void setLoadError(null)
     flowApi
       .getSource(document.id)
       .then(res => {
@@ -63,7 +72,10 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
         setOriginal(res.source)
       })
       .catch(err => {
-        if (!cancelled) toast.error('Failed to load source', {description: String(err)})
+        if (!cancelled) {
+          setLoadError(String(err))
+          toast.error('Failed to load source', {description: String(err)})
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -75,14 +87,17 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     // save/reparse, and re-running this would re-fetch and overwrite the user's
     // unsaved edits; `toast` is only used on the failure path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document?.id])
+  }, [document?.id, reloadNonce])
 
   const dirty = source !== original
 
   const handleSave = useCallback(async () => {
     // readOnly guards the mod+S shortcut too (F1.5) — the button was already
     // disabled, the keyboard path wasn't.
-    if (!document || !dirty || saving || useFlowStore.getState().readOnly) return
+    // loadError: the buffer does not hold this flow's source, it holds
+    // whatever was typed into an empty box. Saving it would overwrite the real
+    // flow with that.
+    if (!document || !dirty || saving || loadError || useFlowStore.getState().readOnly) return
     setSaving(true)
     try {
       const updated = await flowApi.saveSource(document.id, source)
@@ -103,7 +118,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     } finally {
       setSaving(false)
     }
-  }, [document, source, dirty, saving, setOriginal, setReport, toast])
+  }, [document, source, dirty, saving, loadError, setOriginal, setReport, toast])
 
   const handleRevert = useCallback(() => {
     setSource(original)
@@ -157,6 +172,29 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     return (
       <div className="flex items-center justify-center h-full">
         <Spinner size={24} />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center">
+        <div className="text-sm font-medium text-text-primary">Couldn&apos;t load the flow source</div>
+        <div className="max-w-md text-xs text-text-tertiary break-words">{loadError}</div>
+        <div className="max-w-md text-xs text-text-tertiary">
+          The editor stays closed so a save can&apos;t overwrite the flow with an empty buffer.
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setReloadNonce(n => n + 1)}
+            className="px-3 py-1.5 text-xs rounded bg-surface-3 text-text-primary hover:bg-surface-2"
+          >
+            Retry
+          </button>
+          <button onClick={onClose} className="px-3 py-1.5 text-xs rounded text-text-tertiary hover:text-text-primary">
+            Close
+          </button>
+        </div>
       </div>
     )
   }

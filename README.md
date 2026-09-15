@@ -125,7 +125,7 @@ Serve `frontend/dist/` from any static host / reverse proxy, run the Go binary (
 
 ## Configuration
 
-Backend env vars (see `.env.example`):
+Backend env vars (the common ones; the complete reference with defaults is [docs/CONFIGURATION.md](docs/CONFIGURATION.md), and `.env.example` is annotated):
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -153,21 +153,41 @@ Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:
 #### Azure Container Apps deployment (ops runbook)
 
 1. **Identity & RBAC** — assign a (user-assigned) managed identity to the Container App and grant it **Storage Blob Data Contributor** on the storage account. For Postgres, set `PAD_DATABASE_URL` with `password=managed-identity` and grant the identity the AAD login role; the server injects a fresh Entra token per connection.
-2. **Container** — pre-create the blob container (the app does not create it):
+2. **Container** — the container must exist before the app starts; the app does not
+   create it. The Bicep in `infra/` provisions it as **`flow-content`** and sets
+   `PAD_AZURE_STORAGE_CONTAINER` to match, so on that path there is nothing to do.
+   To create it by hand, use the same name — `flows/` is a key *prefix inside* the
+   container, not a container name:
    ```bash
-   az storage container create --account-name <acct> --name flows --auth-mode login
+   az storage container create --account-name <acct> --name flow-content --auth-mode login
    ```
 3. **Recoverability** — enable blob **soft-delete** and **versioning** on the account so an accidental/buggy delete is recoverable (the DB remains the source of truth):
    ```bash
    az storage account blob-service-properties update --account-name <acct> \
      --enable-delete-retention true --delete-retention-days 14 --enable-versioning true
    ```
-4. **Lifecycle policy** — reclaim orphaned/superseded blobs (the version-keyed scheme leaves orphans on rollback/supersession). The current `content.v{N}` is rewritten on every save, so a "delete blobs under `flows/` not modified in 30 days" rule expires only stale ones:
-   ```bash
-   az storage account management-policy create --account-name <acct> --policy @lifecycle.json
-   # lifecycle.json: a rule with filters.prefixMatch ["flows/"] and
-   # actions.baseBlob.delete.daysAfterModificationGreaterThan 30
-   ```
+4. **Lifecycle policy** — **do not add an age-based delete rule under `flows/`.** This
+   step previously recommended one, on the premise that "the current `content.v{N}` is
+   rewritten on every save". That premise is false: content is **version-keyed**
+   (`flowContentKey` → `flows/{id}/content.v{N}.json`), so each save writes a *new*
+   blob and the live one keeps the modification time of the last edit. A "delete blobs
+   not modified in 30 days" rule therefore deletes the **live content of every flow
+   nobody has edited in 30 days** — exactly the destruction the note under *Azure Blob
+   Storage* above warns about, and which the code comment at
+   `internal/storage/database/postgres_flows.go` states outright: such a rule "cannot
+   tell a stale v(N-1) from the LIVE blob of a flow that simply hasn't been edited
+   lately".
+
+   Superseded blobs are already reclaimed by the application shortly after each
+   successful save, and `DeleteFlow` removes the flow's whole prefix, so no age-based
+   rule is needed. If you want a backstop for orphans left by a rolled-back
+   transaction, it must key on something that distinguishes an orphan from a live
+   blob — e.g. reconcile against the `flows` table's current version — not on age.
+
+   Note the shipped Bicep also configures `tierToArchive` at 90 days after
+   modification (`infra/main.bicep`). Archive-tier blobs cannot be read without
+   rehydration, so on that IaC a flow untouched for 90 days becomes temporarily
+   unreadable; narrow or remove that rule if you need every flow to stay hot.
  5. **Probes** — set the ACA `livenessProbe` to `GET /healthz` and `readinessProbe` to `GET /readyz` (the latter checks DB *and* blob reachability).
  6. **Observability** — alert on `pad_blob_operations_total{status="error"}` and `{status="throttled"}` (429s ⇒ throttling/scale), blob-op duration p99 (`pad_blob_operation_duration_seconds`), readiness failures, and `pad_blob_content_missing_total` (a flow's content blob was absent though its metadata recorded content — data loss; any increase warrants investigation).
  7. **Disaster recovery** — database backup/restore (PITR + geo-restore), RPO/RTO targets, a quarterly restore drill, and cutover steps are in [`docs/DR_RUNBOOK.md`](docs/DR_RUNBOOK.md). Provisioning a geo-redundant-backed-up Postgres via IaC is in [`infra/postgres.bicep`](infra/postgres.bicep).

@@ -218,7 +218,7 @@ runs:
 
     - name: Comment on pull request
       if: ${{ always() && github.event_name == 'pull_request' && inputs.comment-on-pr == 'true' }}
-      uses: actions/github-script@d7906e4ad0b1822423a8e9a043a9c665e3ae5c4a  # v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
       with:
         github-token: ${{ github.token }}
         script: |
@@ -236,22 +236,36 @@ runs:
           } catch {
             body += '_No report produced._';
           }
-          // Use update-or-create so re-pushes update the existing comment instead of stacking.
-          const {data: comments} = await github.rest.issues.listComments({
-            ...context.repo,
-            issue_number: context.issue.number,
-          });
-          const existing = comments.find(c => c.user.type === 'Bot' && c.body.startsWith('## PAD Flow Analysis'));
-          if (existing) {
-            await github.rest.issues.updateComment({
-              ...context.repo,
-              comment_id: existing.id,
-              body,
-            });
-          } else {
-            await github.rest.issues.createComment({
+          // Posting is BEST EFFORT. A pull request from a fork always receives a
+          // read-only GITHUB_TOKEN no matter what permissions the calling
+          // workflow declares, so these calls will 403 there — and this step
+          // runs under always(), so an unhandled throw failed the whole job
+          // after a perfectly clean analysis. The comment is a convenience; the
+          // SARIF upload and the exit code are the actual gate.
+          try {
+            // Update-or-create so re-pushes update the existing comment instead of stacking.
+            const {data: comments} = await github.rest.issues.listComments({
               ...context.repo,
               issue_number: context.issue.number,
-              body,
             });
+            const existing = comments.find(c => c.user.type === 'Bot' && c.body.startsWith('## PAD Flow Analysis'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                ...context.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+          } catch (err) {
+            core.warning(
+              `Could not post the PAD analysis comment: ${err.message}. ` +
+              'This is expected for pull requests from forks, which receive a read-only token. ' +
+              'The analysis result itself is unaffected.'
+            );
           }

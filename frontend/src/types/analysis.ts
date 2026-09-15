@@ -266,6 +266,8 @@ export interface Rule {
   confidence?: Confidence
   /** Deterministic fixType a user can apply in one click (e.g. "set-timeout"), or empty if none. */
   autoFix?: string
+  /** Numeric thresholds the rule honours (maxDepth, minRepeats, maxBlocks), as currently configured. */
+  options?: Record<string, number>
 }
 
 export interface RuleConfig {

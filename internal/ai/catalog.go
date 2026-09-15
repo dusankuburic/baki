@@ -6,9 +6,6 @@ package ai
 // auditable place, separate from the stable per-provider request/SSE code, so a
 // model refresh is a one-file edit. TestProviderCatalogConsistency validates that
 // each provider's DefaultModel/FreeModel resolve against these entries.
-//
-// The "demo" provider builds its model list dynamically and is intentionally not
-// catalogued here.
 var modelCatalog = map[string][]ModelInfo{
 	"claude": {
 		{ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},

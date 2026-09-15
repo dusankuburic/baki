@@ -1013,7 +1013,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 53,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -2046,7 +2048,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 104,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -3063,7 +3067,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 155,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -4043,7 +4049,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 206,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -5028,7 +5036,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 257,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -6028,7 +6038,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 308,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -6994,7 +7006,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 359,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -8036,7 +8050,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 410,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -9071,7 +9087,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 461,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -10014,7 +10032,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 512,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -11018,7 +11038,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 563,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -12021,7 +12043,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 614,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -13070,7 +13094,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 665,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -14016,7 +14042,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 716,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -14994,7 +15022,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 767,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -15982,7 +16012,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 818,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -17006,7 +17038,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 869,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -17984,7 +18018,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 920,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -18999,7 +19035,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 971,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -19996,7 +20034,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1022,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -21041,7 +21081,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1073,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -22040,7 +22082,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1124,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -23070,7 +23114,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1175,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -24054,7 +24100,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1226,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -25989,7 +26037,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1330,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -26982,7 +27032,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1381,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -28016,7 +28068,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1432,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -29099,7 +29153,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1483,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -30106,7 +30162,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1534,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -31154,7 +31212,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1585,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -32225,7 +32285,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1636,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -33260,7 +33322,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1687,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -34307,7 +34371,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1738,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -35346,7 +35412,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1789,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -36380,7 +36448,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1840,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -37369,7 +37439,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1891,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -38388,7 +38460,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1942,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -39399,7 +39473,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 1993,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -40410,7 +40486,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2044,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -41409,7 +41487,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2095,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -42291,7 +42371,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2146,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -43242,7 +43324,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2197,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -44176,7 +44260,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2248,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -45134,7 +45220,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2299,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -46095,7 +46183,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2350,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -47117,7 +47207,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2401,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -48163,7 +48255,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2452,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -49127,7 +49221,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2503,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -51206,7 +51302,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2607,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -52126,7 +52224,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2658,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -53142,7 +53242,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2709,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -54159,7 +54261,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2760,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -55133,7 +55237,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2811,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -56147,7 +56253,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2862,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -57196,7 +57304,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2913,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -58188,7 +58298,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 2964,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -59140,7 +59252,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3015,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -60149,7 +60263,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3066,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -61214,7 +61330,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3117,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -62221,7 +62339,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3168,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -63132,7 +63252,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3219,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -64092,7 +64214,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3270,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -65061,7 +65185,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3321,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -66095,7 +66221,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3372,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -67062,7 +67190,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3423,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -68049,7 +68179,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3474,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -68965,7 +69097,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3525,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -69990,7 +70124,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3576,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -71004,7 +71140,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3627,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -72008,7 +72146,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3678,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -73032,7 +73172,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3729,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -74076,7 +74218,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3780,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -76034,7 +76178,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3884,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -77090,7 +77236,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3935,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -78075,7 +78223,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 3986,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -79054,7 +79204,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4037,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -80081,7 +80233,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4088,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -81043,7 +81197,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4139,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -82000,7 +82156,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4190,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -83057,7 +83215,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4241,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -84088,7 +84248,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4292,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -85112,7 +85274,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4343,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -86165,7 +86329,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4394,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -87158,7 +87324,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4445,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -88185,7 +88353,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4496,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -89200,7 +89370,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4547,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -90231,7 +90403,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4598,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -91225,7 +91399,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4649,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -92250,7 +92426,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4700,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -93220,7 +93398,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4751,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -94204,7 +94384,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4802,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -95208,7 +95390,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4853,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -96191,7 +96375,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4904,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -97200,7 +97386,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 4955,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -98203,7 +98391,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5006,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -99244,7 +99434,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5057,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -101321,7 +101513,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5161,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -102298,7 +102492,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5212,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -103298,7 +103494,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5263,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -104292,7 +104490,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5314,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -105321,7 +105521,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5365,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -106318,7 +106520,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5416,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -107340,7 +107544,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5467,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -108413,7 +108619,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5518,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -109466,7 +109674,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5569,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -110407,7 +110617,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5620,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -111445,7 +111657,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5671,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -112428,7 +112642,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5722,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -113492,7 +113708,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5773,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -114510,7 +114728,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5824,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -115553,7 +115773,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5875,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -116595,7 +116817,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5926,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -117565,7 +117789,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 5977,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -118538,7 +118764,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6028,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -119505,7 +119733,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6079,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -120520,7 +120750,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6130,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -121479,7 +121711,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6181,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -122427,7 +122661,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6232,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -123374,7 +123610,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6283,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -124336,7 +124574,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6334,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -126284,7 +126524,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6438,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -127400,7 +127642,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6489,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -128494,7 +128738,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6540,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -129456,7 +129702,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6591,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -130546,7 +130794,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6642,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -131554,7 +131804,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6693,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -132566,7 +132818,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6744,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -133545,7 +133799,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6795,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -134581,7 +134837,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6846,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -135608,7 +135866,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6897,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -136597,7 +136857,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6948,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -137515,7 +137777,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 6999,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -138462,7 +138726,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7050,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -139454,7 +139720,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7101,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -140484,7 +140752,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7152,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -141512,7 +141782,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7203,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -142560,7 +142832,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7254,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -143546,7 +143820,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7305,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -144509,7 +144785,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7356,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -145436,7 +145714,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7407,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -146444,7 +146724,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7458,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -147468,7 +147750,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7509,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -148479,7 +148763,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7560,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -149499,7 +149785,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7611,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -151562,7 +151850,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7715,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -152525,7 +152815,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7766,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -153509,7 +153801,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7817,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -154558,7 +154852,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7868,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -155608,7 +155904,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7919,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -156621,7 +156919,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 7970,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -157607,7 +157907,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8021,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -158681,7 +158983,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8072,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -159685,7 +159989,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8123,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -160697,7 +161003,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8174,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -161723,7 +162031,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8225,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -162744,7 +163054,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8276,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -163725,7 +164037,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8327,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -164722,7 +165036,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8378,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -165700,7 +166016,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8429,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -166713,7 +167031,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8480,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -167739,7 +168059,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8531,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -168772,7 +169094,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8582,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -169786,7 +170110,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8633,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -170836,7 +171162,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8684,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -171828,7 +172156,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8735,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -172744,7 +173074,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8786,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -173782,7 +174114,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8837,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -174823,7 +175157,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8888,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -176850,7 +177186,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 8992,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -177849,7 +178187,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9043,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -178866,7 +179206,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9094,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -179915,7 +180257,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9145,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -180851,7 +181195,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9196,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -181792,7 +182138,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9247,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -182828,7 +183176,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9298,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -183811,7 +184161,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9349,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -184860,7 +185212,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9400,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -185803,7 +186157,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9451,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -186798,7 +187154,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9502,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -187798,7 +188156,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9553,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -188803,7 +189163,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9604,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -189833,7 +190195,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9655,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -190792,7 +191156,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9706,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -191774,7 +192140,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9757,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -192795,7 +193163,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9808,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -193770,7 +194140,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9859,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -194749,7 +195121,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9910,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -195761,7 +196135,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 9961,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -196796,7 +197172,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 10012,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -197700,7 +198078,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 10063,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -198752,7 +199132,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 10114,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",
@@ -199762,7 +200144,9 @@
           "rawType": "LOOP",
           "indent": 4,
           "lineNumber": 10165,
-          "properties": {},
+          "properties": {
+            "_loopKind": "foreach"
+          },
           "variables": [
             "ItemList",
             "CurrentItem",

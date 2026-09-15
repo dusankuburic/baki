@@ -33,6 +33,15 @@ func (r *MissingRetryRule) Check(block *models.Block, ctx *RuleContext) []models
 		return nil
 	}
 
+	// PAD's own inline retry (`ON ERROR REPEAT N TIMES WAIT M`) is folded onto the
+	// action by the parser as _retryCount/_retryWait. It is both a retry AND an
+	// error handler, so an action carrying it is correctly written — this rule
+	// used to fire on it anyway, and `bakicli fix` would then add a counting loop
+	// on top of a working retry.
+	if block.Properties["_retryCount"] != "" {
+		return nil
+	}
+
 	if !isTransientOperation(block.RawType) {
 		return nil
 	}

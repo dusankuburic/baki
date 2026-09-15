@@ -13,9 +13,13 @@
 #         # baseline: 'baseline.json'  # ratchet: fail only on NEW findings
 #         # policy: 'policy.json'      # authoritative gate (overrides failOn)
 #
-# This template builds bakicli from source, runs analysis with SARIF output,
-# publishes the SARIF report as a build artifact, and fails the build if any
-# finding meets the severity threshold.
+# This template downloads the bakicli release binary (checksum-verified), runs
+# analysis with SARIF output, publishes the SARIF report as a build artifact,
+# and fails the build if any finding meets the severity threshold.
+#
+# It used to run `go build ./cmd/bakicli` inside $(Build.SourcesDirectory) —
+# the CONSUMER's repository, which has no cmd/bakicli — so it failed for every
+# consumer, every time. Pin `version` to a release tag for a reproducible gate.
 
 parameters:
   - name: flowPath
@@ -39,18 +43,37 @@ parameters:
     type: string
     default: '$(Build.ArtifactStagingDirectory)/pad-analysis.sarif'
     displayName: 'SARIF output path'
+  - name: version
+    type: string
+    default: 'latest'
+    displayName: 'bakicli release tag (e.g. v0.1.0; "latest" = newest release)'
+  - name: repo
+    type: string
+    default: 'dusankuburic/baki'
+    displayName: 'GitHub repository that publishes bakicli releases'
 
 steps:
-  - task: GoTool@0
-    displayName: 'Set up Go'
-    inputs:
-      version: '1.25'
-
   - script: |
       set -euo pipefail
-      cd "$(Build.SourcesDirectory)"
-      go build -o "$(Agent.TempDirectory)/bakicli" ./cmd/bakicli
-    displayName: 'Build bakicli'
+      case "$(uname -m)" in
+        x86_64) goarch=amd64 ;;
+        aarch64|arm64) goarch=arm64 ;;
+        *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
+      esac
+      asset="bakicli-linux-${goarch}.tar.gz"
+      if [ "${{ parameters.version }}" = "latest" ]; then
+        base="https://github.com/${{ parameters.repo }}/releases/latest/download"
+      else
+        base="https://github.com/${{ parameters.repo }}/releases/download/${{ parameters.version }}"
+      fi
+      tmp="$(mktemp -d)"
+      curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset"
+      curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256"
+      ( cd "$tmp" && sha256sum -c "$asset.sha256" )
+      tar -xzf "$tmp/$asset" -C "$tmp"
+      mv "$tmp/bakicli-linux-${goarch}" "$(Agent.TempDirectory)/bakicli"
+      chmod +x "$(Agent.TempDirectory)/bakicli"
+    displayName: 'Download bakicli release binary'
 
   - script: |
       set -euo pipefail

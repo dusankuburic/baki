@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {useFlowStore} from '@/stores/flowStore'
@@ -268,5 +268,46 @@ describe('FindingCard apply-fix gating (R0-2)', () => {
     )
     expect(screen.getByText('Apply fix')).toBeInTheDocument()
     expect(screen.getByTitle(/Write a pad-ignore directive/)).toBeInTheDocument()
+  })
+})
+
+describe('FindingCard cloud folder import (no stored source)', () => {
+  afterEach(() => {
+    tauriMode = true
+  })
+
+  // The upload handler stores doc.Source for single-file uploads only, so a
+  // cloud folder import (the normal PAD layout) cannot be patched server-side.
+  // The button used to be enabled and fail after the click with "source not
+  // available"; now it is disabled up front with the reason in the tooltip.
+  it('disables Apply fix with the reason on a cloud folder import', () => {
+    tauriMode = false
+    useFlowStore.setState({
+      document: {
+        ...mockDoc,
+        isFolder: true,
+        files: [
+          {path: 'Main.txt', name: 'Main.txt', size: 1},
+          {path: 'Sub.txt', name: 'Sub.txt', size: 1},
+        ],
+      } as unknown as FlowDocument,
+      readOnly: false,
+    })
+    render(
+      <ToastProvider>
+        <FindingCard finding={baseFinding} blockLookup={new Map()} />
+      </ToastProvider>,
+    )
+    const btn = screen.getByText('Apply fix').closest('button')
+    expect(btn).toBeDisabled()
+    expect(btn?.title).toMatch(/folder import/i)
+  })
+
+  it('keeps Apply fix enabled for a cloud single-file flow', () => {
+    tauriMode = false
+    renderCard()
+    const btn = screen.getByText('Apply fix').closest('button')
+    expect(btn).toBeEnabled()
+    expect(btn?.title).not.toMatch(/folder import/i)
   })
 })

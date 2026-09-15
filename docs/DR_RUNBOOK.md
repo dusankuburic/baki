@@ -31,7 +31,7 @@ compliance window changes.
 | **PostgreSQL** | users, orgs, flows (metadata), versions, analysis, triage, baselines, conversations, audit, tokens, settings | Azure DB for PostgreSQL Flexible Server automated backups (full + continuous incremental), optional geo-redundant | `infra/postgres.bicep` (`geoRedundantBackup`, `backupRetentionDays`) |
 | **Blob Storage** | flow content JSON (`flows/{flowId}/content.v{N}.json`) | Blob **soft-delete** (14 d) + **versioning** | storage account — see [README §Azure Blob](../README.md) |
 | **Container image** | the app binary | GHCR (immutable by digest) + `deploy.yml` | `.github/workflows/deploy.yml` |
-| **IaC / secrets** | Bicep, GitHub Actions, Key Vault | Git history + Key Vault | `infra/`, GitHub secrets |
+| **IaC / secrets** | Bicep, GitHub Actions secrets → Container App secrets | Git history + GitHub secrets | `infra/`, GitHub secrets |
 
 > The database schema is **not** separately backed up: `main()` runs
 > `migrate()` on boot under an advisory lock and applies any pending
@@ -137,14 +137,37 @@ az postgres flexible-server deleted-server restore \
    ```
 2. **Schema self-heals on boot** — `migrate()` applies any pending
    `schema_migrations`. Watch the first boot logs for `schema migrations complete`.
-3. **Blob is reconciled from the DB** — the DB is the source of truth. The
-   version-keyed blob scheme (`flows/{id}/content.v{N}.json`) means a rolled-back
-   DB row points at the correct historical blob; a restored DB never references a
-   blob that doesn't exist for its version. Orphaned blobs (from a txn that
-   rolled back before the backup) are reaped by the lifecycle policy
-   (delete blobs under `flows/` unmodified for 30 d) — see [README](../README.md).
-4. **Verify** end-to-end: `GET /readyz` (DB + blob reachability) returns 200, and
-   a known flow loads + analyzes.
+3. **Blob needs its OWN restore — do not skip this.** The DB is the source of
+   truth for *which* blob a flow points at, but not for the blob's existence.
+   Superseded content blobs are hard-deleted about a minute after each successful
+   save (`staleBlobCleanupDelay` in `internal/storage/database/postgres_flows.go`).
+
+   So after a point-in-time restore to time *T*, every flow that was saved **after**
+   *T* has a row pointing at `content.v{N}` that was deleted long ago. The rows
+   restore; the content does not come back with them.
+
+   Recover it from blob **soft-delete** (14-day window, `infra/main.bicep`) or from
+   blob versioning, in the same maintenance window as the DB restore:
+   ```bash
+   # list soft-deleted blobs for the affected prefix
+   az storage blob list --account-name <acct> --container-name flow-content \
+     --prefix "flows/" --include d --auth-mode login -o table
+   # undelete a flow's content
+   az storage blob undelete --account-name <acct> --container-name flow-content \
+     --name "flows/<flowId>/content.v<N>.json" --auth-mode login
+   ```
+   An earlier version of this step said "a restored DB never references a blob that
+   doesn't exist for its version" and pointed at an age-based lifecycle rule. Both
+   were wrong, and the combination was dangerous: it told the operator there was
+   nothing to do, so the content aged out of the soft-delete window permanently.
+   There is no age-based lifecycle rule — see [README](../README.md) step 4 for why
+   one must not be added.
+4. **Verify** end-to-end. `GET /readyz` is **not** sufficient on its own: it checks
+   that the DB, blob and Redis are *reachable*, not that any particular flow's
+   content still exists, so it returns 200 while flows saved after *T* are empty.
+   Open a flow known to have been saved shortly before the incident and confirm it
+   loads and analyzes, and watch `pad_blob_content_missing_total` — any increase
+   means a row's content blob is gone.
 
 ---
 
@@ -176,12 +199,11 @@ wrong, missing, or slower than the target.
   UPDATE users SET role = 'admin' WHERE email = '<known-owner>';
   ```
 - **Lost JWT signing secret (`PAD_AUTH_SECRET`):** all outstanding access/refresh
-  tokens become unverifiable; every user must re-login. Rotate in Key Vault
-  (`pad-auth-secret`) and restart the app. The AES keystore key is the *same*
+  tokens become unverifiable; every user must re-login. Rotate the
+  `PAD_AUTH_SECRET` GitHub secret and re-run `deploy.yml` (it becomes a
+  Container App secret). The AES keystore key is the *same*
   secret — rotating it invalidates encrypted provider keys (users must re-enter
   AI provider keys); see `internal/storage/database/keystore.go`.
-- **Key Vault unreachable:** the app reads secrets at startup; a Vault outage
-  blocks boot. Restore Vault access first (Azure-side), then restart the revision.
 
 ### 7a. Secret rotation impact (H19)
 
@@ -190,9 +212,9 @@ obvious from the break-glass notes. **Read this table before rotating.**
 
 | Secret rotated | Immediate user impact | Recovery action |
 |---|---|---|
-| `PAD_AUTH_SECRET` | Every outstanding JWT (access + refresh) is invalid → all users force-logged-out, all in-flight chat streams abort, all SSE channels drop. | Users re-authenticate. **Cascading impact:** when `PAD_ENCRYPTION_KEY` is UNSET (the legacy default) the keystore uses the auth secret as its AES key, so provider API keys + PAD-cloud tokens ALSO become undecryptable — see next row. |
-| `PAD_ENCRYPTION_KEY` | Every stored provider API key (Settings → Providers) becomes undecryptable. Every PAD-cloud token becomes undecryptable. Users see "provider key missing" until they re-enter credentials. | Each user re-enters provider credentials. PAD-cloud re-runs the device-code flow. |
-| `PAD_SSO_CLIENT_SECRET` | New SSO logins fail until the running process restarts (the secret is read at boot). Existing sessions unaffected. | Restart the process after updating Key Vault. |
+| `PAD_AUTH_SECRET` | Every outstanding JWT (access + refresh) is invalid → all users force-logged-out, all in-flight chat streams abort, all SSE channels drop. | Users re-authenticate. **Cascading impact:** when `PAD_ENCRYPTION_KEY` is UNSET (the legacy default) the keystore uses the auth secret as its AES key, so provider API keys ALSO become undecryptable — see next row. |
+| `PAD_ENCRYPTION_KEY` | Every stored provider API key (Settings → Providers) becomes undecryptable. Users see "provider key missing" until they re-enter credentials. | Each user re-enters provider credentials. |
+| `PAD_SSO_CLIENT_SECRET` | New SSO logins fail until the running process restarts (the secret is read at boot). Existing sessions unaffected. | Update the GitHub secret and redeploy (the value is baked into the revision). |
 | Managed Identity (Postgres / Blob) | Workload-token cache flushes on next request — brief latency spike, no user-visible failure. | None. |
 
 ### 7b. Zero-downtime rotation (forward path)
@@ -218,4 +240,3 @@ Tracked separately as a Phase 4 larger refactor.
 - Schema migration behaviour:
   [`internal/storage/database/postgres_migrations.go`](../internal/storage/database/postgres_migrations.go).
 - Blob soft-delete/versioning/lifecycle: [README §Azure Blob Storage](../README.md).
-- Original review context: [`PRODUCTION_READINESS.md`](../PRODUCTION_READINESS.md) item #12.

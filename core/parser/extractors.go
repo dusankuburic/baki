@@ -55,6 +55,21 @@ func extractKeyValuePairs(text string, props map[string]string) map[string]strin
 	return props
 }
 
+// findNextKey scans forward for the next `Key: ` boundary and returns the key
+// plus the offset just past the colon.
+//
+// On a failed match it resumes at the END of the key-character run it just
+// scanned, never inside it. That is not only an optimisation, it is the only
+// correct resumption point: a key is a MAXIMAL run of key characters followed by
+// ':' and then a space, tab or end-of-line. Every sub-run starting inside
+// [keyStart, runEnd) ends at the same runEnd and is therefore followed by the
+// same byte — so if the full run is not a key, no sub-run of it can be either.
+//
+// It used to resume at keyStart+1, re-scanning the whole run on every byte, so
+// an N-byte run cost N²/2 comparisons. A 2 MB line (the limit on
+// /api/analysis/analyze-raw) took tens of minutes of pinned CPU, and since the
+// parser takes no context the request timeout could not interrupt it.
+// See TestParseProperties_UnterminatedKeyRunIsLinear.
 func findNextKey(text string, start int) (string, int) {
 	pos := start
 	for pos < len(text) {
@@ -67,18 +82,21 @@ func findNextKey(text string, start int) (string, int) {
 		for pos < len(text) && isKeyChar(text[pos]) {
 			pos++
 		}
+		runEnd := pos
 
-		if pos >= len(text) || text[pos] != ':' {
-			pos = keyStart + 1
+		if runEnd >= len(text) || text[runEnd] != ':' {
+			pos = runEnd
 			continue
 		}
-		pos++
+		pos = runEnd + 1
 
 		if pos >= len(text) || text[pos] == ' ' || text[pos] == '\t' {
-			return text[keyStart : pos-1], pos
+			return text[keyStart:runEnd], pos
 		}
 
-		pos = keyStart + 1
+		// Colon present but not a key boundary. Resume past the colon — the run
+		// itself is already excluded by the argument above.
+		pos = runEnd + 1
 	}
 	return "", pos
 }
@@ -128,6 +146,12 @@ func findValueEnd(text string, start int) (int, int) {
 					return pos, pos
 				}
 			}
+			// Not a key boundary. Skip the ENTIRE run just scanned rather than
+			// advancing one byte and re-scanning it: every sub-run ends at the
+			// same `peek`, so none of them can be a boundary either. Advancing by
+			// one made this O(n²) — see findNextKey's comment for the impact.
+			pos = peek
+			continue
 		}
 
 		pos++

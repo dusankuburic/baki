@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,7 +28,6 @@ var validProviders = map[string]bool{
 	"glm":           true,
 	"github-models": true,
 	"copilot":       true,
-	"demo":          true,
 }
 
 // readinessFailureThreshold is the number of consecutive failed readiness
@@ -227,13 +227,26 @@ func (h *SystemHandler) handleFeatures(w http.ResponseWriter, r *http.Request) {
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Router       /api/system/log-error [post]
 func (h *SystemHandler) handleLogError(w http.ResponseWriter, r *http.Request) {
+	// The body used to ride the router's 10 MiB global cap straight into the
+	// ERROR log, so any authenticated user could write megabytes per request
+	// into the shared, retained log. 64 KiB holds any real stack trace.
+	r.Body = http.MaxBytesReader(w, r.Body, maxFrontendErrorBytes)
 	var req models.FrontendError
-	if !decodeBody(w, r, &req) {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			render.Error(w, fmt.Errorf("error report exceeds %d bytes", maxFrontendErrorBytes), http.StatusRequestEntityTooLarge)
+			return
+		}
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 	h.sysSvc.LogError(req)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
+
+// maxFrontendErrorBytes bounds POST /api/system/log-error.
+const maxFrontendErrorBytes = 64 << 10
 
 // @Summary      Save API key
 // @Description  Saves an API key for a given provider.
@@ -331,6 +344,25 @@ func (h *SystemHandler) handleLocalConfig(w http.ResponseWriter, r *http.Request
 		// this endpoint at startup without a noisy console error, then fall back
 		// to the login flow because no token is present.
 		render.JSON(w, map[string]string{"mode": "cloud"})
+		return
+	}
+	// The token is served ONLY when explicitly enabled.
+	//
+	// This route is public (no token required to call it) and, in local mode,
+	// CORS reflects any loopback Origin — so returning the token here let any
+	// page on any localhost port read it cross-origin after a short port scan,
+	// and with it reach every other /api route: load-path (arbitrary file read,
+	// deliberately unconfined for the desktop client) and the export endpoints
+	// (arbitrary file write, since they honour a caller-supplied path outside
+	// cloud mode). That also defeated the point of keeping the signing key out
+	// of stdout and in a 0600 file.
+	//
+	// The Tauri webview never calls this: it gets the token from
+	// invoke("get_backend_config"), which reads that file. Browser-based local
+	// development is the only caller that needs it, and it opts in with
+	// PAD_LOCAL_CONFIG_ENDPOINT=true.
+	if !h.security.Features.LocalConfigEndpoint {
+		render.JSON(w, map[string]string{"mode": "local"})
 		return
 	}
 	render.JSON(w, map[string]string{

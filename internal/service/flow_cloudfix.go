@@ -18,7 +18,7 @@ import (
 //   - STORED single-file source: Content and Source are persisted together
 //     (the parse and the text come from the same upload/fix), so the parsed
 //     doc's line numbers align with doc.Source.
-//   - BRIDGE state (ingested padcloud flows, folder flows): no stored Source
+//   - BRIDGE state (bulk-imported flows, folder flows): no stored Source
 //     exists, so canonical PAD text is DERIVED with the serializer. Canonical
 //     output drops blank lines and normalizes layout — line numbers from the
 //     ORIGINAL parse can be shifted, and applying them to canonical text
@@ -264,9 +264,12 @@ func (s *FlowService) applyFixBatchCloudFolder(ctx context.Context, doc *models.
 	total := 0
 	skipped := 0
 	fixed := copyFiles(files)
+	// Resolved once for the whole folder: every member file belongs to the same
+	// flow, so they share one org profile.
+	opts := s.fixOptions(ctx, doc, ruleFilter, limit)
 	for _, name := range names {
 		src := fixed[name]
-		res, err := analyzer.ApplyFixesToSourceDoc(&src, name, ruleFilter, limit, nil)
+		res, err := analyzer.ApplyFixesToSourceDoc(&src, name, opts)
 		if err != nil {
 			return nil, total, err
 		}

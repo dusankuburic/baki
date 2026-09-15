@@ -28,11 +28,10 @@ export const common = {
   notifications: 'Notifications',
   contextMenu: 'Context menu',
   offline: {
-    banner: "You're offline — showing cached data. Some actions are unavailable.",
-    queued: '({{count}} changes queued)',
+    banner: "You're offline — saves are disabled until you reconnect. Cached data is still shown.",
   },
   syncDrop: {
-    title: '{{count}} change(s) not synced',
+    title: '{{count}} cursor/presence update(s) not synced',
     expired: 'You were offline past the 60s sync window. Recent positions are kept; stale ones were discarded.',
     overflow: 'The pending-change buffer was full; oldest entries were discarded to keep the latest state.',
   },
@@ -334,6 +333,8 @@ export const findings = {
     applying: 'Applying…',
     applyFixLocalTitle: 'Apply this fix to the flow source file and re-analyze',
     applyFixCloudTitle: 'Apply this fix to the stored flow source and re-analyze',
+    applyFixCloudNoSourceTitle:
+      'Not available for folder imports — the server keeps source for single-file uploads only. Apply the fix locally with `bakicli fix` and re-upload.',
     suppressInFile: 'Suppress in file',
     suppressInFileTitle: 'Write a pad-ignore directive into the flow source file and re-analyze',
     suppressTitle: 'Suppress this finding (UI only)',
@@ -498,9 +499,8 @@ export const auth = {
 // block of copy in the app and is only ever mounted inside the lazy AITab chunk.
 export const chat = {
   empty: {
-    apiKeyBody: 'Configure an AI provider in Settings, or try the assistant instantly with demo mode.',
+    apiKeyBody: 'Configure an AI provider in Settings to start.',
     openSettings: 'Open settings',
-    tryDemo: 'Try demo mode',
     startConversation: 'Start a conversation',
     apiKey: 'Add an API key to start',
     noFlowTitle: 'No flow loaded',
@@ -634,7 +634,8 @@ export const chat = {
     estimated_one: 'Estimated: ~{{count}} token',
     estimated_other: 'Estimated: ~{{count}} tokens',
     limit: 'Context limit: {{limit}} ({{usage}}% used)',
-    overLimit: 'This is larger than the model\u2019s context window — the request will be rejected. Narrow the scope, deselect source files, or compact the thread first.',
+    overLimit:
+      'This is larger than the model\u2019s context window — the request will be rejected. Narrow the scope, deselect source files, or compact the thread first.',
     noContext: '(no context)',
     close: 'Close',
     systemPrompt: 'System Prompt',
@@ -696,9 +697,6 @@ export const chat = {
     manage: 'Manage providers ({{connected}}/{{total}})',
     noNativeTools: 'no native tools',
     exportConversation: 'Export conversation',
-    demoLimitReached: 'Demo limit reached',
-    demoRemaining_one: '{{count}} demo message left today',
-    demoRemaining_other: '{{count}} demo messages left today',
     model: 'Model',
     slowToolProtocol: 'This provider runs tools through a slower text-marker protocol',
     using: 'Using',
@@ -795,7 +793,6 @@ export const chat = {
     claude: 'Claude is ready to help you analyze and debug your PAD flow.',
     openai: 'GPT is ready — ask questions about your flow or request analysis.',
     gemini: 'Gemini is ready to help you explore your PAD flow.',
-    demo: 'Demo mode — try out AI analysis with limited daily requests.',
     fallback: 'AI assistant is ready — ask about your flow, request analysis, or explore findings.',
   },
   errors: {

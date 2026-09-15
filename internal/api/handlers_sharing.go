@@ -23,7 +23,7 @@ func NewSharingHandler(backend storageif.StorageBackend, flowSvc *service.FlowSe
 }
 
 // @Summary      List flow collaborators
-// @Description  Returns a list of users who have access to the specified flow. Only the flow owner can view collaborators.
+// @Description  Returns a list of users who have access to the specified flow. Any user with at least viewer access to the flow can view its collaborators.
 // @Tags         sharing
 // @Param        flowId path string true "flowId"
 // @Produce      json
@@ -46,13 +46,10 @@ func (h *SharingHandler) handleCollaboratorList(w http.ResponseWriter, r *http.R
 		render.JSON(w, []storageif.Collaborator{})
 		return
 	}
-	collabs, err := h.backend.ListCollaborators(r.Context(), flowID)
+	collabs, err := h.backend.ListCollaborators(r.Context(), flowID, limit)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
-	}
-	if len(collabs) > limit {
-		collabs = collabs[:limit]
 	}
 	render.JSON(w, collabs)
 }

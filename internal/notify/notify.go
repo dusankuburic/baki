@@ -67,12 +67,16 @@ func ValidChannelKind(kind string) bool {
 // BuildChannelNotifier constructs the single-channel notifier for an
 // org-configured channel (R2-3). Same URL validation and defaults as the
 // deployment-global builder; a bad URL errors instead of silently enabling.
-func BuildChannelNotifier(kind, rawURL, secret string) (AlertNotifier, error) {
-	u, err := validateAlertURL(rawURL)
+func BuildChannelNotifier(kind, rawURL, secret string, policy TargetPolicy) (AlertNotifier, error) {
+	u, err := validateAlertURL(rawURL, policy)
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: defaultTimeout, Transport: guardedTransport()}
+	client := &http.Client{
+		Timeout:       defaultTimeout,
+		Transport:     guardedTransport(policy),
+		CheckRedirect: noRedirects,
+	}
 	switch kind {
 	case "webhook":
 		return &WebhookNotifier{URL: u, Client: client, Secret: secret, MaxAttempts: defaultRetries, Backoff: defaultBackoff}, nil
@@ -135,6 +139,9 @@ type EmailSender interface {
 
 // Config selects which channels are active. Empty URLs disable their channel.
 type Config struct {
+	// Policy gates whether internal/loopback targets are reachable. The zero
+	// value blocks them; local/desktop wiring opts in.
+	Policy        TargetPolicy
 	WebhookURL    string
 	WebhookSecret string // HMAC-SHA256 key for X-Baki-Signature header; empty = no signature
 	TeamsURL      string
@@ -176,6 +183,67 @@ type Dispatcher struct {
 // oracle — so DNS-resolved targets on loopback / link-local / private /
 // unassigned ranges are rejected unless the host is an explicit loopback NAME
 // (the documented dev escape hatch). Literal-IP hosts skip resolution.
+// TargetPolicy decides whether a notification target may point at the machine
+// (or the private network) the server itself runs on.
+//
+// It exists because the "http://localhost for dev" escape hatch was
+// unconditional. In a multi-tenant deployment ANY authenticated user can create
+// an org and become its admin (handleOrgCreate takes no role), add a webhook
+// channel, and hit the synchronous test endpoint — whose response distinguishes
+// connection-refused from non-2xx from 2xx. That is a loopback port scanner
+// plus the ability to POST attacker-influenced JSON at internal listeners.
+type TargetPolicy int
+
+const (
+	// BlockInternalTargets refuses loopback, private, link-local and unspecified
+	// addresses, and refuses plaintext http:// entirely.
+	//
+	// This is the ZERO VALUE on purpose: a caller that forgets to pass a policy
+	// gets the safe one. Opting into the permissive behaviour has to be typed
+	// out, which is also why the tests that need a loopback httptest server say
+	// so explicitly.
+	BlockInternalTargets TargetPolicy = iota
+	// AllowLoopbackTargets additionally permits http:// to loopback. DESKTOP AND
+	// LOCAL MODE ONLY — there the "org" is the single user running the app, so a
+	// webhook pointing at their own machine is exactly what they meant.
+	AllowLoopbackTargets
+)
+
+// isInternalIP is the single definition of "an address the outside world should
+// not be able to make this server reach". Both layers (URL validation and the
+// dial guard) use it, so they cannot drift — previously the dial guard omitted
+// IsLoopback while the resolver check included it, which is precisely how a
+// literal http://127.0.0.1 passed both.
+func isInternalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsPrivate() || ip.IsUnspecified()
+}
+
+// isLoopbackHost reports whether host names the local machine, by literal IP or
+// by the conventional name. Used only to honour AllowLoopbackTargets.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// noRedirects refuses to follow 3xx on notification deliveries.
+//
+// Only the CONFIGURED url passes through validateAlertURL; a redirect target
+// never did, and 307/308 replay the method AND body — so a perfectly legitimate
+// https://attacker.example/hook could answer "307 -> http://127.0.0.1:2379/..."
+// and have the signed governance payload delivered there instead. A webhook
+// endpoint that redirects is already misconfigured, so returning the 3xx as the
+// final response (where it fails the 2xx check with a clear status) is both
+// safer and more debuggable than following it.
+func noRedirects(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 // guardedTransport blocks connections to link-local/private IPs at DIAL
 // time (B1.9): validateAlertURL's resolution check alone is vulnerable to
 // DNS rebinding between validation and request. Loopback is deliberately
@@ -183,7 +251,7 @@ type Dispatcher struct {
 // the test harness — while validateAlertURL still rejects literal loopback
 // https targets; the material SSRF surfaces (cloud metadata 169.254.0.0/16,
 // RFC1918 services) are blocked on both layers.
-func guardedTransport() *http.Transport {
+func guardedTransport(policy TargetPolicy) *http.Transport {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	dial := base.DialContext
 	base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -191,12 +259,18 @@ func guardedTransport() *http.Transport {
 		if err != nil {
 			host = addr
 		}
-		if host != "localhost" {
-			if ips, lerr := net.LookupIP(host); lerr == nil {
-				for _, ip := range ips {
-					if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
-						return nil, fmt.Errorf("notify: refusing connection to private address %s", ip)
-					}
+		// The ONLY bypass, and it is explicit. The previous code skipped the
+		// whole check whenever the host was literally "localhost", and its IP
+		// test omitted IsLoopback — so "127.0.0.1" was not skipped but passed
+		// anyway. Both holes are closed: under BlockInternalTargets nothing is
+		// skipped, and isInternalIP covers loopback.
+		if policy == AllowLoopbackTargets && isLoopbackHost(host) {
+			return dial(ctx, network, addr)
+		}
+		if ips, lerr := net.LookupIP(host); lerr == nil {
+			for _, ip := range ips {
+				if isInternalIP(ip) {
+					return nil, fmt.Errorf("notify: refusing connection to internal address %s", ip)
 				}
 			}
 		}
@@ -206,40 +280,40 @@ func guardedTransport() *http.Transport {
 	return base
 }
 
-func validateAlertURL(raw string) (string, error) {
+func validateAlertURL(raw string, policy TargetPolicy) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", fmt.Errorf("invalid alert URL %q: %w", raw, err)
 	}
 	host := u.Hostname()
 	if u.Scheme == "https" {
-		if err := rejectPrivateTarget(host); err != nil {
+		if err := rejectPrivateTarget(host, policy); err != nil {
 			return "", err
 		}
 		return raw, nil
 	}
-	if u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+	if u.Scheme == "http" && policy == AllowLoopbackTargets && isLoopbackHost(host) {
 		return raw, nil
 	}
-	return "", fmt.Errorf("alert URL %q must use https (or http://localhost for dev); governance payloads carry internal flow details and must not be sent in plaintext", raw)
+	return "", fmt.Errorf("alert URL %q must use https; governance payloads carry internal flow details and must not be sent in plaintext (http:// to localhost is accepted only in local/desktop mode)", raw)
 }
 
 // rejectPrivateTarget resolves host (skipping resolution for IPs and the
 // loopback dev names) and refuses RFC1918/loopback/link-local/unique-local
 // addresses (B1.9).
-func rejectPrivateTarget(host string) error {
+func rejectPrivateTarget(host string, policy TargetPolicy) error {
 	if host == "" {
 		return fmt.Errorf("alert URL has no host")
 	}
-	if host == "localhost" {
-		return nil // documented dev escape hatch (http form is checked above)
+	if policy == AllowLoopbackTargets && isLoopbackHost(host) {
+		return nil // desktop/local escape hatch, opted into explicitly
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return fmt.Errorf("alert URL host %q does not resolve: %w", host, err)
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+		if isInternalIP(ip) {
 			return fmt.Errorf("alert URL host %q resolves to a private/loopback address (%s) — internal targets are not allowed", host, ip)
 		}
 	}
@@ -256,11 +330,15 @@ func New(cfg Config) (*Dispatcher, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	client := &http.Client{Timeout: timeout, Transport: guardedTransport()}
+	client := &http.Client{
+		Timeout:       timeout,
+		Transport:     guardedTransport(cfg.Policy),
+		CheckRedirect: noRedirects,
+	}
 
 	var notifiers []AlertNotifier
 	if cfg.WebhookURL != "" {
-		u, err := validateAlertURL(cfg.WebhookURL)
+		u, err := validateAlertURL(cfg.WebhookURL, cfg.Policy)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +351,7 @@ func New(cfg Config) (*Dispatcher, error) {
 		})
 	}
 	if cfg.TeamsURL != "" {
-		u, err := validateAlertURL(cfg.TeamsURL)
+		u, err := validateAlertURL(cfg.TeamsURL, cfg.Policy)
 		if err != nil {
 			return nil, err
 		}
@@ -285,7 +363,7 @@ func New(cfg Config) (*Dispatcher, error) {
 		})
 	}
 	if cfg.SlackURL != "" {
-		u, err := validateAlertURL(cfg.SlackURL)
+		u, err := validateAlertURL(cfg.SlackURL, cfg.Policy)
 		if err != nil {
 			return nil, err
 		}
@@ -304,7 +382,7 @@ func New(cfg Config) (*Dispatcher, error) {
 		})
 	}
 	if cfg.JiraURL != "" && cfg.JiraEmail != "" && cfg.JiraToken != "" && cfg.JiraProject != "" {
-		base, err := validateAlertURL(cfg.JiraURL)
+		base, err := validateAlertURL(cfg.JiraURL, cfg.Policy)
 		if err != nil {
 			return nil, err
 		}

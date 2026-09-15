@@ -562,6 +562,22 @@ func buildFixProposal(tctx ToolContext, in fixTargetInput) (FixProposal, string)
 	if explain != "" {
 		return FixProposal{}, explain
 	}
+	// Behaviour-changing fixes are not offered through the assistant.
+	//
+	// These alter what the flow DOES at runtime, not how it handles failure:
+	// sanitize-command-vars strips the variables out of a command line, and
+	// mask-sensitive-variable swaps a live credential for a literal. The
+	// approval card carries a one-line summary and no risk signal, so a user
+	// clicking "Approve" is not being told they are about to break the command
+	// — and unlike `bakicli fix -unsafe` there is no way for them to say
+	// "yes, I understand". Until the card can express that, the assistant
+	// explains the issue instead and the user applies it deliberately.
+	if analyzer.IsBehaviourChangingFix(finding.AutoFix) {
+		return FixProposal{}, fmt.Sprintf(
+			"the %q fix changes what this flow does at runtime, so it is not applied through chat — "+
+				"explain the issue and tell the user to apply it deliberately from the findings list "+
+				"or with `bakicli fix -unsafe`", finding.AutoFix)
+	}
 	variable, _ := finding.Metadata["variable"].(string)
 	property, _ := finding.Metadata["property"].(string)
 	patch, err := analyzer.PatchForFix(block, finding.AutoFix, finding.RuleID, variable, property)

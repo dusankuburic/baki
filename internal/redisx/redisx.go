@@ -3,7 +3,7 @@
 // in-process implementation (single-replica). Setting the URL switches the
 // rate limiter (#1), and will switch WebSocket presence (#2) and chat-stream
 // resume (#3), to a shared store so those subsystems are consistent across
-// replicas (PRODUCTION_READINESS.md #1-#3).
+// replicas.
 package redisx
 
 import (

@@ -197,6 +197,9 @@ type orgRuleExport struct {
 type orgRuleExportConf struct {
 	Enabled  *bool  `json:"enabled,omitempty"`
 	Severity string `json:"severity,omitempty"`
+	// Options: the rule's thresholds. The export used to omit them, so a team
+	// that tightened maxDepth in its org settings saw CI gate on the default.
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // @Summary      Export an org's analysis configuration for CI
@@ -228,7 +231,7 @@ func (h *OrgHandler) handleOrgRuleExport(w http.ResponseWriter, r *http.Request)
 		out.RuleConfig = make(map[string]orgRuleExportConf, len(settings.Analysis.Rules))
 		for id, rc := range settings.Analysis.Rules {
 			enabled := rc.Enabled
-			out.RuleConfig[id] = orgRuleExportConf{Enabled: &enabled, Severity: rc.Severity}
+			out.RuleConfig[id] = orgRuleExportConf{Enabled: &enabled, Severity: rc.Severity, Options: rc.Options}
 		}
 	}
 

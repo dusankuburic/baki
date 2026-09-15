@@ -111,3 +111,95 @@ func TestTickerLoop_PanicInFn_IsRecoveredButEndsTheLoop(t *testing.T) {
 		t.Errorf("calls after panic = %d, want exactly 1 (loop must not resume ticking after a panic)", n)
 	}
 }
+
+// TestTickerLoop_StopWaitsForInFlightTick pins the drain.
+//
+// Stop used to return the instant it signalled, so fx proceeded to close the
+// database pool while a governance sweep or an ingest pass was still querying
+// it — producing a guaranteed "query on closed pool" error on every shutdown
+// that looks like a transient one.
+func TestTickerLoop_StopWaitsForInFlightTick(t *testing.T) {
+	var l TickerLoop
+	started := make(chan struct{})
+	var finished atomic.Bool
+
+	l.Start(time.Hour, true, func(ctx context.Context) {
+		close(started)
+		// Long enough that a non-waiting Stop returns first, short enough to
+		// stay well inside stopDrainBudget.
+		time.Sleep(200 * time.Millisecond)
+		finished.Store(true)
+	}, nil)
+
+	<-started
+	l.Stop()
+
+	if !finished.Load() {
+		t.Error("Stop returned while the tick was still running — the caller's dependencies " +
+			"(DB pool, blob client) can be torn down underneath it")
+	}
+}
+
+// TestTickerLoop_StopIsBoundedByTheDrainBudget is the other half: a tick that
+// ignores cancellation must not be able to hold shutdown open forever.
+func TestTickerLoop_StopIsBoundedByTheDrainBudget(t *testing.T) {
+	var l TickerLoop
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+
+	l.Start(time.Hour, true, func(ctx context.Context) {
+		close(started)
+		<-release // deliberately ignores ctx cancellation
+	}, nil)
+
+	<-started
+	done := make(chan time.Duration, 1)
+	go func() {
+		t0 := time.Now()
+		l.Stop()
+		done <- time.Since(t0)
+	}()
+
+	select {
+	case elapsed := <-done:
+		if elapsed < stopDrainBudget {
+			t.Errorf("Stop returned after %v, before the %v budget — it did not wait at all", elapsed, stopDrainBudget)
+		}
+	case <-time.After(stopDrainBudget + 3*time.Second):
+		t.Fatalf("Stop did not return within the %v budget — a stuck tick blocks shutdown", stopDrainBudget)
+	}
+}
+
+// TestTickerLoop_ConcurrentStartStopIsRaceFree covers the field race. sync.Once
+// orders other Do calls, not a concurrent reader, so Stop reading rootCancel /
+// stop while Start wrote them was a genuine race. Run with -race.
+func TestTickerLoop_ConcurrentStartStopIsRaceFree(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		var l TickerLoop
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			l.Start(time.Millisecond, false, func(context.Context) {}, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			l.Stop()
+		}()
+		wg.Wait()
+	}
+}
+
+// TestTickerLoop_StopBeforeStartIsSafe is the documented no-op path — it must
+// not block on a done channel that was never created.
+func TestTickerLoop_StopBeforeStartIsSafe(t *testing.T) {
+	var l TickerLoop
+	done := make(chan struct{})
+	go func() { l.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop on a never-started loop blocked")
+	}
+}

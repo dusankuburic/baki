@@ -13,7 +13,7 @@ import (
 // breaks the request-clamping math. This test runs over every registered
 // provider so a future catalog edit that breaks these invariants fails CI.
 func TestProviderCatalogConsistency(t *testing.T) {
-	ids := []string{"demo"}
+	var ids []string
 	for _, meta := range AvailableProviders() {
 		ids = append(ids, meta.ID)
 	}
@@ -75,7 +75,7 @@ func TestProviderCatalogConsistency(t *testing.T) {
 // 0.01/M against a 1.4/M default — ~140x under-billing), usage for new models
 // is recorded at the wrong cost and the daily budget silently never trips.
 //
-// Free providers (github-models, copilot, demo) report a zero provider-wide
+// Free providers (github-models, copilot) report a zero provider-wide
 // price by design — their access is billed at $0 regardless of the catalog's
 // reference prices — so they're exempt.
 func TestProviderFallbackPricing_MatchesDefaultModelCatalog(t *testing.T) {
@@ -140,14 +140,14 @@ func TestEmbeddingCapability_ConsistentWithRegistry(t *testing.T) {
 			t.Errorf("provider %q is embedding-capable but missing from EmbeddingFallbackOrder", meta.ID)
 		}
 	}
-	for _, chatOnly := range []string{"claude", "xai", "copilot", "demo"} {
+	for _, chatOnly := range []string{"claude", "xai", "copilot"} {
 		if SupportsEmbeddings(chatOnly) {
 			t.Errorf("SupportsEmbeddings(%q) must be false — provider has no Embed implementation", chatOnly)
 		}
 	}
 }
 
-// TestCatalog_CoversAllProviders ensures every registered (non-demo) provider has
+// TestCatalog_CoversAllProviders ensures every registered provider has
 // a central catalog entry, so a newly added provider can't silently ship with an
 // empty model list.
 func TestCatalog_CoversAllProviders(t *testing.T) {

@@ -49,7 +49,9 @@
               "rawType": "LOOP",
               "indent": 4,
               "lineNumber": 4,
-              "properties": {},
+              "properties": {
+                "_loopKind": "counted"
+              },
               "variables": [
                 "FreeRow"
               ],

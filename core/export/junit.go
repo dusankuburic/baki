@@ -36,19 +36,25 @@ func ReportToJUnit(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 	for _, f := range report.Findings {
 		tc := junitTestcase{
 			Classname: suiteName,
-			Name:      fmt.Sprintf("[%s] %s", f.RuleID, f.Title),
+			Name:      junitCaseName(f),
 			Time:      "0",
 		}
+		body := f.Description
+		if f.Suggestion != "" {
+			body += "\n\nSuggestion: " + f.Suggestion
+		}
 		if f.Severity == models.SeverityError || f.Severity == models.SeverityWarning {
-			body := f.Description
-			if f.Suggestion != "" {
-				body += "\n\nSuggestion: " + f.Suggestion
-			}
 			tc.Failure = &junitFailure{
 				Type:    string(f.Severity),
 				Message: f.Title,
 				Content: body,
 			}
+		} else {
+			// Info findings are passing testcases. The doc comment above
+			// promised their body in <system-out>; the struct had no such
+			// field, so 12 of 31 testcases on a sample flow rendered with no
+			// body at all — a name, and nothing to act on.
+			tc.SystemOut = &junitText{Content: body}
 		}
 		cases = append(cases, tc)
 	}
@@ -78,6 +84,26 @@ func ReportToJUnit(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 	return buf.Bytes(), nil
 }
 
+// junitCaseName returns "[rule] title @id", unique per finding. It used to be
+// "[rule] title" alone, so N findings of one rule collapsed into ONE test in
+// Jenkins/GitLab (they key on classname+name) that flapped between pass and
+// fail as findings came and went. The fingerprint is the stable, content-
+// derived identity baselines use, so the same finding keeps the same test name
+// across runs; the block ID is the fallback for findings built without one.
+func junitCaseName(f models.Finding) string {
+	id := f.Fingerprint
+	if id == "" {
+		id = f.BlockID
+	}
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	if id == "" {
+		return fmt.Sprintf("[%s] %s", f.RuleID, f.Title)
+	}
+	return fmt.Sprintf("[%s] %s @%s", f.RuleID, f.Title, id)
+}
+
 // JUnit XML types (using xml names to match the standard format).
 
 type junitRoot struct {
@@ -100,6 +126,11 @@ type junitTestcase struct {
 	Name      string        `xml:"name,attr"`
 	Time      string        `xml:"time,attr"`
 	Failure   *junitFailure `xml:"failure,omitempty"`
+	SystemOut *junitText    `xml:"system-out,omitempty"`
+}
+
+type junitText struct {
+	Content string `xml:",chardata"`
 }
 
 type junitFailure struct {

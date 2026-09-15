@@ -66,7 +66,6 @@ export interface ChatRequest {
   systemPrompt?: string
   temperature?: number
   maxTokens?: number
-  demoMode?: boolean
   excludeContext?: boolean
   useTools?: boolean
   // C-1: client-generated stream ID. When set, the client subscribes its SSE

@@ -133,12 +133,12 @@ func TestOrgAndSharingStores_CopyOnRead(t *testing.T) {
 	if err := lsb.AddCollaborator(ctx, "f1", c); err != nil {
 		t.Fatalf("add collaborator: %v", err)
 	}
-	collabs, err := lsb.ListCollaborators(ctx, "f1")
+	collabs, err := lsb.ListCollaborators(ctx, "f1", 0)
 	if err != nil || len(collabs) != 1 {
 		t.Fatalf("list collaborators: %v %v", collabs, err)
 	}
 	collabs[0].Permission = "admin" // mutate the returned copy
-	freshCollabs, _ := lsb.ListCollaborators(ctx, "f1")
+	freshCollabs, _ := lsb.ListCollaborators(ctx, "f1", 0)
 	if freshCollabs[0].Permission != "viewer" {
 		t.Errorf("collaborator mutation leaked into store: %+v", freshCollabs[0])
 	}

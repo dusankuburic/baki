@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"pad-analyzer/internal/config"
-	"pad-core/logger"
 	"pad-core/models"
 )
 
@@ -19,9 +18,9 @@ import (
 // new userMessage) still gets full LLM context. The key matches the client's
 // save key: contextBlockId, or "flow" when none. A store error degrades to
 // empty history rather than failing the turn. Returns nil when doc is nil.
-func (s *ChatService) reconstructHistory(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest) []models.ChatMessage {
+func (s *ChatService) reconstructHistory(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest) ([]models.ChatMessage, error) {
 	if doc == nil {
-		return nil
+		return nil, nil
 	}
 	convKey := req.ContextBlockID
 	if convKey == "" {
@@ -29,10 +28,14 @@ func (s *ChatService) reconstructHistory(ctx context.Context, doc *models.FlowDo
 	}
 	loaded, err := s.GetConversation(ctx, doc, convKey)
 	if err != nil {
-		logger.Warn("chat history reconstruction failed; continuing with empty history", "error", err)
-		return nil
+		// The error is RETURNED, not swallowed. A caller that persists after
+		// reconstructing must be able to tell "this conversation is empty" from
+		// "I could not read this conversation" — SaveConversation is a full
+		// replace, so writing on the second is data loss. See
+		// reconstructAndPersistUserTurn.
+		return nil, err
 	}
-	return loaded
+	return loaded, nil
 }
 
 // useBackendConversations reports whether conversations should persist through

@@ -1,0 +1,118 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"pad-analyzer/internal/config"
+	storageif "pad-analyzer/internal/storage/interfaces"
+
+	"pad-core/models"
+)
+
+// flakyConvStore fails LoadConversation on demand and records every save, so a
+// test can assert what a failed load causes to be written.
+type flakyConvStore struct {
+	mu       sync.Mutex
+	stored   []storageif.ChatMessage
+	failLoad error
+	saves    int
+}
+
+func (f *flakyConvStore) SaveConversation(_ context.Context, _, _ string, m []storageif.ChatMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saves++
+	f.stored = append([]storageif.ChatMessage(nil), m...)
+	return nil
+}
+
+func (f *flakyConvStore) LoadConversation(_ context.Context, _, _ string) ([]storageif.ChatMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failLoad != nil {
+		return nil, f.failLoad
+	}
+	return append([]storageif.ChatMessage(nil), f.stored...), nil
+}
+
+func (f *flakyConvStore) DeleteConversation(_ context.Context, _, _ string) error { return nil }
+
+func (f *flakyConvStore) SaveUsageMetric(_ context.Context, _ *storageif.UsageMetric) error {
+	return nil
+}
+func (f *flakyConvStore) GetDailyUsage(_ context.Context, _, _ string) (float64, error) {
+	return 0, nil
+}
+
+func (f *flakyConvStore) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.stored)
+}
+
+// TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation is the regression
+// gate for silent, permanent user data loss.
+//
+// reconstructHistory swallowed the load error, logged a WARN and returned nil.
+// reconstructAndPersistUserTurn assigned that nil straight to req.Messages, and
+// persistInitialUserTurn then wrote `req.Messages + [userMsg]` through
+// SaveConversation — which is a FULL REPLACE (`ON CONFLICT (flow_id, scope) DO
+// UPDATE SET messages`). So one transient DB error, one RLS denial, or one JSON
+// unmarshal failure permanently deleted the user's entire chat history and left
+// only the message they had just typed, behind a log line nobody reads.
+//
+// No attacker and no unusual state required — reachable by anyone with viewer
+// access to the flow, on any transient backend hiccup.
+func TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation(t *testing.T) {
+	store := &flakyConvStore{}
+	// Seed a real conversation.
+	seed := make([]storageif.ChatMessage, 0, 10)
+	for i := 0; i < 10; i++ {
+		seed = append(seed, storageif.ChatMessage{Role: "user", Content: "message"})
+	}
+	if err := store.SaveConversation(context.Background(), "flow-1", "flow", seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if store.count() != 10 {
+		t.Fatalf("fixture rot: seeded %d messages", store.count())
+	}
+
+	svc := &ChatService{backend: store, mode: config.ModeCloud}
+	doc := &models.FlowDocument{ID: "flow-1"}
+
+	// The next load fails, exactly as a transient DB error would.
+	store.failLoad = errors.New("simulated: connection reset by peer")
+
+	req := models.ChatRequest{UserMessage: "what does this flow do?"}
+	svc.reconstructAndPersistUserTurn(context.Background(), doc, &req, "flow")
+
+	if got := store.count(); got < 10 {
+		t.Errorf("a failed history load destroyed the stored conversation: %d messages remain, "+
+			"was 10. SaveConversation is a full replace, so persisting an empty reconstruction "+
+			"deletes everything the user had.", got)
+	}
+}
+
+// TestChatHistory_SuccessfulLoadStillAppends keeps the normal path intact — a
+// guard that refuses to persist would "fix" the data loss by breaking the
+// feature.
+func TestChatHistory_SuccessfulLoadStillAppends(t *testing.T) {
+	store := &flakyConvStore{}
+	seed := []storageif.ChatMessage{{Role: "user", Content: "first"}}
+	if err := store.SaveConversation(context.Background(), "flow-1", "flow", seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	svc := &ChatService{backend: store, mode: config.ModeCloud}
+	doc := &models.FlowDocument{ID: "flow-1"}
+
+	req := models.ChatRequest{UserMessage: "second"}
+	svc.reconstructAndPersistUserTurn(context.Background(), doc, &req, "flow")
+
+	if got := store.count(); got != 2 {
+		t.Errorf("the healthy path stored %d messages, want 2 (the seeded one plus the new turn)", got)
+	}
+}

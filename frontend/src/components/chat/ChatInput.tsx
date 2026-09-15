@@ -73,10 +73,7 @@ export default function ChatInput({
   // on whichever one the user is actually typing in.
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const expandedRef = useRef<HTMLTextAreaElement>(null)
-  const activeTextarea = useCallback(
-    () => (isExpandedRef.current ? expandedRef.current : textareaRef.current),
-    [],
-  )
+  const activeTextarea = useCallback(() => (isExpandedRef.current ? expandedRef.current : textareaRef.current), [])
   const valueRef = useRef(value)
   // Synced in a commit-phase effect rather than assigned during render:
   // mutating a ref while rendering is not safe under concurrent rendering
@@ -271,7 +268,17 @@ export default function ChatInput({
         e.preventDefault()
       }
     },
-    [handleSend, autocompleteQuery, slashQuery, fileMatches, slashMatches, value, history, historyIndex, activeTextarea],
+    [
+      handleSend,
+      autocompleteQuery,
+      slashQuery,
+      fileMatches,
+      slashMatches,
+      value,
+      history,
+      historyIndex,
+      activeTextarea,
+    ],
   )
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

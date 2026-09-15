@@ -107,7 +107,6 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	}
 	exportSvc := service.NewExportService(notifier, flowSvc, analysisSvc)
 
-	demo := ai.NewDemoLimiter("")
 	factory := ai.NewProviderFactory(func(s, p string) (string, error) { return "test", nil }, nil, nil, nil)
 	// configDir: a real temp dir (not "") so the ChatService conversation store
 	// never writes into the source tree (internal/api/conversations pollution).
@@ -115,7 +114,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	if dirErr != nil {
 		panic("test conversation dir: " + dirErr.Error())
 	}
-	chatSvc := service.NewChatService(notifier, chatDir, flowSvc, analysisSvc, settings, factory, demo, backend, config.ModeLocal)
+	chatSvc := service.NewChatService(notifier, chatDir, flowSvc, analysisSvc, settings, factory, backend, config.ModeLocal)
 
 	ghAuth := ai.NewGitHubAuth()
 	cpAuth := ai.NewCopilotAuth()
@@ -149,7 +148,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		// refresh handler's replay/rotation path is exercised, and a nil store
 		// (which the handler now rejects as a misconfiguration) isn't relied on.
 		Auth:     NewAuthHandler(newMockTokenStore(), backend, security, ssoClient, identityStore, mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc),
-		Admin:    NewAdminHandler(backend, security, NewMigrationRunner(nil), nil, nil, nil),
+		Admin:    NewAdminHandler(backend, security, NewMigrationRunner(nil), nil),
 		Provider: NewProviderHandler(providerSvc, security),
 		Org:      NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), nil),
 		Sharing:  NewSharingHandler(backend, flowSvc, security),

@@ -1,7 +1,7 @@
 import {useState, useEffect, useRef, useCallback, useMemo} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {chatApi, providersApi} from '@/api'
+import {providersApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {AISettings, ProviderID, ModelDetail, ProviderInfo} from '@/types'
 
@@ -24,7 +24,6 @@ export function useProviderSetup() {
   const [configured, setConfigured] = useState(false)
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [selectedModel, setSelectedModel] = useState('')
-  const [demoRemaining, setDemoRemaining] = useState<number | null>(null)
 
   const providerRef = useRef(provider)
   useEffect(() => {
@@ -91,27 +90,6 @@ export function useProviderSetup() {
     setSelectedModel(prev => (prev === model ? prev : model))
   }, [provider, providers, aiSettings.providers])
 
-  useEffect(() => {
-    if (provider !== 'demo') {
-      // Clears a remotely-sourced counter that does not apply to non-demo providers.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      void setDemoRemaining(null)
-      return
-    }
-    let cancelled = false
-    chatApi
-      .getDemoRemaining()
-      .then(r => {
-        if (!cancelled) setDemoRemaining(r)
-      })
-      .catch(() => {
-        if (!cancelled) setDemoRemaining(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [provider])
-
   const handleSetProvider = useCallback(
     (p: ProviderID) => {
       setProvider(p)
@@ -132,7 +110,6 @@ export function useProviderSetup() {
     providers,
     selectedModel,
     setSelectedModel,
-    demoRemaining,
     handleSetProvider,
     currentProvider,
     currentModels,

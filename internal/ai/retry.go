@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"pad-analyzer/internal/metrics"
 	"time"
 )
 
@@ -76,13 +77,45 @@ func backoff(ctx context.Context, attempt int, lastErr error, baseDelay time.Dur
 // factory chain.
 type RetryingProvider struct {
 	Provider
+	// providerID is the metric label, resolved once at construction — see
+	// metricID and safeProviderID.
+	providerID  string
 	maxAttempts int
 	baseDelay   time.Duration
+}
+
+// metricID is the provider label for retry metrics, resolved once at
+// construction.
+//
+// Deliberately NOT rp.Provider.ID() on the retry path: that adds an interface
+// call into the wrapped provider at the exact moment something is already going
+// wrong, and any wrapper holding a nil inner provider would turn a retry — a
+// recoverable condition — into a panic. A metric label must never be able to
+// crash the request it is describing. Resolving at construction also keeps the
+// hot path free of a call per attempt.
+func (rp *RetryingProvider) metricID() string {
+	if rp.providerID == "" {
+		return "unknown"
+	}
+	return rp.providerID
+}
+
+// safeProviderID reads p.ID() defensively at wiring time. A test double that
+// embeds a nil Provider to avoid implementing the full interface would panic
+// here otherwise, and construction is not a place to fail for a label.
+func safeProviderID(p Provider) (id string) {
+	defer func() {
+		if recover() != nil {
+			id = "unknown"
+		}
+	}()
+	return p.ID()
 }
 
 func NewRetryingProvider(p Provider) *RetryingProvider {
 	return &RetryingProvider{
 		Provider:    p,
+		providerID:  safeProviderID(p),
 		maxAttempts: retryMaxAttempts,
 		baseDelay:   retryBaseDelay,
 	}
@@ -91,6 +124,7 @@ func NewRetryingProvider(p Provider) *RetryingProvider {
 func NewRetryingProviderWithConfig(p Provider, maxAttempts int, baseDelay time.Duration) *RetryingProvider {
 	return &RetryingProvider{
 		Provider:    p,
+		providerID:  safeProviderID(p),
 		maxAttempts: maxAttempts,
 		baseDelay:   baseDelay,
 	}
@@ -100,6 +134,7 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 	var lastErr error
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
+			metrics.RecordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return nil, err
 			}
@@ -113,10 +148,25 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 	return nil, lastErr
 }
 
+// retryReason maps a retryable error onto a CLOSED-SET metric label. Raw error
+// text is never used: it carries provider-specific detail and would make the
+// counter unbounded.
+func retryReason(err error) string {
+	switch {
+	case errors.Is(err, ErrRateLimited):
+		return "rate_limited"
+	case errors.Is(err, ErrProviderDown):
+		return "provider_down"
+	default:
+		return "other"
+	}
+}
+
 func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	var lastErr error
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
+			metrics.RecordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return nil, err
 			}
@@ -142,6 +192,7 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 	var lastErr error
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
+			metrics.RecordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return err
 			}

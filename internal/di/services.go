@@ -44,7 +44,7 @@ func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
 	return analyzer.NewHistoryStore(filepath.Join(configDir, "analysis-history"))
 }
 
-func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, *ai.DemoLimiter) {
+func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory) {
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
 	// recorder nil there — the audited provider guards a nil recorder and skips
@@ -58,8 +58,7 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 	}
 	factory := ai.NewProviderFactory(keys.Get, copilotAuth, recorder, &cfg.Runtime)
 	auth := ai.NewGitHubAuth()
-	demo := ai.NewDemoLimiter(configDir)
-	return auth, copilotAuth, factory, demo
+	return auth, copilotAuth, factory
 }
 
 // ServiceModule bundles all internal services.
@@ -118,13 +117,12 @@ var ServiceModule = fx.Options(
 			analysisSvc *service.AnalysisService,
 			settings service.SettingsProvider,
 			factory *ai.ProviderFactory,
-			demo *ai.DemoLimiter,
 			backend storageif.StorageBackend,
 			knowledge *rag.KnowledgeService,
 			mode config.DeploymentMode,
 			redisClient *redis.Client,
 		) *service.ChatService {
-			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, demo, backend, mode)
+			svc := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode)
 			svc.SetKnowledgeService(knowledge)
 			// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
 			svc.SetResumeBackplane(redisClient)
@@ -155,6 +153,15 @@ var ServiceModule = fx.Options(
 	// service the constructor built.
 	fx.Decorate(func(rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, svc *service.AnalysisService) *service.AnalysisService {
 		svc.SetCustomRules(rules)
+		svc.SetRuleProfileResolver(resolver)
+		return svc
+	}),
+	// FlowService needs the same resolver: its batch-fix loop re-analyzes the
+	// flow to find what to fix, and without the org profile that analysis ran
+	// on deployment defaults — so "fix all" could apply a fix for a rule the
+	// org had disabled, and never applied an org custom rule's autoFix. A
+	// second decorator, because one fx.Decorate returns exactly one type.
+	fx.Decorate(func(resolver *service.RuleProfileResolver, svc *service.FlowService) *service.FlowService {
 		svc.SetRuleProfileResolver(resolver)
 		return svc
 	}),

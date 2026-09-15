@@ -21,10 +21,16 @@ export class WebAdapter implements PlatformAdapter {
 
     const apiUrl = import.meta.env.VITE_API_URL || window.location.origin
 
-    // In local (non-JWT) mode the backend generates a random per-session token
-    // and exposes it on a public endpoint so the web client can self-configure.
-    // In JWT/cloud mode this endpoint returns 404 and the client authenticates
-    // via login instead (sessionToken is set by authStore after login).
+    // In local (non-JWT) mode the backend can expose its per-session token so the
+    // web client self-configures. That is OPT-IN on the server
+    // (PAD_LOCAL_CONFIG_ENDPOINT=true) and off by default: the route is public
+    // and local-mode CORS reflects any loopback Origin, so serving the token
+    // unconditionally let any page on any localhost port read it cross-origin.
+    // Without the opt-in the response carries only {"mode":"local"} and `token`
+    // is undefined, which is the correct outcome for the desktop build — there
+    // the Tauri shell supplies the token through invoke("get_backend_config").
+    // In JWT/cloud mode this returns {"mode":"cloud"} and the client
+    // authenticates via login instead (sessionToken is set by authStore).
     let token: string | undefined
     try {
       const res = await fetch(`${apiUrl}/api/local-config`)

@@ -41,6 +41,12 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const {showComments, comments, commentBody, setCommentBody, commentLoading, handleComments, handleSubmitComment} =
     useFindingComments(finding, doc)
   const {applyingFix, preview, handleApplyFix, doApplyFix, closePreview} = useFindingFix(finding, doc)
+  // Cloud apply-fix patches the flow's stored source, which the upload handler
+  // keeps for SINGLE-file flows only. A folder import — the normal PAD layout —
+  // has no stored source, so the button used to fail AFTER the click with
+  // "source not available". Disable it up front and say why; retaining
+  // per-file source is a storage-model change, an honest disabled button is not.
+  const cloudNoSource = !isDesktop && !!doc && (doc.isFolder === true || (doc.files?.length ?? 0) > 1)
 
   const handleJump = () => {
     selectSubflow(finding.subflowId)
@@ -162,9 +168,15 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
             onClick={() => {
               if (finding.autoFix) void handleApplyFix(finding.autoFix)
             }}
-            disabled={applyingFix}
-            className="flex items-center gap-1 text-2xs text-semantic-success hover:text-semantic-success px-1.5 py-1 rounded hover:bg-semantic-success/10 transition-colors shrink-0 disabled:opacity-50"
-            title={isDesktop ? t('card.applyFixLocalTitle') : t('card.applyFixCloudTitle')}
+            disabled={applyingFix || cloudNoSource}
+            className="flex items-center gap-1 text-2xs text-semantic-success hover:text-semantic-success px-1.5 py-1 rounded hover:bg-semantic-success/10 transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={
+              cloudNoSource
+                ? t('card.applyFixCloudNoSourceTitle')
+                : isDesktop
+                  ? t('card.applyFixLocalTitle')
+                  : t('card.applyFixCloudTitle')
+            }
           >
             <Wrench size={10} />
             {applyingFix ? t('card.applying') : t('card.applyFix')}

@@ -20,17 +20,16 @@ const (
 
 // Config holds the complete application configuration
 type Config struct {
-	Mode          DeploymentMode
-	Server        ServerConfig
-	Storage       StorageConfig
-	Auth          AuthConfig
-	Runtime       RuntimeConfig
-	Governance    GovernanceConfig
-	Email         EmailConfig
-	Redis         RedisConfig
-	PowerPlatform PowerPlatformConfig
-	Features      FeatureFlags
-	Log           models.LogConfig
+	Mode       DeploymentMode
+	Server     ServerConfig
+	Storage    StorageConfig
+	Auth       AuthConfig
+	Runtime    RuntimeConfig
+	Governance GovernanceConfig
+	Email      EmailConfig
+	Redis      RedisConfig
+	Features   FeatureFlags
+	Log        models.LogConfig
 }
 
 // FeatureFlags gates optional product behaviour at runtime. Flags are env-sourced
@@ -44,38 +43,11 @@ type FeatureFlags struct {
 	DisableSignUp bool `json:"disableSignUp"`
 }
 
-// PowerPlatformConfig configures the optional connector that ingests desktop
-// flows from a Power Platform environment (the "monitor my live automation
-// fleet" value prop). The connector is EXPERIMENTAL: the cloud JSON format
-// bridge (Converter) and the Dataverse endpoints are built defensively against
-// the documented schema and are NOT yet validated against a real tenant. Enable
-// only for evaluation. Cloud mode only — ingestion stores flows into the
-// library, which needs the DB backend. See internal/connector/padcloud.
-type PowerPlatformConfig struct {
-	// TenantID is the Azure AD tenant ("common" for multi-tenant device flow).
-	TenantID string
-	// ClientID is the registered Azure app's client ID (device-flow, public client).
-	ClientID string
-	// DataverseURL is the full Dataverse Web API base for the environment, e.g.
-	// "https://{env}.crm.dynamics.com/api/data/v9.2". Required: the environment
-	// is encoded in the org-specific host.
-	DataverseURL string
-	// Scope is the OAuth scope (default the Power Platform API).
-	Scope string
-	// IngestInterval is how often to pull (duration string; empty disables).
-	IngestInterval string
-	// OwnerUserID is the user id that owns ingested flows (authz scope). Defaults
-	// to empty (flows are unowned — visible to admins via AllFlows/portfolio).
-	OwnerUserID string
-	// OwnerOrgID scopes ingested flows to an organisation (authz).
-	OwnerOrgID string
-}
-
 // RedisConfig configures the optional shared backplane. When URL is empty (the
 // default) the app keeps all rate-limit / presence / chat-resume state
 // in-process — correct for single-replica. Setting URL switches those subsystems
-// to a Redis-backed shared store so they work consistently across replicas
-// (PRODUCTION_READINESS.md #1-#3). The backplane is opt-in: nothing changes
+// to a Redis-backed shared store so they work consistently across replicas.
+// The backplane is opt-in: nothing changes
 // unless URL is set.
 type RedisConfig struct {
 	// URL is a redis://[user:pass@]host:port/[db] connection string. Empty =
@@ -175,6 +147,24 @@ type ServerConfig struct {
 	// off r.RemoteAddr, which is the proxy's own (private) address for every
 	// external request. Set this whenever BehindProxy is true.
 	MetricsToken string
+	// LocalConfigEndpoint serves the session token from GET /api/local-config in
+	// local mode. Default false, and it must stay that way for the desktop app.
+	//
+	// That route is public (no token required) and, in local mode, CORS reflects
+	// ANY loopback Origin — so with it enabled, any page served from any
+	// localhost port (a Vite dev server, a Jupyter notebook, a locally-served
+	// HTML report) can read the desktop app's session token cross-origin by
+	// scanning ports. With that token it reaches every other /api route,
+	// including load-path (arbitrary file READ — deliberately unconfined,
+	// because the desktop client legitimately opens files anywhere) and the
+	// export endpoints (arbitrary file WRITE, since they honour a
+	// caller-supplied path outside cloud mode).
+	//
+	// The Tauri webview does not need it: TauriAdapter gets the token through
+	// invoke("get_backend_config"), which reads the 0600 session file. The
+	// endpoint exists only for browser-based local development, which is the
+	// one context that should switch it on.
+	LocalConfigEndpoint bool
 	// PprofEnabled registers the /debug/pprof/* handlers. Default false.
 	//
 	// This is opt-in rather than always-on because a profile is a different
@@ -185,10 +175,6 @@ type ServerConfig struct {
 	// proxy, so they were world-reachable on every ACA/reverse-proxy
 	// deployment. Enabling this REQUIRES MetricsToken (see Validate).
 	PprofEnabled bool
-	// KeyVaultURL is the URL of the Azure Key Vault to fetch secrets from.
-	// When set, secrets like PAD_AUTH_SECRET and PAD_DATABASE_URL will be
-	// retrieved from Key Vault if not already provided via ENV.
-	KeyVaultURL string
 	// TLSCert and TLSKey are paths to PEM-encoded cert/key files. When both
 	// are set the server uses ListenAndServeTLS directly. Leave empty when
 	// terminating TLS at a reverse proxy and set BehindProxy=true instead.
@@ -221,6 +207,10 @@ type StorageConfig struct {
 	DBMaxIdleConns    int
 	DBConnMaxLifetime string // duration string, e.g. "1h"
 	DBConnMaxIdleTime string // duration string, e.g. "5m"
+	// DBStatementTimeout bounds every statement (and lock wait) server-side:
+	// PAD_DB_STATEMENT_TIMEOUT, e.g. "30s". Empty ⇒ the backend default
+	// (30s); "0s" disables for a maintenance run.
+	DBStatementTimeout string
 
 	// DBRequireSSL controls whether the Postgres DSN must enforce TLS.
 	// It is a raw tri-state string parsed from PAD_DB_REQUIRE_SSL:
@@ -359,6 +349,14 @@ func Default() *Config {
 		},
 		Log: models.LogConfig{
 			Level: "debug",
+		},
+		Governance: GovernanceConfig{
+			// On by default (cloud mode only; see initRetentionPurge). Off, the
+			// expired-token and share-link tables grew forever, and nothing
+			// told an operator the purge existed — its env var was documented
+			// nowhere. "0s" disables. Age-based purges (audit, history, usage
+			// metrics, alerts) additionally need PAD_AUDIT_RETENTION_DAYS.
+			RetentionPurgeInterval: "24h",
 		},
 	}
 }

@@ -1,8 +1,10 @@
 package scrubber
 
 import (
-	"pad-core/models"
+	"strings"
 	"testing"
+
+	"pad-core/models"
 )
 
 func TestScrubText(t *testing.T) {
@@ -23,7 +25,7 @@ func TestScrubText(t *testing.T) {
 		},
 		{
 			name:     "Stripe Secret Key",
-			input:    "My key is sk_test_4eC39HqLyjWDarjtT1zdp7dc inside.",
+			input:    "My key is sk_test_" + strings.Repeat("4eC39HqL", 3) + " inside.",
 			expected: "My key is [REDACTED] inside.",
 		},
 		{
@@ -302,7 +304,7 @@ func TestNormalizeFieldName(t *testing.T) {
 // token entropying ~3.7 is caught, where the old flat >4.0 bar missed it), while
 // filesystem paths — which also clear the entropy bar — are excluded so the AI
 // keeps them for analysing file/folder actions. Entropies were measured with
-// shannonEntropy; see the S3 note in docs/IMPROVEMENTS.md.
+// shannonEntropy.
 func TestLooksLikeHighEntropySecret_LengthTieredAndPathGuard(t *testing.T) {
 	// Long opaque hex token (64 chars, entropy ~3.67): previously missed by the
 	// flat >4.0 threshold, now caught by the len>50 ⇒ >3.5 tier.

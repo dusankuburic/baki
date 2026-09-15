@@ -13,7 +13,6 @@ import type {ProviderInfo} from '@/types'
 vi.mock('@/api', () => ({
   chatApi: {
     getSuggestedPrompts: vi.fn(),
-    getDemoRemaining: vi.fn(),
     stream: vi.fn(),
     streamChatMessage: vi.fn(),
     getConversation: vi.fn(),
@@ -44,7 +43,6 @@ beforeEach(() => {
   // so test-specific overrides from a previous test would otherwise leak.
   vi.mocked(providersApi.listProviders).mockResolvedValue([])
   vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue([])
-  vi.mocked(chatApi.getDemoRemaining).mockResolvedValue(5)
   vi.mocked(chatApi.getConversation).mockResolvedValue({messages: []} as unknown as ConversationFile)
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
 })

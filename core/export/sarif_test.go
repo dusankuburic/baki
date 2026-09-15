@@ -126,7 +126,19 @@ func TestReportToSARIF_PhysicalLocationFromDoc(t *testing.T) {
 	}
 }
 
-func TestReportToSARIF_NilDocSynthesizesURI(t *testing.T) {
+// TestReportToSARIF_NilDocUsesAFixedFallbackURI pins the no-document path.
+//
+// This used to assert the URI was synthesized as SubflowID+".txt", and passed
+// because the fixture used a readable SubflowID ("Sub"). In production a
+// SubflowID is a UUID the parser mints on every parse, so that synthesis
+// produced a filename matching nothing in the repo AND differing run to run —
+// which is unusable for GitHub Code Scanning, whose whole job is to locate the
+// alert in a file and correlate it across runs.
+//
+// With no document there is genuinely no file information available, so the
+// honest output is a fixed, obviously-synthetic name rather than a
+// plausible-looking wrong one.
+func TestReportToSARIF_NilDocUsesAFixedFallbackURI(t *testing.T) {
 	report := makeReport(models.Finding{
 		RuleID: "r1", Severity: models.SeverityWarning, Title: "t",
 		BlockID: "b1", SubflowID: "Sub",
@@ -134,8 +146,8 @@ func TestReportToSARIF_NilDocSynthesizesURI(t *testing.T) {
 	log, _ := parseSARIF(t, report, nil) // must not panic
 
 	loc := log.Runs[0].Results[0].Locations[0]
-	if loc.PhysicalLocation.ArtifactLocation.URI != "Sub.txt" {
-		t.Errorf("uri = %q, want synthesized Sub.txt", loc.PhysicalLocation.ArtifactLocation.URI)
+	if got := loc.PhysicalLocation.ArtifactLocation.URI; got != "flow.txt" {
+		t.Errorf("uri = %q, want the fixed fallback %q", got, "flow.txt")
 	}
 	// No doc means no resolvable line, so the region must be omitted.
 	if loc.PhysicalLocation.Region != nil {

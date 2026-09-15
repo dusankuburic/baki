@@ -2,7 +2,9 @@ package websocket
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -95,7 +97,13 @@ func TestStress_HighFrequencyBroadcast_100Messages(t *testing.T) {
 				}
 				continue
 			}
-			if time.Now().Before(overall) {
+			// Retry ONLY the read deadline set just above. Retrying on a
+			// permanent error re-reads a failed connection, which gorilla
+			// answers with `panic: repeated read on failed websocket
+			// connection` — so the real error was replaced by a panic naming
+			// the harness instead of the cause, on every flake.
+			var nerr net.Error
+			if errors.As(err, &nerr) && nerr.Timeout() && time.Now().Before(overall) {
 				continue
 			}
 			t.Fatalf("readStressEnvelope: %v", err)

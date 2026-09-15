@@ -42,6 +42,14 @@ export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
       const comment = await analysisApi.addComment(doc.id, key, body)
       setComments(prev => [...(prev ?? []), comment])
     } catch (err) {
+      // Put back what was typed. The composer is cleared optimistically before
+      // the await, and there is no draft store behind it, so a 500/403/timeout
+      // otherwise destroys the text outright — for a triager that can be a
+      // multi-sentence risk-acceptance justification with nowhere to recover it
+      // from. Only restore when the composer is still empty: if the user
+      // started typing again while the request was in flight, their newer text
+      // wins.
+      setCommentBody(current => (current.trim() === '' ? body : current))
       toast.error(t('toasts.commentFailed'), {description: String(err)})
     }
   }, [commentBody, doc, finding, toast, t])

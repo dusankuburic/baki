@@ -129,22 +129,6 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope string) (prov
 		})
 	}
 
-	if ai.DemoProxyURL != "" {
-		providers = append(providers, models.ProviderInfo{
-			ID:         "demo",
-			Name:       "Demo",
-			Configured: true,
-			Models: []models.ModelDetail{{
-				ID:           "demo",
-				DisplayName:  "Demo",
-				ContextLimit: 200000,
-			}},
-			DefaultModel: "demo",
-			ContextLimit: 200000,
-			AuthType:     "none",
-		})
-	}
-
 	return providers, nil
 }
 

@@ -69,6 +69,48 @@ func RegisterPostCommit(ctx context.Context, fn func()) {
 	fn()
 }
 
+// withTx runs fn inside a transaction, JOINING the request's RLS transaction
+// when ctx already carries one and opening (and committing) its own otherwise.
+//
+// Every write method that opens a transaction must go through this. Calling
+// b.db.BeginTx unconditionally takes a SECOND pooled connection while
+// rlsMiddleware still holds the first for the whole request, which is a
+// self-deadlock: the pool defaults to 25, so 13 concurrent requests each hold
+// one connection and block forever waiting for another that only a peer can
+// release. It wedges every route, not just the one at fault, and the server
+// sets no write timeout, so nothing recovers it but clients giving up.
+//
+// Two further consequences make this a correctness bug and not only a capacity
+// one. The inner transaction commits independently, so its write survives the
+// middleware's rollback and breaks the atomicity the middleware documents. And
+// the second connection carries no app.current_user_id, so app_rls_active() is
+// false and the RLS policies short-circuit to allow-all -- the second layer is
+// simply absent for exactly the writes that most need it.
+func (b *PostgresStorageBackend) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	if tx, ok := ctx.Value(rlsTxKey).(*sql.Tx); ok && tx != nil {
+		// The middleware owns commit and rollback; joining is all we do.
+		return fn(tx)
+	}
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 // DBTX is the common interface between *sql.DB and *sql.Tx. All tenant-scoped
 // queries should call b.query(ctx) to get the right executor — if an RLS
 // transaction has been set on the context (by the RLS middleware), the

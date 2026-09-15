@@ -358,22 +358,6 @@ func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Re
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// @Summary      Get remaining demo requests
-// @Description  Returns the number of demo AI requests remaining for the current session.
-// @Tags         chat
-// @Produce      json
-// @Success      200 {object} int "OK"
-// @Failure      500 {object} map[string]string "Internal Server Error"
-// @Router       /api/chat/demo-remaining [get]
-func (h *ChatHandler) handleGetDemoRemaining(w http.ResponseWriter, r *http.Request) {
-	remaining, err := h.chatSvc.GetDemoRemaining()
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	render.JSON(w, remaining)
-}
-
 // @Summary      Preview AI context
 // @Description  Returns a preview of the context that will be sent to the AI provider.
 // @Tags         chat

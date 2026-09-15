@@ -363,8 +363,28 @@ async function parseErrorEnvelope(response: Response): Promise<ErrorEnvelope> {
 }
 
 // Raw transport: refresh + fetch + retry + envelope error mapping (no caching).
+// Verbs that never change server state. Everything else is a mutation.
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+/**
+ * Thrown for a mutation attempted while the browser reports itself offline.
+ * Nothing in the app queues edits for later (the only offline queue carries
+ * cursor/presence updates), so the honest outcome is an immediate, clearly
+ * worded failure rather than a fetch that dies with "Failed to fetch" after
+ * retries while the offline banner implies the change was saved.
+ */
+export const OFFLINE_CODE = 'OFFLINE'
+const OFFLINE_MESSAGE = "You're offline — this change was not saved. Reconnect and try again."
+
+function offlineMutation(method: string): boolean {
+  return !READ_METHODS.has(method.toUpperCase()) && typeof navigator !== 'undefined' && navigator.onLine === false
+}
+
 async function doRequest<T>(path: string, opts: RequestOptions): Promise<T> {
   const {body, method = 'POST', timeoutMs = DEFAULT_TIMEOUT_MS} = opts
+  if (offlineMutation(method)) {
+    throw new ApiError(OFFLINE_MESSAGE, 0, OFFLINE_CODE)
+  }
   await ensureFreshToken(path)
 
   const response = await fetchWithRetry(path, body, method, timeoutMs, opts.signal)

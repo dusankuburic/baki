@@ -14,18 +14,24 @@ import (
 type CommandInjectionRiskRule struct{}
 
 func (r *CommandInjectionRiskRule) ID() string   { return "command-injection-risk" }
-func (r *CommandInjectionRiskRule) Name() string { return "Command injection risk" }
+func (r *CommandInjectionRiskRule) Name() string { return "Command or script injection risk" }
 func (r *CommandInjectionRiskRule) Description() string {
-	return "System/DOS command actions that interpolate variables into the command line. A malicious value can chain additional commands (command injection)."
+	return "System/DOS command and Scripting.* (PowerShell, VBScript, Python, JavaScript) actions that interpolate variables into the command or script text. A malicious value can chain additional commands or code (injection)."
 }
 func (r *CommandInjectionRiskRule) DefaultSeverity() models.Severity { return models.SeverityError }
 func (r *CommandInjectionRiskRule) Category() string                 { return "Security" }
 
-// commandActionPrefixes — PAD actions that invoke a shell / DOS command.
+// commandActionPrefixes — PAD actions that hand a string to an interpreter:
+// DOS/shell commands and the Scripting.* family (RunPowershellScript,
+// RunVBScript, RunPythonScript, RunJavascript). The scripting actions were
+// matched by NO security rule — arbitrary code execution from an interpolated
+// variable went unreported while a DOS command with the same variable was an
+// Error.
 var commandActionPrefixes = []string{
 	"system.rundoscommand",
 	"system.run",
 	"cmd.",
+	"scripting.",
 }
 
 func (r *CommandInjectionRiskRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {

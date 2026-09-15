@@ -9,9 +9,16 @@ import (
 
 // ---- Persistent Policy CRUD handler tests ----
 //
-// The filesystem backend stubs policy methods (no-op Save/Delete, Get→ErrNotFound,
-// List→empty). These tests verify the handler layer: auth, body parsing,
-// org-membership checks, and error mapping — not the storage implementation.
+// The filesystem backend does not store policies: Get→ErrNotFound, List→empty,
+// and Save/Delete now return ErrPoliciesUnsupported. They previously returned
+// nil — SUCCESS — while writing nothing, which is why the two "…Succeeds" tests
+// below used to assert a flat 200: they were reading a fabricated result off a
+// backend that cannot store a policy at all.
+//
+// These tests verify the HANDLER layer: auth, body parsing, org-membership
+// checks, and error mapping — not the storage implementation. So the member
+// cases now assert what they actually mean — authorization passed — rather than
+// that the whole request succeeded, which depends on the backend.
 
 func TestPolicySave_OrgMemberSucceeds(t *testing.T) {
 	rt := newJWTTestRouter(t)
@@ -26,7 +33,11 @@ func TestPolicySave_OrgMemberSucceeds(t *testing.T) {
 		"rules":        []map[string]any{{"ruleId": "hardcoded-credential", "enabled": true}},
 		"gateSeverity": "error",
 	})
-	checkStatus(t, rr, http.StatusOK)
+	// Authorization passed. Persistence is a backend concern: this router is
+	// backed by the filesystem store, which cannot hold policies.
+	if rr.Code == http.StatusForbidden || rr.Code == http.StatusUnauthorized {
+		t.Fatalf("an org member was denied: status %d — body: %s", rr.Code, rr.Body.String())
+	}
 }
 
 func TestPolicySave_NonMemberForbidden(t *testing.T) {
@@ -153,7 +164,11 @@ func TestPolicyDelete_OrgMemberSucceeds(t *testing.T) {
 		"orgId": orgID,
 		"id":    "pol-1",
 	})
-	checkStatus(t, rr, http.StatusOK)
+	// Authorization passed; see the note at the top of this file on why this is
+	// not a flat 200 assertion.
+	if rr.Code == http.StatusForbidden || rr.Code == http.StatusUnauthorized {
+		t.Fatalf("an org member was denied: status %d — body: %s", rr.Code, rr.Body.String())
+	}
 }
 
 func TestPolicyDelete_NonMemberForbidden(t *testing.T) {

@@ -60,6 +60,19 @@ type FlowAccessChecker interface {
 	// ErrFlowNotFound if the flow doesn't exist, and ErrAccessDenied if the
 	// user lacks read access to it.
 	CheckAccess(ctx context.Context, flowID, userID string) error
+
+	// CanEdit reports whether userID may send MUTATING events for flowID —
+	// the same "editor" rank the HTTP write endpoints require.
+	//
+	// Joining is gated at "viewer" on purpose: presence and cursor traffic is
+	// what read-only collaborators are there for. But handleIncoming used to
+	// broadcast block.update/create/delete from the same case arm as cursor
+	// moves, with no rank check, so a collaborator refused by
+	// POST /api/flow/save-source could send the identical mutation over the
+	// socket. This method is deliberately part of the REQUIRED interface
+	// rather than an optional type assertion: a new adapter that forgets it
+	// should fail to compile, not silently fail open.
+	CanEdit(ctx context.Context, flowID, userID string) bool
 }
 
 // Handler returns an http.HandlerFunc that upgrades the connection to WebSocket
@@ -145,7 +158,14 @@ func Handler(hub *Hub, userID, displayName string, allowedOrigins []string, chec
 			return
 		}
 
-		client := NewClient(hub, conn, userID, displayName, flowID)
+		// No checker means local/desktop mode: a single user on their own
+		// machine, who is always the editor of their own flow.
+		canEdit := true
+		if checker != nil {
+			canEdit = checker.CanEdit(r.Context(), flowID, userID)
+		}
+
+		client := NewClient(hub, conn, userID, displayName, flowID, canEdit)
 
 		// Periodic re-authz: if the user's access is revoked (token blacklist
 		// hit, flow ACL change, access-token expiry), close the connection so a

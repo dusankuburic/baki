@@ -104,7 +104,20 @@ func NewCustomRule(cfg CustomRuleConfig) (*CustomRule, error) {
 		sev:    models.SeverityWarning,
 	}
 	if cfg.Severity != "" {
-		r.sev = models.Severity(cfg.Severity)
+		// Validated here because this is where an untrusted string becomes a
+		// Severity: cfg comes from a .bakirc/-custom-rules JSON file and from
+		// POST /api/orgs/{id}/rules. An unrecognised value used to be accepted
+		// verbatim and then silently dropped by every downstream consumer — the
+		// finding disappeared from Markdown/HTML/PDF, became a PASSING JUnit
+		// testcase, was downgraded to "warning" in SARIF, and ranked 0 in
+		// bakicli's gate so it could never fail a build. An org author writing
+		// "critical" got a rule that looked configured and enforced nothing.
+		sev := models.Severity(cfg.Severity)
+		if !sev.Valid() {
+			return nil, fmt.Errorf("custom rule %q: invalid severity %q (must be one of %v)",
+				cfg.ID, cfg.Severity, models.ValidSeverities())
+		}
+		r.sev = sev
 	}
 	if cfg.NameMatch != "" {
 		re, err := regexp.Compile("(?i)" + cfg.NameMatch)

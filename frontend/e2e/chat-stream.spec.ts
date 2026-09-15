@@ -45,17 +45,16 @@ async function stubChatBoot(page: Page) {
     '/api/auth/me': {id: 'user-1', email: 'e2e@example.com', role: 'member', displayName: 'E2E'},
     '/api/providers/list': [
       {
-        id: 'demo',
-        name: 'Demo',
+        id: 'claude',
+        name: 'Claude',
         configured: true,
-        authType: 'demo',
-        models: [{id: 'demo-model', displayName: 'Demo Model', contextLimit: 8192}],
-        defaultModel: 'demo-model',
+        authType: 'api_key',
+        models: [{id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', contextLimit: 200000}],
+        defaultModel: 'claude-haiku-4-5',
       },
     ],
     '/api/chat/get': {version: 1, threads: []},
     '/api/chat/suggested-prompts': ['Summarize this flow'],
-    '/api/chat/demo-remaining': 5,
     '/api/flow/source-files': [],
     '/api/chat/begin': {status: 'ok'},
     // Onboarding's "Load sample & start" uploads the sample; stubbing it

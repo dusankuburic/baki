@@ -5,6 +5,7 @@ import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
+import {isTauri} from '@/platform/guards'
 import type {ProviderID, AIProviderConfig} from '@/types'
 
 export default function AIBehaviorPanel() {
@@ -92,22 +93,28 @@ export default function AIBehaviorPanel() {
             />
           </div>
 
-          <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-            <div className="flex-1">
-              <span className="text-sm font-medium text-text-primary">{t('behavior.dailyBudget')}</span>
-              <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.dailyBudgetHint')}</p>
+          {/* Desktop (local mode) has no usage store: the server's daily-spend
+              read returns 0 there, so a budget entered here was never
+              enforced while looking exactly like the cloud setting. Hidden
+              rather than shown inert. */}
+          {!isTauri() && (
+            <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
+              <div className="flex-1">
+                <span className="text-sm font-medium text-text-primary">{t('behavior.dailyBudget')}</span>
+                <p className="text-xs text-text-tertiary mt-0.5">{t('behavior.dailyBudgetHint')}</p>
+              </div>
+              <div className="w-24">
+                <NumberField
+                  step="0.5"
+                  min={0}
+                  fallback={0}
+                  integer={false}
+                  value={ai.dailyBudget}
+                  onCommit={v => updateAI({dailyBudget: v})}
+                />
+              </div>
             </div>
-            <div className="w-24">
-              <NumberField
-                step="0.5"
-                min={0}
-                fallback={0}
-                integer={false}
-                value={ai.dailyBudget}
-                onCommit={v => updateAI({dailyBudget: v})}
-              />
-            </div>
-          </div>
+          )}
         </div>
 
         <div className="pt-2">
