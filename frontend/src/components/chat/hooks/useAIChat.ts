@@ -1,6 +1,6 @@
 import {useTranslation} from 'react-i18next'
 import {useState, useCallback, useMemo, useRef, useEffect} from 'react'
-import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
+import {useChatStore, conversationKey, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, ApiError} from '@/api'
@@ -329,7 +329,7 @@ export function useAIChat({selectedModel}: UseAIChatOptions) {
   const handleClearThread = useCallback(() => {
     if (!doc || !activeThread || isCurrentThreadStreaming) return
     clearThreadMessages(activeThread.id)
-    chatApi.clearConversation(doc.id, activeThread.contextBlockId || 'flow').catch(err => {
+    chatApi.clearConversation(doc.id, conversationKey(activeThread)).catch(err => {
       logger.warn('Failed to clear conversation', err)
     })
   }, [doc, activeThread, isCurrentThreadStreaming, clearThreadMessages])

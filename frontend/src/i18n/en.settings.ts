@@ -360,5 +360,21 @@ export const enSettings = {
     expiresOn: 'expires {{date}}',
     neverExpires: 'never expires',
     revokeAria: 'Revoke {{name}}',
+    scopesLabel: 'Scopes',
+    scope: {
+      read: 'Read',
+      write: 'Write',
+      chat: 'Chat',
+      admin: 'Admin',
+    },
+    scopeHelp: {
+      read: 'reports, flows, library, dashboards',
+      write: 'save flows, apply fixes, triage',
+      chat: 'AI chat (spends provider budget)',
+      admin: '/api/admin routes',
+    },
+    scopesHint: 'The token is limited to the checked scopes. Token management is never allowed for scoped tokens.',
+    scopesNoneHint: 'No scopes checked: the token gets full access — everything your account can do.',
+    fullAccess: 'full access',
   },
 }

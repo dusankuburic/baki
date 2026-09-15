@@ -52,18 +52,18 @@ describe('useChatThreads server-side history', () => {
     act(() => result.current.handleClearContext())
 
     expect(useChatStore.getState().getMessages(id)).toHaveLength(0)
-    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', 'flow')
+    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id)
   })
 
-  it('clear uses the scope key in effect BEFORE the thread is reset', () => {
+  it('clear targets the thread key even for a block-scoped thread', () => {
     const id = seedThread(2, 'block-7')
     const {result} = renderThreads(id)
 
     act(() => result.current.handleClearContext())
 
-    // Reading contextBlockId after updateThread would clear the wrong
-    // conversation — the flow-scoped one instead of the block's.
-    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', 'block-7')
+    // The conversation key is the thread id, not the (about to be reset)
+    // block scope — so resetting the scope cannot clear the wrong conversation.
+    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id)
     expect(useChatStore.getState().threads.find(t => t.id === id)?.contextBlockId).toBeNull()
   })
 
@@ -78,7 +78,7 @@ describe('useChatThreads server-side history', () => {
     expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
     const [flowId, scope, saved] = vi.mocked(chatApi.saveConversation).mock.calls[0]
     expect(flowId).toBe('flow1')
-    expect(scope).toBe('flow')
+    expect(scope).toBe(id)
     expect(saved.map(m => m.id)).toEqual(kept.map(m => m.id))
   })
 

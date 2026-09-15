@@ -91,6 +91,28 @@ type ChatRequest struct {
 	// rejected. When absent the backend generates the ID and the client must
 	// send /chat/begin after subscribing (legacy two-POST handshake).
 	ClientStreamID string `json:"clientStreamId,omitempty"`
+	// ConversationID is the client thread this turn belongs to. It is the
+	// server-side conversation key (history reconstruction + persistence).
+	// Before it existed the key was ContextBlockID-or-"flow", so every
+	// flow-scoped thread on a flow shared ONE stored conversation: thread B was
+	// answered with thread A's history and each save clobbered the other.
+	// Must be a single safe path/key segment (a UUID); the handler rejects
+	// anything else.
+	ConversationID string `json:"conversationId,omitempty"`
+}
+
+// ConversationKey returns the key under which this turn's conversation is
+// stored and reconstructed: the thread's ConversationID when the client sent
+// one, otherwise the legacy ContextBlockID-or-"flow" scope (older clients and
+// conversations saved before threads had their own keys).
+func (r ChatRequest) ConversationKey() string {
+	if r.ConversationID != "" {
+		return r.ConversationID
+	}
+	if r.ContextBlockID != "" {
+		return r.ContextBlockID
+	}
+	return "flow"
 }
 
 type SourceFileInfo struct {

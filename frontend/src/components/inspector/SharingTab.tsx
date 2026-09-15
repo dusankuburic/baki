@@ -1,12 +1,22 @@
 import React, {useState, useRef, useEffect} from 'react'
-import {Users, UserPlus, Trash2, Shield, Eye, Edit3, Link2, Clock} from 'lucide-react'
+import {Users, UserPlus, Trash2, Shield, Eye, Edit3, Link2, Clock, Copy, Check} from 'lucide-react'
 import {sharingApi, type Collaborator, type Permission} from '@/api/sharing'
 import {flowApi, type ShareInfo} from '@/api/flow'
+import {libraryApi, type LibraryFlow} from '@/api/library'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAuthStore} from '@/stores/authStore'
 import {EmptyState, Spinner, useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
+import {writeClipboard} from '@/lib/clipboard'
 import {useAsync} from '@/hooks/useAsync'
+
+// shareLinkURL builds the public viewer URL for a raw share token. The viewer
+// is the unauthenticated /shared route (see main.tsx); BASE_URL keeps it
+// correct when the app is served under a sub-path.
+export function shareLinkURL(token: string): string {
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/')
+  return `${window.location.origin}${base}shared?token=${encodeURIComponent(token)}`
+}
 
 export const SharingTab: React.FC = () => {
   const document = useFlowStore(s => s.document)
@@ -44,7 +54,19 @@ export const SharingTab: React.FC = () => {
   const collaborators = data ?? []
   const error = formError ?? (fetchError ? 'Failed to load collaborators' : null)
 
-  const canManage = collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
+  // The server grants sharing rights to the flow OWNER, org admins and
+  // admin-tier collaborators (handlers_sharing.go). The owner never appears in
+  // the collaborator table, so deriving canManage from that list alone hid the
+  // invite form and share links on every flow the user created themselves.
+  // `canShare` from the library record is the authoritative answer; the
+  // collaborator check remains as a fallback when the record cannot be read.
+  const {data: libraryFlow} = useAsync<LibraryFlow | null>(() => {
+    if (!document) return Promise.resolve(null)
+    return libraryApi.get(document.id).catch(() => null)
+  }, [document?.id])
+  const canManage =
+    libraryFlow?.canShare === true ||
+    collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -246,14 +268,30 @@ function ShareLinksSection({flowId}: {flowId: string}) {
   } = useAsync<ShareInfo[]>(() => flowApi.listShares(flowId).catch(() => []), [flowId])
   const shareList = shares ?? []
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  // The raw token is returned exactly once by createShare (the list endpoint
+  // only ever has the hash), so the link must be surfaced here or it is lost.
+  const [created, setCreated] = useState<{id: string; url: string; expiresAt?: string} | null>(null)
+  const [copied, setCopied] = useState(false)
 
   const handleCreate = async () => {
     try {
-      await flowApi.createShare(flowId)
+      const res = await flowApi.createShare(flowId)
+      setCreated({id: res.id, url: shareLinkURL(res.token), expiresAt: res.expiresAt})
+      setCopied(false)
       toastSuccess('Share link created')
       refetch()
     } catch (err) {
       toastError('Failed to create share link: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    }
+  }
+
+  const handleCopy = async () => {
+    if (!created) return
+    try {
+      await writeClipboard(created.url)
+      setCopied(true)
+    } catch (err) {
+      toastError('Could not copy: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
   }
 
@@ -291,6 +329,32 @@ function ShareLinksSection({flowId}: {flowId: string}) {
         </button>
       </div>
 
+      {created && (
+        <div
+          role="status"
+          className="mb-3 p-3 rounded-lg border border-semantic-warning/40 bg-semantic-warning/5 space-y-2 animate-fade-in"
+        >
+          <p className="text-2xs text-text-primary">
+            Copy this link now — it is shown only once. Anyone with it can view the read-only report
+            {created.expiresAt ? ` until ${formatDate(created.expiresAt)}` : ''}.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 px-2 py-1.5 rounded-md bg-surface-1 text-2xs text-text-primary break-all select-all">
+              {created.url}
+            </code>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="flex items-center gap-1 px-2 py-1 text-2xs font-medium rounded-md bg-surface-3 hover:bg-surface-2 text-text-primary transition-colors"
+              title="Copy share link"
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex justify-center py-4">
           <Spinner size={16} />
@@ -305,8 +369,8 @@ function ShareLinksSection({flowId}: {flowId: string}) {
                 className="flex items-center justify-between p-2 rounded-lg bg-surface-1 border border-border-subtle/50 group"
               >
                 <div className="flex flex-col min-w-0">
-                  <span className="text-2xs font-mono text-text-secondary truncate">
-                    {s.token ? s.token.slice(0, 12) + '…' : s.id}
+                  <span className="text-2xs font-mono text-text-secondary truncate" title={s.id}>
+                    Link {s.id.slice(0, 8)}
                   </span>
                   <span className="text-2xs text-text-tertiary flex items-center gap-1">
                     <Clock size={10} />

@@ -13,20 +13,16 @@ import (
 	"pad-core/models"
 )
 
-// reconstructHistory loads the stored conversation for the request's context
-// key so a client that omitted Messages (the efficient path — it sends only the
-// new userMessage) still gets full LLM context. The key matches the client's
-// save key: contextBlockId, or "flow" when none. A store error degrades to
-// empty history rather than failing the turn. Returns nil when doc is nil.
+// reconstructHistory loads the stored conversation for the request's
+// conversation key so a client that omitted Messages (the efficient path — it
+// sends only the new userMessage) still gets full LLM context. The key matches
+// the client's save key (see ChatRequest.ConversationKey). Returns nil when
+// doc is nil.
 func (s *ChatService) reconstructHistory(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest) ([]models.ChatMessage, error) {
 	if doc == nil {
 		return nil, nil
 	}
-	convKey := req.ContextBlockID
-	if convKey == "" {
-		convKey = "flow"
-	}
-	loaded, err := s.GetConversation(ctx, doc, convKey)
+	loaded, err := s.GetConversation(ctx, doc, req.ConversationKey())
 	if err != nil {
 		// The error is RETURNED, not swallowed. A caller that persists after
 		// reconstructing must be able to tell "this conversation is empty" from

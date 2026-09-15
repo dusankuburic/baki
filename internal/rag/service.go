@@ -112,20 +112,20 @@ func (s *KnowledgeService) embedder(scope string) (ai.Provider, error) {
 		return p, nil
 	}
 
-	// Fallback: first enabled, keyed, embedding-capable provider in fixed
-	// priority order.
-	if s.settings != nil {
-		if cfg := s.settings.Get(); cfg != nil {
-			for _, pid := range ai.EmbeddingFallbackOrder() {
-				if pid == providerID {
-					continue // already tried above
-				}
-				if pc, ok := cfg.AI.Providers[pid]; !ok || !pc.Enabled {
-					continue
-				}
-				if p2, err2 := s.factory.ForEmbedding(scope, pid, embeddingModel); err2 == nil {
-					return p2, nil
-				}
+	// Fallback: first keyed, embedding-capable provider in fixed priority
+	// order. Having a usable key (which ForEmbedding decides) is the whole
+	// test. This used to also require settings.AI.Providers[pid].Enabled,
+	// but no UI ever sets that flag and the only provider enabled by default
+	// (claude) cannot embed — so the fallback was unreachable by construction
+	// and a keyed Gemini/GLM deployment without an OpenAI key got
+	// ErrEmbeddingUnavailable instead of its own provider.
+	{
+		for _, pid := range ai.EmbeddingFallbackOrder() {
+			if pid == providerID {
+				continue // already tried above
+			}
+			if p2, err2 := s.factory.ForEmbedding(scope, pid, embeddingModel); err2 == nil {
+				return p2, nil
 			}
 		}
 	}

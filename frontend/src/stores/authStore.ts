@@ -11,6 +11,11 @@ const REFRESH_TOKEN_KEY = 'auth_refresh_token'
 // resurrecting a logged-out session.
 let sessionEpoch = 0
 
+// RegisterOutcome: 'signed-in' when the server issued a session with the
+// account (bootstrap admin); 'verification-required' when the user must follow
+// the emailed link before they can log in.
+export type RegisterOutcome = 'signed-in' | 'verification-required'
+
 interface AuthState {
   user: AuthUser | null
   accessToken: string | null
@@ -19,7 +24,7 @@ interface AuthState {
   error: string | null
 
   login: (credentials: LoginRequest, remember?: boolean) => Promise<void>
-  register: (credentials: LoginRequest, remember?: boolean) => Promise<void>
+  register: (credentials: LoginRequest, remember?: boolean) => Promise<RegisterOutcome>
   loginWithSSOTicket: (ticket: string) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<boolean>
@@ -128,10 +133,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   register: async (credentials, remember = false) => {
-    if (get().isLoading) return
+    if (get().isLoading) return 'verification-required'
     set({isLoading: true, error: null})
     try {
       const res = await authApi.register(credentials)
+      if (res.verificationRequired || !res.accessToken || !res.refreshToken) {
+        // Account created, no session: the caller shows "check your inbox".
+        set({isLoading: false})
+        return 'verification-required'
+      }
       writeRefresh(res.refreshToken, remember)
       setSessionToken(res.accessToken)
       set({
@@ -140,6 +150,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: true,
         isLoading: false,
       })
+      return 'signed-in'
     } catch (err) {
       set({
         isLoading: false,

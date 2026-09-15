@@ -131,6 +131,24 @@ func (s *AuthService) SendVerificationEmail(ctx context.Context, user *storageif
 	}
 }
 
+// ResendVerification re-issues the email-verification link for a known,
+// still-unverified account. Returns (nil, nil) — NOT an error — when the
+// address is unknown or already verified, so the caller can respond
+// identically in every case (anti-enumeration, same posture as
+// RequestPasswordReset). Outstanding verification tokens are invalidated
+// first so only the newest link redeems.
+func (s *AuthService) ResendVerification(ctx context.Context, email string) (*storageif.User, error) {
+	user, err := s.backend.LoadUserByEmail(ctx, email)
+	if err != nil || user == nil || user.EmailVerified {
+		return nil, nil
+	}
+	if err := s.backend.InvalidateUserTokens(ctx, user.ID, storageif.TokenPurposeEmailVerify); err != nil {
+		logger.Error("failed to invalidate outstanding verification tokens before resend", "error", err, "userID", user.ID)
+	}
+	s.SendVerificationEmail(ctx, user)
+	return user, nil
+}
+
 // LoginOutcome distinguishes why Authenticate failed (or that it succeeded),
 // so the caller can log the correct audit reason and resource identifier
 // without re-deriving any of Authenticate's internal, timing-sensitive logic.

@@ -15,6 +15,104 @@ export const MAX_CONCURRENT_STREAMS = 3
 // backend on demand).
 export const MAX_THREADS = 50
 
+// conversationKey is the server-side key under which a thread's conversation
+// is stored (chatApi.getConversation/saveConversation/clearConversation "scope"
+// argument and ChatRequest.conversationId). One key per thread: the old key
+// was contextBlockId-or-'flow', so every flow-scoped thread on a flow shared a
+// single stored conversation and overwrote each other's history.
+export function conversationKey(thread: Pick<ChatThread, 'id'>): string {
+  return thread.id
+}
+
+// LEGACY_FLOW_SCOPE is the pre-thread conversation key. A flow whose threads
+// were never persisted (first open after upgrade, or a different browser)
+// restores its history from here once, then re-saves it under the new
+// thread's own key.
+export const LEGACY_FLOW_SCOPE = 'flow'
+
+// Thread lists persist per flow in localStorage so a reload restores the same
+// threads — and therefore the same conversation keys. Without this every
+// reload minted a fresh thread id and the previous thread's history became
+// unreachable. Conversations themselves stay server-side; only the thread
+// metadata is stored here.
+const THREADS_KEY_PREFIX = 'baki:chatThreads:v1:'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+type StoredThread = Pick<
+  ChatThread,
+  | 'id'
+  | 'flowId'
+  | 'title'
+  | 'createdAt'
+  | 'contextBlockId'
+  | 'selectedSourceFiles'
+  | 'tokensIn'
+  | 'tokensOut'
+  | 'useTools'
+  | 'usedTools'
+  | 'appliedFixes'
+>
+
+function persistFlowThreads(flowId: string, threads: ChatThread[]): void {
+  const mine: StoredThread[] = threads
+    .filter(t => t.flowId === flowId)
+    .map(t => ({
+      id: t.id,
+      flowId: t.flowId,
+      title: t.title,
+      createdAt: t.createdAt,
+      contextBlockId: t.contextBlockId,
+      selectedSourceFiles: t.selectedSourceFiles,
+      tokensIn: t.tokensIn,
+      tokensOut: t.tokensOut,
+      useTools: t.useTools,
+      usedTools: t.usedTools,
+      appliedFixes: t.appliedFixes,
+    }))
+  try {
+    if (mine.length === 0) localStorage.removeItem(THREADS_KEY_PREFIX + flowId)
+    else localStorage.setItem(THREADS_KEY_PREFIX + flowId, JSON.stringify(mine))
+  } catch {
+    // Storage may be unavailable (private mode, quota); threads then last the session.
+  }
+}
+
+function readStoredThreads(flowId: string): ChatThread[] {
+  let parsed: unknown
+  try {
+    const raw = localStorage.getItem(THREADS_KEY_PREFIX + flowId)
+    if (!raw) return []
+    parsed = JSON.parse(raw)
+  } catch {
+    // Storage unavailable or corrupt entry: start with no threads.
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const out: ChatThread[] = []
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue
+    const t = item as Record<string, unknown>
+    if (typeof t.id !== 'string' || !UUID_RE.test(t.id) || t.flowId !== flowId) continue
+    out.push({
+      id: t.id,
+      flowId,
+      title: typeof t.title === 'string' ? t.title : '',
+      createdAt: typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString(),
+      contextBlockId: typeof t.contextBlockId === 'string' ? t.contextBlockId : null,
+      selectedSourceFiles: Array.isArray(t.selectedSourceFiles)
+        ? t.selectedSourceFiles.filter((f): f is string => typeof f === 'string')
+        : [],
+      tokensIn: typeof t.tokensIn === 'number' ? t.tokensIn : 0,
+      tokensOut: typeof t.tokensOut === 'number' ? t.tokensOut : 0,
+      useTools: t.useTools === true ? true : undefined,
+      usedTools: t.usedTools === true ? true : undefined,
+      appliedFixes: t.appliedFixes === true ? true : undefined,
+    })
+    if (out.length >= MAX_THREADS) break
+  }
+  return out
+}
+
 export interface ChatThread {
   id: string
   flowId: string
@@ -155,6 +253,12 @@ interface ChatState {
   canStartStream: () => boolean
 
   createThread: (flowId: string) => string
+  // hydrateThreads restores a flow's persisted thread list (see
+  // persistFlowThreads). Returns the flow's thread ids — the ones already in
+  // the store when present, otherwise the restored ones (last one active),
+  // otherwise []. Conversations are not loaded here; the active-thread effect
+  // fetches each thread's history by its key on demand.
+  hydrateThreads: (flowId: string) => string[]
   switchThread: (threadId: string) => void
   closeThread: (threadId: string) => void
   updateThread: (threadId: string, patch: Partial<ChatThread>) => void
@@ -389,7 +493,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return {threads: [...state.threads, thread], activeThreadId: id, conversations: nextConversations}
     })
+    persistFlowThreads(flowId, get().threads)
     return id
+  },
+
+  hydrateThreads: flowId => {
+    const existing = get().threads.filter(t => t.flowId === flowId)
+    if (existing.length > 0) return existing.map(t => t.id)
+    const stored = readStoredThreads(flowId)
+    if (stored.length === 0) return []
+    set(state => ({
+      threads: [...state.threads, ...stored],
+      activeThreadId: stored[stored.length - 1].id,
+    }))
+    return stored.map(t => t.id)
   },
 
   switchThread: threadId => {
@@ -404,6 +521,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (slot?.streamId) {
       chatApi.cancelStream(slot.streamId).catch(() => {})
     }
+    const closedFlowId = get().threads.find(t => t.id === threadId)?.flowId
     set(state => {
       const remaining = state.threads.filter(t => t.id !== threadId)
       const next = new Map(state.conversations)
@@ -427,12 +545,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : state.activeThreadId
       return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread}
     })
+    if (closedFlowId) persistFlowThreads(closedFlowId, get().threads)
   },
 
-  updateThread: (threadId, patch) =>
+  updateThread: (threadId, patch) => {
     set(state => ({
       threads: state.threads.map(t => (t.id === threadId ? {...t, ...patch} : t)),
-    })),
+    }))
+    const flowId = get().threads.find(t => t.id === threadId)?.flowId
+    if (flowId) persistFlowThreads(flowId, get().threads)
+  },
 
   getActiveThread: () => {
     const {threads, activeThreadId} = get()
@@ -443,7 +565,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return get().threads.filter(t => t.flowId === flowId)
   },
 
-  clearFlowThreads: flowId =>
+  clearFlowThreads: flowId => {
     set(state => {
       const toRemove = state.threads.filter(t => t.flowId === flowId).map(t => t.id)
       const remaining = state.threads.filter(t => t.flowId !== flowId)
@@ -466,7 +588,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         delete queuedByThread[id]
       }
       return {threads: remaining, conversations: next, activeThreadId, streams, drafts, queuedByThread}
-    }),
+    })
+    persistFlowThreads(flowId, get().threads)
+  },
 
   setProvider: p => set({selectedProvider: p}),
 

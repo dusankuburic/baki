@@ -419,3 +419,31 @@ func TestScanOnce_OrgChannelRouting(t *testing.T) {
 		t.Fatalf("disabled org channel got %d events, want 0", n)
 	}
 }
+
+// TestEnabled_DoesNotRequireEnvNotifier pins the gate that decides whether the
+// sweep runs at all. It used to demand a deployment-level PAD_NOTIFY_* channel,
+// which left every org that configured channels only through the UI (and the
+// in-app governance inbox) silently without alerts.
+func TestEnabled_DoesNotRequireEnvNotifier(t *testing.T) {
+	b := testutil.NewFakeBackend()
+	empty, err := notify.New(notify.Config{Policy: notify.AllowLoopbackTargets})
+	if err != nil {
+		t.Fatalf("notify.New: %v", err)
+	}
+	if empty.Enabled() {
+		t.Fatalf("precondition: a dispatcher with no channels must report disabled")
+	}
+	cases := map[string]*notify.Dispatcher{"empty dispatcher": empty, "nil dispatcher": nil}
+	for name, d := range cases {
+		s := New(b, analyzeReturning(nil), d, time.Hour, notify.AllowLoopbackTargets)
+		if !s.enabled() {
+			t.Errorf("%s: scanner must be enabled with a backend, analyzer and interval", name)
+		}
+	}
+	if s := New(b, analyzeReturning(nil), empty, 0, notify.AllowLoopbackTargets); s.enabled() {
+		t.Errorf("zero interval must still disable the scanner")
+	}
+	if s := New(nil, analyzeReturning(nil), empty, time.Hour, notify.AllowLoopbackTargets); s.enabled() {
+		t.Errorf("nil backend must still disable the scanner")
+	}
+}

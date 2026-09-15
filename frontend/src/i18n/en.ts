@@ -396,6 +396,12 @@ export const auth = {
     passwordsDoNotMatch: 'Passwords do not match',
     resetPrompt: "Enter your account email and we'll send you a reset link",
     resetSent: 'If an account exists for that address, we’ve sent a reset link.',
+    registeredTitle: 'Check your inbox',
+    registeredBody: 'We sent a verification link to {{email}}. Follow it to activate your account, then sign in.',
+    notVerifiedHint: 'Didn’t get the email?',
+    resend: 'Resend verification email',
+    resendSent: 'If that address is registered and still unverified, a new link is on its way.',
+    backToSignIn: 'Back to sign in',
   },
   verify: {
     pending: 'Verifying your email…',

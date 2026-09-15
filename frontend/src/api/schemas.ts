@@ -39,6 +39,9 @@ export const getAuthUserSchema = (): Promise<Schemas['AuthUserSchema']> => loadS
 export const getLoginResponseSchema = (): Promise<Schemas['LoginResponseSchema']> =>
   loadSchemas().then(s => s.LoginResponseSchema)
 
+export const getRegisterResponseSchema = (): Promise<Schemas['RegisterResponseSchema']> =>
+  loadSchemas().then(s => s.RegisterResponseSchema)
+
 export const getRefreshResponseSchema = (): Promise<Schemas['RefreshResponseSchema']> =>
   loadSchemas().then(s => s.RefreshResponseSchema)
 

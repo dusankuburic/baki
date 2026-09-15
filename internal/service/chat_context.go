@@ -156,9 +156,12 @@ func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatReques
 	// key — otherwise a free-form turn caches a source/block-less contextText
 	// that a later context-bearing turn (same key) would reuse.
 	exclude := fmt.Sprintf("%t", req.ExcludeContext)
+	// The merged suffix (settings + request) is what actually reaches the
+	// prompt, so key on it — editing the custom-instructions setting must not
+	// serve a context built under the old instructions.
 	return strings.Join([]string{
 		scope, flowID, fmt.Sprintf("%d", gen),
-		req.ContextBlockID, req.SystemPrompt, providerID, model, reportFP, sourceFP, exclude,
+		req.ContextBlockID, s.systemPromptSuffix(req), providerID, model, reportFP, sourceFP, exclude,
 	}, "|")
 }
 
@@ -332,7 +335,7 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 		Flow:               scrubbedDoc,
 		TokenBudget:        tokenBudget,
 		Provider:           provider,
-		SystemPromptSuffix: req.SystemPrompt,
+		SystemPromptSuffix: s.systemPromptSuffix(req),
 	}
 	if report != nil {
 		ctxReq.Findings = report.Findings
@@ -504,4 +507,28 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 		EstimatedTokens: total,
 		ContextLimit:    provider.ContextLimit(),
 	}, nil
+}
+
+// systemPromptSuffix merges the deployment/user "custom instructions" setting
+// (Settings → AI Behavior) with any per-request override. The setting used to
+// be persisted and never read — the only consumer was the per-request field,
+// which the frontend never populated — so the control was inert. Merging here,
+// server-side, keeps it tamper-proof: a client cannot drop the operator's
+// instructions by omitting the field.
+func (s *ChatService) systemPromptSuffix(req models.ChatRequest) string {
+	var configured string
+	if s.settings != nil {
+		if app := s.settings.Get(); app != nil {
+			configured = strings.TrimSpace(app.AI.SystemPromptSuffix)
+		}
+	}
+	perRequest := strings.TrimSpace(req.SystemPrompt)
+	switch {
+	case configured == "":
+		return perRequest
+	case perRequest == "":
+		return configured
+	default:
+		return configured + "\n\n" + perRequest
+	}
 }

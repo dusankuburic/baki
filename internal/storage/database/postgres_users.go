@@ -90,14 +90,21 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 	// the flag) must not claim admin, otherwise on a fresh deployment whoever
 	// reaches the SSO start URL first wins admin (privilege escalation).
 	role := user.Role
+	emailVerified := user.EmailVerified
 	if count == 0 && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
+		// The bootstrap admin is also email-verified. Login refuses unverified
+		// accounts to block shadow-registration takeovers, but on an empty
+		// deployment there is nobody to impersonate — and a deployment with no
+		// SMTP relay (the docker-compose quick start) would otherwise lock its
+		// own first administrator out before anyone could ever sign in.
+		emailVerified = true
 	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO users (id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		user.ID, user.Email, user.Password, string(role), user.EmailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
+		user.ID, user.Email, user.Password, string(role), emailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
 	); err != nil {
 		if isPgErrCode(err, pgErrUniqueViolation) {
 			return interfaces.ErrEmailExists
@@ -110,6 +117,7 @@ func (b *PostgresStorageBackend) tryCreateUser(ctx context.Context, user *interf
 		return err
 	}
 	user.Role = role
+	user.EmailVerified = emailVerified
 	return nil
 }
 

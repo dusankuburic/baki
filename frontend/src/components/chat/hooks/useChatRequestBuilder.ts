@@ -1,5 +1,5 @@
 import {useCallback} from 'react'
-import {useChatStore} from '@/stores/chatStore'
+import {useChatStore, conversationKey} from '@/stores/chatStore'
 import type {ChatThread} from '@/stores/chatStore'
 import type {ChatMessage, FlowDocument, AISettings, ProviderID} from '@/types'
 
@@ -54,10 +54,12 @@ export function useChatRequestBuilder({
             }
           : {}),
         userMessage: text,
-        // ALWAYS send contextBlockId: it is the server-side conversation-history
-        // key (so a free-form / excludeContext turn on a block-scoped thread
-        // still reconstructs the right history). excludeContext below gates only
-        // flow/block CONTEXT INJECTION, not which conversation is loaded.
+        // conversationId is the server-side conversation-history key: one per
+        // thread, so parallel threads on a flow never replay or overwrite each
+        // other's history. contextBlockId still travels for context injection
+        // (and as the legacy key for servers that predate conversationId).
+        // excludeContext below gates only flow/block CONTEXT INJECTION.
+        conversationId: conversationKey(activeThread),
         contextBlockId: activeThread.contextBlockId || '',
         selectedSourceFiles: excludeContext ? undefined : filesToUse.length > 0 ? filesToUse : undefined,
         temperature: providerConfig?.temperature ?? 0.3,

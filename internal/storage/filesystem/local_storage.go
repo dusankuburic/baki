@@ -885,6 +885,10 @@ func (lsb *LocalStorageBackend) CreateUser(ctx context.Context, user *interfaces
 	role := cp.Role
 	if len(lsb.users) == 0 && auth.AllowBootstrap(ctx) {
 		role = auth.RoleAdmin
+		// Mirrors the Postgres backend: the bootstrap admin is email-verified so
+		// a deployment without SMTP can still sign in its first administrator.
+		cp.EmailVerified = true
+		user.EmailVerified = true
 	}
 	cp.Role = role
 	user.Role = role // caller-visible promotion (pre-existing contract)

@@ -1,5 +1,5 @@
 import {request, requestValidated, requestBlob} from './client'
-import {getAuthUserSchema, getLoginResponseSchema, getRefreshResponseSchema} from './schemas'
+import {getAuthUserSchema, getLoginResponseSchema, getRegisterResponseSchema, getRefreshResponseSchema} from './schemas'
 
 export interface LoginRequest {
   email: string
@@ -11,6 +11,19 @@ export interface LoginResponse {
   refreshToken: string
   expiresAt: string
   user: AuthUser
+}
+
+// RegisterResponse: `verificationRequired` is the discriminator. When true the
+// account exists but has no session yet — the user must follow the emailed
+// link. When false (bootstrap admin) the token fields are present and the
+// response doubles as a login.
+export interface RegisterResponse {
+  status?: string
+  user: AuthUser
+  verificationRequired: boolean
+  accessToken?: string
+  refreshToken?: string
+  expiresAt?: string
 }
 
 export interface AuthUser {
@@ -47,12 +60,19 @@ export interface SSOInfo {
   provider?: string
 }
 
+// ApiTokenScope mirrors the closed scope set in internal/auth/apitoken.go.
+// A token with NO scopes is unscoped: it can do everything its owner can.
+export type ApiTokenScope = 'read' | 'write' | 'chat' | 'admin'
+export const API_TOKEN_SCOPES: readonly ApiTokenScope[] = ['read', 'write', 'chat', 'admin']
+
 // ApiToken is the metadata for a machine token (the secret is never returned).
 export interface ApiToken {
   id: string
   name: string
   createdAt: string
   expiresAt?: string
+  // Empty/omitted = unscoped (full access).
+  scopes?: ApiTokenScope[]
 }
 
 // CreatedApiToken additionally carries the raw token, shown exactly once.
@@ -64,8 +84,13 @@ export const authApi = {
   login: async (credentials: LoginRequest): Promise<LoginResponse> =>
     requestValidated('/api/auth/login', await getLoginResponseSchema(), {body: credentials}),
 
-  register: async (credentials: LoginRequest): Promise<LoginResponse> =>
-    requestValidated('/api/auth/register', await getLoginResponseSchema(), {body: credentials}),
+  register: async (credentials: LoginRequest): Promise<RegisterResponse> =>
+    requestValidated('/api/auth/register', await getRegisterResponseSchema(), {body: credentials}),
+
+  // Re-sends the verification link. Like forgotPassword it always resolves —
+  // the server answers identically for unknown, verified and pending addresses.
+  resendVerification: (email: string): Promise<{status: string}> =>
+    request('/api/auth/resend-verification', {body: {email}}),
 
   logout: (): Promise<void> => request('/api/auth/logout'),
 
@@ -106,8 +131,10 @@ export const authApi = {
 
   // expiresInDays <= 0 (or omitted) creates a non-expiring token. The returned
   // CreatedApiToken.token is the only time the raw secret is available.
-  createApiToken: (name: string, expiresInDays?: number): Promise<CreatedApiToken> =>
-    request('/api/auth/tokens', {body: {name, expiresInDays: expiresInDays ?? 0}}),
+  // scopes: subset of ApiTokenScope; empty/omitted mints an UNSCOPED token that
+  // can do everything its owner can (see internal/auth/apitoken.go).
+  createApiToken: (name: string, expiresInDays?: number, scopes?: ApiTokenScope[]): Promise<CreatedApiToken> =>
+    request('/api/auth/tokens', {body: {name, expiresInDays: expiresInDays ?? 0, scopes: scopes ?? []}}),
 
   revokeApiToken: (id: string): Promise<void> => request(`/api/auth/tokens/${id}`, {method: 'DELETE'}),
 

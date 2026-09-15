@@ -281,23 +281,35 @@ func TestEmbedder_FallbackPicksEmbeddingCapable_Deterministic(t *testing.T) {
 	}
 }
 
-// TestEmbedder_DisabledFallbackIsSkipped proves the enabled filter: a keyed,
-// embedding-capable provider that is disabled in settings is not chosen.
-func TestEmbedder_DisabledFallbackIsSkipped(t *testing.T) {
+func TestEmbedder_FallbackUsesFirstKeyedProvider(t *testing.T) {
+	// The fallback used to skip any provider whose settings entry was not
+	// Enabled — a flag no UI ever sets — so on every real install it found
+	// nothing. Having a usable key is the only gate now; priority order still
+	// decides between several keyed providers.
 	settings := &models.AppSettings{}
 	settings.AI.Providers = map[string]models.AIProviderConfig{
 		"gemini": {Enabled: false},
 		"glm":    {Enabled: true},
 	}
-	// Both providers have keys; gemini is higher priority but disabled.
 	svc := NewKnowledgeService(nil, newTestFactory(map[string]bool{"gemini": true, "glm": true}), stubSettings{settings})
 
 	p, err := svc.embedder("scope")
 	if err != nil {
+		t.Fatalf("want a keyed fallback, got error: %v", err)
+	}
+	if p.ID() != "gemini" {
+		t.Errorf("want highest-priority keyed provider (gemini) regardless of Enabled, got %q", p.ID())
+	}
+
+	// Only the lower-priority provider has a key: it must be used even though
+	// its settings entry says nothing about being enabled.
+	svc = NewKnowledgeService(nil, newTestFactory(map[string]bool{"glm": true}), stubSettings{&models.AppSettings{}})
+	p, err = svc.embedder("scope")
+	if err != nil {
 		t.Fatalf("want glm fallback, got error: %v", err)
 	}
 	if p.ID() != "glm" {
-		t.Errorf("want disabled gemini skipped → glm, got %q", p.ID())
+		t.Errorf("want glm (the only keyed provider), got %q", p.ID())
 	}
 }
 

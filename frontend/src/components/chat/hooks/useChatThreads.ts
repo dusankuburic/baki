@@ -1,5 +1,5 @@
 import {useCallback} from 'react'
-import {useChatStore} from '@/stores/chatStore'
+import {useChatStore, conversationKey} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {FlowDocument, SourceFileInfo} from '@/types'
@@ -63,8 +63,8 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
       tokensIn: 0,
       tokensOut: 0,
     })
-    if (doc) {
-      chatApi.clearConversation(doc.id, thread?.contextBlockId || 'flow').catch(err => {
+    if (doc && thread) {
+      chatApi.clearConversation(doc.id, conversationKey(thread)).catch(err => {
         logger.warn('Failed to clear conversation', err)
       })
     }
@@ -82,9 +82,9 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
     if (!activeThreadId) return
     const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
     compactThread(activeThreadId, COMPACT_KEEP_PAIRS)
-    if (!doc) return
+    if (!doc || !thread) return
     const kept = useChatStore.getState().getMessages(activeThreadId)
-    chatApi.saveConversation(doc.id, thread?.contextBlockId || 'flow', [...kept]).catch(err => {
+    chatApi.saveConversation(doc.id, conversationKey(thread), [...kept]).catch(err => {
       logger.warn('Failed to persist compacted conversation', err)
     })
   }, [activeThreadId, compactThread, doc])

@@ -72,6 +72,10 @@ export interface ChatRequest {
   // listener before POSTing create, so the backend emits immediately with no
   // /chat/begin round-trip. Omitted ⇒ legacy two-POST handshake.
   clientStreamId?: string
+  // The client thread id. It is the server-side conversation key, so two
+  // threads on the same flow keep separate histories (see ChatRequest
+  // .ConversationKey on the backend).
+  conversationId?: string
 }
 
 export interface ChatResponse {

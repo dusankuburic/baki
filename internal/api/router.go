@@ -468,9 +468,10 @@ var publicRoutes = map[string]bool{
 	"/api/auth/logout":   true,
 	// Password recovery and email verification are pre-authentication: the user
 	// either has no session or is acting on a one-time emailed token.
-	"/api/auth/forgot-password": true,
-	"/api/auth/reset-password":  true,
-	"/api/auth/verify-email":    true,
+	"/api/auth/forgot-password":     true,
+	"/api/auth/reset-password":      true,
+	"/api/auth/verify-email":        true,
+	"/api/auth/resend-verification": true,
 	// SSO endpoints are pre-authentication by definition: the browser hits
 	// start/callback before it has any token, and exchange carries its own
 	// single-use ticket credential.

@@ -5,6 +5,7 @@ import type {AuthUser, LoginResponse} from '@/api/auth'
 vi.mock('@/api/auth', () => ({
   authApi: {
     login: vi.fn(),
+    register: vi.fn(),
     logout: vi.fn(),
     refresh: vi.fn(),
     me: vi.fn(),
@@ -79,6 +80,51 @@ beforeEach(() => {
   _session = {}
   vi.resetAllMocks()
   mockLogout.mockResolvedValue(undefined)
+})
+
+// ---- register ----
+
+describe('register', () => {
+  const mockRegister = authApi.register as ReturnType<typeof vi.fn>
+
+  it('returns verification-required and stays signed out when the server issues no session', async () => {
+    // The ordinary sign-up response: account created, verification link sent,
+    // no tokens. Treating this as a login used to throw a schema error and
+    // report "Registration failed" for an account that had just been created.
+    mockRegister.mockResolvedValue({status: 'ok', user: fakeUser, verificationRequired: true})
+
+    const outcome = await useAuthStore.getState().register({email: 'alice@example.com', password: 'secret'})
+
+    expect(outcome).toBe('verification-required')
+    const s = useAuthStore.getState()
+    expect(s.isAuthenticated).toBe(false)
+    expect(s.accessToken).toBeNull()
+    expect(s.error).toBeNull()
+    expect(s.isLoading).toBe(false)
+    expect(_session['auth_refresh_token']).toBeUndefined()
+  })
+
+  it('signs in directly when the server returns a session (bootstrap admin)', async () => {
+    mockRegister.mockResolvedValue({...fakeLoginResponse, status: 'ok', verificationRequired: false})
+
+    const outcome = await useAuthStore.getState().register({email: 'alice@example.com', password: 'secret'})
+
+    expect(outcome).toBe('signed-in')
+    const s = useAuthStore.getState()
+    expect(s.isAuthenticated).toBe(true)
+    expect(s.user).toEqual(fakeUser)
+    expect(s.accessToken).toBe('access-abc')
+  })
+
+  it('surfaces the error message and rethrows on failure', async () => {
+    mockRegister.mockRejectedValue(new Error('email already registered'))
+
+    await expect(
+      useAuthStore.getState().register({email: 'alice@example.com', password: 'secret'}),
+    ).rejects.toThrow('email already registered')
+    expect(useAuthStore.getState().error).toBe('email already registered')
+    expect(useAuthStore.getState().isAuthenticated).toBe(false)
+  })
 })
 
 // ---- login ----

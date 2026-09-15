@@ -85,6 +85,9 @@ param redisCapacity int = 0
 @description('Comma-separated email addresses for operational alerts (Action Group recipients). Leave empty to skip alert provisioning.')
 param alertEmails string = ''
 
+@description('Comma-separated CORS / WebSocket origin allowlist (PAD_ALLOWED_ORIGINS). The WebSocket upgrade rejects any browser Origin not listed here, so an empty value leaves presence/collaboration dead on the deployed app. Defaults to the Container App\'s own ingress hostname; add your custom domain when you front it with one.')
+param allowedOrigins string = ''
+
 var deploymentName = '${appName}-env'
 var identityName = '${appName}-mi'
 
@@ -305,6 +308,10 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             { name: 'PAD_AUTH_ENABLED', value: 'true' }
             { name: 'PAD_STORAGE', value: 'database' }
             { name: 'PAD_BEHIND_PROXY', value: 'true' }
+            // Origin allowlist for CORS and the /ws upgrade. The app's own
+            // ingress hostname is <appName>.<environment default domain>; the
+            // resource cannot reference its own fqdn output, so it is composed.
+            { name: 'PAD_ALLOWED_ORIGINS', value: !empty(allowedOrigins) ? allowedOrigins : 'https://${appName}.${env.properties.defaultDomain}' }
             // Tell DefaultAzureCredential which managed identity to use.
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'PAD_AUTH_SECRET', secretRef: 'auth-secret' }

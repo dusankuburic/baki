@@ -1,7 +1,7 @@
 import i18n from '@/i18n'
 import {useCallback, useRef, useEffect, useMemo} from 'react'
 import {chatApi, flowApi, analysisApi} from '@/api'
-import {useChatStore, FixProposalCard, FixProposalItem} from '@/stores/chatStore'
+import {useChatStore, conversationKey, FixProposalCard, FixProposalItem} from '@/stores/chatStore'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -243,7 +243,7 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
         })
       }
       const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
-      chatApi.saveConversation(thread.flowId, thread.contextBlockId || 'flow', persistable).catch(err => {
+      chatApi.saveConversation(thread.flowId, conversationKey(thread), persistable).catch(err => {
         logger.warn('Failed to save conversation', err)
       })
       if (opts.tokensIn != null || opts.tokensOut != null) {

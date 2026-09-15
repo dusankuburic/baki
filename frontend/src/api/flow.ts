@@ -7,11 +7,12 @@ const BULK_LOAD_TIMEOUT_MS = 300_000
 import {createAdapter} from '@/platform/adapters'
 
 // ShareInfo is one row of a flow's read-only share-link list. Mirrors the
-// backend share-token record (createShare returns the same fields plus the raw
-// secret, which is never re-sent by the list endpoint).
+// backend share-token record. The raw secret is returned ONLY by createShare
+// (once); the list endpoint carries the hash, so `token` is never populated
+// here — the UI must capture it at creation time.
 export interface ShareInfo {
   id: string
-  token: string
+  token?: string
   createdAt?: string
   expiresAt?: string
 }

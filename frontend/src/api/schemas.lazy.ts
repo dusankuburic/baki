@@ -25,6 +25,19 @@ export function buildSchemas() {
     user: AuthUserSchema,
   })
 
+  // Register is NOT a login: unless the account was created already verified
+  // (the bootstrap admin), the server sends a verification link and returns
+  // no tokens. Validating it against LoginResponseSchema made every ordinary
+  // sign-up fail client-side after the account had been created.
+  const RegisterResponseSchema = z.object({
+    status: z.string().optional(),
+    user: AuthUserSchema,
+    verificationRequired: z.boolean(),
+    accessToken: z.string().min(1).optional(),
+    refreshToken: z.string().min(1).optional(),
+    expiresAt: z.string().optional(),
+  })
+
   const RefreshResponseSchema = z.object({
     accessToken: z.string().min(1),
     expiresAt: z.string(),
@@ -112,6 +125,7 @@ export function buildSchemas() {
   return {
     AuthUserSchema,
     LoginResponseSchema,
+    RegisterResponseSchema,
     RefreshResponseSchema,
     FlowDocumentEnvelopeSchema,
     FindingSchema,
