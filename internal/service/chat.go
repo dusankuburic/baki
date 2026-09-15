@@ -481,10 +481,7 @@ func (s *ChatService) persistInitialUserTurn(ctx context.Context, doc *models.Fl
 	if doc == nil || req.UserMessage == "" {
 		return
 	}
-	convKey := req.ContextBlockID
-	if convKey == "" {
-		convKey = "flow"
-	}
+	convKey := req.ConversationKey()
 	userMsg := models.ChatMessage{
 		ID:             uuid.NewString(),
 		Role:           "user",
@@ -576,6 +573,19 @@ func (s *ChatService) resolveStreamID(req models.ChatRequest) (streamID string, 
 	return req.ClientStreamID, true, nil
 }
 
+// validateConversationID rejects a conversationId that is not a UUID. The
+// value becomes a storage key (and, in local mode, a path segment), so it must
+// be a client-generated thread id rather than free text.
+func validateConversationID(req models.ChatRequest) error {
+	if req.ConversationID == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(req.ConversationID); err != nil {
+		return fmt.Errorf("conversationId must be a UUID: %w", err)
+	}
+	return nil
+}
+
 func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (streamID string, err error) {
 	defer logger.Guard("App.StreamChatMessage", &err)
 
@@ -592,6 +602,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 
 	streamID, clientProvided, err := s.resolveStreamID(req)
 	if err != nil {
+		return "", err
+	}
+	if err := validateConversationID(req); err != nil {
 		return "", err
 	}
 
@@ -718,11 +731,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			// concurrent streams on the same (flowID, convKey) can't both read
 			// the same history and then overwrite each other's user-turn persist
 			// (a lost update — SaveConversation replaces the whole file).
-			convKey := req.ContextBlockID
-			if convKey == "" {
-				convKey = "flow"
-			}
-			s.reconstructAndPersistUserTurn(ctx, doc, &req, convKey)
+			s.reconstructAndPersistUserTurn(ctx, doc, &req, req.ConversationKey())
 		}
 
 		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, req)

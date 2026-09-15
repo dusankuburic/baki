@@ -4,7 +4,7 @@ import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
 import {useAuthStore} from '@/stores/authStore'
 import {authApi, type SSOInfo} from '@/api/auth'
-import {getBackendConfig} from '@/api/client'
+import {ApiError, getBackendConfig} from '@/api/client'
 import {useTranslation} from 'react-i18next'
 
 interface LoginFormProps {
@@ -42,6 +42,13 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   const [forgot, setForgot] = useState(false)
   const [forgotSent, setForgotSent] = useState(false)
   const [forgotLoading, setForgotLoading] = useState(false)
+  // Post-registration state: the account exists but has no session until the
+  // emailed verification link is followed. `needsVerification` is the same
+  // situation reached from the sign-in side (403 email_not_verified). Both
+  // offer a resend; `resendState` is deliberately generic (anti-enumeration).
+  const [registeredEmail, setRegisteredEmail] = useState<string | null>(null)
+  const [needsVerification, setNeedsVerification] = useState(false)
+  const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent'>('idle')
   const login = useAuthStore(s => s.login)
   const register = useAuthStore(s => s.register)
   const loginWithSSOTicket = useAuthStore(s => s.loginWithSSOTicket)
@@ -107,14 +114,31 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   function backToLogin() {
     setForgot(false)
     setForgotSent(false)
+    setRegisteredEmail(null)
+    setNeedsVerification(false)
+    setResendState('idle')
+    setIsRegister(false)
     setFormError(null)
     clearError()
+  }
+
+  async function handleResend() {
+    setResendState('sending')
+    try {
+      await authApi.resendVerification(email)
+    } catch {
+      // Same generic confirmation either way so the endpoint can't be used to
+      // probe for accounts.
+    } finally {
+      setResendState('sent')
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     clearError()
     setFormError(null)
+    setNeedsVerification(false)
 
     if (isRegister && password !== confirmPassword) {
       setFormError(t('login.passwordsDoNotMatch'))
@@ -123,14 +147,57 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
 
     try {
       if (isRegister) {
-        await register({email, password}, remember)
+        const outcome = await register({email, password}, remember)
+        if (outcome === 'verification-required') {
+          setRegisteredEmail(email)
+          return
+        }
       } else {
         await login({email, password}, remember)
       }
       onSuccess?.()
-    } catch {
-      // error is set in the store
+    } catch (err) {
+      // The message lands in the store's `error`; the code tells us whether a
+      // resend would help.
+      if (err instanceof ApiError && err.code === 'email_not_verified') setNeedsVerification(true)
     }
+  }
+
+  if (registeredEmail) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-surface-1">
+        <div
+          role="status"
+          className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
+        >
+          <div className="flex flex-col gap-1 mb-2">
+            <h1 className="text-xl font-semibold text-text-primary">{t('login.registeredTitle')}</h1>
+            <p className="text-sm text-text-tertiary">{t('login.registeredBody', {email: registeredEmail})}</p>
+          </div>
+          <p className="text-sm text-text-tertiary">
+            {resendState === 'sent' ? t('login.resendSent') : t('login.notVerifiedHint')}
+          </p>
+          {resendState !== 'sent' && (
+            <Button
+              type="button"
+              variant="secondary"
+              fullWidth
+              icon={Send}
+              loading={resendState === 'sending'}
+              disabled={resendState === 'sending'}
+              onClick={handleResend}
+            >
+              {t('login.resend')}
+            </Button>
+          )}
+          <div className="text-center text-sm text-text-tertiary">
+            <button type="button" className="text-brand-500 hover:underline font-medium" onClick={backToLogin}>
+              {t('login.backToSignIn')}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (forgot) {
@@ -202,6 +269,25 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
             className="px-3 py-2 bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-sm text-semantic-error"
           >
             {error || ssoError || formError}
+          </div>
+        )}
+
+        {needsVerification && (
+          <div className="flex flex-col gap-2 -mt-2 text-sm text-text-tertiary">
+            <span>{resendState === 'sent' ? t('login.resendSent') : t('login.notVerifiedHint')}</span>
+            {resendState !== 'sent' && (
+              <Button
+                type="button"
+                variant="secondary"
+                fullWidth
+                icon={Send}
+                loading={resendState === 'sending'}
+                disabled={resendState === 'sending' || !email}
+                onClick={handleResend}
+              >
+                {t('login.resend')}
+              </Button>
+            )}
           </div>
         )}
 

@@ -120,9 +120,13 @@ const deliveryDrainBudget = 5 * time.Second
 func (s *Scanner) SetEventNotifier(n SSENotifier) { s.sse = n }
 
 // enabled reports whether periodic scanning should run: it needs a backend, an
-// analyzer, at least one notification channel, and a positive interval.
+// analyzer and a positive interval. A deployment-level notification channel
+// (PAD_NOTIFY_*) is NOT required: the sweep also records in-app governance
+// alerts and delivers to each org's own channels, both of which are configured
+// without any env-level channel. Requiring one here left the org channel UI
+// and the alerts inbox silently inert on every deployment that used only them.
 func (s *Scanner) enabled() bool {
-	return s != nil && s.backend != nil && s.analyze != nil && s.notifier.Enabled() && s.interval > 0
+	return s != nil && s.backend != nil && s.analyze != nil && s.interval > 0
 }
 
 // Start launches the periodic scan loop in a background goroutine. It returns
@@ -131,7 +135,7 @@ func (s *Scanner) enabled() bool {
 // Start — it waits for the first tick.
 func (s *Scanner) Start() {
 	if !s.enabled() {
-		logger.Info("scanner: disabled (needs backend, notifier, and a positive interval)")
+		logger.Info("scanner: disabled (needs a storage backend and a positive PAD_SCAN_INTERVAL)")
 		return
 	}
 	logger.Info("scanner: starting", "interval", s.interval.String())

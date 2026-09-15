@@ -1,4 +1,4 @@
-import {describe, it, expect, beforeEach} from 'vitest'
+import {describe, it, expect, beforeEach, vi} from 'vitest'
 import {useChatStore, MAX_CONCURRENT_STREAMS} from './chatStore'
 import type {ChatMessage} from '@/types'
 
@@ -432,5 +432,75 @@ describe('queued follow-up messages (U1.6)', () => {
     st.queueMessage('t1', {text: 'first', files: []})
     st.queueMessage('t1', {text: 'second', files: []})
     expect(useChatStore.getState().takeQueuedMessage('t1')?.text).toBe('second')
+  })
+})
+
+// ---- thread persistence (conversation keys must survive a reload) ----
+
+describe('thread persistence', () => {
+  const stored: Record<string, string> = {}
+  const fakeStorage = {
+    getItem: (k: string) => stored[k] ?? null,
+    setItem: (k: string, v: string) => {
+      stored[k] = v
+    },
+    removeItem: (k: string) => {
+      delete stored[k]
+    },
+  }
+
+  beforeEach(() => {
+    for (const k of Object.keys(stored)) delete stored[k]
+    vi.stubGlobal('localStorage', fakeStorage)
+  })
+
+  it('restores a flow’s threads with the same ids so their conversations stay reachable', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const b = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().updateThread(b, {title: 'second', contextBlockId: 'blk-1', useTools: true})
+    useChatStore.getState().createThread('other-flow')
+
+    // Simulate a reload: the in-memory store is empty, localStorage is not.
+    useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
+
+    const ids = useChatStore.getState().hydrateThreads('flow1')
+    expect(ids).toEqual([a, b])
+    const state = useChatStore.getState()
+    expect(state.activeThreadId).toBe(b)
+    expect(state.threads.find(t => t.id === b)).toMatchObject({
+      flowId: 'flow1',
+      title: 'second',
+      contextBlockId: 'blk-1',
+      useTools: true,
+    })
+    // Other flows are untouched by a per-flow hydrate.
+    expect(state.threads.some(t => t.flowId === 'other-flow')).toBe(false)
+    // Conversations are NOT pre-populated: the restore effect loads them by key.
+    expect(state.conversations.has(a)).toBe(false)
+  })
+
+  it('returns the existing ids without touching storage when threads are already loaded', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    stored['baki:chatThreads:v1:flow1'] = JSON.stringify([{id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'}])
+    expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([a])
+    expect(useChatStore.getState().threads).toHaveLength(1)
+  })
+
+  it('drops closed threads from storage and ignores malformed entries', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    const b = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().closeThread(a)
+    stored['baki:chatThreads:v1:flow2'] = JSON.stringify([{id: 'not-a-uuid', flowId: 'flow2'}, 'garbage', null])
+
+    useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
+    expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([b])
+    expect(useChatStore.getState().hydrateThreads('flow2')).toEqual([])
+  })
+
+  it('removes the key when the last thread of a flow is cleared', () => {
+    useChatStore.getState().createThread('flow1')
+    expect(stored['baki:chatThreads:v1:flow1']).toBeDefined()
+    useChatStore.getState().clearFlowThreads('flow1')
+    expect(stored['baki:chatThreads:v1:flow1']).toBeUndefined()
   })
 })

@@ -471,7 +471,7 @@ describe('useChatStreamEngine', () => {
 
       expect(chatApi.saveConversation).toHaveBeenCalledWith(
         'flow-A',
-        'block1',
+        'threadA',
         expect.arrayContaining([expect.objectContaining({role: 'assistant', content: 'hello from A'})]),
       )
       // Must NOT have saved under the switched-to doc.
@@ -949,7 +949,7 @@ describe('useChatStreamEngine', () => {
       // The trail is persisted with the conversation save.
       expect(chatApi.saveConversation).toHaveBeenCalledWith(
         'flow-1',
-        'flow',
+        'threadA',
         expect.arrayContaining([
           expect.objectContaining({toolCalls: committed.toolCalls, fixProposals: committed.fixProposals}),
         ]),

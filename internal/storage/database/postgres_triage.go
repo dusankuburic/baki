@@ -22,13 +22,19 @@ func (b *PostgresStorageBackend) SetFindingStatus(ctx context.Context, st *inter
 		ON CONFLICT (flow_id, finding_key) DO UPDATE SET
 			rule_id = EXCLUDED.rule_id,
 			status = EXCLUDED.status,
-			justification = EXCLUDED.justification,
+			justification = COALESCE(NULLIF(EXCLUDED.justification, ''), finding_status.justification),
 			assignee_id = EXCLUDED.assignee_id,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = NOW()`,
 		st.FlowID, st.FindingKey, st.RuleID, st.Status, st.Justification, st.AssigneeID, st.UpdatedBy)
 	return err
 }
+
+// The justification COALESCE above (and in buildFindingStatusUpsert) keeps a
+// previously recorded risk-acceptance reason when a later status change omits
+// one: the status menu sends only {status, assignee}, and a plain overwrite
+// erased the reason entered at suppression time. Clearing a finding's triage
+// (DeleteFindingStatus) remains the way to drop a justification.
 
 // batchExec is the executor subset both tx paths satisfy, so the multi-row
 // loop is shared between the RLS-middleware tx and the self-opened tx.
@@ -62,7 +68,7 @@ func buildFindingStatusUpsert(flowID string, batch []*interfaces.FindingStatus) 
 		ON CONFLICT (flow_id, finding_key) DO UPDATE SET
 			rule_id = EXCLUDED.rule_id,
 			status = EXCLUDED.status,
-			justification = EXCLUDED.justification,
+			justification = COALESCE(NULLIF(EXCLUDED.justification, ''), finding_status.justification),
 			assignee_id = EXCLUDED.assignee_id,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = NOW()`)

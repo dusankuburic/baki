@@ -8,6 +8,7 @@ const createApiToken = vi.fn()
 const revokeApiToken = vi.fn()
 
 vi.mock('@/api/auth', () => ({
+  API_TOKEN_SCOPES: ['read', 'write', 'chat', 'admin'],
   authApi: {
     listApiTokens: (...a: unknown[]) => listApiTokens(...a),
     createApiToken: (...a: unknown[]) => createApiToken(...a),
@@ -49,7 +50,7 @@ describe('ApiTokensPanel', () => {
     fireEvent.change(screen.getByPlaceholderText(/Name/i), {target: {value: 'new'}})
     fireEvent.click(screen.getByRole('button', {name: /Create/i}))
 
-    await waitFor(() => expect(createApiToken).toHaveBeenCalledWith('new', undefined))
+    await waitFor(() => expect(createApiToken).toHaveBeenCalledWith('new', undefined, ['read', 'write']))
     // The raw secret is shown in the one-time reveal banner.
     expect(await screen.findByText('pad_pat_secret123')).toBeInTheDocument()
   })
@@ -63,7 +64,7 @@ describe('ApiTokensPanel', () => {
     fireEvent.change(screen.getByPlaceholderText(/Expires/i), {target: {value: '30'}})
     fireEvent.click(screen.getByRole('button', {name: /Create/i}))
 
-    await waitFor(() => expect(createApiToken).toHaveBeenCalledWith('temp', 30))
+    await waitFor(() => expect(createApiToken).toHaveBeenCalledWith('temp', 30, ['read', 'write']))
   })
 
   it('shows an error when listing fails', async () => {

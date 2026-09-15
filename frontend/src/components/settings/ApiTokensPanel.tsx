@@ -1,10 +1,15 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {KeyRound, Plus, Trash2, Copy, Check, AlertCircle, AlertTriangle} from 'lucide-react'
-import {authApi, type ApiToken, type CreatedApiToken} from '@/api/auth'
+import {authApi, API_TOKEN_SCOPES, type ApiToken, type ApiTokenScope, type CreatedApiToken} from '@/api/auth'
 import {writeClipboard} from '@/lib/clipboard'
 import {Button, Input, Spinner, useToast, useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
+
+// Least-privilege default for a CI/automation token: it can read reports and
+// save flows / triage, but cannot spend AI budget (chat) or touch admin
+// routes. Unchecking everything mints an unscoped token (full access).
+const DEFAULT_SCOPES: ApiTokenScope[] = ['read', 'write']
 
 /**
  * Cloud-only Settings panel for machine API tokens (personal access tokens):
@@ -16,7 +21,16 @@ export default function ApiTokensPanel() {
   const {t} = useTranslation('settings')
   const [name, setName] = useState('')
   const [expiresDays, setExpiresDays] = useState('')
+  const [scopes, setScopes] = useState<ApiTokenScope[]>(DEFAULT_SCOPES)
   const [expiryError, setExpiryError] = useState<string | null>(null)
+
+  const toggleScope = (scope: ApiTokenScope) =>
+    setScopes(prev => (prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope]))
+
+  const scopeLabel = (tok: ApiToken) =>
+    tok.scopes && tok.scopes.length > 0
+      ? tok.scopes.map(s => t(`tokens.scope.${s}`)).join(', ')
+      : t('tokens.fullAccess')
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<CreatedApiToken | null>(null) // one-time secret reveal
   const [copied, setCopied] = useState(false)
@@ -48,11 +62,12 @@ export default function ApiTokensPanel() {
     setCreating(true)
     try {
       const days = parseInt(expiresDays, 10)
-      const tok = await authApi.createApiToken(n, Number.isFinite(days) && days > 0 ? days : undefined)
+      const tok = await authApi.createApiToken(n, Number.isFinite(days) && days > 0 ? days : undefined, scopes)
       setCreated(tok)
       setCopied(false)
       setName('')
       setExpiresDays('')
+      setScopes(DEFAULT_SCOPES)
       load()
     } catch (e) {
       toast.error(t('tokens.createFailed', {message: e instanceof Error ? e.message : String(e)}))
@@ -159,6 +174,27 @@ export default function ApiTokensPanel() {
             {expiryError}
           </p>
         )}
+        <fieldset className="space-y-1.5">
+          <legend className="text-xs font-medium text-text-secondary">{t('tokens.scopesLabel')}</legend>
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+            {API_TOKEN_SCOPES.map(scope => (
+              <label key={scope} className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="accent-brand-500 w-3.5 h-3.5"
+                  checked={scopes.includes(scope)}
+                  onChange={() => toggleScope(scope)}
+                  aria-label={t(`tokens.scope.${scope}`)}
+                />
+                <span>{t(`tokens.scope.${scope}`)}</span>
+                <span className="text-text-tertiary">— {t(`tokens.scopeHelp.${scope}`)}</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-2xs text-text-tertiary">
+            {scopes.length === 0 ? t('tokens.scopesNoneHint') : t('tokens.scopesHint')}
+          </p>
+        </fieldset>
       </div>
 
       {/* Existing tokens */}
@@ -195,6 +231,8 @@ export default function ApiTokensPanel() {
                   {tok.expiresAt
                     ? t('tokens.expiresOn', {date: new Date(tok.expiresAt).toLocaleDateString()})
                     : t('tokens.neverExpires')}
+                  {' · '}
+                  <span title={t('tokens.scopesLabel')}>{scopeLabel(tok)}</span>
                 </p>
               </div>
               <Button

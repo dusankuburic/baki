@@ -153,7 +153,7 @@ describe('useAIChat send/stream/commit', () => {
     expect(useChatStore.getState().streams[threadId]).toBeUndefined()
     expect(chatApi.saveConversation).toHaveBeenCalledWith(
       'flow1',
-      'flow',
+      threadId,
       expect.arrayContaining([
         expect.objectContaining({role: 'user', content: 'hello'}),
         expect.objectContaining({role: 'assistant', content: 'Hello!'}),

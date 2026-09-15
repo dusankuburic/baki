@@ -192,15 +192,107 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	}
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRegister, "user", user.ID, nil)
+	userJSON := map[string]any{
+		"id":    user.ID,
+		"email": user.Email,
+		"role":  user.Role,
+	}
+	if user.EmailVerified {
+		// No verification round trip is pending (the bootstrap admin is created
+		// verified — see CreateUser), so issue the session directly instead of
+		// sending the user to a login they would immediately pass anyway.
+		pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role)
+		if !ok {
+			return
+		}
+		render.JSON(w, map[string]any{
+			"status":               "ok",
+			"user":                 userJSON,
+			"verificationRequired": false,
+			"accessToken":          pair.AccessToken,
+			"refreshToken":         pair.RefreshToken,
+			"expiresAt":            pair.ExpiresAt,
+			"refreshId":            pair.RefreshID,
+			"refreshExpiresAt":     pair.RefreshExpiresAt,
+		})
+		return
+	}
 	h.authSvc.SendVerificationEmail(r.Context(), user)
+	// verificationRequired tells the client this is NOT a session: the user
+	// must follow the emailed link (or ask for a resend) before logging in.
 	render.JSON(w, map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"role":  user.Role,
-		},
+		"status":               "ok",
+		"user":                 userJSON,
+		"verificationRequired": true,
 	})
+}
+
+// issueSession mints a token pair, persists the refresh token, sets the
+// HttpOnly refresh cookie and records the login audit event — the tail every
+// successful credential exchange shares. On failure it has already written the
+// error response and returns ok=false.
+func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userID, email string, role auth.Role) (*auth.TokenPair, bool) {
+	pair, err := h.security.AuthMgr.Issue(userID, email, role)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return nil, false
+	}
+
+	if h.tokenStore != nil {
+		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
+		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, userID, pair.RefreshExpiresAt, ua, ip); err != nil {
+			render.Error(w, err, http.StatusInternalServerError)
+			return nil, false
+		}
+	}
+
+	// Set the HttpOnly refresh cookie. The body field is still returned by
+	// callers for backward compatibility with existing clients.
+	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
+
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", userID, nil)
+	return pair, true
+}
+
+// @Summary      Resend email verification
+// @Description  Re-sends the verification link for a registered, still-unverified address. Always returns 200 so the endpoint cannot be used to probe which emails exist.
+// @Tags         auth
+// @Param        request body object true "request"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} map[string]interface{} "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/auth/resend-verification [post]
+func (h *AuthHandler) handleAuthResendVerification(w http.ResponseWriter, r *http.Request) {
+	if !h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("email verification not available in local mode"), http.StatusForbidden)
+		return
+	}
+	metrics.RecordAuthOp("resend_verification")
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	ok := map[string]string{"status": "ok"}
+	email, err := validateEmail(req.Email)
+	if err != nil || h.backend == nil {
+		render.JSON(w, ok) // never reveal validation/availability details
+		return
+	}
+
+	user, err := h.authSvc.ResendVerification(r.Context(), email)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	if user != nil {
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionRegister, "user", user.ID, map[string]string{"step": "verification_resent"})
+	}
+	render.JSON(w, ok)
 }
 
 // @Summary      Login user
@@ -258,30 +350,17 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	case service.LoginEmailNotVerified:
 		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLoginFailure, "user", result.User.ID, map[string]string{"reason": "email_not_verified"})
-		render.Error(w, fmt.Errorf("email not verified — check your inbox for a verification link"), http.StatusForbidden)
+		// Machine-readable code so the login page can offer "resend the link"
+		// instead of a bare error (see handleAuthResendVerification).
+		render.ErrorWithCode(w, fmt.Errorf("email not verified — check your inbox for a verification link"), http.StatusForbidden, "email_not_verified")
 		return
 	}
 	user := result.User
 
-	pair, err := h.security.AuthMgr.Issue(user.ID, user.Email, user.Role)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+	pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role)
+	if !ok {
 		return
 	}
-
-	if h.tokenStore != nil {
-		ua, ip := r.UserAgent(), middleware.ClientIP(r, h.security.TrustedProxies)
-		if err := h.tokenStore.StoreRefreshToken(r.Context(), pair.RefreshID, user.ID, pair.RefreshExpiresAt, ua, ip); err != nil {
-			render.Error(w, err, http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Set the HttpOnly refresh cookie. The body field is still returned below
-	// for backward compatibility with existing clients.
-	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt)
-
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionLogin, "user", user.ID, nil)
 	render.JSON(w, pair)
 }
 

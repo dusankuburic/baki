@@ -205,7 +205,9 @@ func (a mailSvcAdapter) SendAlert(ctx context.Context, to, subject, plainBody, h
 }
 
 // provideScanner wires the periodic flow scanner. A zero/invalid interval or a
-// missing backend/channel leaves it disabled, so it is opt-in and cloud-only.
+// missing backend leaves it disabled, so it is opt-in and cloud-only. The
+// env-level notifier is optional: alerts are always recorded in-app and routed
+// to each org's own channels; PAD_NOTIFY_* only adds a deployment-wide sink.
 func provideScanner(cfg *config.Config, backend storageif.StorageBackend, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, eventMgr *api.EventManager) *scanner.Scanner {
 	var analyze scanner.AnalyzeFunc
 	if analysisSvc != nil {

@@ -1,5 +1,5 @@
 import {useState, useEffect, useRef} from 'react'
-import {useChatStore, type ChatThread} from '@/stores/chatStore'
+import {useChatStore, conversationKey, LEGACY_FLOW_SCOPE, type ChatThread} from '@/stores/chatStore'
 import {chatApi, flowApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {parseChatMessages} from '@/lib/chatMessage'
@@ -18,6 +18,7 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
 
   const appendMessage = useChatStore(s => s.appendMessage)
   const createThread = useChatStore(s => s.createThread)
+  const hydrateThreads = useChatStore(s => s.hydrateThreads)
   const updateThread = useChatStore(s => s.updateThread)
 
   // sourceFilesRef mirrors sourceFiles so the thread-creation effect (which
@@ -77,20 +78,34 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
       return
     }
     createdForDocRef.current = doc.id
+    // Persisted threads come back with their ids, so their conversations are
+    // reachable under the same keys; the active-thread effect below loads them.
+    if (hydrateThreads(doc.id).length > 0) return
     const id = createThread(doc.id)
     const files = sourceFilesRef.current
     if (files.length > 0) {
       updateThread(id, {selectedSourceFiles: files.map(f => f.filename)})
     }
     let cancelled = false
+    // No persisted threads: this flow's history (if any) still lives under the
+    // legacy flow-wide key. Load it into the new thread and mirror it under the
+    // thread's own key, which is what the server reconstructs from on the next
+    // turn — without the mirror the model would answer with no history while
+    // the panel showed the old messages.
     chatApi
-      .getConversation(doc.id, 'flow')
+      .getConversation(doc.id, LEGACY_FLOW_SCOPE)
       .then((conv: ConversationFile) => {
         if (cancelled) return
         // Validate the backend payload at the boundary instead of trusting the
         // shape (F5): malformed entries are dropped before reaching the store.
-        for (const m of parseChatMessages(conv?.messages)) {
+        const restored = parseChatMessages(conv?.messages)
+        for (const m of restored) {
           appendMessage(id, m)
+        }
+        if (restored.length > 0) {
+          chatApi.saveConversation(doc.id, conversationKey({id}), restored).catch(err => {
+            logger.warn('Failed to migrate legacy conversation to thread key', err)
+          })
         }
       })
       .catch(err => {
@@ -99,14 +114,15 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
     return () => {
       cancelled = true
     }
-  }, [doc?.id, doc, flowThreads.length, createThread, updateThread, appendMessage])
+  }, [doc?.id, doc, flowThreads.length, createThread, hydrateThreads, updateThread, appendMessage])
 
   useEffect(() => {
     if (!activeThreadId || !doc?.id) return
     const existing = useChatStore.getState().conversations.get(activeThreadId)
     if (existing !== undefined) return
     const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
-    const scope = thread?.contextBlockId || 'flow'
+    if (!thread) return
+    const scope = conversationKey(thread)
     let cancelled = false
     chatApi
       .getConversation(doc.id, scope)

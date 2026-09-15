@@ -160,6 +160,9 @@ var authRateLimitPaths = map[string]struct{}{
 	// looser general one so they can't be flooded by rotating source IPs.
 	"/api/auth/verify-email": {},
 	"/api/auth/sso/exchange": {},
+	// resend-verification sends email for any known unverified address; the
+	// tighter bucket is what stops it becoming an SMTP-flooding primitive.
+	"/api/auth/resend-verification": {},
 }
 
 // expensiveGetPaths are unauthenticated GETs that resolve a flow and run the

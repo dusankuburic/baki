@@ -199,6 +199,10 @@ func TestHandleAuthLogin_ReturnsTokenPair(t *testing.T) {
 // and immediately gets a working session.
 func TestHandleAuthLogin_UnverifiedEmail_Returns403(t *testing.T) {
 	rt := newJWTTestRouter(t)
+	// The very first registration is the bootstrap admin, which is created
+	// verified (see CreateUser) — consume that slot so the user under test is
+	// an ordinary, unverified registration.
+	login(t, rt, "founder@example.com", "Password123!")
 	// Register (leaves EmailVerified=false) but do NOT call login(), which
 	// would verify the email.
 	rrReg := doRequestWithAuth(t, rt, http.MethodPost, "/api/auth/register", "", map[string]any{
