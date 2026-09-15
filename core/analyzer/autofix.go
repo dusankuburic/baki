@@ -367,16 +367,11 @@ func WrapInErrorHandlerPatch(block *models.Block) models.Patch {
 // need to adjust it to PAD's actual property name (Document/Connection/etc.)
 // when importing back, but the finding is resolved structurally.
 func InsertClosePatch(block *models.Block) models.Patch {
-	var closePrefix string
-	for _, p := range resourcePairs {
-		if strings.HasPrefix(block.RawType, p.openPrefix) {
-			closePrefix = p.closePrefix
-			break
-		}
-	}
-	if closePrefix == "" {
+	pair := matchResourcePair(block.RawType)
+	if pair == nil {
 		return models.Patch{}
 	}
+	closePrefix := pair.closeActionName()
 	outputVar := block.Properties["_output"]
 	if outputVar == "" {
 		outputVar = block.Properties["output"]

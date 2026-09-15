@@ -10,27 +10,41 @@ import type {DependencyAnalysis} from '@/types'
 
 cytoscape.use(dagre)
 
-// RuleDependencyView renders the analyzer's rule-dependency DAG
-// (GET /api/analysis/dependencies). It shows
-// how the 29 rules depend on each other, the topological evaluation order, and
-// any cycles (an analyzer-internal health signal). Static: not flow-specific.
+// RelatedRulesResponse is the dependencies payload plus the provenance fields
+// the backend now sends. Kept local: the shared DependencyAnalysis type is
+// unchanged, and the fields are optional so an older backend still renders.
+type RelatedRulesResponse = DependencyAnalysis & {editorial?: boolean; description?: string}
+
+// EDITORIAL_NOTE is the fallback help text when the backend does not send
+// `description`; it says the same thing the backend does.
+const EDITORIAL_NOTE =
+  'Hand-maintained editorial map of rules whose findings are worth reviewing together. ' +
+  'It is not derived from the analyzer and has no effect on evaluation order or results.'
+
+// RuleDependencyView renders the analyzer's "related rules" map
+// (GET /api/analysis/dependencies): a hand-maintained, editorial list of rule
+// pairs whose findings are worth reviewing together, drawn as a graph. Rules
+// run independently, so this is NOT an execution-order dependency graph — the
+// payload says so (`editorial: true` + `description`), and so does the header.
+// A cycle in the map is a map-authoring error, not an analyzer fault. Static:
+// not flow-specific.
 export default function RuleDependencyView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [data, setData] = useState<DependencyAnalysis | null>(null)
+  const [data, setData] = useState<RelatedRulesResponse | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
-  // The DAG is static (rule catalog structure, not flow-specific), so keep the
+  // The map is static (editorial content, not flow-specific), so keep the
   // last fetch in a ref: theme-driven instance rebuilds re-render from it
   // instead of re-hitting the API. The Refresh button remains the explicit
   // re-fetch path.
-  const dataRef = useRef<DependencyAnalysis | null>(null)
+  const dataRef = useRef<RelatedRulesResponse | null>(null)
 
-  // renderGraph paints a fetched DAG into the current cytoscape instance.
+  // renderGraph paints a fetched map into the current cytoscape instance.
   const renderGraph = (dep: DependencyAnalysis) => {
     const cy = cyRef.current
     if (!cy) return
@@ -68,7 +82,7 @@ export default function RuleDependencyView() {
     cy.fit(undefined, 40)
   }
 
-  // load fetches the rule-dependency DAG and renders it into the cytoscape
+  // load fetches the related-rules map and renders it into the cytoscape
   // instance. Declared before the instance-creation effect so that effect can
   // call it for the initial paint without tripping no-use-before-define.
   const load = async () => {
@@ -76,14 +90,14 @@ export default function RuleDependencyView() {
     setLoading(true)
     setError(null)
     try {
-      const dep = await analysisApi.getDependencies()
+      const dep: RelatedRulesResponse = await analysisApi.getDependencies()
       setData(dep)
       dataRef.current = dep
       if (cyRef.current && cyRef.current === inst) renderGraph(dep)
     } catch (err) {
       if (cyRef.current === inst) {
         setError(err instanceof Error ? err.message : String(err))
-        logger.warn('rule dependency view: load failed', err)
+        logger.warn('related rules view: load failed', err)
       }
     } finally {
       if (cyRef.current === inst) setLoading(false)
@@ -159,7 +173,7 @@ export default function RuleDependencyView() {
     })
 
     cyRef.current = instance
-    // First mount fetches; theme rebuilds re-render the cached DAG without a
+    // First mount fetches; theme rebuilds re-render the cached map without a
     // redundant HTTP round trip (the data doesn't change with theme).
     if (dataRef.current) {
       renderGraph(dataRef.current)
@@ -193,10 +207,10 @@ export default function RuleDependencyView() {
           >
             ← Back
           </button>
-          <h2 className="text-sm font-semibold text-text-primary">Rule Dependency Graph</h2>
+          <h2 className="text-sm font-semibold text-text-primary">Related rules</h2>
           {data && (
             <span className="text-2xs text-text-tertiary font-mono">
-              {(data.dependencies ?? []).length} edges · {(data.topoOrder ?? []).length} rules
+              {(data.dependencies ?? []).length} links · {(data.topoOrder ?? []).length} rules
             </span>
           )}
         </div>
@@ -208,6 +222,11 @@ export default function RuleDependencyView() {
           <RefreshCw size={13} />
         </button>
       </div>
+
+      {/* Provenance: this is an editorial map, not an analyzer-derived graph. */}
+      <p className="absolute top-11 left-3 right-3 text-2xs text-text-tertiary pointer-events-none">
+        {data?.description || EDITORIAL_NOTE}
+      </p>
 
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-surface-1/60 backdrop-blur-sm">
@@ -226,7 +245,7 @@ export default function RuleDependencyView() {
         <div className="absolute top-16 left-3 right-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400 pointer-events-none">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <div>
-            <span className="font-semibold">Circular dependency detected:</span>{' '}
+            <span className="font-semibold">Circular reference in the related-rules map:</span>{' '}
             {(data?.cycles ?? []).map((c, i) => (
               <span key={i} className="font-mono">
                 {c.join(' → ')}
@@ -253,7 +272,7 @@ export default function RuleDependencyView() {
             </button>
           </div>
           {selectedDeps.length === 0 ? (
-            <p className="text-text-tertiary">No dependency edges.</p>
+            <p className="text-text-tertiary">No related rules listed.</p>
           ) : (
             <ul className="space-y-1">
               {selectedDeps.map((d, i) => (
@@ -282,7 +301,7 @@ export default function RuleDependencyView() {
   )
 }
 
-// shortReason trims a dependency reason for the edge label (full text is in the
+// shortReason trims a relation's reason for the edge label (full text is in the
 // side panel when a connected node is tapped).
 function shortReason(r: string): string {
   if (!r) return ''

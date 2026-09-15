@@ -284,3 +284,25 @@ func TestFnvHasher_ByteSemantics(t *testing.T) {
 		t.Fatalf("collision: byte-iterating FNV-1a of \"\\xc3\\xa9\" == \"\\xe9\" (%s); expected distinct", got)
 	}
 }
+
+// TestAnalyzeRuleDependencies_IsLabelledEditorial: the payload must say what it
+// is — a hand-maintained related-rules map — so no consumer presents it as an
+// execution-order dependency graph again.
+func TestAnalyzeRuleDependencies_IsLabelledEditorial(t *testing.T) {
+	da := AnalyzeRuleDependencies()
+	if !da.Editorial {
+		t.Error("Editorial must be true")
+	}
+	if da.Description != RelatedRulesDescription || da.Description == "" {
+		t.Errorf("Description = %q", da.Description)
+	}
+	catalog := map[string]bool{}
+	for _, r := range AllRules() {
+		catalog[r.ID()] = true
+	}
+	for _, d := range relatedRules {
+		if !catalog[d.FromRuleID] || !catalog[d.ToRuleID] {
+			t.Errorf("related-rules entry names a rule not in the catalog: %+v", d)
+		}
+	}
+}

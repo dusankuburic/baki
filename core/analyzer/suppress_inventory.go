@@ -26,6 +26,10 @@ type SuppressionEntry struct {
 // and audits staleness against the UNSUPPRESSED findings (rules as they would
 // fire without any suppression). The governance concern: suppressions are
 // write-only today — nothing lists them or flags the ones masking nothing.
+//
+// A directive in a subflow header (its leading comment lines) has two targets —
+// the next concrete block AND the block-less / header-anchored findings the
+// header scope covers (see inlineSuppressions) — and is live if either fires.
 func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *models.AppSettings) []SuppressionEntry {
 	if flow == nil {
 		return nil
@@ -33,7 +37,14 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 	// Unsuppressed findings: dispatch every rule over the SAME context the
 	// engine builds (runAnalysisCore applies inline suppression at the end;
 	// we want the pre-suppression truth). One buildContext + one walk.
-	firing := map[string]map[string]bool{} // blockID -> ruleID set
+	firing := map[string]map[string]bool{}    // blockID -> ruleID set
+	blockless := map[string]map[string]bool{} // subflowID -> ruleID set, findings with no block
+	record := func(m map[string]map[string]bool, key, rule string) {
+		if m[key] == nil {
+			m[key] = map[string]bool{}
+		}
+		m[key][rule] = true
+	}
 	ctx := buildContext(flow, settings)
 	var check func(blocks []models.Block)
 	check = func(blocks []models.Block) {
@@ -47,10 +58,11 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 						}
 					}
 					for _, f := range rule.Check(b, ctx) {
-						if firing[b.ID] == nil {
-							firing[b.ID] = map[string]bool{}
+						if f.BlockID == "" {
+							record(blockless, f.SubflowID, f.RuleID)
+							continue
 						}
-						firing[b.ID][f.RuleID] = true
+						record(firing, b.ID, f.RuleID)
 					}
 				}
 			}
@@ -62,10 +74,65 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 	for i := range flow.Subflows {
 		check(flow.Subflows[i].Blocks)
 	}
+	// Mirror the engine's document-level parse-error fallback (engine.go): when
+	// no block produced a parse-error finding, the errors are reported with an
+	// empty BlockID against the first subflow.
+	if len(flow.ParseErrors) > 0 && parseErrorRuleEnabled(settings) {
+		fired := false
+		for _, set := range firing {
+			if set["parse-error"] {
+				fired = true
+				break
+			}
+		}
+		if !fired {
+			sfID := ""
+			if len(flow.Subflows) > 0 {
+				sfID = flow.Subflows[0].ID
+			}
+			record(blockless, sfID, "parse-error")
+		}
+	}
+
+	// setFires reports whether rule ("*" = any) fires within set.
+	setFires := func(set map[string]bool, rule string) bool {
+		if rule == "*" {
+			return len(set) > 0
+		}
+		return set[rule]
+	}
+	// headerScope describes the header of one subflow for the walk below.
+	type headerScope struct {
+		sfID       string
+		file       bool     // this header is also the file scope
+		commentIDs []string // the leading comment blocks themselves
+	}
+	headerFires := func(h *headerScope, rule string) bool {
+		if h == nil {
+			return false
+		}
+		if setFires(blockless[h.sfID], rule) {
+			return true
+		}
+		if h.file {
+			for _, set := range blockless {
+				if setFires(set, rule) {
+					return true
+				}
+			}
+		}
+		for _, id := range h.commentIDs {
+			if setFires(firing[id], rule) {
+				return true
+			}
+		}
+		return false
+	}
 
 	var entries []SuppressionEntry
-	var walk func(blocks []models.Block, subflowName string)
-	walk = func(blocks []models.Block, subflowName string) {
+	var walk func(blocks []models.Block, subflowName string, header *headerScope)
+	walk = func(blocks []models.Block, subflowName string, header *headerScope) {
+		inHeader := header != nil
 		for i := range blocks {
 			b := &blocks[i]
 			if b.Type == models.BlockTypeComment {
@@ -88,7 +155,6 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 								e.BlockLabel = next.RawType
 							}
 							e.BlockType = string(next.Type)
-							fires := firing[next.ID] != nil && firing[next.ID][rule]
 							if rule == "*" {
 								// Wildcards: stale only when NO rule fires on
 								// the block at all.
@@ -97,7 +163,7 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 									e.Reason = "no rule currently fires on this block"
 								}
 							} else {
-								e.Stale = !fires
+								e.Stale = !firing[next.ID][rule]
 								if e.Stale {
 									if len(firing[next.ID]) == 0 {
 										e.Reason = "no rule currently fires on this block"
@@ -110,18 +176,36 @@ func SuppressionInventory(flow *models.FlowDocument, rules []Rule, settings *mod
 							e.Stale = true
 							e.Reason = "directive has no following block"
 						}
+						// A header directive is live when its subflow/file
+						// scope currently silences something, whatever the
+						// next block does.
+						if inHeader && e.Stale && headerFires(header, rule) {
+							e.Stale = false
+							e.Reason = ""
+							if next == nil {
+								e.BlockLabel = "<subflow header>"
+							}
+						}
 						entries = append(entries, e)
 					}
 				}
 				continue
 			}
+			inHeader = false
 			if len(b.Children) > 0 {
-				walk(b.Children, subflowName)
+				walk(b.Children, subflowName, nil)
 			}
 		}
 	}
+	fileScoped := false
 	for i := range flow.Subflows {
-		walk(flow.Subflows[i].Blocks, flow.Subflows[i].Name)
+		sf := &flow.Subflows[i]
+		h := &headerScope{sfID: sf.ID, commentIDs: leadingCommentIDs(sf.Blocks)}
+		if !fileScoped && len(sf.Blocks) > 0 {
+			fileScoped = true
+			h.file = true
+		}
+		walk(sf.Blocks, sf.Name, h)
 	}
 	sort.SliceStable(entries, func(a, b int) bool {
 		if entries[a].Line != entries[b].Line {

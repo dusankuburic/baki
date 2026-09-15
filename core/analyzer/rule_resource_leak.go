@@ -10,19 +10,56 @@ import (
 type resourcePair struct {
 	openPrefix  string
 	closePrefix string
+	// closeAction is the concrete action named in the suggestion and emitted by
+	// the insert-close fixer. Empty means closePrefix is itself a real action.
+	closeAction string
 	label       string
 }
 
 // Each entry covers one resource lifecycle. The open prefix must be specific enough
-// that it doesn't match unrelated actions; the close prefix is matched as a HasPrefix
-// so partial module names (e.g. "Excel.Close") catch all Close variants.
+// that it doesn't match unrelated actions; both prefixes are matched with a
+// case-insensitive HasPrefix (hasPrefixFold), so partial module names (e.g.
+// "Excel.Close") catch all Close variants and exporter casing differences
+// ("Ftp." vs "FTP.") do not matter.
 var resourcePairs = []resourcePair{
-	{"File.OpenTextFile", "File.CloseTextFile", "file"},
-	{"Database.Connect", "Database.Close", "database connection"},
-	{"Excel.LaunchExcel", "Excel.Close", "Excel instance"},
-	{"Excel.AttachToRunningExcel", "Excel.Close", "Excel instance"},
-	{"Outlook.Launch", "Outlook.Close", "Outlook instance"},
-	{"SAP.Login", "SAP.Logout", "SAP session"},
+	{openPrefix: "File.OpenTextFile", closePrefix: "File.CloseTextFile", label: "file"},
+	{openPrefix: "Database.Connect", closePrefix: "Database.Close", label: "database connection"},
+	// Database.OpenSQLConnection / Database.OpenODBCConnection.
+	{openPrefix: "Database.Open", closePrefix: "Database.Close", label: "database connection"},
+	// FTP.OpenConnection / FTP.OpenSecureConnection.
+	{openPrefix: "FTP.Open", closePrefix: "FTP.CloseConnection", label: "FTP connection"},
+	{openPrefix: "Excel.LaunchExcel", closePrefix: "Excel.Close", label: "Excel instance"},
+	{openPrefix: "Excel.AttachToRunningExcel", closePrefix: "Excel.Close", label: "Excel instance"},
+	{openPrefix: "Outlook.Launch", closePrefix: "Outlook.Close", label: "Outlook instance"},
+	{openPrefix: "SAP.Login", closePrefix: "SAP.Logout", label: "SAP session"},
+	// WebAutomation.LaunchChrome / LaunchEdge / LaunchFirefox / LaunchBrowser,
+	// released by CloseWebBrowser (or CloseBrowser / CloseWindow).
+	{openPrefix: "WebAutomation.Launch", closePrefix: "WebAutomation.Close", closeAction: "WebAutomation.CloseWebBrowser", label: "web browser instance"},
+}
+
+// hasPrefixFold is strings.HasPrefix without case sensitivity.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// matchResourcePair returns the resource lifecycle opened by rawType, or nil.
+// Shared by the rule and the insert-close fixer so they cannot disagree about
+// which actions open a resource.
+func matchResourcePair(rawType string) *resourcePair {
+	for i := range resourcePairs {
+		if hasPrefixFold(rawType, resourcePairs[i].openPrefix) {
+			return &resourcePairs[i]
+		}
+	}
+	return nil
+}
+
+// closeActionName is the action the suggestion/fixer should name for the pair.
+func (p *resourcePair) closeActionName() string {
+	if p.closeAction != "" {
+		return p.closeAction
+	}
+	return p.closePrefix
 }
 
 type ResourceLeakRule struct{}
@@ -36,13 +73,7 @@ func (r *ResourceLeakRule) DefaultSeverity() models.Severity { return models.Sev
 func (r *ResourceLeakRule) Category() string                 { return "Reliability" }
 
 func (r *ResourceLeakRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
-	var matched *resourcePair
-	for i := range resourcePairs {
-		if strings.HasPrefix(block.RawType, resourcePairs[i].openPrefix) {
-			matched = &resourcePairs[i]
-			break
-		}
-	}
+	matched := matchResourcePair(block.RawType)
 	if matched == nil {
 		return nil
 	}
@@ -68,7 +99,7 @@ func (r *ResourceLeakRule) Check(block *models.Block, ctx *RuleContext) []models
 			"%) but no matching close action was found in the flow.",
 		BlockID:   block.ID,
 		SubflowID: block.SubflowID,
-		Suggestion: "Add a '" + matched.closePrefix + "' action to release the resource. " +
+		Suggestion: "Add a '" + matched.closeActionName() + "' action to release the resource. " +
 			"Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.",
 		Metadata: map[string]any{"resource": matched.label, "variable": outputVar},
 	}}
@@ -118,7 +149,7 @@ func buildClosedResourceVars(ctx *RuleContext) map[string]map[string]bool {
 	for _, b := range ctx.AllBlocks {
 		for i := range resourcePairs {
 			cp := resourcePairs[i].closePrefix
-			if !strings.HasPrefix(b.RawType, cp) {
+			if !hasPrefixFold(b.RawType, cp) {
 				continue
 			}
 			set := out[cp]

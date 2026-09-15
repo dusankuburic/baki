@@ -340,10 +340,17 @@ type RuleDependency struct {
 	Reason     string `json:"reason"`
 }
 
+// DependencyAnalysis is the payload of GET /api/analysis/dependencies: the
+// analyzer's hand-maintained "related rules" map (see analyzer.relatedRules).
 type DependencyAnalysis struct {
 	Dependencies []RuleDependency `json:"dependencies"`
 	Cycles       [][]string       `json:"cycles"`
 	TopoOrder    []string         `json:"topoOrder"`
+	// Editorial marks the map as hand-maintained: it is not derived from rule
+	// behaviour and has no effect on evaluation order or results.
+	Editorial bool `json:"editorial"`
+	// Description explains the map's provenance to whoever renders it.
+	Description string `json:"description,omitempty"`
 }
 
 type SubflowHash struct {

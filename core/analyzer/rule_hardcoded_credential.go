@@ -3,6 +3,7 @@ package analyzer
 import (
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"pad-core/models"
@@ -13,22 +14,43 @@ type HardcodedCredentialRule struct{}
 func (r *HardcodedCredentialRule) ID() string   { return "hardcoded-credential" }
 func (r *HardcodedCredentialRule) Name() string { return "Hardcoded credential detected" }
 func (r *HardcodedCredentialRule) Description() string {
-	return "String values matching credential patterns."
+	return "String values matching credential patterns, and credential-typed action properties (Password, ApiKey, Token, …) set to a literal."
 }
 func (r *HardcodedCredentialRule) DefaultSeverity() models.Severity { return models.SeverityWarning }
 func (r *HardcodedCredentialRule) Category() string                 { return "Security" }
 
 // Patterns use [^%"'\s] for the secret value portion to exclude PAD variable
 // references (%VarName%) which are non-whitespace but not literal secrets.
-// sensitiveVarName matches variable names that are likely to hold credentials.
-var sensitiveVarName = regexp.MustCompile(`(?i)(password|passwd|pwd|api[_\-]?key|token|secret|credential|auth[_\-]?key|bearer|access[_\-]?key)`)
+// sensitiveVarName matches variable names — and, since the key-aware check
+// below, action property KEYS — that are likely to hold credentials.
+var sensitiveVarName = regexp.MustCompile(`(?i)(password|passwd|pwd|passphrase|api[_\-]?key|token|secret|credential|auth[_\-]?key|bearer|access[_\-]?key)`)
 
 var credentialPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)password\s*[:=]\s*["'][^%"'\s]{4,}["']`),
+	// Unquoted `password=…;` as it appears inside a connection string
+	// (`Server=x;Database=y;Password=hunter2;`). The parser strips the outer
+	// quotes from the property, so the quoted form above never saw it.
+	regexp.MustCompile(`(?i)\b(?:password|passwd|pwd)\s*=\s*[^%"'\s;]{4,}\s*(?:;|$)`),
 	regexp.MustCompile(`(?i)api[_-]?key\s*[:=]\s*["'][^%"'\s]{16,}["']`),
 	regexp.MustCompile(`(?i)token\s*[:=]\s*["'][^%"'\s]{16,}["']`),
 	regexp.MustCompile(`(?i)secret\s*[:=]\s*["'][^%"'\s]{8,}["']`),
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
+}
+
+// credentialActionProperties names, per action, the property keys that carry a
+// secret by the action's own contract but whose NAME does not say so — the
+// generic key check (sensitiveVarName) cannot see them. Seeded from the AI
+// scrubber's action table (core/ai/scrubber, sensitiveActions); the entries
+// there whose key is already Password/Passphrase are covered by the key check,
+// and ConnectionString is covered by the `password=` pattern (a connection
+// string without a password is not a credential).
+var credentialActionProperties = map[string][]string{
+	"Cryptography.DecryptTextWithAES":     {"Key"},
+	"Cryptography.EncryptTextWithAES":     {"Key"},
+	"Cryptography.DecryptFromFileWithAES": {"Key"},
+	"Cryptography.EncryptToFileWithAES":   {"Key"},
+	"Cryptography.HashText":               {"Key"},
+	"Cryptography.HashFromFile":           {"Key"},
 }
 
 func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
@@ -52,6 +74,28 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 				})
 				break
 			}
+		}
+
+		// Key-aware check: the property is a credential by the action's
+		// contract (`Email.SendEmailSMTP … Password: 'hunter2'`), whatever the
+		// value looks like. The value patterns above only ever inspected the
+		// VALUE, so a plain password under a Password: key was never flagged —
+		// although the replace-with-variable fixer for exactly this case has
+		// existed (and been tested) all along.
+		if !patternFlagged[key] && isCredentialProperty(block, key, val) {
+			patternFlagged[key] = true
+			findings = append(findings, models.Finding{
+				RuleID:   r.ID(),
+				Severity: r.DefaultSeverity(),
+				Title:    "Credential property set to literal value",
+				Description: "Property '" + key + "' of '" + block.RawType + "' carries a credential " +
+					"and is set to a literal value instead of a variable.",
+				BlockID:     block.ID,
+				SubflowID:   block.SubflowID,
+				Suggestion:  "Move this credential to a secured variable or vault. Hardcoded secrets in flows are a security risk.",
+				AutoFixHint: "Replace the literal value with a %InputVariable% declared as Sensitive in the flow's input properties, or retrieve it at runtime using the 'Get password from CyberArk / Windows Credential Manager' action.",
+				Metadata:    map[string]interface{}{"property": key},
+			})
 		}
 
 		// Skip entropy check for properties already flagged by a pattern to avoid
@@ -101,6 +145,60 @@ func (r *HardcodedCredentialRule) Check(block *models.Block, ctx *RuleContext) [
 	}
 
 	return findings
+}
+
+// isCredentialProperty reports whether property key on an ACTION block is a
+// credential-typed property holding a literal (non-%Var%) value worth flagging.
+//
+// A key qualifies when its name says credential (sensitiveVarName: Password,
+// ApiKey, Token, Secret, …) or when the action's contract says so
+// (credentialActionProperties). Parser-synthesised keys (`_output`, `_var`,
+// `_value`) are skipped: `=> %Password%` names the OUTPUT variable, and the
+// SET-variable form is handled separately above. Placeholders (`****`, `True`,
+// a bare number) and anything shorter than four characters are not secrets.
+func isCredentialProperty(block *models.Block, key, val string) bool {
+	if block.Type != models.BlockTypeAction || strings.HasPrefix(key, "_") {
+		return false
+	}
+	if strings.Contains(val, "%") {
+		return false
+	}
+	byName := sensitiveVarName.MatchString(key)
+	byContract := false
+	for _, k := range credentialActionProperties[block.RawType] {
+		if strings.EqualFold(k, key) {
+			byContract = true
+			break
+		}
+	}
+	if !byName && !byContract {
+		return false
+	}
+	bare := strings.TrimSpace(strings.Trim(strings.TrimSpace(val), "'\""))
+	if len(bare) < 4 || isCredentialPlaceholder(bare) {
+		return false
+	}
+	return true
+}
+
+// isCredentialPlaceholder recognises values that sit in a credential property
+// without being a credential: a masked value, a boolean/null, a number, or an
+// angle-bracket template such as <password>.
+func isCredentialPlaceholder(v string) bool {
+	if strings.Trim(v, "*•xX·") == "" {
+		return true
+	}
+	switch strings.ToLower(v) {
+	case "true", "false", "null", "none", "nil":
+		return true
+	}
+	if _, err := strconv.ParseFloat(v, 64); err == nil {
+		return true
+	}
+	if strings.HasPrefix(v, "<") && strings.HasSuffix(v, ">") {
+		return true
+	}
+	return false
 }
 
 // isHighEntropySecret flags long random-looking alphanumeric literals. The

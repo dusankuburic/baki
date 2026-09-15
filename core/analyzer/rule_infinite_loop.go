@@ -66,25 +66,30 @@ func hasExitCondition(loop *models.Block) bool {
 	// An explicit Exit Loop / Break in the loop's OWN body. EXIT LOOP only
 	// exits the innermost enclosing loop, so an exit inside a nested loop does
 	// NOT terminate this one — walkLoopBody skips nested-loop subtrees.
+	//
+	// Only real control-flow constructs count: the isExitLoop predicate (exact
+	// name / RawType token) plus the parser's exact RawType for `EXIT LOOP` and
+	// `BREAK`. The rule used to ALSO accept any RawType or property VALUE that
+	// merely contained "Exit" or "Break", so a loop whose body only did
+	// `Display.ShowMessage Message: 'Exit code received'` was declared safe —
+	// a false negative on the one rule that guards against a hung robot.
 	found := false
 	walkLoopBody(loop, func(b *models.Block) {
-		if isExitLoop(b) {
+		if isExitLoop(b) || isExitLoopRawType(b.RawType) {
 			found = true
-			return
-		}
-		rt := strings.ToLower(b.RawType)
-		if strings.Contains(rt, "exit") || strings.Contains(rt, "break") {
-			found = true
-			return
-		}
-		for _, v := range b.Properties {
-			if strings.Contains(v, "Exit") || strings.Contains(v, "Break") {
-				found = true
-				return
-			}
 		}
 	})
 	return found
+}
+
+// isExitLoopRawType reports whether rawType is exactly one of the parser's
+// loop-exit statements (case-insensitive, whole token — no substring match).
+func isExitLoopRawType(rawType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(rawType)) {
+	case "EXIT LOOP", "EXIT_LOOP", "EXITLOOP", "BREAK":
+		return true
+	}
+	return false
 }
 
 // walkLoopBody visits descendants of loop that are NOT inside a nested loop.
