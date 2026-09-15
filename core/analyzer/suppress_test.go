@@ -51,11 +51,11 @@ func TestCollectInlineSuppressions_NextSiblingOnly(t *testing.T) {
 	}}
 
 	supp := collectInlineSuppressions(flow)
-	if m := supp["b1"]; m == nil || !m["unhandled-error"] {
-		t.Fatalf("expected b1 to suppress unhandled-error, got %v", supp["b1"])
+	if m := supp.blocks["b1"]; m == nil || !m["unhandled-error"] {
+		t.Fatalf("expected b1 to suppress unhandled-error, got %v", supp.blocks["b1"])
 	}
-	if _, ok := supp["b2"]; ok {
-		t.Errorf("directive must not leak to the block after the target: %v", supp["b2"])
+	if _, ok := supp.blocks["b2"]; ok {
+		t.Errorf("directive must not leak to the block after the target: %v", supp.blocks["b2"])
 	}
 }
 

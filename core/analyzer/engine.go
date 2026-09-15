@@ -571,6 +571,18 @@ func computeStats(findings []models.Finding) models.AnalysisStats {
 // offending rule/block is logged and skipped; the returned `skipped` flag lets
 // the caller tally RulesSkipped on the report so operators can see that
 // findings may be missing.
+// parseErrorRuleEnabled reports whether settings leave the parse-error rule
+// enabled (the default). Shared by the engine's document-level fallback and
+// the suppression inventory, which must mirror that fallback exactly.
+func parseErrorRuleEnabled(settings *models.AppSettings) bool {
+	if settings != nil {
+		if rc, ok := settings.Analysis.Rules["parse-error"]; ok {
+			return rc.Enabled
+		}
+	}
+	return true
+}
+
 func safeCheck(rule Rule, block *models.Block, ctx *RuleContext) (findings []models.Finding, skipped bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -703,13 +715,7 @@ func runAnalysisCore(gctx context.Context, flow *models.FlowDocument, rules []Ru
 	// by the per-block rule (avoids duplicates).
 	if len(flow.ParseErrors) > 0 {
 		// Respect the rule's enabled/disabled setting.
-		peEnabled := true
-		if settings != nil {
-			if rc, ok := settings.Analysis.Rules["parse-error"]; ok {
-				peEnabled = rc.Enabled
-			}
-		}
-		if peEnabled {
+		if parseErrorRuleEnabled(settings) {
 			hasParseErrors := false
 			for _, f := range findings {
 				if f.RuleID == "parse-error" {

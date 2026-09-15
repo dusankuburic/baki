@@ -122,3 +122,95 @@ the bucket size.
 | Variable | Purpose |
 |---|---|
 | `VITE_API_URL` | Backend origin for the web build (no trailing `/api`). The desktop app discovers the sidecar itself. |
+
+## Health score
+
+Every analysis report carries `metrics.healthScore` (0–100; also on the
+dashboard, in `bakicli -format json`, and as the input to drift / regression
+alerts). It is computed in `core/analyzer/metrics.go` as
+
+```
+score = 100
+      − 12 × errors − 4 × warnings − 1 × infos
+      − 2   × max(0, maxCyclomatic − 20)
+      − 1.5 × max(0, maxCognitive  − 30)
+      − 10 if any circular subflow-call dependency exists
+```
+
+clamped to `[0, 100]` and truncated to an integer.
+
+- The finding counts are the findings that appear in the report: after inline
+  `pad-ignore` suppression and de-duplication, and after any per-rule
+  `severity` override in the rule profile. Suppressed findings do not count.
+- `maxCyclomatic` / `maxCognitive` are the highest per-subflow values in the
+  flow (`metrics.maxCyclomatic`, `metrics.maxCognitive`), so one complex
+  subflow lowers the whole flow's score.
+- The scale saturates quickly: 9 errors (108 points) or 25 warnings alone
+  reach 0, so scores near 0 do not distinguish "bad" from "much worse". Treat
+  it as a trend signal for a flow over time; gate CI on findings and policies
+  (`bakicli -fail-on`, `-policy`) rather than on a score threshold.
+
+## Custom rules
+
+Custom rules are JSON objects evaluated per block alongside the built-in rules.
+They are loaded from:
+
+- `bakicli -custom-rules <file>` (or `"customRules": "<file>"` in
+  `.bakirc.json`), plus inline `"customRulesInline": [ … ]` entries in
+  `.bakirc.json` — both sources are additive;
+- `PAD_CUSTOM_RULES=<file>` for the server, read at boot;
+- the organisation rule editor (`POST /api/orgs/{id}/rules`), applied to that
+  organisation's analyses; `GET /api/orgs/{id}/rules/export` emits a
+  `.bakirc.json` with those rules inline so CI gates on the same set.
+
+The file is a JSON **array** of rule objects (`bakicli rules test`, which runs
+one rules file against a flow, also accepts a single object). An invalid entry
+is **skipped with a warning** that names the entry — on CLI stderr, in the
+server log, or in the response of `POST /api/analysis/custom-rules/validate`
+— and a skipped rule enforces nothing, so treat those warnings as errors in CI.
+
+| Field | Matching | Purpose |
+|---|---|---|
+| `id` | — | Rule identifier (kebab-case). Findings, `pad-ignore[<id>]`, triage, baselines and SARIF are keyed by it, so it must be unique and stable; do not reuse a built-in ID. |
+| `name` | — | Finding title. |
+| `description` | — | Finding description. |
+| `severity` | exact | `error`, `warning` or `info`. Default `warning`. Any other value rejects the entry (it used to be accepted and then silently dropped by every consumer). |
+| `category` | — | Free text (`Security`, `Reliability`, …) shown in the catalog and reports. |
+| `typeMatch` | exact, case-insensitive | Block type: `ACTION`, `LOOP`, `CONDITION`, `SUBFLOW`, `ERROR_HANDLER`, `COMMENT`, `VARIABLE`, `WAIT`, `ELSE`, `CASE`, `DEFAULT`, `BLOCK`, `SWITCH`, `UNKNOWN`. (`END` blocks are never checked.) |
+| `rawTypeMatch` | **regex** (RE2, case-insensitive, unanchored) | Against the block's raw action type, e.g. `Database.Connect`, `WebAutomation.LaunchChrome`, `LOOP`. |
+| `nameMatch` | **regex** (RE2, case-insensitive, unanchored) | Against the block's display name; for `COMMENT` blocks this is the comment text. |
+| `propertyHas` | **substring** (case-insensitive), per key | `{"<property>": "<text>"}`. Every listed property must exist on the block **and** contain the text. |
+| `propertyNot` | **substring** (case-insensitive), per key | `{"<property>": "<text>"}`. The rule is skipped when any listed property exists and contains the text; a missing property passes. |
+| `suggestion` | — | Finding suggestion. Default: "Review this block for potential issues." |
+| `autoFix` | exact | Optional fixer attached to the finding. One of `wrap-error-handler`, `insert-close`, `set-timeout`, `insert-delay`, `insert-delay-in-loop`, `insert-handler-log`, `init-variable`, `insert-error-log`, `replace-with-variable`, `wrap-in-retry`, `insert-exit-condition`, `remove-block`, `parameterize-sql`, `append-output`, `mask-sensitive-variable`, `insert-default`, `upgrade-to-https`, `sanitize-command-vars`, `suppress`. Any other value rejects the entry. The fixer must make sense for the matched block (e.g. `insert-close` needs an action that opens a resource); an inapplicable fixer produces an empty patch. |
+
+All matchers are ANDed; a rule with no matcher at all fires on every block.
+
+**Regex vs. substring — the trap.** `nameMatch` and `rawTypeMatch` are regular
+expressions; `propertyHas` and `propertyNot` are plain substrings. So
+`"propertyHas": {"Url": "^http://"}` never matches (the `^` is a literal
+character) — write `"http://"`. Conversely `"rawTypeMatch": "Database.Connect"`
+also matches `Database.ConnectX` and, because `.` is a regex wildcard,
+`DatabaseXConnect`; anchor and escape when you mean an exact action:
+`"^Database\\.Connect$"`.
+
+Property keys are the names as written in the flow (`Url`, `ConnectionString`,
+`Timeout`), plus parser-synthesised keys: `_output` is the variable after
+`=>`, and `SET` blocks expose `_var` and `_value`.
+
+```json
+[
+  {
+    "id": "org-no-plain-http",
+    "name": "Cleartext HTTP call",
+    "description": "HTTP calls must use https://.",
+    "severity": "error",
+    "category": "Security",
+    "rawTypeMatch": "^HTTPClient\\.",
+    "propertyHas": {"Url": "http://"},
+    "propertyNot": {"Url": "http://localhost"},
+    "suggestion": "Switch the URL to https://.",
+    "autoFix": "upgrade-to-https"
+  }
+]
+```

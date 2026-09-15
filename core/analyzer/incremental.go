@@ -7,7 +7,20 @@ import (
 	"pad-core/models"
 )
 
-var knownDependencies = []models.RuleDependency{
+// relatedRules is an EDITORIAL map: a hand-maintained list of rule pairs whose
+// findings are worth reviewing together, each with a one-line reason. It is
+// what GET /api/analysis/dependencies serves and what the "Related rules" view
+// draws.
+//
+// Nothing in the engine consumes it. Rules are independent — every enabled
+// rule is dispatched per block regardless of any other rule's result — so the
+// order returned alongside it (TopoOrder) is a presentation order for the map,
+// not an execution constraint, and a rule absent from the map is merely
+// unrelated in the author's judgement, not "isolated" by the analyzer. It used
+// to be presented as a dependency graph, which implied an ordering the
+// analyzer never had; keep it honest by adding a pair only when one rule's
+// finding is a genuine reason to look at the other.
+var relatedRules = []models.RuleDependency{
 	{FromRuleID: "dead-code", ToRuleID: "unused-variable", Reason: "dead code may produce unused variable findings"},
 	{FromRuleID: "deep-nesting", ToRuleID: "infinite-loop-risk", Reason: "deep nesting increases loop complexity"},
 	{FromRuleID: "unhandled-error", ToRuleID: "error-swallow", Reason: "error handling must be checked before swallow detection"},
@@ -19,6 +32,16 @@ var knownDependencies = []models.RuleDependency{
 	{FromRuleID: "sensitive-exposure", ToRuleID: "hardcoded-credential", Reason: "sensitive exposure may involve hardcoded credentials"},
 }
 
+// RelatedRulesDescription travels with the map so every consumer (API, UI,
+// CLI) can tell the user what it is and is not.
+const RelatedRulesDescription = "Hand-maintained editorial map of rules whose findings are worth reviewing together. " +
+	"It is not derived from the analyzer: rules run independently, and this map affects neither evaluation order nor results."
+
+// AnalyzeRuleDependencies returns the related-rules map restricted to rules
+// present in the catalog, plus a cycle check on the map and a topological
+// presentation order over all rules. The name and the response shape are kept
+// for the existing route; the payload is marked Editorial so consumers do not
+// read it as an execution dependency graph.
 func AnalyzeRuleDependencies() *models.DependencyAnalysis {
 	rules := AllRules()
 	ruleIDs := make(map[string]bool)
@@ -27,7 +50,7 @@ func AnalyzeRuleDependencies() *models.DependencyAnalysis {
 	}
 
 	var active []models.RuleDependency
-	for _, dep := range knownDependencies {
+	for _, dep := range relatedRules {
 		if ruleIDs[dep.FromRuleID] && ruleIDs[dep.ToRuleID] {
 			active = append(active, dep)
 		}
@@ -46,18 +69,20 @@ func AnalyzeRuleDependencies() *models.DependencyAnalysis {
 		Dependencies: active,
 		Cycles:       cycles,
 		TopoOrder:    order,
+		Editorial:    true,
+		Description:  RelatedRulesDescription,
 	}
 }
 
-// detectCycles returns the cyclic strongly-connected components of the rule
-// dependency graph. Each cycle is the set of rules forming an SCC, sorted for
+// detectCycles returns the cyclic strongly-connected components of the
+// related-rules map. Each cycle is the set of rules forming an SCC, sorted for
 // determinism (rotations are equivalent, so a canonical order avoids the
 // "which node leads?" ambiguity the prior DFS-with-colors reconstruction had —
 // it emitted a duplicate leading element in some rotations).
 //
 // An SCC is reported as a cycle iff it has more than one node, or a single node
 // with a self-loop. Tarjan's algorithm finds SCCs in O(V+E); the rule graph is
-// tiny (≤ ~41 nodes) so the textbook recursive form is safe here (unbounded
+// tiny (45 nodes — see registry_pin_test.go) so the textbook recursive form is safe here (unbounded
 // user-input graphs elsewhere get recursion guards — this graph is fixed/
 // internal).
 func detectCycles(adj map[string][]string, nodes map[string]bool) [][]string {
