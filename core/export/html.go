@@ -31,6 +31,7 @@ func ReportToHTML(report *models.AnalysisReport, doc *models.FlowDocument) strin
 	if report == nil {
 		report = &models.AnalysisReport{}
 	}
+	doc = withIndexes(doc)
 
 	var sb strings.Builder
 	sb.WriteString(`<!DOCTYPE html>
@@ -112,6 +113,9 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
 	writeCard(&sb, "info", report.Stats.Info, "Info")
 	writeCard(&sb, "", report.Stats.BlocksAnalyzed, "Blocks analyzed")
 	writeCard(&sb, "", report.Stats.RulesRun, "Rules run")
+	// Findings hidden by inline pad-ignore directives are otherwise invisible
+	// in a report that only lists what remains.
+	writeCard(&sb, "", report.Stats.Suppressed, "Suppressed inline")
 	sb.WriteString("</div>\n")
 
 	if len(report.Findings) == 0 {
@@ -142,6 +146,12 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
 			if f.SubflowID != "" {
 				fmt.Fprintf(&sb, " &middot; <span>Subflow: <code>%s</code></span>", esc(f.SubflowID))
 			}
+			if file := findingSourceFile(*f, doc); file != "" {
+				fmt.Fprintf(&sb, " &middot; <span>File: <code>%s</code></span>", esc(file))
+			}
+			if line := blockLine(*f, doc); line > 0 {
+				fmt.Fprintf(&sb, " &middot; <span>Line: %d</span>", line)
+			}
 			sb.WriteString("</div>\n")
 			if f.Description != "" {
 				fmt.Fprintf(&sb, "<p>%s</p>\n", esc(f.Description))
@@ -155,6 +165,18 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
 
 	sb.WriteString("</body>\n</html>\n")
 	return sb.String()
+}
+
+// findingSourceFile is the member file a finding's subflow was parsed from —
+// only meaningful for folder imports, where "line 12" alone is ambiguous.
+func findingSourceFile(f models.Finding, doc *models.FlowDocument) string {
+	if doc == nil || !doc.IsFolder || f.SubflowID == "" {
+		return ""
+	}
+	if sf := doc.SubflowsByID[f.SubflowID]; sf != nil {
+		return sf.SourceFile
+	}
+	return ""
 }
 
 func writeCard(sb *strings.Builder, class string, value int, label string) {

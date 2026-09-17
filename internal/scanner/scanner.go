@@ -181,6 +181,23 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	if s.backend == nil || s.analyze == nil {
 		return
 	}
+	// One sweep at a time ACROSS replicas: every pod runs its own ticker, so
+	// without this N replicas re-analysed every flow N times per interval and
+	// each of them dispatched the same alert to the org's webhooks (the dedup
+	// signature is per process). The Postgres backend exposes a session-level
+	// advisory lock; a backend without one (memory, tests) sweeps as before.
+	if locker, ok := s.backend.(globalLocker); ok {
+		release, acquired, err := locker.TryGlobalLock(ctx, scanLockKey)
+		switch {
+		case err != nil:
+			logger.Warn("scanner: advisory lock unavailable; sweeping without it", "err", err)
+		case !acquired:
+			logger.Info("scanner: sweep already running on another replica; skipping this tick")
+			return
+		default:
+			defer release()
+		}
+	}
 	// Fresh per-sweep org-channel cache: a channel added mid-sweep may be
 	// missed until the next sweep (acceptable) but a DELETED one must stop
 	// receiving promptly, and a stale cache would keep delivering to it.
@@ -239,6 +256,18 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	// deadlock is "logs stopped" — invisible to /healthz which always returns 200.
 	metrics.RecordBackgroundLoopTick("scanner")
 }
+
+// globalLocker mirrors api.GlobalLocker (the scanner cannot import the api
+// package): the Postgres backend's TryGlobalLock. acquired=false means another
+// session holds the key; release must be called exactly once when acquired.
+type globalLocker interface {
+	TryGlobalLock(ctx context.Context, key int64) (release func(), acquired bool, err error)
+}
+
+// scanLockKey namespaces the sweep's advisory lock. Arbitrary but stable —
+// every replica must use the same key, and it must differ from the migration
+// runner's.
+const scanLockKey int64 = 0x62616b697363616e // "bakiscan"
 
 // pruneLastSig drops lastSig entries for flows no longer present, so a
 // deleted flow's dedup keys don't accumulate in memory for the life of the

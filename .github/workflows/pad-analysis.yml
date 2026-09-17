@@ -17,6 +17,21 @@ on:
       fail_on:
         description: 'Minimum severity that fails the build: error, warning, info, none'
         default: 'error'
+      rules:
+        description: 'Comma-separated rule IDs to enable (empty = all)'
+        default: ''
+      policy:
+        description: 'Policy JSON file (authoritative gate, overrides fail_on)'
+        default: ''
+      baseline:
+        description: 'Baseline JSON file (ratchet: fail only on NEW findings)'
+        default: ''
+      new_from_rev:
+        description: 'Git revision; gate only on findings absent at that revision'
+        default: ''
+  # Every action input is forwarded so a consumer calling this workflow gets
+  # the same surface as one using the action directly (it used to expose two
+  # of them, so policies, baselines and custom rules were unreachable here).
   workflow_call:
     inputs:
       flow_path:
@@ -25,6 +40,39 @@ on:
       fail_on:
         type: string
         default: 'error'
+      rules:
+        type: string
+        default: ''
+      format:
+        type: string
+        default: 'sarif'
+      policy:
+        type: string
+        default: ''
+      baseline:
+        type: string
+        default: ''
+      new_from_rev:
+        type: string
+        default: ''
+      custom_rules:
+        type: string
+        default: ''
+      config:
+        type: string
+        default: ''
+      sarif_file:
+        type: string
+        default: 'pad-analysis.sarif'
+      upload_sarif:
+        type: string
+        default: 'true'
+      comment_on_pr:
+        type: string
+        default: 'true'
+      version:
+        type: string
+        default: 'latest'
 
 permissions:
   contents: read
@@ -45,24 +93,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # new_from_rev compares against another revision; a shallow clone
+          # has none. Full history is cheap for a flows repository.
+          fetch-depth: ${{ inputs.new_from_rev != '' && 0 || 1 }}
 
-      # A pinned, fully-qualified reference — NOT `uses: ./`. This workflow is
-      # also offered to other repositories via workflow_call, and a relative
-      # `./` resolves against the CALLER's checkout, which has no action.yml,
-      # so every consumer run failed with "Can't find action.yml". The tag
-      # must exist (release.yml publishes it); bump it when cutting a release.
+      # A fully-qualified reference — NOT `uses: ./`. This workflow is also
+      # offered to other repositories via workflow_call, and a relative `./`
+      # resolves against the CALLER's checkout, which has no action.yml, so
+      # every consumer run failed with "Can't find action.yml".
+      #
+      # Pinned to `main` because NO release tag exists yet (locally or on
+      # origin): the previous `@v0.1.0` pin could not resolve and every run
+      # failed before analysis started. Move this to the tag as soon as
+      # release.yml (push: tags: v*) publishes one, and bump it per release.
       - name: Analyze PAD flows
-        uses: dusankuburic/baki@v0.1.0
+        uses: dusankuburic/baki@main
         with:
           flow-path: ${{ inputs.flow_path || '.' }}
           fail-on: ${{ inputs.fail_on || 'error' }}
-          sarif-file: pad-analysis.sarif
-          upload-sarif: 'true'
+          rules: ${{ inputs.rules || '' }}
+          format: ${{ inputs.format || 'sarif' }}
+          policy: ${{ inputs.policy || '' }}
+          baseline: ${{ inputs.baseline || '' }}
+          new-from-rev: ${{ inputs.new_from_rev || '' }}
+          custom-rules: ${{ inputs.custom_rules || '' }}
+          config: ${{ inputs.config || '' }}
+          sarif-file: ${{ inputs.sarif_file || 'pad-analysis.sarif' }}
+          upload-sarif: ${{ inputs.upload_sarif || 'true' }}
+          comment-on-pr: ${{ inputs.comment_on_pr || 'true' }}
+          version: ${{ inputs.version || 'latest' }}
 
       - name: Upload SARIF artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: pad-analysis-sarif
-          path: pad-analysis.sarif
+          path: ${{ inputs.sarif_file || 'pad-analysis.sarif' }}
+          # Exit 2 leaves no report; an empty artifact is noise, not evidence.
+          if-no-files-found: ignore
           retention-days: 30

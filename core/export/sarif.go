@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 
+	"pad-core/analyzer"
 	"pad-core/models"
 )
 
@@ -19,7 +21,20 @@ const (
 	sarifSchema  = "https://json.schemastore.org/sarif-2.1.0.json"
 	sarifVersion = "2.1.0"
 	sarifTool    = "PAD Analyzer"
+	// sarifAutomationID is run.automationDetails.id: the stable category a
+	// consumer files every PAD upload under (GitHub code scanning uses it to
+	// separate this tool's alerts from other analyses on the same commit; the
+	// Action passes the same value as its upload `category`).
+	sarifAutomationID = "pad-analysis"
+	// sarifSourceRootID is the conventional uriBaseId for "the repository
+	// checkout" — GitHub resolves relative artifact URIs against it.
+	sarifSourceRootID = "%SRCROOT%"
 )
+
+// RuleHelpURL is the documentation page every rule descriptor's helpUri points
+// at (the project has no per-rule pages; `bakicli rules <id>` prints the full
+// description). Overridable like ToolVersion for forks/mirrors.
+var RuleHelpURL = "https://github.com/dusankuburic/baki#features"
 
 type sarifLog struct {
 	Schema  string     `json:"$schema"`
@@ -28,8 +43,21 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool    sarifToolBlock `json:"tool"`
-	Results []sarifResult  `json:"results"`
+	Tool               sarifToolBlock                   `json:"tool"`
+	AutomationDetails  *sarifAutomationDetails          `json:"automationDetails,omitempty"`
+	Invocations        []sarifInvocation                `json:"invocations,omitempty"`
+	OriginalURIBaseIDs map[string]sarifArtifactLocation `json:"originalUriBaseIds,omitempty"`
+	Results            []sarifResult                    `json:"results"`
+	Properties         map[string]any                   `json:"properties,omitempty"`
+}
+
+type sarifAutomationDetails struct {
+	ID string `json:"id"`
+}
+
+type sarifInvocation struct {
+	ExecutionSuccessful bool           `json:"executionSuccessful"`
+	Properties          map[string]any `json:"properties,omitempty"`
 }
 
 type sarifToolBlock struct {
@@ -58,10 +86,14 @@ func SetToolVersion(v string) {
 }
 
 type sarifReportingDescriptor struct {
-	ID                   string              `json:"id"`
-	ShortDescription     *sarifMessage       `json:"shortDescription,omitempty"`
-	DefaultConfiguration *sarifConfiguration `json:"defaultConfiguration,omitempty"`
-	Properties           map[string]any      `json:"properties,omitempty"`
+	ID                   string                   `json:"id"`
+	Name                 string                   `json:"name,omitempty"`
+	ShortDescription     *sarifMessage            `json:"shortDescription,omitempty"`
+	FullDescription      *sarifMessage            `json:"fullDescription,omitempty"`
+	Help                 *sarifMultiformatMessage `json:"help,omitempty"`
+	HelpURI              string                   `json:"helpUri,omitempty"`
+	DefaultConfiguration *sarifConfiguration      `json:"defaultConfiguration,omitempty"`
+	Properties           map[string]any           `json:"properties,omitempty"`
 }
 
 type sarifConfiguration struct {
@@ -72,6 +104,11 @@ type sarifMessage struct {
 	Text string `json:"text"`
 }
 
+type sarifMultiformatMessage struct {
+	Text     string `json:"text"`
+	Markdown string `json:"markdown,omitempty"`
+}
+
 type sarifResult struct {
 	RuleID              string            `json:"ruleId"`
 	RuleIndex           int               `json:"ruleIndex"`
@@ -79,6 +116,7 @@ type sarifResult struct {
 	Message             sarifMessage      `json:"message"`
 	Locations           []sarifLocation   `json:"locations,omitempty"`
 	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
+	Properties          map[string]any    `json:"properties,omitempty"`
 }
 
 type sarifLocation struct {
@@ -92,7 +130,8 @@ type sarifPhysicalLocation struct {
 }
 
 type sarifArtifactLocation struct {
-	URI string `json:"uri"`
+	URI       string `json:"uri"`
+	URIBaseID string `json:"uriBaseId,omitempty"`
 }
 
 type sarifRegion struct {
@@ -109,6 +148,14 @@ type sarifLogicalLocation struct {
 // supplied it is used to resolve each finding's block to a source file and line
 // number for richer physical locations.
 func ReportToSARIF(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
+	return ReportToSARIFWithOptions(report, doc, Options{})
+}
+
+// ReportToSARIFWithOptions is ReportToSARIF plus the CI context in Options: a
+// policy verdict (run.properties.policy, invocations[0].executionSuccessful,
+// per-result policyViolation) and a source root so artifact URIs are
+// repository-relative (originalUriBaseIds["%SRCROOT%"] + uriBaseId).
+func ReportToSARIFWithOptions(report *models.AnalysisReport, doc *models.FlowDocument, opts Options) ([]byte, error) {
 	if report == nil {
 		report = &models.AnalysisReport{}
 	}
@@ -116,11 +163,10 @@ func ReportToSARIF(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 	// empty on a deserialized document. Rebuild them on a shallow copy so a
 	// SHARED doc (e.g. a cached cloud-resolved document handed to concurrent
 	// requests) is never mutated from a serializer.
-	if doc != nil && doc.BlocksByID == nil {
-		cp := *doc
-		cp.RebuildIndexes()
-		doc = &cp
-	}
+	doc = withIndexes(doc)
+
+	catalog := ruleCatalog()
+	violations := policyViolationKeys(opts.Policy)
 
 	ruleIndex := make(map[string]int)
 	rules := make([]sarifReportingDescriptor, 0)
@@ -136,47 +182,166 @@ func ReportToSARIF(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 		if !ok {
 			idx = len(rules)
 			ruleIndex[f.RuleID] = idx
-			rules = append(rules, ruleDescriptor(f))
+			rules = append(rules, ruleDescriptor(f, catalog[f.RuleID]))
 			ruleMaxRank[f.RuleID] = severityRank(sarifLevel(f.Severity))
 		} else if r := severityRank(sarifLevel(f.Severity)); r > ruleMaxRank[f.RuleID] {
 			ruleMaxRank[f.RuleID] = r
 			rules[idx].DefaultConfiguration = &sarifConfiguration{Level: sarifLevel(f.Severity)}
 		}
 
-		results = append(results, sarifResult{
+		res := sarifResult{
 			RuleID:    f.RuleID,
 			RuleIndex: idx,
 			Level:     sarifLevel(f.Severity),
 			Message:   sarifMessage{Text: messageText(f)},
-			Locations: sarifLocations(f, doc),
+			Locations: sarifLocations(f, doc, opts),
 			PartialFingerprints: map[string]string{
 				"padFindingId/v1": fingerprint(f),
 			},
-		})
+		}
+		if violations[findingKey(f)] {
+			res.Properties = map[string]any{"policyViolation": true}
+		}
+		results = append(results, res)
 	}
+
+	run := sarifRun{
+		Tool:              sarifToolBlock{Driver: sarifDriver{Name: sarifTool, Version: ToolVersion, Rules: rules}},
+		AutomationDetails: &sarifAutomationDetails{ID: sarifAutomationID},
+		Results:           results,
+	}
+	if opts.SourceRootURI != "" {
+		uri := opts.SourceRootURI
+		if !strings.HasSuffix(uri, "/") {
+			uri += "/"
+		}
+		run.OriginalURIBaseIDs = map[string]sarifArtifactLocation{sarifSourceRootID: {URI: uri}}
+	}
+	// executionSuccessful is the SARIF field consumers read for "did this run
+	// pass"; a failed policy gate is reported there so a dashboard does not
+	// show a green run whose gate actually failed. The verdict details ride
+	// in run.properties.policy.
+	inv := sarifInvocation{ExecutionSuccessful: true}
+	if opts.Policy != nil {
+		inv.ExecutionSuccessful = opts.Policy.Passed
+		run.Properties = map[string]any{"policy": policyProperties(opts.Policy)}
+	}
+	run.Invocations = []sarifInvocation{inv}
 
 	log := sarifLog{
 		Schema:  sarifSchema,
 		Version: sarifVersion,
-		Runs: []sarifRun{{
-			Tool:    sarifToolBlock{Driver: sarifDriver{Name: sarifTool, Version: ToolVersion, Rules: rules}},
-			Results: results,
-		}},
+		Runs:    []sarifRun{run},
 	}
 
 	return json.MarshalIndent(log, "", "  ")
 }
 
-func ruleDescriptor(f models.Finding) sarifReportingDescriptor {
+// withIndexes returns doc with its transient lookup maps populated, rebuilding
+// them on a shallow copy so a shared document is never mutated by an exporter.
+func withIndexes(doc *models.FlowDocument) *models.FlowDocument {
+	if doc != nil && doc.BlocksByID == nil {
+		cp := *doc
+		cp.RebuildIndexes()
+		return &cp
+	}
+	return doc
+}
+
+// ruleCatalog indexes the built-in rules by ID so descriptors can carry the
+// rule's own name/description (stable across findings) rather than the first
+// finding's instance-specific title. Custom rules are absent and fall back to
+// the finding's text.
+func ruleCatalog() map[string]analyzer.Rule {
+	all := analyzer.AllRules()
+	m := make(map[string]analyzer.Rule, len(all))
+	for _, r := range all {
+		m[r.ID()] = r
+	}
+	return m
+}
+
+// policyProperties is the compact verdict embedded as run.properties.policy:
+// the PolicyResult counts plus the fingerprints of the violating findings (the
+// same padFindingId/v1 values as the results) instead of the full findings,
+// which are already present as results.
+func policyProperties(res *models.PolicyResult) map[string]any {
+	fps := make([]string, 0, len(res.Violations))
+	for _, v := range res.Violations {
+		fps = append(fps, fingerprint(v))
+	}
+	return map[string]any{
+		"policyId":              res.PolicyID,
+		"policyName":            res.PolicyName,
+		"passed":                res.Passed,
+		"errors":                res.Errors,
+		"warnings":              res.Warnings,
+		"info":                  res.Info,
+		"evaluated":             res.Evaluated,
+		"waived":                res.Waived,
+		"violations":            len(res.Violations),
+		"violationFingerprints": fps,
+	}
+}
+
+// policyViolationKeys returns the identity set of a policy's violations so each
+// result can be tagged; nil when there is no policy.
+func policyViolationKeys(res *models.PolicyResult) map[string]bool {
+	if res == nil || len(res.Violations) == 0 {
+		return nil
+	}
+	keys := make(map[string]bool, len(res.Violations))
+	for _, v := range res.Violations {
+		keys[findingKey(v)] = true
+	}
+	return keys
+}
+
+func findingKey(f models.Finding) string {
+	if f.Fingerprint != "" {
+		return f.Fingerprint
+	}
+	return f.Key()
+}
+
+func ruleDescriptor(f models.Finding, rule analyzer.Rule) sarifReportingDescriptor {
 	d := sarifReportingDescriptor{
 		ID:                   f.RuleID,
 		DefaultConfiguration: &sarifConfiguration{Level: sarifLevel(f.Severity)},
+		HelpURI:              RuleHelpURL,
 	}
-	if f.Title != "" {
-		d.ShortDescription = &sarifMessage{Text: f.Title}
+	name, desc := f.Title, ""
+	if rule != nil {
+		name, desc = rule.Name(), rule.Description()
+		d.Name = rule.Name()
 	}
+	if name != "" {
+		d.ShortDescription = &sarifMessage{Text: name}
+	}
+	if desc != "" {
+		d.FullDescription = &sarifMessage{Text: desc}
+	}
+	if help := desc; help != "" || f.Description != "" {
+		if help == "" {
+			help = f.Description
+		}
+		if fix := analyzer.RuleAutoFix(f.RuleID); fix != "" {
+			help += "\n\nAuto-fix available: " + fix + " (apply with `bakicli fix`)."
+		}
+		help += "\n\nRun `bakicli rules " + f.RuleID + "` for the full rule description."
+		d.Help = &sarifMultiformatMessage{Text: help, Markdown: help}
+	}
+	props := map[string]any{}
 	if f.Category != "" {
-		d.Properties = map[string]any{"category": f.Category}
+		props["category"] = f.Category
+	} else if rule != nil && rule.Category() != "" {
+		props["category"] = rule.Category()
+	}
+	if rule != nil {
+		props["confidence"] = string(analyzer.RuleConfidence(f.RuleID))
+	}
+	if len(props) > 0 {
+		d.Properties = props
 	}
 	return d
 }
@@ -228,13 +393,20 @@ func messageText(f models.Finding) string {
 	return msg
 }
 
-func sarifLocations(f models.Finding, doc *models.FlowDocument) []sarifLocation {
+func sarifLocations(f models.Finding, doc *models.FlowDocument, opts Options) []sarifLocation {
 	if f.BlockID == "" && f.SubflowID == "" {
 		return nil
 	}
 
+	uri := artifactURI(f, doc)
+	if root := strings.Trim(opts.SourceRoot, "/"); root != "" && root != "." {
+		uri = root + "/" + uri
+	}
 	phys := &sarifPhysicalLocation{
-		ArtifactLocation: sarifArtifactLocation{URI: artifactURI(f, doc)},
+		ArtifactLocation: sarifArtifactLocation{URI: uri},
+	}
+	if opts.SourceRootURI != "" {
+		phys.ArtifactLocation.URIBaseID = sarifSourceRootID
 	}
 	if line := blockLine(f, doc); line > 0 {
 		phys.Region = &sarifRegion{StartLine: line}

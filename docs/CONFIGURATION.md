@@ -72,11 +72,48 @@ metrics token, an insecure `sslmode` in cloud mode.
 | `PAD_NOTIFY_SLACK_URL` / `PAD_NOTIFY_SLACK_SECRET` | Slack-compatible incoming webhook (also Discord/Mattermost), optional HMAC key. `PAD_WEBHOOK_URL` / `PAD_WEBHOOK_SECRET` are legacy aliases read when these are unset. | — |
 | `PAD_NOTIFY_EMAIL_TO` | Recipient for alert emails (needs the SMTP settings below). Deployment-global. | — |
 | `PAD_NOTIFY_JIRA_BASE_URL` / `PAD_NOTIFY_JIRA_EMAIL` / `PAD_NOTIFY_JIRA_API_TOKEN` / `PAD_NOTIFY_JIRA_PROJECT` | Create a Jira Cloud issue per alert when all four are set. Deployment-global. | — |
-| `PAD_CI_WEBHOOK_SECRET` | HMAC key for inbound CI webhooks (`POST /api/integrations/ci`). Empty = endpoint returns 503. | — |
+| `PAD_CI_WEBHOOK_SECRET` | HMAC key for inbound CI webhooks (`POST /api/integrations/ci`, see [CI webhook](#ci-webhook)). Empty = endpoint returns 503. | — |
 | `PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP` | `1` accepts CI webhooks without `X-Baki-Timestamp` (replay-vulnerable; legacy senders only). | unset |
 | `PAD_RETENTION_PURGE_INTERVAL` | How often expired tokens, invites, share links and blacklist rows are purged (cloud). `0s` disables. | `24h` |
 | `PAD_AUDIT_RETENTION_DAYS` | Age-based purge window for audit events, analysis history, usage metrics and governance alerts. `0` keeps them forever. | `0` |
 | `PAD_AUDIT_SPILL_DIR` | On-disk spill queue for audit events when the in-memory pool overflows. Empty = temp dir; `off` disables. | temp dir |
+
+## CI webhook
+
+`POST /api/integrations/ci` lets a pipeline ask the server to re-analyse a **stored** flow and record the run on the dashboard. The server never ingests numbers from the runner. It is off until `PAD_CI_WEBHOOK_SECRET` is set.
+
+The request body is `{"flowId": "<id>", "failOn": "error", "format": "summary"}`. `failOn` accepts `error`, `warning`, `info` or `none`; `format` accepts `summary`, `report` (adds findings) or `sarif`. Two headers authenticate it:
+
+- `X-Baki-Timestamp` is the current Unix time in seconds. The server rejects values more than five minutes off its clock.
+- `X-Baki-Signature` is `sha256=` followed by the hex HMAC-SHA256 of `<timestamp>.<raw body>`, keyed with `PAD_CI_WEBHOOK_SECRET`.
+
+`bakicli report` does all of this and exits `0` when the server's gate passed, `1` when it failed and `2` on a request error:
+
+```bash
+export PAD_CI_WEBHOOK_SECRET=...        # keeps the key off the command line
+bakicli report -endpoint https://baki.example.com -flow-id "$FLOW_ID" -fail-on error
+```
+
+The same request with curl:
+
+```bash
+body='{"flowId":"'"$FLOW_ID"'","failOn":"error"}'
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$PAD_CI_WEBHOOK_SECRET" -hex | sed 's/^.* //')
+curl -fsS -X POST https://baki.example.com/api/integrations/ci \
+  -H 'Content-Type: application/json' \
+  -H "X-Baki-Timestamp: $ts" \
+  -H "X-Baki-Signature: sha256=$sig" \
+  --data "$body"
+```
+
+## `bakicli` exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Gate passed. |
+| `1` | Gate failed: findings at or above `-fail-on`, policy violated, stale suppressions with `-fail-on-stale`, or the output could not be written. The report is complete. |
+| `2` | Usage error, invalid config or policy, parse error, or file not found. No report is produced. |
 
 ## Email (SMTP)
 

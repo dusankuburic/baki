@@ -5,23 +5,32 @@
 //
 // Usage:
 //
-//	bakicli [flags] <file.txt | folder>          Analyze (default)
-//	bakicli fix [flags] <file.txt>               Apply auto-fixers
-//	bakicli diff [flags] <old.txt> <new.txt>     Compare two flows
-//	bakicli rules [rule-id]                      List or describe rules
-//	bakicli init [-o .bakirc.json]               Generate a starter config
-//	bakicli watch [flags] <file.txt|folder>      Re-analyze on every save (Ctrl-C to stop)
-//	bakicli migrate down [flags] <version>       Roll schema back (operator-only)
-//	bakicli --version                            Print version
+//	bakicli [flags] <file.txt | folder | ->       Analyze (default) and gate
+//	bakicli fix [flags] <file|folder> ...         Apply auto-fixers (dry-run unless -apply)
+//	bakicli diff [flags] <old.txt> <new.txt>      Compare two flows structurally
+//	bakicli diff-reports [flags] <old> <new>      Compare two saved JSON reports (findings level)
+//	bakicli rules [-format json] [rule-id]        List or describe rules (JSON includes thresholds)
+//	bakicli rules test [flags] <rules.json> <flow> Try custom rules against a fixture flow
+//	bakicli suppressions [flags] <file|folder|->  List inline pad-ignore directives, flag stale ones
+//	bakicli report [flags] [report.json]          Record a run on a PAD Analyzer server (CI webhook)
+//	bakicli init [-o .bakirc.json]                Generate a starter config
+//	bakicli watch [flags] <file|folder>           Re-analyze on every save (Ctrl-C to stop)
+//	bakicli migrate down [flags] <version>        Roll the server schema back (operator-only)
+//	bakicli --version                             Print version
+//	bakicli -h / bakicli <subcommand> -h          This overview / a subcommand's flags
 //
 // Flags (analyze):
 //
 //	-fail-on string   Minimum severity that causes a non-zero exit: error, warning, info (default "error")
 //	-format  string   Output format: text, json, sarif, junit, csv, html (default "text")
+//	-report-json path Also write the JSON report (findings, stats, policy verdict) to this
+//	                  file whatever -format is, so CI derives its summary from the SAME run
 //	-rules   string   Comma-separated list of rule IDs to enable (empty = all enabled)
+//	-custom-rules     Path to a custom rules JSON file (additive to the config's inline rules)
 //	-config  string   Config file path for defaults (default ".bakirc.json"; set to "" to skip)
 //	-policy  string   Path to a policy JSON file; gates on the policy's rules +
-//	                  GateSeverity instead of -fail-on (a named, shareable ruleset)
+//	                  GateSeverity instead of -fail-on (a named, shareable ruleset).
+//	                  The verdict is embedded in json/sarif/junit output.
 //	-baseline string  Baseline JSON file (finding fingerprints). When set, the gate
 //	                  fails only on NEW findings since the baseline (the ratchet),
 //	                  not pre-existing ones — so a team can adopt the gate without
@@ -30,6 +39,7 @@
 //	                  a clean run with -update-baseline.
 //	-update-baseline string  Write the current run's findings as the baseline to
 //	                  this file and exit 0 (accept the current state).
+//	-new-from-rev     Git revision; gate only on findings absent at that revision
 //	-quiet            Suppress informational output; only print findings
 //
 // A config file (.bakirc.json) is auto-discovered from the current directory.
@@ -37,9 +47,13 @@
 //
 // # Exit Codes
 //
-//	0  Analysis passed (no findings at or above the threshold)
-//	1  Analysis gate failed (findings at or above -fail-on threshold)
-//	2  Usage error, parse error, or file not found
+//	0  Gate passed (no findings at or above the threshold / policy passed / no stale suppressions)
+//	1  Gate failed (findings at or above -fail-on, policy violated, -fail-on-stale hit,
+//	   or an output write error)
+//	2  Usage error, invalid config/policy, parse error, or file not found
+//
+// Exit 2 means NO report was produced — CI steps must not upload the (empty)
+// output file in that case.
 package main
 
 import (
@@ -50,6 +64,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -113,9 +128,50 @@ func main() {
 		case "suppressions":
 			runSuppressions(os.Args[2:])
 			return
+		case "report":
+			runReport(os.Args[2:])
+			return
 		}
 	}
 	runAnalyze()
+}
+
+// printUsage is the top-level -h. The default flag output listed the analyze
+// flags only — no subcommands, no formats, no exit codes — so the one place a
+// CI author looks first said nothing about `fix`, `suppressions` or what a 2
+// means.
+func printUsage() {
+	w := flag.CommandLine.Output()
+	fmt.Fprintf(w, `bakicli %s — static analysis for Power Automate Desktop flows
+
+Usage:
+  bakicli [flags] <file.txt | folder | ->        Analyze (default) and gate
+  bakicli fix [flags] <file|folder> ...          Apply auto-fixers (dry-run unless -apply)
+  bakicli diff [flags] <old.txt> <new.txt>       Compare two flows structurally
+  bakicli diff-reports [flags] <old> <new>       Compare two saved JSON reports
+  bakicli rules [-format json] [rule-id]         List or describe rules
+  bakicli rules test [flags] <rules.json> <flow> Try custom rules against a flow
+  bakicli suppressions [flags] <file|folder|->   List inline pad-ignore directives, flag stale ones
+  bakicli report [flags] [report.json]           Record a run on a PAD Analyzer server (CI webhook)
+  bakicli init [-o .bakirc.json]                 Generate a starter config
+  bakicli watch [flags] <file|folder>            Re-analyze on every save (Ctrl-C to stop)
+  bakicli migrate down [flags] <version>         Roll the server schema back (operator-only)
+  bakicli --version                              Print version
+  bakicli <subcommand> -h                        Flags of a subcommand
+
+Output formats (-format): text, json, sarif, junit, csv, html
+  -report-json <path> additionally writes the JSON report from the same run.
+
+Exit codes:
+  0  gate passed
+  1  gate failed: findings at/above -fail-on, policy violated, stale suppressions
+     with -fail-on-stale, or the output could not be written
+  2  usage error, invalid config/policy, parse error, or file not found
+     (no report is produced — do not upload the output file)
+
+Analyze flags:
+`, version)
+	flag.PrintDefaults()
 }
 
 func runAnalyze() {
@@ -128,7 +184,13 @@ func runAnalyze() {
 	newFromRev := flag.String("new-from-rev", "", "git revision (e.g. origin/main); gate only on findings NOT present at that revision")
 	updateBaseline := flag.String("update-baseline", "", "write the current run's findings as the baseline to this file and exit 0 (accept current state)")
 	configFlag := flag.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
+	// CI needs BOTH a code-scanning artifact (sarif) and numbers for a job
+	// summary. Producing the latter with a second `-format json` invocation
+	// meant a second analysis that did not carry -rules/-policy/-baseline, so
+	// the summary disagreed with the gate. One run, two outputs.
+	reportJSON := flag.String("report-json", "", "also write the JSON report (with the policy verdict) to this file, whatever -format is")
 	quiet := flag.Bool("quiet", false, "suppress informational output")
+	flag.Usage = printUsage
 	flag.Parse()
 
 	if flag.NArg() < 1 {
@@ -218,23 +280,38 @@ func runAnalyze() {
 		policyResult = analyzer.EvaluatePolicy(report, policy)
 	}
 
+	// The policy verdict and the analysed root travel with every structured
+	// format: an uploaded SARIF/JUnit/JSON that omitted the verdict could not
+	// say WHY the gate failed, and SARIF locations that were bare basenames
+	// could not be placed on a PR.
+	exportOpts := export.Options{Policy: policyResult}
+	exportOpts.SourceRoot, exportOpts.SourceRootURI = sarifSourceRoot(target)
+	jsonReport := cliReport{AnalysisReport: report, Policy: policyResult}
+
+	if *reportJSON != "" {
+		if err := writeJSONFile(*reportJSON, jsonReport); err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: write -report-json: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	switch *format {
 	case "json":
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(report); err != nil {
+		if err := enc.Encode(jsonReport); err != nil {
 			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
 			os.Exit(1)
 		}
 	case "sarif":
-		out, err := export.ReportToSARIF(report, doc)
+		out, err := export.ReportToSARIFWithOptions(report, doc, exportOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stdout, "%s\n", out)
 	case "junit":
-		out, err := export.ReportToJUnit(report, doc)
+		out, err := export.ReportToJUnitWithOptions(report, doc, exportOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error writing output: %v\n", err)
 			os.Exit(1)
@@ -352,6 +429,65 @@ func runAnalyze() {
 	if shouldFail(report.Findings, *failOn) {
 		os.Exit(1)
 	}
+}
+
+// cliReport is the JSON document `-format json` and `-report-json` emit: the
+// AnalysisReport's fields at the top level (the shape readReport/diff-reports
+// decode is unchanged) plus the policy verdict when -policy gated the run, so a
+// stored report says whether and why the gate failed.
+type cliReport struct {
+	*models.AnalysisReport
+	Policy *models.PolicyResult `json:"policy,omitempty"`
+}
+
+// writeJSONFile writes v as indented JSON to path (0600, operator-supplied path).
+func writeJSONFile(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600) // #nosec G306 -- report file, operator path
+}
+
+// sarifSourceRoot derives export.Options.SourceRoot/SourceRootURI for a CLI
+// target: the analysed root (the folder, or the file's directory) relative to
+// the working directory, which in CI is the repository checkout that SARIF
+// %SRCROOT% denotes. A target outside the working directory anchors %SRCROOT%
+// at the analysed root itself so URIs stay resolvable rather than sprouting
+// "../" segments; stdin has no root.
+func sarifSourceRoot(target string) (root, rootURI string) {
+	if target == "-" {
+		return "", ""
+	}
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return "", ""
+	}
+	if info, serr := os.Stat(abs); serr == nil && !info.IsDir() {
+		abs = filepath.Dir(abs)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", ""
+	}
+	rel, err := filepath.Rel(cwd, abs)
+	if err != nil {
+		return "", fileURI(abs)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fileURI(abs)
+	}
+	return rel, fileURI(cwd)
+}
+
+// fileURI renders an absolute path as a file:// URI (file:///C:/x on Windows).
+func fileURI(abs string) string {
+	p := filepath.ToSlash(abs)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + (&url.URL{Path: p}).EscapedPath()
 }
 
 func loadPolicy(path string) (models.Policy, error) {
@@ -958,6 +1094,9 @@ func runFix(args []string) {
 	// developer who typed `bakicli fix` expecting a tidy-up.
 	unsafeFlag := fs.Bool("unsafe", false,
 		"also apply fixes that change runtime behaviour (command sanitisation, credential masking)")
+	// The atomic replace protects against a crash mid-write, not against a
+	// fixer that did the wrong thing; the flow source is the user's only copy.
+	backup := fs.Bool("backup", false, "with -apply, keep the original as <file>.bak before replacing a changed file")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: bakicli fix [flags] <file.txt> [file2.txt ...] [folder]")
 		fs.PrintDefaults()
@@ -996,7 +1135,7 @@ func runFix(args []string) {
 			os.Exit(2)
 		}
 		for _, file := range files {
-			n, err := fixOneFile(file, *apply, opts, *quiet)
+			n, err := fixOneFile(file, *apply, *backup, opts, *quiet)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "bakicli fix: %s: %v\n", file, err)
 				os.Exit(1)
@@ -1050,8 +1189,9 @@ func expandFixTargets(path string) ([]string, error) {
 }
 
 // fixOneFile loads, fixes, and optionally writes a single flow file. Returns
-// the number of fixes applied.
-func fixOneFile(file string, apply bool, opts analyzer.FixOptions, quiet bool) (int, error) {
+// the number of fixes applied. With backup, a changed file's original bytes
+// are kept as <file>.bak (same permissions) before the atomic replace.
+func fixOneFile(file string, apply, backup bool, opts analyzer.FixOptions, quiet bool) (int, error) {
 	data, err := os.ReadFile(file) // #nosec G304 -- path is a CLI argument supplied by the operator
 	if err != nil {
 		return 0, err
@@ -1067,6 +1207,11 @@ func fixOneFile(file string, apply bool, opts analyzer.FixOptions, quiet bool) (
 		return 0, err
 	}
 	if apply {
+		if backup && source != string(data) {
+			if err := writeBackup(file, data); err != nil {
+				return 0, err
+			}
+		}
 		if err := atomicWriteFile(file, []byte(source)); err != nil {
 			return 0, err
 		}
@@ -1074,6 +1219,19 @@ func fixOneFile(file string, apply bool, opts analyzer.FixOptions, quiet bool) (
 		fmt.Print(source)
 	}
 	return fixed, nil
+}
+
+// writeBackup writes the original bytes of file to <file>.bak, preserving the
+// source file's permission bits.
+func writeBackup(file string, data []byte) error {
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(file); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := os.WriteFile(file+".bak", data, mode); err != nil { // #nosec G306 -- mirrors the source file's mode
+		return fmt.Errorf("write backup: %w", err)
+	}
+	return nil
 }
 
 // atomicWriteFile writes data to path atomically: it writes to a temp file in
@@ -1483,10 +1641,16 @@ func printRulesJSON() {
 		Severity    string `json:"defaultSeverity"`
 		Confidence  string `json:"confidence"`
 		AutoFix     string `json:"autoFix,omitempty"`
+		// Options are the rule's tunable thresholds with their defaults
+		// (deep-nesting maxDepth, wide-loop maxBlocks, …) — the same keys
+		// `.bakirc.json` ruleConfig.<id>.options accepts. Absent for rules
+		// with nothing to tune.
+		Options map[string]any `json:"options,omitempty"`
 	}
+	defaults := models.DefaultSettings()
 	entries := make([]ruleEntry, 0, len(rules))
 	for _, r := range rules {
-		entries = append(entries, ruleEntry{
+		e := ruleEntry{
 			ID:          r.ID(),
 			Name:        r.Name(),
 			Description: r.Description(),
@@ -1494,7 +1658,11 @@ func printRulesJSON() {
 			Severity:    string(r.DefaultSeverity()),
 			Confidence:  string(analyzer.RuleConfidence(r.ID())),
 			AutoFix:     analyzer.RuleAutoFix(r.ID()),
-		})
+		}
+		if rc, ok := defaults.Analysis.Rules[r.ID()]; ok && len(rc.Options) > 0 {
+			e.Options = maps.Clone(rc.Options)
+		}
+		entries = append(entries, e)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -1938,8 +2106,13 @@ func runSuppressions(args []string) {
 	format := fs.String("format", "text", "output format: text, json")
 	failOnStale := fs.Bool("fail-on-stale", false, "exit 1 when any stale directive exists")
 	customRulesFlag := fs.String("custom-rules", "", "path to custom rules JSON file")
+	// Same .bakirc.json as `analyze`/`fix`: "stale" means "this rule no longer
+	// fires here", which depends on the configured rule set, severities and
+	// thresholds. Judged against built-in defaults instead, -fail-on-stale
+	// failed builds over directives that were still doing their job.
+	configFlag := fs.String("config", ".bakirc.json", "config file path (set to empty to skip auto-discovery)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: bakicli suppressions [-format text|json] [-fail-on-stale] <file.txt|folder|->")
+		fmt.Fprintln(os.Stderr, "usage: bakicli suppressions [-format text|json] [-fail-on-stale] [-config .bakirc.json] <file.txt|folder|->")
 		fmt.Fprintln(os.Stderr, "  list inline pad-ignore directives and flag stale ones")
 		fs.PrintDefaults()
 	}
@@ -1949,12 +2122,27 @@ func runSuppressions(args []string) {
 		os.Exit(2)
 	}
 
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	var cfg *bakiConfig
+	if *configFlag != "" {
+		loaded, err := loadConfig(*configFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "bakicli: config: %v\n", err)
+			os.Exit(2)
+		}
+		cfg = loaded
+	}
+	if cfg != nil && !setFlags["custom-rules"] && cfg.CustomRules != "" {
+		*customRulesFlag = cfg.CustomRules
+	}
+
 	doc, err := load(fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bakicli suppressions: %v\n", err)
 		os.Exit(2)
 	}
-	entries := analyzer.SuppressionInventory(doc, selectRules("", *customRulesFlag, nil), models.DefaultSettings())
+	entries := analyzer.SuppressionInventory(doc, selectRules("", *customRulesFlag, inlineRulesOf(cfg)), buildSettingsFromConfig(cfg))
 
 	if *format == "json" {
 		enc := json.NewEncoder(os.Stdout)

@@ -3,39 +3,61 @@
 # Usage in your .gitlab-ci.yml:
 #
 #   include:
-#     - remote: 'https://raw.githubusercontent.com/<org>/baki/main/ci/.gitlab-ci.pad-analysis.yml'
+#     - remote: 'https://raw.githubusercontent.com/dusankuburic/baki/main/ci/.gitlab-ci.pad-analysis.yml'
 #
 #   pad-analysis:
 #     extends: .pad-analysis
 #     variables:
 #       FLOW_PATH: './flows'
 #       FAIL_ON: 'error'
+#       # RULES: 'hardcoded-credential,unhandled-error'   # empty = all enabled rules
 #       # BASELINE: 'baseline.json'   # ratchet: fail only on NEW findings
 #       # POLICY: 'policy.json'       # authoritative gate (overrides FAIL_ON)
+#       # NEW_FROM_REV: 'origin/main' # gate only on findings absent at that revision
+#       # CUSTOM_RULES: 'rules.json'  # extra rule definitions
+#       # CONFIG: '.bakirc.json'      # empty = auto-discover ./.bakirc.json
+#       # BAKI_VERSION: 'v0.1.0'      # release tag; 'latest' = newest release
 #
-# This template downloads the bakicli release binary (checksum-verified), runs
-# analysis with SARIF output, publishes the SARIF report as a GitLab artifact,
-# and fails the pipeline on threshold breach.
+# What it does: downloads the bakicli release binary (checksum-verified) — or,
+# when no release asset matches (nothing published yet, air-gapped mirror),
+# builds it from source at BAKI_SOURCE_REF — runs ONE analysis that writes the
+# SARIF report and a JSON report (the job-log summary is derived from that same
+# run, so every gate flag is reflected in its numbers), publishes both as plain
+# job artifacts, and fails the job on threshold/policy breach.
 #
-# It used to run `go build ./cmd/bakicli` inside $CI_PROJECT_DIR — the
-# CONSUMER's repository, which has no cmd/bakicli — so it failed in
-# before_script for every consumer, every time. Pin BAKI_VERSION to a release
-# tag for reproducible gates; "latest" follows the newest release.
+# SARIF and GitLab: the file is published under artifacts:paths only. It is NOT
+# declared as artifacts:reports:sast — that report type expects GitLab's own
+# SAST JSON schema, and a SARIF file there is silently ignored (the MR security
+# widget stayed empty while the job passed). Download it from the job's
+# artifacts, or convert it to the GitLab schema yourself if you need the widget.
+#
+# Exit codes: 0 gate passed · 1 gate failed (report complete) · 2 usage,
+# config/policy or parse error (no report; the job fails regardless of FAIL_ON).
+#
+# Shell: the image is alpine, whose default shell is busybox sh, so the scripts
+# are POSIX (argument lists are built with `set --`, not bash arrays).
 
 .pad-analysis:
   image: alpine:3.20
   variables:
     FLOW_PATH: '.'
     FAIL_ON: 'error'
+    RULES: ''
     BASELINE: ''
     POLICY: ''
+    NEW_FROM_REV: ''
+    CUSTOM_RULES: ''
+    CONFIG: ''
     SARIF_FILE: 'pad-analysis.sarif'
+    REPORT_FILE: 'pad-report.json'
     BAKI_REPO: 'dusankuburic/baki'
     BAKI_VERSION: 'latest'
+    # Git ref built from source when the release download fails.
+    BAKI_SOURCE_REF: 'main'
   before_script:
-    - apk add --no-cache jq curl bash
+    - apk add --no-cache jq curl
     - |
-      set -euo pipefail
+      set -eu
       case "$(uname -m)" in
         x86_64) goarch=amd64 ;;
         aarch64|arm64) goarch=arm64 ;;
@@ -48,45 +70,66 @@
         base="https://github.com/${BAKI_REPO}/releases/download/${BAKI_VERSION}"
       fi
       tmp="$(mktemp -d)"
-      curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset"
-      curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256"
-      ( cd "$tmp" && sha256sum -c "$asset.sha256" )
-      tar -xzf "$tmp/$asset" -C "$tmp"
-      mv "$tmp/bakicli-linux-${goarch}" /usr/local/bin/bakicli
+      acquired=false
+      if curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset" \
+         && curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256" \
+         && ( cd "$tmp" && sha256sum -c "$asset.sha256" ); then
+        tar -xzf "$tmp/$asset" -C "$tmp"
+        mv "$tmp/bakicli-linux-${goarch}" /usr/local/bin/bakicli
+        acquired=true
+        echo "acquired release binary $asset"
+      fi
+      if [ "$acquired" != "true" ]; then
+        # Source-build fallback (mirrors the GitHub Action): no matching
+        # release asset, checksum missing, or mismatch. GOTOOLCHAIN=auto
+        # fetches the Go version go.mod asks for when the distro's is older.
+        echo "release asset unavailable at $base/$asset — building bakicli from source (${BAKI_SOURCE_REF})"
+        apk add --no-cache go git
+        git clone --depth 1 --branch "$BAKI_SOURCE_REF" "https://github.com/${BAKI_REPO}.git" "$tmp/src"
+        ( cd "$tmp/src" && GOTOOLCHAIN=auto go build -ldflags "-X main.version=${BAKI_SOURCE_REF}" -o /usr/local/bin/bakicli ./cmd/bakicli )
+      fi
       chmod +x /usr/local/bin/bakicli
-      bakicli -version || true
+      bakicli --version
   script:
     - |
-      set -euo pipefail
-      args=()
+      set -eu
+      set --
       if [ -n "$POLICY" ]; then
-        args+=(-policy "$POLICY")
+        set -- "$@" -policy "$POLICY"
       else
         gate="$FAIL_ON"
-        [ "$gate" = "none" ] && gate="info"
-        args+=(-fail-on "$gate")
+        if [ "$gate" = "none" ]; then gate="info"; fi
+        set -- "$@" -fail-on "$gate"
       fi
-      if [ -n "$BASELINE" ]; then
-        args+=(-baseline "$BASELINE")
-      fi
-      # SARIF is emitted before the gate exits non-zero, so the report is complete.
+      if [ -n "$RULES" ]; then set -- "$@" -rules "$RULES"; fi
+      if [ -n "$BASELINE" ]; then set -- "$@" -baseline "$BASELINE"; fi
+      if [ -n "$NEW_FROM_REV" ]; then set -- "$@" -new-from-rev "$NEW_FROM_REV"; fi
+      if [ -n "$CUSTOM_RULES" ]; then set -- "$@" -custom-rules "$CUSTOM_RULES"; fi
+      if [ -n "$CONFIG" ]; then set -- "$@" -config "$CONFIG"; fi
+      # ONE run: SARIF to $SARIF_FILE, the JSON report (same flags, same
+      # numbers, policy verdict included) to $REPORT_FILE. Both are written
+      # before the gate exits non-zero; exit 2 leaves them empty.
       set +e
-      bakicli -format sarif "${args[@]}" "$FLOW_PATH" > "$SARIF_FILE"
+      bakicli -format sarif -report-json "$REPORT_FILE" "$@" "$FLOW_PATH" > "$SARIF_FILE"
       code=$?
       set -e
       echo "Gate exit code: $code"
-      # Print a summary to the job log
-      bakicli -format json -quiet "$FLOW_PATH" > pad-report.json || true
-      if [ -s pad-report.json ]; then
+      if [ "$code" = "2" ]; then
+        echo "PAD analysis could not run (exit 2: usage, config/policy or parse error) — no report produced."
+        exit 2
+      fi
+      if [ -s "$REPORT_FILE" ]; then
         echo ""
         echo "=== PAD Flow Analysis ==="
-        echo "Errors:   $(jq '.stats.errors' pad-report.json)"
-        echo "Warnings: $(jq '.stats.warnings' pad-report.json)"
-        echo "Info:     $(jq '.stats.info' pad-report.json)"
-        echo "Health:   $(jq '.metrics.healthScore // "n/a"' pad-report.json)/100"
+        echo "Errors:     $(jq '.stats.errors' "$REPORT_FILE")"
+        echo "Warnings:   $(jq '.stats.warnings' "$REPORT_FILE")"
+        echo "Info:       $(jq '.stats.info' "$REPORT_FILE")"
+        echo "Suppressed: $(jq '.stats.suppressed' "$REPORT_FILE") (inline)"
+        echo "Health:     $(jq '.metrics.healthScore // "n/a"' "$REPORT_FILE")/100"
+        jq -r 'if .policy then "Policy:     \(.policy.policyName) — \(if .policy.passed then "passed" else "FAILED" end), \(.policy.violations | length) violation(s)" else empty end' "$REPORT_FILE"
         echo "=========================="
       fi
-      # Save the exit code for the after_script gate check
+      # Save the exit code for the gate check below
       echo "$code" > .gate-exit-code
     # Fail the job if the gate failed.
     #
@@ -100,19 +143,18 @@
         code=$(cat .gate-exit-code)
         if [ "$code" != "0" ]; then
           if [ -n "$POLICY" ]; then
-            echo "PAD analysis gate failed (policy=$POLICY)."
+            echo "PAD analysis gate failed (policy=$POLICY, exit $code)."
           else
-            echo "PAD analysis gate failed (fail-on=$FAIL_ON)."
+            echo "PAD analysis gate failed (fail-on=$FAIL_ON, exit $code)."
           fi
           exit "$code"
         fi
       fi
   artifacts:
     when: always
-    reports:
-      # SARIF reports are surfaced in GitLab merge request widgets as SAST.
-      sast: pad-analysis.sarif
+    # Plain artifacts on purpose — see the header on why reports:sast is not
+    # used for SARIF.
     paths:
-      - pad-analysis.sarif
-      - pad-report.json
+      - $SARIF_FILE
+      - $REPORT_FILE
     expire_in: 30 days

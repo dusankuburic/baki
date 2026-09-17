@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"pad-core/models"
@@ -11,12 +12,19 @@ import (
 
 // ReportToCSV serializes an analysis report as CSV (RFC 4180) — spreadsheet-
 // friendly for ops teams who paste findings into Excel for triage. One row per
-// finding, with a header row. doc may be nil; when provided, flow name and
-// file path columns are populated.
+// finding, with a header row. doc may be nil; when provided, flow name, file
+// path and per-finding line numbers are populated.
+//
+// The first line is a `#` summary comment carrying the counts that have no
+// natural column — above all the number of findings hidden by inline
+// pad-ignore directives, which a sheet of the remaining rows cannot show.
+// Readers that want rows only skip it with csv.Reader.Comment = '#' (or
+// delete row 1 in a spreadsheet).
 func ReportToCSV(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
 	if report == nil {
 		report = &models.AnalysisReport{}
 	}
+	doc = withIndexes(doc)
 
 	flowName := ""
 	filePath := ""
@@ -26,14 +34,22 @@ func ReportToCSV(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 	}
 
 	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "# PAD Analyzer: %d finding(s) — %d error(s), %d warning(s), %d info; %d suppressed inline\n",
+		len(report.Findings), report.Stats.Errors, report.Stats.Warnings, report.Stats.Info, report.Stats.Suppressed)
 	w := csv.NewWriter(&buf)
 
-	header := []string{"Rule", "Severity", "Title", "Description", "Suggestion", "Flow", "File", "BlockID", "SubflowID"}
+	// New columns are APPENDED so consumers indexing the original nine keep
+	// working.
+	header := []string{"Rule", "Severity", "Title", "Description", "Suggestion", "Flow", "File", "BlockID", "SubflowID", "Line", "Fingerprint", "Category"}
 	if err := w.Write(header); err != nil {
 		return nil, fmt.Errorf("CSV header write: %w", err)
 	}
 
 	for _, f := range report.Findings {
+		line := ""
+		if n := blockLine(f, doc); n > 0 {
+			line = strconv.Itoa(n)
+		}
 		row := []string{
 			csvCell(f.RuleID),
 			csvCell(string(f.Severity)),
@@ -44,6 +60,9 @@ func ReportToCSV(report *models.AnalysisReport, doc *models.FlowDocument) ([]byt
 			csvCell(filePath),
 			csvCell(f.BlockID),
 			csvCell(f.SubflowID),
+			line,
+			csvCell(f.Fingerprint),
+			csvCell(f.Category),
 		}
 		if err := w.Write(row); err != nil {
 			return nil, fmt.Errorf("CSV row write: %w", err)
