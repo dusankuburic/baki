@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ func TestAssemblePortfolio(t *testing.T) {
 	}
 	names := map[string]string{"u1": "u1@example.com", "u2": "u2@example.com"}
 
-	p := assemblePortfolio(docs, health, names)
+	p := assemblePortfolio(docs, health, names, PortfolioSortRisk, 0)
 
 	if p.TotalFlows != 3 || p.AnalyzedFlows != 2 {
 		t.Fatalf("totals: total=%d analyzed=%d, want 3/2", p.TotalFlows, p.AnalyzedFlows)
@@ -51,8 +53,66 @@ func TestAssemblePortfolio(t *testing.T) {
 	}
 }
 
+func TestAssemblePortfolio_SortAndLimit(t *testing.T) {
+	earlier := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	later := earlier.Add(time.Hour)
+	docs := []*storageif.FlowDocument{
+		{ID: "f1", Name: "Delta"},
+		{ID: "f2", Name: "Alpha"},
+		{ID: "f3", Name: "Charlie"},
+		{ID: "f4", Name: "Bravo"}, // never analyzed
+	}
+	health := map[string]*storageif.HealthSnapshot{
+		"f1": {HealthScore: 90, Errors: 0, Warnings: 5, AnalyzedAt: earlier},
+		"f2": {HealthScore: 40, Errors: 2, Warnings: 0, AnalyzedAt: earlier},
+		"f3": {HealthScore: 70, Errors: 2, Warnings: 3, AnalyzedAt: later},
+	}
+	cases := []struct {
+		sort  PortfolioSort
+		limit int
+		want  []string
+	}{
+		{PortfolioSortRisk, 0, []string{"f2", "f3", "f1", "f4"}},
+		{PortfolioSortHealth, 0, []string{"f1", "f3", "f2", "f4"}},
+		// Equal error counts break on warnings.
+		{PortfolioSortErrors, 0, []string{"f3", "f2", "f1", "f4"}},
+		// Name ignores analysis state entirely.
+		{PortfolioSortName, 0, []string{"f2", "f4", "f3", "f1"}},
+		// Equal timestamps fall back to name.
+		{PortfolioSortAnalyzed, 0, []string{"f3", "f2", "f1", "f4"}},
+		{PortfolioSortRisk, 2, []string{"f2", "f3"}},
+		{PortfolioSortRisk, 10, []string{"f2", "f3", "f1", "f4"}},
+	}
+	for _, tc := range cases {
+		p := assemblePortfolio(docs, health, map[string]string{}, tc.sort, tc.limit)
+		got := make([]string, len(p.Entries))
+		for i, e := range p.Entries {
+			got[i] = e.FlowID
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("sort=%s limit=%d: entries %v, want %v", tc.sort, tc.limit, got, tc.want)
+		}
+		// Trimming the entries must not shrink the rollup.
+		if p.TotalFlows != 4 || p.AnalyzedFlows != 3 || p.Errors != 4 {
+			t.Errorf("sort=%s limit=%d: totals %+v cover less than the whole fleet", tc.sort, tc.limit, p)
+		}
+	}
+}
+
+func TestParsePortfolioSort(t *testing.T) {
+	if got, err := ParsePortfolioSort(""); err != nil || got != PortfolioSortRisk {
+		t.Errorf("empty sort = %q, %v; want risk", got, err)
+	}
+	if got, err := ParsePortfolioSort("errors"); err != nil || got != PortfolioSortErrors {
+		t.Errorf("errors sort = %q, %v", got, err)
+	}
+	if _, err := ParsePortfolioSort("updated_desc"); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("unknown sort err = %v, want ErrInvalidInput", err)
+	}
+}
+
 func TestAssemblePortfolio_Empty(t *testing.T) {
-	p := assemblePortfolio(nil, map[string]*storageif.HealthSnapshot{}, map[string]string{})
+	p := assemblePortfolio(nil, map[string]*storageif.HealthSnapshot{}, map[string]string{}, PortfolioSortRisk, 0)
 	if p.TotalFlows != 0 || p.AnalyzedFlows != 0 || p.AvgHealth != 0 {
 		t.Errorf("empty portfolio should be zeroed, got %+v", p)
 	}
@@ -67,7 +127,7 @@ func TestAssemblePortfolio_Empty(t *testing.T) {
 // must return an empty portfolio instead.
 func TestBuildPortfolio_LocalModeIsEmpty(t *testing.T) {
 	svc := NewLibraryService(nil, nil, nil)
-	p, err := svc.BuildPortfolio(context.Background(), "user-1", "")
+	p, err := svc.BuildPortfolio(context.Background(), "user-1", "", PortfolioSortRisk, 0)
 	if err != nil {
 		t.Fatalf("BuildPortfolio in local mode: %v", err)
 	}

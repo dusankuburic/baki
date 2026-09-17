@@ -193,6 +193,7 @@ jobs:
             appName=${{ secrets.AZURE_CONTAINER_APP_NAME }}
             image=ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
             authSecret=${{ secrets.PAD_AUTH_SECRET }}
+            encryptionKey=${{ secrets.PAD_ENCRYPTION_KEY }}
             databaseUrl=${{ secrets.PAD_DATABASE_URL }}
             storageAccountResourceId=${{ secrets.AZURE_STORAGE_ACCOUNT_ID }}
             registryUsername=${{ github.repository_owner }}

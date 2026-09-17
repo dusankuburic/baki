@@ -24,7 +24,7 @@ var rlsStreamingPrefixes = []string{
 
 // rlsHeavyExactPaths lists CPU- or blob-heavy request paths exempt from the
 // per-request RLS transaction for the same reason as the streaming routes:
-// each can burn seconds of CPU (parse + 41-rule analysis + iterative fix
+// each can burn seconds of CPU (parse + 45-rule analysis + iterative fix
 // loop) or perform many blob round-trips while holding the transaction, so a
 // handful of concurrent calls pins every pooled connection and stalls ALL
 // other requests — including health-gated writes.
@@ -43,19 +43,19 @@ var rlsStreamingPrefixes = []string{
 var rlsHeavyExactPaths = map[string]bool{
 	// Analysis of stored flows — resolve via GetAuthorized("viewer"), then
 	// seconds of parse/analyze/export CPU on the resolved document.
-	"/api/analysis/analyze":        true,
-	"/api/analysis/lineage":        true,
-	"/api/analysis/graph":          true,
-	"/api/analysis/metrics":        true,
-	"/api/analysis/dataflow":       true,
-	"/api/analysis/diff":           true,
-	"/api/analysis/compare":        true,
-	"/api/analysis/subflow-hashes": true,
-	"/api/analysis/deduplicate":    true,
-	"/api/analysis/related":        true,
-	"/api/analysis/export/sarif":   true,
-	"/api/analysis/export/junit":   true,
-	"/api/analysis/export/csv":     true,
+	"/api/analysis/analyze":      true,
+	"/api/analysis/lineage":      true,
+	"/api/analysis/graph":        true,
+	"/api/analysis/dataflow":     true,
+	"/api/analysis/diff":         true,
+	"/api/analysis/compare":      true,
+	"/api/analysis/deduplicate":  true,
+	"/api/analysis/related":      true,
+	"/api/analysis/export/sarif": true,
+	"/api/analysis/export/junit": true,
+	// Suppression inventory: parses the flow and runs every rule to decide
+	// which inline pad-ignore directives are stale.
+	"/api/analysis/suppressions": true,
 	// Stateless CI payload analysis — nothing is persisted; PAT-authed and
 	// body/time bounded by the handler itself.
 	"/api/analysis/analyze-raw": true,
@@ -85,9 +85,9 @@ func rlsExemptPath(path string) bool {
 }
 
 // rlsMiddleware sets the Postgres session variable app.current_user_id for
-// every authenticated /api/ request. The variable is scoped to a transaction
-// that wraps the entire request so that Row-Level Security policies can filter
-// rows by the caller's identity.
+// authenticated /api/ requests that are not exempt (below). The variable is
+// scoped to a transaction that wraps the entire request so that Row-Level
+// Security policies can filter rows by the caller's identity.
 //
 // The middleware is a no-op when:
 //   - JWT auth is disabled (local / desktop mode)
@@ -95,6 +95,14 @@ func rlsExemptPath(path string) bool {
 //   - the route is public (no authenticated user)
 //   - the route streams (see rlsStreamingPrefixes) — wrapping it would pin a
 //     connection for the stream's lifetime
+//   - the route is CPU- or blob-heavy (see rlsHeavyExactPaths), including
+//     some writes (apply-fix, save-source, upload)
+//
+// Outside this middleware entirely: the /ws WebSocket endpoint (not under
+// /api/) and background work — the scanner, retention purge, audit writer and
+// notification delivery. None of these run with app.current_user_id set, so
+// for them RLS policies allow every row and tenant isolation rests on the
+// Go-layer authz and the queries' explicit owner/org clauses.
 //
 // If the RLS transaction cannot be started, the request proceeds without RLS
 // (the Go-layer authz is still enforced). A warning is logged so operators can

@@ -169,6 +169,19 @@ describe('deleteOrg', () => {
     expect(useOrgStore.getState().activeOrgId).toBeNull()
   })
 
+  // Same reason leaving resets: the deleted org's flow, findings and chat
+  // would otherwise stay on screen behind requests that now 404.
+  it('closes the open flow when the active org is deleted', async () => {
+    useOrgStore.setState({organisations: [fakeOrg], activeOrgId: 'org-1'})
+    const {useFlowStore} = await import('./flowStore')
+    useFlowStore.setState({document: {id: 'f1'} as never})
+    mockRequest.mockResolvedValue(undefined)
+
+    await useOrgStore.getState().deleteOrg('org-1')
+
+    expect(useFlowStore.getState().document).toBeNull()
+  })
+
   it('preserves activeOrgId when a different org is deleted', async () => {
     const other: Organisation = {...fakeOrg, id: 'org-2', name: 'Other'}
     useOrgStore.setState({organisations: [fakeOrg, other], activeOrgId: 'org-1'})
@@ -229,6 +242,65 @@ describe('setMemberRole', () => {
     await useOrgStore.getState().setMemberRole('org-1', 'u2', 'admin')
 
     expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/members/u2/role', {body: {role: 'admin'}, method: 'PUT'})
+  })
+})
+
+// ---- renameOrg ----
+
+describe('renameOrg', () => {
+  it('PUTs the new name and updates the org in place', async () => {
+    useOrgStore.setState({organisations: [fakeOrg], activeOrgId: 'org-1'})
+    mockRequest.mockResolvedValue({...fakeOrg, name: 'Acme Holdings'})
+
+    await useOrgStore.getState().renameOrg('org-1', 'Acme Holdings')
+
+    expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1', {body: {name: 'Acme Holdings'}, method: 'PUT'})
+    expect(useOrgStore.getState().organisations[0].name).toBe('Acme Holdings')
+    expect(useOrgStore.getState().activeOrgId).toBe('org-1')
+  })
+
+  it('keeps the old name and surfaces the error on failure', async () => {
+    useOrgStore.setState({organisations: [fakeOrg]})
+    mockRequest.mockRejectedValue(new Error('forbidden'))
+
+    await expect(useOrgStore.getState().renameOrg('org-1', 'Nope')).rejects.toThrow()
+    expect(useOrgStore.getState().organisations[0].name).toBe('Acme Corp')
+    expect(useOrgStore.getState().error).toBe('forbidden')
+    expect(useOrgStore.getState().isBusy).toBe(false)
+  })
+})
+
+// ---- removeMember (incl. leaving) ----
+
+describe('removeMember', () => {
+  // Leaving the org you are working in must behave like switching away from
+  // it: loadOrgs' fallback alone reset activeOrgId but left the org's open
+  // flow on screen.
+  it('leaving the active org drops it, falls back to Personal and closes its flow', async () => {
+    useOrgStore.setState({organisations: [fakeOrg], activeOrgId: 'org-1'})
+    const {useFlowStore} = await import('./flowStore')
+    useFlowStore.setState({document: {id: 'f1'} as never})
+    // 1st call: DELETE member; 2nd call: loadOrgs -> the org is gone.
+    mockRequest.mockResolvedValueOnce(undefined).mockResolvedValueOnce([])
+
+    await useOrgStore.getState().removeMember('org-1', 'u2')
+
+    expect(mockRequest).toHaveBeenNthCalledWith(1, '/api/orgs/org-1/members/u2', {method: 'DELETE'})
+    expect(useOrgStore.getState().organisations).toEqual([])
+    expect(useOrgStore.getState().activeOrgId).toBeNull()
+    expect(useFlowStore.getState().document).toBeNull()
+  })
+
+  it('removing someone else keeps the active org and its open flow', async () => {
+    useOrgStore.setState({organisations: [fakeOrg], activeOrgId: 'org-1'})
+    const {useFlowStore} = await import('./flowStore')
+    useFlowStore.setState({document: {id: 'f1'} as never})
+    mockRequest.mockResolvedValueOnce(undefined).mockResolvedValueOnce([fakeOrg])
+
+    await useOrgStore.getState().removeMember('org-1', 'u2')
+
+    expect(useOrgStore.getState().activeOrgId).toBe('org-1')
+    expect(useFlowStore.getState().document).not.toBeNull()
   })
 })
 

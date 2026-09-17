@@ -42,6 +42,19 @@ const SYSTEM_VIEW_TITLES: Record<SystemView, string> = {
   admin: 'Admin',
 }
 
+// enterFullscreen swallows both failure shapes of the Fullscreen API.
+// requestFullscreen reports refusal (no user activation, fullscreen disabled
+// by an embedding iframe) by REJECTING, which a try/catch around a `void`ed
+// call never sees — it surfaced as an unhandled rejection. The try covers
+// engines where the method is missing and the call throws synchronously.
+function enterFullscreen() {
+  try {
+    window.document.documentElement.requestFullscreen().catch(() => {})
+  } catch {
+    /* fullscreen not supported */
+  }
+}
+
 export default function MainPaneToolbar() {
   const mainPaneView = useUIStore(s => s.mainPaneView)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
@@ -86,18 +99,7 @@ export default function MainPaneToolbar() {
             {SYSTEM_VIEW_TITLES[mainPaneView as SystemView]}
           </span>
         </div>
-        <IconButton
-          icon={Expand}
-          size="sm"
-          label={t('toolbar.fullscreen')}
-          onClick={() => {
-            try {
-              void window.document.documentElement.requestFullscreen()
-            } catch {
-              /* fullscreen not supported */
-            }
-          }}
-        />
+        <IconButton icon={Expand} size="sm" label={t('toolbar.fullscreen')} onClick={enterFullscreen} />
       </div>
     )
   }
@@ -264,18 +266,7 @@ export default function MainPaneToolbar() {
             onClick={handleReimport}
           />
         )}
-        <IconButton
-          icon={Expand}
-          size="sm"
-          label={t('toolbar.fullscreen')}
-          onClick={() => {
-            try {
-              void window.document.documentElement.requestFullscreen()
-            } catch {
-              /* fullscreen not supported */
-            }
-          }}
-        />
+        <IconButton icon={Expand} size="sm" label={t('toolbar.fullscreen')} onClick={enterFullscreen} />
         <IconButton icon={Download} size="sm" label={t('toolbar.exportPdf')} onClick={() => handleExport('pdf')} />
         <IconButton icon={Code2} size="sm" label={t('toolbar.exportHtml')} onClick={() => handleExport('html')} />
       </div>

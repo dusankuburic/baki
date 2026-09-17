@@ -115,6 +115,8 @@ export function useAppShortcuts(deps: {
       'view.map': () => useUIStore.getState().setMainPaneView('map'),
       'view.local-map': () => useUIStore.getState().setMainPaneView('local-map'),
       'nav.up.subflow': () => useFlowStore.getState().drillUp(),
+      'nav.back': () => useFlowStore.getState().goBack(),
+      'nav.forward': () => useFlowStore.getState().goForward(),
       'view.theme.toggle': () => toggleTheme(),
       'file.open': async () => {
         try {

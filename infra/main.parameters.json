@@ -18,6 +18,7 @@
     "metricsToken":             { "value": "<random token for GET /metrics>" },
     "storageAccountResourceId": { "value": "" },
     "authSecret":               { "value": "<openssl rand -hex 32>" },
+    "encryptionKey":            { "value": "<openssl rand -hex 32, different from authSecret; set before users store provider keys>" },
     "databaseUrl":              { "value": "postgres://baki_app:<password>@<host>:5432/baki?sslmode=require" }
   }
 }

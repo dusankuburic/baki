@@ -82,7 +82,7 @@ func TestAdminUserRole_PromotingMember_AlwaysSucceeds(t *testing.T) {
 }
 
 // TestMigrationStart_Unconfigured_Returns503: in the test router the migration
-// runner is disabled (no PAD_STORAGE_DATA_DIR), so the admin endpoint must
+// runner is disabled (no PAD_DATA_DIR), so the admin endpoint must
 // report 503 rather than the old hardcoded 501.
 func TestMigrationStart_Unconfigured_Returns503(t *testing.T) {
 	rt := newJWTTestRouter(t)

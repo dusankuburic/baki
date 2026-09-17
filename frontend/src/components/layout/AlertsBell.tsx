@@ -1,6 +1,6 @@
 import {useTranslation} from 'react-i18next'
 import {useEffect, useRef} from 'react'
-import {Bell, X, CheckCheck, Trash2, ChevronRight} from 'lucide-react'
+import {Bell, X, CheckCheck, Trash2, ChevronRight, Eye, EyeOff} from 'lucide-react'
 import clsx from 'clsx'
 import {useGovernanceStore} from '@/stores/governanceStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -86,11 +86,15 @@ function AlertsPanel() {
   const loading = useGovernanceStore(s => s.loading)
   const dismiss = useGovernanceStore(s => s.dismiss)
   const clear = useGovernanceStore(s => s.clearDismissed)
+  const showDismissed = useGovernanceStore(s => s.showDismissed)
+  const setShowDismissed = useGovernanceStore(s => s.setShowDismissed)
   const closePanel = useGovernanceStore(s => s.closePanel)
   const setDocument = useFlowStore(s => s.setDocument)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
-  const hasDismissed = alerts.some(a => a.dismissedAt)
+  // Dismissed rows only reach the list while the toggle is on, so Clear is
+  // offered exactly when there is something on screen for it to remove.
+  const hasDismissed = showDismissed && alerts.some(a => a.dismissedAt)
 
   const openFlow = async (flowId: string) => {
     closePanel()
@@ -109,6 +113,15 @@ function AlertsPanel() {
       <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
         <span className="text-xs font-medium text-text-secondary">{t('alerts.heading')}</span>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => void setShowDismissed(!showDismissed)}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors duration-fast"
+            aria-pressed={showDismissed}
+            title={showDismissed ? t('alerts.hideDismissed') : t('alerts.showDismissed')}
+          >
+            {showDismissed ? <EyeOff size={11} /> : <Eye size={11} />}{' '}
+            {showDismissed ? t('alerts.hideDismissedShort') : t('alerts.showDismissedShort')}
+          </button>
           {hasDismissed && (
             <button
               onClick={() => void clear()}

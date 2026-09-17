@@ -2,7 +2,7 @@ import {useTranslation} from 'react-i18next'
 import React, {useState, useEffect} from 'react'
 import {Library, Search, Trash2, FolderOpen, Save, RefreshCw} from 'lucide-react'
 import {libraryApi, type LibraryFlow} from '@/api/library'
-import {VersionConflictError} from '@/api/client'
+import {useLibraryWriteErrorToast} from '@/components/library/useLibraryWriteErrorToast'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useOrgStore} from '@/stores/orgStore'
@@ -24,6 +24,7 @@ export default function LibraryTab() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const toast = useToast()
+  const reportWriteError = useLibraryWriteErrorToast()
   const {confirm, prompt} = useConfirm()
 
   // Debounce search input to avoid firing an API call per keystroke (mirrors
@@ -115,20 +116,7 @@ export default function LibraryTab() {
         toast.success(t('libraryTab.updated'))
         fetchLibrary()
       } catch (err) {
-        if (err instanceof VersionConflictError) {
-          toast.warning(t('libraryTab.conflictTitle'), {
-            description: t('libraryTab.conflictBody'),
-            duration: 15000,
-            action: {
-              label: t('libraryTab.reload'),
-              onClick: () => reloadFromLibrary(libraryFlowId),
-            },
-          })
-        } else {
-          toast.error(t('libraryTab.updateFailed'), {
-            description: err instanceof Error ? err.message : t('libraryTab.unknownError'),
-          })
-        }
+        reportWriteError(err, t('libraryTab.updateFailed'), () => reloadFromLibrary(libraryFlowId))
       } finally {
         setIsSaving(false)
       }

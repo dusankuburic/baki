@@ -100,7 +100,7 @@ func (s *FlowService) cloudFixContextFor(doc *models.FlowDocument, blockID, fixT
 	if err != nil {
 		return nil, err
 	}
-	patch, err := analyzer.PatchForFix(target, fixType, ruleID, variable, property)
+	patch, err := patchForFix(target, fixType, ruleID, variable, property)
 	if err != nil {
 		return nil, err
 	}

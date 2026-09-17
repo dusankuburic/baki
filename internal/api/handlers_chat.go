@@ -322,42 +322,6 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// @Summary      Export conversation
-// @Description  Exports the chat history to a file. Only available in local mode.
-// @Tags         chat
-// @Param        request body object true "request"
-// @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      500 {object} map[string]string "Internal Server Error"
-// @Router       /api/chat/export [post]
-func (h *ChatHandler) handleExportConversation(w http.ResponseWriter, r *http.Request) {
-	if h.common.JWTEnabled {
-		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
-		return
-	}
-	var req struct {
-		FlowID   string `json:"flowId"`
-		Provider string `json:"provider"`
-		Path     string `json:"path"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	doc, ok := resolveFlow(w, r, h.flowSvc, h.common, req.FlowID, "viewer")
-	if !ok {
-		return
-	}
-
-	if err := h.chatSvc.ExportConversation(r.Context(), doc, req.Provider, req.Path); err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	render.JSON(w, map[string]string{"status": "ok"})
-}
-
 // @Summary      Preview AI context
 // @Description  Returns a preview of the context that will be sent to the AI provider.
 // @Tags         chat

@@ -274,7 +274,7 @@ func (h *AnalysisHandler) notifyFindingAssignment(assigneeID, assignerID, flowNa
 			break
 		}
 	}
-	if err := h.email.SendFindingAssigned(ctx, assignee.Email, assigneeName, assignerName, flowName, findingTitle, ""); err != nil {
+	if err := h.email.SendFindingAssigned(ctx, assignee.Email, assigneeName, assignerName, flowName, findingTitle); err != nil {
 		logger.Warn("failed to send finding-assignment notification", "assignee", assigneeID, "error", err)
 	}
 }

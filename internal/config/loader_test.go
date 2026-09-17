@@ -467,3 +467,37 @@ func TestIsWeakSecret_BlocklistAndEntropy(t *testing.T) {
 		t.Errorf("isWeakSecret(good secret) = true, want false (false positive)")
 	}
 }
+
+// TestLoadFromEnvRaw_CloudDefaultsToInfoLogLevel: the documented cloud default
+// is info, but Default() carries the desktop's debug level and nothing
+// adjusted it for cloud mode.
+func TestLoadFromEnvRaw_CloudDefaultsToInfoLogLevel(t *testing.T) {
+	t.Setenv("PAD_MODE", "cloud")
+	t.Setenv("PAD_LOG_LEVEL", "")
+	cfg, err := LoadFromEnvRaw()
+	if err != nil {
+		t.Fatalf("LoadFromEnvRaw: %v", err)
+	}
+	if cfg.Log.Level != "info" {
+		t.Errorf("cloud default log level = %q, want info", cfg.Log.Level)
+	}
+
+	t.Setenv("PAD_LOG_LEVEL", "debug")
+	cfg, err = LoadFromEnvRaw()
+	if err != nil {
+		t.Fatalf("LoadFromEnvRaw: %v", err)
+	}
+	if cfg.Log.Level != "debug" {
+		t.Errorf("an explicit PAD_LOG_LEVEL must win, got %q", cfg.Log.Level)
+	}
+
+	t.Setenv("PAD_MODE", "local")
+	t.Setenv("PAD_LOG_LEVEL", "")
+	cfg, err = LoadFromEnvRaw()
+	if err != nil {
+		t.Fatalf("LoadFromEnvRaw: %v", err)
+	}
+	if cfg.Log.Level != "debug" {
+		t.Errorf("local default log level = %q, want debug", cfg.Log.Level)
+	}
+}

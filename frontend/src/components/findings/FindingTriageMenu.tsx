@@ -10,6 +10,7 @@ import {useDismissable} from '@/hooks/useDismissable'
 import {triageTone} from '@/lib/severityTone'
 import Avatar from '@/components/shared/Avatar'
 import {isTauri} from '@/platform/guards'
+import {useSuppressReasonPrompt} from './hooks/useSuppressReasonPrompt'
 import type {Finding, TriageStatus} from '@/types'
 
 // Order only — labels resolve through findings:triage.status.<status>, whose
@@ -31,6 +32,7 @@ export default function FindingTriageMenu({finding}: Props) {
   const [showTriage, setShowTriage] = useState(false)
   const [showAssign, setShowAssign] = useState(false)
   const toast = useToast()
+  const promptSuppressReason = useSuppressReasonPrompt()
   const setFindingTriage = useAnalysisStore(s => s.setFindingTriage)
   const assignFinding = useAnalysisStore(s => s.assignFinding)
   // Select only the single triage entry this card needs — selecting the whole
@@ -69,10 +71,18 @@ export default function FindingTriageMenu({finding}: Props) {
     setShowAssign(false)
   })
 
-  const handleSetTriage = (status: TriageStatus) => {
+  const handleSetTriage = async (status: TriageStatus) => {
     setShowTriage(false)
     if (status === triageStatus) return
-    setFindingTriage(finding, status)
+    // Suppressing asks why (stored as the triage justification and shown on
+    // the chip); cancelling leaves the status unchanged.
+    let justification: string | undefined
+    if (status === 'suppressed') {
+      const reason = await promptSuppressReason()
+      if (reason === null) return
+      justification = reason
+    }
+    setFindingTriage(finding, status, justification)
     if (status === 'suppressed') {
       toast.info(t('toasts.findingSuppressed'), {
         action: {label: t('toasts.undo'), onClick: () => setFindingTriage(finding, 'open')},
@@ -96,7 +106,16 @@ export default function FindingTriageMenu({finding}: Props) {
             triageTone(triageStatus).border,
             triageTone(triageStatus).bg,
           )}
-          title={isDesktop ? t('triage.labels.sessionOnlyHint') : undefined}
+          // The stored justification had no renderer: the reason a teammate
+          // gave for suppressing was saved and never shown.
+          title={
+            [
+              triage?.justification ? t('triage.labels.justification', {reason: triage.justification}) : '',
+              isDesktop ? t('triage.labels.sessionOnlyHint') : '',
+            ]
+              .filter(Boolean)
+              .join('\n') || undefined
+          }
         >
           {t(`triage.status.${triageStatus}`)}
           {/* Desktop triage is process memory (the store persists only in
@@ -146,7 +165,7 @@ export default function FindingTriageMenu({finding}: Props) {
             {TRIAGE_OPTIONS.map(s => (
               <button
                 key={s}
-                onClick={() => handleSetTriage(s)}
+                onClick={() => void handleSetTriage(s)}
                 className={clsx(
                   'block w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors',
                   triageStatus === s ? 'text-brand-400 font-medium' : 'text-text-secondary',

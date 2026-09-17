@@ -8,6 +8,7 @@ import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import {isTauri} from '@/platform/guards'
 import type {ProviderID, AIProviderConfig} from '@/types'
+import {PROVIDER_OPTIONS} from '@/types/providers'
 
 export default function AIBehaviorPanel() {
   const {t} = useTranslation('settings')
@@ -33,13 +34,9 @@ export default function AIBehaviorPanel() {
           <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.activeAssistant')}</label>
           <SegmentedControl
             value={activeProvider}
-            onChange={v => updateAI({activeProvider: v as ProviderID})}
-            options={[
-              {value: 'claude', label: 'Claude'},
-              {value: 'openai', label: 'OpenAI'},
-              {value: 'gemini', label: 'Gemini'},
-              {value: 'copilot', label: 'Copilot'},
-            ]}
+            onChange={v => updateAI({activeProvider: v})}
+            options={PROVIDER_OPTIONS}
+            className="flex-wrap"
           />
           <p className="text-xs text-text-tertiary mt-2">{t('behavior.activeAssistantHint')}</p>
         </div>

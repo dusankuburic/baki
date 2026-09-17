@@ -738,26 +738,6 @@ func (s *FlowService) ReadSourceFiles(doc *models.FlowDocument, filenames []stri
 	return result, nil
 }
 
-func (s *FlowService) OnFileOpenFromSystem(path string) {
-	if path == "" {
-		return
-	}
-	path = strings.TrimSpace(path)
-	if _, err := os.Stat(path); err != nil {
-		logger.Warn("file open from system: file not found", "path", path)
-		return
-	}
-	doc, err := s.loadAndParse(path)
-	if err != nil {
-		logger.Error("file open from system failed", "path", path, "error", err)
-		s.notifier.Emit("flow:load-error", map[string]any{
-			"path": path, "error": err.Error(),
-		})
-		return
-	}
-	s.notifier.Emit("flow:loaded", doc)
-}
-
 // loadAndParse reads a file, parses it, updates document and search index state,
 // emits events, and adds the file to recents.
 func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
@@ -1014,7 +994,7 @@ func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixTyp
 		return models.Patch{}, fmt.Errorf("block %q not found", blockID)
 	}
 
-	patch, err := analyzer.PatchForFix(block, fixType, ruleID, variable, property)
+	patch, err := patchForFix(block, fixType, ruleID, variable, property)
 	if err != nil {
 		return models.Patch{}, err
 	}
@@ -1028,10 +1008,30 @@ func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixTyp
 	return patch, nil
 }
 
+// patchForFix is analyzer.PatchForFix for the single-fix routes (preview and
+// apply, desktop and cloud): a fixer that declines — e.g.
+// mask-sensitive-variable or init-variable called without the finding's
+// `variable` metadata — returns a patch with no ops, and both routes used to
+// treat that as success. The preview showed identical before/after text and
+// "Apply fix" toasted success on a flow it never touched. An empty patch is
+// now a 400 naming the fixer, so the user sees why nothing happened. (The
+// batch loop keeps calling analyzer.PatchForFix directly: there a declined
+// finding is skipped, not an error.)
+func patchForFix(block *models.Block, fixType, ruleID, variable, property string) (models.Patch, error) {
+	patch, err := analyzer.PatchForFix(block, fixType, ruleID, variable, property)
+	if err != nil {
+		return models.Patch{}, err
+	}
+	if len(patch.Ops) == 0 {
+		return models.Patch{}, fmt.Errorf("%w: fixer declined: %q has nothing to change on this block (the finding may be missing the metadata this fix needs)", ErrInvalidInput, fixType)
+	}
+	return patch, nil
+}
+
 // ErrUnsafeFixRequiresOptIn is returned by ApplyFix for a behaviour-changing
 // fixer (analyzer.IsBehaviourChangingFix) applied without the explicit opt-in.
 // Wraps ErrInvalidInput so the HTTP layer answers 400, not 500.
-var ErrUnsafeFixRequiresOptIn = fmt.Errorf("%w: fix %q changes runtime behaviour; review the previewed diff and resend with unsafe: true", ErrInvalidInput, "")
+var ErrUnsafeFixRequiresOptIn = fmt.Errorf("%w: this fix changes runtime behaviour; review the previewed diff and resend with unsafe: true", ErrInvalidInput)
 
 // unsafeFixError names the offending fix type while keeping the sentinel
 // matchable with errors.Is.

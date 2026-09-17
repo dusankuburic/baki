@@ -28,7 +28,8 @@ export function useChatRequestBuilder({
   // client no longer re-sends the full history each turn (~30KB saved/request).
   // Set includeHistory=true when the client has locally truncated history
   // (resend/edit) — the backend then uses the provided slice as-is instead of
-  // its stored copy.
+  // its stored copy. With "Save conversation history" off there IS no stored
+  // copy, so history always travels with the request.
   const buildRequest = useCallback(
     (text: string, overrideFiles?: string[], excludeContext?: boolean, includeHistory = false) => {
       if (!doc || !activeThread) return null
@@ -38,12 +39,13 @@ export function useChatRequestBuilder({
       if (overrideFiles !== undefined && overrideFiles.length > 0) {
         filesToUse = overrideFiles
       }
+      const sendHistory = includeHistory || aiSettings.saveConversationHistory === false
       return {
         flowId: doc.id,
         provider,
         model: selectedModel || providerConfig?.defaultModel || '',
         // Omit `messages` unless the caller needs to override server-side history.
-        ...(includeHistory
+        ...(sendHistory
           ? {
               messages: getMessages(activeThread.id).map((m: ChatMessage) => ({
                 id: m.id,

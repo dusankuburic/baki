@@ -112,9 +112,6 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Route("/api/system", func(r chi.Router) {
 		r.Get("/settings", h.Sys.handleGetSettings)
 		r.Post("/settings", h.Sys.handleUpdateSettings)
-		r.Put("/settings", h.Sys.handleUpdateSettings)
-		r.Get("/settings/user", h.Sys.handleGetSettings)
-		r.Post("/settings/user", h.Sys.handleUpdateSettings)
 		r.Get("/settings/org/{id}", h.Sys.handleGetOrgSettings)     // member-only
 		r.Post("/settings/org/{id}", h.Sys.handleUpdateOrgSettings) // admin-only
 		r.Get("/info", h.Sys.handleAppInfo)
@@ -139,8 +136,6 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/search", h.Flow.handleSearchFlow)
 		r.Post("/search-library", h.Flow.handleSearchLibrary)
 		r.Get("/source-files", h.Flow.handleGetSourceFiles)
-		r.Post("/read-sources", h.Flow.handleReadSourceFiles)
-		r.Post("/open-from-system", h.Flow.handleOnFileOpenFromSystem)
 		r.Post("/suppress-in-source", h.Flow.handleSuppressInSource)
 		r.Post("/apply-fix", h.Flow.handleApplyFix)
 		r.Post("/apply-fix-batch", h.Flow.handleApplyFixBatch)
@@ -197,7 +192,6 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/get", h.Chat.handleGetConversation)
 		r.Post("/save", h.Chat.handleSaveConversation)
 		r.Post("/clear", h.Chat.handleClearConversation)
-		r.Post("/export", h.Chat.handleExportConversation)
 		r.Post("/preview-context", h.Chat.handlePreviewContext)
 		r.Post("/suggested-prompts", h.Chat.handleGetSuggestedPrompts)
 	})
@@ -208,22 +202,19 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/analyze-raw", h.Analysis.handleAnalyzeRaw)
 		r.Post("/lineage", h.Analysis.handleGetVariableLineage)
 		r.Post("/graph", h.Analysis.handleGetExecutionGraph)
-		r.Post("/metrics", h.Analysis.handleGetMetrics)
 		r.Post("/dataflow", h.Analysis.handleGetDataFlow)
 		r.Post("/batch", h.Analysis.handleBatchAnalyze)
 		r.Post("/diff", h.Analysis.handleDiff)
 		r.Post("/history", h.Analysis.handleGetHistory)
 		r.Post("/export/sarif", h.Analysis.handleExportSARIF)
 		r.Post("/export/junit", h.Analysis.handleExportJUnit)
-		r.Post("/export/csv", h.Analysis.handleExportCSV)
+		r.Post("/suppressions", h.Analysis.handleSuppressionInventory)
 		r.Get("/dependencies", h.Analysis.handleGetDependencies)
 		r.Get("/dashboard", h.Analysis.handleGetDashboard)
-		r.Post("/subflow-hashes", h.Analysis.handleGetSubflowHashes)
 		r.Post("/deduplicate", h.Analysis.handleDeduplicate)
 		r.Post("/related", h.Analysis.handleRelatedFindings)
 		r.Post("/compare", h.Analysis.handleCompareFlows)
 		r.Get("/rules", h.Analysis.handleGetRules)
-		r.Get("/rules/summary", h.Analysis.handleGetRulesSummary)
 		r.Post("/custom-rules/validate", h.Analysis.handleValidateCustomRules)
 		r.Post("/custom-rules/test", h.Analysis.handleTestCustomRule)
 		r.Post("/rule/enabled", h.Analysis.handleSetRuleEnabled)
@@ -258,7 +249,6 @@ func registerRoutes(rt *Router, r chi.Router) {
 	r.Route("/api/governance", func(r chi.Router) {
 		r.Get("/alerts", h.Analysis.handleListGovernanceAlerts)
 		r.Get("/alerts/unread-count", h.Analysis.handleUnreadGovernanceAlertCount)
-		r.Post("/alerts/read", h.Analysis.handleMarkGovernanceAlertRead)
 		r.Post("/alerts/read-all", h.Analysis.handleMarkAllGovernanceAlertsRead)
 		r.Post("/alerts/dismiss", h.Analysis.handleDismissGovernanceAlert)
 		r.Delete("/alerts", h.Analysis.handleClearGovernanceAlerts)
@@ -269,6 +259,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/markdown", h.Export.handleExportMarkdown)
 		r.Post("/html", h.Export.handleExportHTML)
 		r.Post("/pdf", h.Export.handleExportPDF)
+		r.Post("/save", h.Export.handleSaveClientExport)
 	})
 
 	// --- Providers & Auth ---
@@ -329,12 +320,10 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Get("/", h.Org.handleOrgList)
 		r.Post("/", h.Org.handleOrgCreate)
 		r.Route("/{id}", func(r chi.Router) {
-			r.Get("/", h.Org.handleOrgGet)
 			r.Put("/", h.Org.handleOrgUpdate)
 			r.Delete("/", h.Org.handleOrgDelete)
 			r.Route("/members", func(r chi.Router) {
 				r.Get("/", h.Org.handleOrgMemberList)
-				r.Post("/", h.Org.handleOrgMemberAdd)
 				r.Route("/{userId}", func(r chi.Router) {
 					r.Delete("/", h.Org.handleOrgMemberRemove)
 					r.Put("/role", h.Org.handleOrgMemberRoleUpdate)

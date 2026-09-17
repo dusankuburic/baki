@@ -113,6 +113,11 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   }, [document?.id, memberFile, reloadNonce])
 
   const dirty = source !== original
+  // Cloud folder flows (no on-disk path) store no per-file source: the server
+  // refuses to save the combined text because it would collapse the folder
+  // structure, so Save used to arm on the first keystroke and always fail.
+  // Desktop folder flows save the selected member file and stay enabled.
+  const cloudFolder = !!document?.isFolder && !document.filePath
 
   const handleSave = useCallback(async () => {
     // readOnly guards the mod+S shortcut too (F1.5) — the button was already
@@ -120,7 +125,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     // loadError: the buffer does not hold this flow's source, it holds
     // whatever was typed into an empty box. Saving it would overwrite the real
     // flow with that.
-    if (!document || !dirty || saving || loadError || useFlowStore.getState().readOnly) return
+    if (!document || !dirty || saving || loadError || cloudFolder || useFlowStore.getState().readOnly) return
     setSaving(true)
     try {
       const updated = await flowApi.saveSource(document.id, source, memberFile)
@@ -141,7 +146,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     } finally {
       setSaving(false)
     }
-  }, [document, memberFile, source, dirty, saving, loadError, setOriginal, setReport, toast])
+  }, [document, memberFile, source, dirty, saving, loadError, cloudFolder, setOriginal, setReport, toast])
 
   const handleRevert = useCallback(() => {
     setSource(original)
@@ -263,7 +268,12 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
           </button>
           <button
             onClick={handleSave}
-            disabled={!dirty || saving || readOnly}
+            disabled={!dirty || saving || readOnly || cloudFolder}
+            title={
+              cloudFolder
+                ? 'Saving a multi-file flow is not supported here (it would collapse the folder structure)'
+                : undefined
+            }
             className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 disabled:opacity-40 transition-colors"
           >
             {saving ? <Spinner size={12} /> : <Save size={12} />}

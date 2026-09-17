@@ -3,6 +3,7 @@ import {useChatStore, conversationKey} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {FlowDocument, SourceFileInfo} from '@/types'
+import {conversationHistoryEnabled} from '@/lib/chatHistory'
 
 // Exchanges (user+assistant pairs) kept by Compact. Mirrored in the toolbar
 // copy, so keep the two in step.
@@ -83,6 +84,9 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
     const thread = useChatStore.getState().threads.find(t => t.id === activeThreadId)
     compactThread(activeThreadId, COMPACT_KEEP_PAIRS)
     if (!doc || !thread) return
+    // History off: the server holds no copy to shrink, and the next request
+    // carries the trimmed local messages itself.
+    if (!conversationHistoryEnabled()) return
     const kept = useChatStore.getState().getMessages(activeThreadId)
     chatApi.saveConversation(doc.id, conversationKey(thread), [...kept]).catch(err => {
       logger.warn('Failed to persist compacted conversation', err)

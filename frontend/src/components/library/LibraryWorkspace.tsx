@@ -18,6 +18,16 @@ import LibraryDetailPanel from './LibraryDetailPanel'
 import LibraryPager from './LibraryPager'
 import LibrarySkeleton from './LibrarySkeleton'
 import LibraryEmptyState from './LibraryEmptyState'
+import {useLibraryWriteErrorToast} from './useLibraryWriteErrorToast'
+
+// mergeTags folds the tags on newly loaded flows into the session's known set,
+// returning the previous array when nothing new appeared so the filter rail
+// does not re-render on every page load.
+function mergeTags(known: string[], flows: LibraryFlow[]): string[] {
+  const next = new Set(known)
+  for (const f of flows) for (const tag of f.tags ?? []) next.add(tag)
+  return next.size === known.length ? known : [...next].sort()
+}
 
 // Cloud-library browse workspace. Three-pane layout:
 //   • filter rail (left)  — scope + per-org filter
@@ -32,6 +42,7 @@ export default function LibraryWorkspace() {
   const selectedOrgIds = useLibraryBrowseStore(s => s.selectedOrgIds)
   const sort = useLibraryBrowseStore(s => s.sort)
   const query = useLibraryBrowseStore(s => s.query)
+  const selectedTags = useLibraryBrowseStore(s => s.selectedTags)
   const page = useLibraryBrowseStore(s => s.page)
   const pageSize = useLibraryBrowseStore(s => s.pageSize)
   const selectedFlowId = useLibraryBrowseStore(s => s.selectedFlowId)
@@ -43,7 +54,13 @@ export default function LibraryWorkspace() {
   const orgs = useOrgStore(s => s.organisations)
   const loadOrgs = useOrgStore(s => s.loadOrgs)
   const toast = useToast()
+  const reportWriteError = useLibraryWriteErrorToast()
   const {confirm, prompt} = useConfirm()
+  const [knownTags, setKnownTags] = useState<string[]>([])
+  // Bumped after a write (or a conflict reload) so the detail panel re-reads
+  // the flow: it holds its own copy, and a stale version there turns the next
+  // rename into a 409.
+  const [detailReload, setDetailReload] = useState(0)
 
   const [items, setItems] = useState<LibraryFlow[]>([])
   const [total, setTotal] = useState(0)
@@ -93,6 +110,7 @@ export default function LibraryWorkspace() {
             sort,
             orgId: requestOrgId,
             query: debouncedQuery || undefined,
+            tags: selectedTags.size > 0 ? [...selectedTags] : undefined,
             limit: pageSize,
             offset: page * pageSize,
           },
@@ -109,6 +127,7 @@ export default function LibraryWorkspace() {
         }
         setItems(pageItems)
         setTotal(res.total)
+        setKnownTags(prev => mergeTags(prev, res.items))
       } catch (e) {
         // Abort (superseded fetch or unmount) is intentional, not an error.
         if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return
@@ -119,7 +138,7 @@ export default function LibraryWorkspace() {
         if (!ac.signal.aborted) setIsLoading(false)
       }
     },
-    [scope, sort, requestOrgId, debouncedQuery, page, pageSize, selectedOrgIds],
+    [scope, sort, requestOrgId, debouncedQuery, selectedTags, page, pageSize, selectedOrgIds],
   )
 
   useEffect(() => {
@@ -170,6 +189,13 @@ export default function LibraryWorkspace() {
     [selectedFlowId, setSelectedFlow, toast, confirm],
   )
 
+  // A conflict reload re-reads both the page and the detail panel, so the next
+  // write goes out with the version the server now holds.
+  const reloadAfterConflict = useCallback(() => {
+    setDetailReload(n => n + 1)
+    void fetchPage(true)
+  }, [fetchPage])
+
   // R0-4: rename a library flow. The backend's update endpoint always
   // accepted {name}; no UI ever sent it — renaming meant delete + re-upload.
   const handleRename = useCallback(
@@ -185,12 +211,13 @@ export default function LibraryWorkspace() {
       try {
         const updated = await libraryApi.update(flow.id, {name: name.trim(), version: flow.version})
         setItems(prev => prev.map(f => (f.id === flow.id ? updated : f)))
+        setDetailReload(n => n + 1)
         toast.success('Flow renamed')
       } catch (e) {
-        toast.error('Failed to rename', {description: e instanceof Error ? e.message : String(e)})
+        reportWriteError(e, 'Failed to rename', reloadAfterConflict)
       }
     },
-    [toast, prompt],
+    [toast, prompt, reportWriteError, reloadAfterConflict],
   )
 
   // R0-4: duplicate = load content, save as "<name> (copy)" (same org).
@@ -219,13 +246,16 @@ export default function LibraryWorkspace() {
     async (flow: LibraryFlow, tags: string[]) => {
       try {
         const res = await flowApi.setTags(flow.id, tags)
-        setItems(prev => prev.map(f => (f.id === flow.id ? {...f, tags: res?.tags ?? []} : f)))
+        const saved = res?.tags ?? []
+        setItems(prev => prev.map(f => (f.id === flow.id ? {...f, tags: saved} : f)))
+        setKnownTags(prev => mergeTags(prev, [{...flow, tags: saved}]))
+        setDetailReload(n => n + 1)
         toast.success('Tags updated')
       } catch (e) {
-        toast.error('Failed to update tags', {description: e instanceof Error ? e.message : String(e)})
+        reportWriteError(e, 'Failed to update tags', reloadAfterConflict)
       }
     },
-    [toast],
+    [toast, reportWriteError, reloadAfterConflict],
   )
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -253,7 +283,7 @@ export default function LibraryWorkspace() {
 
       <div className="flex-1 flex overflow-hidden">
         <aside className="w-56 border-r border-border-subtle overflow-y-auto flex-shrink-0">
-          <LibraryFilterRail orgs={orgs} />
+          <LibraryFilterRail orgs={orgs} tags={knownTags} />
         </aside>
 
         <section className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -272,7 +302,7 @@ export default function LibraryWorkspace() {
               <LibraryEmptyState
                 scope={scope}
                 hasQuery={debouncedQuery.length > 0}
-                hasOrgFilter={selectedOrgIds !== null && selectedOrgIds.size > 0}
+                hasOrgFilter={(selectedOrgIds !== null && selectedOrgIds.size > 0) || selectedTags.size > 0}
               />
             ) : view === 'grid' ? (
               <LibraryGrid
@@ -303,6 +333,7 @@ export default function LibraryWorkspace() {
         <aside className="w-80 border-l border-border-subtle overflow-y-auto flex-shrink-0 hidden xl:block">
           <LibraryDetailPanel
             flowId={selectedFlowId}
+            reloadKey={detailReload}
             onOpen={handleOpen}
             onDelete={handleDelete}
             onRename={handleRename}

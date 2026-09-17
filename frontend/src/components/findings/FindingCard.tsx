@@ -16,6 +16,7 @@ import {useRelatedFindings} from './hooks/useRelatedFindings'
 import {useFindingComments} from './hooks/useFindingComments'
 import {useFindingFix} from './hooks/useFindingFix'
 import {isTauri} from '@/platform/guards'
+import {useSuppressReasonPrompt} from './hooks/useSuppressReasonPrompt'
 
 interface Props {
   finding: Finding
@@ -34,13 +35,17 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const suppressFinding = useAnalysisStore(s => s.suppressFinding)
   const unsuppressFinding = useAnalysisStore(s => s.unsuppressFinding)
   const toast = useToast()
+  const promptSuppressReason = useSuppressReasonPrompt()
   const [showHint, setShowHint] = useState(false)
   const isDesktop = isTauri()
 
   const {showRelated, related, relatedLoading, relatedError, handleRelated, fetchRelated} = useRelatedFindings(finding)
   const {showComments, comments, commentBody, setCommentBody, commentLoading, handleComments, handleSubmitComment} =
     useFindingComments(finding, doc)
-  const {applyingFix, preview, handleApplyFix, doApplyFix, closePreview} = useFindingFix(finding, doc)
+  const {applyingFix, preview, handleApplyFix, doApplyFix, handleSuppressInSource, closePreview} = useFindingFix(
+    finding,
+    doc,
+  )
   // Cloud apply-fix patches the flow's stored source, which the upload handler
   // keeps for SINGLE-file flows only. A folder import — the normal PAD layout —
   // has no stored source, so the button used to fail AFTER the click with
@@ -53,10 +58,12 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
     selectBlock(finding.blockId)
   }
 
-  const handleSuppress = () => {
-    suppressFinding(finding, t('card.dismissedByUser'))
+  const handleSuppress = async () => {
+    const reason = await promptSuppressReason()
+    if (reason === null) return
+    suppressFinding(finding, reason)
     toast.warning(t('toasts.findingSuppressed'), {
-      action: {label: 'Undo', onClick: () => unsuppressFinding(finding)},
+      action: {label: t('toasts.undo'), onClick: () => unsuppressFinding(finding)},
     })
   }
 
@@ -189,7 +196,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
 
         {isDesktop && !readOnly && (
           <button
-            onClick={() => handleApplyFix('suppress')}
+            onClick={() => void handleSuppressInSource()}
             disabled={applyingFix}
             className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-1.5 py-1 rounded hover:bg-brand-500/10 transition-colors shrink-0 disabled:opacity-50"
             title={t('card.suppressInFileTitle')}
@@ -200,7 +207,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
         )}
 
         <button
-          onClick={handleSuppress}
+          onClick={() => void handleSuppress()}
           aria-label={t('card.suppressAria')}
           className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
           title={t('card.suppressTitle')}

@@ -156,8 +156,6 @@ func (m *FakeBackend) CountFlows(_ context.Context, _ interfaces.FlowFilter) (in
 	return len(m.Flows), nil
 }
 
-func (m *FakeBackend) TransferFlowOwner(_ context.Context, _, _, _ string) error { return nil }
-
 func (m *FakeBackend) DeleteFlow(_ context.Context, id string) error {
 	delete(m.Flows, id)
 	return nil

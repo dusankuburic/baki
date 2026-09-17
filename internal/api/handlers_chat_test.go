@@ -43,12 +43,6 @@ func TestHandleClearConversation_BadBodyReturns400(t *testing.T) {
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
-func TestHandleExportConversation_BadBodyReturns400(t *testing.T) {
-	rt := newTestRouter(nil, false)
-	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/chat/export")
-	checkStatus(t, rr, http.StatusBadRequest)
-}
-
 func TestHandlePreviewContext_BadBodyReturns400(t *testing.T) {
 	rt := newTestRouter(nil, false)
 	rr := newBadBodyRequest(t, rt, http.MethodPost, "/api/chat/preview-context")

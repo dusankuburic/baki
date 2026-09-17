@@ -198,9 +198,16 @@ export default function ChatHeader({
       })
     }
     if (onToggleTools) {
+      // Providers without native function calling (Copilot) still run tools:
+      // the chat service falls back to the text-marker protocol
+      // (runPromptToolLoop), so the toggle stays enabled and only says which
+      // protocol it will use — the same suffix the model list shows.
+      const viaMarkers = currentModel?.supportsTools === false
       items.push({
         type: 'item',
-        label: useTools ? t('toolbar.toolsOn') : t('toolbar.toolsOff'),
+        label:
+          (useTools ? t('toolbar.toolsOn') : t('toolbar.toolsOff')) +
+          (viaMarkers ? ` · ${t('provider.noNativeTools')}` : ''),
         icon: Wrench,
         onSelect: onToggleTools,
       })
@@ -250,6 +257,7 @@ export default function ChatHeader({
     messageCount,
     onToggleTools,
     useTools,
+    currentModel,
     onExport,
     onTogglePopOut,
     isPoppedOut,

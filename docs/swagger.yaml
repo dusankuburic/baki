@@ -18,17 +18,49 @@ info:
 paths:
   /api/admin/audit:
     get:
-      description: Returns the audit trail (logins, settings changes, admin actions).
+      description: Returns the audit trail (logins, settings changes, admin actions),
+        newest first. GET /api/admin/audit/actions lists the action values.
+      parameters:
+      - description: Only this action (e.g. auth.login)
+        in: query
+        name: action
+        type: string
+      - description: Only events by this user ID
+        in: query
+        name: userId
+        type: string
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: Rows to skip
+        in: query
+        name: offset
+        type: integer
       produces:
       - application/json
       responses:
         "200":
           description: Audit entries
           schema:
-            additionalProperties: true
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "400":
+          description: Invalid limit or offset
+          schema:
+            additionalProperties:
+              type: string
             type: object
         "403":
           description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: No storage backend (local mode)
           schema:
             additionalProperties:
               type: string
@@ -60,13 +92,14 @@ paths:
       - admin
   /api/admin/migration/start:
     post:
-      description: Kicks off the local→database flow migration (admin only, cloud
-        mode). Idempotent and non-blocking.
+      description: Copies flows, settings and chat conversations from a legacy filesystem-backed
+        server's data directory (PAD_DATA_DIR) into the database (admin only, cloud
+        mode). Idempotent and non-blocking; the status result lists what is not migrated.
       produces:
       - application/json
       responses:
-        "202":
-          description: Accepted
+        "200":
+          description: Started
           schema:
             additionalProperties:
               type: string
@@ -79,6 +112,12 @@ paths:
             type: object
         "409":
           description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Migration not configured
           schema:
             additionalProperties:
               type: string
@@ -686,30 +725,6 @@ paths:
       summary: Diff current vs. stored report
       tags:
       - analysis
-  /api/analysis/export/csv:
-    post:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            type: object
-        "503":
-          description: Service Unavailable (cloud mode required)
-          schema:
-            type: object
-      summary: Export findings as CSV
-      tags:
-      - export
   /api/analysis/export/junit:
     post:
       produces:
@@ -844,40 +859,6 @@ paths:
               type: string
             type: object
       summary: Get variable lineage
-      tags:
-      - analysis
-  /api/analysis/metrics:
-    post:
-      consumes:
-      - application/json
-      description: Complexity/cognitive metrics and health score for the flow.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Flow metrics
       tags:
       - analysis
   /api/analysis/policy/delete:
@@ -1151,38 +1132,31 @@ paths:
       summary: List analysis rules
       tags:
       - analysis
-  /api/analysis/rules/summary:
-    get:
-      description: All rules with severity, category, and auto-fix availability.
-      parameters:
-      - description: Scope the catalog to an organisation the caller belongs to (org
-          custom rules + overrides)
-        in: query
-        name: orgId
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Rules
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Rule catalog summary
-      tags:
-      - analysis
-  /api/analysis/subflow-hashes:
+  /api/analysis/suppressions:
     post:
       consumes:
       - application/json
+      description: handleSuppressionInventory lists every inline `# pad-ignore` directive
+        in the flow and marks stale ones (the suppressed rule no longer fires on the
+        target block). Audited against the flow's org rule profile. Viewer access.
+      parameters:
+      - description: '{flowId}'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: 'Suppression entries: line, rule, blockLabel, blockType, subflow,
+            stale, reason'
           schema:
-            additionalProperties: true
-            type: object
+            items:
+              additionalProperties: true
+              type: object
+            type: array
         "400":
           description: Bad Request
           schema:
@@ -1195,13 +1169,19 @@ paths:
             additionalProperties:
               type: string
             type: object
-        "500":
-          description: Error
+        "403":
+          description: Forbidden
           schema:
             additionalProperties:
               type: string
             type: object
-      summary: Subflow content hashes
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List inline suppressions
       tags:
       - analysis
   /api/analysis/triage/clear:
@@ -2091,42 +2071,6 @@ paths:
       summary: Clear conversation history
       tags:
       - chat
-  /api/chat/export:
-    post:
-      consumes:
-      - application/json
-      description: Exports the chat history to a file. Only available in local mode.
-      parameters:
-      - description: request
-        in: body
-        name: request
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Export conversation
-      tags:
-      - chat
   /api/chat/fix-decision:
     post:
       consumes:
@@ -2440,6 +2384,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
@@ -2542,6 +2492,50 @@ paths:
               type: string
             type: object
       summary: Export flow as PDF
+      tags:
+      - export
+  /api/export/save:
+    post:
+      consumes:
+      - application/json
+      description: Desktop only. Writes CSV/SARIF/JUnit text rendered by the findings
+        panel to the absolute path chosen in the native save dialog (.csv, .sarif
+        or .xml only). 403 in cloud mode.
+      parameters:
+      - description: '{path, content}'
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden (cloud mode)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save a client-rendered findings export
       tags:
       - export
   /api/flow/apply-fix:
@@ -2822,37 +2816,6 @@ paths:
       summary: Load flow from path
       tags:
       - flow
-  /api/flow/open-from-system:
-    post:
-      consumes:
-      - application/json
-      description: Notifies the application that a file was opened via the operating
-        system.
-      parameters:
-      - description: request
-        in: body
-        name: request
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Handle file open from system
-      tags:
-      - flow
   /api/flow/preview-fix:
     post:
       consumes:
@@ -2888,42 +2851,6 @@ paths:
               type: string
             type: object
       summary: Preview an auto-fix diff
-      tags:
-      - flow
-  /api/flow/read-sources:
-    post:
-      consumes:
-      - application/json
-      description: Reads the content of specified source files.
-      parameters:
-      - description: request
-        in: body
-        name: request
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Read source files
       tags:
       - flow
   /api/flow/recent:
@@ -3693,41 +3620,6 @@ paths:
       summary: Dismiss alert
       tags:
       - governance
-  /api/governance/alerts/read:
-    post:
-      consumes:
-      - application/json
-      description: handleMarkGovernanceAlertRead — POST /api/governance/alerts/read
-        {id}
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Mark alert read
-      tags:
-      - governance
   /api/governance/alerts/read-all:
     post:
       consumes:
@@ -4338,7 +4230,28 @@ paths:
   /api/library/portfolio:
     get:
       description: 'handlePortfolio returns the org-wide governance portfolio: every
-        flow the caller can access (optionally filtered by ?orgId=), ranked worst-health-first.'
+        flow the caller can access (optionally filtered by ?orgId=), ordered by ?sort=
+        and trimmed to ?limit= entries. Rollup totals always cover every ranked flow.'
+      parameters:
+      - description: Only flows in this organisation
+        in: query
+        name: orgId
+        type: string
+      - description: 'Entry order: risk (default, worst health first), health, errors,
+          name, analyzed (most recent first)'
+        enum:
+        - risk
+        - health
+        - errors
+        - name
+        - analyzed
+        in: query
+        name: sort
+        type: string
+      - description: Maximum entries returned (default and cap 1000)
+        in: query
+        name: limit
+        type: integer
       produces:
       - application/json
       responses:
@@ -4346,6 +4259,12 @@ paths:
           description: Portfolio
           schema:
             additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
             type: object
       summary: Flow portfolio view
       tags:
@@ -4466,24 +4385,6 @@ paths:
       summary: Delete organization
       tags:
       - organization
-    get:
-      parameters:
-      - description: Org ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Organization
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Get organization
-      tags:
-      - org
     put:
       consumes:
       - application/json
@@ -4772,65 +4673,6 @@ paths:
       summary: List org members
       tags:
       - org
-    post:
-      consumes:
-      - application/json
-      description: Adds a user to an organization with a specific role. Only organization
-        admins can add members.
-      parameters:
-      - description: id
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: request
-        in: body
-        name: request
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "403":
-          description: Forbidden
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Not Found
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "409":
-          description: Conflict
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Add organization member
-      tags:
-      - organization
   /api/orgs/{id}/members/{userId}:
     delete:
       description: Removes a user from an organization. Only organization admins can
@@ -5386,41 +5228,6 @@ paths:
       summary: Update app settings
       tags:
       - system
-    put:
-      consumes:
-      - application/json
-      description: Updates the application settings.
-      parameters:
-      - description: settings
-        in: body
-        name: settings
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update app settings
-      tags:
-      - system
   /api/system/settings/org/{id}:
     get:
       description: handleGetOrgSettings returns org-wide settings. Reading requires
@@ -5463,61 +5270,6 @@ paths:
             additionalProperties: true
             type: object
       summary: Update org settings
-      tags:
-      - system
-  /api/system/settings/user:
-    get:
-      description: Returns the current application settings.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get app settings
-      tags:
-      - system
-    post:
-      consumes:
-      - application/json
-      description: Updates the application settings.
-      parameters:
-      - description: settings
-        in: body
-        name: settings
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update app settings
       tags:
       - system
   /api/ws-ticket:

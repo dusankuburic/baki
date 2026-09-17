@@ -205,11 +205,17 @@ func (h *AdminHandler) handleAdminAuditActions(w http.ResponseWriter, r *http.Re
 }
 
 // @Summary      List audit log entries
-// @Description  Returns the audit trail (logins, settings changes, admin actions).
+// @Description  Returns the audit trail (logins, settings changes, admin actions), newest first. GET /api/admin/audit/actions lists the action values.
 // @Tags         admin
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "Audit entries"
+// @Param        action query string false "Only this action (e.g. auth.login)"
+// @Param        userId query string false "Only events by this user ID"
+// @Param        limit query int false "Page size"
+// @Param        offset query int false "Rows to skip"
+// @Success      200 {array} map[string]interface{} "Audit entries"
+// @Failure      400 {object} map[string]string "Invalid limit or offset"
 // @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      503 {object} map[string]string "No storage backend (local mode)"
 // @Router       /api/admin/audit [get]
 func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
@@ -245,19 +251,20 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 }
 
 // @Summary      Start data migration
-// @Description  Kicks off the local→database flow migration (admin only, cloud mode). Idempotent and non-blocking.
+// @Description  Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, cloud mode). Idempotent and non-blocking; the status result lists what is not migrated.
 // @Tags         admin
 // @Produce      json
-// @Success      202 {object} map[string]string "Accepted"
+// @Success      200 {object} map[string]string "Started"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Failure      409 {object} map[string]string "Conflict"
+// @Failure      503 {object} map[string]string "Migration not configured"
 // @Router       /api/admin/migration/start [post]
 func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Request) {
 	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
 		return
 	}
 	if !h.runner.Enabled() {
-		render.Error(w, fmt.Errorf("migration not configured: set PAD_STORAGE_DATA_DIR (and PAD_STORAGE=database) in cloud mode"), http.StatusServiceUnavailable)
+		render.Error(w, fmt.Errorf("migration not configured: set PAD_DATA_DIR (and PAD_STORAGE=database) in cloud mode"), http.StatusServiceUnavailable)
 		return
 	}
 	if !h.runner.Start() {

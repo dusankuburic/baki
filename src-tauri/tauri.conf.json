@@ -26,6 +26,11 @@
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost; connect-src http://localhost:* ws://localhost:*; font-src 'self'"
     }
   },
+  "plugins": {
+    "shell": {
+      "open": "^https://\\w+.+"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

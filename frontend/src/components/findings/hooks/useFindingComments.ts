@@ -16,6 +16,11 @@ export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
   const handleComments = useCallback(async () => {
     if (showComments) {
       setShowComments(false)
+      // Drop the cached list so the next open refetches. The panel deletes
+      // comments itself (author or flow-admin moderation) and teammates keep
+      // adding them; a list cached from the first open would resurrect the
+      // deleted ones and hide the new ones.
+      setComments(null)
       return
     }
     setShowComments(true)

@@ -112,8 +112,13 @@ type FlowComplexityStub struct {
 }
 
 type DashboardSecurityStub struct {
-	FailedLogins24h    int `json:"failedLogins24h"`
-	CredentialFindings int `json:"credentialFindings"`
+	// Available is false when the posture could not be read (the advanced
+	// dashboard query failed, or there is no persistent source at all in local
+	// mode). All-zero counts are then "unknown", not "no issues", and the UI
+	// must not render them as a clean bill of health.
+	Available          bool `json:"available"`
+	FailedLogins24h    int  `json:"failedLogins24h"`
+	CredentialFindings int  `json:"credentialFindings"`
 	// LockedAccounts is how many user accounts are currently locked by the
 	// brute-force defense, surfaced so admins can spot a sweep without grepping
 	// the audit log.

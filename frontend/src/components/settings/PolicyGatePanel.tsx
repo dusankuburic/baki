@@ -1,10 +1,11 @@
 import {useEffect, useState, useCallback} from 'react'
 import {useTranslation} from 'react-i18next'
-import {Plus, Trash2, Shield, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight} from 'lucide-react'
+import {Plus, Trash2, Shield, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, Play} from 'lucide-react'
 import clsx from 'clsx'
 import {analysisApi} from '@/api'
-import type {Policy, PolicyRule, Severity, Rule} from '@/types'
+import type {Policy, PolicyResult, PolicyRule, Severity, Rule} from '@/types'
 import {useOrgStore} from '@/stores/orgStore'
+import {useFlowStore} from '@/stores/flowStore'
 import {useToast} from '@/components/shared/Toast'
 import {useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
@@ -32,6 +33,11 @@ export default function PolicyGatePanel() {
   const [loading, setLoading] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const openFlowId = useFlowStore(s => s.document?.id ?? null)
+  // Keyed by policy id. A result is only meaningful for the policy as it was
+  // evaluated, so handleUpdate drops it whenever the policy changes.
+  const [results, setResults] = useState<Record<string, PolicyResult>>({})
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
 
   const loadPolicies = useCallback(async () => {
     if (!activeOrgId) return
@@ -97,8 +103,28 @@ export default function PolicyGatePanel() {
     try {
       const saved = await analysisApi.savePolicy(policy)
       setPolicies(policies.map(p => (p.id === saved.id ? saved : p)))
+      setResults(prev => {
+        const next = {...prev}
+        delete next[saved.id]
+        return next
+      })
     } catch (err) {
       toast.error(t('policy.saveFailed', {message: (err as Error).message}))
+    }
+  }
+
+  // Evaluates the persisted policy (the panel saves on every edit, so it matches
+  // what is shown) — the same path a CI gate takes, not an inline copy.
+  const handleEvaluate = async (policy: Policy) => {
+    if (!activeOrgId || !openFlowId) return
+    setEvaluatingId(policy.id)
+    try {
+      const result = await analysisApi.evaluatePolicyById(openFlowId, activeOrgId, policy.id)
+      setResults(prev => ({...prev, [policy.id]: result}))
+    } catch (err) {
+      toast.error(t('policy.evaluateFailed', {message: (err as Error).message}))
+    } finally {
+      setEvaluatingId(null)
     }
   }
 
@@ -257,12 +283,71 @@ export default function PolicyGatePanel() {
                       })}
                     </div>
                   </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => void handleEvaluate(policy)}
+                        disabled={!openFlowId || evaluatingId === policy.id}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-border-default text-text-primary hover:bg-surface-2 disabled:opacity-40 transition-colors"
+                      >
+                        <Play className="w-4 h-4" />
+                        {evaluatingId === policy.id ? t('policy.evaluating') : t('policy.evaluate')}
+                      </button>
+                      {!openFlowId && <span className="text-xs text-text-secondary">{t('policy.evaluateNoFlow')}</span>}
+                    </div>
+                    {results[policy.id] && <PolicyResultView result={results[policy.id]} />}
+                  </div>
                 </div>
               )}
             </div>
           )
         })}
       </div>
+    </div>
+  )
+}
+
+function PolicyResultView({result}: {result: PolicyResult}) {
+  const {t} = useTranslation('settings')
+  const violations = result.violations ?? []
+  return (
+    <div
+      className={clsx(
+        'rounded-md border p-3 space-y-2',
+        result.passed ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5',
+      )}
+      role="status"
+    >
+      <div className="flex items-center gap-2 text-sm">
+        {result.passed ? (
+          <ShieldCheck className="w-4 h-4 text-green-500" />
+        ) : (
+          <ShieldAlert className="w-4 h-4 text-red-500" />
+        )}
+        <span className={clsx('font-medium', result.passed ? 'text-green-500' : 'text-red-500')}>
+          {result.passed ? t('policy.resultPassed') : t('policy.resultFailed')}
+        </span>
+        <span className="text-xs text-text-secondary">
+          {t('policy.resultSummary', {
+            evaluated: result.evaluated,
+            errors: result.errors,
+            warnings: result.warnings,
+            info: result.info,
+          })}
+        </span>
+      </div>
+      {violations.length > 0 && (
+        <ul className="max-h-48 overflow-y-auto space-y-1">
+          {violations.map((v, i) => (
+            <li key={v.fingerprint ?? `${v.id}-${i}`} className="flex items-baseline gap-2 text-xs">
+              <span className="uppercase text-text-secondary shrink-0">{v.severity}</span>
+              <span className="text-text-secondary shrink-0">{v.ruleId}</span>
+              <span className="text-text-primary truncate">{v.title}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

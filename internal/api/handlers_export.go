@@ -28,6 +28,7 @@ func NewExportHandler(exportSvc *service.ExportService, flowSvc *service.FlowSer
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/export/compare [post]
 func (h *ExportHandler) handleCompareCurrentWith(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +160,41 @@ func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request)
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
 	})
+}
+
+// handleSaveClientExport writes a findings export rendered in the browser
+// (CSV of the filtered list, SARIF, JUnit) to the path picked in the desktop
+// native save dialog — the same dialog-then-server-write flow the PDF,
+// Markdown and HTML exports use. Desktop/local only: in cloud mode a caller
+// must never choose a server path.
+// @Summary      Save a client-rendered findings export
+// @Description  Desktop only. Writes CSV/SARIF/JUnit text rendered by the findings panel to the absolute path chosen in the native save dialog (.csv, .sarif or .xml only). 403 in cloud mode.
+// @Tags         export
+// @Accept       json
+// @Produce      json
+// @Param        request body object true "{path, content}"
+// @Success      200 {object} map[string]string "OK"
+// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} map[string]string "Forbidden (cloud mode)"
+// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Router       /api/export/save [post]
+func (h *ExportHandler) handleSaveClientExport(w http.ResponseWriter, r *http.Request) {
+	if h.security.JWTEnabled {
+		render.Error(w, fmt.Errorf("saving an export to a server path is not available in cloud mode"), http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := h.exportSvc.SaveClientExport(req.Path, req.Content); err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	render.JSON(w, map[string]string{"status": "ok"})
 }
 
 // @Summary      Export flow as PDF

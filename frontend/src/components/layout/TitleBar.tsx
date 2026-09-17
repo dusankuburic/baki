@@ -72,18 +72,24 @@ export default function TitleBar() {
             <button
               onClick={() => platform.minimizeWindow()}
               className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
+              title={t('titleBar.minimizeWindow')}
+              aria-label={t('titleBar.minimizeWindow')}
             >
               <Minus size={10} />
             </button>
             <button
               onClick={() => platform.toggleMaximizeWindow()}
               className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
+              title={t('titleBar.maximizeWindow')}
+              aria-label={t('titleBar.maximizeWindow')}
             >
               <Square size={8} />
             </button>
             <button
               onClick={() => platform.closeWindow()}
               className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-semantic-error/15 text-text-tertiary hover:text-semantic-error transition-colors duration-fast"
+              title={t('titleBar.closeWindow')}
+              aria-label={t('titleBar.closeWindow')}
             >
               <X size={10} />
             </button>

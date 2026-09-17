@@ -6,7 +6,6 @@ interface SearchState {
   query: string
   results: SearchResult[]
   activeResultIndex: number
-  isSearching: boolean
   totalCount: number
   focusRequest: number
 
@@ -22,18 +21,16 @@ export const useSearchStore = create<SearchState>((set, _get) => ({
   query: '',
   results: [],
   activeResultIndex: -1,
-  isSearching: false,
   totalCount: 0,
   focusRequest: 0,
 
-  setQuery: q => set({query: q, isSearching: q.length > 0}),
+  setQuery: q => set({query: q}),
 
   setResults: (results, total) =>
     set({
       results,
       totalCount: total,
       activeResultIndex: results.length > 0 ? 0 : -1,
-      isSearching: false,
     }),
 
   nextResult: () =>
@@ -48,7 +45,7 @@ export const useSearchStore = create<SearchState>((set, _get) => ({
       return {activeResultIndex: (state.activeResultIndex - 1 + state.results.length) % state.results.length}
     }),
 
-  clear: () => set({query: '', results: [], activeResultIndex: -1, isSearching: false, totalCount: 0}),
+  clear: () => set({query: '', results: [], activeResultIndex: -1, totalCount: 0}),
 
   requestFocus: () => set(state => ({focusRequest: state.focusRequest + 1, query: ''})),
 }))

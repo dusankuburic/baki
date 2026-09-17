@@ -66,11 +66,11 @@ export AZURITE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=devs
 ## Project Structure
 
 ```
-core/analyzer/     41 rules + 19 auto-fixers (18 distinct Patch fixers + "suppress") + patch model (5 op kinds: insert/wrap/append/replace/remove)
+core/analyzer/     45 rules + 19 auto-fixers (18 distinct Patch fixers + "suppress") + patch model (5 op kinds: insert/wrap/append/replace/remove)
 core/parser/       PAD text format parser (tokenizer → classifier → parser)
 core/models/       Domain models (Block, Finding, Patch, AnalysisReport)
 core/export/       SARIF 2.1.0 + report serializers
-internal/api/      HTTP handlers (chi router), 170+ endpoints
+internal/api/      HTTP handlers (chi router), ~190 endpoints over ~175 paths
 internal/service/  Business logic (FlowService, AnalysisService, ChatService)
 internal/storage/  StorageBackend interface + Postgres + filesystem implementations
 cmd/bakicli/       CLI with -format sarif/json/text, -baseline, -policy gates

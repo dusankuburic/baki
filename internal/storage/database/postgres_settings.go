@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"pad-core/models"
+
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -68,8 +70,13 @@ func (b *PostgresStorageBackend) LoadUserSettings(ctx context.Context, userID st
 	var data []byte
 	err := b.query(ctx).QueryRowContext(ctx, `SELECT data FROM user_settings WHERE user_id = $1`, userID).Scan(&data)
 	if err == sql.ErrNoRows {
-		// Return default settings if none found
-		return &interfaces.AppSettings{Version: 1}, nil
+		// A user who has never saved settings gets the application defaults.
+		// This returned a bare {Version: 1}, whose zero values the client
+		// merged over its own defaults, so every default of true ("Save
+		// conversation history", "Auto-analyze on open") showed as off for a
+		// new cloud account, and chat, which now honours the history toggle,
+		// would have stopped saving their conversations.
+		return defaultStorageSettings()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load user settings: %w", err)
@@ -108,6 +115,21 @@ func (b *PostgresStorageBackend) LoadOrgSettings(ctx context.Context, orgID stri
 	var s interfaces.AppSettings
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("unmarshal org settings: %w", err)
+	}
+	return &s, nil
+}
+
+// defaultStorageSettings converts the application defaults (pad-core models,
+// the single source of truth) into the storage settings type. The two types
+// share JSON tags field for field, so the round trip is lossless.
+func defaultStorageSettings() (*interfaces.AppSettings, error) {
+	data, err := json.Marshal(models.DefaultSettings())
+	if err != nil {
+		return nil, fmt.Errorf("marshal default settings: %w", err)
+	}
+	var s interfaces.AppSettings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("unmarshal default settings: %w", err)
 	}
 	return &s, nil
 }

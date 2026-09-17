@@ -59,6 +59,17 @@ export const exportApi = {
   exportHTML: (flowId?: string): Promise<string> =>
     exportReport({endpoint: '/api/export/html', mime: 'text/html', label: 'HTML', ext: 'html'}, flowId),
 
+  // saveTextExport is the desktop branch for exports rendered in the browser
+  // (findings CSV, SARIF, JUnit): the same native save dialog exportReport
+  // uses, then the local backend writes the text to the chosen path — the
+  // webview cannot write files itself. Returns the path, "" when cancelled.
+  saveTextExport: async (content: string, kind: {label: string; ext: string}): Promise<string> => {
+    const path = await createAdapter().fileSave({filters: [{name: kind.label, extensions: [kind.ext]}]})
+    if (!path) return ''
+    await request('/api/export/save', {body: {path, content}, method: 'POST', timeoutMs: EXPORT_TIMEOUT_MS})
+    return path
+  },
+
   compareCurrentWith: (path: string): Promise<FlowDiff> => request('/api/export/compare', {body: {path}}),
 
   pickFile: async (filter: string): Promise<string | null> => {

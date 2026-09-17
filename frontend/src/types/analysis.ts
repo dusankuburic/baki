@@ -50,6 +50,20 @@ export interface FindingStatus {
 
 // The accepted set of finding keys for a flow. Findings whose fingerprint is not
 // in `keys` are "new since baseline".
+// One inline `# pad-ignore` directive in the flow source, audited by
+// POST /api/analysis/suppressions (core/analyzer/suppress_inventory.go).
+// stale: the rule no longer fires on the target block, so the directive masks
+// nothing today but would silently hide a future finding there.
+export interface SuppressionEntry {
+  line: number
+  rule: string // "*" = all rules
+  blockLabel: string
+  blockType?: string
+  subflow?: string
+  stale: boolean
+  reason?: string
+}
+
 export interface FlowBaseline {
   flowId: string
   keys: string[]
@@ -115,6 +129,9 @@ export interface AnalysisStats {
   info: number
   blocksAnalyzed: number
   rulesRun: number
+  // Findings hidden by inline `# pad-ignore` directives. The engine always
+  // emits it; optional because reports stored before the field existed lack it.
+  suppressed?: number
 }
 
 export interface SubflowMetrics {

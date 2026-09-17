@@ -12,7 +12,10 @@ interface Props {
 // a widened `string` would defeat the key checking the i18next augmentation adds.
 const SHORTCUTS = [
   {keys: 'Enter', descriptionKey: 'help.sendMessage'},
-  {keys: 'Shift/Cmd/Ctrl + Enter', descriptionKey: 'help.newLine'},
+  {keys: 'Cmd/Ctrl + Enter', descriptionKey: 'help.sendMessage'},
+  {keys: 'Shift + Enter', descriptionKey: 'help.newLine'},
+  {keys: 'Cmd/Ctrl + L', descriptionKey: 'help.clearChat'},
+  {keys: 'Esc', descriptionKey: 'help.stopResponse'},
   {keys: '↑ / ↓', descriptionKey: 'help.cycleHistory'},
   {keys: '@', descriptionKey: 'help.mentionFile'},
   {keys: '/', descriptionKey: 'help.openCommandMenu'},

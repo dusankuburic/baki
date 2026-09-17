@@ -245,8 +245,9 @@ func initScanner(lc fx.Lifecycle, s *scanner.Scanner) {
 }
 
 // provideMigrationRunner wires the optional local→cloud data migration runner.
-// The migrator needs BOTH a source filesystem backend (PAD_STORAGE_DATA_DIR
-// pointing at the old local data) and the active cloud (Postgres) destination.
+// The migrator needs BOTH a source filesystem backend (PAD_DATA_DIR pointing
+// at a legacy filesystem-backed server's data directory) and the active cloud
+// (Postgres) destination.
 // With either absent the runner is disabled — nil — and the admin endpoint
 // reports 503. Cloud mode only: local mode has no destination backend.
 func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend) *api.MigrationRunner {

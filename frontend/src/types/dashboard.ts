@@ -99,6 +99,8 @@ export interface FlowComplexityPoint {
 }
 
 export interface DashboardSecurity {
+  /** False when the posture could not be read: all-zero counts then mean "unknown", not "clean". */
+  available: boolean
   failedLogins24h: number
   credentialFindings: number
   /** Accounts currently locked by the brute-force defense. Cloud-only. */

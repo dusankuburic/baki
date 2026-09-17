@@ -55,7 +55,4 @@ export const chatApi = {
 
 
   previewContext: (req: ChatRequest): Promise<ContextPreview> => request('/api/chat/preview-context', {body: req}),
-
-  readSourceFiles: (files: string[]): Promise<Record<string, string>> =>
-    request('/api/flow/read-sources', {body: {files}}),
 }

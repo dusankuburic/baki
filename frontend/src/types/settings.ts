@@ -38,16 +38,11 @@ export interface AppSettings {
 
 export interface GeneralSettings {
   firstRunCompleted: boolean
-  lastUsedVersion: string
-  checkForUpdates: 'never' | 'daily' | 'weekly' | 'monthly'
-  openInNewWindow: boolean
 }
 
 export interface AppearanceSettings {
   theme: ThemeMode
   density: 'comfortable' | 'compact'
-  codeFont: string
-  uiFont: string
   reduceMotion: boolean
   highContrast: boolean
 }
@@ -92,9 +87,6 @@ export interface AIProviderConfig {
 
 export interface ParserSettings {
   maxFileSizeMB: number
-  preserveComments: boolean
-  treatTabsAsSpaces: boolean
-  spacesPerIndent: number
 }
 
 export interface AnalysisRulesSettings {

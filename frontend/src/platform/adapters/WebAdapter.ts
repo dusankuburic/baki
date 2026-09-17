@@ -237,14 +237,6 @@ export class WebAdapter implements PlatformAdapter {
   }
 
   /**
-   * Reveal file - not applicable in web browsers
-   */
-  async fileReveal(_path: string): Promise<void> {
-    // Revealing a file in the OS file manager has no browser equivalent — no-op.
-    logger.warn('File reveal is not supported in web browsers')
-  }
-
-  /**
    * Open URL in new tab
    */
   async openURL(url: string): Promise<void> {
@@ -279,23 +271,6 @@ export class WebAdapter implements PlatformAdapter {
       }
     } else {
       logger.warn('Notifications not supported in this browser')
-    }
-  }
-
-  /**
-   * Read clipboard using Clipboard API
-   */
-  async readClipboard(): Promise<string> {
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        return await navigator.clipboard.readText()
-      } else {
-        logger.warn('Clipboard API not available')
-        return ''
-      }
-    } catch (error) {
-      logger.warn('Failed to read clipboard:', error)
-      return ''
     }
   }
 

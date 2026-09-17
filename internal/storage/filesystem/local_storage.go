@@ -19,7 +19,15 @@ import (
 	"pad-core/models"
 )
 
-// LocalStorageBackend implements StorageBackend for local file system storage
+// LocalStorageBackend implements StorageBackend on the local file system.
+//
+// It is NOT the desktop app's store: in local mode no StorageBackend is
+// injected at all (provideStorageBackend returns nil), and the desktop keeps
+// flows in memory with settings and conversations in its own files. This
+// backend has two live uses: the SOURCE of the legacy-server migration
+// (PAD_DATA_DIR, see internal/migration), and the in-process storage behind
+// the API test router. Features built on it (versions, triage, comments,
+// tokens) are therefore exercised by tests but unreachable in the desktop app.
 type LocalStorageBackend struct {
 	dataDir      string
 	mu           sync.RWMutex // guards users, orgs, and sharing maps
@@ -165,10 +173,6 @@ func (lsb *LocalStorageBackend) SaveFlow(ctx context.Context, flow *interfaces.F
 	}
 
 	return nil
-}
-
-func (lsb *LocalStorageBackend) TransferFlowOwner(_ context.Context, _, _, _ string) error {
-	return fmt.Errorf("TransferFlowOwner not supported in local mode")
 }
 
 // LoadFlow loads a flow document from the local file system
@@ -699,7 +703,7 @@ func (b *LocalStorageBackend) DeletePolicy(ctx context.Context, orgID, id string
 	return ErrPoliciesUnsupported
 }
 
-// Flow versioning — not supported in local desktop mode.
+// Flow versioning (test router / legacy data only — see LocalStorageBackend).
 // versionDir is the per-flow directory holding one JSON file per snapshot:
 // {dataDir}/versions/{flowID}/{version}.json. Flow IDs originate from uploads,
 // so they get the same traversal guard (safePathSegment) as every other
@@ -712,8 +716,9 @@ func (lsb *LocalStorageBackend) versionDir(flowID string) (string, error) {
 }
 
 // SaveFlowVersion assigns the next version number atomically (max existing + 1
-// under flowMu) and persists the snapshot. Desktop/local equivalent of the
-// Postgres FOR UPDATE + MAX+1 path — versioning now works in desktop mode too.
+// under flowMu) and persists the snapshot. Filesystem equivalent of the
+// Postgres FOR UPDATE + MAX+1 path. The desktop app does not reach it: local
+// mode injects no StorageBackend, so its version routes answer 503.
 func (lsb *LocalStorageBackend) SaveFlowVersion(ctx context.Context, v *interfaces.FlowVersion) error {
 	dir, err := lsb.versionDir(v.FlowID)
 	if err != nil {
@@ -822,8 +827,6 @@ func (lsb *LocalStorageBackend) getDefaultSettings() *interfaces.AppSettings {
 		Version: 1,
 		General: interfaces.GeneralSettings{
 			FirstRunCompleted: false,
-			LastUsedVersion:   "",
-			CheckForUpdates:   "weekly",
 		},
 		Appearance: interfaces.AppearanceSettings{
 			Theme:   "dark",

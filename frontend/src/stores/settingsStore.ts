@@ -29,15 +29,10 @@ export const defaultSettings: AppSettings = {
   version: 1,
   general: {
     firstRunCompleted: false,
-    lastUsedVersion: '',
-    checkForUpdates: 'weekly',
-    openInNewWindow: false,
   },
   appearance: {
     theme: 'dark',
     density: 'comfortable',
-    codeFont: 'JetBrains Mono',
-    uiFont: 'Inter',
     reduceMotion: false,
     highContrast: false,
   },
@@ -134,9 +129,6 @@ export const defaultSettings: AppSettings = {
   },
   parser: {
     maxFileSizeMB: 50,
-    preserveComments: true,
-    treatTabsAsSpaces: true,
-    spacesPerIndent: 4,
   },
   analysis: {
     rules: {},
@@ -257,21 +249,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             general: {
               ...defaultSettings.general,
               ...loaded.general,
-              checkForUpdates: loaded.general?.checkForUpdates || defaultSettings.general.checkForUpdates,
             },
             appearance: {
               ...defaultSettings.appearance,
               ...loaded.appearance,
               theme: loaded.appearance?.theme || defaultSettings.appearance.theme,
               density: loaded.appearance?.density || defaultSettings.appearance.density,
-              codeFont: loaded.appearance?.codeFont || defaultSettings.appearance.codeFont,
-              uiFont: loaded.appearance?.uiFont || defaultSettings.appearance.uiFont,
             },
             parser: {
               ...defaultSettings.parser,
               ...loaded.parser,
               maxFileSizeMB: loaded.parser?.maxFileSizeMB || defaultSettings.parser.maxFileSizeMB,
-              spacesPerIndent: loaded.parser?.spacesPerIndent || defaultSettings.parser.spacesPerIndent,
             },
             layout: {
               ...defaultSettings.layout,

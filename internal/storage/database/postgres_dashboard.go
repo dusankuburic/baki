@@ -8,6 +8,8 @@ import (
 	"log/slog"
 
 	"pad-analyzer/internal/storage/interfaces"
+
+	"pad-core/logger"
 )
 
 // SaveFlowAnalysis upserts a flow's latest analysis summary. Called best-effort
@@ -467,30 +469,42 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		return nil, fmt.Errorf("iterate complexity: %w", err)
 	}
 
-	// F. Security posture.
-	// Failed logins in last 24h
-	_ = b.query(ctx).QueryRowContext(ctx, `
+	// F. Security posture. Each count is best-effort, but a failure must be
+	// reported: a query that errors leaves its field at 0, and the card used to
+	// render three zeros as "no security issues detected".
+	securityOK := true
+	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COUNT(*)::int FROM audit_events
 		WHERE action = 'auth.login_failure' AND user_id = $1
 		  AND created_at >= NOW() - INTERVAL '24 hours'`, ownerID,
-	).Scan(&out.Security.FailedLogins24h)
+	).Scan(&out.Security.FailedLogins24h); err != nil {
+		logger.Warn("dashboard: failed-login count unavailable", "error", err)
+		securityOK = false
+	}
 
 	// Credential-related findings across all analyzed flows
-	_ = b.query(ctx).QueryRowContext(ctx, `
+	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(rv.value::int), 0)::int
 		FROM flow_analysis fa
 		JOIN flows f ON f.id = fa.flow_id,
 		     LATERAL jsonb_each_text(fa.by_rule) AS rv(key, value)
 		WHERE f.owner_id = $1
 		  AND (rv.key LIKE '%credential%' OR rv.key LIKE '%sensitive%' OR rv.key LIKE '%injection%')`, ownerID,
-	).Scan(&out.Security.CredentialFindings)
+	).Scan(&out.Security.CredentialFindings); err != nil {
+		logger.Warn("dashboard: credential-finding count unavailable", "error", err)
+		securityOK = false
+	}
 
 	// Currently locked accounts. Instance-wide: the users table has no org/owner
 	// scoping, and lockouts are a fleet-security signal rather than a per-owner one.
-	_ = b.query(ctx).QueryRowContext(ctx, `
+	if err := b.query(ctx).QueryRowContext(ctx, `
 		SELECT COUNT(*)::int FROM users
 		WHERE locked_until IS NOT NULL AND locked_until > NOW()`,
-	).Scan(&out.Security.LockedAccounts)
+	).Scan(&out.Security.LockedAccounts); err != nil {
+		logger.Warn("dashboard: locked-account count unavailable", "error", err)
+		securityOK = false
+	}
+	out.Security.Available = securityOK
 
 	// G. Team-triage workflow: status funnel, MTTR, and stale-finding count.
 	// Best-effort (a failure leaves the section empty rather than failing the

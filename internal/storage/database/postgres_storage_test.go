@@ -138,7 +138,6 @@ func TestPostgres_Settings_SaveLoad(t *testing.T) {
 		Version: 2,
 		General: interfaces.GeneralSettings{
 			FirstRunCompleted: true,
-			LastUsedVersion:   "1.2.3",
 		},
 	}
 

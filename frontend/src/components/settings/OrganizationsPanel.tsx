@@ -1,6 +1,20 @@
 import {useEffect, useState, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
-import {Building2, Plus, Trash2, UserPlus, X, AlertCircle, Clock, Mail, Link2, Copy, Check} from 'lucide-react'
+import {
+  Building2,
+  Plus,
+  Trash2,
+  UserPlus,
+  X,
+  AlertCircle,
+  Clock,
+  Mail,
+  Link2,
+  Copy,
+  Check,
+  Pencil,
+  LogOut,
+} from 'lucide-react'
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
@@ -30,7 +44,7 @@ function inviteLinkURL(token: string): string {
  */
 export default function OrganizationsPanel() {
   const {t} = useTranslation('settings')
-  const {error: toastError} = useToast()
+  const {error: toastError, success: toastSuccess} = useToast()
   const organisations = useOrgStore(s => s.organisations)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const isLoading = useOrgStore(s => s.isLoading)
@@ -39,6 +53,7 @@ export default function OrganizationsPanel() {
   const setActiveOrg = useOrgStore(s => s.setActiveOrg)
   const createOrg = useOrgStore(s => s.createOrg)
   const deleteOrg = useOrgStore(s => s.deleteOrg)
+  const renameOrg = useOrgStore(s => s.renameOrg)
   const inviteMember = useOrgStore(s => s.inviteMember)
   const removeMember = useOrgStore(s => s.removeMember)
   const setMemberRole = useOrgStore(s => s.setMemberRole)
@@ -49,6 +64,10 @@ export default function OrganizationsPanel() {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [createBusy, setCreateBusy] = useState(false)
+
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameBusy, setRenameBusy] = useState(false)
 
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<OrgRole>('member')
@@ -115,6 +134,49 @@ export default function OrganizationsPanel() {
       await removeMember(selected.id, userId)
     } catch {
       // error surfaces via store.error
+    }
+  }
+
+  // A non-admin member leaves by removing their own row — the server allows
+  // exactly that self-removal. removeMember reloads the list, so the org drops
+  // out and the active org falls back to Personal.
+  const handleLeave = async (org: Organisation) => {
+    if (!currentUser) return
+    const ok = await confirm({
+      title: t('orgs.leaveTitle'),
+      message: t('orgs.leaveMessage', {name: org.name}),
+      danger: true,
+      confirmLabel: t('orgs.leaveConfirm'),
+    })
+    if (!ok) return
+    try {
+      await removeMember(org.id, currentUser.id)
+      toastSuccess(t('orgs.left', {name: org.name}))
+    } catch {
+      // error surfaces via store.error
+    }
+  }
+
+  const startRename = (org: Organisation) => {
+    setRenamingId(org.id)
+    setRenameValue(org.name)
+  }
+
+  const handleRename = async (org: Organisation) => {
+    const name = renameValue.trim()
+    // Blank or unchanged is a cancel, not a request the server would refuse.
+    if (!name || name === org.name) {
+      setRenamingId(null)
+      return
+    }
+    setRenameBusy(true)
+    try {
+      await renameOrg(org.id, name)
+      setRenamingId(null)
+    } catch {
+      // error surfaces via store.error; keep the editor open with the typed name
+    } finally {
+      setRenameBusy(false)
     }
   }
 
@@ -226,6 +288,7 @@ export default function OrganizationsPanel() {
             const isAdmin = org.members.find(m => m.userId === currentUser?.id)?.role === 'admin'
             const canManageMembers = isOwner || isAdmin
             const isActive = org.id === activeOrgId
+            const isRenaming = renamingId === org.id
             return (
               <div
                 key={org.id}
@@ -240,9 +303,38 @@ export default function OrganizationsPanel() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span title={org.name} className="text-sm font-semibold text-text-primary truncate">
-                        {org.name}
-                      </span>
+                      {isRenaming ? (
+                        <div className="flex items-center gap-2 flex-1 min-w-0" onClick={e => e.stopPropagation()}>
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={e => setRenameValue(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') void handleRename(org)
+                              if (e.key === 'Escape') setRenamingId(null)
+                            }}
+                            aria-label={t('orgs.renameInputAria')}
+                            className="flex-1 min-w-0 px-2 py-1 rounded-md bg-surface-2 border border-border-default text-sm focus:outline-none focus:border-brand-500"
+                          />
+                          <button
+                            onClick={() => void handleRename(org)}
+                            disabled={renameBusy || !renameValue.trim()}
+                            className="px-2 py-1 rounded-md bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-brand-foreground text-xs font-medium"
+                          >
+                            {t('orgs.renameSave')}
+                          </button>
+                          <button
+                            onClick={() => setRenamingId(null)}
+                            className="px-2 py-1 rounded-md text-xs text-text-secondary hover:bg-surface-3"
+                          >
+                            {t('orgs.cancel')}
+                          </button>
+                        </div>
+                      ) : (
+                        <span title={org.name} className="text-sm font-semibold text-text-primary truncate">
+                          {org.name}
+                        </span>
+                      )}
                       {isOwner && (
                         <span className="text-2xs font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-400">
                           Owner
@@ -253,6 +345,19 @@ export default function OrganizationsPanel() {
                       {org.members.length} {org.members.length === 1 ? 'member' : 'members'}
                     </p>
                   </div>
+                  {canManageMembers && !isRenaming && (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        startRename(org)
+                      }}
+                      className="p-1.5 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-3 transition-colors"
+                      title={t('orgs.renameAria')}
+                      aria-label={t('orgs.renameAria')}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
                   {isOwner && (
                     <button
                       onClick={e => {
@@ -330,6 +435,16 @@ export default function OrganizationsPanel() {
                                   }
                                 >
                                   <X size={14} />
+                                </button>
+                              ) : m.userId === currentUser?.id ? (
+                                <button
+                                  onClick={() => void handleLeave(org)}
+                                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors"
+                                  title={t('orgs.leaveAria')}
+                                  aria-label={t('orgs.leaveAria')}
+                                >
+                                  <LogOut size={12} />
+                                  {t('orgs.leave')}
                                 </button>
                               ) : null}
                             </div>

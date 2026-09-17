@@ -263,8 +263,6 @@ func TestLocalStorageBackend_SaveAndLoadSettings(t *testing.T) {
 		Version: 1,
 		General: interfaces.GeneralSettings{
 			FirstRunCompleted: true,
-			LastUsedVersion:   "1.0.0",
-			CheckForUpdates:   "weekly",
 		},
 		Appearance: interfaces.AppearanceSettings{
 			Theme:   "dark",

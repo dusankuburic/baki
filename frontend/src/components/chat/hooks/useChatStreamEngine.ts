@@ -10,6 +10,7 @@ import {uuid} from '@/lib/uuid'
 import {utf8ByteLength} from '@/lib/utf8'
 import type {ChatEvent, FixProposalPayload, ToolResultPayload} from '@/lib/chatEvent'
 import type {ChatMessage, FlowDocument, ProviderID, ToolCallRecord} from '@/types'
+import {conversationHistoryEnabled} from '@/lib/chatHistory'
 
 // StreamAcc is one in-flight stream's local accumulation state: the growing
 // text plus the RAF batching bookkeeping. Keyed by streamId in a ref so
@@ -242,10 +243,14 @@ export function useChatStreamEngine({doc, provider, selectedModel, getMessages}:
             (msg.fixProposals ?? []).some(p => p.status === 'applied' || p.status === 'applied-unresolved'),
         })
       }
-      const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
-      chatApi.saveConversation(thread.flowId, conversationKey(thread), persistable).catch(err => {
-        logger.warn('Failed to save conversation', err)
-      })
+      // History off: nothing is stored, and the request builder sends the
+      // thread's messages with each turn instead of relying on the server copy.
+      if (conversationHistoryEnabled()) {
+        const persistable = (getMessages(threadId) as ChatMessage[]).filter(m => m.finishReason !== 'error')
+        chatApi.saveConversation(thread.flowId, conversationKey(thread), persistable).catch(err => {
+          logger.warn('Failed to save conversation', err)
+        })
+      }
       if (opts.tokensIn != null || opts.tokensOut != null) {
         updateThread(threadId, {
           tokensIn: (thread.tokensIn ?? 0) + (opts.tokensIn ?? 0),

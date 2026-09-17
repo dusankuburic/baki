@@ -87,12 +87,11 @@ interface FlowState {
   selectSubflow: (subflowId: string | null, skipHistory?: boolean) => void
   goBack: () => void
   goForward: () => void
-  drillIntoSubflow: (subflowId: string) => void
   drillUp: () => void
   toggleSubflowExpand: (id: string) => void
   toggleBlockExpand: (id: string) => void
   setVisibleTypes: (types: Set<BlockType>) => void
-  setParsing: (parsing: boolean) => void
+  setParsing: (parsing: boolean, progress?: number) => void
   setParseError: (error: string | null) => void
   setFolderFiles: (files: FlowFileInfo[] | null) => void
   setSelectedFilePath: (path: string | null) => void
@@ -294,12 +293,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
   },
 
-  drillIntoSubflow: subflowId =>
-    set(state => ({
-      drilledSubflowPath: [...state.drilledSubflowPath, subflowId],
-      selectedSubflowId: subflowId,
-    })),
-
   drillUp: () =>
     set(state => {
       const path = state.drilledSubflowPath.slice(0, -1)
@@ -317,7 +310,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     })),
 
   setVisibleTypes: types => set({visibleTypes: types}),
-  setParsing: parsing => set({isParsing: parsing}),
+  // Progress only means something while a parse is running; clearing the flag
+  // resets it so the next parse does not start from a stale percentage.
+  setParsing: (parsing, progress = 0) => set({isParsing: parsing, parseProgress: parsing ? progress : 0}),
   setParseError: error => set({parseError: error, isParsing: false}),
   setFolderFiles: files => set({folderFiles: files, selectedFilePath: null}),
   setSelectedFilePath: path => set({selectedFilePath: path}),

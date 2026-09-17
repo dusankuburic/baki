@@ -1,5 +1,8 @@
-// Package migration handles data migration from the local filesystem backend
-// to a cloud-backed (PostgreSQL) StorageBackend.
+// Package migration upgrades a LEGACY filesystem-backed server (a deployment
+// that ran with the filesystem storage backend and a PAD_DATA_DIR) to the
+// PostgreSQL StorageBackend. It copies flows, settings and chat conversations
+// only; Result.NotMigrated names what stays behind. It is not a desktop-app
+// export: the desktop app keeps no store under PAD_DATA_DIR.
 //
 // # Failure model
 //
@@ -51,8 +54,12 @@ type Result struct {
 	ConversationsSkipped  int
 	ConversationsFailed   int
 	SettingsMoved         bool
-	Errors                []MigrationError
-	Duration              time.Duration
+	// NotMigrated lists the kinds of data the source directory can hold that
+	// this migrator does not copy. The status used to report counts for flows
+	// only, so a "completed" run read as a full upgrade.
+	NotMigrated []string
+	Errors      []MigrationError
+	Duration    time.Duration
 }
 
 // MigrationError captures a per-item failure without stopping the run.
@@ -116,9 +123,22 @@ func (m *Migrator) WithConversationsDir(dir string) *Migrator {
 
 // Migrate runs the full migration: flows first, then settings, then
 // conversations (best-effort).  It returns a Result even on partial failure.
+// notMigrated is what a legacy filesystem data directory can hold beyond the
+// flows, settings and conversations Migrate copies.
+var notMigrated = []string{
+	"users and sessions",
+	"organisations and memberships",
+	"API tokens",
+	"finding triage and comments",
+	"flow versions",
+	"share links",
+	"governance alerts",
+	"audit events",
+}
+
 func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 	start := time.Now()
-	var res Result
+	res := Result{NotMigrated: append([]string(nil), notMigrated...)}
 
 	if err := m.dst.Ping(ctx); err != nil {
 		return res, fmt.Errorf("destination unreachable: %w", err)

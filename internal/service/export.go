@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"pad-core/export"
 	"pad-core/logger"
@@ -133,4 +134,32 @@ func (s *ExportService) ExportPDF(doc *models.FlowDocument, report *models.Analy
 	}
 
 	return pdfBytes, nil
+}
+
+// clientExportExts are the file types the findings panel renders in the
+// browser (CSV of the filtered list, SARIF, JUnit XML) and SaveClientExport may
+// write. An allowlist, not "any path": this endpoint writes caller-supplied
+// text, unlike the PDF/Markdown/HTML exports whose bytes the server renders.
+var clientExportExts = map[string]bool{".csv": true, ".sarif": true, ".xml": true}
+
+// SaveClientExport writes a browser-rendered findings export to the path the
+// desktop native save dialog returned. The webview cannot write files itself,
+// so CSV/SARIF/JUnit used to fall back to an anchor download on desktop and
+// skip the save dialog the PDF/Markdown/HTML exports show. Desktop only — the
+// handler refuses it in cloud mode.
+func (s *ExportService) SaveClientExport(path, content string) error {
+	if err := validateUserPath(path); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%w: export path must be absolute", ErrInvalidInput)
+	}
+	if ext := strings.ToLower(filepath.Ext(path)); !clientExportExts[ext] {
+		return fmt.Errorf("%w: unsupported export file type %q (want .csv, .sarif or .xml)", ErrInvalidInput, ext)
+	}
+	//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	return nil
 }
