@@ -23,7 +23,15 @@ vi.mock('./AddActionForm', () => ({
   insertBeforeLastRegionEnd: (s: string) => s,
 }))
 
-const flowState = {document: {id: 'flow-1'}, readOnly: false, setDocument: vi.fn()}
+const flowState: {
+  document: {id: string; isFolder?: boolean; filePath?: string}
+  readOnly: boolean
+  setDocument: unknown
+} = {
+  document: {id: 'flow-1'},
+  readOnly: false,
+  setDocument: vi.fn(),
+}
 vi.mock('@/stores/flowStore', () => ({
   useFlowStore: Object.assign((sel: (s: typeof flowState) => unknown) => sel(flowState), {getState: () => flowState}),
 }))
@@ -37,6 +45,7 @@ describe('SourceEditor', () => {
   beforeEach(() => {
     getSource.mockReset()
     saveSource.mockReset()
+    flowState.document = {id: 'flow-1'}
   })
 
   // The destruction chain this guards: getSource rejects -> the catch only
@@ -95,5 +104,23 @@ describe('SourceEditor', () => {
       const box = screen.getByRole('textbox') as HTMLTextAreaElement
       expect(box.value).toContain('WAIT 1')
     })
+  })
+
+  // A cloud folder flow has no per-file source, and the server refuses to save
+  // the combined text (it would collapse the folder). Save used to arm on the
+  // first keystroke and fail every time; a desktop folder (on-disk path) saves
+  // the selected member file and must stay enabled.
+  it.each([
+    ['cloud folder', {id: 'flow-1', isFolder: true, filePath: ''}, true],
+    ['desktop folder', {id: 'flow-1', isFolder: true, filePath: '/flows/F'}, false],
+  ])('Save for a %s: disabled=%s', async (_label, doc, disabled) => {
+    flowState.document = doc
+    getSource.mockResolvedValue({source: '#Region "Main"\nWAIT 1\n#EndRegion\n'})
+    render(<SourceEditor onClose={() => {}} />)
+
+    const box = (await screen.findByRole('textbox')) as HTMLTextAreaElement
+    fireEvent.change(box, {target: {value: box.value + 'WAIT 2\n'}})
+    const save = screen.getByText('Save & Re-parse').closest('button') as HTMLButtonElement
+    expect(save.disabled).toBe(disabled)
   })
 })

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, waitFor, act} from '@testing-library/react'
+import {render, screen, waitFor, act, fireEvent, within} from '@testing-library/react'
 import AITab from './AITab'
 import {chatApi, providersApi, flowApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
@@ -181,5 +181,96 @@ describe('AITab source-file selection (B1)', () => {
       expect(screen.getByText('All 2 files')).toBeInTheDocument()
     })
     expect(screen.queryByText('No files selected')).not.toBeInTheDocument()
+  })
+})
+
+// C23: the chat shortcuts listed in the help dialogs are bound while focus is
+// inside the chat panel, and only there.
+describe('AITab chat shortcuts', () => {
+  function seedChat(streaming: boolean) {
+    vi.mocked(providersApi.listProviders).mockResolvedValue([
+      {id: 'claude', name: 'Claude', configured: true, authType: 'apiKey', models: [], defaultModel: 'm1'},
+    ] as unknown as ProviderInfo[])
+    vi.mocked(chatApi.clearConversation).mockResolvedValue(undefined)
+    useFlowStore.setState({document: {id: 'f1', name: 'Flow', subflows: []} as never})
+    useChatStore.setState({
+      activeThreadId: 't1',
+      threads: [
+        {
+          id: 't1',
+          flowId: 'f1',
+          title: 'T',
+          createdAt: '2024-01-01T00:00:00Z',
+          contextBlockId: null,
+          selectedSourceFiles: [],
+          tokensIn: 0,
+          tokensOut: 0,
+        },
+      ],
+      conversations: new Map([
+        ['t1', [{id: 'm1', role: 'user' as const, content: 'hi', timestamp: '2024-01-01T00:00:00Z'}]],
+      ]),
+      streams: streaming
+        ? {
+            t1: {
+              streamId: 'pending',
+              messageId: 'm2',
+              text: '',
+              isThinking: false,
+              tokens: 0,
+              toolStatus: null,
+              toolCalls: [],
+            } as never,
+          }
+        : {},
+    })
+  }
+
+  async function renderTab() {
+    await act(async () => {
+      render(
+        <ToastProvider>
+          <ConfirmProvider>
+            <AITab />
+          </ConfirmProvider>
+        </ToastProvider>,
+      )
+    })
+    return (await screen.findByRole('textbox', {name: /message/i})) as HTMLTextAreaElement
+  }
+
+  it('mod+l clears the thread (after confirming) from the composer, but not from outside the panel', async () => {
+    seedChat(false)
+    const composer = await renderTab()
+
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    fireEvent.keyDown(outside, {key: 'l', ctrlKey: true})
+    expect(chatApi.clearConversation).not.toHaveBeenCalled()
+    outside.remove()
+
+    composer.focus()
+    fireEvent.keyDown(composer, {key: 'l', ctrlKey: true})
+    // Destructive, so it asks first, like the header's Clear.
+    const dialog = await screen.findByRole('dialog')
+    expect(chatApi.clearConversation).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Clear'}))
+    await waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalledTimes(1))
+    expect(useChatStore.getState().conversations.get('t1') ?? []).toHaveLength(0)
+  })
+
+  it('Escape stops a running reply, and leaves an already-handled Escape alone', async () => {
+    seedChat(true)
+    const composer = await renderTab()
+    composer.focus()
+
+    // Something inside the panel (an open menu) claimed the key first.
+    composer.addEventListener('keydown', e => e.preventDefault(), {once: true})
+    fireEvent.keyDown(composer, {key: 'Escape'})
+    expect(useChatStore.getState().streams.t1).toBeDefined()
+
+    fireEvent.keyDown(composer, {key: 'Escape'})
+    await waitFor(() => expect(useChatStore.getState().streams.t1).toBeUndefined())
   })
 })

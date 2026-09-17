@@ -145,18 +145,6 @@ export class TauriAdapter implements PlatformAdapter {
   }
 
   /**
-   * Reveal file in system file explorer
-   */
-  async fileReveal(path: string): Promise<void> {
-    try {
-      await shellOpen(path)
-    } catch (error) {
-      logger.warn('Failed to reveal file:', error)
-      throw error
-    }
-  }
-
-  /**
    * Open URL in default browser
    */
   async openURL(url: string): Promise<void> {
@@ -181,17 +169,6 @@ export class TauriAdapter implements PlatformAdapter {
       if (permission === 'granted') {
         new Notification(options.title, {body: options.body, icon: options.icon})
       }
-    }
-  }
-
-  /**
-   * Read clipboard using browser Clipboard API (available in Tauri webview)
-   */
-  async readClipboard(): Promise<string> {
-    try {
-      return await navigator.clipboard.readText()
-    } catch {
-      return ''
     }
   }
 

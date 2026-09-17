@@ -38,6 +38,16 @@ export interface PortfolioEntry {
   analyzedAt?: string
 }
 
+/** Portfolio entry order; the rollup totals always cover every ranked flow. */
+export type PortfolioSort = 'risk' | 'health' | 'errors' | 'name' | 'analyzed'
+
+export interface PortfolioQuery {
+  orgId?: string
+  sort?: PortfolioSort
+  /** Maximum entries returned; omitted means every ranked flow (server cap 1000). */
+  limit?: number
+}
+
 export interface Portfolio {
   entries: PortfolioEntry[]
   totalFlows: number
@@ -56,6 +66,8 @@ export interface LibraryFilter {
   scope?: LibraryScope
   sort?: LibrarySort
   query?: string
+  /** ANY-of tag match (backend-normalized tags). */
+  tags?: string[]
   limit?: number
   offset?: number
 }
@@ -90,16 +102,21 @@ export const libraryApi = {
     if (filter.scope) params.set('scope', filter.scope)
     if (filter.sort) params.set('sort', filter.sort)
     if (filter.query) params.set('q', filter.query)
+    if (filter.tags && filter.tags.length > 0) params.set('tags', filter.tags.join(','))
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset) params.set('offset', String(filter.offset))
     const qs = params.toString()
     return request(`/api/library${qs ? '?' + qs : ''}`, {method: 'GET', signal})
   },
 
-  // Org-wide governance portfolio, ranked worst-health-first.
-  portfolio: (orgId?: string): Promise<Portfolio> => {
-    const qs = orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''
-    return request(`/api/library/portfolio${qs}`, {method: 'GET'})
+  // Org-wide governance portfolio, ranked worst-health-first unless sort says otherwise.
+  portfolio: (q: PortfolioQuery = {}, signal?: AbortSignal): Promise<Portfolio> => {
+    const params = new URLSearchParams()
+    if (q.orgId) params.set('orgId', q.orgId)
+    if (q.sort) params.set('sort', q.sort)
+    if (q.limit) params.set('limit', String(q.limit))
+    const qs = params.toString()
+    return request(`/api/library/portfolio${qs ? '?' + qs : ''}`, {method: 'GET', signal})
   },
 
   get: (id: string): Promise<LibraryFlow> => request(`/api/library/${id}`, {method: 'GET'}),

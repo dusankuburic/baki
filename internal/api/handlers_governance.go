@@ -87,38 +87,6 @@ func (h *AnalysisHandler) handleUnreadGovernanceAlertCount(w http.ResponseWriter
 	render.JSON(w, map[string]int{"count": n})
 }
 
-// handleMarkGovernanceAlertRead — POST /api/governance/alerts/read  {id}
-// @Summary      Mark alert read
-// @Description  handleMarkGovernanceAlertRead — POST /api/governance/alerts/read {id}
-// @Tags         governance
-// @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      401 {object} map[string]string "Unauthorized"
-// @Failure      500 {object} map[string]string "Error"
-// @Router       /api/governance/alerts/read [post]
-func (h *AnalysisHandler) handleMarkGovernanceAlertRead(w http.ResponseWriter, r *http.Request) {
-	if !h.governanceAvailable(w) {
-		return
-	}
-	var req struct {
-		ID string `json:"id"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if req.ID == "" {
-		render.Error(w, fmt.Errorf("id is required"), http.StatusBadRequest)
-		return
-	}
-	if err := h.backend.MarkGovernanceAlertRead(r.Context(), h.security.CallerID(r), req.ID); err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	render.JSON(w, map[string]string{"status": "ok"})
-}
-
 // handleMarkAllGovernanceAlertsRead — POST /api/governance/alerts/read-all
 // The "open the panel → clear the badge" action.
 // @Summary      Mark all alerts read

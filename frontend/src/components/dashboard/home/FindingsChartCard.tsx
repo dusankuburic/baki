@@ -6,20 +6,22 @@ import type {DashboardFindingsAgg} from '@/types'
 
 // FindingsChartCard shows findings-by-category as a radar. The title links into
 // the existing analytics dashboard for the full breakdown rather than
-// re-implementing it here.
+// re-implementing it here — when there is one: that view reads session
+// analytics, which only a local backend has, so the caller omits
+// onOpenAnalytics elsewhere and the link is not offered.
 export function FindingsChartCard({
   findings,
   onOpenAnalytics,
   className,
 }: {
   findings: DashboardFindingsAgg
-  onOpenAnalytics: () => void
+  onOpenAnalytics?: () => void
   className?: string
 }) {
   const colors = useChartColors()
   const data = findings.byCategory
 
-  const action = (
+  const action = onOpenAnalytics && (
     <button
       onClick={onOpenAnalytics}
       className="inline-flex items-center gap-1 text-2xs text-text-tertiary hover:text-brand-400 transition-colors"

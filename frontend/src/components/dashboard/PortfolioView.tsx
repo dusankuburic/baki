@@ -1,9 +1,10 @@
 import {useState, useCallback, useMemo} from 'react'
 import {LayoutGrid, AlertCircle, RefreshCw, Download, ChevronDown, Check} from 'lucide-react'
-import {libraryApi, type Portfolio, type PortfolioEntry} from '@/api/library'
+import {libraryApi, type Portfolio, type PortfolioEntry, type PortfolioSort} from '@/api/library'
 import {analysisApi} from '@/api'
 import {Spinner, EmptyState, useToast} from '@/components/shared'
 import {useUIStore} from '@/stores/uiStore'
+import {useOrgStore} from '@/stores/orgStore'
 import {logger} from '@/lib/logger'
 import {useAsync} from '@/hooks/useAsync'
 import {downloadBlob} from '@/lib/csv'
@@ -39,6 +40,14 @@ function exportPortfolioCSV(entries: PortfolioEntry[]): void {
   downloadBlob(csv, 'text/csv', `portfolio-${new Date().toISOString().slice(0, 10)}.csv`)
 }
 
+const SORT_OPTIONS: {value: PortfolioSort; label: string}[] = [
+  {value: 'risk', label: 'Worst health first'},
+  {value: 'health', label: 'Best health first'},
+  {value: 'errors', label: 'Most errors'},
+  {value: 'analyzed', label: 'Recently analyzed'},
+  {value: 'name', label: 'Name A → Z'},
+]
+
 /**
  * Org-wide governance "fleet view": every flow the user can access, ranked
  * worst-health-first, with rollup totals. Backed by GET /api/library/portfolio
@@ -47,19 +56,30 @@ function exportPortfolioCSV(entries: PortfolioEntry[]): void {
 export default function PortfolioView() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const toast = useToast()
+  // Scoped to the org picked in the title bar, like the library; no active org
+  // means every flow the caller can reach across their orgs.
+  const activeOrgId = useOrgStore(s => s.activeOrgId)
+  const [sort, setSort] = useState<PortfolioSort>('risk')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [reanalyzing, setReanalyzing] = useState<Set<string>>(new Set())
+  // A selection made in one org must not ride along into another's list
+  // (the bulk bar would count flows that are no longer shown).
+  const [selectionOrgId, setSelectionOrgId] = useState(activeOrgId)
+  if (selectionOrgId !== activeOrgId) {
+    setSelectionOrgId(activeOrgId)
+    setSelected(new Set())
+  }
   const {
     data,
     isLoading: loading,
     error,
   } = useAsync<Portfolio>(
-    () =>
-      libraryApi.portfolio().catch(e => {
-        logger.warn('Failed to load portfolio', e)
+    signal =>
+      libraryApi.portfolio({orgId: activeOrgId ?? undefined, sort}, signal).catch(e => {
+        if (!signal.aborted) logger.warn('Failed to load portfolio', e)
         throw e
       }),
-    [],
+    [activeOrgId, sort],
   )
 
   // Memoize so the derived array identity is stable across renders when data
@@ -113,7 +133,9 @@ export default function PortfolioView() {
     exportPortfolioCSV(subset.length > 0 ? subset : entries)
   }, [entries, selected])
 
-  if (loading) {
+  // Re-sorting or switching org keeps the current table on screen until the
+  // new ranking arrives; only the first load has nothing to show.
+  if (loading && !data) {
     return (
       <div className="h-full flex items-center justify-center">
         <Spinner />
@@ -158,8 +180,22 @@ export default function PortfolioView() {
               <LayoutGrid size={20} className="text-brand-500" />
               Flow Portfolio
             </h1>
-            <p className="text-sm text-text-secondary mt-1">Every flow you can access, ranked worst-health-first.</p>
+            <p className="text-sm text-text-secondary mt-1">
+              {activeOrgId ? 'Flows in the active organisation that you can access.' : 'Every flow you can access.'}
+            </p>
           </div>
+          <select
+            value={sort}
+            onChange={e => setSort(e.target.value as PortfolioSort)}
+            className="h-8 px-2 text-xs bg-surface-1 border border-border-default rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-brand-500/20 shrink-0 ml-auto"
+            aria-label="Sort flows"
+          >
+            {SORT_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
           <button
             onClick={exportSelected}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-default bg-surface-1 text-xs text-text-secondary hover:bg-surface-2 transition-colors shrink-0"

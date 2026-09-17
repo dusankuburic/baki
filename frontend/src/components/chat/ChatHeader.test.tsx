@@ -83,6 +83,23 @@ describe('ChatHeader', () => {
     expect(onToggleTools).toHaveBeenCalled()
   })
 
+  it('keeps tools available on a provider without native tool calling, and says so', async () => {
+    const user = userEvent.setup()
+    const onToggleTools = vi.fn()
+    renderHeader({
+      useTools: false,
+      onToggleTools,
+      models: [{...models[0], supportsTools: false}],
+    })
+    await openOverflow(user)
+    // The chat service runs these through the text-marker fallback, so the
+    // item must stay enabled rather than be greyed out.
+    const item = screen.getByRole('menuitem', {name: 'Tools off · no native tools'})
+    expect(item).toBeEnabled()
+    await user.click(item)
+    expect(onToggleTools).toHaveBeenCalled()
+  })
+
   it('confirms before clearing instead of firing immediately', async () => {
     const user = userEvent.setup()
     const props = renderHeader()

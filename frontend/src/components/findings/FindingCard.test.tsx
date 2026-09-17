@@ -1,12 +1,14 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
+import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import type {Finding, FlowDocument} from '@/types'
 
 const previewFix = vi.fn()
 const applyFix = vi.fn()
+const suppressInSource = vi.fn()
 const analyzeFlow = vi.fn()
 
 vi.mock('@/api', () => ({
@@ -18,6 +20,7 @@ vi.mock('@/api', () => ({
   flowApi: {
     previewFix: (...a: unknown[]) => previewFix(...a),
     applyFix: (...a: unknown[]) => applyFix(...a),
+    suppressInSource: (...a: unknown[]) => suppressInSource(...a),
   },
 }))
 
@@ -62,7 +65,9 @@ function renderCard(finding: Finding = baseFinding) {
   useFlowStore.setState({document: mockDoc, readOnly: false})
   return render(
     <ToastProvider>
-      <FindingCard finding={finding} blockLookup={new Map()} />
+      <ConfirmProvider>
+        <FindingCard finding={finding} blockLookup={new Map()} />
+      </ConfirmProvider>
     </ToastProvider>,
   )
 }
@@ -87,7 +92,9 @@ describe('FindingCard read-only gating (U1.2)', () => {
     useFlowStore.setState({readOnly: true})
     render(
       <ToastProvider>
-        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        <ConfirmProvider>
+          <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        </ConfirmProvider>
       </ToastProvider>,
     )
     expect(screen.queryByText('Apply fix')).not.toBeInTheDocument()
@@ -242,7 +249,9 @@ describe('FindingCard apply-fix gating (R0-2)', () => {
     useFlowStore.setState({document: {...mockDoc, filePath: '', isFolder: false} as unknown as FlowDocument})
     render(
       <ToastProvider>
-        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        <ConfirmProvider>
+          <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        </ConfirmProvider>
       </ToastProvider>,
     )
     expect(screen.getByText('Apply fix')).toBeInTheDocument()
@@ -254,7 +263,9 @@ describe('FindingCard apply-fix gating (R0-2)', () => {
     useFlowStore.setState({document: {...mockDoc, filePath: '', isFolder: true} as unknown as FlowDocument})
     render(
       <ToastProvider>
-        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        <ConfirmProvider>
+          <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        </ConfirmProvider>
       </ToastProvider>,
     )
     expect(screen.getByText('Apply fix')).toBeInTheDocument()
@@ -265,7 +276,9 @@ describe('FindingCard apply-fix gating (R0-2)', () => {
     useFlowStore.setState({document: mockDoc, readOnly: false})
     render(
       <ToastProvider>
-        <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        <ConfirmProvider>
+          <FindingCard finding={baseFinding} blockLookup={new Map()} onFixWithAI={vi.fn()} />
+        </ConfirmProvider>
       </ToastProvider>,
     )
     expect(screen.getByText('Apply fix')).toBeInTheDocument()
@@ -297,7 +310,9 @@ describe('FindingCard cloud folder import (no stored source)', () => {
     })
     render(
       <ToastProvider>
-        <FindingCard finding={baseFinding} blockLookup={new Map()} />
+        <ConfirmProvider>
+          <FindingCard finding={baseFinding} blockLookup={new Map()} />
+        </ConfirmProvider>
       </ToastProvider>,
     )
     const btn = screen.getByText('Apply fix').closest('button')
@@ -311,5 +326,76 @@ describe('FindingCard cloud folder import (no stored source)', () => {
     const btn = screen.getByText('Apply fix').closest('button')
     expect(btn).toBeEnabled()
     expect(btn?.title).not.toMatch(/folder import/i)
+  })
+})
+
+// C2: sensitive-exposure's fixer needs the variable name. The card sent it for
+// init-variable only, so the server's fixer produced an empty patch and the
+// card reported success on an unchanged flow.
+describe('FindingCard mask-sensitive-variable', () => {
+  it('passes metadata.variable to the preview', async () => {
+    tauriMode = true
+    previewFix.mockResolvedValue({original: 'old', patched: 'new'})
+    renderCard({
+      ...baseFinding,
+      ruleId: 'sensitive-exposure',
+      autoFix: 'mask-sensitive-variable',
+      metadata: {variable: 'Password'},
+    })
+
+    fireEvent.click(screen.getByText('Apply fix'))
+
+    await waitFor(() => {
+      expect(previewFix).toHaveBeenCalledWith(
+        'flow-1',
+        'b1',
+        'mask-sensitive-variable',
+        'sensitive-exposure',
+        'Password',
+        undefined,
+      )
+    })
+  })
+})
+
+// C5: suppressing asks for a user-authored reason (it used to store the
+// hard-coded "Dismissed by user"); cancelling keeps the finding.
+describe('FindingCard suppress reason', () => {
+  it('does not suppress when the reason prompt is cancelled', async () => {
+    renderCard()
+    fireEvent.click(screen.getByRole('button', {name: 'Suppress this finding'}))
+    fireEvent.click(await screen.findByText('Cancel'))
+    await waitFor(() => expect(screen.queryByText('Why is this being suppressed?')).not.toBeInTheDocument())
+    expect(useAnalysisStore.getState().suppressedFindings).toHaveLength(0)
+  })
+
+  it('stores the entered reason', async () => {
+    tauriMode = true // desktop: no persistence call to mock
+    renderCard()
+    fireEvent.click(screen.getByRole('button', {name: 'Suppress this finding'}))
+    const input = await screen.findByRole('textbox')
+    fireEvent.change(input, {target: {value: 'Documented test endpoint'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Suppress'}))
+
+    await waitFor(() => {
+      expect(useAnalysisStore.getState().suppressedFindings.map(f => f.reason)).toEqual(['Documented test endpoint'])
+    })
+  })
+})
+
+// C10: the desktop "Suppress in file" action goes through the dedicated
+// suppress-in-source route (which had no caller) and re-analyzes.
+describe('FindingCard suppress in file', () => {
+  it('writes the directive via flowApi.suppressInSource', async () => {
+    tauriMode = true
+    suppressInSource.mockResolvedValue(mockDoc)
+    analyzeFlow.mockResolvedValue({flowId: 'flow-1', findings: [], generatedAt: '2024', durationMs: 1, stats: {}})
+    renderCard()
+
+    fireEvent.click(screen.getByText('Suppress in file'))
+
+    await waitFor(() => expect(suppressInSource).toHaveBeenCalledWith('flow-1', 'b1', 'unhandled-error'))
+    await waitFor(() => expect(analyzeFlow).toHaveBeenCalled())
+    expect(previewFix).not.toHaveBeenCalled()
   })
 })

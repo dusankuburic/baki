@@ -42,7 +42,7 @@ param memory string = '1.0Gi'
 @secure()
 param authSecret string
 
-@description('Dedicated at-rest encryption key for the provider-key keystore (AES-256-GCM). Separate from the JWT secret so rotating either doesn'\''t affect the other. Defaults to authSecret for backward compatibility.')
+@description('Dedicated at-rest encryption key for the provider-key keystore (AES-256-GCM). Separate from the JWT secret so rotating either doesn'\''t affect the other. Empty = the app falls back to authSecret and warns at boot. Set it before users store provider keys: changing it later makes the stored keys unreadable.')
 @secure()
 param encryptionKey string = ''
 
@@ -261,7 +261,12 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
       }
       secrets: [
         { name: 'auth-secret', value: authSecret }
-        { name: 'encryption-key', value: !empty(encryptionKey) ? encryptionKey : authSecret }
+        // Passed through as given. The template used to substitute authSecret
+        // here, so PAD_ENCRYPTION_KEY was always set: the documented key
+        // separation never happened and the app's fallback warning never fired.
+        // Empty keeps the same effective key (the app falls back to
+        // PAD_AUTH_SECRET) but says so in the boot log.
+        { name: 'encryption-key', value: encryptionKey }
         { name: 'database-url', value: databaseUrl }
         // Redis primary key composed into the rediss:// URL below (TLS endpoint).
         { name: 'redis-key', value: redisPrimaryKey }
@@ -352,9 +357,11 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
 // An Action Group (notification target) + the highest-signal built-in metric
 // alert: Container App restarts (crash-loop). The app's ~30 custom Prometheus
 // metrics (pad_audit_spill_depth, pad_background_loop_last_tick_timestamp_seconds,
-// pad_ai_request_errors_total, etc.) are exported at /metrics and the OTel
-// errsink already funnels panics/errors to Application Insights; surfacing them
-// as automated Azure-Monitor alerts requires the managed-service-for-Prometheus
+// pad_ai_request_errors_total, etc.) are exported at /metrics, and the app
+// counts reported errors in pad_errors_reported_total. No Application
+// Insights exporter is provisioned by this template (set PAD_OTLP_ENDPOINT to
+// an OTLP/HTTP collector to export traces); surfacing metrics as automated
+// Azure-Monitor alerts requires the managed-service-for-Prometheus
 // scrape pipeline (a Microsoft.Monitor/accounts + diagnostic-settings wiring),
 // which is intentionally NOT included here to keep the first-deploy surface
 // small. Add it as a follow-up once the metric-to-alert mapping is confirmed
@@ -429,7 +436,7 @@ resource errorBurstAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-prev
   location: location
   properties: {
     displayName: '${appName}: ERROR log burst'
-    description: 'More than 20 ERROR-level log lines in 15 minutes. Open the workspace and filter ContainerAppConsoleLogs_CL on level ERROR; each line carries request_id and trace_id.'
+    description: 'More than 20 ERROR-level log lines in 15 minutes. Open the workspace and filter ContainerAppConsoleLogs_CL on level ERROR; access-log lines carry request_id, and trace_id when tracing is enabled (PAD_OTLP_ENDPOINT).'
     severity: 2
     enabled: true
     evaluationFrequency: 'PT5M'

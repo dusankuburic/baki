@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"net/http"
 	"pad-analyzer/internal/notify"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -506,20 +507,6 @@ func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, org)
 }
 
-// @Summary      Get organization
-// @Tags         org
-// @Param        id path string true "Org ID"
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "Organization"
-// @Router       /api/orgs/{id} [get]
-func (h *OrgHandler) handleOrgGet(w http.ResponseWriter, r *http.Request) {
-	org := h.requireMember(w, r)
-	if org == nil {
-		return
-	}
-	render.JSON(w, org)
-}
-
 // @Summary      Update organization
 // @Tags         org
 // @Param        id path string true "Org ID"
@@ -538,7 +525,14 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 	if h.requireAdmin(w, r) == nil {
 		return
 	}
-	updated, err := h.orgSvc.Update(r.Context(), chi.URLParam(r, "id"), req.Name)
+	// Create refuses an empty name; rename must too, or an org can be renamed
+	// into one nobody can pick out of the switcher.
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		render.Error(w, fmt.Errorf("organisation name is required"), http.StatusBadRequest)
+		return
+	}
+	updated, err := h.orgSvc.Update(r.Context(), chi.URLParam(r, "id"), name)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -586,80 +580,6 @@ func (h *OrgHandler) handleOrgMemberList(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	render.JSON(w, members)
-}
-
-// @Summary      Add organization member
-// @Description  Adds a user to an organization with a specific role. Only organization admins can add members.
-// @Tags         organization
-// @Param        id path string true "id"
-// @Param        request body object true "request"
-// @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      403 {object} map[string]string "Forbidden"
-// @Failure      404 {object} map[string]string "Not Found"
-// @Failure      409 {object} map[string]string "Conflict"
-// @Failure      500 {object} map[string]string "Internal Server Error"
-// @Router       /api/orgs/{id}/members [post]
-func (h *OrgHandler) handleOrgMemberAdd(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var req struct {
-		Email  string `json:"email"`
-		UserID string `json:"userId"`
-		Role   string `json:"role"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-
-	if h.requireAdmin(w, r) == nil {
-		return
-	}
-
-	if h.backend == nil {
-		render.Error(w, fmt.Errorf("user store not available"), http.StatusServiceUnavailable)
-		return
-	}
-
-	var targetID string
-	if req.UserID != "" {
-		targetID = req.UserID
-	} else if req.Email != "" {
-		u, err := h.backend.LoadUserByEmail(r.Context(), req.Email)
-		if err != nil {
-			// Anti-enumeration: return the same 200 "ok" as a successful add
-			// rather than 404 "user not found", so an admin can't probe whether
-			// an arbitrary email is registered (matching the forgot-password
-			// flow's indistinguishable-response design). No member is added for
-			// an unknown target.
-			render.JSON(w, map[string]string{"status": "ok"})
-			return
-		}
-		targetID = u.ID
-	} else {
-		render.Error(w, fmt.Errorf("userId or email required"), http.StatusBadRequest)
-		return
-	}
-
-	role := auth.Role(req.Role)
-	if role == "" {
-		role = auth.RoleMember
-	}
-	if !role.IsValid() {
-		render.Error(w, fmt.Errorf("invalid role %q", req.Role), http.StatusBadRequest)
-		return
-	}
-	if err := h.orgSvc.AddMember(r.Context(), id, targetID, role); err != nil {
-		if errors.Is(err, collaboration.ErrAlreadyMember) {
-			render.Error(w, err, http.StatusConflict)
-			return
-		}
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgMemberAdd, "org", id, map[string]string{"targetUser": targetID, "role": req.Role})
-	render.JSON(w, map[string]string{"status": "ok"})
 }
 
 // @Summary      Remove organization member

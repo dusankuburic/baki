@@ -3,6 +3,7 @@ import {render, screen, waitFor} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useOrgStore} from '@/stores/orgStore'
+import {useSystemStore} from '@/stores/systemStore'
 import HomeDashboard from './HomeDashboard'
 
 const getHome = vi.fn()
@@ -57,7 +58,7 @@ const emptyData = {
   ruleFrequency: [],
   activity: [],
   complexity: [],
-  security: {failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
+  security: {available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
   severityTrend: [],
   confidenceDist: {},
   healthBuckets: [],
@@ -78,6 +79,7 @@ beforeEach(() => {
   getHome.mockResolvedValue(emptyData)
   useAnalysisStore.getState().reset()
   useOrgStore.setState({organisations: [], activeOrgId: null})
+  useSystemStore.setState({info: null, isLoaded: false})
 })
 
 describe('HomeDashboard', () => {
@@ -110,7 +112,7 @@ describe('HomeDashboard', () => {
       healthTrend: [{date: '2023-01-01', avgHealth: 80, flowCount: 1}],
       costByProvider: [{provider: 'openai', cost: 1.0, tokensIn: 100, tokensOut: 100}],
       activity: [{action: 'auth.login', createdAt: new Date().toISOString()}],
-      security: {failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
+      security: {available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0},
     })
     renderHome()
     await waitFor(() => expect(screen.getByText(/Tester/)).toBeInTheDocument())
@@ -119,6 +121,32 @@ describe('HomeDashboard', () => {
     expect(screen.getByText(/AI Cost by Provider/)).toBeInTheDocument()
     expect(screen.getByText(/Recent Activity/)).toBeInTheDocument()
     expect(screen.getByText(/Security Posture/)).toBeInTheDocument()
+  })
+
+  // "Details" opens the session analytics view, which only a backend with
+  // session analytics can fill — elsewhere it is a dead end that says "not
+  // available", so the link must not be offered.
+  it('offers the findings "Details" link only with session analytics', async () => {
+    getHome.mockResolvedValue({...emptyData, isCloud: true})
+    const {unmount} = renderHome()
+    await waitFor(() => expect(screen.getByText(/Findings by Category/)).toBeInTheDocument())
+    expect(screen.queryByTitle('Open full analytics')).toBeNull()
+    unmount()
+
+    useSystemStore.setState({
+      info: {
+        version: 'dev',
+        platform: 'linux',
+        arch: 'amd64',
+        buildDate: '',
+        gitCommit: '',
+        capabilities: {sessionAnalytics: true},
+      },
+      isLoaded: true,
+    })
+    getHome.mockResolvedValue(emptyData)
+    renderHome()
+    expect(await screen.findByTitle('Open full analytics')).toBeInTheDocument()
   })
 
   it('shows skeleton while loading', () => {

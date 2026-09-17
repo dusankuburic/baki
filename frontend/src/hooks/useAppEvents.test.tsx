@@ -4,6 +4,7 @@ import {useAppEvents} from './useAppEvents'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useGovernanceStore} from '@/stores/governanceStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 
 let capturedCallback: ((ev: {name: string; data?: unknown}) => void) | null = null
 
@@ -21,7 +22,6 @@ vi.mock('@/api/governance', () => ({
   governanceApi: {
     unreadCount: (...a: unknown[]) => mockUnreadCount(...a),
     list: vi.fn().mockResolvedValue([]),
-    markRead: vi.fn().mockResolvedValue({status: 'ok'}),
     markAllRead: vi.fn().mockResolvedValue({status: 'ok'}),
     dismiss: vi.fn().mockResolvedValue({status: 'ok'}),
     clear: vi.fn().mockResolvedValue({status: 'ok'}),
@@ -194,5 +194,31 @@ describe('useAppEvents', () => {
     await new Promise(r => setTimeout(r, 10))
 
     expect(useGovernanceStore.getState().unreadCount).toBe(3)
+  })
+
+  // The server emits settings:changed (with org fan-out) and nothing listened,
+  // so a change made in another tab, on another device or by an org admin
+  // stayed invisible until the next full reload.
+  it('refetches settings once after a burst of settings:changed events', async () => {
+    const loadFromBackend = vi.fn().mockResolvedValue(undefined)
+    const original = useSettingsStore.getState().loadFromBackend
+    useSettingsStore.setState({loadFromBackend})
+    try {
+      render(<TestComponent openDocument={vi.fn()} />)
+      await new Promise(r => setTimeout(r, 10))
+
+      vi.useFakeTimers()
+      capturedCallback!({name: 'settings:changed', data: {}})
+      capturedCallback!({name: 'settings:changed', data: {}})
+      vi.advanceTimersByTime(1000)
+      // Still inside the coalescing window: a save echo mid-edit must not reload.
+      expect(loadFromBackend).not.toHaveBeenCalled()
+      capturedCallback!({name: 'settings:changed', data: {}})
+      vi.advanceTimersByTime(1500)
+      expect(loadFromBackend).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      useSettingsStore.setState({loadFromBackend: original})
+    }
   })
 })

@@ -4,6 +4,7 @@ import {chatApi, flowApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {parseChatMessages} from '@/lib/chatMessage'
 import type {SourceFileInfo, ConversationFile, FlowDocument} from '@/types'
+import {conversationHistoryEnabled} from '@/lib/chatHistory'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
@@ -102,7 +103,7 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
         for (const m of restored) {
           appendMessage(id, m)
         }
-        if (restored.length > 0) {
+        if (restored.length > 0 && conversationHistoryEnabled()) {
           chatApi.saveConversation(doc.id, conversationKey({id}), restored).catch(err => {
             logger.warn('Failed to migrate legacy conversation to thread key', err)
           })

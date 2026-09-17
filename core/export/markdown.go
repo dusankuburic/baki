@@ -38,6 +38,10 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 	fmt.Fprintf(&sb, "| Errors | %d |\n", report.Stats.Errors)
 	fmt.Fprintf(&sb, "| Warnings | %d |\n", report.Stats.Warnings)
 	fmt.Fprintf(&sb, "| Info | %d |\n", report.Stats.Info)
+	// Inline `# pad-ignore` suppressions are counted by the engine but were
+	// missing here, so a report read "0 findings" with no hint that directives
+	// were hiding some (the HTML and CSV exports already show the count).
+	fmt.Fprintf(&sb, "| Suppressed inline | %d |\n", report.Stats.Suppressed)
 	sb.WriteString("\n")
 
 	if len(report.Findings) == 0 {

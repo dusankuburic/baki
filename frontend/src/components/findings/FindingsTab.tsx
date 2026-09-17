@@ -14,7 +14,8 @@ import FindingsToolbar from './FindingsToolbar'
 import AnalysisRunner from './AnalysisRunner'
 import AnalysisProgressStrip from './AnalysisProgressStrip'
 import AnalysisDiffView from './AnalysisDiffView'
-import {exportFindingsCSV, exportFindingsHTML, exportFindingsSARIF, exportFindingsJUnit} from '@/lib/findingsExport'
+import SuppressionsPanel from './SuppressionsPanel'
+import {saveFindingsCSV, exportFindingsHTML, exportFindingsSARIF, exportFindingsJUnit} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
 
 // FindingsList pulls in react-virtuoso (~55KB); it only renders once a flow
@@ -210,13 +211,18 @@ export default function FindingsTab() {
     }
   }, [dedupGroups, toast, setDedupGroups, setDedupLoading])
 
-  const handleExportCSV = useCallback(() => {
+  const handleExportCSV = useCallback(async () => {
     if (!report) return
     // Export the actively-filtered view (severity/category/search/dedup), not
     // the raw report — a triager who filters to "errors only" expects exactly
-    // that in the CSV.
-    exportFindingsCSV(findings, doc?.id ?? 'report')
-  }, [report, findings, doc])
+    // that in the CSV. On desktop this saves through the native dialog, which
+    // can fail server-side, so it is awaited like the other exports.
+    try {
+      await saveFindingsCSV(findings, doc?.id ?? 'report')
+    } catch (err) {
+      toast.error('CSV export failed', {description: String(err)})
+    }
+  }, [report, findings, doc, toast])
 
   const handleExportHTML = useCallback(async () => {
     if (!doc) return
@@ -365,6 +371,7 @@ export default function FindingsTab() {
           </button>
         </div>
       )}
+      <SuppressionsPanel flowId={doc.id} reportVersion={report.generatedAt} />
       {diff ? (
         <AnalysisDiffView
           diff={diff}

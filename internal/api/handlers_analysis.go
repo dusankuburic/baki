@@ -356,21 +356,6 @@ func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *ht
 	render.JSON(w, map[string]any{"entries": out, "valid": valid, "invalid": len(configs) - valid})
 }
 
-// @Summary      Rule catalog summary
-// @Description  All rules with severity, category, and auto-fix availability.
-// @Tags         analysis
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "Rules"
-// @Param        orgId query string false "Scope the catalog to an organisation the caller belongs to (org custom rules + overrides)"
-// @Router       /api/analysis/rules/summary [get]
-func (h *AnalysisHandler) handleGetRulesSummary(w http.ResponseWriter, r *http.Request) {
-	orgID, ok := h.catalogOrg(w, r)
-	if !ok {
-		return
-	}
-	render.JSON(w, h.analysisSvc.GetRulesSummaryFor(r.Context(), orgID))
-}
-
 // @Summary      Enable/disable analysis rule
 // @Description  Enables or disables a specific analysis rule by ID.
 // @Tags         analysis
@@ -508,40 +493,6 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 		return
 	}
 	render.JSON(w, map[string]string{"status": "ok"})
-}
-
-// @Summary      Flow metrics
-// @Description  Complexity/cognitive metrics and health score for the flow.
-// @Tags         analysis
-// @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      401 {object} map[string]string "Unauthorized"
-// @Failure      500 {object} map[string]string "Error"
-// @Router       /api/analysis/metrics [post]
-func (h *AnalysisHandler) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		FlowID string `json:"flowId"`
-	}
-	if err := decodeOptional(r.Body, &req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	metrics, err := h.analysisSvc.GetFlowMetrics(doc)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	render.JSON(w, metrics)
 }
 
 // @Summary      Dataflow analysis
@@ -793,49 +744,6 @@ func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "%s\n", out)
 }
 
-// handleExportCSV emits a CSV report for the flow, suitable for spreadsheet
-// triage. Mirrors handleExportSARIF.
-// @Summary      Export findings as CSV
-// @Tags         export
-// @Produce      json
-// @Success      200 {object} object "OK"
-// @Failure      400 {object} object "Bad Request"
-// @Failure      401 {object} object "Unauthorized"
-// @Failure      503 {object} object "Service Unavailable (cloud mode required)"
-// @Router       /api/analysis/export/csv [post]
-func (h *AnalysisHandler) handleExportCSV(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		FlowID string `json:"flowId"`
-	}
-	if err := decodeOptional(r.Body, &req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	report, err := h.analysisSvc.AnalyzeFlow(r.Context(), doc)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-
-	out, err := export.ReportToCSV(report, doc)
-	if err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
-		return
-	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "csv"})
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.csv"`)
-	fmt.Fprintf(w, "%s", out)
-}
-
 // @Summary      Subflow dependency graph
 // @Tags         analysis
 // @Produce      json
@@ -861,35 +769,6 @@ func (h *AnalysisHandler) handleGetDashboard(w http.ResponseWriter, r *http.Requ
 	}
 	result := h.analysisSvc.ComputeDashboard()
 	render.JSON(w, result)
-}
-
-// @Summary      Subflow content hashes
-// @Tags         analysis
-// @Accept       json
-// @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      401 {object} map[string]string "Unauthorized"
-// @Failure      500 {object} map[string]string "Error"
-// @Router       /api/analysis/subflow-hashes [post]
-func (h *AnalysisHandler) handleGetSubflowHashes(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		FlowID string `json:"flowId"`
-	}
-	if err := decodeOptional(r.Body, &req); err != nil {
-		render.Error(w, err, http.StatusBadRequest)
-		return
-	}
-
-	userID := h.security.CallerID(r)
-	doc, err := h.flowSvc.GetAuthorized(r.Context(), req.FlowID, userID, "viewer")
-	if err != nil {
-		render.Error(w, err, 0)
-		return
-	}
-
-	hashes := h.analysisSvc.ComputeSubflowHashes(doc)
-	render.JSON(w, hashes)
 }
 
 // @Summary      Deduplicate findings

@@ -154,4 +154,22 @@ describe('MainPaneToolbar', () => {
     resolveReimport!({id: 'flow-1'})
     await waitFor(() => expect(screen.getByRole('button', {name: 'Re-import flow'})).toBeEnabled())
   })
+
+  it('swallows a refused fullscreen request instead of leaking an unhandled rejection', async () => {
+    const refusal = Promise.reject(new TypeError('Permissions check failed'))
+    const caught = vi.spyOn(refusal, 'catch')
+    const el = document.documentElement as HTMLElement & {requestFullscreen: () => Promise<void>}
+    const original = el.requestFullscreen
+    el.requestFullscreen = vi.fn(() => refusal)
+    try {
+      renderToolbar()
+      fireEvent.click(screen.getByRole('button', {name: 'Fullscreen'}))
+      expect(el.requestFullscreen).toHaveBeenCalledTimes(1)
+      // The rejection is handled on the returned promise itself.
+      expect(caught).toHaveBeenCalledTimes(1)
+      await expect(refusal.catch(() => 'handled')).resolves.toBe('handled')
+    } finally {
+      el.requestFullscreen = original
+    }
+  })
 })

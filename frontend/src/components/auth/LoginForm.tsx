@@ -4,6 +4,7 @@ import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
 import {useAuthStore} from '@/stores/authStore'
 import {authApi, type SSOInfo} from '@/api/auth'
+import {systemApi} from '@/api/system'
 import {ApiError, getBackendConfig} from '@/api/client'
 import {useTranslation} from 'react-i18next'
 
@@ -34,6 +35,11 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [remember, setRemember] = useState(false)
   const [sso, setSso] = useState<SSOInfo | null>(null)
+  // A closed deployment rejects registration server-side; offering the toggle
+  // there only leads to an error after the form is filled in. Until the flag
+  // arrives (or if it cannot be read) the toggle stays, and the server remains
+  // the enforcement point either way.
+  const [signUpDisabled, setSignUpDisabled] = useState(false)
   const [ssoError, setSsoError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   // Forgot-password sub-flow: a small email-only form reachable from the login
@@ -68,6 +74,18 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
       .catch(() => {
         if (!cancelled) setSso(null)
       })
+    void (async () => {
+      try {
+        const features = await systemApi.features()
+        if (!cancelled && features?.disableSignUp) {
+          setSignUpDisabled(true)
+          setIsRegister(false)
+        }
+      } catch {
+        // Unreadable flags leave the toggle visible; registration still fails
+        // closed on the server.
+      }
+    })()
 
     const {ticket, error: hashError} = readSSOHash()
     // One-shot parse of the URL fragment on mount: an external input, not derived state.
@@ -382,19 +400,21 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           </>
         )}
 
-        <div className="text-center text-sm text-text-tertiary">
-          {isRegister ? t('login.hasAccount') : t('login.noAccount')}{' '}
-          <button
-            type="button"
-            className="text-brand-500 hover:underline font-medium"
-            onClick={() => {
-              setIsRegister(!isRegister)
-              clearError()
-            }}
-          >
-            {isRegister ? t('login.switchToSignIn') : t('login.switchToRegister')}
-          </button>
-        </div>
+        {!signUpDisabled && (
+          <div className="text-center text-sm text-text-tertiary">
+            {isRegister ? t('login.hasAccount') : t('login.noAccount')}{' '}
+            <button
+              type="button"
+              className="text-brand-500 hover:underline font-medium"
+              onClick={() => {
+                setIsRegister(!isRegister)
+                clearError()
+              }}
+            >
+              {isRegister ? t('login.switchToSignIn') : t('login.switchToRegister')}
+            </button>
+          </div>
+        )}
       </form>
     </div>
   )

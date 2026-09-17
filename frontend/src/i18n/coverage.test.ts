@@ -7,8 +7,10 @@ import {join} from 'node:path'
 // The app shipped a full i18n setup that only 26 of 473 files actually used, so
 // English kept getting hardcoded into new components faster than it was being
 // extracted. This test locks in each directory as it is converted: once a
-// namespace lands here, a new component in it that renders raw English fails the
-// suite instead of quietly widening the gap.
+// namespace lands here, a new component in it that does not use i18n at all
+// fails the suite. The stricter raw-English-literal scan is enforced only for
+// the directories in RAW_COPY_ENFORCED (chat today); the others still render
+// some literal copy, so passing here does not mean they are fully translated.
 //
 // ADD A DIRECTORY HERE AS SOON AS ITS NAMESPACE IS COMPLETE — that is the whole
 // point. Do not add one "to do later".

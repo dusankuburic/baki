@@ -6,6 +6,204 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Feature completeness — controls that did nothing, and features with no way in
+
+An audit traced every advertised feature through every layer (routes, storage,
+rules, CLI, CI, settings, both runtime modes). What it found, and what changed:
+
+**Cloud sign-up and sharing**
+
+- Registration always ended in "Registration failed": the response was
+  validated against the login schema, which requires tokens the register
+  handler does not return. It now reports "check your inbox", or signs the
+  first (bootstrap) admin straight in.
+- An unverified account could never sign in on a deployment without SMTP:
+  the verification mail was sent once, fire-and-forget, and there was no way
+  to ask for another. `POST /api/auth/resend-verification` was added, the 403
+  login state offers "Resend", and the bootstrap admin is created verified.
+- A flow's owner could not manage its sharing: the permission check read the
+  collaborator list, which never contains the owner, so the invite form and
+  share-link section were hidden on every flow anyone created.
+- Share links were created and then lost — the one-time token was discarded
+  and nothing built a URL. The link is now shown once, with a copy button.
+- Org invites return their token when email is not configured; the store
+  dropped it. Pending invites now offer a copyable invite link.
+- SSO login told existing users to "link <provider> from your account
+  settings". No such flow existed. Account settings now has a Linked sign-in
+  card over `POST /api/auth/sso/link/start`, `GET /api/auth/sso/links` and
+  `DELETE /api/auth/sso/links/{provider}`; unlinking the last sign-in method
+  is refused, and an identity already linked elsewhere is never re-pointed.
+- Personal access tokens are scope-enforced, but the UI could not select or
+  show scopes, so every token minted in the app was unscoped.
+
+**Settings that changed nothing**
+
+- "Custom instructions" had no reader on the server; the only consumer was a
+  per-request field the client never set. The setting is now merged into the
+  system prompt server-side. In cloud mode chat read the server's settings
+  file rather than the signed-in user's own settings, so a user's custom
+  instructions and history preference could not reach their chat at all.
+- "Save conversation history" had no reader: turns were stored whichever way
+  it was set. It now gates both the client's saves and the server's own
+  start-of-stream persist, and the client sends history with each turn when
+  storage is off.
+- A cloud user who had never saved settings received an empty settings object,
+  so every default of true ("Save conversation history", "Auto-analyze on
+  open") showed as off. A missing settings row now returns the defaults.
+- Removed: the Parser panel's "Preserve comments", "Treat tabs as spaces" and
+  "Spaces per indent" (persisted, never read by the parser), and the
+  `checkForUpdates`, `openInNewWindow`, `lastUsedVersion`, `codeFont` and
+  `uiFont` fields (no UI, no consumer, no updater).
+
+**Desktop app**
+
+- Settings were write-only: the load waited for an authenticated session,
+  which the desktop never has, so theme, density, provider, prompts and
+  layout reset on every restart — and the welcome tour, which waits for
+  settings, never appeared.
+- The welcome tour could not be dismissed: Skip, X and Escape jumped to the
+  last step, and only "Load sample" completed it. Its "Set one up" button
+  opened a settings section that does not exist.
+- Titlebar maximize and F11 fullscreen failed silently: the granted Tauri
+  permissions did not match the calls the code makes.
+- After three failed backend respawns the host emitted events nothing
+  listened for, leaving a dead shell. A blocking banner now offers a restart
+  through the `restart_backend` command that was already registered.
+- The home "Findings" tile pointed at the portfolio, which panicked without a
+  storage backend (500). It returns an empty portfolio, and the tile links
+  only where there is a library.
+- Cross-flow search returned a clean empty result on desktop, which reads as
+  "no matches"; it now answers 503 like the other cloud-only routes.
+- Hidden or labelled where the desktop has no backend for them: finding
+  comments (the list was always empty and adding answered 503 after typing),
+  the Sharing and History inspector tabs, the Cloud Library nav, re-import,
+  reveal and reload file actions, and triage, which is session-only there.
+- The source editor read and wrote `Main.txt` whichever file was selected, so
+  editing a subflow file overwrote Main. It now edits the selected member of a
+  folder flow, shows its name, and keeps the loaded file while edits are
+  unsaved.
+- Batch apply-fix on a folder flow patched `Main.txt` only and silently
+  skipped findings in subflow files. It now patches every member file, with
+  the per-file never-degrade gate and one undo snapshot.
+
+**Features with no way in**
+
+- "Find Usages" set the search query without running the search, leaving the
+  sidebar in a loading state that never resolved.
+- Apply fix on a `sensitive-exposure` finding was a silent no-op: the variable
+  name was passed only for `init-variable`, so the fixer returned an empty
+  patch, the preview showed identical text and a success toast fired. An empty
+  patch is now refused as "fixer declined".
+- Single apply-fix applied behaviour-changing fixers on a bare POST; the batch
+  path and the CLI already required an opt-in. It now needs `unsafe: true`,
+  which the UI sends only after showing the diff.
+- Durable suppression (`# pad-ignore` written into the flow) had no caller,
+  and the staleness audit had no route. The finding card's "Suppress in file"
+  now writes the directive, and `POST /api/analysis/suppressions` backs a
+  panel listing suppressions with stale ones marked.
+- Suppressing a finding never asked for a reason (only hard-coded strings were
+  stored) and stored reasons were never rendered. Suppression now prompts, and
+  the triage chip shows the justification.
+- The Policy Gate panel could create, save and delete policies but never
+  evaluate one; the evaluate call had no caller. Each policy now evaluates
+  against the open flow.
+- Comment deletion, "leave organisation" and organisation rename were
+  implemented on the server with nothing calling them. All three are now in
+  the UI. Dismissed governance alerts could only be cleared within the same
+  panel session; the list can now include them.
+- The audit log offered 7 of 35 actions, with no user filter and no paging.
+  Sensitive mutations emitted no audit event at all — share links, policies,
+  comments, knowledge base, org create/update/delete, org rules and channels,
+  scan-now, settings and key changes, exports and flow uploads now do.
+- Baseline set and clear failures were unhandled promise rejections: nothing
+  told the user the baseline had not changed.
+- The Security Posture card rendered "No security issues detected" when its
+  data source had failed or was stubbed, and the Postgres counts behind it
+  swallowed per-query errors. Unavailable counts now render as unavailable.
+- The rule catalog ignored an organisation's custom rules and overrides, so
+  the reference and its counts did not describe the rules that run.
+- The portfolio could not be scoped to an organisation or sorted; library
+  flows could not be filtered by tag (and the API never returned tags);
+  rename and duplicate ignored `canEdit`.
+- WebSocket `error` frames (permission denied, unknown event) were dropped
+  silently; they now surface as a toast.
+- `errreport.CaptureError` had no production caller, so
+  `pad_errors_reported_total` was always zero.
+- The `settings:changed` event, the `disableSignUp` feature flag and four
+  advertised chat shortcuts had no consumer. Alt+Left/Right now navigate
+  flow history; the Tab shortcut was dropped rather than trap focus.
+- Data-subject exports described themselves as everything stored about the
+  user but omitted conversations, comments, triage decisions, organisation
+  memberships and sessions, and capped audit history at 1000 rows silently.
+
+**CLI, CI and reports**
+
+- The reusable workflow pinned a release tag that does not exist, so every run
+  failed to resolve it; both CI templates hard-failed when the release asset
+  was missing. The workflow is pinned to a branch until a release is cut, and
+  the templates fall back to a source build.
+- The Azure template named a task that does not exist, and the GitLab
+  template published SARIF as a GitLab SAST report, which ignores it.
+- Job summaries and PR comments came from a second analysis run without the
+  gate's flags, so their numbers disagreed with the gate. There is now one run.
+- The policy verdict never left the terminal: it is now in the JSON report,
+  SARIF run properties and the JUnit testsuite.
+- SARIF locations were bare filenames, so folder imports produced no inline
+  pull-request annotations — the stated benefit. Paths are now repo-relative,
+  with rule help and automation details.
+- `bakicli -h` printed only the analyze flags: no subcommands, no exit codes.
+  `suppressions` ignored `.bakirc.json`, so `-fail-on-stale` could gate on a
+  profile nobody configured. `fix --apply` has `-backup`. The new
+  `bakicli report` signs the CI webhook that had no client.
+- The periodic scanner had no cross-replica lock: every replica re-analysed
+  every flow and delivered the same alert.
+
+**Analyzer**
+
+- `hardcoded-credential` never looked at property keys, so
+  `Password: 'hunter2'` and a password inside a connection string went
+  unreported while the matching auto-fix sat tested and unreachable.
+- `resource-leak` checked six openers and ignored database, FTP and web
+  automation connections its own description promises.
+- `infinite-loop-risk` treated any property value containing "Exit" or
+  "Break" as a loop exit.
+- Document-level findings (parse errors) could not be suppressed inline;
+  suppression now has file and subflow scope.
+- The rule "dependencies" view was a hand-written list nothing enforced; it is
+  now labelled as related rules.
+- The health score formula and the custom-rule schema are documented.
+
+**Deployment and documentation**
+
+- The Azure template set no allowed origins, so the browser WebSocket upgrade
+  was refused and presence and collaboration were dead on a shipped deploy.
+- The template substituted the JWT secret for the encryption key, so the
+  documented key separation never happened and the app's own warning never
+  fired. `encryptionKey` is now a real deployment parameter.
+- Compose published `PAD_PORT` without passing it to the container, so a
+  custom port published a port nothing listened on. Cloud mode defaulted to
+  debug logging against documented `info`.
+- The admin migration panel read a status field the server never sends: no
+  state was shown, a running migration was never polled, and Start stayed
+  enabled where migration is not configured. The migration also now reports
+  what it does not copy, and is described as the legacy filesystem-server
+  upgrade it is.
+- Corrected: `PAD_STORAGE=local` means no server-side store; the command
+  palette is Ctrl/Cmd+K; the offline queue does not replay edits; the
+  filesystem backend is a migration source and test double, not the desktop's
+  store; the RLS middleware documents the routes and jobs that run without it;
+  the OTLP exporter is HTTP; the auth rate limit is per minute; rule and
+  endpoint counts; and the project tree lists `core/`, `cmd/`, `ci/` and
+  `infra/`.
+
+**Removed** (implemented with no caller, and no reason to add one): flow owner
+transfer, the `cursor.move` collaboration event, conversation export, the
+read-sources / open-from-system / server-side CSV / metrics / subflow-hashes /
+rule-summary routes, the duplicate settings write routes and aliases, direct
+org member add, single-org read, per-alert read marking, and four dead store
+selectors and platform adapter methods. The desktop shell's URL-open
+permission is now scoped to https.
+
 ### Production readiness — features that reported states they did not have
 
 - `bakicli watch` analysed with default settings while loading `.bakirc.json`
@@ -26,9 +224,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - An older binary against a newer schema booted clean and logged "schema up to
   date" with its own version. Migration now refuses a schema newer than the
   binary knows, and logs the database's version.
-- Admin "scan now" / "ingest now" ran without a panic guard; a panic there
-  took the process down. They now recover, log, and count under
-  `pad_panics_total{location="admin.scan-now"|"admin.ingest-now"}`.
+- Admin "scan now" ran without a panic guard; a panic there took the process
+  down. It now recovers, logs, and counts under
+  `pad_panics_total{location="admin.scan-now"}`.
 - Handler panics produced no access-log line and no `http_requests_total{5xx}`
   sample (Recovery sat outside AccessLog and Metrics). An inner Recovery now
   wraps the router.
@@ -102,7 +300,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WebSocket connections had no inbound message rate limit. Each message is
   amplified into one marshal per room member plus a Redis publish every replica
   decodes, so a flooding collaborator caused room-sized CPU amplification. A
-  per-connection token bucket (50/s, burst 100) now sheds before that work.
+  per-connection token bucket (200/s, burst 512) now sheds before that work.
 
 ### Fixed — Background sweeps could crash or stall the server
 
@@ -360,7 +558,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a shared device (regression-tested in authStore.test.ts)
 
 ### Added — Analyzer
-- 8 new rules: `parse-error`, `circular-subflow-dependency`, `hardcoded-ip`,
+- 11 new rules: `parse-error`, `circular-subflow-dependency`, `hardcoded-ip`,
   `high-cyclomatic-complexity`, `uncalled-subflow`, `duplicate-subflow-name`,
   `duplicate-label`, `switch-no-default`, `empty-subflow`, `todo-in-comment`,
   `wait-zero` (40 total)
@@ -414,7 +612,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `fix` subcommand accepts multiple file arguments
 
 ### Added — Frontend
-- In-app Rule Reference page (Ctrl+P → "Rule Reference")
+- In-app Rule Reference page (Ctrl/Cmd+K → "Rule Reference")
 - Onboarding tour replay from Settings → General
 - `showSourceEditor` / `showHelpOverlay` moved to uiStore (survive navigation)
 

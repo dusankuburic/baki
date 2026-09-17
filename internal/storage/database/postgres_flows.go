@@ -215,25 +215,6 @@ func (b *PostgresStorageBackend) saveFlowTx(ctx context.Context, flow *interface
 	return nil
 }
 
-func (b *PostgresStorageBackend) TransferFlowOwner(ctx context.Context, flowID, newOwnerID, newOrgID string) error {
-	// Bump version on transfer: SaveFlow's OCC contract keys off flows.version,
-	// and owner_id/org_id are security-sensitive fields (the interface doc notes
-	// this is the ONLY way to reassign ownership). Without a version bump a
-	// client that read the flow before the transfer can still save afterward
-	// (the WHERE flows.version = $11 check passes), silently reverting the new
-	// ownership — and the version-keyed flow.changed broadcast wouldn't fire.
-	res, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE flows SET owner_id = $1, org_id = $2, updated_at = $3, version = version + 1 WHERE id = $4`,
-		newOwnerID, newOrgID, time.Now().UTC(), flowID)
-	if err != nil {
-		return fmt.Errorf("transfer flow owner: %w", err)
-	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
-		return interfaces.ErrNotFound
-	}
-	return nil
-}
-
 // loadFlowRow reads the flow's DB row (no blob download). Content is the raw DB
 // value — a "{}" placeholder when blob storage is configured.
 func (b *PostgresStorageBackend) loadFlowRow(ctx context.Context, id string) (*interfaces.FlowDocument, error) {

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
-import {shortcuts, matchesShortcut, formatShortcutParts, checkCollisions} from './shortcuts'
+import {allShortcuts, matchesShortcut, formatShortcutParts} from './shortcuts'
 
 function keyEvent(init: Partial<KeyboardEvent> & {key: string}): KeyboardEvent {
   return {
@@ -54,25 +54,26 @@ describe('formatShortcutParts', () => {
   })
 })
 
-describe('checkCollisions', () => {
-  it('flags "escape" as shared, since checkCollisions is scope-unaware even though main/chat scopes never fire together', () => {
-    // Every other key combo in the real registry is unique; 'escape' is
-    // intentionally reused across scopes (edit.clear.selection / ai.cancel.stream).
-    const collisions = checkCollisions()
-    expect([...collisions.keys()]).toEqual(['escape'])
-    expect(collisions.get('escape')).toEqual(['edit.clear.selection', 'ai.cancel.stream'])
+describe('registry', () => {
+  // A combo may repeat across scopes that never listen together (escape clears
+  // the canvas selection in 'main' and stops a reply in 'chat'). Within one
+  // scope, or against a 'global' binding that is live everywhere, useKeyboard
+  // runs whichever id comes first and the other entry is dead.
+  it('binds each key combo at most once per scope, counting global against every scope', () => {
+    const conflicts: string[] = []
+    allShortcuts.forEach((a, i) => {
+      for (const b of allShortcuts.slice(i + 1)) {
+        if (a.keys.toLowerCase() !== b.keys.toLowerCase()) continue
+        if (a.scope === b.scope || a.scope === 'global' || b.scope === 'global') {
+          conflicts.push(`${a.keys}: ${a.id} / ${b.id}`)
+        }
+      }
+    })
+    expect(conflicts).toEqual([])
   })
 
-  it('detects colliding key combos when duplicated', () => {
-    const original = [...shortcuts]
-    shortcuts.push({id: 'dup.one', keys: 'mod+zzz', description: 'x', category: 'Help', scope: 'global'})
-    shortcuts.push({id: 'dup.two', keys: 'mod+zzz', description: 'y', category: 'Help', scope: 'global'})
-    try {
-      const collisions = checkCollisions()
-      expect(collisions.get('mod+zzz')).toEqual(['dup.one', 'dup.two'])
-    } finally {
-      shortcuts.length = 0
-      shortcuts.push(...original)
-    }
+  it('has unique ids', () => {
+    const ids = allShortcuts.map(s => s.id)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })

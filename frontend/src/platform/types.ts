@@ -73,11 +73,6 @@ export interface PlatformAdapter {
   fileSave(options: FileSaveOptions): Promise<string | null>
 
   /**
-   * Reveal file in file explorer/finder
-   */
-  fileReveal(path: string): Promise<void>
-
-  /**
    * Open URL in default browser
    */
   openURL(url: string): Promise<void>
@@ -86,11 +81,6 @@ export interface PlatformAdapter {
    * Show notification
    */
   showNotification(options: NotificationOptions): Promise<void>
-
-  /**
-   * Read clipboard content
-   */
-  readClipboard(): Promise<string>
 
   /**
    * Write to clipboard

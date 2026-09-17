@@ -24,6 +24,7 @@ const inviteMember = vi.fn().mockResolvedValue(undefined)
 const removeMember = vi.fn().mockResolvedValue(undefined)
 const setMemberRole = vi.fn().mockResolvedValue(undefined)
 const setActiveOrg = vi.fn()
+const renameOrg = vi.fn().mockResolvedValue(undefined)
 
 function seedStore() {
   useOrgStore.setState({
@@ -38,6 +39,7 @@ function seedStore() {
     removeMember,
     setMemberRole,
     setActiveOrg,
+    renameOrg,
   } as never)
 }
 
@@ -54,6 +56,8 @@ function renderPanel() {
 beforeEach(() => {
   vi.clearAllMocks()
   loadOrgs.mockResolvedValue(undefined)
+  renameOrg.mockResolvedValue(undefined)
+  removeMember.mockResolvedValue(undefined)
   useAuthStore.setState({user: {id: 'u-admin', email: 'admin@acme.io', role: 'member'} as never})
   seedStore()
 })
@@ -130,5 +134,51 @@ describe('OrganizationsPanel', () => {
     fireEvent.click(await screen.findByRole('button', {name: /cancel/i}))
     await waitFor(() => expect(screen.queryByRole('button', {name: 'Remove'})).not.toBeInTheDocument())
     expect(removeMember).not.toHaveBeenCalled()
+  })
+
+  it('renames the org for an admin', async () => {
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', {name: 'Rename organization'}))
+    const input = screen.getByLabelText('New organization name')
+    fireEvent.change(input, {target: {value: '  Acme Holdings '}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+
+    await waitFor(() => expect(renameOrg).toHaveBeenCalledWith('org-1', 'Acme Holdings'))
+    // Typing into the editor must not toggle the org row it sits in.
+    expect(setActiveOrg).not.toHaveBeenCalled()
+  })
+
+  it('treats an unchanged name as a cancel', async () => {
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', {name: 'Rename organization'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+    await waitFor(() => expect(screen.queryByLabelText('New organization name')).not.toBeInTheDocument())
+    expect(renameOrg).not.toHaveBeenCalled()
+  })
+
+  describe('as a non-admin member', () => {
+    beforeEach(() => {
+      useAuthStore.setState({user: {id: 'u-2', email: 'bob@acme.io', role: 'member'} as never})
+    })
+
+    it('offers neither rename nor member removal', async () => {
+      renderPanel()
+      await screen.findByText('Acme')
+      expect(screen.queryByRole('button', {name: 'Rename organization'})).toBeNull()
+      expect(screen.queryByLabelText('Remove member')).toBeNull()
+    })
+
+    // Members had no way out of an org short of asking an admin, although the
+    // server has always allowed removing your own membership.
+    it('leaves the org via their own row after confirmation', async () => {
+      renderPanel()
+      const leave = await screen.findAllByRole('button', {name: 'Leave organization'})
+      // Only the caller's own row carries the control.
+      expect(leave).toHaveLength(1)
+      fireEvent.click(leave[0])
+      fireEvent.click(await screen.findByRole('button', {name: 'Leave'}))
+
+      await waitFor(() => expect(removeMember).toHaveBeenCalledWith('org-1', 'u-2'))
+    })
   })
 })

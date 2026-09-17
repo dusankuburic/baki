@@ -81,3 +81,24 @@ describe('LibraryDetailPanel version history', () => {
     expect(await screen.findByText('No saved versions yet.')).toBeInTheDocument()
   })
 })
+
+describe('LibraryDetailPanel actions', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('offers rename and duplicate only to editors', async () => {
+    versions.mockResolvedValue([])
+    get.mockResolvedValue({...flow, canEdit: false, canDelete: false})
+    const {unmount} = renderPanel()
+    await screen.findByText('Flow one')
+    expect(screen.queryByRole('button', {name: /rename/i})).toBeNull()
+    expect(screen.queryByRole('button', {name: /duplicate/i})).toBeNull()
+    // Viewers can still load the flow read-only.
+    expect(screen.getByRole('button', {name: 'Load flow'})).toBeInTheDocument()
+    unmount()
+
+    get.mockResolvedValue({...flow, canEdit: true, canDelete: true})
+    renderPanel()
+    expect(await screen.findByRole('button', {name: /rename/i})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /duplicate/i})).toBeInTheDocument()
+  })
+})

@@ -68,7 +68,18 @@ func LoadFromEnvRaw() (*Config, error) {
 	if err := applyEnvVars(cfg); err != nil {
 		return nil, err
 	}
+	applyModeDefaults(cfg)
 	return cfg, nil
+}
+
+// applyModeDefaults sets defaults that depend on the deployment mode, for
+// values the operator did not set. Default() is mode-agnostic and uses the
+// desktop's debug log level, so a cloud server logged at debug unless
+// PAD_LOG_LEVEL was set, while the documented cloud default is info.
+func applyModeDefaults(cfg *Config) {
+	if cfg.Mode == ModeCloud && os.Getenv("PAD_LOG_LEVEL") == "" {
+		cfg.Log.Level = "info"
+	}
 }
 
 // envBinding maps one PAD_* environment variable to a setter that parses its

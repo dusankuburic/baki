@@ -1,18 +1,29 @@
 import {request} from './client'
 import {type AuthUser} from './auth'
 
+// Mirrors internal/migration.Result (no JSON tags, so the keys are Go field names).
 export interface MigrationResult {
   FlowsMigrated: number
   FlowsSkipped: number
   FlowsFailed: number
+  ConversationsMigrated: number
+  ConversationsSkipped: number
+  ConversationsFailed: number
   SettingsMoved: boolean
-  Errors: Array<{FlowID: string; Message: string}>
+  NotMigrated: string[] | null
+  Errors: Array<{FlowID: string; Message: string}> | null
   Duration: number
 }
 
+// Mirrors api.MigrationStatus. This used to declare a `status` string the
+// server never sends, so the panel showed no state, never polled a running
+// migration and kept Start enabled where migration is not configured.
 export interface MigrationStatus {
-  status: 'idle' | 'running' | 'completed' | 'started'
+  configured: boolean
+  running: boolean
+  startedAt?: string
   result?: MigrationResult
+  error?: string
 }
 
 export interface AuditEvent {

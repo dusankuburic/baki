@@ -146,10 +146,6 @@ type FlowStore interface {
 	// first, within the filter's visibility scope. Backends without a
 	// queryable content column return ErrContentSearchUnsupported.
 	SearchFlowContents(ctx context.Context, filter FlowFilter, needle string, limit int) ([]*FlowDocument, error)
-	// TransferFlowOwner changes owner_id and org_id on a flow. This is the
-	// ONLY way to reassign ownership — SaveFlow's ON CONFLICT intentionally
-	// preserves the original owner_id/org_id to prevent hijacking.
-	TransferFlowOwner(ctx context.Context, flowID, newOwnerID, newOrgID string) error
 	LoadFlow(ctx context.Context, id string) (*FlowDocument, error)
 	// LoadFlowHeader returns a flow's metadata (owner, org, version, …) WITHOUT
 	// its content. Callers that only authorize, check existence, or read the
@@ -783,7 +779,11 @@ type FlowComplexityPoint struct {
 }
 
 // DashboardSecurity summarizes the security posture for the dashboard.
+// Available is false when any of its counts could not be read: each is a
+// separate best-effort query, and a failed one leaves its field at 0 — which
+// the UI would otherwise present as "no security issues detected".
 type DashboardSecurity struct {
+	Available          bool
 	FailedLogins24h    int
 	LockedAccounts     int
 	CredentialFindings int
@@ -923,17 +923,12 @@ type ChatMessage struct {
 // Settings types — kept in parity with the matching types in internal/models
 // (same fields, same JSON tags) so the toModel/fromModel JSON bridge is lossless.
 type GeneralSettings struct {
-	FirstRunCompleted bool   `json:"firstRunCompleted"`
-	LastUsedVersion   string `json:"lastUsedVersion"`
-	CheckForUpdates   string `json:"checkForUpdates"`
-	OpenInNewWindow   bool   `json:"openInNewWindow"`
+	FirstRunCompleted bool `json:"firstRunCompleted"`
 }
 
 type AppearanceSettings struct {
 	Theme        string `json:"theme"`
 	Density      string `json:"density"`
-	CodeFont     string `json:"codeFont"`
-	UIFont       string `json:"uiFont"`
 	ReduceMotion bool   `json:"reduceMotion"`
 	HighContrast bool   `json:"highContrast"`
 }
@@ -978,10 +973,7 @@ type AIProviderConfig struct {
 }
 
 type ParserSettings struct {
-	MaxFileSizeMB     int  `json:"maxFileSizeMB"`
-	PreserveComments  bool `json:"preserveComments"`
-	TreatTabsAsSpaces bool `json:"treatTabsAsSpaces"`
-	SpacesPerIndent   int  `json:"spacesPerIndent"`
+	MaxFileSizeMB int `json:"maxFileSizeMB"`
 }
 
 type AnalysisSettings struct {

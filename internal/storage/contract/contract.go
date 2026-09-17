@@ -222,8 +222,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 			t.Fatalf("seed user: %v", err)
 		}
 		settings := &interfaces.AppSettings{
-			Version: 1,
-			General: interfaces.GeneralSettings{CheckForUpdates: "daily"},
+			Version:    1,
+			Appearance: interfaces.AppearanceSettings{Density: "compact"},
 		}
 		if err := b.SaveUserSettings(ctx, userID, settings); err != nil {
 			t.Fatalf("SaveUserSettings: %v", err)
@@ -232,8 +232,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if err != nil {
 			t.Fatalf("LoadUserSettings: %v", err)
 		}
-		if got.General.CheckForUpdates != "daily" {
-			t.Errorf("round-trip: want daily, got %s", got.General.CheckForUpdates)
+		if got.Appearance.Density != "compact" {
+			t.Errorf("round-trip: want compact, got %s", got.Appearance.Density)
 		}
 	})
 
@@ -247,7 +247,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		}
 		settings := &interfaces.AppSettings{
 			Version: 1,
-			General: interfaces.GeneralSettings{CheckForUpdates: "monthly"},
+			Layout:  interfaces.LayoutSettings{LastActiveInspectorTab: "findings"},
 		}
 		if err := b.SaveOrgSettings(ctx, orgID, settings); err != nil {
 			t.Fatalf("SaveOrgSettings: %v", err)
@@ -256,8 +256,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend) {
 		if err != nil {
 			t.Fatalf("LoadOrgSettings: %v", err)
 		}
-		if got.General.CheckForUpdates != "monthly" {
-			t.Errorf("round-trip: want monthly, got %s", got.General.CheckForUpdates)
+		if got.Layout.LastActiveInspectorTab != "findings" {
+			t.Errorf("round-trip: want findings, got %s", got.Layout.LastActiveInspectorTab)
 		}
 	})
 

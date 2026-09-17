@@ -5,7 +5,6 @@ import type {GovernanceAlert} from '@/api/governance'
 // Stub the API layer so tests don't hit a real backend.
 const mockList = vi.fn()
 const mockUnreadCount = vi.fn()
-const mockMarkRead = vi.fn()
 const mockMarkAllRead = vi.fn()
 const mockDismiss = vi.fn()
 const mockClear = vi.fn()
@@ -14,7 +13,6 @@ vi.mock('@/api/governance', () => ({
   governanceApi: {
     list: (...a: unknown[]) => mockList(...a),
     unreadCount: (...a: unknown[]) => mockUnreadCount(...a),
-    markRead: (...a: unknown[]) => mockMarkRead(...a),
     markAllRead: (...a: unknown[]) => mockMarkAllRead(...a),
     dismiss: (...a: unknown[]) => mockDismiss(...a),
     clear: (...a: unknown[]) => mockClear(...a),
@@ -37,7 +35,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockUnreadCount.mockResolvedValue({count: 0})
   mockList.mockResolvedValue([])
-  mockMarkRead.mockResolvedValue({status: 'ok'})
   mockMarkAllRead.mockResolvedValue({status: 'ok'})
   mockDismiss.mockResolvedValue({status: 'ok'})
   mockClear.mockResolvedValue({status: 'ok'})
@@ -48,6 +45,7 @@ beforeEach(() => {
     unreadCount: 0,
     loading: false,
     panelOpen: false,
+    showDismissed: false,
     lastError: null,
   })
 })
@@ -77,21 +75,6 @@ describe('governanceStore', () => {
     expect(mockMarkAllRead).toHaveBeenCalled()
   })
 
-  it('markRead optimistically stamps a readAt and calls the API', async () => {
-    useGovernanceStore.setState({alerts: [baseAlert({id: 'a1', readAt: undefined})]})
-    await useGovernanceStore.getState().markRead('a1')
-    const a = useGovernanceStore.getState().alerts[0]
-    expect(a.readAt).toBeTruthy()
-    expect(mockMarkRead).toHaveBeenCalledWith('a1')
-  })
-
-  it('markRead rolls back on API error', async () => {
-    useGovernanceStore.setState({alerts: [baseAlert({id: 'a1', readAt: undefined})]})
-    mockMarkRead.mockRejectedValue(new Error('fail'))
-    await useGovernanceStore.getState().markRead('a1')
-    expect(useGovernanceStore.getState().alerts[0].readAt).toBeUndefined()
-  })
-
   it('markAllRead rolls back alerts and badge on API error', async () => {
     useGovernanceStore.setState({
       alerts: [baseAlert({id: 'a1', readAt: undefined}), baseAlert({id: 'a2', readAt: undefined})],
@@ -107,11 +90,46 @@ describe('governanceStore', () => {
     expect(st.lastError).toBeTruthy()
   })
 
-  it('dismiss hides the alert (stamps dismissedAt) and calls the API', async () => {
-    useGovernanceStore.setState({alerts: [baseAlert({id: 'a1'})]})
+  it('dismiss drops the alert from the default list and calls the API', async () => {
+    useGovernanceStore.setState({alerts: [baseAlert({id: 'a1'}), baseAlert({id: 'a2'})]})
+    await useGovernanceStore.getState().dismiss('a1')
+    expect(useGovernanceStore.getState().alerts.map(a => a.id)).toEqual(['a2'])
+    expect(mockDismiss).toHaveBeenCalledWith('a1')
+  })
+
+  it('dismiss keeps the row (stamps dismissedAt) while dismissed alerts are shown', async () => {
+    useGovernanceStore.setState({alerts: [baseAlert({id: 'a1'})], showDismissed: true})
     await useGovernanceStore.getState().dismiss('a1')
     expect(useGovernanceStore.getState().alerts[0].dismissedAt).toBeTruthy()
-    expect(mockDismiss).toHaveBeenCalledWith('a1')
+  })
+
+  // "Clear dismissed" only reaches alerts the list actually contains. The
+  // default list hides dismissed rows, so without includeDismissed an alert
+  // dismissed in an earlier session could never be cleared.
+  it('the list only asks for dismissed alerts once the toggle is on', async () => {
+    await useGovernanceStore.getState().openPanel()
+    expect(mockList).toHaveBeenLastCalledWith({limit: 50, includeDismissed: false})
+
+    const dismissed = baseAlert({id: 'old', dismissedAt: '2026-01-01T00:00:00Z'})
+    mockList.mockResolvedValue([dismissed])
+    await useGovernanceStore.getState().setShowDismissed(true)
+    expect(mockList).toHaveBeenLastCalledWith({limit: 50, includeDismissed: true})
+    expect(useGovernanceStore.getState().alerts).toEqual([dismissed])
+
+    await useGovernanceStore.getState().clearDismissed()
+    expect(mockClear).toHaveBeenCalled()
+    expect(useGovernanceStore.getState().alerts).toEqual([])
+  })
+
+  it('a reload that resolves after the toggle flipped is discarded', async () => {
+    let resolveFirst: (v: GovernanceAlert[]) => void = () => {}
+    mockList.mockImplementationOnce(() => new Promise(r => (resolveFirst = r)))
+    const first = useGovernanceStore.getState().setShowDismissed(true)
+    mockList.mockResolvedValue([])
+    await useGovernanceStore.getState().setShowDismissed(false)
+    resolveFirst([baseAlert({id: 'stale', dismissedAt: '2026-01-01T00:00:00Z'})])
+    await first
+    expect(useGovernanceStore.getState().alerts).toEqual([])
   })
 
   it('reloadList refreshes the list without re-acknowledging', async () => {
@@ -129,10 +147,11 @@ describe('governanceStore', () => {
   })
 
   it('reset clears state', () => {
-    useGovernanceStore.setState({alerts: [baseAlert()], unreadCount: 5, panelOpen: true})
+    useGovernanceStore.setState({alerts: [baseAlert()], unreadCount: 5, panelOpen: true, showDismissed: true})
     useGovernanceStore.getState().reset()
     const st = useGovernanceStore.getState()
     expect(st.alerts).toEqual([])
+    expect(st.showDismissed).toBe(false)
     expect(st.unreadCount).toBe(0)
     expect(st.panelOpen).toBe(false)
   })

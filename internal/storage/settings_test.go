@@ -61,7 +61,7 @@ func TestSettingsStore_Update_PersistsAndGet(t *testing.T) {
 	s := newTestStore(t)
 
 	updated := *s.Get()
-	updated.General.CheckForUpdates = "never"
+	updated.Appearance.Density = "compact"
 	updated.Layout.SidebarWidth = 999
 
 	if err := s.Update(updated); err != nil {
@@ -69,8 +69,8 @@ func TestSettingsStore_Update_PersistsAndGet(t *testing.T) {
 	}
 
 	got := s.Get()
-	if got.General.CheckForUpdates != "never" {
-		t.Errorf("CheckForUpdates = %q, want %q", got.General.CheckForUpdates, "never")
+	if got.Appearance.Density != "compact" {
+		t.Errorf("Density = %q, want %q", got.Appearance.Density, "compact")
 	}
 	if got.Layout.SidebarWidth != 999 {
 		t.Errorf("SidebarWidth = %d, want 999", got.Layout.SidebarWidth)

@@ -1,6 +1,7 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {renderHook, act} from '@testing-library/react'
 import {useChatStore} from '@/stores/chatStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 
 // Bind to the REAL StreamHandler contract. This test used to declare a private
 // copy of the shape, whose onFixDecision took a 5th `items` argument that the
@@ -476,6 +477,66 @@ describe('useChatStreamEngine', () => {
       )
       // Must NOT have saved under the switched-to doc.
       expect(chatApi.saveConversation).not.toHaveBeenCalledWith('flow-B', expect.anything(), expect.anything())
+    })
+  })
+
+  describe('"Save conversation history" off', () => {
+    it('does not store the finished turn', () => {
+      const prevSettings = useSettingsStore.getState().settings
+      useSettingsStore.setState({settings: {...prevSettings, ai: {...prevSettings.ai, saveConversationHistory: false}}})
+      try {
+        const doc = {id: 'flow-A', name: 'A', subflows: []} as unknown as FlowDocument
+        const {result} = renderHook(() =>
+          useChatStreamEngine({
+            doc,
+            provider: 'claude' as never,
+            selectedModel: 'claude-sonnet-4',
+            getMessages: (threadId: string) => useChatStore.getState().conversations.get(threadId) ?? [],
+          }),
+        )
+        act(() => {
+          useChatStore.setState({
+            threads: [
+              {
+                id: 'threadA',
+                flowId: 'flow-A',
+                title: 'T',
+                createdAt: '2024',
+                contextBlockId: '',
+                selectedSourceFiles: [],
+                tokensIn: 0,
+                tokensOut: 0,
+              },
+            ],
+            conversations: new Map([['threadA', []]]),
+            streams: {
+              threadA: {
+                streamId: 'streamA',
+                messageId: 'mA',
+                text: '',
+                isThinking: true,
+                tokens: 0,
+                toolStatus: null,
+                toolCalls: [],
+                fixProposals: [],
+              },
+            },
+          })
+          result.current.beginAcc('streamA', 'threadA')
+          capturedHandler!.onChunk('not kept', 'streamA')
+        })
+        act(() => {
+          capturedHandler!.onDone(5, 10, 'streamA')
+        })
+
+        // The answer still reaches the thread; it is only not stored.
+        expect(useChatStore.getState().conversations.get('threadA')).toEqual(
+          expect.arrayContaining([expect.objectContaining({role: 'assistant', content: 'not kept'})]),
+        )
+        expect(chatApi.saveConversation).not.toHaveBeenCalled()
+      } finally {
+        useSettingsStore.setState({settings: prevSettings})
+      }
     })
   })
 

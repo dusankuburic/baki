@@ -6,7 +6,7 @@ import {useAuthStore} from '@/stores/authStore'
 
 vi.mock('@/api/admin', () => ({
   adminApi: {
-    getMigrationStatus: vi.fn().mockResolvedValue({status: 'idle', message: 'No migration running'}),
+    getMigrationStatus: vi.fn().mockResolvedValue({configured: false, running: false}),
     listUsers: vi.fn().mockResolvedValue([
       {id: 'u1', email: 'alice@example.com', role: 'admin', displayName: 'Alice'},
       {id: 'u2', email: 'bob@example.com', role: 'member', displayName: 'Bob'},

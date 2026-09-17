@@ -2,9 +2,18 @@
 // (AccountDataCard) now, so account management isn't split across two panes.
 // This panel stays purely informational.
 import {useTranslation} from 'react-i18next'
+import {useSystemStore} from '@/stores/systemStore'
+import {isTauri} from '@/platform/guards'
 
 export default function PrivacyPanel() {
   const {t} = useTranslation('settings')
+  // Where keys live depends on the backend, not the shell: a local backend
+  // keeps them in the OS keychain, a server backend receives them and stores
+  // them encrypted. Session analytics is the local-backend capability (same
+  // signal AIBehaviorPanel uses); isTauri() only covers the moment before
+  // system info has loaded.
+  const systemInfo = useSystemStore(s => s.info)
+  const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
   return (
     <div>
       <h2 className="text-xl font-semibold text-text-primary">Privacy</h2>
@@ -12,10 +21,9 @@ export default function PrivacyPanel() {
 
       <div className="space-y-4">
         <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-          <span className="text-sm font-medium text-text-primary">API Keys</span>
+          <span className="text-sm font-medium text-text-primary">{t('privacy.apiKeysTitle')}</span>
           <p className="text-xs text-text-tertiary mt-0.5">
-            All API keys are stored securely in your operating system's keychain. They are never sent to any server
-            other than the respective AI provider.
+            {localBackend ? t('privacy.apiKeysLocal') : t('privacy.apiKeysServer')}
           </p>
         </div>
 

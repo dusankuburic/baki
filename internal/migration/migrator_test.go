@@ -47,6 +47,11 @@ func TestMigrator_MigratesFlows(t *testing.T) {
 	if len(dst.Flows) != 3 {
 		t.Errorf("dst flows: want 3, got %d", len(dst.Flows))
 	}
+	// A completed run must say what it did NOT copy; the status used to read
+	// as a full upgrade.
+	if len(res.NotMigrated) == 0 {
+		t.Error("NotMigrated should list the data kinds this migrator leaves behind")
+	}
 }
 
 func TestMigrator_SkipsAlreadyMigrated(t *testing.T) {

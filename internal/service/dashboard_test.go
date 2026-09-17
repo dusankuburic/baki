@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -52,8 +53,9 @@ func TestDashboardService_BuildHome_ConcurrentCacheHitRaceFree(t *testing.T) {
 // cloud-path mapping without a real Postgres.
 type stubDashBackend struct {
 	*testutil.FakeBackend
-	data *storageif.DashboardData
-	adv  *storageif.DashboardAdvancedData
+	data   *storageif.DashboardData
+	adv    *storageif.DashboardAdvancedData
+	advErr error
 }
 
 func (s *stubDashBackend) FlowDashboardData(_ context.Context, _ string, _ int) (*storageif.DashboardData, error) {
@@ -61,6 +63,9 @@ func (s *stubDashBackend) FlowDashboardData(_ context.Context, _ string, _ int) 
 }
 
 func (s *stubDashBackend) FlowDashboardAdvanced(_ context.Context, _ string, _ int) (*storageif.DashboardAdvancedData, error) {
+	if s.advErr != nil {
+		return nil, s.advErr
+	}
 	if s.adv == nil {
 		return &storageif.DashboardAdvancedData{Security: storageif.DashboardSecurity{}}, nil
 	}
@@ -248,7 +253,7 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 			Complexity: []storageif.FlowComplexityPoint{
 				{FlowID: "f1", FlowName: "Big", BlockCount: 100, FindingCount: 12, HealthScore: 75},
 			},
-			Security: storageif.DashboardSecurity{FailedLogins24h: 3, CredentialFindings: 2},
+			Security: storageif.DashboardSecurity{Available: true, FailedLogins24h: 3, CredentialFindings: 2},
 		},
 	}
 	svc := NewDashboardService(backend, nil, nil)
@@ -270,8 +275,40 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 	if len(home.Complexity) != 1 || home.Complexity[0].BlockCount != 100 {
 		t.Errorf("Complexity mapping: got %+v", home.Complexity)
 	}
-	if home.Security.FailedLogins24h != 3 || home.Security.CredentialFindings != 2 {
+	if !home.Security.Available || home.Security.FailedLogins24h != 3 || home.Security.CredentialFindings != 2 {
 		t.Errorf("Security mapping: got %+v", home.Security)
+	}
+
+	// A backend that could not read one of the counts reports them as
+	// unavailable even though the advanced query itself succeeded: the counts
+	// left at 0 must not render as a clean bill of health.
+	degraded := &stubDashBackend{FakeBackend: testutil.NewFakeBackend(), adv: &storageif.DashboardAdvancedData{
+		Security: storageif.DashboardSecurity{Available: false},
+	}}
+	if home := NewDashboardService(degraded, nil, nil).BuildHome(context.Background(), "user-2"); home.Security.Available {
+		t.Errorf("Security must be unavailable when the backend could not read its counts: got %+v", home.Security)
+	}
+}
+
+// When the advanced query fails the security counts are unknown, not zero: the
+// card used to read the all-zero stub as "No security issues detected". The
+// base sections must still render, and the nil advanced result must not panic
+// the build (it used to be dereferenced unconditionally).
+func TestDashboardService_BuildHome_AdvancedFailureMarksSecurityUnavailable(t *testing.T) {
+	backend := &stubDashBackend{
+		FakeBackend: testutil.NewFakeBackend(),
+		data:        &storageif.DashboardData{TotalFlows: 2, HealthCount: 1, AvgHealth: 90, ByCategory: map[string]int{}},
+		advErr:      errors.New("advanced query timed out"),
+	}
+	svc := NewDashboardService(backend, nil, nil)
+
+	home := svc.BuildHome(context.Background(), "user-1")
+
+	if home.Security.Available {
+		t.Errorf("security must be unavailable when the advanced query failed: got %+v", home.Security)
+	}
+	if home.Overview.TotalFlows != 2 || !home.Overview.HealthAvailable {
+		t.Errorf("base sections must survive an advanced failure: got %+v", home.Overview)
 	}
 }
 

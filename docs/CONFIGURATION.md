@@ -44,8 +44,8 @@ metrics token, an insecure `sslmode` in cloud mode.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `PAD_STORAGE` | `local` (filesystem) or `database` (PostgreSQL). Cloud mode with auth needs `database`. | `local` |
-| `PAD_DATA_DIR` | Data directory for the filesystem backend. | OS app-data dir |
+| `PAD_STORAGE` | `local` (no server-side store: the desktop app keeps flows in memory and settings/conversations in its app-data directory, and library, triage, comments, versions and sharing are unavailable) or `database` (PostgreSQL). Cloud mode with auth needs `database`. | `local` |
+| `PAD_DATA_DIR` | Data directory of a legacy server that ran with filesystem storage. Cloud mode reads it only as the source of the admin data migration (flows, settings, conversations). | — (migration off) |
 | `PAD_DATABASE_URL` | Postgres DSN. Connect as a dedicated role (`NOSUPERUSER NOBYPASSRLS`) — superusers bypass Row-Level Security. `password=managed-identity` uses Azure Entra tokens. Also read by `bakicli migrate`. | — |
 | `PAD_DB_REQUIRE_SSL` | Force/allow TLS on the DSN (`true`/`false`). | required in cloud, optional in local |
 | `PAD_DB_MAX_OPEN_CONNS` / `PAD_DB_MAX_IDLE_CONNS` | Pool sizing. | `25` / `5` |
@@ -132,7 +132,7 @@ the bucket size.
 | Group | Variables | Default RPS / burst |
 |---|---|---|
 | general | `PAD_RATE_LIMIT_GENERAL_RPS` / `PAD_RATE_LIMIT_GENERAL_BURST` | 1.0 / 20 |
-| auth (login, refresh, password reset) | `PAD_RATE_LIMIT_AUTH_RPS` / `PAD_RATE_LIMIT_AUTH_BURST` | 5.0 / 5 |
+| auth (login, refresh, password reset) | `PAD_RATE_LIMIT_AUTH_RPS` / `PAD_RATE_LIMIT_AUTH_BURST` | 0.083 (5 per minute) / 5 |
 | analysis (expensive) | `PAD_RATE_LIMIT_EXPENSIVE_RPS` / `PAD_RATE_LIMIT_EXPENSIVE_BURST` | 2 / 5 |
 | chat | `PAD_RATE_LIMIT_CHAT_RPS` / `PAD_RATE_LIMIT_CHAT_BURST` | 3 / 10 |
 | upload | `PAD_RATE_LIMIT_UPLOAD_RPS` / `PAD_RATE_LIMIT_UPLOAD_BURST` | 1 / 3 |
@@ -152,7 +152,7 @@ the bucket size.
 |---|---|---|
 | `PAD_METRICS_TOKEN` | Bearer token required on `GET /metrics` and `/debug/pprof/*` in addition to the private-IP allowlist. Set it whenever `PAD_BEHIND_PROXY=true`. | — (public; warning at boot) |
 | `PAD_PPROF_ENABLED` | Register `/debug/pprof/*`. Requires `PAD_METRICS_TOKEN`. | `false` |
-| `PAD_OTLP_ENDPOINT` | OTLP/gRPC endpoint for traces and the error sink. Empty = tracing off. Access-log lines carry `trace_id` when a span is present. | — |
+| `PAD_OTLP_ENDPOINT` | OTLP/HTTP endpoint (`host:port`) for traces. Empty = tracing off. Access-log lines carry `trace_id` when a span is present. | — |
 
 ## Frontend build
 

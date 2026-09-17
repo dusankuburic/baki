@@ -16,7 +16,7 @@ import {useAuthStore} from '@/stores/authStore'
 import type {TriageStatus} from '@/types'
 import {categoryColors, categoryBackgrounds} from '@/lib/findingsColors'
 import {isTauri} from '@/platform/guards'
-import {useConfirm} from '@/components/shared'
+import {useConfirm, useToast} from '@/components/shared'
 import type {Severity} from '@/types'
 import clsx from 'clsx'
 import {useDismissable} from '@/hooks/useDismissable'
@@ -127,6 +127,15 @@ export default function FindingsToolbar({
   const [showUndo, setShowUndo] = useState(false)
   const undoRef = useDismissable(showUndo, () => setShowUndo(false))
   const {prompt} = useConfirm()
+  const toast = useToast()
+  // The store rethrows a failed set/clear; this click handler used to drop the
+  // promise, so a failure was an unhandled rejection with no toast and the
+  // shield icon silently unchanged.
+  const toggleBaseline = () => {
+    const run = baseline ? handleClearBaseline : handleSetBaseline
+    const failTitle = baseline ? t('toasts.baselineClearFailed') : t('toasts.baselineSetFailed')
+    run().catch(err => toast.error(failTitle, {description: String(err)}))
+  }
 
   const handleSaveView = async () => {
     setShowViews(false)
@@ -391,7 +400,7 @@ export default function FindingsToolbar({
             </span>
           )}
           <button
-            onClick={() => (baseline ? handleClearBaseline() : handleSetBaseline())}
+            onClick={toggleBaseline}
             title={
               baseline ? 'Clear baseline (track all findings again)' : 'Set current findings as baseline (ratchet)'
             }

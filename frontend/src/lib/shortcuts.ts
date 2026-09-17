@@ -108,6 +108,10 @@ export const allShortcuts: Shortcut[] = [
     scope: 'global',
   },
   {id: 'nav.drill.subflow', keys: 'enter', description: 'Drill into subflow', category: 'Navigation', scope: 'main'},
+  // Same history as the toolbar's back/forward buttons. Not allowed in inputs,
+  // where alt+arrow is word-wise caret movement on macOS.
+  {id: 'nav.back', keys: 'alt+left', description: 'Go back', category: 'Navigation', scope: 'global'},
+  {id: 'nav.forward', keys: 'alt+right', description: 'Go forward', category: 'Navigation', scope: 'global'},
 
   {id: 'tree.expand', keys: 'right', description: 'Expand node', category: 'Navigation', scope: 'sidebar'},
   {id: 'tree.collapse', keys: 'left', description: 'Collapse node', category: 'Navigation', scope: 'sidebar'},
@@ -131,6 +135,15 @@ export const allShortcuts: Shortcut[] = [
     preventDefault: false,
   },
 
+  // Chat shortcuts are bound by AITab / ChatInput and only fire while focus is
+  // inside the chat panel. They are allowed in inputs because the composer is
+  // where focus sits. ai.send and ai.cancel.stream leave preventDefault to the
+  // handler: it only claims the key when it acts, so an open @/slash menu or
+  // the find bar keeps its own Enter/Escape.
+  //
+  // There is deliberately no Tab binding for "next suggested prompt": Tab is
+  // focus traversal, and taking it over would trap keyboard users in the panel
+  // (the prompts are ordinary buttons, already reachable with Tab).
   {
     id: 'ai.send',
     keys: 'mod+enter',
@@ -138,15 +151,16 @@ export const allShortcuts: Shortcut[] = [
     category: 'AI',
     scope: 'chat',
     allowInInputs: true,
+    preventDefault: false,
   },
-  {id: 'ai.clear.chat', keys: 'mod+l', description: 'Clear chat', category: 'AI', scope: 'chat'},
-  {id: 'ai.next.suggestion', keys: 'tab', description: 'Next suggested prompt', category: 'AI', scope: 'chat'},
+  {id: 'ai.clear.chat', keys: 'mod+l', description: 'Clear chat', category: 'AI', scope: 'chat', allowInInputs: true},
   {
     id: 'ai.cancel.stream',
     keys: 'escape',
     description: 'Cancel AI response',
     category: 'AI',
     scope: 'chat',
+    allowInInputs: true,
     preventDefault: false,
   },
 
@@ -288,19 +302,4 @@ function formatKeyDisplay(k: string): string {
 
 export function formatShortcutParts(keys: string): {key: string; display: string}[] {
   return keys.split('+').map(k => ({key: k, display: formatKeyDisplay(k)}))
-}
-
-export function checkCollisions(): Map<string, string[]> {
-  const keyMap = new Map<string, string[]>()
-  for (const s of shortcuts) {
-    const normalized = s.keys.toLowerCase()
-    const existing = keyMap.get(normalized) ?? []
-    existing.push(s.id)
-    keyMap.set(normalized, existing)
-  }
-  const collisions = new Map<string, string[]>()
-  for (const [key, ids] of keyMap) {
-    if (ids.length > 1) collisions.set(key, ids)
-  }
-  return collisions
 }

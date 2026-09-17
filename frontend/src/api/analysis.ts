@@ -11,20 +11,19 @@ import type {
   GraphData,
   Rule,
   RuleConfig,
-  FlowMetrics,
   DataFlowAnalysis,
   AnalysisSnapshot,
   BatchAnalysis,
   AnalysisDiff,
   DependencyAnalysis,
   DashboardStats,
-  SubflowHash,
   DeduplicateResult,
   FlowComparison,
   Finding,
   FindingStatus,
   FlowBaseline,
   BaselineDrift,
+  SuppressionEntry,
   TriageStatus,
   FindingComment,
   Policy,
@@ -70,8 +69,6 @@ export const analysisApi = {
     request('/api/analysis/lineage', {body: {flowId: activeFlowId(), varName}}),
 
   getExecutionGraph: (): Promise<GraphData> => request('/api/analysis/graph', {body: {flowId: activeFlowId()}}),
-
-  getMetrics: (): Promise<FlowMetrics> => request('/api/analysis/metrics', {body: {flowId: activeFlowId()}}),
 
   getDataFlow: (): Promise<DataFlowAnalysis> => request('/api/analysis/dataflow', {body: {flowId: activeFlowId()}}),
 
@@ -122,20 +119,19 @@ export const analysisApi = {
   exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<unknown> =>
     request('/api/analysis/export/sarif', {body: {flowId}}),
 
-  // Server-rendered exports (R0-6): the endpoints existed with no frontend
-  // consumer. Both return text bodies shaped by the backend serializers.
+  // Server-rendered JUnit XML, shaped by the backend serializer. CSV is built
+  // client-side from the visible findings, so there is no server CSV wrapper.
   exportJUnit: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
     request('/api/analysis/export/junit', {body: {flowId}}),
 
-  exportCSVServer: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
-    request('/api/analysis/export/csv', {body: {flowId}}),
+  // Inline pad-ignore directives in the flow, with stale ones flagged. The
+  // audit ran only in the CLI (`bakicli suppressions`) before this route.
+  listSuppressions: (flowId: string = activeFlowId() ?? ''): Promise<SuppressionEntry[]> =>
+    request('/api/analysis/suppressions', {body: {flowId}}),
 
   getDependencies: (): Promise<DependencyAnalysis> => request('/api/analysis/dependencies', {method: 'GET'}),
 
   getDashboard: (): Promise<DashboardStats> => request('/api/analysis/dashboard', {method: 'GET'}),
-
-  getSubflowHashes: (): Promise<SubflowHash[]> =>
-    request('/api/analysis/subflow-hashes', {body: {flowId: activeFlowId()}}),
 
   deduplicate: (): Promise<DeduplicateResult> => request('/api/analysis/deduplicate', {body: {flowId: activeFlowId()}}),
 
@@ -187,14 +183,9 @@ export const analysisApi = {
 
   // --- Policy Gates (persistent, org-scoped; cloud mode only) ---
 
-  evaluatePolicy: (flowId: string, policy: Policy): Promise<PolicyResult> =>
-    request('/api/analysis/policy/evaluate', {body: {flowId, policy}}),
-
   savePolicy: (policy: Policy): Promise<Policy> => request('/api/analysis/policy/save', {body: policy}),
 
   listPolicies: (orgId: string): Promise<Policy[]> => request('/api/analysis/policy/list', {body: {orgId}}),
-
-  getPolicy: (orgId: string, id: string): Promise<Policy> => request('/api/analysis/policy/get', {body: {orgId, id}}),
 
   deletePolicy: (orgId: string, id: string): Promise<void> =>
     request('/api/analysis/policy/delete', {body: {orgId, id}}),

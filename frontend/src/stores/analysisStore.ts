@@ -101,16 +101,16 @@ interface AnalysisState {
   toggleStatusFilter: (st: TriageStatus) => void
   setStatusFilter: (sts: Set<TriageStatus>) => void
   toggleAssignedToMe: () => void
-  findingsForBlock: (flowId: string, blockId: string) => Finding[]
   setVariableLineage: (h: VariableHistory | null) => void
   setFindingSearch: (q: string) => void
   suppressFinding: (finding: Finding, reason: string) => void
   suppressMany: (findings: Finding[], reason: string) => void
   unsuppressFinding: (finding: Finding) => void
   clearSuppressed: () => void
-  isSuppressed: (finding: Finding) => boolean
   loadSuppressions: (flowId: string) => Promise<void>
-  setFindingTriage: (finding: Finding, status: TriageStatus) => void
+  // justification is the user-authored reason (prompted when suppressing);
+  // stored on the triage entry so the status chip can show it.
+  setFindingTriage: (finding: Finding, status: TriageStatus, justification?: string) => void
   // triageFindingsBatch applies one triage patch (status and/or assignee) to
   // many findings: optimistic triageMap update + ONE persisted batch request
   // (U4.4 bulk triage). prev entries are snapshotted for rollback.
@@ -165,7 +165,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     set(state => {
       const next = new Map(state.reports)
       next.set(flowId, report)
-      // Build per-block findings index for O(1) lookup in findingsForBlock.
+      // Build per-block findings index for O(1) lookup in BlockFindings.
       const nextIndex = new Map(state.findingsByBlock)
       const blockIndex = new Map<string, Finding[]>()
       for (const f of report.findings) {
@@ -234,12 +234,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setStatusFilter: (sts: Set<TriageStatus>) => set({statusFilter: new Set(sts)}),
 
   toggleAssignedToMe: () => set(state => ({assignedToMeOnly: !state.assignedToMeOnly})),
-
-  findingsForBlock: (flowId, blockId) => {
-    const flowIndex = get().findingsByBlock.get(flowId)
-    if (!flowIndex) return []
-    return flowIndex.get(blockId) ?? []
-  },
 
   setVariableLineage: h => set({variableLineage: h}),
 
@@ -330,8 +324,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   clearSuppressed: () => set({suppressedFindings: [], suppressedKeys: new Set()}),
 
-  isSuppressed: finding => get().suppressedKeys.has(findingKey(finding)),
-
   loadSuppressions: async flowId => {
     if (isTauri() || !flowId) return
     try {
@@ -360,7 +352,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }
   },
 
-  setFindingTriage: (finding, status) => {
+  setFindingTriage: (finding, status, justification) => {
     const key = findingKey(finding)
     // Preserve any existing assignee across a status change so triaging a
     // finding (e.g. open → in_progress) doesn't silently drop its owner.
@@ -375,6 +367,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           findingKey: key,
           ruleId: finding.ruleId,
           status,
+          justification,
           assigneeId: preservedAssignee,
           updatedAt: new Date().toISOString(),
         })
@@ -390,7 +383,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           suppressedKeys: keys,
           suppressedFindings: [
             ...state.suppressedFindings,
-            {key, ruleId: finding.ruleId, reason: '', suppressedAt: new Date().toISOString()},
+            {key, ruleId: finding.ruleId, reason: justification ?? '', suppressedAt: new Date().toISOString()},
           ],
         }
       }
@@ -407,7 +400,13 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
     if (!isTauri()) {
       analysisApi
-        .setFindingStatus({findingKey: key, ruleId: finding.ruleId, status, assigneeId: preservedAssignee})
+        .setFindingStatus({
+          findingKey: key,
+          ruleId: finding.ruleId,
+          status,
+          justification,
+          assigneeId: preservedAssignee,
+        })
         .catch(err => logger.warn('Failed to persist triage status', err))
     }
   },

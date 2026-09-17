@@ -159,18 +159,7 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 	// includes a digest of that set (analyzer.ruleSetDigest) — without it two
 	// orgs whose flows share a name and content would share a cached report and
 	// one would receive the other's custom-rule findings.
-	var settings *models.AppSettings
-	var rules []analyzer.Rule
-	if s.profiles != nil {
-		profile := s.profiles.Resolve(ctx, doc.OrganizationID)
-		settings, rules = profile.Settings, profile.Rules
-	} else {
-		settings = s.settings.Get()
-		rules = analyzer.AllRules()
-		if len(s.customRules) > 0 {
-			rules = append(rules, s.customRules...)
-		}
-	}
+	settings, rules := s.ruleSetFor(ctx, doc)
 
 	// Extract userID for per-user event delivery (prevents cross-tenant leaks).
 	userID := ""
@@ -341,16 +330,6 @@ func (s *AnalysisService) GetExecutionGraph(doc *models.FlowDocument) (graph *mo
 	return analyzer.BuildExecutionGraph(doc, nil), nil
 }
 
-func (s *AnalysisService) GetFlowMetrics(doc *models.FlowDocument) (metrics *models.FlowMetrics, err error) {
-	defer logger.Guard("App.GetFlowMetrics", &err)
-
-	if doc == nil {
-		return nil, fmt.Errorf("no flow loaded")
-	}
-
-	return analyzer.ComputeFlowMetrics(doc, nil), nil
-}
-
 func (s *AnalysisService) GetDataFlow(doc *models.FlowDocument) (df *models.DataFlowAnalysis, err error) {
 	defer logger.Guard("App.GetDataFlow", &err)
 
@@ -405,10 +384,6 @@ func (s *AnalysisService) DashboardData() (*models.DashboardStats, []*models.Ana
 func sortedReports(reports []*models.AnalysisReport) []*models.AnalysisReport {
 	sort.Slice(reports, func(i, j int) bool { return reports[i].FlowID < reports[j].FlowID })
 	return reports
-}
-
-func (s *AnalysisService) ComputeSubflowHashes(doc *models.FlowDocument) []models.SubflowHash {
-	return analyzer.ComputeSubflowHashes(doc)
 }
 
 func (s *AnalysisService) DeduplicateFindings(report *models.AnalysisReport) ([]models.Finding, []models.FindingGroup) {

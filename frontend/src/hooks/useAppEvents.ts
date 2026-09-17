@@ -2,10 +2,17 @@ import {useEffect} from 'react'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useGovernanceStore} from '@/stores/governanceStore'
+import {useSettingsStore} from '@/stores/settingsStore'
 import {subscribeToEvents} from '@/api/client'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
 import {getFlowDocumentEnvelopeSchema} from '@/api/schemas'
 import {logger} from '@/lib/logger'
+
+// settings:changed arrives once per save — including this tab's own saves,
+// which the store debounces by 1s — and an org-settings save fans out to every
+// member. Coalescing to a trailing refetch that outlasts that debounce keeps a
+// slider drag or burst of toggles from reloading settings underneath the edit.
+const SETTINGS_REFETCH_DELAY_MS = 1500
 
 export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | null) => void}) {
   const {openDocument} = deps
@@ -13,10 +20,11 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
   useEffect(() => {
     let unsub: (() => void) | null = null
     let cancelled = false
+    let settingsRefetch: ReturnType<typeof setTimeout> | null = null
     void subscribeToEvents(ev => {
       const d = ev.data as Record<string, unknown> | undefined
       if (ev.name === 'flow:parse-progress') {
-        useFlowStore.setState({parseProgress: (d?.percent as number) ?? 0, isParsing: true})
+        useFlowStore.getState().setParsing(true, (d?.percent as number) ?? 0)
       } else if (ev.name === 'flow:loaded') {
         if (!d) return
         // Honor the initial load (no document open yet) or a refresh of the
@@ -82,6 +90,15 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
         const gs = useGovernanceStore.getState()
         void gs.refreshUnread()
         if (gs.panelOpen) void gs.reloadList()
+      } else if (ev.name === 'settings:changed') {
+        // Settings saved elsewhere (another tab or device, or an org admin).
+        // The payload is not applied directly: re-reading through the store's
+        // loader merges defaults exactly as the start-up load does.
+        if (settingsRefetch) clearTimeout(settingsRefetch)
+        settingsRefetch = setTimeout(() => {
+          settingsRefetch = null
+          if (!cancelled) void useSettingsStore.getState().loadFromBackend()
+        }, SETTINGS_REFETCH_DELAY_MS)
       }
     }).then(fn => {
       if (!cancelled) unsub = fn
@@ -89,6 +106,7 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
     })
     return () => {
       cancelled = true
+      if (settingsRefetch) clearTimeout(settingsRefetch)
       unsub?.()
     }
   }, [openDocument])

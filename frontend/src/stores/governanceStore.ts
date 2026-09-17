@@ -16,13 +16,17 @@ interface GovernanceState {
   unreadCount: number
   loading: boolean
   panelOpen: boolean
+  // Dismissed alerts stay on the server until cleared, but the default list
+  // hides them. Toggling this on reloads with includeDismissed so a later
+  // session can still find — and clear — what an earlier one dismissed.
+  showDismissed: boolean
   lastError: string | null
 
   openPanel: () => Promise<void>
   reloadList: () => Promise<void>
   closePanel: () => void
   refreshUnread: () => Promise<void>
-  markRead: (id: string) => Promise<void>
+  setShowDismissed: (show: boolean) => Promise<void>
   markAllRead: () => Promise<void>
   dismiss: (id: string) => Promise<void>
   clearDismissed: () => Promise<void>
@@ -50,6 +54,7 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
   unreadCount: 0,
   loading: false,
   panelOpen: false,
+  showDismissed: false,
   lastError: null,
 
   refreshUnread: async () => {
@@ -68,7 +73,10 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
     // Loading the list implicitly acknowledges (clears the badge) — a user who
     // opens the inbox has seen the alerts.
     try {
-      const [alerts] = await Promise.all([governanceApi.list({limit: 50}), governanceApi.markAllRead()])
+      const [alerts] = await Promise.all([
+        governanceApi.list({limit: 50, includeDismissed: get().showDismissed}),
+        governanceApi.markAllRead(),
+      ])
       set({alerts, unreadCount: 0, loading: false, lastError: null})
     } catch (err) {
       set({loading: false, lastError: err instanceof Error ? err.message : 'Failed to load alerts'})
@@ -80,8 +88,11 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
   // (the new alert should appear, but we don't want to mark it read on the user's
   // behalf before they've seen it).
   reloadList: async () => {
+    const includeDismissed = get().showDismissed
     try {
-      const alerts = await governanceApi.list({limit: 50})
+      const alerts = await governanceApi.list({limit: 50, includeDismissed})
+      // A toggle flipped while this was in flight owns the list now.
+      if (get().showDismissed !== includeDismissed) return
       set({alerts, lastError: null})
     } catch (err) {
       logger.warn('governance: reload list failed', err)
@@ -90,23 +101,16 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
 
   closePanel: () => set({panelOpen: false}),
 
-  markRead: async (id: string) => {
-    const prev = get().alerts
-    // Optimistic: stamp a local readAt so the row restyles immediately.
-    set({
-      alerts: prev.map(a => (a.id === id && !a.readAt ? {...a, readAt: new Date().toISOString()} : a)),
-    })
-    try {
-      await governanceApi.markRead(id)
-    } catch (err) {
-      set({alerts: prev, lastError: err instanceof Error ? err.message : 'Failed to mark alert'})
-    }
+  setShowDismissed: async (show: boolean) => {
+    if (get().showDismissed === show) return
+    set({showDismissed: show})
+    await get().reloadList()
   },
 
   markAllRead: async () => {
     const prev = get()
     // Optimistic: stamp every unread row and zero the badge. On failure,
-    // restore the previous alerts + unreadCount (mirroring markRead/dismiss)
+    // restore the previous alerts + unreadCount (mirroring dismiss)
     // so the bell doesn't claim 0 unread while the server disagrees.
     set({
       alerts: prev.alerts.map(a => (a.readAt ? a : {...a, readAt: new Date().toISOString()})),
@@ -124,8 +128,14 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
   },
 
   dismiss: async (id: string) => {
-    const prev = get().alerts
-    set({alerts: prev.map(a => (a.id === id ? {...a, dismissedAt: new Date().toISOString()} : a))})
+    const {alerts: prev, showDismissed} = get()
+    // Mirror what the next list load returns: with dismissed alerts shown the
+    // row stays (dimmed, clearable); otherwise it leaves the list.
+    set({
+      alerts: showDismissed
+        ? prev.map(a => (a.id === id ? {...a, dismissedAt: new Date().toISOString()} : a))
+        : prev.filter(a => a.id !== id),
+    })
     try {
       await governanceApi.dismiss(id)
     } catch (err) {
@@ -145,7 +155,7 @@ export const useGovernanceStore = create<GovernanceState>((set, get) => ({
 
   reset: () => {
     stopPolling()
-    set({alerts: [], unreadCount: 0, loading: false, panelOpen: false, lastError: null})
+    set({alerts: [], unreadCount: 0, loading: false, panelOpen: false, showDismissed: false, lastError: null})
   },
 }))
 

@@ -80,7 +80,7 @@ export function useAdminData(isAdmin: boolean) {
     // Only poll while a migration is actively running — avoids unnecessary
     // network traffic for the admin panel's lifetime when idle.
     const interval = setInterval(() => {
-      if (!cancelled && statusRef.current?.status === 'running') void fetchStatus()
+      if (!cancelled && statusRef.current?.running) void fetchStatus()
     }, 5000)
     return () => {
       cancelled = true
@@ -91,7 +91,8 @@ export function useAdminData(isAdmin: boolean) {
   const startMigration = useCallback(async () => {
     const ok = await confirm({
       title: 'Start migration',
-      message: 'Start data migration from filesystem to database? This will skip already migrated flows.',
+      message:
+        'Copy flows, settings and chat conversations from the legacy data directory into the database? Already migrated flows are skipped.',
       confirmLabel: 'Start migration',
     })
     if (!ok) return

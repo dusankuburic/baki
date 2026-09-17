@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"pad-analyzer/internal/config"
@@ -77,6 +76,13 @@ func (s *ChatService) SaveConversation(ctx context.Context, doc *models.FlowDocu
 	if doc == nil {
 		return fmt.Errorf("no flow loaded")
 	}
+	// "Save conversation history" off: accept and drop. The toggle used to have
+	// no reader, so turns were stored regardless of it. The client stops
+	// calling this and sends history with each turn instead; the check here
+	// also covers the server's own start-of-stream persist and older clients.
+	if !s.conversationHistoryEnabled(ctx) {
+		return nil
+	}
 	trimmed := evictConvMessages(messages)
 
 	if s.useBackendConversations() {
@@ -125,19 +131,4 @@ func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDoc
 		return fmt.Errorf("failed to delete conversation file: %w", err)
 	}
 	return nil
-}
-
-func (s *ChatService) ExportConversation(ctx context.Context, doc *models.FlowDocument, provider string, path string) error {
-	if err := validateUserPath(path); err != nil {
-		return err
-	}
-	msgs, err := s.GetConversation(ctx, doc, provider)
-	if err != nil {
-		return err
-	}
-	var b strings.Builder
-	for _, m := range msgs {
-		fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", m.Role, m.Timestamp.Format(time.RFC3339), m.Content)
-	}
-	return os.WriteFile(path, []byte(b.String()), 0644) // #nosec G306 -- user-chosen export path; world-readable is intended for sharing
 }

@@ -7,6 +7,7 @@ import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
+import {useSystemStore} from '@/stores/systemStore'
 import type {DashboardHomeData, FlowDocument} from '@/types'
 import {KPIStripCard} from './home/KPIStripCard'
 import {HealthTrendCard} from './home/HealthTrendCard'
@@ -41,6 +42,10 @@ export default function HomeDashboard() {
   const docId = useFlowStore(s => s.document?.id ?? null)
   const toast = useToast()
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
+  // The analytics view behind "Details" is session analytics; without them it
+  // only says "not available", so the link is not offered.
+  const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
+  const openAnalytics = sessionAnalytics ? () => setMainPaneView('dashboard') : undefined
 
   const loadIdRef = useRef(0)
   const hasDataRef = useRef(false)
@@ -229,7 +234,7 @@ export default function HomeDashboard() {
             <RuleFrequencyCard data={ruleFrequency} className="col-span-12 lg:col-span-8" />
             <FindingsChartCard
               findings={findings}
-              onOpenAnalytics={() => setMainPaneView('dashboard')}
+              onOpenAnalytics={openAnalytics}
               className="col-span-12 lg:col-span-4"
             />
 
@@ -271,7 +276,7 @@ export default function HomeDashboard() {
             <RecentFlowsCard flows={recentFlows} onOpen={openFlow} className="col-span-12 lg:col-span-7" />
             <FindingsChartCard
               findings={findings}
-              onOpenAnalytics={() => setMainPaneView('dashboard')}
+              onOpenAnalytics={openAnalytics}
               className="col-span-12 lg:col-span-5"
             />
 

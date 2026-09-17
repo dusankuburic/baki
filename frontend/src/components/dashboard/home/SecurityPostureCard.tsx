@@ -1,5 +1,5 @@
 import {ShieldAlert, AlertTriangle, Key, Lock} from 'lucide-react'
-import {CardShell} from './CardShell'
+import {CardShell, CardPlaceholder} from './CardShell'
 import type {DashboardSecurity} from '@/types'
 
 export function SecurityPostureCard({data, className}: {data: DashboardSecurity; className?: string}) {
@@ -29,7 +29,10 @@ export function SecurityPostureCard({data, className}: {data: DashboardSecurity;
 
   return (
     <CardShell title="Security Posture" className={className}>
-      {!hasIssues ? (
+      {!data.available ? (
+        // Zeros from a failed read are not an all-clear; say so instead.
+        <CardPlaceholder message="Security posture is unavailable right now." />
+      ) : !hasIssues ? (
         <div className="flex flex-col items-center justify-center h-32 gap-2">
           <ShieldAlert size={20} className="text-emerald-400" />
           <span className="text-xs text-text-tertiary text-center">No security issues detected</span>

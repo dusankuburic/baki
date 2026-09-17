@@ -146,6 +146,15 @@ func TestReportToMarkdown_StatsTable(t *testing.T) {
 	}
 }
 
+func TestReportToMarkdown_StatsTableShowsSuppressed(t *testing.T) {
+	report := makeReport()
+	report.Stats.Suppressed = 3
+	out := ReportToMarkdown(report, makeDoc("Flow", ""))
+	if !strings.Contains(out, "| Suppressed inline | 3 |") {
+		t.Errorf("expected the inline-suppressed count in the stats table:\n%s", out)
+	}
+}
+
 func TestFilterBySeverity(t *testing.T) {
 	findings := []models.Finding{
 		{Severity: models.SeverityError},

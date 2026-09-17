@@ -73,3 +73,43 @@ func TestExportMarkdown_CloudModeIgnoresPath(t *testing.T) {
 		t.Fatalf("cloud-mode export wrote to the caller-supplied path %q (arbitrary file write not blocked)", outFile)
 	}
 }
+
+// TestHandleSaveClientExport pins C14's server half: on desktop the CSV/SARIF/
+// JUnit exports go through the native save dialog and this route writes the
+// browser-rendered text to the chosen path. Only the allowlisted export types
+// are written, and cloud mode refuses the route outright.
+func TestHandleSaveClientExport(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("local writes the export", func(t *testing.T) {
+		rt := newTestRouter(nil, false)
+		path := filepath.Join(dir, "findings.sarif")
+		rr := doRequest(t, rt, http.MethodPost, "/api/export/save", map[string]string{"path": path, "content": `{"version":"2.1.0"}`})
+		checkStatus(t, rr, http.StatusOK)
+		got, err := os.ReadFile(path) // #nosec G304 -- test temp dir
+		if err != nil || string(got) != `{"version":"2.1.0"}` {
+			t.Fatalf("export not written: %q, %v", got, err)
+		}
+	})
+
+	t.Run("local rejects a non-export file type", func(t *testing.T) {
+		rt := newTestRouter(nil, false)
+		path := filepath.Join(dir, "authorized_keys")
+		rr := doRequest(t, rt, http.MethodPost, "/api/export/save", map[string]string{"path": path, "content": "x"})
+		checkStatus(t, rr, http.StatusBadRequest)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("rejected export was written anyway (stat err = %v)", err)
+		}
+	})
+
+	t.Run("cloud refuses", func(t *testing.T) {
+		rt := newJWTTestRouter(t)
+		bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+		path := filepath.Join(dir, "cloud.csv")
+		rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/export/save", bearer, map[string]string{"path": path, "content": "x"})
+		checkStatus(t, rr, http.StatusForbidden)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("cloud mode wrote a server path (stat err = %v)", err)
+		}
+	})
+}

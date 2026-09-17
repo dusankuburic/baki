@@ -65,3 +65,44 @@ func TestFlowTags_ViewerForbidden(t *testing.T) {
 		map[string]any{"flowId": flowID, "tags": []string{"prod"}})
 	checkStatus(t, rr, http.StatusForbidden)
 }
+
+// TestLibraryFlow_SerializesTags: the library list and single GET carry each
+// flow's tags. They were stored and filterable but dropped from the response,
+// so the detail panel showed "No tags" after every reload and the tag filter
+// had nothing to offer.
+func TestLibraryFlow_SerializesTags(t *testing.T) {
+	backend := &testutil.FakeBackend{}
+	rt := newTestRouter(backend, true)
+	seedUserWithRole(t, rt, "editor", "editor@example.com", auth.RoleMember)
+	doc := &storageif.FlowDocument{ID: "flow-t", Name: "Tagged", OwnerID: "editor", Tags: []string{"finance", "prod"}}
+	if err := backend.SaveFlow(context.Background(), doc); err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
+	bearer := jwtBearer(t, rt, "editor", "editor@example.com")
+
+	type item struct {
+		ID   string   `json:"id"`
+		Tags []string `json:"tags"`
+	}
+	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/library", bearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+	var page struct {
+		Items []item `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(page.Items) != 1 || len(page.Items[0].Tags) != 2 {
+		t.Fatalf("list items = %+v, want flow-t with its 2 tags", page.Items)
+	}
+
+	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/library/flow-t", bearer, nil)
+	checkStatus(t, rr, http.StatusOK)
+	var one item
+	if err := json.Unmarshal(rr.Body.Bytes(), &one); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if len(one.Tags) != 2 {
+		t.Errorf("GET tags = %v, want [finance prod]", one.Tags)
+	}
+}

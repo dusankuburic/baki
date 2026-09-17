@@ -260,6 +260,18 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 			TokensOut: t.TokensOut,
 		})
 	}
+	// The base-only sections derived from `data` must still render when the
+	// advanced half failed; everything below reads `adv`, which is nil then.
+	out.ConfidenceDist = copyIntMap(data.Confidence)
+	for _, hb := range data.HealthBuckets {
+		out.HealthBuckets = append(out.HealthBuckets, models.HealthBucketStub{
+			Label: hb.Label, Lo: hb.Lo, Hi: hb.Hi, Count: hb.Count,
+		})
+	}
+	out.Fixability = s.fixabilityStub(data.AutoFixable, data.TotalFindings)
+	if adv == nil {
+		return out
+	}
 
 	for _, h := range adv.HealthTrend {
 		out.HealthTrend = append(out.HealthTrend, models.DailyHealthPoint{
@@ -289,6 +301,9 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 		})
 	}
 	out.Security = models.DashboardSecurityStub{
+		// Available only when the backend actually read every count; a failed
+		// count leaves a 0 that would read as "no issues".
+		Available:          adv.Security.Available,
 		FailedLogins24h:    adv.Security.FailedLogins24h,
 		CredentialFindings: adv.Security.CredentialFindings,
 		LockedAccounts:     adv.Security.LockedAccounts,
@@ -300,13 +315,6 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 			Date: p.Date, Errors: p.Errors, Warnings: p.Warnings, Info: p.Info,
 		})
 	}
-	out.ConfidenceDist = copyIntMap(data.Confidence)
-	for _, hb := range data.HealthBuckets {
-		out.HealthBuckets = append(out.HealthBuckets, models.HealthBucketStub{
-			Label: hb.Label, Lo: hb.Lo, Hi: hb.Hi, Count: hb.Count,
-		})
-	}
-	out.Fixability = s.fixabilityStub(data.AutoFixable, data.TotalFindings)
 
 	// Workflow (cloud-only team-triage funnel + MTTR). Available is true once
 	// any finding has been triaged; local mode never sets this (no persistent

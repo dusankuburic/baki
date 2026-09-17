@@ -264,3 +264,30 @@ describe('ChatInput queue-while-streaming (U1.6)', () => {
     expect(useChatStore.getState().queuedByThread['threadA']).toBeUndefined()
   })
 })
+
+describe('ChatInput mod+enter', () => {
+  it('sends with Ctrl/Cmd+Enter from the composer', async () => {
+    const onSend = vi.fn()
+    render(<ChatInput onSend={onSend} />)
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    await userEvent.type(textarea, 'Hello')
+    textarea.focus()
+    fireEvent.keyDown(textarea, {key: 'Enter', ctrlKey: true})
+    expect(onSend).toHaveBeenCalledWith('Hello', [], false)
+  })
+
+  it('ignores the chord outside the composer', async () => {
+    const onSend = vi.fn()
+    render(<ChatInput onSend={onSend} />)
+    await userEvent.type(screen.getByRole('textbox'), 'Hello')
+    const other = document.createElement('textarea')
+    document.body.appendChild(other)
+    other.focus()
+    const ev = new KeyboardEvent('keydown', {key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true})
+    other.dispatchEvent(ev)
+    expect(onSend).not.toHaveBeenCalled()
+    // Not claimed either: another field's own Ctrl+Enter keeps its default.
+    expect(ev.defaultPrevented).toBe(false)
+    other.remove()
+  })
+})

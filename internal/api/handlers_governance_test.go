@@ -52,26 +52,6 @@ func TestGovernanceAlerts_ListAndUnreadCount(t *testing.T) {
 	}
 }
 
-func TestGovernanceAlerts_MarkReadClearsBadge(t *testing.T) {
-	rt := newJWTTestRouter(t)
-	seedUserWithRole(t, rt, "alice", "alice@example.com", "admin")
-	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
-	seedGovAlert(t, rt, "f1|drift|e1w0", "f1", "Flow One", "drift")
-
-	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/governance/alerts/read", bearer, map[string]string{"id": "f1|drift|e1w0"})
-	checkStatus(t, rr, http.StatusOK)
-
-	rr = doRequestWithAuth(t, rt, http.MethodGet, "/api/governance/alerts/unread-count", bearer, nil)
-	checkStatus(t, rr, http.StatusOK)
-	var cnt struct {
-		Count int `json:"count"`
-	}
-	decodeJSON(t, rr, &cnt)
-	if cnt.Count != 0 {
-		t.Errorf("expected 0 unread after read, got %d", cnt.Count)
-	}
-}
-
 func TestGovernanceAlerts_MarkAllReadAndDismiss(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	seedUserWithRole(t, rt, "alice", "alice@example.com", "admin")
@@ -112,15 +92,6 @@ func TestGovernanceAlerts_MarkAllReadAndDismiss(t *testing.T) {
 	if len(alerts) != 1 {
 		t.Errorf("expected 1 alert after clear (dismissed removed), got %d", len(alerts))
 	}
-}
-
-func TestGovernanceAlerts_MarkReadMissingIdReturns400(t *testing.T) {
-	rt := newJWTTestRouter(t)
-	seedUserWithRole(t, rt, "alice", "alice@example.com", "admin")
-	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
-
-	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/governance/alerts/read", bearer, map[string]string{})
-	checkStatus(t, rr, http.StatusBadRequest)
 }
 
 // TestGovernanceAlerts_TargetedVisibility pins R2-5's personal-delivery

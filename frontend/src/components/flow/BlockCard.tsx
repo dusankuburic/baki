@@ -24,7 +24,7 @@ import {isContainerType} from './BlockEnd'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
-import {useSearchStore} from '@/stores/searchStore'
+import {runSearch} from '@/components/sidebar/hooks/useSidebarSearch'
 import type {PresenceUser} from '@/stores/presenceStore'
 import {stageBlockPrompt} from '@/lib/fixWithAI'
 import type {Block} from '@/types'
@@ -258,7 +258,7 @@ export default React.memo(function BlockCard({
           block.rawType === 'CALL' || block.rawType === 'DISABLED_CALL'
             ? block.name.replace('Call ', '').replace(' (disabled)', '')
             : block.name
-        useSearchStore.getState().setQuery(query)
+        void runSearch(query)
         if (useUIStore.getState().sidebarCollapsed) {
           useUIStore.getState().toggleSidebar()
         }

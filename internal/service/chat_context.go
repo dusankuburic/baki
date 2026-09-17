@@ -156,12 +156,13 @@ func (s *ChatService) chatContextKey(scope, flowID string, req models.ChatReques
 	// key — otherwise a free-form turn caches a source/block-less contextText
 	// that a later context-bearing turn (same key) would reuse.
 	exclude := fmt.Sprintf("%t", req.ExcludeContext)
-	// The merged suffix (settings + request) is what actually reaches the
-	// prompt, so key on it — editing the custom-instructions setting must not
-	// serve a context built under the old instructions.
+	// req.SystemPrompt holds the MERGED suffix (settings + request, see
+	// cachedContextCore), which is what reaches the prompt — so editing the
+	// custom-instructions setting cannot serve a context built under the old
+	// instructions.
 	return strings.Join([]string{
 		scope, flowID, fmt.Sprintf("%d", gen),
-		req.ContextBlockID, s.systemPromptSuffix(req), providerID, model, reportFP, sourceFP, exclude,
+		req.ContextBlockID, req.SystemPrompt, providerID, model, reportFP, sourceFP, exclude,
 	}, "|")
 }
 
@@ -295,6 +296,10 @@ func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) boo
 // and storing it on a miss. The cache is bypassed when there is no document
 // (nothing to key on) or when the cache is unset (e.g. a test-built service).
 func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
+	// Resolve the caller's custom instructions once, here where the request
+	// context (and so the caller) is known; the key and the computation below
+	// both read the merged value from req.SystemPrompt.
+	req.SystemPrompt = s.systemPromptSuffix(ctx, req)
 	if s.chatCtxCache == nil || doc == nil {
 		return s.computeContextCore(provider, doc, report, req)
 	}
@@ -335,7 +340,7 @@ func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowD
 		Flow:               scrubbedDoc,
 		TokenBudget:        tokenBudget,
 		Provider:           provider,
-		SystemPromptSuffix: s.systemPromptSuffix(req),
+		SystemPromptSuffix: req.SystemPrompt,
 	}
 	if report != nil {
 		ctxReq.Findings = report.Findings
@@ -509,18 +514,18 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	}, nil
 }
 
-// systemPromptSuffix merges the deployment/user "custom instructions" setting
+// systemPromptSuffix merges the caller's "custom instructions" setting
 // (Settings → AI Behavior) with any per-request override. The setting used to
 // be persisted and never read — the only consumer was the per-request field,
 // which the frontend never populated — so the control was inert. Merging here,
-// server-side, keeps it tamper-proof: a client cannot drop the operator's
-// instructions by omitting the field.
-func (s *ChatService) systemPromptSuffix(req models.ChatRequest) string {
+// server-side, keeps it tamper-proof: a client cannot drop the configured
+// instructions by omitting the field. The setting comes from
+// callerPreferences, so in cloud mode it is the user's own, not the server's
+// settings file.
+func (s *ChatService) systemPromptSuffix(ctx context.Context, req models.ChatRequest) string {
 	var configured string
-	if s.settings != nil {
-		if app := s.settings.Get(); app != nil {
-			configured = strings.TrimSpace(app.AI.SystemPromptSuffix)
-		}
+	if app := s.callerPreferences(ctx); app != nil {
+		configured = strings.TrimSpace(app.AI.SystemPromptSuffix)
 	}
 	perRequest := strings.TrimSpace(req.SystemPrompt)
 	switch {

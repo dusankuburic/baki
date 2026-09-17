@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import PortfolioView from './PortfolioView'
 import {ToastProvider} from '@/components/shared/Toast'
+import {useOrgStore} from '@/stores/orgStore'
 
 const portfolio = vi.fn()
 const analyzeFlowById = vi.fn()
@@ -12,7 +13,12 @@ vi.mock('@/api', () => ({
   analysisApi: {analyzeFlowById: (...a: unknown[]) => analyzeFlowById(...a)},
 }))
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  useOrgStore.setState({activeOrgId: null})
+})
+
+const emptyPortfolio = {totalFlows: 0, analyzedFlows: 0, avgHealth: 0, errors: 0, warnings: 0, info: 0, entries: []}
 
 describe('PortfolioView', () => {
   it('renders the ranked flows and rollup totals', async () => {
@@ -136,5 +142,34 @@ describe('PortfolioView', () => {
     const reanalyzeBtn = await screen.findByText(/Re-analyze 1/)
     fireEvent.click(reanalyzeBtn)
     await waitFor(() => expect(analyzeFlowById).toHaveBeenCalledWith('f1'))
+  })
+  it('scopes the portfolio to the active organisation', async () => {
+    useOrgStore.setState({activeOrgId: 'org-7'})
+    portfolio.mockResolvedValue(emptyPortfolio)
+    render(
+      <ToastProvider>
+        <PortfolioView />
+      </ToastProvider>,
+    )
+    await screen.findByText(/No flows to govern/i)
+    expect(portfolio).toHaveBeenCalledWith({orgId: 'org-7', sort: 'risk'}, expect.anything())
+  })
+
+  it('re-requests the ranking when the sort changes', async () => {
+    portfolio.mockResolvedValue({
+      ...emptyPortfolio,
+      totalFlows: 1,
+      entries: [{flowId: 'f1', flowName: 'Alpha', analyzed: false, healthScore: 0, errors: 0, warnings: 0, info: 0}],
+    })
+    render(
+      <ToastProvider>
+        <PortfolioView />
+      </ToastProvider>,
+    )
+    await screen.findByText('Alpha')
+    fireEvent.change(screen.getByLabelText('Sort flows'), {target: {value: 'errors'}})
+    await waitFor(() =>
+      expect(portfolio).toHaveBeenLastCalledWith({orgId: undefined, sort: 'errors'}, expect.anything()),
+    )
   })
 })

@@ -7,6 +7,7 @@ import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
+import {VersionConflictError} from '@/api/client'
 
 const list = vi.fn()
 const get = vi.fn()
@@ -187,6 +188,55 @@ describe('LibraryWorkspace', () => {
     fireEvent.keyDown(input, {key: 'Enter'})
 
     await waitFor(() => expect(setTags).toHaveBeenCalledWith('a', ['prod', 'finance']))
+  })
+
+  it('offers the tags seen on flows as filter chips and filters by them', async () => {
+    list.mockResolvedValue({
+      items: [
+        {...flow('a'), tags: ['prod']},
+        {...flow('b'), tags: ['finance', 'prod']},
+      ],
+      total: 2,
+      offset: 0,
+      limit: 24,
+    })
+    renderWorkspace()
+    const chip = await screen.findByRole('button', {name: 'finance'})
+    expect(screen.getByRole('button', {name: 'prod'})).toHaveAttribute('aria-pressed', 'false')
+
+    list.mockClear()
+    fireEvent.click(chip)
+    await waitFor(() => expect(list).toHaveBeenCalled())
+    expect(list.mock.calls.at(-1)![0].tags).toEqual(['finance'])
+    expect(await screen.findByRole('button', {name: 'finance'})).toHaveAttribute('aria-pressed', 'true')
+
+    // Clearing drops the filter from the request again.
+    list.mockClear()
+    fireEvent.click(screen.getByRole('button', {name: 'Clear'}))
+    await waitFor(() => expect(list).toHaveBeenCalled())
+    expect(list.mock.calls.at(-1)![0].tags).toBeUndefined()
+  })
+
+  it('turns a rename conflict into a reload prompt that re-reads the flow', async () => {
+    list.mockResolvedValue({items: [flow('a', {name: 'Pipeline'})], total: 1, offset: 0, limit: 24})
+    get.mockResolvedValue(flow('a', {name: 'Pipeline'}))
+    versions.mockResolvedValue([])
+    update.mockRejectedValue(new VersionConflictError('flow was modified concurrently; reload and retry'))
+    renderWorkspace()
+
+    fireEvent.click(await screen.findByText('Pipeline'))
+    fireEvent.click(await screen.findByRole('button', {name: /rename/i}))
+    fireEvent.change(await screen.findByDisplayValue('Pipeline'), {target: {value: 'Renamed'}})
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {name: 'Rename'}))
+
+    expect(await screen.findByText('Flow was modified by another user')).toBeInTheDocument()
+    expect(screen.queryByText(/modified concurrently/)).toBeNull()
+
+    get.mockClear()
+    list.mockClear()
+    fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('a'))
+    expect(list).toHaveBeenCalled()
   })
 
   it('switches between grid and list view', async () => {

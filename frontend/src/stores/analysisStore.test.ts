@@ -30,6 +30,12 @@ function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
   } as Finding
 }
 
+// The findings filters read suppressedKeys directly, so that set is what
+// "suppressed" means to the UI.
+function isSuppressed(f: Finding): boolean {
+  return useAnalysisStore.getState().suppressedKeys.has(findingKey(f))
+}
+
 beforeEach(() => {
   useAnalysisStore.getState().reset()
 })
@@ -42,14 +48,14 @@ describe('suppression', () => {
 
   it('suppressFinding marks a finding suppressed', () => {
     useAnalysisStore.getState().suppressFinding(f1(), 'noise')
-    expect(useAnalysisStore.getState().isSuppressed(f1())).toBe(true)
-    expect(useAnalysisStore.getState().isSuppressed(f2())).toBe(false)
+    expect(isSuppressed(f1())).toBe(true)
+    expect(isSuppressed(f2())).toBe(false)
   })
 
   it('suppression is keyed by fingerprint, so it survives a finding.id change', () => {
     useAnalysisStore.getState().suppressFinding(makeFinding('F-001', {blockId: 'b1'}), 'noise')
     // A later analysis renumbers ids but the same rule fires on the same block.
-    expect(useAnalysisStore.getState().isSuppressed(makeFinding('F-042', {blockId: 'b1'}))).toBe(true)
+    expect(isSuppressed(makeFinding('F-042', {blockId: 'b1'}))).toBe(true)
   })
 
   it('suppressMany suppresses a whole group and skips already-suppressed', () => {
@@ -58,9 +64,9 @@ describe('suppression', () => {
     s.suppressMany([f1(), f2(), f3()], 'bulk')
 
     const state = useAnalysisStore.getState()
-    expect(state.isSuppressed(f1())).toBe(true)
-    expect(state.isSuppressed(f2())).toBe(true)
-    expect(state.isSuppressed(f3())).toBe(true)
+    expect(isSuppressed(f1())).toBe(true)
+    expect(isSuppressed(f2())).toBe(true)
+    expect(isSuppressed(f3())).toBe(true)
     // f1 must not be duplicated in the list
     expect(state.suppressedFindings.filter(x => x.key === findingKey(f1()))).toHaveLength(1)
   })
@@ -78,8 +84,8 @@ describe('suppression', () => {
   it('unsuppressFinding restores a single finding', () => {
     useAnalysisStore.getState().suppressMany([f1(), f2()], 'bulk')
     useAnalysisStore.getState().unsuppressFinding(f1())
-    expect(useAnalysisStore.getState().isSuppressed(f1())).toBe(false)
-    expect(useAnalysisStore.getState().isSuppressed(f2())).toBe(true)
+    expect(isSuppressed(f1())).toBe(false)
+    expect(isSuppressed(f2())).toBe(true)
   })
 
   it('clearSuppressed restores everything', () => {
@@ -105,8 +111,8 @@ describe('filters', () => {
   })
 })
 
-describe('findingsForBlock', () => {
-  it('returns only the findings for the given block', () => {
+describe('findingsByBlock', () => {
+  it('indexes each report by block for the inspector', () => {
     const report = {
       flowId: 'doc1',
       findings: [
@@ -117,9 +123,10 @@ describe('findingsForBlock', () => {
     } as unknown as AnalysisReport
     useAnalysisStore.getState().setReport('doc1', report)
 
-    const got = useAnalysisStore.getState().findingsForBlock('doc1', 'b1')
-    expect(got.map(f => f.id)).toEqual(['f1', 'f3'])
-    expect(useAnalysisStore.getState().findingsForBlock('missing', 'b1')).toEqual([])
+    const index = useAnalysisStore.getState().findingsByBlock
+    const b1 = index.get('doc1')?.get('b1') ?? []
+    expect(b1.map(f => f.id)).toEqual(['f1', 'f3'])
+    expect(index.get('missing')).toBeUndefined()
   })
 })
 
@@ -256,19 +263,19 @@ describe('finding triage status', () => {
     useAnalysisStore.getState().setFindingTriage(f, 'suppressed')
     const key = findingKey(f)
     expect(useAnalysisStore.getState().suppressedKeys.has(key)).toBe(true)
-    expect(useAnalysisStore.getState().isSuppressed(f)).toBe(true)
+    expect(isSuppressed(f)).toBe(true)
     expect(useAnalysisStore.getState().suppressedFindings.find(s => s.key === key)).toBeDefined()
   })
 
   it('setFindingTriage from suppressed to resolved reveals the finding again', () => {
     const f = makeFinding('f1', {blockId: 'b1'})
     useAnalysisStore.getState().setFindingTriage(f, 'suppressed')
-    expect(useAnalysisStore.getState().isSuppressed(f)).toBe(true)
+    expect(isSuppressed(f)).toBe(true)
 
     useAnalysisStore.getState().setFindingTriage(f, 'resolved')
     const key = findingKey(f)
     expect(useAnalysisStore.getState().suppressedKeys.has(key)).toBe(false)
-    expect(useAnalysisStore.getState().isSuppressed(f)).toBe(false)
+    expect(isSuppressed(f)).toBe(false)
     expect(useAnalysisStore.getState().suppressedFindings.find(s => s.key === key)).toBeUndefined()
     // The triage status itself is still recorded.
     expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('resolved')

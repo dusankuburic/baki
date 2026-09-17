@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"pad-core/models"
@@ -15,11 +16,44 @@ import (
 // cap bounds the work; org fleets in the hundreds fit comfortably.
 const maxPortfolioFlows = 1000
 
+// PortfolioSort orders the portfolio's entries. The rollup totals always cover
+// every ranked flow; sort and limit only shape the entries list, so "the 20
+// riskiest flows" still reports the fleet's real average health.
+type PortfolioSort string
+
+const (
+	// PortfolioSortRisk is the default: worst health first, then most errors.
+	PortfolioSortRisk PortfolioSort = "risk"
+	// PortfolioSortHealth is best health first.
+	PortfolioSortHealth PortfolioSort = "health"
+	// PortfolioSortErrors is most open errors first, then most warnings.
+	PortfolioSortErrors PortfolioSort = "errors"
+	// PortfolioSortName is flow name A to Z.
+	PortfolioSortName PortfolioSort = "name"
+	// PortfolioSortAnalyzed is most recently analyzed first.
+	PortfolioSortAnalyzed PortfolioSort = "analyzed"
+)
+
+// ParsePortfolioSort maps the public ?sort= value to a PortfolioSort. Empty
+// means the default risk ranking. Unknown values are rejected rather than
+// silently ranked by risk, because a caller asking for an order it does not
+// get would read the wrong flows as "top".
+func ParsePortfolioSort(raw string) (PortfolioSort, error) {
+	switch PortfolioSort(raw) {
+	case "":
+		return PortfolioSortRisk, nil
+	case PortfolioSortRisk, PortfolioSortHealth, PortfolioSortErrors, PortfolioSortName, PortfolioSortAnalyzed:
+		return PortfolioSort(raw), nil
+	}
+	return "", fmt.Errorf("%w: sort must be one of risk, health, errors, name, analyzed", ErrInvalidInput)
+}
+
 // BuildPortfolio assembles the org-wide governance portfolio for the caller:
-// every flow they can access (optionally filtered to one org), ranked by risk,
-// with each flow's latest persisted health. Two queries (list + batch health),
-// never N+1.
-func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID string) (*models.Portfolio, error) {
+// every flow they can access (optionally filtered to one org), ordered by
+// sortBy, with each flow's latest persisted health. limit trims the entries
+// (<= 0 or above the ranking cap means all ranked flows). Two queries (list +
+// batch health), never N+1.
+func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID string, sortBy PortfolioSort, limit int) (*models.Portfolio, error) {
 	// Desktop/local mode has no storage backend: ListLibraryFlows already
 	// returns an empty list there, but the health batch below dereferenced
 	// s.storage regardless, so GET /api/library/portfolio panicked into a 500
@@ -53,13 +87,14 @@ func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID strin
 	}
 	names := s.ResolveOwnerNames(ctx, ownerIDs)
 
-	return assemblePortfolio(docs, health, names), nil
+	return assemblePortfolio(docs, health, names, sortBy, limit), nil
 }
 
 // assemblePortfolio is the pure assembly + ranking core (no I/O) so it can be
-// unit-tested directly. Flows are ranked worst-health-first; unanalyzed flows
-// sort last, then ties break by error count and name.
-func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storageif.HealthSnapshot, ownerNames map[string]string) *models.Portfolio {
+// unit-tested directly. Totals are computed over every doc before the entries
+// are ordered and trimmed. Every order except name puts unanalyzed flows last
+// (they have no health to rank by); ties break by name.
+func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storageif.HealthSnapshot, ownerNames map[string]string, sortBy PortfolioSort, limit int) *models.Portfolio {
 	p := &models.Portfolio{Entries: make([]models.PortfolioEntry, 0, len(docs))}
 	for _, d := range docs {
 		e := models.PortfolioEntry{
@@ -90,11 +125,39 @@ func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storag
 	}
 
 	sort.SliceStable(p.Entries, func(i, j int) bool {
-		a, b := p.Entries[i], p.Entries[j]
-		if a.Analyzed != b.Analyzed {
-			return a.Analyzed // analyzed flows rank above never-analyzed ones
-		}
-		if a.Analyzed { // both analyzed: worst health first, then most errors
+		return portfolioLess(p.Entries[i], p.Entries[j], sortBy)
+	})
+	if limit > 0 && limit < len(p.Entries) {
+		p.Entries = p.Entries[:limit]
+	}
+	return p
+}
+
+func portfolioLess(a, b models.PortfolioEntry, sortBy PortfolioSort) bool {
+	if sortBy == PortfolioSortName {
+		return a.FlowName < b.FlowName
+	}
+	if a.Analyzed != b.Analyzed {
+		return a.Analyzed // analyzed flows rank above never-analyzed ones
+	}
+	if a.Analyzed {
+		switch sortBy {
+		case PortfolioSortHealth:
+			if a.HealthScore != b.HealthScore {
+				return a.HealthScore > b.HealthScore
+			}
+		case PortfolioSortErrors:
+			if a.Errors != b.Errors {
+				return a.Errors > b.Errors
+			}
+			if a.Warnings != b.Warnings {
+				return a.Warnings > b.Warnings
+			}
+		case PortfolioSortAnalyzed:
+			if at, bt := a.AnalyzedAt, b.AnalyzedAt; at != nil && bt != nil && !at.Equal(*bt) {
+				return at.After(*bt)
+			}
+		default: // risk: worst health first, then most errors
 			if a.HealthScore != b.HealthScore {
 				return a.HealthScore < b.HealthScore
 			}
@@ -102,7 +165,6 @@ func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storag
 				return a.Errors > b.Errors
 			}
 		}
-		return a.FlowName < b.FlowName
-	})
-	return p
+	}
+	return a.FlowName < b.FlowName
 }

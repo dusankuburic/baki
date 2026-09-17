@@ -134,7 +134,7 @@ Backend env vars (the common ones; the complete reference with defaults is [docs
 | `PAD_ALLOWED_ORIGINS` | Comma-separated CORS / WebSocket origin allowlist | — |
 | `PAD_AUTH_ENABLED` | Enable JWT auth (required for browser use) | `false` |
 | `PAD_AUTH_SECRET` | JWT signing secret (required when auth enabled) | — |
-| `PAD_STORAGE` | `local` (filesystem) or `database` (PostgreSQL) | `local` |
+| `PAD_STORAGE` | `local` (no server-side store; desktop) or `database` (PostgreSQL) | `local` |
 | `PAD_DATABASE_URL` | Postgres DSN (required when `PAD_STORAGE=database`) | — |
 | `PAD_AZURE_STORAGE_ACCOUNT` / `PAD_AZURE_STORAGE_CONTAINER` | Offload flow content to Azure Blob Storage (both required together; database backend) | — (off) |
 | `PAD_TRUSTED_PROXIES` | Trusted proxy IPs for `X-Forwarded-For` | — |
@@ -216,7 +216,7 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 ## Features
 
 - **Parsing** — single `.txt` exports or full flow folders (`Main.txt` + subflows); implicit subflow detection.
-- **Static analysis** — 15+ rules: hardcoded credentials, dead code, deep nesting, duplicate actions, empty error handlers, infinite loops, resource leaks, uninitialized variables, redundant actions, … with Error/Warning/Info severities and configurable thresholds.
+- **Static analysis** — 45 rules: hardcoded credentials, dead code, deep nesting, duplicate actions, empty error handlers, infinite loops, resource leaks, uninitialized variables, redundant actions, … with Error/Warning/Info severities and configurable thresholds.
 - **Inline suppression** — silence a reviewed false-positive directly in the flow with a PAD comment placed immediately before the action: `# pad-ignore` (all rules on the next block) or `# pad-ignore[hardcoded-credential, deep-nesting]` (specific rules). Because it lives in the flow source it is honored everywhere — the app, `bakicli`, baselines, and CI gates — and suppressed counts surface in the report stats.
 - **Visualization** — virtualized block view (react-virtuoso); variable lineage graph; execution-graph (DAG) view; flow tree sidebar with breadcrumbs.
 - **AI review** — streaming chat over your flow with GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM, or GitHub Models. Tool-augmented mode for autonomous analysis.
@@ -229,9 +229,9 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 - **Machine API tokens** *(web mode)* — scoped, revocable personal access tokens (managed under **Settings → API Tokens**, or `POST /api/auth/tokens`) so CI and automation can call the API as a user without an interactive login. Sent as `Authorization: Bearer pad_pat_…`; only the token hash is stored, the raw value is shown once, and the owner's current role applies (revoke = immediate).
 - **Org invites** *(web mode)* — token-based email invites with configurable roles and expiry; pending invite management.
 - **Optimistic concurrency** — version-tracked flow saves prevent silent overwrites; conflict detection with reload prompts.
-- **Offline resilience** — operation queue with localStorage persistence; automatic flush on reconnect; stale-response guards prevent out-of-order overwrites.
-- **Global search** — fuzzy search across all subflows, block properties, and comments (`Ctrl+Shift+F`); command palette (`Ctrl+P`).
-- **Navigation** — breadcrumbs, go-to-definition for subflow calls (Ctrl+Click), navigation history (back/forward), block context menu (Explain with AI, Copy as Markdown, Find Usages, Trace Variable).
+- **Offline handling** — an offline banner, and the API client refuses saves while offline instead of queueing them (edits are not replayed on reconnect); cached data stays visible, and stale-response guards prevent out-of-order overwrites.
+- **Global search** — fuzzy search across all subflows, block properties, and comments (`Ctrl+Shift+F`); command palette (`Ctrl/Cmd+K`).
+- **Navigation** — breadcrumbs, go-to-definition for subflow calls (Ctrl+Click), navigation history (back/forward), block context menu (Explain with AI, Copy as Markdown, Find Usages, and Trace on blocks that produce an output variable).
 
 ---
 
@@ -292,18 +292,26 @@ npm run lint                           # ESLint
 ```
 baki/
 ├── main.go                # Go server entry point (reads PAD_* env / Tauri sidecar)
-├── internal/              # Go backend packages
+├── core/                  # pad-core module: engine code shared by the server and bakicli
+│   ├── parser/            #   PAD export text parser (lexer + parser + tree builder)
+│   ├── analyzer/          #   static-analysis rules, auto-fixers, suppression, policies
+│   ├── export/            #   SARIF, JUnit, CSV, HTML, Markdown exporters
+│   ├── ai/                #   context building and secret scrubbing for AI requests
+│   └── models/            #   shared data types
+├── internal/              # pad-analyzer module: server packages
 │   ├── api/               #   HTTP router (chi), handlers, SSE events, middleware
 │   ├── auth/              #   JWT, bcrypt, token blacklist, RBAC roles
 │   ├── service/           #   FlowService, ChatService, AnalysisService, AuthzService
 │   ├── collaboration/     #   Org CRUD, member management, invites
-│   ├── analyzer/          #   Static-analysis rules engine, cache, history
-│   ├── parser/            #   PAD export text parser (lexer + parser + tree builder)
 │   ├── ai/                #   AI provider abstraction (Claude, OpenAI, Gemini, Copilot…)
 │   ├── websocket/         #   Hub/Client for real-time collaboration
-│   ├── storage/           #   filesystem (local) + database (Postgres) backends
+│   ├── storage/           #   database (Postgres) backend; filesystem backend (migration source, tests)
+│   ├── scanner/           #   periodic re-analysis, drift and regression alerts
 │   ├── sso/               #   OIDC relying-party client for single sign-on
 │   └── config/            #   config loading + validation
+├── cmd/bakicli/           # headless CLI: analyze, gate, fix, diff, rules, suppressions, report
+├── ci/                    # GitLab and Azure DevOps pipeline templates
+├── infra/                 # Azure Container Apps deployment (Bicep)
 ├── frontend/              # React + TypeScript (Vite, Tailwind, Zustand)
 │   └── src/
 │       ├── api/           #   shared HTTP/SSE client + endpoint modules

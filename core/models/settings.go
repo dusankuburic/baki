@@ -38,18 +38,16 @@ type AppSettings struct {
 	RecentFiles []RecentFile       `json:"recentFiles"`
 }
 
+// GeneralSettings used to also carry lastUsedVersion, checkForUpdates and
+// openInNewWindow: persisted and defaulted, but with no control and no reader
+// (there is no updater). Stored JSON that still has them decodes fine.
 type GeneralSettings struct {
-	FirstRunCompleted bool   `json:"firstRunCompleted"`
-	LastUsedVersion   string `json:"lastUsedVersion"`
-	CheckForUpdates   string `json:"checkForUpdates"`
-	OpenInNewWindow   bool   `json:"openInNewWindow"`
+	FirstRunCompleted bool `json:"firstRunCompleted"`
 }
 
 type AppearanceSettings struct {
 	Theme        ThemeMode `json:"theme"`
 	Density      string    `json:"density"`
-	CodeFont     string    `json:"codeFont"`
-	UIFont       string    `json:"uiFont"`
 	ReduceMotion bool      `json:"reduceMotion"`
 	HighContrast bool      `json:"highContrast"`
 }
@@ -100,11 +98,11 @@ type AIProviderConfig struct {
 	ContextTokenBudget int     `json:"contextTokenBudget"`
 }
 
+// ParserSettings: only the size cap is read by the parser. The "Preserve
+// comments", "Treat tabs as spaces" and "Spaces per indent" controls were
+// persisted and never consulted, so they were removed rather than left inert.
 type ParserSettings struct {
-	MaxFileSizeMB     int  `json:"maxFileSizeMB"`
-	PreserveComments  bool `json:"preserveComments"`
-	TreatTabsAsSpaces bool `json:"treatTabsAsSpaces"`
-	SpacesPerIndent   int  `json:"spacesPerIndent"`
+	MaxFileSizeMB int `json:"maxFileSizeMB"`
 }
 
 type AnalysisSettings struct {
@@ -150,14 +148,9 @@ func (s *AppSettings) Clone() *AppSettings {
 func DefaultSettings() *AppSettings {
 	return &AppSettings{
 		Version: 1,
-		General: GeneralSettings{
-			CheckForUpdates: "weekly",
-		},
 		Appearance: AppearanceSettings{
-			Theme:    ThemeDark,
-			Density:  "comfortable",
-			CodeFont: "JetBrains Mono",
-			UIFont:   "Inter",
+			Theme:   ThemeDark,
+			Density: "comfortable",
 		},
 		Layout: LayoutSettings{
 			SidebarWidth:           280,
@@ -234,10 +227,7 @@ func DefaultSettings() *AppSettings {
 			},
 		},
 		Parser: ParserSettings{
-			MaxFileSizeMB:     50,
-			PreserveComments:  true,
-			TreatTabsAsSpaces: true,
-			SpacesPerIndent:   4,
+			MaxFileSizeMB: 50,
 		},
 		Analysis: AnalysisSettings{
 			AutoAnalyzeOnOpen: true,

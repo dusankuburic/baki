@@ -16,7 +16,9 @@ import {
   ChatThreadBar,
   FixProposalCard,
 } from '.'
-import {useState, useEffect, useMemo, useCallback, lazy, Suspense} from 'react'
+import {useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense} from 'react'
+import {useKeyboard} from '@/hooks/useKeyboard'
+import {useConfirm} from '@/components/shared'
 import {useChatStore} from '@/stores/chatStore'
 import {chatApi} from '@/api'
 import LiveToolTrail from './LiveToolTrail'
@@ -120,6 +122,41 @@ export default function AITab() {
     setMsgSearch('')
   }, [])
   const showHelp = useCallback(() => setHelpOpen(true), [])
+
+  // Chat-scope shortcuts (mod+enter lives in ChatInput, next to the draft it
+  // sends). containerRef keeps them to the chat panel: mod+l or Escape pressed
+  // in the canvas or a findings comment box is not a request to touch the chat.
+  // Enabled only while the panel is rendered: with no root mounted useKeyboard
+  // has no container to check and would claim these keys app-wide.
+  const chatRootRef = useRef<HTMLDivElement>(null)
+  const {confirm} = useConfirm()
+  useKeyboard({
+    scope: 'chat',
+    containerRef: chatRootRef,
+    enabled: configured,
+    handlers: {
+      // Ctrl+L is browser muscle memory (focus the address bar), so a stray
+      // press must not silently wipe the thread: same confirm as the header's
+      // Clear action.
+      'ai.clear.chat': () => {
+        void confirm({
+          title: t('toolbar.confirmClearTitle'),
+          message: t('toolbar.confirmClear'),
+          confirmLabel: t('toolbar.clear'),
+          danger: true,
+        }).then(ok => {
+          if (ok) handleClearThread()
+        })
+      },
+      'ai.cancel.stream': e => {
+        // An open @/slash menu, the find bar or a fix-approval card handles
+        // Escape first; only a bare Escape stops the reply.
+        if (e.defaultPrevented || !isCurrentThreadStreaming) return
+        e.preventDefault()
+        handleCancelStream()
+      },
+    },
+  })
 
   const contextBlockId = activeThread?.contextBlockId ?? null
 
@@ -243,7 +280,7 @@ export default function AITab() {
       {/* chat-root establishes the container that every density rule below
           keys off. The panel is 280-560px wide by drag, independent of the
           viewport, so viewport breakpoints cannot describe it. */}
-      <div className="chat-root flex flex-col h-full min-h-0">
+      <div ref={chatRootRef} className="chat-root flex flex-col h-full min-h-0">
         <div className="flex-shrink-0">
           <ChatHeader
             providers={configuredProviders.map(p => ({

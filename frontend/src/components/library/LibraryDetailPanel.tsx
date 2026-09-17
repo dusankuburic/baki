@@ -10,6 +10,9 @@ import {isTauri} from '@/platform/guards'
 
 interface Props {
   flowId: string | null
+  // Changing this re-reads the flow (after a rename, tag edit or conflict
+  // reload elsewhere in the workspace).
+  reloadKey?: number
   onOpen: (flow: LibraryFlow) => void
   onDelete: (flow: LibraryFlow) => void
   onRename: (flow: LibraryFlow) => void
@@ -35,6 +38,7 @@ const versioningAvailable = () => !isTauri()
 
 export default function LibraryDetailPanel({
   flowId,
+  reloadKey = 0,
   onOpen,
   onDelete,
   onRename,
@@ -68,7 +72,7 @@ export default function LibraryDetailPanel({
         logger.warn('Library: detail load failed', e)
         throw e
       })
-  }, [flowId])
+  }, [flowId, reloadKey])
   const flow = data?.flow ?? null
   const versions = data?.versions ?? []
   const versionsError = data?.versionsError ?? null
@@ -177,12 +181,18 @@ export default function LibraryDetailPanel({
         )}
 
         <div className="flex items-center gap-2 pt-3 border-t border-border-subtle flex-wrap">
-          <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onRename(flow)}>
-            Rename
-          </Button>
-          <Button variant="ghost" size="sm" icon={Copy} onClick={() => onDuplicate(flow)}>
-            Duplicate
-          </Button>
+          {/* Viewers get neither: the server refuses the rename, and a copy
+              lands in the same org, where a viewer cannot create flows. */}
+          {flow.canEdit && (
+            <>
+              <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onRename(flow)}>
+                Rename
+              </Button>
+              <Button variant="ghost" size="sm" icon={Copy} onClick={() => onDuplicate(flow)}>
+                Duplicate
+              </Button>
+            </>
+          )}
           {flow.canDelete && (
             <Button variant="ghost" size="sm" icon={Trash2} onClick={() => onDelete(flow)}>
               Delete
@@ -291,7 +301,9 @@ function TagRow({
   }
 
   return (
-    <div className="flex items-start gap-2 pt-1 flex-wrap">
+    // `group` is what the edit button's hover reveal keys off; without it the
+    // button stayed at opacity 0 for mouse users.
+    <div className="group flex items-start gap-2 pt-1 flex-wrap">
       {(flow.tags ?? []).length === 0 ? (
         <span className="text-xs text-text-tertiary/60">No tags</span>
       ) : (
@@ -304,7 +316,7 @@ function TagRow({
       {flow.canEdit && (
         <button
           onClick={() => setEditing(true)}
-          className="p-0.5 rounded text-text-tertiary hover:text-text-secondary opacity-0 group-hover:opacity-100 transition-opacity"
+          className="p-0.5 rounded text-text-tertiary hover:text-text-secondary opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           title="Edit tags"
           aria-label="Edit tags"
         >

@@ -114,24 +114,42 @@ describe('KPIStripCard', () => {
 
 describe('SecurityPostureCard', () => {
   it('shows all-clear when no issues', () => {
-    render(<SecurityPostureCard data={{failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0}} />)
+    render(
+      <SecurityPostureCard data={{available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0}} />,
+    )
     expect(screen.getByText(/No security issues detected/)).toBeTruthy()
   })
 
   it('shows failed logins count when present', () => {
-    render(<SecurityPostureCard data={{failedLogins24h: 7, credentialFindings: 0, lockedAccounts: 0}} />)
+    render(
+      <SecurityPostureCard data={{available: true, failedLogins24h: 7, credentialFindings: 0, lockedAccounts: 0}} />,
+    )
     expect(screen.getByText('7')).toBeTruthy()
     expect(screen.getByText('Failed logins (24h)')).toBeTruthy()
   })
 
   it('shows credential findings when present', () => {
-    render(<SecurityPostureCard data={{failedLogins24h: 0, credentialFindings: 3, lockedAccounts: 0}} />)
+    render(
+      <SecurityPostureCard data={{available: true, failedLogins24h: 0, credentialFindings: 3, lockedAccounts: 0}} />,
+    )
     expect(screen.getByText('3')).toBeTruthy()
     expect(screen.getByText('Credential findings')).toBeTruthy()
   })
 
+  // A failed or stubbed source arrives as all zeros; rendering that as an
+  // all-clear told admins nothing was wrong when nothing had been checked.
+  it('shows a placeholder, not the all-clear, when the posture is unavailable', () => {
+    render(
+      <SecurityPostureCard data={{available: false, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 0}} />,
+    )
+    expect(screen.queryByText(/No security issues detected/)).toBeNull()
+    expect(screen.getByText(/Security posture is unavailable/)).toBeTruthy()
+  })
+
   it('shows locked accounts and loses the all-clear state', () => {
-    render(<SecurityPostureCard data={{failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 2}} />)
+    render(
+      <SecurityPostureCard data={{available: true, failedLogins24h: 0, credentialFindings: 0, lockedAccounts: 2}} />,
+    )
     expect(screen.getByText('2')).toBeTruthy()
     expect(screen.getByText('Locked accounts')).toBeTruthy()
     expect(screen.queryByText(/No security issues detected/)).toBeNull()

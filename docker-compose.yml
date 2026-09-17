@@ -8,6 +8,10 @@ services:
     ports:
       - "${PAD_PORT:-8080}:${PAD_PORT:-8080}"
     environment:
+      # The container must listen on the port the mapping above publishes. The
+      # image defaults PAD_PORT to 8080 and this was never passed through, so
+      # setting PAD_PORT in .env published a port nothing listened on.
+      - PAD_PORT=${PAD_PORT:-8080}
       # baki_app, NOT postgres: a superuser (or any BYPASSRLS role) ignores
       # every Row-Level Security policy in the schema, which silently disables
       # the second of the two tenant-isolation layers. scripts/db-init creates

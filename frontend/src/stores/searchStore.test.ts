@@ -20,14 +20,9 @@ function result(blockId: string): SearchResult {
 }
 
 describe('setQuery', () => {
-  it('marks isSearching true for a non-empty query', () => {
+  it('stores the query', () => {
     useSearchStore.getState().setQuery('foo')
-    expect(useSearchStore.getState().isSearching).toBe(true)
-  })
-
-  it('marks isSearching false for an empty query', () => {
-    useSearchStore.getState().setQuery('')
-    expect(useSearchStore.getState().isSearching).toBe(false)
+    expect(useSearchStore.getState().query).toBe('foo')
   })
 })
 
@@ -37,7 +32,6 @@ describe('setResults', () => {
     const s = useSearchStore.getState()
     expect(s.activeResultIndex).toBe(0)
     expect(s.totalCount).toBe(2)
-    expect(s.isSearching).toBe(false)
   })
 
   it('sets activeResultIndex to -1 when results are empty', () => {
@@ -75,12 +69,11 @@ describe('nextResult / prevResult', () => {
 })
 
 describe('clear', () => {
-  it('resets query, results, index, isSearching, and totalCount', () => {
+  it('resets query, results, index, and totalCount', () => {
     useSearchStore.setState({
       query: 'x',
       results: [result('a')],
       activeResultIndex: 0,
-      isSearching: true,
       totalCount: 1,
     })
     useSearchStore.getState().clear()
@@ -88,7 +81,6 @@ describe('clear', () => {
     expect(s.query).toBe('')
     expect(s.results).toEqual([])
     expect(s.activeResultIndex).toBe(-1)
-    expect(s.isSearching).toBe(false)
     expect(s.totalCount).toBe(0)
   })
 })

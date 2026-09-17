@@ -42,6 +42,38 @@ func (s *Service) link(hashParam, token string) string {
 	return fmt.Sprintf("%s/#%s=%s", s.baseURL, hashParam, token)
 }
 
+// appLink is the app's entry point, or "" when no public base URL is configured
+// (callers then omit the link rather than print a relative one).
+//
+// It is deliberately not a per-finding deep link: the frontend has no route
+// for one, and every finding email is paired with a targeted in-app alert
+// whose click opens the flow. Sending the reader to the app, where that alert
+// is waiting, is the link that actually works.
+func (s *Service) appLink() string {
+	if s.baseURL == "" {
+		return ""
+	}
+	return s.baseURL + "/"
+}
+
+// findingLinkText/HTML render the shared "view it" footer of the finding
+// emails; empty when there is no base URL to link to.
+func (s *Service) findingLinkText() string {
+	if url := s.appLink(); url != "" {
+		return fmt.Sprintf("\nView it in PAD Analyzer (it is waiting in your notifications):\n%s\n", url)
+	}
+	return ""
+}
+
+func (s *Service) findingLinkHTML() string {
+	if url := s.appLink(); url != "" {
+		// The base URL is operator config, not user input, but it still lands
+		// in an href: escape it so a stray quote cannot break the attribute.
+		return fmt.Sprintf("<p><a href=\"%s\">View the finding</a> — it is waiting in your notifications.</p>", html.EscapeString(url))
+	}
+	return ""
+}
+
 // SendAlert delivers a generic governance alert email (the body is provided by
 // the notify package). It satisfies notify.EmailSender so the notify package can
 // route events to email without depending on mail directly.
@@ -87,37 +119,27 @@ func (s *Service) SendOrgInvite(ctx context.Context, to, orgName, rawToken strin
 }
 
 // SendFindingAssigned notifies a user that a finding was assigned to them.
-// findingTitle/flowName are user/content-controlled and HTML-escaped; flowURL is
-// a deep link into the flow's findings tab (or empty when no base URL is set,
-// in which case the link is omitted).
-func (s *Service) SendFindingAssigned(ctx context.Context, to, assigneeName, assignerName, flowName, findingTitle, flowURL string) error {
+// findingTitle/flowName are user/content-controlled and HTML-escaped. The link
+// is built here from the configured base URL (see appLink) and omitted when
+// none is set.
+func (s *Service) SendFindingAssigned(ctx context.Context, to, assigneeName, assignerName, flowName, findingTitle string) error {
 	if s == nil {
 		return nil
 	}
 	text := fmt.Sprintf(
 		"Hi %s,\n\n%s assigned a finding to you on the flow %q:\n\n  %s\n",
-		assigneeName, assignerName, flowName, findingTitle)
-	if flowURL != "" {
-		text += fmt.Sprintf("\nView it:\n%s\n", flowURL)
-	}
+		assigneeName, assignerName, flowName, findingTitle) + s.findingLinkText()
 	htmlBody := fmt.Sprintf(
 		"<p>Hi %s,</p><p><strong>%s</strong> assigned a finding to you on the flow <strong>%s</strong>:</p>"+
 			"<blockquote>%s</blockquote>",
-		html.EscapeString(assigneeName), html.EscapeString(assignerName), html.EscapeString(flowName), html.EscapeString(findingTitle))
-	if flowURL != "" {
-		// Escaped even though every caller currently passes a server-built URL
-		// (today: the empty string). An unescaped value interpolated into an
-		// href is an attribute-injection hole waiting for the first caller that
-		// passes something derived from user input, and the cost of closing it
-		// now is one function call.
-		htmlBody += fmt.Sprintf("<p><a href=\"%s\">View the finding</a>.</p>", html.EscapeString(flowURL))
-	}
+		html.EscapeString(assigneeName), html.EscapeString(assignerName), html.EscapeString(flowName), html.EscapeString(findingTitle)) +
+		s.findingLinkHTML()
 	return s.mailer.Send(ctx, to, "A finding was assigned to you", text, htmlBody)
 }
 
 // SendFindingComment notifies the assignee that someone commented on their
 // assigned finding. commentBody is user-controlled and HTML-escaped; long bodies
-// are truncated to a 300-char preview.
+// are truncated to a 300-char preview. Links back like SendFindingAssigned.
 func (s *Service) SendFindingComment(ctx context.Context, to, recipientName, commenterName, flowName, findingTitle, commentBody string) error {
 	if s == nil {
 		return nil
@@ -125,11 +147,12 @@ func (s *Service) SendFindingComment(ctx context.Context, to, recipientName, com
 	preview := previewOf(commentBody)
 	text := fmt.Sprintf(
 		"Hi %s,\n\n%s commented on a finding assigned to you on the flow %q:\n\n  %s\n",
-		recipientName, commenterName, flowName, preview)
+		recipientName, commenterName, flowName, preview) + s.findingLinkText()
 	htmlBody := fmt.Sprintf(
 		"<p>Hi %s,</p><p><strong>%s</strong> commented on a finding assigned to you on the flow <strong>%s</strong>:</p>"+
 			"<blockquote>%s</blockquote>",
-		html.EscapeString(recipientName), html.EscapeString(commenterName), html.EscapeString(flowName), html.EscapeString(preview))
+		html.EscapeString(recipientName), html.EscapeString(commenterName), html.EscapeString(flowName), html.EscapeString(preview)) +
+		s.findingLinkHTML()
 	return s.mailer.Send(ctx, to, "New comment on your assigned finding", text, htmlBody)
 }
 

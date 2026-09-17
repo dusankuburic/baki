@@ -130,6 +130,49 @@ func TestServiceLinkWithoutBaseURLFallsBackToToken(t *testing.T) {
 	}
 }
 
+// The assignment email used to take the link from its caller, and the only
+// caller passed "" — so "View the finding" never rendered, and the comment
+// email had no link at all. Both now build it from the service's base URL.
+func TestFindingEmails_LinkBackToTheApp(t *testing.T) {
+	cap := &captureMailer{}
+	svc := &Service{mailer: cap, baseURL: "https://app.example.com"}
+	want := "https://app.example.com/"
+
+	if err := svc.SendFindingAssigned(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error"); err != nil {
+		t.Fatalf("SendFindingAssigned: %v", err)
+	}
+	if !strings.Contains(cap.text, want) || !strings.Contains(cap.html, `<a href="`+want+`">View the finding</a>`) {
+		t.Errorf("assignment email missing app link:\ntext=%s\nhtml=%s", cap.text, cap.html)
+	}
+
+	if err := svc.SendFindingComment(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error", "looks risky"); err != nil {
+		t.Fatalf("SendFindingComment: %v", err)
+	}
+	if !strings.Contains(cap.text, want) || !strings.Contains(cap.html, `<a href="`+want+`">View the finding</a>`) {
+		t.Errorf("comment email missing app link:\ntext=%s\nhtml=%s", cap.text, cap.html)
+	}
+}
+
+// Without a public base URL there is nothing absolute to link to; a relative
+// href in an email resolves against the mail client, so the link is omitted.
+func TestFindingEmails_NoBaseURLOmitsLink(t *testing.T) {
+	cap := &captureMailer{}
+	svc := &Service{mailer: cap}
+
+	if err := svc.SendFindingAssigned(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error"); err != nil {
+		t.Fatalf("SendFindingAssigned: %v", err)
+	}
+	if strings.Contains(cap.html, "<a ") || strings.Contains(cap.text, "View it") {
+		t.Errorf("no base URL must mean no link:\ntext=%s\nhtml=%s", cap.text, cap.html)
+	}
+	if err := svc.SendFindingComment(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error", "hi"); err != nil {
+		t.Fatalf("SendFindingComment: %v", err)
+	}
+	if strings.Contains(cap.html, "<a ") || strings.Contains(cap.text, "View it") {
+		t.Errorf("no base URL must mean no link:\ntext=%s\nhtml=%s", cap.text, cap.html)
+	}
+}
+
 // startSMTPStub launches a minimal in-process SMTP responder that speaks just
 // enough of the protocol for net/smtp's client to run through EHLO + QUIT. The
 // extensions advertised are controlled by advertiseSTARTTLS; the raw DATA body

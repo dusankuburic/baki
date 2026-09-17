@@ -138,6 +138,23 @@ describe('useChatRequestBuilder', () => {
     expect(withHistory?.messages).toEqual([{id: 'm1', role: 'user', content: 'hi', timestamp: 't'}])
   })
 
+  it('always sends history when "Save conversation history" is off (the server keeps no copy)', () => {
+    const thread = makeThread()
+    useChatStore.setState({threads: [thread]})
+    const msgs: ChatMessage[] = [{id: 'm1', role: 'user', content: 'hi', timestamp: 't'}]
+    const {result} = renderHook(() =>
+      useChatRequestBuilder({
+        doc,
+        activeThread: thread,
+        provider: 'openai',
+        selectedModel: 'gpt-4',
+        aiSettings: {...makeAISettings(), saveConversationHistory: false},
+        getMessages: () => msgs,
+      }),
+    )
+    expect(result.current.buildRequest('hi')?.messages).toEqual([{id: 'm1', role: 'user', content: 'hi', timestamp: 't'}])
+  })
+
   it("uses the thread's stored selectedSourceFiles when overrideFiles is not given", () => {
     const thread = makeThread({selectedSourceFiles: ['a.txt', 'b.txt']})
     useChatStore.setState({threads: [thread]})

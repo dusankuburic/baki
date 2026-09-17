@@ -9,6 +9,7 @@ import FileAutocomplete from './FileAutocomplete'
 import SlashCommandAutocomplete, {type SlashCommand} from './SlashCommandAutocomplete'
 import ExpandedChatInput from './ExpandedChatInput'
 import ChatUsageMeter from './ChatUsageMeter'
+import {useKeyboard} from '@/hooks/useKeyboard'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
@@ -231,6 +232,22 @@ export default function ChatInput({
       }
     })
   }, [value, taggedFiles, isDisabled, canQueue, onQueue, onSend, excludeContext, activeThreadId, setDraft])
+
+  // mod+enter sends from either composer. The expanded editor renders in a
+  // portal outside the chat panel, so this checks the event target instead of
+  // a containerRef. An open @/slash menu claims Enter in its capture listener
+  // first (defaultPrevented), and then the chord picks the item, as Enter does.
+  useKeyboard({
+    scope: 'chat',
+    handlers: {
+      'ai.send': e => {
+        if (e.defaultPrevented) return
+        if (e.target !== textareaRef.current && e.target !== expandedRef.current) return
+        e.preventDefault()
+        handleSend()
+      },
+    },
+  })
 
   const handlePreview = useCallback(() => {
     const trimmed = value.trim()

@@ -90,7 +90,6 @@ func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, b
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/system/settings [get]
-// @Router       /api/system/settings/user [get]
 func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	userID := h.security.CallerID(r)
 	settings, err := h.sysSvc.GetUserSettings(r.Context(), userID)
@@ -111,8 +110,6 @@ func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/system/settings [post]
-// @Router       /api/system/settings [put]
-// @Router       /api/system/settings/user [post]
 func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req models.AppSettings
 	if !decodeBody(w, r, &req) {

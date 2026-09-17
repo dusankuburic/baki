@@ -3,9 +3,16 @@ import type {Finding} from '@/types'
 
 const exportHTML = vi.fn()
 const exportSARIF = vi.fn()
+const exportJUnit = vi.fn()
+const saveTextExport = vi.fn()
 vi.mock('@/api', () => ({
-  analysisApi: {exportSARIF},
-  exportApi: {exportHTML},
+  analysisApi: {exportSARIF, exportJUnit},
+  exportApi: {exportHTML, saveTextExport},
+}))
+
+let nativeDialogs = false
+vi.mock('@/platform/guards', () => ({
+  getPlatformCapabilities: () => ({nativeDialogs}),
 }))
 
 const downloadBlob = vi.fn()
@@ -30,6 +37,7 @@ function finding(p: Partial<Finding> = {}): Finding {
 
 afterEach(() => {
   vi.clearAllMocks()
+  nativeDialogs = false
 })
 
 describe('exportFindingsCSV', () => {
@@ -78,5 +86,26 @@ describe('exportFindingsSARIF', () => {
     expect(JSON.parse(content)).toEqual({version: '2.1.0', runs: []})
     expect(mime).toBe('application/sarif+json;charset=utf-8;')
     expect(filename).toMatch(/^analysis-doc1-\d{4}-\d{2}-\d{2}\.sarif$/)
+  })
+})
+
+// C14: on desktop the browser-rendered exports take the native save dialog
+// branch (PDF/Markdown/HTML already did) instead of an anchor download that
+// skipped the dialog.
+describe('desktop exports use the native save dialog', () => {
+  it.each([
+    ['CSV', async (m: typeof import('./findingsExport')) => m.saveFindingsCSV([finding()], 'doc1'), 'csv'],
+    ['SARIF', async (m: typeof import('./findingsExport')) => m.exportFindingsSARIF('doc1'), 'sarif'],
+    ['JUnit', async (m: typeof import('./findingsExport')) => m.exportFindingsJUnit('doc1'), 'xml'],
+  ])('%s', async (_label, run, ext) => {
+    nativeDialogs = true
+    exportSARIF.mockResolvedValue({version: '2.1.0', runs: []})
+    exportJUnit.mockResolvedValue('<testsuites/>')
+    saveTextExport.mockResolvedValue('/tmp/out')
+    await run(await import('./findingsExport'))
+
+    expect(downloadBlob).not.toHaveBeenCalled()
+    expect(saveTextExport).toHaveBeenCalledTimes(1)
+    expect(saveTextExport.mock.calls[0][1]).toEqual(expect.objectContaining({ext}))
   })
 })

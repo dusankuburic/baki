@@ -13,6 +13,7 @@ import {useAuthStore} from '@/stores/authStore'
 import {useToast} from '@/components/shared'
 import {useTranslation} from 'react-i18next'
 import FindingCard from './FindingCard'
+import {useSuppressReasonPrompt} from './hooks/useSuppressReasonPrompt'
 
 interface Props {
   findings: Finding[]
@@ -67,6 +68,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [batchFixing, setBatchFixing] = useState(false)
   const suppressMany = useAnalysisStore(s => s.suppressMany)
+  const promptSuppressReason = useSuppressReasonPrompt()
   const triageFindingsBatch = useAnalysisStore(s => s.triageFindingsBatch)
   const currentUserId = useAuthStore(s => s.user?.id ?? '')
   const selectedFindingIds = useAnalysisStore(s => s.selectedFindingIds)
@@ -239,7 +241,10 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                     )}
                   </button>
                   <button
-                    onClick={() => suppressMany(group.findings, `Suppressed all "${group.title}" findings`)}
+                    onClick={async () => {
+                      const reason = await promptSuppressReason(group.findings.length)
+                      if (reason !== null) suppressMany(group.findings, reason)
+                    }}
                     aria-label={`Suppress all ${group.findings.length} findings of this rule`}
                     title="Suppress all findings in this group"
                     className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
@@ -318,7 +323,9 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
               {t('selection.resolve', 'Resolve')}
             </button>
             <button
-              onClick={() => {
+              onClick={async () => {
+                const reason = await promptSuppressReason(selectedFindingIds.size)
+                if (reason === null) return
                 // Suppress ALL selected findings from the full report, not
                 // just the filtered view — selected items hidden by a filter
                 // change must not be silently skipped.
@@ -326,7 +333,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                 const report = docId ? useAnalysisStore.getState().reports.get(docId) : undefined
                 const allFindings = report?.findings ?? []
                 const toSuppress = allFindings.filter(f => selectedFindingIds.has(f.id))
-                suppressMany(toSuppress, 'Bulk suppressed via selection')
+                suppressMany(toSuppress, reason)
                 clearFindingSelection()
               }}
               className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-3 transition-colors"

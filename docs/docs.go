@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/api/admin/audit": {
             "get": {
-                "description": "Returns the audit trail (logins, settings changes, admin actions).",
+                "description": "Returns the audit trail (logins, settings changes, admin actions), newest first. GET /api/admin/audit/actions lists the action values.",
                 "produces": [
                     "application/json"
                 ],
@@ -25,16 +25,63 @@ const docTemplate = `{
                     "admin"
                 ],
                 "summary": "List audit log entries",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only this action (e.g. auth.login)",
+                        "name": "action",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only events by this user ID",
+                        "name": "userId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Rows to skip",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Audit entries",
                         "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid limit or offset",
+                        "schema": {
                             "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "No storage backend (local mode)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -79,7 +126,7 @@ const docTemplate = `{
         },
         "/api/admin/migration/start": {
             "post": {
-                "description": "Kicks off the local→database flow migration (admin only, cloud mode). Idempotent and non-blocking.",
+                "description": "Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, cloud mode). Idempotent and non-blocking; the status result lists what is not migrated.",
                 "produces": [
                     "application/json"
                 ],
@@ -88,8 +135,8 @@ const docTemplate = `{
                 ],
                 "summary": "Start data migration",
                 "responses": {
-                    "202": {
-                        "description": "Accepted",
+                    "200": {
+                        "description": "Started",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -108,6 +155,15 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Migration not configured",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1010,43 +1066,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/analysis/export/csv": {
-            "post": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "export"
-                ],
-                "summary": "Export findings as CSV",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable (cloud mode required)",
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                }
-            }
-        },
         "/api/analysis/export/junit": {
             "post": {
                 "produces": [
@@ -1242,57 +1261,6 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/analysis/metrics": {
-            "post": {
-                "description": "Complexity/cognitive metrics and health score for the flow.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "analysis"
-                ],
-                "summary": "Flow metrics",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1717,37 +1685,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/analysis/rules/summary": {
-            "get": {
-                "description": "All rules with severity, category, and auto-fix availability.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "analysis"
-                ],
-                "summary": "Rule catalog summary",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Scope the catalog to an organisation the caller belongs to (org custom rules + overrides)",
-                        "name": "orgId",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Rules",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/analysis/subflow-hashes": {
+        "/api/analysis/suppressions": {
             "post": {
+                "description": "handleSuppressionInventory lists every inline ` + "`" + `# pad-ignore` + "`" + ` directive in the flow and marks stale ones (the suppressed rule no longer fires on the target block). Audited against the flow's org rule profile. Viewer access.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1757,13 +1697,27 @@ const docTemplate = `{
                 "tags": [
                     "analysis"
                 ],
-                "summary": "Subflow content hashes",
+                "summary": "List inline suppressions",
+                "parameters": [
+                    {
+                        "description": "{flowId}",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Suppression entries: line, rule, blockLabel, blockType, subflow, stale, reason",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
                         }
                     },
                     "400": {
@@ -1784,8 +1738,17 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "500": {
-                        "description": "Error",
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3112,61 +3075,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/chat/export": {
-            "post": {
-                "description": "Exports the chat history to a file. Only available in local mode.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "chat"
-                ],
-                "summary": "Export conversation",
-                "parameters": [
-                    {
-                        "description": "request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/api/chat/fix-decision": {
             "post": {
                 "description": "Delivers the user's approve/decline for an apply_fix proposal pending in one of the caller's chat streams. First decision wins; unknown or already-decided proposals return 404.",
@@ -3639,6 +3547,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -3771,6 +3688,70 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/export/save": {
+            "post": {
+                "description": "Desktop only. Writes CSV/SARIF/JUnit text rendered by the findings panel to the absolute path chosen in the native save dialog (.csv, .sarif or .xml only). 403 in cloud mode.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "export"
+                ],
+                "summary": "Save a client-rendered findings export",
+                "parameters": [
+                    {
+                        "description": "{path, content}",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (cloud mode)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4199,52 +4180,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/flow/open-from-system": {
-            "post": {
-                "description": "Notifies the application that a file was opened via the operating system.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "flow"
-                ],
-                "summary": "Handle file open from system",
-                "parameters": [
-                    {
-                        "description": "request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/api/flow/preview-fix": {
             "post": {
                 "description": "handlePreviewFix returns the before/after source text for a fix WITHOUT writing. The frontend renders a diff so the user can review the change before committing. Works in both desktop (local source file) and cloud (stored raw source) modes for single-file flows.",
@@ -4286,61 +4221,6 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/flow/read-sources": {
-            "post": {
-                "description": "Reads the content of specified source files.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "flow"
-                ],
-                "summary": "Read source files",
-                "parameters": [
-                    {
-                        "description": "request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5471,57 +5351,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/governance/alerts/read": {
-            "post": {
-                "description": "handleMarkGovernanceAlertRead — POST /api/governance/alerts/read {id}",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "governance"
-                ],
-                "summary": "Mark alert read",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/api/governance/alerts/read-all": {
             "post": {
                 "description": "handleMarkAllGovernanceAlertsRead — POST /api/governance/alerts/read-all The \"open the panel → clear the badge\" action.",
@@ -5993,7 +5822,7 @@ const docTemplate = `{
         },
         "/api/library/portfolio": {
             "get": {
-                "description": "handlePortfolio returns the org-wide governance portfolio: every flow the caller can access (optionally filtered by ?orgId=), ranked worst-health-first.",
+                "description": "handlePortfolio returns the org-wide governance portfolio: every flow the caller can access (optionally filtered by ?orgId=), ordered by ?sort= and trimmed to ?limit= entries. Rollup totals always cover every ranked flow.",
                 "produces": [
                     "application/json"
                 ],
@@ -6001,12 +5830,48 @@ const docTemplate = `{
                     "library"
                 ],
                 "summary": "Flow portfolio view",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only flows in this organisation",
+                        "name": "orgId",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "risk",
+                            "health",
+                            "errors",
+                            "name",
+                            "analyzed"
+                        ],
+                        "type": "string",
+                        "description": "Entry order: risk (default, worst health first), health, errors, name, analyzed (most recent first)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum entries returned (default and cap 1000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Portfolio",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -6542,33 +6407,6 @@ const docTemplate = `{
             }
         },
         "/api/orgs/{id}": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "org"
-                ],
-                "summary": "Get organization",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Org ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Organization",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            },
             "put": {
                 "consumes": [
                     "application/json"
@@ -7048,93 +6886,6 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    }
-                }
-            },
-            "post": {
-                "description": "Adds a user to an organization with a specific role. Only organization admins can add members.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "organization"
-                ],
-                "summary": "Add organization member",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     }
                 }
@@ -7922,59 +7673,6 @@ const docTemplate = `{
                     }
                 }
             },
-            "put": {
-                "description": "Updates the application settings.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "system"
-                ],
-                "summary": "Update app settings",
-                "parameters": [
-                    {
-                        "description": "settings",
-                        "name": "settings",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            },
             "post": {
                 "description": "Updates the application settings.",
                 "consumes": [
@@ -8085,89 +7783,6 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/system/settings/user": {
-            "get": {
-                "description": "Returns the current application settings.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "system"
-                ],
-                "summary": "Get app settings",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            },
-            "post": {
-                "description": "Updates the application settings.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "system"
-                ],
-                "summary": "Update app settings",
-                "parameters": [
-                    {
-                        "description": "settings",
-                        "name": "settings",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     }
                 }
