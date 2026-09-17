@@ -4,12 +4,17 @@ import {type AuthUser} from '@/api/auth'
 import {useConfirm} from '@/components/shared'
 import {logger} from '@/lib/logger'
 
+const AUDIT_PAGE_SIZE = 50
+
 export function useAdminData(isAdmin: boolean) {
   const {confirm} = useConfirm()
   const [migrationStatus, setMigrationStatus] = useState<MigrationStatus | null>(null)
   const [users, setUsers] = useState<AuthUser[]>([])
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [auditAction, setAuditAction] = useState('')
+  const [auditUserId, setAuditUserId] = useState('')
+  const [auditOffset, setAuditOffset] = useState(0)
+  const [auditActions, setAuditActions] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -33,28 +38,42 @@ export function useAdminData(isAdmin: boolean) {
     }
   }, [])
 
+  // AUDIT_PAGE_SIZE rows per page; the backend honours offset/limit/userId
+  // but the hook used to hardcode {limit: 100} with no way past row 100.
   const auditActionRef = useRef('')
-  const fetchAudit = useCallback(async (action?: string) => {
+  const auditUserRef = useRef('')
+  const auditOffsetRef = useRef(0)
+  const fetchAudit = useCallback(async (action?: string, userId?: string, offset?: number) => {
     const a = action ?? auditActionRef.current
+    const u = userId ?? auditUserRef.current
+    const o = offset ?? auditOffsetRef.current
     try {
-      setAuditEvents(await adminApi.listAuditEvents({action: a || undefined, limit: 100}))
+      setAuditEvents(await adminApi.listAuditEvents({action: a || undefined, userId: u || undefined, limit: AUDIT_PAGE_SIZE, offset: o}))
     } catch {
       // audit log is optional
     }
   }, [])
 
+  const fetchAuditActions = useCallback(async () => {
+    try {
+      setAuditActions(await adminApi.listAuditActions())
+    } catch {
+      // filter falls back to a free-text match on the action column
+    }
+  }, [])
+
   const fetchAll = useCallback(async () => {
     setIsLoading(true)
-    await Promise.all([fetchStatus(), fetchUsers(), fetchAudit()])
+    await Promise.all([fetchStatus(), fetchUsers(), fetchAudit(), fetchAuditActions()])
     setIsLoading(false)
-  }, [fetchStatus, fetchUsers, fetchAudit])
+  }, [fetchStatus, fetchUsers, fetchAudit, fetchAuditActions])
 
   useEffect(() => {
     if (!isAdmin) return
     let cancelled = false
     const run = async () => {
       setIsLoading(true)
-      await Promise.all([fetchStatus(), fetchUsers(), fetchAudit()])
+      await Promise.all([fetchStatus(), fetchUsers(), fetchAudit(), fetchAuditActions()])
       if (!cancelled) setIsLoading(false)
     }
     void run()
@@ -67,7 +86,7 @@ export function useAdminData(isAdmin: boolean) {
       cancelled = true
       clearInterval(interval)
     }
-  }, [isAdmin, fetchStatus, fetchUsers, fetchAudit])
+  }, [isAdmin, fetchStatus, fetchUsers, fetchAudit, fetchAuditActions])
 
   const startMigration = useCallback(async () => {
     const ok = await confirm({
@@ -109,11 +128,26 @@ export function useAdminData(isAdmin: boolean) {
     [fetchUsers, confirm],
   )
 
+  // Any filter change restarts paging from the first page.
   const filterAudit = useCallback(
-    (action: string) => {
+    (action: string, userId?: string) => {
       auditActionRef.current = action
+      if (userId !== undefined) auditUserRef.current = userId
+      auditOffsetRef.current = 0
       setAuditAction(action)
-      void fetchAudit(action)
+      if (userId !== undefined) setAuditUserId(userId)
+      setAuditOffset(0)
+      void fetchAudit(action, userId, 0)
+    },
+    [fetchAudit],
+  )
+
+  const pageAudit = useCallback(
+    (direction: 'prev' | 'next') => {
+      const next = Math.max(0, auditOffsetRef.current + (direction === 'next' ? AUDIT_PAGE_SIZE : -AUDIT_PAGE_SIZE))
+      auditOffsetRef.current = next
+      setAuditOffset(next)
+      void fetchAudit(undefined, undefined, next)
     },
     [fetchAudit],
   )
@@ -123,6 +157,10 @@ export function useAdminData(isAdmin: boolean) {
     users,
     auditEvents,
     auditAction,
+    auditUserId,
+    auditOffset,
+    auditActions,
+    auditPageSize: AUDIT_PAGE_SIZE,
     isLoading,
     isStarting,
     error,
@@ -130,5 +168,6 @@ export function useAdminData(isAdmin: boolean) {
     startMigration,
     changeRole,
     filterAudit,
+    pageAudit,
   }
 }

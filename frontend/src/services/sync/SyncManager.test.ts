@@ -51,7 +51,7 @@ describe('start(flowId)', () => {
   it('drops stale ops on load (TTL expired)', () => {
     const flowId = 'flow-2'
     const freshOp = {id: 'op-1', env: {type: 'block.update'}, queuedAt: Date.now()}
-    const staleOp = {id: 'op-2', env: {type: 'cursor.move'}, queuedAt: Date.now() - 120_000}
+    const staleOp = {id: 'op-2', env: {type: 'presence.update'}, queuedAt: Date.now() - 120_000}
     localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({queue: [freshOp, staleOp], counter: 2}))
 
     syncManager.start(flowId)
@@ -82,7 +82,7 @@ describe('start(flowId)', () => {
     localStorage.setItem(
       'baki-sync-queue-b',
       JSON.stringify({
-        queue: [{id: 'b1', env: {type: 'cursor.move'}, queuedAt: Date.now()}],
+        queue: [{id: 'b1', env: {type: 'presence.update'}, queuedAt: Date.now()}],
         counter: 1,
       }),
     )
@@ -139,7 +139,7 @@ describe('flush on reconnect', () => {
     const flowId = 'flow-flush-1'
     syncManager.start(flowId)
     syncManager.enqueue({type: 'block.update'})
-    syncManager.enqueue({type: 'cursor.move'})
+    syncManager.enqueue({type: 'presence.update'})
 
     expect(localStorage.getItem(`baki-sync-queue-${flowId}`)).not.toBeNull()
 
@@ -220,7 +220,7 @@ describe('drop notification', () => {
     const unsub = syncManager.onDroppedOps((count, reason) => drops.push({count, reason}))
 
     const fresh = {id: 'op-fresh', env: {type: 'block.update'}, queuedAt: Date.now()}
-    const stale = {id: 'op-stale', env: {type: 'cursor.move'}, queuedAt: Date.now() - 120_000}
+    const stale = {id: 'op-stale', env: {type: 'presence.update'}, queuedAt: Date.now() - 120_000}
     localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({queue: [fresh, stale], counter: 2}))
     syncManager.start(flowId) // load drops 'stale', fires notifyDropped('expired', 1)
 

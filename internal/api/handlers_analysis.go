@@ -276,10 +276,28 @@ func (h *AnalysisHandler) handleGetExecutionGraph(w http.ResponseWriter, r *http
 // @Tags         analysis
 // @Produce      json
 // @Success      200 {object} []map[string]interface{} "OK"
+// @Param        orgId query string false "Scope the catalog to an organisation the caller belongs to (org custom rules + overrides)"
 // @Router       /api/analysis/rules [get]
 func (h *AnalysisHandler) handleGetRules(w http.ResponseWriter, r *http.Request) {
-	rules := h.analysisSvc.GetRules()
-	render.JSON(w, rules)
+	orgID, ok := h.catalogOrg(w, r)
+	if !ok {
+		return
+	}
+	render.JSON(w, h.analysisSvc.GetRulesFor(r.Context(), orgID))
+}
+
+// catalogOrg reads the optional ?orgId= query parameter for the rule catalog
+// endpoints and checks the caller is a member of that org — the org's custom
+// rules are tenant data. Returns ok=false after writing the 403.
+func (h *AnalysisHandler) catalogOrg(w http.ResponseWriter, r *http.Request) (string, bool) {
+	orgID := r.URL.Query().Get("orgId")
+	if orgID == "" {
+		return "", true
+	}
+	if !requireOrgMember(w, r, h.security, orgID) {
+		return "", false
+	}
+	return orgID, true
 }
 
 // handleValidateCustomRules validates a custom-rules payload (array or single
@@ -343,9 +361,14 @@ func (h *AnalysisHandler) handleValidateCustomRules(w http.ResponseWriter, r *ht
 // @Tags         analysis
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Rules"
+// @Param        orgId query string false "Scope the catalog to an organisation the caller belongs to (org custom rules + overrides)"
 // @Router       /api/analysis/rules/summary [get]
 func (h *AnalysisHandler) handleGetRulesSummary(w http.ResponseWriter, r *http.Request) {
-	render.JSON(w, h.analysisSvc.GetRulesSummary())
+	orgID, ok := h.catalogOrg(w, r)
+	if !ok {
+		return
+	}
+	render.JSON(w, h.analysisSvc.GetRulesSummaryFor(r.Context(), orgID))
 }
 
 // @Summary      Enable/disable analysis rule
@@ -721,6 +744,7 @@ func (h *AnalysisHandler) handleExportSARIF(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "sarif"})
 	w.Header().Set("Content-Type", "application/sarif+json")
 	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.sarif"`)
 	fmt.Fprintf(w, "%s\n", out)
@@ -763,6 +787,7 @@ func (h *AnalysisHandler) handleExportJUnit(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "junit"})
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.xml"`)
 	fmt.Fprintf(w, "%s\n", out)
@@ -805,6 +830,7 @@ func (h *AnalysisHandler) handleExportCSV(w http.ResponseWriter, r *http.Request
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "csv"})
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="pad-analysis.csv"`)
 	fmt.Fprintf(w, "%s", out)

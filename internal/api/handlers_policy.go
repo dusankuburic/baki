@@ -87,6 +87,7 @@ func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPolicySave, "policy", p.ID, map[string]string{"orgId": p.OrgID, "name": p.Name})
 	render.JSON(w, p)
 }
 
@@ -178,6 +179,7 @@ func (h *AnalysisHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionPolicyDelete, "policy", req.ID, map[string]string{"orgId": req.OrgID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

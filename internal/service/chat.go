@@ -12,6 +12,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/rag"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -905,6 +906,9 @@ func (s *ChatService) runToolLoop(
 		own := inFlightCost(provider, totalIn, totalOut)
 		ctl.setInflight(own + reserve)
 		if err := s.enforceBudget(ctx, scope, base.OrgID, own, ctl); err != nil {
+			// A mid-loop budget stop is the kind of error operators need
+			// aggregated: the turn already burned budget before being cut off.
+			errreport.CaptureError(ctx, "chat.tool_loop.budget", err, errreport.Attrs{"scope": scope, "provider": provider.ID()})
 			fail("response stopped: " + err.Error())
 			return
 		}

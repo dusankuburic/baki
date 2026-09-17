@@ -197,6 +197,11 @@ export const enSettings = {
   },
   orgs: {
     title: 'Organizations',
+    inviteLinkBody:
+      'Invite created for {{email}}. If email delivery is not configured, copy this link and send it yourself — it is shown only once.',
+    inviteLinkCopy: 'Copy link',
+    inviteLinkCopied: 'Copied',
+    inviteLinkCopyFailed: 'Could not copy the invite link — select it and copy manually.',
     newOrg: 'New organization',
     nameLabel: 'Organization name',
     namePlaceholder: 'e.g. Acme RPA',

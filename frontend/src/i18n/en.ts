@@ -437,7 +437,7 @@ export const auth = {
     heading: 'Account Data',
     downloadTitle: 'Download your data',
     downloadBody:
-      'Export a copy of your account profile, flows, settings, API tokens, and audit history (data-subject access / portability).',
+      'Export a copy of your account profile, flows, settings, API tokens, full audit history, chat conversations on your flows, the comments and triage decisions you made, your organisation memberships and active sessions (data-subject access / portability).',
     downloadButton: 'Download my data',
     exportFailed: 'Export failed',
     dangerZone: 'Danger zone',
@@ -482,6 +482,24 @@ export const auth = {
   organisations: {
     heading: 'Organisations',
     empty: "You're not a member of any organisations.",
+  },
+  linked: {
+    heading: 'Linked sign-in',
+    body: 'Sign in with {{provider}} instead of a password. Linking requires signing in at the identity provider once.',
+    link: 'Link {{provider}}',
+    linking: 'Redirecting…',
+    linked: 'Linked',
+    linkedOn: 'linked {{date}}',
+    unlink: 'Unlink',
+    unlinkTitle: 'Unlink {{provider}}?',
+    unlinkMessage: 'You will no longer be able to sign in with {{provider}}; your password keeps working.',
+    unlinkConfirm: 'Unlink',
+    unlinked: '{{provider}} unlinked',
+    unlinkFailed: 'Could not unlink: {{message}}',
+    linkFailed: 'Could not start linking: {{message}}',
+    linkedToast: '{{provider}} is now linked to your account',
+    loadFailed: 'Could not load linked identities',
+    none: 'No identity provider linked yet.',
   },
   sessions: {
     heading: 'Active Sessions',

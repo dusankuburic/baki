@@ -1,6 +1,6 @@
 import {useEffect, useState, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
-import {Building2, Plus, Trash2, UserPlus, X, AlertCircle, Clock, Mail} from 'lucide-react'
+import {Building2, Plus, Trash2, UserPlus, X, AlertCircle, Clock, Mail, Link2, Copy, Check} from 'lucide-react'
 import clsx from 'clsx'
 import {useOrgStore, type Organisation, type OrgRole} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
@@ -9,9 +9,19 @@ import OrgChannelsSection from './OrgChannelsSection'
 import OrgCustomRulesSection from './OrgCustomRulesSection'
 import {useAsync} from '@/hooks/useAsync'
 import {request} from '@/api/client'
+import {writeClipboard} from '@/lib/clipboard'
 import {useToast} from '@/components/shared/Toast'
 
 const ROLES: OrgRole[] = ['admin', 'member', 'viewer', 'guest']
+
+// inviteLinkURL builds the same deep link the invite email carries
+// (`<base>/#invite=<token>`, see internal/mail/service.go). Shown once after
+// creating an invite so an admin can hand it over when email delivery is not
+// configured — the server always returned the token, the UI threw it away.
+function inviteLinkURL(token: string): string {
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/')
+  return `${window.location.origin}${base}#invite=${encodeURIComponent(token)}`
+}
 
 /**
  * Cloud-only Settings panel that exposes the existing `useOrgStore` actions.
@@ -20,6 +30,7 @@ const ROLES: OrgRole[] = ['admin', 'member', 'viewer', 'guest']
  */
 export default function OrganizationsPanel() {
   const {t} = useTranslation('settings')
+  const {error: toastError} = useToast()
   const organisations = useOrgStore(s => s.organisations)
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const isLoading = useOrgStore(s => s.isLoading)
@@ -43,6 +54,8 @@ export default function OrganizationsPanel() {
   const [inviteRole, setInviteRole] = useState<OrgRole>('member')
   const [inviteBusy, setInviteBusy] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteLink, setInviteLink] = useState<{email: string; url: string} | null>(null)
+  const [inviteLinkCopied, setInviteLinkCopied] = useState(false)
 
   useEffect(() => {
     void loadOrgs()
@@ -78,8 +91,10 @@ export default function OrganizationsPanel() {
     setInviteError(null)
     setInviteBusy(true)
     try {
-      await inviteMember(selected.id, email, inviteRole)
+      const token = await inviteMember(selected.id, email, inviteRole)
       setInviteEmail('')
+      setInviteLink(token ? {email, url: inviteLinkURL(token)} : null)
+      setInviteLinkCopied(false)
     } catch {
       // error surfaces via store.error
     } finally {
@@ -370,6 +385,45 @@ export default function OrganizationsPanel() {
                           <p className="mt-1 text-2xs text-semantic-error" role="alert">
                             {inviteError}
                           </p>
+                        )}
+                        {inviteLink && (
+                          <div
+                            role="status"
+                            className="mt-2 p-3 rounded-lg border border-semantic-warning/40 bg-semantic-warning/5 space-y-2"
+                          >
+                            <p className="text-2xs text-text-primary flex items-center gap-1">
+                              <Link2 size={12} />
+                              {t('orgs.inviteLinkBody', {email: inviteLink.email})}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <code className="flex-1 px-2 py-1.5 rounded-md bg-surface-2 text-2xs text-text-primary break-all select-all">
+                                {inviteLink.url}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await writeClipboard(inviteLink.url)
+                                    setInviteLinkCopied(true)
+                                  } catch {
+                                    toastError(t('orgs.inviteLinkCopyFailed'))
+                                  }
+                                }}
+                                className="flex items-center gap-1 px-2 py-1 text-2xs font-medium rounded-md bg-surface-3 hover:bg-surface-2 text-text-primary"
+                              >
+                                {inviteLinkCopied ? <Check size={12} /> : <Copy size={12} />}
+                                {inviteLinkCopied ? t('orgs.inviteLinkCopied') : t('orgs.inviteLinkCopy')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setInviteLink(null)}
+                                className="p-1 rounded text-text-tertiary hover:text-text-primary"
+                                aria-label={t('orgs.dismiss')}
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          </div>
                         )}
 
                         <PendingInvites orgId={org.id} onInviteSent={handleInvite} />

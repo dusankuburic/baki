@@ -6,7 +6,6 @@ export type EventType =
   | 'presence.join'
   | 'presence.leave'
   | 'presence.update'
-  | 'cursor.move'
   | 'block.update'
   | 'block.create'
   | 'block.delete'
@@ -28,12 +27,6 @@ export interface PresencePayload {
   displayName?: string
   avatarUrl?: string
   selectedBlockId?: string
-}
-
-export interface CursorPayload {
-  userId: string
-  blockId: string
-  offset: number
 }
 
 export interface BlockPayload {

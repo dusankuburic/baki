@@ -41,6 +41,10 @@ export const AdminDashboard: React.FC = () => {
     users,
     auditEvents,
     auditAction,
+    auditUserId,
+    auditOffset,
+    auditActions,
+    auditPageSize,
     isLoading,
     isStarting,
     error,
@@ -48,6 +52,7 @@ export const AdminDashboard: React.FC = () => {
     startMigration,
     changeRole,
     filterAudit,
+    pageAudit,
   } = useAdminData(isAdmin)
 
   if (!isAdmin) {
@@ -101,7 +106,18 @@ export const AdminDashboard: React.FC = () => {
           an audit panel would show a permanently empty log as if the feature
           were on. The dashboard is not reachable without a signed-in admin
           anyway; this makes the intent explicit. */}
-      {!isTauri() && <AuditLogSection events={auditEvents} action={auditAction} onFilterChange={filterAudit} />}
+      {!isTauri() && (
+        <AuditLogSection
+          events={auditEvents}
+          action={auditAction}
+          userId={auditUserId}
+          actions={auditActions}
+          offset={auditOffset}
+          pageSize={auditPageSize}
+          onFilterChange={filterAudit}
+          onPage={pageAudit}
+        />
+      )}
 
       {error && (
         <div className="bg-semantic-error/10 border border-semantic-error/30 rounded-lg px-4 py-3 text-semantic-error text-sm flex items-start gap-2">

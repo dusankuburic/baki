@@ -124,6 +124,7 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSettingsChange, "settings", userID, map[string]string{"scope": "user"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -274,6 +275,8 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	// The key itself never reaches the audit row — only which provider changed.
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", req.Provider, map[string]string{"op": "save"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -327,6 +330,7 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKeysSave, "provider", req.Provider, map[string]string{"op": "delete"})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

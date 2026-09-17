@@ -35,6 +35,26 @@ func newMemIdentityStore() *memIdentityStore {
 	return &memIdentityStore{links: map[string]*storageif.IdentityLink{}}
 }
 
+func (m *memIdentityStore) ListIdentityLinks(_ context.Context, userID string) ([]*storageif.IdentityLink, error) {
+	out := []*storageif.IdentityLink{}
+	for _, l := range m.links {
+		if l.UserID == userID {
+			cp := *l
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *memIdentityStore) DeleteIdentityLink(_ context.Context, userID, provider string) error {
+	for key, l := range m.links {
+		if l.UserID == userID && l.Provider == provider {
+			delete(m.links, key)
+		}
+	}
+	return nil
+}
+
 func (m *memIdentityStore) SaveIdentityLink(_ context.Context, link *storageif.IdentityLink) error {
 	key := link.Provider + "\x00" + link.Subject
 	if _, exists := m.links[key]; exists {

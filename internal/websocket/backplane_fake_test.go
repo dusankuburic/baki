@@ -132,13 +132,13 @@ func TestDeliverRemote_DeliversToLocalClient(t *testing.T) {
 		<-c.send
 	}
 
-	env := Envelope{Type: EventCursorMove, FlowID: "flow-1", UserID: "remote", Timestamp: time.Now()}
+	env := Envelope{Type: EventPresenceUpdate, FlowID: "flow-1", UserID: "remote", Timestamp: time.Now()}
 	envJSON, _ := json.Marshal(env)
 	h.deliverRemote("flow-1", envJSON)
 
 	select {
 	case got := <-c.send:
-		if got.Type != EventCursorMove || got.UserID != "remote" {
+		if got.Type != EventPresenceUpdate || got.UserID != "remote" {
 			t.Fatalf("unexpected delivered envelope: %+v", got)
 		}
 	default:

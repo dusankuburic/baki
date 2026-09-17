@@ -315,6 +315,11 @@ func registerRoutes(rt *Router, r chi.Router) {
 			r.Get("/start", h.Auth.handleSSOStart)
 			r.Get("/callback", h.Auth.handleSSOCallback)
 			r.Post("/exchange", h.Auth.handleSSOExchange)
+			// Account linking (authenticated): start a link round trip, list
+			// and remove the caller's linked identities.
+			r.Post("/link/start", h.Auth.handleSSOLinkStart)
+			r.Get("/links", h.Auth.handleSSOLinks)
+			r.Delete("/links/{provider}", h.Auth.handleSSOUnlink)
 		})
 	})
 	r.Post("/api/ws-ticket", h.Auth.handleWSTicket)
@@ -382,6 +387,7 @@ func registerRoutes(rt *Router, r chi.Router) {
 		r.Post("/migration/start", h.Admin.handleMigrationStart)
 		r.Get("/migration/status", h.Admin.handleMigrationStatus)
 		r.Get("/audit", h.Admin.handleAdminAuditList)
+		r.Get("/audit/actions", h.Admin.handleAdminAuditActions)
 		r.Post("/scanner/scan", h.Admin.handleScannerScan)
 		r.Get("/system/health", h.Sys.handleAdminSystemHealth)
 	})

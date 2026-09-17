@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/metrics"
 	"pad-core/analyzer"
 	"pad-core/logger"
@@ -305,6 +306,9 @@ func (s *Scanner) scanFlow(ctx context.Context, lf *storageif.FlowDocument) {
 	if err != nil || report == nil {
 		if err != nil {
 			logger.Warn("scanner: analyze failed", "flowId", lf.ID, "err", err)
+			// A flow the sweep cannot analyze never produces drift/regression
+			// alerts; route it to the exception sink so it is not lost in logs.
+			errreport.CaptureError(ctx, "scanner.analyze", err, errreport.Attrs{"flowId": lf.ID})
 		}
 		return
 	}

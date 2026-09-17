@@ -48,7 +48,7 @@ describe('queue synchronization', () => {
   it('updates queue and pendingCount when syncManager fires a change', () => {
     const ops: PendingOp[] = [
       {id: 'op-1', env: {type: 'block.update'}, queuedAt: Date.now()},
-      {id: 'op-2', env: {type: 'cursor.move'}, queuedAt: Date.now()},
+      {id: 'op-2', env: {type: 'presence.update'}, queuedAt: Date.now()},
     ]
     capture.queueChangeHandler?.(ops)
 

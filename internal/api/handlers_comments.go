@@ -116,6 +116,7 @@ func (h *AnalysisHandler) handleAddComment(w http.ResponseWriter, r *http.Reques
 	// — the comment write already committed.
 	h.recordCommentAlerts(req, userID, comment)
 
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionCommentAdd, "flow", req.FlowID, map[string]string{"findingKey": req.FindingKey, "commentId": comment.ID})
 	render.JSON(w, comment)
 }
 
@@ -305,6 +306,7 @@ func (h *AnalysisHandler) handleDeleteComment(w http.ResponseWriter, r *http.Req
 		render.Error(w, err, 0)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionCommentDelete, "flow", req.FlowID, map[string]string{"commentId": req.CommentID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -358,6 +360,9 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	metrics.RecordFlowOp("share_create")
+	// A public, unauthenticated link to the report: the one action a reviewer
+	// of the audit trail most needs to see.
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionShareLinkCreate, "flow", req.FlowID, map[string]string{"tokenId": t.ID})
 	// Return the raw token (shown once, never again) along with the expiry so
 	// the UI can tell the user when the link stops working.
 	render.JSON(w, map[string]any{
@@ -436,6 +441,7 @@ func (h *FlowHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionShareLinkRevoke, "flow", req.FlowID, map[string]string{"tokenId": req.TokenID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

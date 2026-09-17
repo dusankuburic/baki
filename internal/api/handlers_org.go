@@ -193,6 +193,7 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeUpload, "org", chi.URLParam(r, "id"), map[string]string{"filename": req.Filename})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -219,6 +220,7 @@ func (h *OrgHandler) handleKnowledgeDelete(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeDelete, "org", chi.URLParam(r, "id"), map[string]string{"docId": docID})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -251,6 +253,7 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionKnowledgeReindex, "org", chi.URLParam(r, "id"), nil)
 	render.JSON(w, res)
 }
 
@@ -350,7 +353,7 @@ func (h *OrgHandler) handleChannelSave(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, "org_channel_save", "org", org.ID,
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgChannelSave, "org", org.ID,
 		map[string]string{"kind": req.Kind})
 	render.JSON(w, channelOut{ID: ch.ID, Name: ch.Name, Kind: ch.Kind, URL: ch.URL, Enabled: ch.Enabled, CreatedAt: ch.CreatedAt})
 }
@@ -375,7 +378,7 @@ func (h *OrgHandler) handleChannelDelete(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, "org_channel_delete", "org", org.ID,
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgChannelDelete, "org", org.ID,
 		map[string]string{"channelId": chi.URLParam(r, "channelId")})
 	render.JSON(w, map[string]string{"status": "ok"})
 }
@@ -499,6 +502,7 @@ func (h *OrgHandler) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgCreate, "org", org.ID, map[string]string{"name": org.Name})
 	render.JSON(w, org)
 }
 
@@ -539,6 +543,7 @@ func (h *OrgHandler) handleOrgUpdate(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, 0)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgUpdate, "org", updated.ID, map[string]string{"name": updated.Name})
 	render.JSON(w, updated)
 }
 
@@ -560,6 +565,7 @@ func (h *OrgHandler) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgDelete, "org", chi.URLParam(r, "id"), nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

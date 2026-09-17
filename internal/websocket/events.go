@@ -11,8 +11,9 @@ const (
 	EventPresenceLeave  EventType = "presence.leave"
 	EventPresenceUpdate EventType = "presence.update"
 
-	// Cursor / selection events
-	EventCursorMove EventType = "cursor.move"
+	// Block selection travels as presence.update{selectedBlockId}; there is
+	// no separate cursor event (a "cursor.move" type once existed here and in
+	// the client protocol mirror, declared on both sides and sent by neither).
 
 	// Document edit events
 	EventBlockUpdate EventType = "block.update"
@@ -45,13 +46,6 @@ type PresencePayload struct {
 	AvatarURL   string `json:"avatarUrl,omitempty"`
 	// SelectedBlockID is the block currently focused by the user.
 	SelectedBlockID string `json:"selectedBlockId,omitempty"`
-}
-
-// CursorPayload carries a user's cursor position within a flow.
-type CursorPayload struct {
-	UserID  string `json:"userId"`
-	BlockID string `json:"blockId"`
-	Offset  int    `json:"offset"`
 }
 
 // BlockPayload carries a partial or full block update.

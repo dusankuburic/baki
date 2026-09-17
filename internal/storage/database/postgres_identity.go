@@ -45,3 +45,35 @@ func (b *PostgresStorageBackend) LoadIdentityLink(ctx context.Context, provider,
 	}
 	return &link, nil
 }
+
+// ListIdentityLinks returns every IdP identity linked to a local user, for the
+// "Linked identities" card in account settings.
+func (b *PostgresStorageBackend) ListIdentityLinks(ctx context.Context, userID string) ([]*interfaces.IdentityLink, error) {
+	rows, err := b.db.QueryContext(ctx, `
+		SELECT provider, subject, user_id, email, created_at
+		FROM identity_links WHERE user_id = $1 ORDER BY created_at ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list identity links: %w", err)
+	}
+	defer rows.Close()
+	out := []*interfaces.IdentityLink{}
+	for rows.Next() {
+		var link interfaces.IdentityLink
+		if err := rows.Scan(&link.Provider, &link.Subject, &link.UserID, &link.Email, &link.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan identity link: %w", err)
+		}
+		out = append(out, &link)
+	}
+	return out, rows.Err()
+}
+
+// DeleteIdentityLink removes a user's link for one provider. Scoped by user_id
+// so a caller can only unlink their own identities. Deleting an absent link is
+// a no-op.
+func (b *PostgresStorageBackend) DeleteIdentityLink(ctx context.Context, userID, provider string) error {
+	if _, err := b.db.ExecContext(ctx,
+		`DELETE FROM identity_links WHERE user_id = $1 AND provider = $2`, userID, provider); err != nil {
+		return fmt.Errorf("delete identity link: %w", err)
+	}
+	return nil
+}

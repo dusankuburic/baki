@@ -94,7 +94,24 @@ type UserDataExport struct {
 	Settings    *AppSettings    `json:"settings"`
 	AuditEvents []*AuditEvent   `json:"auditEvents"`
 	APITokens   []*APIToken     `json:"apiTokens"`
-	ExportedAt  time.Time       `json:"exportedAt"`
+	// The sections below were missing from the bundle while the endpoint
+	// described itself as "everything stored about the user": chat history on
+	// the user's own flows, the comments and triage decisions they authored,
+	// the organisations they belong to and their active sessions.
+	Conversations   []*ExportedConversation `json:"conversations"`
+	Comments        []*FindingComment       `json:"comments"`
+	TriageDecisions []*FindingStatus        `json:"triageDecisions"`
+	Organisations   []*Organisation         `json:"organisations"`
+	Sessions        []RefreshTokenInfo      `json:"sessions"`
+	ExportedAt      time.Time               `json:"exportedAt"`
+}
+
+// ExportedConversation is one stored chat conversation on a flow the user
+// owns, keyed by the same (flowId, scope) pair the ConversationStore uses.
+type ExportedConversation struct {
+	FlowID   string        `json:"flowId"`
+	Scope    string        `json:"scope"`
+	Messages []ChatMessage `json:"messages"`
 }
 
 // PurgeResult reports how many stale rows a PurgeExpiredData run removed.

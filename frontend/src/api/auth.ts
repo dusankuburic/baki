@@ -60,6 +60,14 @@ export interface SSOInfo {
   provider?: string
 }
 
+// IdentityLinkInfo is one IdP identity attached to the current account (the
+// opaque IdP subject stays server-side).
+export interface IdentityLinkInfo {
+  provider: string
+  email?: string
+  createdAt: string
+}
+
 // ApiTokenScope mirrors the closed scope set in internal/auth/apitoken.go.
 // A token with NO scopes is unscoped: it can do everything its owner can.
 export type ApiTokenScope = 'read' | 'write' | 'chat' | 'admin'
@@ -120,6 +128,14 @@ export const authApi = {
   revokeSession: (id: string): Promise<void> => request(`/api/auth/sessions/${id}`, {method: 'DELETE'}),
 
   ssoInfo: (): Promise<SSOInfo> => request('/api/auth/sso/info', {method: 'GET'}),
+
+  // Account linking: start a link round trip as an authenticated XHR (a
+  // top-level navigation cannot carry the bearer token), then navigate the
+  // browser to the returned IdP URL; the callback lands on /#ssoLinked=<provider>.
+  ssoLinkStart: (): Promise<{url: string}> => request('/api/auth/sso/link/start'),
+  ssoLinks: (): Promise<IdentityLinkInfo[]> => request('/api/auth/sso/links', {method: 'GET'}),
+  ssoUnlink: (provider: string): Promise<void> =>
+    request(`/api/auth/sso/links/${encodeURIComponent(provider)}`, {method: 'DELETE'}),
 
   // Exchanges the single-use ticket from the OIDC callback redirect for a
   // regular token pair (same shape as login).

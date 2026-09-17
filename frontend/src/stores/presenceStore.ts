@@ -6,6 +6,7 @@ import {
   type PresencePayload,
   type FlowChangedPayload,
   type Envelope,
+  type ErrorPayload,
 } from '@/services/collaboration/CollaborationService'
 import {syncManager} from '@/services/sync/SyncManager'
 import {getBackendConfig, getWsTicket} from '@/api/client'
@@ -19,11 +20,22 @@ export interface PresenceUser {
   lastSeen?: number
 }
 
+// WsError is the last server `error` envelope (permission_denied,
+// unknown_event, …). PresenceIndicators surfaces it as a toast; before it was
+// dropped on the floor, so a read-only collaborator whose edit was refused
+// over the socket saw nothing happen.
+export interface WsError {
+  code: string
+  message: string
+  at: number
+}
+
 interface PresenceState {
   users: Record<string, PresenceUser>
   status: ConnectionStatus
   flowId: string | null
   remoteVersion: number
+  lastError: WsError | null
 
   connectToFlow: (flowId: string) => Promise<void>
   disconnect: () => void
@@ -58,6 +70,7 @@ export const usePresenceStore = create<PresenceState>(set => ({
   status: 'disconnected',
   flowId: null,
   remoteVersion: 0,
+  lastError: null,
 
   connectToFlow: async (flowId: string) => {
     teardown()
@@ -104,6 +117,17 @@ export const usePresenceStore = create<PresenceState>(set => ({
 }))
 
 function handleEnvelope(env: Envelope): void {
+  if (env.type === 'error') {
+    const p = (env.payload ?? {}) as Partial<ErrorPayload>
+    usePresenceStore.setState({
+      lastError: {
+        code: p.code ?? 'error',
+        message: p.message ?? 'The collaboration server rejected a message.',
+        at: Date.now(),
+      },
+    })
+    return
+  }
   if (env.type === 'presence.join') {
     const p = env.payload as PresencePayload
     const wasAlreadyPresent = Boolean(usePresenceStore.getState().users[p.userId])

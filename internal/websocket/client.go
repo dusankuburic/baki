@@ -20,7 +20,7 @@ const (
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 64 * 1024 // 64 KB
 	// sendBufferCap bounds per-client outgoing buffering. Collab events
-	// (cursor moves, block updates) can burst — 64 was too tight and
+	// (selection updates, block updates) can burst — 64 was too tight and
 	// caused silent drops under normal use. 256 gives modest headroom
 	// while still bounding worst-case memory.
 	sendBufferCap = 256
@@ -375,10 +375,6 @@ func (c *Client) handleIncoming(env Envelope) {
 			// Presence() queries see it (no-op single-replica).
 			c.hub.writePresence(c)
 		}
-		c.hub.Broadcast(c.flowID, c.UserID, env, c)
-
-	case EventCursorMove:
-		// Presence-class traffic: viewer rank is exactly what it is for.
 		c.hub.Broadcast(c.flowID, c.UserID, env, c)
 
 	case EventBlockUpdate, EventBlockCreate, EventBlockDelete:

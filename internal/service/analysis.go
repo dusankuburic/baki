@@ -423,17 +423,36 @@ func (s *AnalysisService) CompareFlows(docA, docB *models.FlowDocument) *models.
 	return analyzer.CompareFlows(docA, docB)
 }
 
-func (s *AnalysisService) GetRules() (result []models.Rule) {
+// GetRules returns the deployment-scoped rule catalog (no org overrides).
+// Prefer GetRulesFor in request handlers so an org member sees the rules
+// that actually run on their flows.
+func (s *AnalysisService) GetRules() []models.Rule {
+	return s.GetRulesFor(context.Background(), "")
+}
+
+// GetRulesFor returns the rule catalog as it applies to orgID: built-in rules
+// plus the org's custom rules, with the org's enable/severity/threshold
+// overrides merged — resolved through the same RuleProfileResolver the
+// analysis path uses. With an empty orgID (or no resolver) it is the
+// deployment catalog. Before this the catalog ignored orgs entirely, so
+// RuleReference and the rule summary showed deployment values while analysis
+// ran on org-merged ones, and an org's custom rules never appeared at all.
+func (s *AnalysisService) GetRulesFor(ctx context.Context, orgID string) (result []models.Rule) {
 	defer logger.GuardRecover("App.GetRules")
 
 	var settings *models.AppSettings
-	if s.settings != nil {
-		settings = s.settings.Get()
-	}
-
-	rules := analyzer.AllRules()
-	if len(s.customRules) > 0 {
-		rules = append(rules, s.customRules...)
+	var rules []analyzer.Rule
+	if orgID != "" && s.profiles != nil {
+		profile := s.profiles.Resolve(ctx, orgID)
+		settings, rules = profile.Settings, profile.Rules
+	} else {
+		if s.settings != nil {
+			settings = s.settings.Get()
+		}
+		rules = analyzer.AllRules()
+		if len(s.customRules) > 0 {
+			rules = append(rules, s.customRules...)
+		}
 	}
 	defaults := models.DefaultSettings()
 	result = make([]models.Rule, len(rules))
@@ -479,13 +498,18 @@ func (s *AnalysisService) GetRules() (result []models.Rule) {
 // the distribution across categories and confidence tiers. Reuses GetRules so
 // the summary honours the same enabled/severity overrides as the catalog.
 func (s *AnalysisService) GetRulesSummary() models.RuleSummary {
+	return s.GetRulesSummaryFor(context.Background(), "")
+}
+
+// GetRulesSummaryFor is GetRulesSummary over the org-scoped catalog.
+func (s *AnalysisService) GetRulesSummaryFor(ctx context.Context, orgID string) models.RuleSummary {
 	defer logger.GuardRecover("App.GetRulesSummary")
 
 	summary := models.RuleSummary{
 		ByCategory:   map[string]int{},
 		ByConfidence: map[string]int{},
 	}
-	for _, r := range s.GetRules() {
+	for _, r := range s.GetRulesFor(ctx, orgID) {
 		summary.TotalRules++
 		if r.AutoFix != "" {
 			summary.AutoFixableRules++

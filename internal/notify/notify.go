@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"pad-core/logger"
+
+	"pad-analyzer/internal/errreport"
 )
 
 const (
@@ -431,6 +433,7 @@ func deliver(ctx context.Context, n AlertNotifier, ev Event, timeout time.Durati
 	defer cancel()
 	if err := n.Notify(cctx, ev); err != nil {
 		logger.Warn("notify: delivery failed", "channel", n.Name(), "flowId", ev.FlowID, "err", err)
+		errreport.CaptureError(ctx, "notify.deliver", err, errreport.Attrs{"channel": n.Name(), "flowId": ev.FlowID, "event": string(ev.Type)})
 	}
 }
 

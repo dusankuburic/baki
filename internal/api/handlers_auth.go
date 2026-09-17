@@ -638,7 +638,7 @@ func (h *AuthHandler) handleAuthDeleteAccount(w http.ResponseWriter, r *http.Req
 // handleAuthExportAccount returns a data-subject access / portability bundle for
 // the caller's own account.
 // @Summary      Export account data
-// @Description  GDPR data-subject export of everything stored about the user.
+// @Description  GDPR data-subject export: profile, owned flows (with content), settings, API tokens, the complete audit history, chat conversations on owned flows, the comments and triage decisions the user authored, organisation memberships and active sessions. Content other users authored on shared flows is out of scope.
 // @Tags         auth
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Account data"
