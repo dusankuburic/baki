@@ -45,6 +45,38 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/admin/audit/actions": {
+            "get": {
+                "description": "Returns every audit action string the server can emit, so the admin filter offers the full set instead of a hand-maintained subset.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "List audit action names",
+                "responses": {
+                    "200": {
+                        "description": "Actions",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/admin/migration/start": {
             "post": {
                 "description": "Kicks off the local→database flow migration (admin only, cloud mode). Idempotent and non-blocking.",
@@ -1663,6 +1695,14 @@ const docTemplate = `{
                     "analysis"
                 ],
                 "summary": "List analysis rules",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Scope the catalog to an organisation the caller belongs to (org custom rules + overrides)",
+                        "name": "orgId",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1687,6 +1727,14 @@ const docTemplate = `{
                     "analysis"
                 ],
                 "summary": "Rule catalog summary",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Scope the catalog to an organisation the caller belongs to (org custom rules + overrides)",
+                        "name": "orgId",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Rules",
@@ -1949,7 +1997,7 @@ const docTemplate = `{
         },
         "/api/auth/account/export": {
             "get": {
-                "description": "GDPR data-subject export of everything stored about the user.",
+                "description": "GDPR data-subject export: profile, owned flows (with content), settings, API tokens, the complete audit history, chat conversations on owned flows, the comments and triage decisions the user authored, organisation memberships and active sessions. Content other users authored on shared flows is out of scope.",
                 "produces": [
                     "application/json"
                 ],
@@ -2373,6 +2421,68 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/auth/resend-verification": {
+            "post": {
+                "description": "Re-sends the verification link for a registered, still-unverified address. Always returns 200 so the endpoint cannot be used to probe which emails exist.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Resend email verification",
+                "parameters": [
+                    {
+                        "description": "request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/auth/reset-password": {
             "post": {
                 "description": "handleAuthResetPassword redeems a reset token and sets a new password, revoking all of the user's existing sessions.",
@@ -2566,6 +2676,126 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/sso/link/start": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sso"
+                ],
+                "summary": "Start linking an SSO identity to the current account",
+                "responses": {
+                    "200": {
+                        "description": "IdP authorization URL",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "SSO not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/sso/links": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sso"
+                ],
+                "summary": "List the caller's linked SSO identities",
+                "responses": {
+                    "200": {
+                        "description": "Links",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.identityLinkView"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/sso/links/{provider}": {
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sso"
+                ],
+                "summary": "Unlink an SSO identity from the current account",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider name",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "No password set — unlinking would lock the account",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -4475,6 +4705,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable (cloud mode required)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -4635,7 +4874,7 @@ const docTemplate = `{
         },
         "/api/flow/source": {
             "get": {
-                "description": "handleGetSource returns the raw PAD source text for the flow. Desktop: reads the file. Cloud: returns the stored source. Viewer access.",
+                "description": "handleGetSource returns the raw PAD source text for the flow. Desktop: reads the file (folder flows: the member named by ?file=, Main.txt when omitted). Cloud: returns the stored source. Viewer access.",
                 "produces": [
                     "application/json"
                 ],
@@ -4643,12 +4882,29 @@ const docTemplate = `{
                     "flow"
                 ],
                 "summary": "Get raw flow source",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Member file of a folder flow (bare filename)",
+                        "name": "file",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Source",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request (file is not a member of the flow folder)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -8028,6 +8284,22 @@ const docTemplate = `{
                             "type": "string"
                         }
                     }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.identityLinkView": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
                 }
             }
         }
