@@ -1,4 +1,14 @@
 basePath: /
+definitions:
+  api.identityLinkView:
+    properties:
+      createdAt:
+        type: string
+      email:
+        type: string
+      provider:
+        type: string
+    type: object
 info:
   contact: {}
   description: Static analysis, auto-fix, and AI-assisted review for Power Automate
@@ -24,6 +34,28 @@ paths:
               type: string
             type: object
       summary: List audit log entries
+      tags:
+      - admin
+  /api/admin/audit/actions:
+    get:
+      description: Returns every audit action string the server can emit, so the admin
+        filter offers the full set instead of a hand-maintained subset.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Actions
+          schema:
+            items:
+              type: string
+            type: array
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List audit action names
       tags:
       - admin
   /api/admin/migration/start:
@@ -1100,6 +1132,12 @@ paths:
   /api/analysis/rules:
     get:
       description: Returns all available analysis rules and their current configuration.
+      parameters:
+      - description: Scope the catalog to an organisation the caller belongs to (org
+          custom rules + overrides)
+        in: query
+        name: orgId
+        type: string
       produces:
       - application/json
       responses:
@@ -1116,6 +1154,12 @@ paths:
   /api/analysis/rules/summary:
     get:
       description: All rules with severity, category, and auto-fix availability.
+      parameters:
+      - description: Scope the catalog to an organisation the caller belongs to (org
+          custom rules + overrides)
+        in: query
+        name: orgId
+        type: string
       produces:
       - application/json
       responses:
@@ -1292,7 +1336,11 @@ paths:
       - auth
   /api/auth/account/export:
     get:
-      description: GDPR data-subject export of everything stored about the user.
+      description: 'GDPR data-subject export: profile, owned flows (with content),
+        settings, API tokens, the complete audit history, chat conversations on owned
+        flows, the comments and triage decisions the user authored, organisation memberships
+        and active sessions. Content other users authored on shared flows is out of
+        scope.'
       produces:
       - application/json
       responses:
@@ -1577,6 +1625,49 @@ paths:
       summary: Register a new user
       tags:
       - auth
+  /api/auth/resend-verification:
+    post:
+      consumes:
+      - application/json
+      description: Re-sends the verification link for a registered, still-unverified
+        address. Always returns 200 so the endpoint cannot be used to probe which
+        emails exist.
+      parameters:
+      - description: request
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Resend email verification
+      tags:
+      - auth
   /api/auth/reset-password:
     post:
       consumes:
@@ -1712,6 +1803,84 @@ paths:
             additionalProperties: true
             type: object
       summary: SSO provider info
+      tags:
+      - sso
+  /api/auth/sso/link/start:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: IdP authorization URL
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: SSO not configured
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start linking an SSO identity to the current account
+      tags:
+      - sso
+  /api/auth/sso/links:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Links
+          schema:
+            items:
+              $ref: '#/definitions/api.identityLinkView'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the caller's linked SSO identities
+      tags:
+      - sso
+  /api/auth/sso/links/{provider}:
+    delete:
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: No password set — unlinking would lock the account
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Unlink an SSO identity from the current account
       tags:
       - sso
   /api/auth/sso/start:
@@ -3002,6 +3171,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable (cloud mode required)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       summary: Search cloud library
       tags:
       - flow
@@ -3108,7 +3283,13 @@ paths:
   /api/flow/source:
     get:
       description: 'handleGetSource returns the raw PAD source text for the flow.
-        Desktop: reads the file. Cloud: returns the stored source. Viewer access.'
+        Desktop: reads the file (folder flows: the member named by ?file=, Main.txt
+        when omitted). Cloud: returns the stored source. Viewer access.'
+      parameters:
+      - description: Member file of a folder flow (bare filename)
+        in: query
+        name: file
+        type: string
       produces:
       - application/json
       responses:
@@ -3116,6 +3297,12 @@ paths:
           description: Source
           schema:
             additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request (file is not a member of the flow folder)
+          schema:
+            additionalProperties:
+              type: string
             type: object
       summary: Get raw flow source
       tags:
