@@ -193,6 +193,31 @@ func (s *FlowService) snapshotCloudFiles(doc *models.FlowDocument, files map[str
 	})
 }
 
+// snapshotDesktopFiles captures the pre-mutation bytes of the member files a
+// desktop FOLDER batch is about to rewrite, as ONE undo entry. TargetPath
+// carries the folder so restore knows where the files live; Files carries the
+// per-file bytes. Restore writes each file back and re-parses the folder.
+func (s *FlowService) snapshotDesktopFiles(doc *models.FlowDocument, files map[string]string, label string) {
+	if s.snapshots == nil || len(files) == 0 || doc.FilePath == "" {
+		return
+	}
+	var total int64
+	cp := make(map[string]string, len(files))
+	for name, text := range files {
+		total += int64(len(text))
+		cp[name] = text
+	}
+	s.snapshots.push(flowSnapshotKey(doc), &SourceSnapshot{
+		ID:         uuid.NewString(),
+		FlowID:     doc.ID,
+		Label:      label,
+		CreatedAt:  time.Now().UTC(),
+		Bytes:      total,
+		TargetPath: doc.FilePath,
+		Files:      cp,
+	})
+}
+
 // ListSourceSnapshots returns the flow's undo ring, newest last.
 func (s *FlowService) ListSourceSnapshots(doc *models.FlowDocument) []*SourceSnapshot {
 	if s.snapshots == nil || doc == nil {
@@ -214,6 +239,29 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 	snap, ok := s.snapshots.take(flowSnapshotKey(doc), snapshotID)
 	if !ok {
 		return nil, fmt.Errorf("snapshot %q not found for this flow", snapshotID)
+	}
+
+	if snap.TargetPath != "" && snap.Files != nil {
+		// Desktop FOLDER batch: write every recorded member back into the
+		// folder (TargetPath), then re-parse once. The current bytes of those
+		// same members are snapshotted first so the restore is itself
+		// undoable, matching the single-file branch below.
+		current := make(map[string]string, len(snap.Files))
+		for name := range snap.Files {
+			if data, rerr := os.ReadFile(filepath.Join(snap.TargetPath, name)); rerr == nil { // #nosec G304 -- recorded member of the flow folder
+				current[name] = string(data)
+			}
+		}
+		s.snapshotDesktopFiles(doc, current, "before restore")
+		for name, text := range snap.Files {
+			target := filepath.Join(snap.TargetPath, name)
+			if err := atomicWriteConv(snap.TargetPath, target, []byte(text)); err != nil {
+				return nil, fmt.Errorf("restore snapshot (%s): %w", name, err)
+			}
+		}
+		s.InvalidateSearchIndex(doc.ID)
+		logger.Info("folder snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
+		return s.LoadFlowFolder(snap.TargetPath)
 	}
 
 	if snap.TargetPath != "" {

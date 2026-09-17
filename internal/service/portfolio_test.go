@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -57,5 +58,26 @@ func TestAssemblePortfolio_Empty(t *testing.T) {
 	}
 	if p.Entries == nil {
 		t.Error("Entries must be a non-nil empty slice")
+	}
+}
+
+// TestBuildPortfolio_LocalModeIsEmpty pins the desktop guard: with no storage
+// backend the portfolio used to panic on s.storage.LoadFlowHealthBatch (nil
+// receiver) and surface as a 500 from GET /api/library/portfolio. Local mode
+// must return an empty portfolio instead.
+func TestBuildPortfolio_LocalModeIsEmpty(t *testing.T) {
+	svc := NewLibraryService(nil, nil, nil)
+	p, err := svc.BuildPortfolio(context.Background(), "user-1", "")
+	if err != nil {
+		t.Fatalf("BuildPortfolio in local mode: %v", err)
+	}
+	if p == nil {
+		t.Fatal("BuildPortfolio returned nil portfolio")
+	}
+	if p.TotalFlows != 0 || p.AnalyzedFlows != 0 || len(p.Entries) != 0 {
+		t.Errorf("expected an empty portfolio, got %+v", p)
+	}
+	if p.Entries == nil {
+		t.Error("Entries must be a non-nil empty slice so the JSON is [] rather than null")
 	}
 }

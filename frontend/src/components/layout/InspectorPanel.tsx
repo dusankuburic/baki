@@ -7,6 +7,7 @@ import {HistoryTab} from '@/components/inspector/HistoryTab'
 import {useUIStore} from '@/stores/uiStore'
 import {Spinner, ErrorBoundary} from '@/components/shared'
 import ResizableChatPanel from '@/components/chat/ResizableChatPanel'
+import {isTauri} from '@/platform/guards'
 
 // AITab transitively pulls react-markdown + prism-react-renderer; lazy
 // loading keeps that chat-only weight out of the entry chunk.
@@ -25,6 +26,10 @@ export default function InspectorPanel() {
   // Monotonic latch, flipped during render: an effect would paint one frame with
   // the AI tab still unmounted before latching.
   if (tab === 'ai' && !aiVisited) setAiVisited(true)
+  // Sharing/History are hidden from the tab strip on desktop (InspectorTabs);
+  // never mount their panels there either, so a stale tab id cannot render a
+  // form that 503s.
+  const cloudTabs = !isTauri()
 
   return (
     <div className="flex flex-col h-full bg-surface-1">
@@ -75,12 +80,12 @@ export default function InspectorPanel() {
             </Suspense>
           </ErrorBoundary>
         )}
-        {tab === 'sharing' && (
+        {cloudTabs && tab === 'sharing' && (
           <ErrorBoundary fallbackMessage="Sharing tab error">
             <SharingTab />
           </ErrorBoundary>
         )}
-        {tab === 'history' && (
+        {cloudTabs && tab === 'history' && (
           <ErrorBoundary fallbackMessage="History tab error">
             <HistoryTab />
           </ErrorBoundary>

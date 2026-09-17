@@ -54,7 +54,7 @@ func TestSnapshots_FixCaptureAndRestore(t *testing.T) {
 		t.Fatal("fixture has no HTTP action")
 	}
 
-	fixed, err := svc.ApplyFix(ctx, doc, blockID, "wrap-error-handler", "unhandled-error", "", "")
+	fixed, err := svc.ApplyFix(ctx, doc, blockID, "wrap-error-handler", "unhandled-error", "", "", false)
 	if err != nil {
 		t.Fatalf("ApplyFix: %v", err)
 	}

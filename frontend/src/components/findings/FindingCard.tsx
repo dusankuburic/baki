@@ -124,21 +124,25 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           Related
         </button>
 
-        <button
-          onClick={handleComments}
-          className={clsx(
-            'flex items-center gap-1 text-2xs px-1.5 py-1 rounded transition-colors shrink-0',
-            showComments
-              ? 'text-brand-400 bg-brand-500/10'
-              : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
-          )}
-          title={t('card.comments')}
-          aria-label={t('card.comments')}
-          aria-pressed={showComments}
-        >
-          <MessageSquare size={10} />
-          {comments && comments.length > 0 && comments.length}
-        </button>
+        {/* Comments need the cloud store: on desktop the list is always []
+            and add answers 503 — after the user has typed the comment. */}
+        {!isDesktop && (
+          <button
+            onClick={handleComments}
+            className={clsx(
+              'flex items-center gap-1 text-2xs px-1.5 py-1 rounded transition-colors shrink-0',
+              showComments
+                ? 'text-brand-400 bg-brand-500/10'
+                : 'text-text-tertiary hover:text-text-secondary hover:bg-surface-3',
+            )}
+            title={t('card.comments')}
+            aria-label={t('card.comments')}
+            aria-pressed={showComments}
+          >
+            <MessageSquare size={10} />
+            {comments && comments.length > 0 && comments.length}
+          </button>
+        )}
 
         {finding.autoFixHint && (
           <button
@@ -235,7 +239,8 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
         original={preview.original}
         patched={preview.patched}
         fixType={preview.fixType}
-        onApply={() => doApplyFix(preview.fixType)}
+        // The modal has shown the diff: this is the reviewed (unsafe-ok) path.
+        onApply={() => doApplyFix(preview.fixType, true)}
         onCancel={closePreview}
       />
     </div>

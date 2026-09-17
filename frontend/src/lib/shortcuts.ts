@@ -1,5 +1,7 @@
 export type ShortcutScope = 'global' | 'sidebar' | 'main' | 'inspector' | 'chat' | 'modal'
 
+import {getPlatformCapabilities} from '@/platform/guards'
+
 export interface Shortcut {
   id: string
   keys: string
@@ -8,9 +10,15 @@ export interface Shortcut {
   scope: ShortcutScope
   preventDefault?: boolean
   allowInInputs?: boolean
+  // desktopOnly shortcuts drive the native window (fullscreen, quit) and are
+  // registered only when the platform has one; in a browser tab they were
+  // matched, preventDefault'ed (eating the browser's own F11) and then no-op'd.
+  desktopOnly?: boolean
 }
 
-export const shortcuts: Shortcut[] = [
+// allShortcuts is the full catalogue; `shortcuts` (below) is what this
+// platform registers and lists in the help dialogs.
+export const allShortcuts: Shortcut[] = [
   {id: 'file.open', keys: 'mod+o', description: 'Open flow file', category: 'File', scope: 'global'},
   {id: 'file.open.folder', keys: 'mod+shift+o', description: 'Open flow folder', category: 'File', scope: 'global'},
   {id: 'file.export.pdf', keys: 'mod+e', description: 'Export findings as PDF', category: 'File', scope: 'global'},
@@ -46,7 +54,14 @@ export const shortcuts: Shortcut[] = [
   {id: 'view.tab.details', keys: 'mod+1', description: 'Inspector → Details', category: 'View', scope: 'global'},
   {id: 'view.tab.ai', keys: 'mod+2', description: 'Inspector → AI', category: 'View', scope: 'global'},
   {id: 'view.tab.findings', keys: 'mod+3', description: 'Inspector → Findings', category: 'View', scope: 'global'},
-  {id: 'view.fullscreen', keys: 'f11', description: 'Toggle fullscreen', category: 'View', scope: 'global'},
+  {
+    id: 'view.fullscreen',
+    keys: 'f11',
+    description: 'Toggle fullscreen',
+    category: 'View',
+    scope: 'global',
+    desktopOnly: true,
+  },
   {id: 'view.theme.toggle', keys: 'mod+shift+t', description: 'Toggle theme', category: 'View', scope: 'global'},
   {id: 'view.split.toggle', keys: 'mod+\\', description: 'Split editor right', category: 'View', scope: 'global'},
   {id: 'view.group.1', keys: 'alt+1', description: 'Focus group 1', category: 'View', scope: 'global'},
@@ -188,10 +203,19 @@ export const shortcuts: Shortcut[] = [
   },
 
   {id: 'window.reload', keys: 'mod+r', description: 'Reload app', category: 'Window', scope: 'global'},
-  {id: 'window.quit', keys: 'mod+q', description: 'Quit app', category: 'Window', scope: 'global'},
+  {id: 'window.quit', keys: 'mod+q', description: 'Quit app', category: 'Window', scope: 'global', desktopOnly: true},
 
   {id: 'help.shortcuts', keys: '?', description: 'Show shortcuts help', category: 'Help', scope: 'global'},
 ]
+
+// shortcutsForPlatform filters the catalogue by capability. Exported for
+// tests; the module-level `shortcuts` is resolved once at load (the Tauri
+// globals are injected before any script runs, so the answer is stable).
+export function shortcutsForPlatform(all: Shortcut[], nativeWindow: boolean): Shortcut[] {
+  return nativeWindow ? all : all.filter(s => !s.desktopOnly)
+}
+
+export const shortcuts: Shortcut[] = shortcutsForPlatform(allShortcuts, getPlatformCapabilities().nativeWindow)
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent)
 

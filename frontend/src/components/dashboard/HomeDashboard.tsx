@@ -204,8 +204,11 @@ export default function HomeDashboard() {
           findings={findings}
           costByProvider={isCloud ? costByProvider : []}
           className="col-span-12"
-          onViewFindings={() => setMainPaneView('portfolio')}
-          onViewFlows={() => setMainPaneView('library')}
+          // The portfolio is an org-wide governance view (cloud only, the
+          // palette hides it the same way); on desktop the tile used to route
+          // to a view backed by GET /api/library/portfolio, which 500'd there.
+          onViewFindings={isCloud ? () => setMainPaneView('portfolio') : undefined}
+          onViewFlows={isCloud ? () => setMainPaneView('library') : undefined}
         />
 
         {isCloud ? (

@@ -148,7 +148,9 @@ export const HistoryTab: React.FC = () => {
           error ? (
             <ErrorState message={error} onRetry={fetchVersions} />
           ) : (
-            <EmptyState title="No history yet" description="Run analysis to create snapshots over time." />
+            // Versions are created by Save Snapshot above (and library saves) —
+            // not by analysis, as this copy used to claim.
+            <EmptyState title="No history yet" description="Save a snapshot above to record the first version of this flow." />
           )
         ) : (
           <div className="space-y-2">

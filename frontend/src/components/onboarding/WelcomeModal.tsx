@@ -127,9 +127,14 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
     complete()
   }, [setDocument, complete, toastError])
 
+  // Skip / X / Esc DISMISS the tour: they used to jump to the last step, so
+  // the only way out was "Load sample & start" — the modal could not be
+  // closed, and on desktop (where it is now shown, see App.tsx) that blocked
+  // the whole app. Completing persists firstRunCompleted so it never returns
+  // uninvited; "Replay tour" in Settings brings it back on demand.
   const handleSkip = useCallback(() => {
-    setStep(STEPS.length - 1)
-  }, [])
+    complete()
+  }, [complete])
 
   const Icon = current.icon
 
@@ -173,7 +178,10 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
           <button
             onClick={() => {
               const ui = useUIStore.getState()
-              ui.setSettingsSection('providers')
+              // 'accounts' is the AI Providers section id (see
+              // SettingsModal); 'providers' does not exist and silently
+              // landed on General.
+              ui.setSettingsSection('accounts')
               ui.setSettingsOpen(true)
               complete()
             }}

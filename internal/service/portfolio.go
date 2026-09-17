@@ -6,6 +6,7 @@ import (
 
 	"pad-core/models"
 
+	"pad-analyzer/internal/config"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -19,6 +20,14 @@ const maxPortfolioFlows = 1000
 // with each flow's latest persisted health. Two queries (list + batch health),
 // never N+1.
 func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID string) (*models.Portfolio, error) {
+	// Desktop/local mode has no storage backend: ListLibraryFlows already
+	// returns an empty list there, but the health batch below dereferenced
+	// s.storage regardless, so GET /api/library/portfolio panicked into a 500
+	// on every desktop hit (the home KPI tile routed there). Same guard as
+	// FlowHealth: an empty portfolio is the honest answer, not an error.
+	if s.mode == config.ModeLocal || s.storage == nil {
+		return &models.Portfolio{Entries: []models.PortfolioEntry{}}, nil
+	}
 	docs, err := s.ListLibraryFlows(ctx, userID, orgID, ScopeAll, "", "", maxPortfolioFlows, 0)
 	if err != nil {
 		return nil, err

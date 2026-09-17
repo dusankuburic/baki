@@ -320,4 +320,11 @@ export class WebAdapter implements PlatformAdapter {
   async minimizeWindow(): Promise<void> {}
   async toggleMaximizeWindow(): Promise<void> {}
   async closeWindow(): Promise<void> {}
+
+  // The web build talks to a remote server, not a child process: there are
+  // no lifecycle events to forward and nothing to restart.
+  onBackendEvent(): () => void {
+    return () => {}
+  }
+  async restartBackend(): Promise<void> {}
 }

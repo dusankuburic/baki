@@ -104,6 +104,9 @@ export const flowApi = {
   // folder flows (per-member-file patching via the canonical serializer, R3-3).
   // The finding carries the available fixType in its `autoFix` field; show
   // "Apply fix" only when that is set.
+  // `unsafe` is the explicit opt-in for behaviour-changing fixers
+  // (replace-with-variable & co.): the server answers 400 without it. Pass
+  // true only after the preview diff has been shown to the user.
   applyFix: (
     flowId: string,
     blockId: string,
@@ -111,8 +114,9 @@ export const flowApi = {
     ruleId?: string,
     variable?: string,
     property?: string,
+    unsafe?: boolean,
   ): Promise<FlowDocument> =>
-    request('/api/flow/apply-fix', {body: {flowId, blockId, fixType, ruleId, variable, property}}),
+    request('/api/flow/apply-fix', {body: {flowId, blockId, fixType, ruleId, variable, property, unsafe}}),
 
   previewFix: (
     flowId: string,
@@ -201,12 +205,21 @@ export const flowApi = {
     request(`/api/flow/source-meta${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
 
   // getSource returns the raw PAD source text (desktop: file; cloud: stored).
-  getSource: (flowId: string): Promise<{source: string}> =>
-    request(`/api/flow/source${flowId ? '?flowId=' + encodeURIComponent(flowId) : ''}`, {method: 'GET'}),
+  // `file` selects the member of a desktop FOLDER flow (bare filename; the
+  // server defaults to Main.txt) — without it the editor showed and saved
+  // Main.txt whichever file was selected in the sidebar.
+  getSource: (flowId: string, file?: string): Promise<{source: string}> => {
+    const params = new URLSearchParams()
+    if (flowId) params.set('flowId', flowId)
+    if (file) params.set('file', file)
+    const qs = params.toString()
+    return request(`/api/flow/source${qs ? '?' + qs : ''}`, {method: 'GET'})
+  },
 
-  // saveSource replaces the raw source, re-parses, and returns the updated doc.
-  saveSource: (flowId: string, source: string): Promise<FlowDocument> =>
-    request('/api/flow/save-source', {body: {flowId, source}}),
+  // saveSource replaces the raw source (of `file`, for folder flows),
+  // re-parses, and returns the updated doc.
+  saveSource: (flowId: string, source: string, file?: string): Promise<FlowDocument> =>
+    request('/api/flow/save-source', {body: {flowId, source, file}}),
 
   // reimport re-reads the currently-loaded flow's source file (desktop), re-
   // parses it, and returns the fresh document — so a user who edited the flow

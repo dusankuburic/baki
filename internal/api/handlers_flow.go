@@ -462,6 +462,11 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		RuleID   string `json:"ruleId"`
 		Variable string `json:"variable"`
 		Property string `json:"property"`
+		// Unsafe is the explicit opt-in for behaviour-changing fixers
+		// (replace-with-variable & co.). The batch endpoint and the CLI already
+		// required it; this single-fix route applied them on a bare POST.
+		// Without it such a fix is rejected with 400 (service gate).
+		Unsafe bool `json:"unsafe"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -475,7 +480,7 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.RecordFlowOp("patch_fix")
-	updated, err := h.flowSvc.ApplyFix(r.Context(), doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property)
+	updated, err := h.flowSvc.ApplyFix(r.Context(), doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property, req.Unsafe)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
@@ -971,12 +976,15 @@ func (h *FlowHandler) handleGetSourceMeta(w http.ResponseWriter, r *http.Request
 }
 
 // handleGetSource returns the raw PAD source text for the flow. Desktop: reads
-// the file. Cloud: returns the stored source. Viewer access.
+// the file — for folder flows the member named by ?file= (Main.txt when
+// omitted). Cloud: returns the stored source. Viewer access.
 // @Summary      Get raw flow source
-// @Description  handleGetSource returns the raw PAD source text for the flow. Desktop: reads the file. Cloud: returns the stored source. Viewer access.
+// @Description  handleGetSource returns the raw PAD source text for the flow. Desktop: reads the file (folder flows: the member named by ?file=, Main.txt when omitted). Cloud: returns the stored source. Viewer access.
 // @Tags         flow
+// @Param        file query string false "Member file of a folder flow (bare filename)"
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Source"
+// @Failure      400 {object} map[string]string "Bad Request (file is not a member of the flow folder)"
 // @Router       /api/flow/source [get]
 func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	flowID := r.URL.Query().Get("flowId")
@@ -984,7 +992,7 @@ func (h *FlowHandler) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	source, err := h.flowSvc.GetSource(doc)
+	source, err := h.flowSvc.GetSource(doc, r.URL.Query().Get("file"))
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -1008,6 +1016,9 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlowID string `json:"flowId"`
 		Source string `json:"source"`
+		// File names the member of a desktop folder flow being saved (bare
+		// filename; Main.txt when empty). Ignored for single-file flows.
+		File string `json:"file"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -1021,7 +1032,7 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.RecordFlowOp("save_source")
-	updated, err := h.flowSvc.SaveSource(r.Context(), doc, req.Source)
+	updated, err := h.flowSvc.SaveSource(r.Context(), doc, req.Source, req.File)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
@@ -1068,6 +1079,18 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, res)
 }
 
+// librarySearchAvailable answers 503 in local/desktop mode, where there is no
+// stored library to search. The service used to return a clean empty result
+// there, which the UI could not tell apart from "no matches". Same shape as
+// triageAvailable / policyAvailable.
+func (h *FlowHandler) librarySearchAvailable(w http.ResponseWriter) bool {
+	if h.backend == nil {
+		render.Error(w, fmt.Errorf("library search requires a storage backend (cloud mode)"), http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
 // handleSearchLibrary runs a query across every flow the caller can access
 // (cross-flow / org-wide search), merging per-flow hits into one result set.
 // Each hit is stamped with its source flowId/flowName so the UI can group them.
@@ -1080,8 +1103,12 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Failure      500 {object} map[string]string "Error"
+// @Failure      503 {object} map[string]string "Service Unavailable (cloud mode required)"
 // @Router       /api/flow/search-library [post]
 func (h *FlowHandler) handleSearchLibrary(w http.ResponseWriter, r *http.Request) {
+	if !h.librarySearchAvailable(w) {
+		return
+	}
 	var req struct {
 		Query models.SearchQuery `json:"query"`
 	}

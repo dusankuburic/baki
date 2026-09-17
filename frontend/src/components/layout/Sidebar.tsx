@@ -19,6 +19,7 @@ import {Tabs} from '@/components/shared'
 import {useFileOpen} from '@/components/sidebar/hooks/useFileOpen'
 import {useSidebarSearch} from '@/components/sidebar/hooks/useSidebarSearch'
 import {analysisApi} from '@/api'
+import {getPlatformCapabilities, isTauri} from '@/platform/guards'
 import type {BlockType, AnalysisReport, Block} from '@/types'
 
 export default function Sidebar() {
@@ -41,6 +42,12 @@ export default function Sidebar() {
   const sidebarTab = useUIStore(s => s.sidebarTab)
   const setSidebarTab = useUIStore(s => s.setSidebarTab)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
+  // Reveal / reload act on the file's disk path; without a filesystem (web)
+  // they were still offered in the context menu and failed with a toast.
+  const hasFileSystem = getPlatformCapabilities().fileSystem
+  // The cloud library is always empty on desktop (no storage backend), so the
+  // Library tab is dropped there together with the toolbar's Cloud Library nav.
+  const showLibraryTab = !isTauri()
 
   const {
     recentFiles,
@@ -202,8 +209,8 @@ export default function Sidebar() {
           selectedFilePath={selectedFilePath}
           folderName={folderName}
           onSelectFile={handleSelectFolderFile}
-          onRevealFile={handleRevealFile}
-          onReloadFile={handleReloadFile}
+          onRevealFile={hasFileSystem ? handleRevealFile : undefined}
+          onReloadFile={hasFileSystem ? handleReloadFile : undefined}
         />
       )}
 
@@ -211,7 +218,7 @@ export default function Sidebar() {
         items={[
           {value: 'explorer' as const, label: t('sidebar.explorer'), icon: FolderTree},
           {value: 'variables' as const, label: t('sidebar.variables'), icon: BarChart2},
-          {value: 'library' as const, label: t('sidebar.library'), icon: Library},
+          ...(showLibraryTab ? [{value: 'library' as const, label: t('sidebar.library'), icon: Library}] : []),
         ]}
         value={sidebarTab}
         onChange={setSidebarTab}

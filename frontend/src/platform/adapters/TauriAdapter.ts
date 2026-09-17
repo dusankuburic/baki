@@ -7,7 +7,14 @@ import {listen} from '@tauri-apps/api/event'
 import {open, save} from '@tauri-apps/plugin-dialog'
 import {open as shellOpen} from '@tauri-apps/plugin-shell'
 import {logger} from '@/lib/logger'
-import type {PlatformAdapter, BackendConfig, FileOpenOptions, FileSaveOptions, NotificationOptions} from '../types'
+import type {
+  PlatformAdapter,
+  BackendConfig,
+  BackendEvent,
+  FileOpenOptions,
+  FileSaveOptions,
+  NotificationOptions,
+} from '../types'
 
 // SIDEKICK_READY_DEADLINE_MS bounds how long getBackendConfig waits for the Go
 // sidecar to come up before giving up. Without it a sidecar that never starts
@@ -212,5 +219,40 @@ export class TauriAdapter implements PlatformAdapter {
   async closeWindow(): Promise<void> {
     const {getCurrentWindow} = await import('@tauri-apps/api/window')
     await getCurrentWindow().close()
+  }
+
+  // The host emitted backend-error / backend-terminated for years and nothing
+  // listened: after the auto-restart cap the app sat as a dead shell with
+  // every request failing. Both events (plus backend-ready, which clears the
+  // condition after a successful respawn) are forwarded to one callback.
+  // listen() is async; the returned unsubscribe tears down whichever
+  // listeners have attached by the time it runs, and prevents late ones.
+  onBackendEvent(cb: (event: BackendEvent) => void): () => void {
+    let active = true
+    const unlisteners: (() => void)[] = []
+    const attach = (name: string, kind: BackendEvent['kind']) => {
+      listen<unknown>(name, event => {
+        if (!active) return
+        const payload = event.payload
+        cb({kind, message: typeof payload === 'string' ? payload : ''})
+      })
+        .then(fn => {
+          if (active) unlisteners.push(fn)
+          else fn()
+        })
+        .catch(err => logger.warn(`Failed to listen for ${name}:`, err))
+    }
+    attach('backend-terminated', 'terminated')
+    attach('backend-error', 'error')
+    attach('backend-ready', 'ready')
+    return () => {
+      active = false
+      for (const fn of unlisteners) fn()
+      unlisteners.length = 0
+    }
+  }
+
+  async restartBackend(): Promise<void> {
+    await invoke('restart_backend')
   }
 }

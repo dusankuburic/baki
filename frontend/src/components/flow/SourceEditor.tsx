@@ -33,14 +33,36 @@ const LineGutter = memo(function LineGutter({lineCount}: {lineCount: number}) {
 // which re-parses + persists), and "Revert". No external editor dependency —
 // the textarea + line-number gutter is sufficient for PAD text, which has no
 // standard syntax-highlighting grammar.
+// memberFileName returns the bare filename the editor targets for a desktop
+// FOLDER flow: the file selected in the sidebar, else Main.txt (the server
+// default). Single-file and cloud flows have no member to pick.
+function memberFileName(document: {isFolder?: boolean; filePath: string} | null, selectedFilePath: string | null) {
+  if (!document?.isFolder || !document.filePath) return undefined
+  const selected = selectedFilePath?.split(/[/\\]/).pop()
+  return selected || 'Main.txt'
+}
+
 export default function SourceEditor({onClose}: SourceEditorProps) {
   const document = useFlowStore(s => s.document)
+  const selectedFilePath = useFlowStore(s => s.selectedFilePath)
+  // Folder flows: read and write the SELECTED member file. The editor used to
+  // load Main.txt unconditionally and label nothing, so editing "Subflow.txt"
+  // (selected in the sidebar) overwrote Main.
+  const requestedFile = memberFileName(document, selectedFilePath)
   const setReport = useAnalysisStore(s => s.setReport)
   const toast = useToast()
   const {confirm} = useConfirm()
 
   const [source, setSource] = useState('')
   const [original, setOriginal] = useState('')
+  // memberFile is the folder member whose source is IN the buffer. It follows
+  // the sidebar selection only while the buffer is clean: switching on a
+  // selection change with unsaved edits would refetch and overwrite them. The
+  // header shows memberFile, so the user sees which file a Save will write.
+  const [memberFile, setMemberFile] = useState(requestedFile)
+  if (memberFile !== requestedFile && source === original) {
+    setMemberFile(requestedFile)
+  }
   const [addingAction, setAddingAction] = useState(false)
   const readOnly = useFlowStore(s => s.readOnly)
   const [loading, setLoading] = useState(true)
@@ -65,7 +87,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     void setLoading(true)
     void setLoadError(null)
     flowApi
-      .getSource(document.id)
+      .getSource(document.id, memberFile)
       .then(res => {
         if (cancelled) return
         setSource(res.source)
@@ -83,11 +105,12 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     return () => {
       cancelled = true
     }
-    // Keyed on document IDENTITY only. `document` is replaced on every
-    // save/reparse, and re-running this would re-fetch and overwrite the user's
-    // unsaved edits; `toast` is only used on the failure path.
+    // Keyed on document IDENTITY (and the selected member file) only.
+    // `document` is replaced on every save/reparse, and re-running this would
+    // re-fetch and overwrite the user's unsaved edits; `toast` is only used on
+    // the failure path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document?.id, reloadNonce])
+  }, [document?.id, memberFile, reloadNonce])
 
   const dirty = source !== original
 
@@ -100,7 +123,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     if (!document || !dirty || saving || loadError || useFlowStore.getState().readOnly) return
     setSaving(true)
     try {
-      const updated = await flowApi.saveSource(document.id, source)
+      const updated = await flowApi.saveSource(document.id, source, memberFile)
       // Same-flow refresh (F1.1): preserve subflow/chat/selection.
       useFlowStore.getState().applyRemoteDocumentUpdate(updated)
       setOriginal(source)
@@ -118,7 +141,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     } finally {
       setSaving(false)
     }
-  }, [document, source, dirty, saving, loadError, setOriginal, setReport, toast])
+  }, [document, memberFile, source, dirty, saving, loadError, setOriginal, setReport, toast])
 
   const handleRevert = useCallback(() => {
     setSource(original)
@@ -208,6 +231,11 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
         <div className="flex items-center gap-2 text-xs text-text-tertiary">
           <Code2 size={14} />
           <span className="font-medium">Source Editor</span>
+          {memberFile && (
+            <span className="font-mono text-text-secondary" title="Member file of this flow folder being edited">
+              · {memberFile}
+            </span>
+          )}
           {dirty && <span className="text-semantic-warning">• unsaved</span>}
           {readOnly && <span className="text-2xs text-text-tertiary">· read-only</span>}
         </div>

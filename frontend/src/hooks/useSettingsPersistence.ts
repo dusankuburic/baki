@@ -4,17 +4,19 @@ import {useUIStore} from '@/stores/uiStore'
 import {useChatStore} from '@/stores/chatStore'
 import type {ProviderID} from '@/types'
 
-export function useSettingsPersistence(isAuthenticated: boolean) {
+// canLoad: true once the backend will answer a settings read — the user is
+// authenticated (cloud), or the app runs against the local sidecar (desktop,
+// where there is no login and the auth gate never sets isAuthenticated).
+export function useSettingsPersistence(canLoad: boolean) {
   const loadFromBackend = useSettingsStore(s => s.loadFromBackend)
   const updateLayout = useSettingsStore(s => s.updateLayout)
 
   useEffect(() => {
-    // Settings live server-side; nothing to load until the user is
-    // authenticated. Guarded explicitly so the `isAuthenticated` dependency
-    // is meaningful (it re-triggers the load on login) rather than a no-op
-    // extra dep, and we avoid a doomed backend fetch on the unauthenticated
-    // initial mount.
-    if (!isAuthenticated) return
+    // Settings live server-side; nothing to load until the backend will
+    // answer. Guarded explicitly so the `canLoad` dependency is meaningful
+    // (it re-triggers the load on login) rather than a no-op extra dep, and
+    // we avoid a doomed backend fetch on the unauthenticated initial mount.
+    if (!canLoad) return
     const unsub = onSettingsLoaded(s => {
       if (s.layout?.lastViewMode) useUIStore.getState().setMainPaneView(s.layout.lastViewMode)
       if (s.layout?.lastActiveInspectorTab) useUIStore.getState().setInspectorTab(s.layout.lastActiveInspectorTab)
@@ -25,7 +27,7 @@ export function useSettingsPersistence(isAuthenticated: boolean) {
     })
     void loadFromBackend()
     return unsub
-  }, [loadFromBackend, isAuthenticated])
+  }, [loadFromBackend, canLoad])
 
   useEffect(() => {
     const unsub = useUIStore.subscribe((state, prev) => {
