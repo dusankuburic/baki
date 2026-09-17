@@ -221,17 +221,7 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 - **Visualization** — virtualized block view (react-virtuoso); variable lineage graph; execution-graph (DAG) view; flow tree sidebar with breadcrumbs.
 - **AI review** — streaming chat over your flow with GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM, or GitHub Models. Tool-augmented mode for autonomous analysis.
 - **Export** — full analysis reports to PDF or Markdown (works in both desktop and browser); analysis history with regression diffing.
-- **CI/CD** — headless `bakicli` runs static analysis and exits non-zero past a severity threshold (`-fail-on`); emits `text`, `json`, or **SARIF 2.1.0** (`-format sarif`) for GitHub code scanning, Azure DevOps, and other security dashboards. Gate against a named, shareable **policy** (`-policy policy.json`) — a rule set with per-rule severities and a pass/fail threshold. A packaged **GitHub Action** (`action.yml`, used by `.github/workflows/pad-analysis.yml`) builds the CLI, **uploads SARIF to the Security tab** (so findings annotate changed lines inline on pull requests), writes a job-summary table, and fails the build on the chosen threshold/policy:
-
-  ```yaml
-  - uses: actions/checkout@v4
-  - uses: <owner>/baki@v1          # or `uses: ./` from within this repo
-    with:
-      flow-path: ./flows
-      fail-on: error               # error | warning | info | none (report-only)
-      # policy: ./pad-policy.json   # optional, overrides fail-on
-    # needs: permissions: { security-events: write }
-  ```
+- **CI/CD** — headless `bakicli` runs static analysis and exits non-zero past a severity threshold (`-fail-on`) or a named, shareable **policy** (`-policy policy.json`), ratcheting on new findings only with `-baseline` or `-new-from-rev`. It emits `text`, `json`, **SARIF 2.1.0**, `junit`, `csv` or `html`; `-report-json` also writes the JSON report from the same run. A packaged **GitHub Action** uploads SARIF to the Security tab, writes a job summary and gates the build; GitLab and Azure DevOps templates live in `ci/`. See [CI/CD](#cicd).
 - **Governance** *(web mode)* — persistent, team-shared finding triage (status/assignee/justification) and per-flow **baselines** so dashboards and CI can ratchet on *new* findings only; an org-wide **portfolio** view (Command Palette → "Flow Portfolio", or `GET /api/library/portfolio`) ranks every accessible flow worst-health-first; a periodic scanner re-analyzes stored flows and **alerts on drift or health regressions** via webhook / Microsoft Teams (`PAD_SCAN_INTERVAL` + `PAD_NOTIFY_*`).
 - **Collaboration** *(web mode)* — organizations with role-based access (admin/member/viewer/guest); real-time presence indicators and block selection sync via WebSocket; flow sharing with per-flow collaborator permissions.
 - **SSO** *(web mode)* — OIDC single sign-on with Microsoft Entra ID, Google, Okta, or any OIDC-compliant IdP. Account linking with automatic JIT provisioning.
@@ -245,11 +235,49 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 
 ---
 
+## CI/CD
+
+`bakicli` exit codes: `0` gate passed, `1` gate failed (findings at or above `-fail-on`, policy violated, or stale suppressions with `-fail-on-stale`), `2` usage, config, policy or parse error. Exit `2` produces no report, so do not upload the output file. `bakicli -h` lists every subcommand.
+
+### GitHub Actions
+
+The action (`action.yml`) downloads the checksum-verified `bakicli` release binary for the runner and builds it from source when no matching release asset exists. It runs the analysis **once**: the SARIF upload, the job summary and the pull-request comment all come from that run, so `rules`, `policy`, `baseline`, `new-from-rev`, `custom-rules` and `config` are reflected everywhere. Reference it by owner and ref, not `uses: ./` (a relative path resolves against the *calling* repository):
+
+```yaml
+permissions:
+  contents: read
+  security-events: write     # SARIF upload
+  pull-requests: write       # PR summary comment
+steps:
+  - uses: actions/checkout@v4
+  - uses: dusankuburic/baki@main   # pin a release tag once one is published
+    with:
+      flow-path: ./flows
+      fail-on: error               # error | warning | info | none (report-only)
+      # policy: ./pad-policy.json  # authoritative gate, overrides fail-on
+      # baseline: ./pad-baseline.json
+      # new-from-rev: origin/main  # needs fetch-depth: 0
+      # custom-rules: ./rules.json
+      # config: ./.bakirc.json
+```
+
+`.github/workflows/pad-analysis.yml` is a reusable workflow (`workflow_call`) that forwards every action input.
+
+### Other CI systems
+
+Both templates download the release binary (falling back to a source build), run one analysis that writes SARIF and JSON, publish the reports as artifacts and fail the job on the gate.
+
+- **GitLab** — include `https://raw.githubusercontent.com/dusankuburic/baki/main/ci/.gitlab-ci.pad-analysis.yml` and extend `.pad-analysis`. The SARIF file is a plain job artifact. GitLab's `artifacts:reports:sast` expects its own schema and ignores SARIF, so the merge-request security widget stays empty.
+- **Azure DevOps** — copy `ci/azure-pipelines.pad-analysis.yml` into your repository (or reference it through a GitHub repository resource) and use it as a step template.
+
+Both headers list every variable or parameter. To record a run on a PAD Analyzer server's dashboard, use `bakicli report` (see [CI webhook](docs/CONFIGURATION.md#ci-webhook)).
+
 ## Tests
 
 ```bash
 go test ./...                          # Go backend (parser, analyzer, API, storage, …)
 go test -race ./...                    # with race detector
+npm run gen:samples                    # regenerate the 10k-line synthetic benchmark flow (core/parser/testdata/samples/synthetic_10k.txt)
 
 cd frontend
 npm run test:run                       # Vitest (frontend unit/component tests)

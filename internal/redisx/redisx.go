@@ -1,9 +1,11 @@
 // Package redisx owns the optional Redis backplane client. The client is nil
 // when PAD_REDIS_URL is unset, in which case every consumer falls back to its
 // in-process implementation (single-replica). Setting the URL switches the
-// rate limiter (#1), and will switch WebSocket presence (#2) and chat-stream
-// resume (#3), to a shared store so those subsystems are consistent across
-// replicas.
+// rate limiter, the WebSocket collaboration backplane (presence and block
+// selection fan-out across replicas, internal/websocket) and chat-stream resume
+// to a shared store so those subsystems are consistent across replicas. The
+// periodic scanner coordinates through a Postgres advisory lock instead, so it
+// needs no Redis.
 package redisx
 
 import (

@@ -83,5 +83,17 @@ func main() {
 
 	output := sb.String()
 	fmt.Fprintf(os.Stderr, "Generated %d lines\n", strings.Count(output, "\n"))
-	os.WriteFile("internal/parser/testdata/samples/synthetic_10k.txt", []byte(output), 0o644)
+	// Default target is the parser's sample corpus (the parser moved from
+	// internal/ to core/; the old path silently wrote into a directory that
+	// no longer exists and the error was discarded). Run from the repo root:
+	// `npm run gen:samples`, or pass an explicit output path.
+	out := "core/parser/testdata/samples/synthetic_10k.txt"
+	if len(os.Args) > 1 {
+		out = os.Args[1]
+	}
+	if err := os.WriteFile(out, []byte(output), 0o644); err != nil { //nolint:gosec // generated fixture, world-readable is intended
+		fmt.Fprintf(os.Stderr, "generate-samples: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "Wrote %s\n", out)
 }

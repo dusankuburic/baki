@@ -23,19 +23,31 @@ inputs:
     required: false
     default: 'sarif'
   policy:
-    description: 'Optional path to a policy JSON file. When set it is the authoritative gate (overrides fail-on).'
+    description: 'Optional path to a policy JSON file. When set it is the authoritative gate (overrides fail-on). The verdict is embedded in the SARIF/JSON/JUnit output.'
     required: false
     default: ''
   baseline:
     description: 'Optional path to a baseline JSON file (committed alongside the flow). When set the gate fails only on NEW findings since the baseline (the ratchet) — adopt the gate without fixing everything first. Capture/refresh a clean state with `bakicli -update-baseline <path>`.'
     required: false
     default: ''
+  new-from-rev:
+    description: 'Optional git revision (e.g. origin/main). When set the gate fails only on findings NOT present at that revision — the ratchet without a committed baseline file. Requires a checkout deep enough to contain the revision (fetch-depth: 0). Cannot be combined with policy or baseline.'
+    required: false
+    default: ''
+  custom-rules:
+    description: 'Optional path to a custom rules JSON file (loaded in addition to the built-in rules and any inline rules in the config file).'
+    required: false
+    default: ''
+  config:
+    description: 'Path to a .bakirc.json config file. Empty = auto-discover ./.bakirc.json in the workspace (pass a path to use another file).'
+    required: false
+    default: ''
   sarif-file:
-    description: 'Path to write the SARIF report.'
+    description: 'Path to write the report (SARIF by default; whatever `format` selects).'
     required: false
     default: 'pad-analysis.sarif'
   upload-sarif:
-    description: 'Upload the SARIF report to GitHub code scanning (requires security-events: write).'
+    description: 'Upload the SARIF report to GitHub code scanning (requires security-events: write). Skipped when format is not sarif or the analyzer produced no report (exit 2).'
     required: false
     default: 'true'
   comment-on-pr:
@@ -43,16 +55,19 @@ inputs:
     required: false
     default: 'true'
   version:
-    description: 'bakicli release tag to download (e.g. v1.2.0; "latest" resolves the newest release). Falls back to building from the action checkout when the download is unavailable (air-gapped runners, pre-release tags).'
+    description: 'bakicli release tag to download (e.g. v1.2.0; "latest" resolves the newest release). Falls back to building from the action checkout when the download is unavailable (air-gapped runners, pre-release tags, no release published yet).'
     required: false
     default: 'latest'
 
 outputs:
   sarif-file:
-    description: 'Path to the generated SARIF report.'
+    description: 'Path to the generated report (SARIF unless `format` says otherwise).'
     value: ${{ inputs.sarif-file }}
+  report-file:
+    description: 'Path to the JSON report (findings, stats, policy verdict) written by the same analysis run — the source of the job summary and PR comment.'
+    value: ${{ steps.analyze.outputs.report-file }}
   exit-code:
-    description: 'The analyzer gate exit code (0 = passed, 1 = threshold/policy violated).'
+    description: 'The analyzer exit code: 0 = gate passed, 1 = threshold/policy violated (report complete), 2 = usage, config/policy or parse error (no report produced; the SARIF upload is skipped).'
     value: ${{ steps.analyze.outputs.exit-code }}
 
 runs:
@@ -62,7 +77,8 @@ runs:
     # input, checksum-verified via the .sha256 sidecar shipped per RELEASE.md).
     # Every run used to compile the CLI from source through setup-go — slow
     # first-runs and no pinning story. Any download failure (air-gapped
-    # runner, tag predating the release assets) falls back to a source build.
+    # runner, tag predating the release assets, no release cut yet) falls back
+    # to a source build of the action checkout.
     - name: Acquire bakicli (release binary)
       id: acquire
       shell: bash
@@ -71,16 +87,16 @@ runs:
         BAKI_VERSION: ${{ inputs.version }}
       run: |
         set -uo pipefail
-        case "${{ runner.os }}" in
+        case "$RUNNER_OS" in
           Linux) goos=linux ;;
           macOS) goos=darwin ;;
           Windows) goos=windows ;;
-          *) echo "unsupported OS: ${{ runner.os }}"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          *) echo "unsupported OS: $RUNNER_OS"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
         esac
-        case "${{ runner.arch }}" in
+        case "$RUNNER_ARCH" in
           X64) goarch=amd64 ;;
           ARM64) goarch=arm64 ;;
-          *) echo "unsupported arch: ${{ runner.arch }}"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          *) echo "unsupported arch: $RUNNER_ARCH"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
         esac
         ext="tar.gz"; [ "$goos" = "windows" ] && ext="zip"
         if [ "$BAKI_VERSION" = "latest" ]; then
@@ -100,11 +116,11 @@ runs:
         fi
         # Verify integrity (sha256sum ships in the runner's bash).
         ( cd "$tmp" && sha256sum -c "$asset.sha256" ) || { echo "checksum mismatch — falling back to source build"; echo "build=true" >> "$GITHUB_OUTPUT"; exit 0; }
-        bin="${{ runner.temp }}/bakicli"
-        mkdir -p "${{ runner.temp }}"
+        bin="$RUNNER_TEMP/bakicli"
+        mkdir -p "$RUNNER_TEMP"
         if [ "$ext" = "zip" ]; then
           # -j flattens: the archive holds bakicli.exe at its root.
-          unzip -o -j "$tmp/$asset" -d "${{ runner.temp }}" >/dev/null
+          unzip -o -j "$tmp/$asset" -d "$RUNNER_TEMP" >/dev/null
         else
           tar -xzf "$tmp/$asset" -C "$tmp"
           mv "$tmp/bakicli-${goos}-${goarch}" "$bin"
@@ -125,71 +141,123 @@ runs:
       working-directory: ${{ github.action_path }}
       run: |
         VERSION=$(git describe --tags --always 2>/dev/null || echo "ci")
-        go build -ldflags "-X main.version=${VERSION}" -o "${{ runner.temp }}/bakicli" ./cmd/bakicli
+        go build -ldflags "-X main.version=${VERSION}" -o "$RUNNER_TEMP/bakicli" ./cmd/bakicli
 
-    - name: Analyze flows (SARIF + gate)
-      id: analyze
+    # One resolution for every later step: the release archive unpacks to
+    # bakicli.exe on Windows, and the summary step used to hard-code the
+    # extension-less name (so it silently produced no summary there).
+    - name: Resolve bakicli
+      id: cli
       shell: bash
       run: |
         set -euo pipefail
+        bin="$RUNNER_TEMP/bakicli"
+        [ -x "$bin" ] || bin="$RUNNER_TEMP/bakicli.exe"
+        if [ ! -x "$bin" ]; then
+          echo "::error::bakicli was neither downloaded nor built"
+          exit 1
+        fi
+        echo "path=$bin" >> "$GITHUB_OUTPUT"
+        "$bin" --version
+
+    # ONE analysis run. It writes the requested format to `sarif-file` for
+    # upload and, via -report-json, the JSON report the summary and PR comment
+    # read — so every gate flag (rules, policy, baseline, new-from-rev, custom
+    # rules, config) is reflected in the numbers shown. The summary used to
+    # come from a second, flag-less `-format json` run whose counts disagreed
+    # with the gate.
+    #
+    # Inputs reach the shell through env, never by template interpolation into
+    # the script: a branch or file name containing a quote is data, not code.
+    - name: Analyze flows (report + gate)
+      id: analyze
+      shell: bash
+      env:
+        BAKICLI: ${{ steps.cli.outputs.path }}
+        FLOW_PATH: ${{ inputs.flow-path }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        RULES: ${{ inputs.rules }}
+        FORMAT: ${{ inputs.format }}
+        POLICY: ${{ inputs.policy }}
+        BASELINE: ${{ inputs.baseline }}
+        NEW_FROM_REV: ${{ inputs.new-from-rev }}
+        CUSTOM_RULES: ${{ inputs.custom-rules }}
+        CONFIG: ${{ inputs.config }}
+        OUT_FILE: ${{ inputs.sarif-file }}
+      run: |
+        set -euo pipefail
         args=()
-        if [ -n "${{ inputs.policy }}" ]; then
-          args+=(-policy "${{ inputs.policy }}")
+        if [ -n "$POLICY" ]; then
+          args+=(-policy "$POLICY")
         else
-          gate="${{ inputs.fail-on }}"
+          gate="$FAIL_ON"
           [ "$gate" = "none" ] && gate="info"
           args+=(-fail-on "$gate")
         fi
-        if [ -n "${{ inputs.rules }}" ]; then
-          args+=(-rules "${{ inputs.rules }}")
-        fi
-        if [ -n "${{ inputs.baseline }}" ]; then
-          args+=(-baseline "${{ inputs.baseline }}")
-        fi
-        out_format="${{ inputs.format }}"
+        if [ -n "$RULES" ]; then args+=(-rules "$RULES"); fi
+        if [ -n "$BASELINE" ]; then args+=(-baseline "$BASELINE"); fi
+        if [ -n "$NEW_FROM_REV" ]; then args+=(-new-from-rev "$NEW_FROM_REV"); fi
+        if [ -n "$CUSTOM_RULES" ]; then args+=(-custom-rules "$CUSTOM_RULES"); fi
+        if [ -n "$CONFIG" ]; then args+=(-config "$CONFIG"); fi
+        out_format="$FORMAT"
         [ -z "$out_format" ] && out_format="sarif"
-        out_file="${{ inputs.sarif-file }}"
-        # SARIF is emitted before the gate exits non-zero, so the report is complete.
-        BAKICLI="${{ runner.temp }}/bakicli"
-        [ -x "$BAKICLI" ] || BAKICLI="${{ runner.temp }}/bakicli.exe"
+        report="$RUNNER_TEMP/pad-report.json"
+        # The report is emitted before the gate exits non-zero, so exit 1
+        # still leaves a complete file. Exit 2 leaves an EMPTY one.
         set +e
-        "$BAKICLI" -format "$out_format" "${args[@]}" "${{ inputs.flow-path }}" > "$out_file"
+        "$BAKICLI" -format "$out_format" -report-json "$report" "${args[@]}" "$FLOW_PATH" > "$OUT_FILE"
         code=$?
         set -e
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report-file=$report" >> "$GITHUB_OUTPUT"
+        if [ -s "$OUT_FILE" ]; then
+          echo "has-output=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has-output=false" >> "$GITHUB_OUTPUT"
+        fi
+        if [ "$code" = "2" ]; then
+          echo "::error::bakicli could not analyze $FLOW_PATH (exit 2: usage, config/policy or parse error — see the log above). No report was produced."
+          exit 2
+        fi
 
     - name: Job summary
       if: ${{ always() }}
       shell: bash
+      env:
+        REPORT: ${{ steps.analyze.outputs.report-file }}
       run: |
         set -euo pipefail
-        report="${{ runner.temp }}/pad-report.json"
-        "${{ runner.temp }}/bakicli" -format json -quiet "${{ inputs.flow-path }}" > "$report" || true
         {
           echo "## PAD Flow Analysis"
           echo ""
-          if [ -s "$report" ]; then
+          if [ -n "${REPORT:-}" ] && [ -s "$REPORT" ]; then
             echo "| Severity | Count |"
             echo "|---|---:|"
-            echo "| 🔴 Errors | $(jq '.stats.errors' "$report") |"
-            echo "| 🟠 Warnings | $(jq '.stats.warnings' "$report") |"
-            echo "| 🔵 Info | $(jq '.stats.info' "$report") |"
-            echo "| 🤫 Suppressed (inline) | $(jq '.stats.suppressed' "$report") |"
+            echo "| 🔴 Errors | $(jq '.stats.errors' "$REPORT") |"
+            echo "| 🟠 Warnings | $(jq '.stats.warnings' "$REPORT") |"
+            echo "| 🔵 Info | $(jq '.stats.info' "$REPORT") |"
+            echo "| 🤫 Suppressed (inline) | $(jq '.stats.suppressed' "$REPORT") |"
             echo ""
-            echo "Health score: **$(jq '.metrics.healthScore // "n/a"' "$report")/100** · blocks analyzed: $(jq '.stats.blocksAnalyzed' "$report")"
+            echo "Health score: **$(jq '.metrics.healthScore // "n/a"' "$REPORT")/100** · blocks analyzed: $(jq '.stats.blocksAnalyzed' "$REPORT")"
+            jq -r 'if .policy then "\nPolicy **\(.policy.policyName)**: \(if .policy.passed then "✅ passed" else "❌ FAILED" end) — \(.policy.violations | length) violation(s), \(.policy.waived) waived" else empty end' "$REPORT"
           else
-            echo "_No report produced._"
+            echo "_No report produced (the analyzer exited 2 — see the analyze step)._"
           fi
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Warn on upload-sarif without sarif format
       if: ${{ always() && inputs.upload-sarif == 'true' && inputs.format != 'sarif' }}
       shell: bash
+      env:
+        FORMAT: ${{ inputs.format }}
       run: |
-        echo "::warning::upload-sarif=true requires format=sarif (currently format=${{ inputs.format }}); skipping SARIF upload."
+        echo "::warning::upload-sarif=true requires format=sarif (currently format=$FORMAT); skipping SARIF upload."
 
+    # Gated on a NON-EMPTY file: exit 2 leaves an empty one, and uploading it
+    # failed the job on top of the real error and pushed an empty analysis
+    # into code scanning.
     - name: Upload SARIF to code scanning
-      if: ${{ always() && inputs.upload-sarif == 'true' && inputs.format == 'sarif' }}
+      if: ${{ always() && inputs.upload-sarif == 'true' && inputs.format == 'sarif' && steps.analyze.outputs.has-output == 'true' }}
       uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26  # v3
       with:
         sarif_file: ${{ inputs.sarif-file }}
@@ -205,36 +273,48 @@ runs:
     - name: Enforce gate
       if: ${{ inputs.fail-on != 'none' || inputs.policy != '' }}
       shell: bash
+      env:
+        CODE: ${{ steps.analyze.outputs.exit-code }}
+        POLICY: ${{ inputs.policy }}
+        FAIL_ON: ${{ inputs.fail-on }}
       run: |
-        code="${{ steps.analyze.outputs.exit-code }}"
-        if [ "$code" != "0" ]; then
-          if [ -n "${{ inputs.policy }}" ]; then
-            echo "::error::PAD analysis gate failed (policy=${{ inputs.policy }})."
-          else
-            echo "::error::PAD analysis gate failed (fail-on=${{ inputs.fail-on }})."
-          fi
-          exit "$code"
-        fi
+        case "$CODE" in
+          0) ;;
+          2) echo "::error::PAD analysis did not run (exit 2: usage, config/policy or parse error). No report was produced."; exit 2 ;;
+          *)
+            if [ -n "$POLICY" ]; then
+              echo "::error::PAD analysis gate failed (policy=$POLICY, exit $CODE). The report at the sarif-file output lists the violations."
+            else
+              echo "::error::PAD analysis gate failed (fail-on=$FAIL_ON, exit $CODE)."
+            fi
+            exit "$CODE" ;;
+        esac
 
     - name: Comment on pull request
       if: ${{ always() && github.event_name == 'pull_request' && inputs.comment-on-pr == 'true' }}
       uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
+      env:
+        REPORT: ${{ steps.analyze.outputs.report-file }}
       with:
         github-token: ${{ github.token }}
         script: |
           const fs = require('fs');
-          const reportPath = `${{ runner.temp }}/pad-report.json`;
+          const reportPath = process.env.REPORT || `${process.env.RUNNER_TEMP}/pad-report.json`;
           let body = '## PAD Flow Analysis\n\n';
           try {
             const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
             const s = report.stats || {};
             const m = report.metrics || {};
             const icon = s.errors > 0 ? '🔴' : s.warnings > 0 ? '🟠' : '✅';
-            body += `${icon} **${s.errors}** error(s) · **${s.warnings}** warning(s) · **${s.info}** info\n`;
-            body += `Health: **${m.healthScore ?? 'n/a'}/100** · Blocks: ${s.blocksAnalyzed}\n`;
+            body += `${icon} **${s.errors}** error(s) · **${s.warnings}** warning(s) · **${s.info}** info`;
             if (s.suppressed > 0) body += ` (${s.suppressed} suppressed inline)`;
+            body += `\nHealth: **${m.healthScore ?? 'n/a'}/100** · Blocks: ${s.blocksAnalyzed}\n`;
+            if (report.policy) {
+              const p = report.policy;
+              body += `Policy **${p.policyName}**: ${p.passed ? '✅ passed' : '❌ FAILED'} — ${(p.violations || []).length} violation(s)\n`;
+            }
           } catch {
-            body += '_No report produced._';
+            body += '_No report produced (the analyzer exited 2 — see the analyze step)._';
           }
           // Posting is BEST EFFORT. A pull request from a fork always receives a
           // read-only GITHUB_TOKEN no matter what permissions the calling

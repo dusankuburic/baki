@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"strconv"
 	"time"
 
 	"pad-core/models"
@@ -15,6 +16,13 @@ import (
 // while info findings appear as passing testcases (noted via <system-out>).
 // doc may be nil; when provided, its name populates the testsuite name.
 func ReportToJUnit(report *models.AnalysisReport, doc *models.FlowDocument) ([]byte, error) {
+	return ReportToJUnitWithOptions(report, doc, Options{})
+}
+
+// ReportToJUnitWithOptions is ReportToJUnit plus the policy verdict as a
+// <properties> block on the testsuite (policy.id/name/passed/violations…), so a
+// CI test report says why the gate failed instead of only listing findings.
+func ReportToJUnitWithOptions(report *models.AnalysisReport, doc *models.FlowDocument, opts Options) ([]byte, error) {
 	if report == nil {
 		report = &models.AnalysisReport{}
 	}
@@ -67,6 +75,9 @@ func ReportToJUnit(report *models.AnalysisReport, doc *models.FlowDocument) ([]b
 		Timestamp: report.GeneratedAt.Format(time.RFC3339),
 		Testcases: cases,
 	}
+	if opts.Policy != nil {
+		suite.Properties = &junitProperties{Items: policyJUnitProperties(opts.Policy)}
+	}
 
 	root := junitRoot{
 		Suites: []junitTestsuite{suite},
@@ -112,13 +123,40 @@ type junitRoot struct {
 }
 
 type junitTestsuite struct {
-	Name      string          `xml:"name,attr"`
-	Tests     int             `xml:"tests,attr"`
-	Failures  int             `xml:"failures,attr"`
-	Errors    int             `xml:"errors,attr"`
-	Time      string          `xml:"time,attr"`
-	Timestamp string          `xml:"timestamp,attr"`
-	Testcases []junitTestcase `xml:"testcase"`
+	Name       string           `xml:"name,attr"`
+	Tests      int              `xml:"tests,attr"`
+	Failures   int              `xml:"failures,attr"`
+	Errors     int              `xml:"errors,attr"`
+	Time       string           `xml:"time,attr"`
+	Timestamp  string           `xml:"timestamp,attr"`
+	Properties *junitProperties `xml:"properties,omitempty"`
+	Testcases  []junitTestcase  `xml:"testcase"`
+}
+
+// junitProperties is the standard JUnit <properties><property name= value=/>
+// block; JUnit consumers (Jenkins, GitLab, Azure) surface it on the suite.
+type junitProperties struct {
+	Items []junitProperty `xml:"property"`
+}
+
+type junitProperty struct {
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
+}
+
+// policyJUnitProperties flattens a PolicyResult into suite properties.
+func policyJUnitProperties(res *models.PolicyResult) []junitProperty {
+	return []junitProperty{
+		{Name: "policy.id", Value: res.PolicyID},
+		{Name: "policy.name", Value: res.PolicyName},
+		{Name: "policy.passed", Value: strconv.FormatBool(res.Passed)},
+		{Name: "policy.violations", Value: strconv.Itoa(len(res.Violations))},
+		{Name: "policy.errors", Value: strconv.Itoa(res.Errors)},
+		{Name: "policy.warnings", Value: strconv.Itoa(res.Warnings)},
+		{Name: "policy.info", Value: strconv.Itoa(res.Info)},
+		{Name: "policy.evaluated", Value: strconv.Itoa(res.Evaluated)},
+		{Name: "policy.waived", Value: strconv.Itoa(res.Waived)},
+	}
 }
 
 type junitTestcase struct {

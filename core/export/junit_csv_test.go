@@ -82,6 +82,14 @@ func TestReportToJUnit_NilReportNoPanic(t *testing.T) {
 
 // ── CSV ────────────────────────────────────────────────────────────
 
+// readCSVRows parses exporter output the way a consumer must: the leading
+// `# …` summary line is a comment, not a record.
+func readCSVRows(out []byte) ([][]string, error) {
+	r := csv.NewReader(strings.NewReader(string(out)))
+	r.Comment = '#'
+	return r.ReadAll()
+}
+
 func TestReportToCSV_BasicStructure(t *testing.T) {
 	report := &models.AnalysisReport{
 		Findings: []models.Finding{
@@ -95,8 +103,7 @@ func TestReportToCSV_BasicStructure(t *testing.T) {
 		t.Fatalf("ReportToCSV: %v", err)
 	}
 
-	r := csv.NewReader(strings.NewReader(string(out)))
-	rows, err := r.ReadAll()
+	rows, err := readCSVRows(out)
 	if err != nil {
 		t.Fatalf("invalid CSV: %v", err)
 	}
@@ -121,8 +128,7 @@ func TestReportToCSV_EmptyReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportToCSV: %v", err)
 	}
-	r := csv.NewReader(strings.NewReader(string(out)))
-	rows, err := r.ReadAll()
+	rows, err := readCSVRows(out)
 	if err != nil {
 		t.Fatalf("invalid CSV: %v", err)
 	}
@@ -141,8 +147,7 @@ func TestReportToCSV_NewlineSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportToCSV: %v", err)
 	}
-	r := csv.NewReader(strings.NewReader(string(out)))
-	rows, err := r.ReadAll()
+	rows, err := readCSVRows(out)
 	if err != nil {
 		t.Fatalf("invalid CSV: %v", err)
 	}

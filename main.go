@@ -689,7 +689,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, chatSv
 			// does not close hijacked (WebSocket) sockets, so without this
 			// every rolling restart with even one live WS client takes the
 			// full shutdownCtx budget and drops in-flight collab state
-			// silently. Budget: 5s — enough for clients to receive the Close
+			// silently. Budget: 3s — enough for clients to receive the Close
 			// frame + pumps to exit; the remainder of shutdownCtx goes to
 			// server.Shutdown for non-WS requests.
 			wsCtx, wsCancel := context.WithTimeout(ctx, 3*time.Second)

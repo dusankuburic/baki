@@ -1,25 +1,48 @@
 # Azure DevOps Pipeline template for PAD Flow Analysis.
 #
-# Usage in your azure-pipelines.yml:
+# Usage in your azure-pipelines.yml — either copy this file into your
+# repository and reference it with `@self`:
 #
 #   trigger: ['main']
 #   pool:
 #     vmImage: 'ubuntu-latest'
 #   steps:
-#     - template: azure-pipelines.pad-analysis.yml@self
+#     - template: ci/azure-pipelines.pad-analysis.yml@self
 #       parameters:
 #         flowPath: '$(Build.SourcesDirectory)/flows'
 #         failOn: 'error'
-#         # baseline: 'baseline.json'  # ratchet: fail only on NEW findings
-#         # policy: 'policy.json'      # authoritative gate (overrides failOn)
+#         # rules: 'hardcoded-credential,unhandled-error'  # empty = all enabled rules
+#         # baseline: 'baseline.json'   # ratchet: fail only on NEW findings
+#         # policy: 'policy.json'       # authoritative gate (overrides failOn)
+#         # newFromRev: 'origin/main'   # gate only on findings absent at that revision
+#         # customRules: 'rules.json'   # extra rule definitions
+#         # config: '.bakirc.json'      # empty = auto-discover ./.bakirc.json
 #
-# This template downloads the bakicli release binary (checksum-verified), runs
-# analysis with SARIF output, publishes the SARIF report as a build artifact,
-# and fails the build if any finding meets the severity threshold.
+# …or reference it straight from GitHub through a repository resource:
 #
-# It used to run `go build ./cmd/bakicli` inside $(Build.SourcesDirectory) —
-# the CONSUMER's repository, which has no cmd/bakicli — so it failed for every
-# consumer, every time. Pin `version` to a release tag for a reproducible gate.
+#   resources:
+#     repositories:
+#       - repository: baki
+#         type: github
+#         name: dusankuburic/baki
+#         ref: refs/heads/main
+#         endpoint: <your GitHub service connection>
+#   steps:
+#     - template: ci/azure-pipelines.pad-analysis.yml@baki
+#       parameters: { flowPath: '$(Build.SourcesDirectory)/flows' }
+#
+# What it does: downloads the bakicli release binary (checksum-verified) — or,
+# when no release asset matches (nothing published yet, air-gapped agent),
+# builds it from source at `sourceRef` — runs ONE analysis that writes the
+# SARIF report and a JSON report (the summary is derived from that same run,
+# so every gate flag is reflected in its numbers), publishes the SARIF as a
+# build artifact, and fails the build on threshold/policy breach.
+#
+# Exit codes: 0 gate passed · 1 gate failed (report complete) · 2 usage,
+# config/policy or parse error (no report; the build fails regardless of failOn).
+#
+# Parameters reach the scripts through `env:`, never by template-expanding them
+# into the script body, so a value containing quotes is data, not code.
 
 parameters:
   - name: flowPath
@@ -31,6 +54,10 @@ parameters:
     default: 'error'
     values: ['error', 'warning', 'info', 'none']
     displayName: 'Fail the build at this severity or higher'
+  - name: rules
+    type: string
+    default: ''
+    displayName: 'Comma-separated rule IDs to enable (empty = all)'
   - name: baseline
     type: string
     default: ''
@@ -39,6 +66,18 @@ parameters:
     type: string
     default: ''
     displayName: 'Policy JSON file (authoritative gate, overrides failOn)'
+  - name: newFromRev
+    type: string
+    default: ''
+    displayName: 'Git revision; gate only on findings absent at that revision'
+  - name: customRules
+    type: string
+    default: ''
+    displayName: 'Custom rules JSON file'
+  - name: config
+    type: string
+    default: ''
+    displayName: '.bakirc.json path (empty = auto-discover)'
   - name: sarifFile
     type: string
     default: '$(Build.ArtifactStagingDirectory)/pad-analysis.sarif'
@@ -51,9 +90,13 @@ parameters:
     type: string
     default: 'dusankuburic/baki'
     displayName: 'GitHub repository that publishes bakicli releases'
+  - name: sourceRef
+    type: string
+    default: 'main'
+    displayName: 'Git ref built from source when no release asset is available'
 
 steps:
-  - script: |
+  - bash: |
       set -euo pipefail
       case "$(uname -m)" in
         x86_64) goarch=amd64 ;;
@@ -61,83 +104,129 @@ steps:
         *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
       esac
       asset="bakicli-linux-${goarch}.tar.gz"
-      if [ "${{ parameters.version }}" = "latest" ]; then
-        base="https://github.com/${{ parameters.repo }}/releases/latest/download"
+      if [ "$BAKI_VERSION" = "latest" ]; then
+        base="https://github.com/${BAKI_REPO}/releases/latest/download"
       else
-        base="https://github.com/${{ parameters.repo }}/releases/download/${{ parameters.version }}"
+        base="https://github.com/${BAKI_REPO}/releases/download/${BAKI_VERSION}"
       fi
       tmp="$(mktemp -d)"
-      curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset"
-      curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256"
-      ( cd "$tmp" && sha256sum -c "$asset.sha256" )
-      tar -xzf "$tmp/$asset" -C "$tmp"
-      mv "$tmp/bakicli-linux-${goarch}" "$(Agent.TempDirectory)/bakicli"
-      chmod +x "$(Agent.TempDirectory)/bakicli"
-    displayName: 'Download bakicli release binary'
+      bin="$AGENT_TEMPDIRECTORY/bakicli"
+      acquired=false
+      if curl -fsSL --retry 2 -o "$tmp/$asset" "$base/$asset" \
+         && curl -fsSL --retry 2 -o "$tmp/$asset.sha256" "$base/$asset.sha256" \
+         && ( cd "$tmp" && sha256sum -c "$asset.sha256" ); then
+        tar -xzf "$tmp/$asset" -C "$tmp"
+        mv "$tmp/bakicli-linux-${goarch}" "$bin"
+        acquired=true
+        echo "acquired release binary $asset"
+      fi
+      if [ "$acquired" != "true" ]; then
+        # Source-build fallback (mirrors the GitHub Action): no matching
+        # release asset, checksum missing, or mismatch. Hosted agents ship Go;
+        # GOTOOLCHAIN=auto fetches the version go.mod asks for if it is newer.
+        echo "release asset unavailable at $base/$asset — building bakicli from source (${BAKI_SOURCE_REF})"
+        command -v go >/dev/null || { echo "go toolchain not found on this agent; add a GoTool@0 step or publish a release"; exit 1; }
+        git clone --depth 1 --branch "$BAKI_SOURCE_REF" "https://github.com/${BAKI_REPO}.git" "$tmp/src"
+        ( cd "$tmp/src" && GOTOOLCHAIN=auto go build -ldflags "-X main.version=${BAKI_SOURCE_REF}" -o "$bin" ./cmd/bakicli )
+      fi
+      chmod +x "$bin"
+      "$bin" --version
+      # One resolution for every later step.
+      echo "##vso[task.setvariable variable=bakicliPath]$bin"
+    displayName: 'Acquire bakicli (release binary or source build)'
+    env:
+      BAKI_REPO: ${{ parameters.repo }}
+      BAKI_VERSION: ${{ parameters.version }}
+      BAKI_SOURCE_REF: ${{ parameters.sourceRef }}
 
-  - script: |
+  - bash: |
       set -euo pipefail
-      BAKICLI="$(Agent.TempDirectory)/bakicli"
+      BAKICLI="$BAKICLI_PATH"
+      [ -x "$BAKICLI" ] || BAKICLI="$BAKICLI.exe"
       args=()
-      if [ -n "${{ parameters.policy }}" ]; then
-        args+=(-policy "${{ parameters.policy }}")
+      if [ -n "$POLICY" ]; then
+        args+=(-policy "$POLICY")
       else
-        gate="${{ parameters.failOn }}"
+        gate="$FAIL_ON"
         [ "$gate" = "none" ] && gate="info"
         args+=(-fail-on "$gate")
       fi
-      if [ -n "${{ parameters.baseline }}" ]; then
-        args+=(-baseline "${{ parameters.baseline }}")
-      fi
-      # SARIF is emitted before the gate exits non-zero, so the report is complete.
+      if [ -n "$RULES" ]; then args+=(-rules "$RULES"); fi
+      if [ -n "$BASELINE" ]; then args+=(-baseline "$BASELINE"); fi
+      if [ -n "$NEW_FROM_REV" ]; then args+=(-new-from-rev "$NEW_FROM_REV"); fi
+      if [ -n "$CUSTOM_RULES" ]; then args+=(-custom-rules "$CUSTOM_RULES"); fi
+      if [ -n "$CONFIG" ]; then args+=(-config "$CONFIG"); fi
+      report="$AGENT_TEMPDIRECTORY/pad-report.json"
+      # ONE run: SARIF to the artifact path, the JSON report (same flags, same
+      # numbers, policy verdict included) to $report. Both are written before
+      # the gate exits non-zero; exit 2 leaves them empty.
       set +e
-      "$BAKICLI" -format sarif "${args[@]}" "${{ parameters.flowPath }}" > "${{ parameters.sarifFile }}"
+      "$BAKICLI" -format sarif -report-json "$report" "${args[@]}" "$FLOW_PATH" > "$SARIF_FILE"
       code=$?
       set -e
       echo "##vso[task.setvariable variable=gateExitCode]$code"
+      echo "##vso[task.setvariable variable=padReportPath]$report"
+      if [ "$code" = "2" ]; then
+        echo "##vso[task.logissue type=error]PAD analysis could not run (exit 2: usage, config/policy or parse error) — no report produced."
+        exit 2
+      fi
       # A configured POLICY is authoritative and overrides failOn (the block
       # above does not even pass -fail-on when one is set), so enforcement must
       # not be conditioned on failOn alone — policy=<file> with failOn=none is
       # the documented way to ask for policy-only gating, and it used to pass
       # the build on a violation.
-      if [ "$code" != "0" ] && { [ "${{ parameters.failOn }}" != "none" ] || [ -n "${{ parameters.policy }}" ]; }; then
-        if [ -n "${{ parameters.policy }}" ]; then
-          echo "##vso[task.logissue type=error]PAD analysis gate failed (policy=${{ parameters.policy }})."
+      if [ "$code" != "0" ] && { [ "$FAIL_ON" != "none" ] || [ -n "$POLICY" ]; }; then
+        if [ -n "$POLICY" ]; then
+          echo "##vso[task.logissue type=error]PAD analysis gate failed (policy=$POLICY, exit $code)."
         else
-          echo "##vso[task.logissue type=error]PAD analysis gate failed (fail-on=${{ parameters.failOn }})."
+          echo "##vso[task.logissue type=error]PAD analysis gate failed (fail-on=$FAIL_ON, exit $code)."
         fi
       fi
     displayName: 'Analyze flows (SARIF + gate)'
+    env:
+      BAKICLI_PATH: $(bakicliPath)
+      FLOW_PATH: ${{ parameters.flowPath }}
+      FAIL_ON: ${{ parameters.failOn }}
+      RULES: ${{ parameters.rules }}
+      BASELINE: ${{ parameters.baseline }}
+      POLICY: ${{ parameters.policy }}
+      NEW_FROM_REV: ${{ parameters.newFromRev }}
+      CUSTOM_RULES: ${{ parameters.customRules }}
+      CONFIG: ${{ parameters.config }}
+      SARIF_FILE: ${{ parameters.sarifFile }}
 
-  - script: |
-      BAKICLI="$(Agent.TempDirectory)/bakicli"
-      "$BAKICLI" -format json -quiet "${{ parameters.flowPath }}" > "$(Agent.TempDirectory)/pad-report.json" || true
-      report="$(Agent.TempDirectory)/pad-report.json"
+  - bash: |
+      report="$PAD_REPORT_PATH"
       echo "## PAD Flow Analysis"
       echo ""
-      if [ -s "$report" ]; then
+      if [ -n "$report" ] && [ -s "$report" ]; then
         errors=$(jq '.stats.errors' "$report")
         warnings=$(jq '.stats.warnings' "$report")
         info=$(jq '.stats.info' "$report")
+        suppressed=$(jq '.stats.suppressed' "$report")
         health=$(jq '.metrics.healthScore // "n/a"' "$report")
-        echo "Errors: **$errors** · Warnings: **$warnings** · Info: **$info**"
+        echo "Errors: **$errors** · Warnings: **$warnings** · Info: **$info** · Suppressed inline: $suppressed"
         echo "Health score: **$health/100**"
+        jq -r 'if .policy then "Policy **\(.policy.policyName)**: \(if .policy.passed then "passed" else "FAILED" end) — \(.policy.violations | length) violation(s)" else empty end' "$report"
       else
-        echo "_No report produced._"
+        echo "_No report produced (the analyzer exited 2 — see the analyze step)._"
       fi
     condition: always()
     displayName: 'Analysis summary'
+    env:
+      PAD_REPORT_PATH: $(padReportPath)
 
-  - task: PublishBuildArtifact@1
-    condition: always()
+  # Only a NON-EMPTY report is worth publishing: exit 2 leaves an empty file.
+  - task: PublishBuildArtifacts@1
+    condition: and(always(), ne(variables['gateExitCode'], '2'))
     displayName: 'Publish SARIF report'
     inputs:
       pathToPublish: '${{ parameters.sarifFile }}'
       artifactName: 'pad-analysis-sarif'
       publishLocation: 'Container'
 
-  - script: |
-      code="$(gateExitCode)"
+  - bash: |
+      code="$GATE_EXIT_CODE"
       if [ "$code" != "0" ]; then
         exit "$code"
       fi
@@ -145,3 +234,5 @@ steps:
     # a policy is configured.
     condition: and(always(), or(ne('${{ parameters.failOn }}', 'none'), ne('${{ parameters.policy }}', '')))
     displayName: 'Enforce gate'
+    env:
+      GATE_EXIT_CODE: $(gateExitCode)

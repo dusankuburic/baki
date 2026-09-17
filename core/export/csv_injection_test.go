@@ -1,7 +1,6 @@
 package export
 
 import (
-	"encoding/csv"
 	"strings"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestReportToCSV_FormulaInjectionNeutralized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportToCSV: %v", err)
 	}
-	rows, err := csv.NewReader(strings.NewReader(string(out))).ReadAll()
+	rows, err := readCSVRows(out)
 	if err != nil {
 		t.Fatalf("invalid CSV: %v", err)
 	}
