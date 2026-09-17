@@ -96,8 +96,12 @@ export default function FindingTriageMenu({finding}: Props) {
             triageTone(triageStatus).border,
             triageTone(triageStatus).bg,
           )}
+          title={isDesktop ? t('triage.labels.sessionOnlyHint') : undefined}
         >
           {t(`triage.status.${triageStatus}`)}
+          {/* Desktop triage is process memory (the store persists only in
+              cloud mode): say so on the chip, which otherwise looks saved. */}
+          {isDesktop && <span className="ml-1 normal-case tracking-normal opacity-70">· {t('triage.labels.sessionOnly')}</span>}
         </span>
       )}
 
@@ -125,12 +129,20 @@ export default function FindingTriageMenu({finding}: Props) {
             setShowAssign(false)
           }}
           className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
-          title={t('triage.actions.setStatus')}
+          title={isDesktop ? `${t('triage.actions.setStatus')} (${t('triage.labels.sessionOnly')})` : t('triage.actions.setStatus')}
         >
           <CircleDot size={10} />
         </button>
         {showTriage && (
           <div className="absolute right-0 top-full mt-1 z-20 bg-surface-2 border border-border-subtle rounded-md shadow-lg py-0.5 min-w-36">
+            {isDesktop && (
+              <div
+                className="px-2.5 py-1 text-2xs text-text-tertiary border-b border-border-subtle mb-0.5"
+                title={t('triage.labels.sessionOnlyHint')}
+              >
+                {t('triage.labels.sessionOnly')}
+              </div>
+            )}
             {TRIAGE_OPTIONS.map(s => (
               <button
                 key={s}

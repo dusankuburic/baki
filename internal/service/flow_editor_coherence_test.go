@@ -73,7 +73,7 @@ func TestEditorMutations_InvalidateDerivedCaches(t *testing.T) {
 		svc, doc := newDesktopEditSvc(t)
 		fired := record(svc)
 		target := blockIDByURL(doc, "https://target")
-		if _, err := svc.ApplyFix(context.Background(), doc, target, "wrap-error-handler", "unhandled-error", "", ""); err != nil {
+		if _, err := svc.ApplyFix(context.Background(), doc, target, "wrap-error-handler", "unhandled-error", "", "", false); err != nil {
 			t.Fatalf("ApplyFix: %v", err)
 		}
 		if *fired != 1 {

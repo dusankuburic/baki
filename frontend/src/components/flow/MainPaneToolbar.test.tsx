@@ -27,6 +27,14 @@ vi.mock('@/api', () => ({
   analysisApi: {analyzeFlow: (...a: unknown[]) => analyzeFlow(...a)},
 }))
 
+// Re-import needs a filesystem (desktop) and a file-backed flow; the toolbar
+// asks the platform guard, so the tests control it here.
+const capabilities = {fileSystem: true}
+vi.mock('@/platform/guards', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/platform/guards')>()),
+  getPlatformCapabilities: () => capabilities,
+}))
+
 function renderToolbar() {
   return render(
     <ToastProvider>
@@ -38,7 +46,8 @@ function renderToolbar() {
 beforeEach(() => {
   vi.clearAllMocks()
   useUIStore.setState({mainPaneView: 'block'})
-  useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never})
+  capabilities.fileSystem = true
+  useFlowStore.setState({document: {id: 'flow-1', name: 'F', filePath: '/flows/F.txt'} as never})
   useAnalysisStore.setState({isAnalyzing: false, analyzingGen: 0})
   useEditorStore.setState({groups: [{tabs: [], activeTabId: null} as never], focusedGroupIndex: 0})
 })
@@ -118,6 +127,18 @@ describe('MainPaneToolbar', () => {
     // setDocument rebuilds indexes/derived state, so assert identity not shape.
     await waitFor(() => expect(useFlowStore.getState().document?.name).toBe('F2'))
     await waitFor(() => expect(screen.getAllByText(/Flow re-imported and re-analyzed/).length).toBeGreaterThan(0))
+  })
+
+  it('hides re-import where it cannot work (no filesystem, or an uploaded flow)', () => {
+    capabilities.fileSystem = false
+    const {unmount} = renderToolbar()
+    expect(screen.queryByRole('button', {name: 'Re-import flow'})).not.toBeInTheDocument()
+    unmount()
+
+    capabilities.fileSystem = true
+    useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never})
+    renderToolbar()
+    expect(screen.queryByRole('button', {name: 'Re-import flow'})).not.toBeInTheDocument()
   })
 
   it('disables re-import while one is in flight', async () => {

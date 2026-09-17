@@ -135,6 +135,7 @@ describe('FindingCard apply-fix chain', () => {
         'unhandled-error',
         undefined,
         undefined,
+        true, // the preview diff was shown: this is the unsafe opt-in
       )
     })
 
@@ -208,6 +209,7 @@ describe('FindingCard apply-fix chain', () => {
         'unhandled-error',
         undefined,
         undefined,
+        false, // no preview diff was shown: not the unsafe opt-in
       )
     })
     expect(analyzeFlow).toHaveBeenCalled()

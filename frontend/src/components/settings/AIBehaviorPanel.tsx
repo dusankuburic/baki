@@ -1,6 +1,7 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useSettingsStore} from '@/stores/settingsStore'
+import {useSystemStore} from '@/stores/systemStore'
 import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
@@ -14,6 +15,13 @@ export default function AIBehaviorPanel() {
   const updateAI = useSettingsStore(s => s.updateAI)
   const updateProvider = useSettingsStore(s => s.updateProvider)
   const activeProvider = ai.activeProvider
+  // Local-mode backend (desktop sidecar OR a browser-served `PAD_MODE=local`
+  // server) has no usage store: the daily-spend read returns 0 there, so a
+  // budget never accumulates. /api/system/info reports that mode as
+  // capabilities.sessionAnalytics; isTauri() is only the fallback until the
+  // info has loaded — it missed the browser-served local case entirely.
+  const systemInfo = useSystemStore(s => s.info)
+  const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
 
   return (
     <div>
@@ -93,11 +101,11 @@ export default function AIBehaviorPanel() {
             />
           </div>
 
-          {/* Desktop (local mode) has no usage store: the server's daily-spend
-              read returns 0 there, so a budget entered here was never
-              enforced while looking exactly like the cloud setting. Hidden
-              rather than shown inert. */}
-          {!isTauri() && (
+          {/* Local mode has no usage store: the server's daily-spend read
+              returns 0 there, so a budget entered here was never enforced
+              while looking exactly like the cloud setting. Hidden rather
+              than shown inert. */}
+          {!localBackend && (
             <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
               <div className="flex-1">
                 <span className="text-sm font-medium text-text-primary">{t('behavior.dailyBudget')}</span>

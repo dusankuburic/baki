@@ -38,6 +38,17 @@ export interface FileSaveOptions {
 }
 
 /**
+ * Lifecycle event of the local backend process (desktop sidecar). The Rust
+ * host emits `backend-terminated` on every exit, `backend-error` when it gives
+ * up (spawn failure, startup timeout, or the auto-restart cap) and
+ * `backend-ready` once a (re)spawned sidecar has published its config.
+ */
+export interface BackendEvent {
+  kind: 'terminated' | 'error' | 'ready'
+  message: string
+}
+
+/**
  * Platform adapter interface for abstracting platform-specific operations
  */
 export interface PlatformAdapter {
@@ -100,6 +111,19 @@ export interface PlatformAdapter {
    * Close the application window (desktop only; no-op on web).
    */
   closeWindow(): Promise<void>
+
+  /**
+   * Subscribe to backend lifecycle events (desktop only; web never fires).
+   * Returns the unsubscribe function.
+   */
+  onBackendEvent(cb: (event: BackendEvent) => void): () => void
+
+  /**
+   * Terminate and respawn the backend process (desktop only; no-op on web).
+   * Resolves once the new process has been spawned — readiness arrives as a
+   * `ready` BackendEvent.
+   */
+  restartBackend(): Promise<void>
 }
 
 /**

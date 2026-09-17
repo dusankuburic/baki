@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import Modal from '@/components/shared/Modal'
 import Spinner from '@/components/shared/Spinner'
 import {isTauri} from '@/platform/guards'
+import type {SettingsSection} from '@/stores/uiStore'
 
 // Each panel is lazy: only one is visible at a time, so the settings chunk
 // fetches a panel on first open of that section instead of shipping all 14
@@ -23,22 +24,6 @@ const ApiTokensPanel = lazy(() => import('./ApiTokensPanel'))
 const ShortcutsPanel = lazy(() => import('./ShortcutsPanel'))
 const PrivacyPanel = lazy(() => import('./PrivacyPanel'))
 const AboutPanel = lazy(() => import('./AboutPanel'))
-
-type SettingsSection =
-  | 'general'
-  | 'parser'
-  | 'accounts'
-  | 'behavior'
-  | 'prompts'
-  | 'appearance'
-  | 'analysis'
-  | 'policies'
-  | 'orgs'
-  | 'knowledge'
-  | 'tokens'
-  | 'shortcuts'
-  | 'privacy'
-  | 'about'
 
 // Organisations are a cloud-mode (multi-user) concept; the desktop app is
 // single-user and has no notion of orgs, so hide that entry there.
@@ -75,12 +60,12 @@ export default function SettingsModal({
   onClose: () => void
   // initialSection selects the opening tab (deep-link from onboarding /
   // missing-key states); falls back to 'general' when unknown.
-  initialSection?: string | null
+  initialSection?: SettingsSection | null
 }) {
   const {t} = useTranslation('settings')
   const sections = useSections()
   const validInitial =
-    initialSection && sections.some(s => s.id === initialSection) ? (initialSection as SettingsSection) : 'general'
+    initialSection && sections.some(s => s.id === initialSection) ? initialSection : 'general'
   const [activeSection, setActiveSection] = useState<SettingsSection>(validInitial)
 
   return (

@@ -41,13 +41,18 @@ export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
       const result = await flowApi.previewFix(doc.id, finding.blockId, fixType, finding.ruleId, variable, property)
       setPreview({open: true, original: result.original, patched: result.patched, fixType})
     } catch {
-      // Preview failed (e.g. cloud mode where preview-fix is blocked) — apply
-      // directly without a preview, preserving the original UX.
-      await doApplyFix(fixType)
+      // Preview failed — apply directly without a preview, preserving the
+      // original UX. No diff was shown, so this is NOT the unsafe opt-in: a
+      // behaviour-changing fixer is refused by the server here (400) and the
+      // toast says why.
+      await doApplyFix(fixType, false)
     }
   }
 
-  const doApplyFix = async (fixType: string) => {
+  // reviewed: true when the caller has shown the preview diff for this fix —
+  // that is the only path allowed to send `unsafe: true`, the opt-in the
+  // server requires for behaviour-changing fixers.
+  const doApplyFix = async (fixType: string, reviewed: boolean) => {
     if (!doc) return
     setApplyingFix(true)
     setPreview(p => ({...p, open: false}))
@@ -58,7 +63,15 @@ export function useFindingFix(finding: Finding, doc: FlowDocument | null) {
         fixType === 'replace-with-variable' || fixType === 'parameterize-sql'
           ? (finding.metadata?.property as string | undefined)
           : undefined
-      const updated = await flowApi.applyFix(doc.id, finding.blockId, fixType, finding.ruleId, variable, property)
+      const updated = await flowApi.applyFix(
+        doc.id,
+        finding.blockId,
+        fixType,
+        finding.ruleId,
+        variable,
+        property,
+        reviewed,
+      )
       setDocument(updated)
       // Fix was applied successfully. Re-analysis is best-effort — if it
       // fails the editor already shows the fixed source; the stale report

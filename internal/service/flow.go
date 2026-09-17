@@ -560,7 +560,10 @@ const searchFanOut = 8
 // flow doesn't monopolise the result, then a global cap is applied.
 func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query models.SearchQuery) (*models.SearchResults, error) {
 	if s.storage == nil || s.docProvider == nil {
-		// Local/no storage: nothing stored to search across.
+		// Local/no storage: there is no library to search. The HTTP layer
+		// answers 503 before reaching here (handleSearchLibrary), so a
+		// desktop caller is told "not available" rather than "no matches";
+		// this branch only keeps direct callers nil-safe.
 		return &models.SearchResults{Query: query, Results: []models.SearchResult{}}, nil
 	}
 	// MetadataOnly: the loop below re-resolves each flow's full document via
@@ -1025,7 +1028,28 @@ func (s *FlowService) generateFixPatch(doc *models.FlowDocument, blockID, fixTyp
 	return patch, nil
 }
 
-func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*models.FlowDocument, error) {
+// ErrUnsafeFixRequiresOptIn is returned by ApplyFix for a behaviour-changing
+// fixer (analyzer.IsBehaviourChangingFix) applied without the explicit opt-in.
+// Wraps ErrInvalidInput so the HTTP layer answers 400, not 500.
+var ErrUnsafeFixRequiresOptIn = fmt.Errorf("%w: fix %q changes runtime behaviour; review the previewed diff and resend with unsafe: true", ErrInvalidInput, "")
+
+// unsafeFixError names the offending fix type while keeping the sentinel
+// matchable with errors.Is.
+func unsafeFixError(fixType string) error {
+	return fmt.Errorf("%w (fix type %q)", ErrUnsafeFixRequiresOptIn, fixType)
+}
+
+// ApplyFix applies one auto-fix to a block. unsafe is the explicit opt-in for
+// behaviour-changing fixers (replace-with-variable, mask-sensitive-variable,
+// sanitize-command-vars): the batch loop and the CLI already required
+// -unsafe for those, but this single-fix path applied them on a bare POST —
+// the one-line "Apply fix" card could parameterise a flow with no diff shown.
+// Callers that have displayed the preview pass unsafe=true; everything else
+// gets ErrUnsafeFixRequiresOptIn and the flow is left unchanged.
+func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string, unsafe bool) (*models.FlowDocument, error) {
+	if analyzer.IsBehaviourChangingFix(fixType) && !unsafe {
+		return nil, unsafeFixError(fixType)
+	}
 	// Cloud mode (no local source file): build the ALIGNED patching context
 	// (stored source, or the canonical bridge for ingested/folder flows —
 	// see flow_cloudfix.go) and persist via SaveFlow. Desktop falls through
@@ -1049,9 +1073,43 @@ func (s *FlowService) ApplyFix(ctx context.Context, doc *models.FlowDocument, bl
 // updated content + source via SaveFlow. For single-file flows, patches the
 // doc.Source directly. For multi-file flows, doc.Source contains the combined
 
+// desktopSourcePath resolves the on-disk file the source editor reads and
+// writes for a desktop flow. Single-file flows ignore `file` (there is only
+// one). Folder flows select the member by bare filename — "" means Main.txt,
+// the pre-existing default — and reject anything that is not a real .txt
+// member of that folder: the name is a request parameter, so the same
+// traversal guard PatchFlow applies to patch.File applies here (no
+// separators, no ".."), plus an existence check so the editor cannot be used
+// to create a new file in the flow folder.
+//
+// The editor used to read and write Main.txt unconditionally: with
+// Subflow.txt selected in the sidebar, "Save & Re-parse" overwrote Main.
+func desktopSourcePath(doc *models.FlowDocument, file string) (string, error) {
+	info, err := os.Stat(doc.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("source not accessible: %w", err)
+	}
+	if !info.IsDir() {
+		return doc.FilePath, nil
+	}
+	if file == "" {
+		file = "Main.txt"
+	}
+	if !safeConvComponent(file) || !strings.HasSuffix(strings.ToLower(file), ".txt") {
+		return "", fmt.Errorf("%w: invalid flow file %q", ErrInvalidInput, file)
+	}
+	target := filepath.Join(doc.FilePath, file)
+	finfo, err := os.Stat(target)
+	if err != nil || finfo.IsDir() {
+		return "", fmt.Errorf("%w: %q is not a file of this flow folder", ErrInvalidInput, file)
+	}
+	return target, nil
+}
+
 // GetSource returns the raw PAD source text for a flow. Desktop: reads the
-// source file. Cloud: returns doc.Source. Used by the in-app source editor.
-func (s *FlowService) GetSource(doc *models.FlowDocument) (string, error) {
+// source file (for folder flows, the member named by `file`, Main.txt when
+// empty). Cloud: returns doc.Source. Used by the in-app source editor.
+func (s *FlowService) GetSource(doc *models.FlowDocument, file string) (string, error) {
 	if doc.FilePath == "" {
 		// Cloud: stored source; for IMPORTED flows (parsed content
 		// only, Source never set) fall back to the serializer so the source
@@ -1061,11 +1119,11 @@ func (s *FlowService) GetSource(doc *models.FlowDocument) (string, error) {
 		}
 		return parser.SerializeDocument(doc), nil
 	}
-	targetPath := doc.FilePath
-	if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
-		targetPath = filepath.Join(doc.FilePath, "Main.txt")
+	targetPath, err := desktopSourcePath(doc, file)
+	if err != nil {
+		return "", err
 	}
-	data, err := os.ReadFile(targetPath) // #nosec G304 -- same path logic as PatchFlow
+	data, err := os.ReadFile(targetPath) // #nosec G304 -- validated member of doc.FilePath (desktopSourcePath)
 	if err != nil {
 		return "", fmt.Errorf("read source file: %w", err)
 	}
@@ -1074,10 +1132,11 @@ func (s *FlowService) GetSource(doc *models.FlowDocument) (string, error) {
 
 // SaveSource replaces the flow's raw source text with the given source (from
 // the in-app source editor), re-parses, and persists. Desktop: writes the file
-// then re-reads/re-parses. Cloud: re-parses the source into Content + Source
-// and saves via SaveFlow (OCC). Used by the "Save & Re-parse" button in the
+// (for folder flows, the member named by `file`, Main.txt when empty) then
+// re-reads/re-parses. Cloud: re-parses the source into Content + Source and
+// saves via SaveFlow (OCC). Used by the "Save & Re-parse" button in the
 // source editor view.
-func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, source string) (*models.FlowDocument, error) {
+func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, source, file string) (*models.FlowDocument, error) {
 	if doc.FilePath == "" {
 		if doc.IsFolder {
 			// Guard: the combined text parses as a SINGLE-file flow, so a
@@ -1093,9 +1152,9 @@ func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, 
 		return s.persistCloudSource(ctx, doc, source)
 	}
 	// Desktop: write the source to the file, then re-parse the whole flow.
-	targetPath := doc.FilePath
-	if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
-		targetPath = filepath.Join(doc.FilePath, "Main.txt")
+	targetPath, err := desktopSourcePath(doc, file)
+	if err != nil {
+		return nil, err
 	}
 	s.snapshotDesktopFile(doc, targetPath, "before source save")
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
@@ -1171,7 +1230,10 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 	} else {
 		targetPath = doc.FilePath
 		if info, err := os.Stat(doc.FilePath); err == nil && info.IsDir() {
-			targetPath = filepath.Join(doc.FilePath, "Main.txt")
+			// Folder flows: the loop runs PER MEMBER FILE, mirroring the
+			// cloud branch. This path used to patch Main.txt only, so every
+			// auto-fixable finding in a subflow file was silently skipped.
+			return s.applyFixBatchDesktopFolder(ctx, doc, ruleFilter, limit)
 		}
 		data, err := os.ReadFile(targetPath) // #nosec G304 -- target derived from doc.FilePath
 		if err != nil {
@@ -1202,14 +1264,10 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 		updated, err := s.persistCloudDoc(ctx, doc, res.Doc, source)
 		return updated, res.Fixed, err
 	}
-	// Desktop: write once, then re-parse the whole flow (cross-subflow indexes).
+	// Desktop single file: write once, then re-parse.
 	s.snapshotDesktopFile(doc, targetPath, "before batch fix")
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
 		return nil, res.Fixed, fmt.Errorf("write source file: %w", err)
-	}
-	if info, _ := os.Stat(doc.FilePath); info != nil && info.IsDir() {
-		updated, err := s.LoadFlowFolder(doc.FilePath)
-		return updated, res.Fixed, err
 	}
 	// Seed the AST cache with the loop's parse of the exact bytes just
 	// written, so the reload below is a cache hit (read + hash) instead of
@@ -1223,6 +1281,72 @@ func (s *FlowService) ApplyFixBatch(ctx context.Context, doc *models.FlowDocumen
 		return nil, res.Fixed, err
 	}
 	return updated, res.Fixed, nil
+}
+
+// applyFixBatchDesktopFolder runs the iterative fix loop PER MEMBER FILE of a
+// desktop folder flow — the local twin of applyFixBatchCloudFolder. Per-file
+// gate: a member whose fixes would introduce parse errors keeps its original
+// bytes while the rest proceed ("never degrade" stays per file). Every touched
+// file's pre-fix bytes go into ONE undo snapshot, then the files are written
+// and the folder re-parsed once for the cross-subflow indexes.
+func (s *FlowService) applyFixBatchDesktopFolder(ctx context.Context, doc *models.FlowDocument, ruleFilter map[string]bool, limit int) (*models.FlowDocument, int, error) {
+	entries, err := os.ReadDir(doc.FilePath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read folder: %w", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".txt") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return doc, 0, nil
+	}
+
+	// Resolved once for the whole folder: every member file belongs to the same
+	// flow, so they share one org profile.
+	opts := s.fixOptions(ctx, doc, ruleFilter, limit)
+	total := 0
+	original := make(map[string]string) // pre-fix bytes of the files about to change
+	fixed := make(map[string]string)
+	for _, name := range names {
+		data, rerr := os.ReadFile(filepath.Join(doc.FilePath, name)) // #nosec G304 -- enumerated member of doc.FilePath
+		if rerr != nil {
+			return nil, total, fmt.Errorf("read %s: %w", name, rerr)
+		}
+		src := string(data)
+		res, ferr := analyzer.ApplyFixesToSourceDoc(&src, name, opts)
+		if ferr != nil {
+			return nil, total, ferr
+		}
+		if res.Fixed == 0 {
+			continue
+		}
+		if res.AfterErrors > res.BeforeErrors {
+			// Keep this file's original text; the rest of the batch proceeds.
+			continue
+		}
+		original[name] = string(data)
+		fixed[name] = src
+		total += res.Fixed
+	}
+	if total == 0 {
+		return doc, 0, nil
+	}
+
+	s.snapshotDesktopFiles(doc, original, "before batch fix")
+	for name, src := range fixed {
+		target := filepath.Join(doc.FilePath, name)
+		if werr := atomicWriteConv(doc.FilePath, target, []byte(src)); werr != nil {
+			return nil, total, fmt.Errorf("write %s: %w", name, werr)
+		}
+	}
+	s.InvalidateSearchIndex(doc.ID)
+	updated, err := s.LoadFlowFolder(doc.FilePath)
+	return updated, total, err
 }
 
 // persistCloudDoc stamps an ALREADY-PARSED doc with the original's cloud

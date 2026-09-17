@@ -101,7 +101,7 @@ func TestCloudFix_SaveSourceFolderGuard(t *testing.T) {
 	doc.IsFolder = true
 	doc.Files = []models.FlowFileInfo{{Name: "Main.txt", Path: "Main.txt"}, {Name: "Util.txt", Path: "Util.txt"}}
 
-	if _, err := svc.SaveSource(context.Background(), doc, "whatever"); err == nil || !strings.Contains(err.Error(), "collapse") {
+	if _, err := svc.SaveSource(context.Background(), doc, "whatever", ""); err == nil || !strings.Contains(err.Error(), "collapse") {
 		t.Errorf("folder SaveSource should be gated with the collapse warning, got %v", err)
 	}
 }

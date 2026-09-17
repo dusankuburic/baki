@@ -115,17 +115,6 @@ export function useAppShortcuts(deps: {
       'view.map': () => useUIStore.getState().setMainPaneView('map'),
       'view.local-map': () => useUIStore.getState().setMainPaneView('local-map'),
       'nav.up.subflow': () => useFlowStore.getState().drillUp(),
-      'view.fullscreen': async () => {
-        if (!getPlatformCapabilities().nativeWindow) return
-        const {getCurrentWindow} = await import('@tauri-apps/api/window')
-        const win = getCurrentWindow()
-        const isFs = await win.isFullscreen()
-        if (isFs) {
-          void win.setFullscreen(false)
-        } else {
-          void win.setFullscreen(true)
-        }
-      },
       'view.theme.toggle': () => toggleTheme(),
       'file.open': async () => {
         try {
@@ -180,10 +169,24 @@ export function useAppShortcuts(deps: {
       'window.reload': () => {
         window.location.reload()
       },
-      'window.quit': () => {
-        if (!getPlatformCapabilities().nativeWindow) return
-        void import('@tauri-apps/api/window').then(({getCurrentWindow}) => getCurrentWindow().close())
-      },
+      // Native-window shortcuts (F11 fullscreen, mod+q quit) are registered
+      // only where a native window exists; lib/shortcuts.ts drops their
+      // bindings on web for the same reason, so a browser keeps its own F11.
+      ...(getPlatformCapabilities().nativeWindow ? nativeWindowHandlers() : {}),
     },
   })
+}
+
+function nativeWindowHandlers() {
+  return {
+    'view.fullscreen': async () => {
+      const {getCurrentWindow} = await import('@tauri-apps/api/window')
+      const win = getCurrentWindow()
+      const isFs = await win.isFullscreen()
+      void win.setFullscreen(!isFs)
+    },
+    'window.quit': () => {
+      void import('@tauri-apps/api/window').then(({getCurrentWindow}) => getCurrentWindow().close())
+    },
+  }
 }

@@ -96,6 +96,14 @@ export const shell = {
   inspector: {
     panelAria: 'Inspector panel',
   },
+  backendCrash: {
+    titleTerminated: 'The analysis backend stopped',
+    titleError: 'The analysis backend is not running',
+    titleRestarting: 'Restarting the analysis backend…',
+    body: 'Nothing works until it is back: flows cannot be opened, analyzed or saved. Restart it here, or quit and reopen the app if that fails.',
+    restart: 'Restart backend',
+    restarting: 'Restarting…',
+  },
   org: {
     personal: 'Personal',
     personalActive: '✓ Personal',
@@ -326,6 +334,8 @@ export const findings = {
     },
     labels: {
       assignedTo: 'Assigned to {{name}}',
+      sessionOnly: 'session only',
+      sessionOnlyHint: 'Triage statuses are kept in memory on the desktop app and reset when it closes.',
     },
   },
   card: {

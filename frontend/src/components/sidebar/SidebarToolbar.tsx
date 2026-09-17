@@ -5,6 +5,7 @@ import Button from '@/components/shared/Button'
 import Avatar from '@/components/shared/Avatar'
 import {useAuthStore} from '@/stores/authStore'
 import {useUIStore} from '@/stores/uiStore'
+import {isTauri} from '@/platform/guards'
 
 type SidebarToolbarProps = {
   hasFlow: boolean
@@ -68,14 +69,18 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
           <BarChart3 size={16} />
         </button>
 
-        <button
-          onClick={() => setMainPaneView('library')}
-          className={navClass('library')}
-          title={t('sidebar.cloudLibrary')}
-          aria-label={t('sidebar.cloudLibrary')}
-        >
-          <Cloud size={16} />
-        </button>
+        {/* Cloud Library is a storage-backend feature: on desktop the list is
+            always empty and tag edits 400, so the nav is hidden there. */}
+        {!isTauri() && (
+          <button
+            onClick={() => setMainPaneView('library')}
+            className={navClass('library')}
+            title={t('sidebar.cloudLibrary')}
+            aria-label={t('sidebar.cloudLibrary')}
+          >
+            <Cloud size={16} />
+          </button>
+        )}
 
         <button
           onClick={() => setMainPaneView('profile')}

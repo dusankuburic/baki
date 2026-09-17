@@ -29,6 +29,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAuthStore} from '@/stores/authStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {exportApi, flowApi, analysisApi} from '@/api'
+import {getPlatformCapabilities} from '@/platform/guards'
 import {useToast} from '@/components/shared/Toast'
 import type {FlowDiff, AnalysisReport} from '@/types'
 
@@ -251,13 +252,18 @@ export default function MainPaneToolbar() {
             className={complexityMode ? 'text-semantic-warning bg-semantic-warning/10' : ''}
           />
         )}
-        <IconButton
-          icon={RefreshCw}
-          size="sm"
-          label={reimporting ? t('toolbar.reimporting') : t('toolbar.reimport')}
-          disabled={reimporting}
-          onClick={handleReimport}
-        />
+        {/* Re-import re-reads the flow's source FILE: it needs a filesystem
+            and a file-backed flow. It was always rendered and answered 403 in
+            cloud mode / 400 for uploaded flows. */}
+        {getPlatformCapabilities().fileSystem && document?.filePath && (
+          <IconButton
+            icon={RefreshCw}
+            size="sm"
+            label={reimporting ? t('toolbar.reimporting') : t('toolbar.reimport')}
+            disabled={reimporting}
+            onClick={handleReimport}
+          />
+        )}
         <IconButton
           icon={Expand}
           size="sm"

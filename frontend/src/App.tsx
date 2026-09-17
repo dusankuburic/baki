@@ -41,6 +41,7 @@ import MobileDrawer from './components/layout/MobileDrawer'
 import StatusBar from './components/layout/StatusBar'
 import PaneDivider from './components/layout/PaneDivider'
 import WelcomeModal from './components/onboarding/WelcomeModal'
+import BackendCrashBanner from './components/layout/BackendCrashBanner'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
 import {useFileWatcher} from '@/hooks/useFileWatcher'
@@ -108,7 +109,12 @@ function AppInner() {
     return () => usePresenceStore.getState().disconnect()
   }, [documentId])
 
-  useSettingsPersistence(isAuthenticated)
+  // Desktop: the auth gate is skipped in Tauri, so isAuthenticated never
+  // becomes true there and settings were never LOADED (only saved) — theme,
+  // density, provider and layout reset on every restart and the welcome tour
+  // never showed (it waits for settingsLoaded). The local backend needs no
+  // login, so load unconditionally on desktop.
+  useSettingsPersistence(isAuthenticated || isTauri())
   useGlobalErrorHandler()
   useFlowChangeSync()
 
@@ -296,6 +302,12 @@ function AppInner() {
       <ErrorBoundary>
         <WelcomeModal isOpen={showWelcome} onClose={() => setWelcomeDismissed(true)} />
       </ErrorBoundary>
+      {/* Desktop only: the sidecar lifecycle has no web equivalent. */}
+      {isTauri() && (
+        <ErrorBoundary>
+          <BackendCrashBanner />
+        </ErrorBoundary>
+      )}
     </>
   )
 }

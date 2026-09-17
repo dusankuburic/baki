@@ -370,7 +370,12 @@ func (s *ChatService) applyFixHook() applyFixFunc {
 		return s.applyFixFunc
 	}
 	return func(ctx context.Context, doc *models.FlowDocument, blockID, fixType, ruleID, variable, property string) (*models.FlowDocument, error) {
-		return s.flowCache.ApplyFix(ctx, doc, blockID, fixType, ruleID, variable, property)
+		// unsafe=false: a chat approval is a one-line card with no diff, which
+		// is exactly the unattended approval the behaviour-changing fixers are
+		// gated against (see analyzer.IsBehaviourChangingFix). Those fixes
+		// report the opt-in error here and stay available from the finding
+		// card, where the preview diff is shown before the unsafe apply.
+		return s.flowCache.ApplyFix(ctx, doc, blockID, fixType, ruleID, variable, property, false)
 	}
 }
 

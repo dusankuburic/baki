@@ -97,7 +97,7 @@ func TestCloudFolderFix_SingleApply(t *testing.T) {
 		t.Errorf("patched preview missing the handler wrap:\n%s", prev.Patched)
 	}
 
-	updated, err := svc.ApplyFix(context.Background(), doc, mainID, "wrap-error-handler", "unhandled-error", "", "")
+	updated, err := svc.ApplyFix(context.Background(), doc, mainID, "wrap-error-handler", "unhandled-error", "", "", false)
 	if err != nil {
 		t.Fatalf("ApplyFix: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestCloudBridge_LineAlignment(t *testing.T) {
 		t.Fatal("fixture has no second block")
 	}
 
-	updated, err := svc.ApplyFix(context.Background(), doc, secondID, "wrap-error-handler", "unhandled-error", "", "")
+	updated, err := svc.ApplyFix(context.Background(), doc, secondID, "wrap-error-handler", "unhandled-error", "", "", false)
 	if err != nil {
 		t.Fatalf("ApplyFix: %v", err)
 	}

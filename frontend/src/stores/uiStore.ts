@@ -40,6 +40,25 @@ export type ResolvedTheme =
 export type SidebarTab = 'explorer' | 'variables' | 'library'
 export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
 
+// Settings modal section ids. Typed here (not in SettingsModal) so deep-links
+// like setSettingsSection('accounts') are checked at compile time — a typo
+// ('providers') used to land silently on General.
+export type SettingsSection =
+  | 'general'
+  | 'parser'
+  | 'accounts'
+  | 'behavior'
+  | 'prompts'
+  | 'appearance'
+  | 'analysis'
+  | 'policies'
+  | 'orgs'
+  | 'knowledge'
+  | 'tokens'
+  | 'shortcuts'
+  | 'privacy'
+  | 'about'
+
 // "System" views are standalone destinations (don't depend on a loaded flow).
 // Sidebar handlers use isSystemView to know when opening a flow should also
 // transition the main pane back to a flow view ('block') so the new flow
@@ -75,7 +94,7 @@ interface UiState {
   settingsOpen: boolean
   // Section the settings modal opens on (deep-links: "Set one up" from the
   // welcome tour, ApiKeyMissingState, etc.). Consumed on open, then reset.
-  settingsSection: string | null
+  settingsSection: SettingsSection | null
   variablePanelOpen: boolean
   selectedVariable: string | null
   graphZoom: number
@@ -92,7 +111,7 @@ interface UiState {
   setCommandPaletteOpen: (o: boolean | ((prev: boolean) => boolean)) => void
   setGlobalSearchOpen: (o: boolean | ((prev: boolean) => boolean)) => void
   setSettingsOpen: (o: boolean) => void
-  setSettingsSection: (s: string | null) => void
+  setSettingsSection: (s: SettingsSection | null) => void
   setVariablePanelOpen: (o: boolean) => void
   setSelectedVariable: (v: string | null) => void
   setGraphZoom: (z: number) => void
