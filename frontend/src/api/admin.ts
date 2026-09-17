@@ -76,6 +76,11 @@ export const adminApi = {
 
   systemHealth: (): Promise<SystemHealth> => request('/api/admin/system/health', {method: 'GET'}),
 
+  // The closed set of action names the server emits; the audit filter is
+  // built from it so it can never fall behind the backend (it used to offer
+  // 7 of 35 actions).
+  listAuditActions: (): Promise<string[]> => request('/api/admin/audit/actions', {method: 'GET'}),
+
   listAuditEvents: (filter: AuditFilter = {}): Promise<AuditEvent[]> => {
     const params = new URLSearchParams()
     if (filter.userId) params.set('userId', filter.userId)

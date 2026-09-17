@@ -151,6 +151,18 @@ export function ToastProvider({children}: {children: React.ReactNode}) {
   )
 }
 
+type AddToast = ToastActions['addToast']
+
+function buildToastApi(addToast: AddToast) {
+  return {
+    toast: addToast,
+    success: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'success', title, ...opts}),
+    error: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'error', title, ...opts}),
+    warning: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'warning', title, ...opts}),
+    info: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'info', title, ...opts}),
+  }
+}
+
 export function useToast() {
   const ctx = React.useContext(ToastActionsContext)
   if (!ctx) throw new Error('useToast must be used within ToastProvider')
@@ -158,14 +170,14 @@ export function useToast() {
   // exhaustive-deps ask for the whole `ctx` object, which would rebuild this
   // façade — and every consumer memo keyed on it — on any context change.
   const {addToast} = ctx
-  return useMemo(
-    () => ({
-      toast: addToast,
-      success: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'success', title, ...opts}),
-      error: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'error', title, ...opts}),
-      warning: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'warning', title, ...opts}),
-      info: (title: string, opts?: Partial<ToastData>) => addToast({variant: 'info', title, ...opts}),
-    }),
-    [addToast],
-  )
+  return useMemo(() => buildToastApi(addToast), [addToast])
+}
+
+// useOptionalToast is useToast for components that legitimately render outside
+// a ToastProvider (isolated component tests, portals mounted before the
+// provider). It returns null there instead of throwing; callers skip the toast.
+export function useOptionalToast() {
+  const ctx = React.useContext(ToastActionsContext)
+  const addToast = ctx?.addToast
+  return useMemo(() => (addToast ? buildToastApi(addToast) : null), [addToast])
 }

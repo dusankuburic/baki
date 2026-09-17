@@ -1,7 +1,9 @@
+import {useEffect} from 'react'
 import clsx from 'clsx'
 import {usePresenceStore, type PresenceUser} from '@/stores/presenceStore'
 import Tooltip from '@/components/shared/Tooltip'
 import Avatar from '@/components/shared/Avatar'
+import {useOptionalToast} from '@/components/shared'
 
 interface PresenceIndicatorsProps {
   className?: string
@@ -11,6 +13,17 @@ interface PresenceIndicatorsProps {
 export default function PresenceIndicators({className, maxVisible = 5}: PresenceIndicatorsProps) {
   const users = usePresenceStore(s => s.users)
   const status = usePresenceStore(s => s.status)
+  const lastError = usePresenceStore(s => s.lastError)
+  const toast = useOptionalToast()
+
+  // Server-side refusals (a viewer's edit, an unknown event) arrive as `error`
+  // envelopes on the socket. Without this they were silently dropped and the
+  // user saw "nothing happens". Keyed on the whole object (its `at` changes)
+  // so the same code twice still toasts twice.
+  useEffect(() => {
+    if (!lastError || !toast) return
+    toast.error(lastError.message, {description: lastError.code})
+  }, [lastError, toast])
 
   const list = Object.values(users)
   const visible = list.slice(0, maxVisible)

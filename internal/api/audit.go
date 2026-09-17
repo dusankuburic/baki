@@ -66,7 +66,58 @@ const (
 	AuditActionTokenCreate     = "token.create"
 	AuditActionTokenRevoke     = "token.revoke"
 	AuditActionMigrationStart  = "admin.migration_start"
+	// Added by the feature-completeness audit: these mutations previously left
+	// no trail at all (share links and policy rewrites being the highest
+	// blast-radius non-admin actions).
+	AuditActionCommentAdd       = "finding.comment_add"
+	AuditActionCommentDelete    = "finding.comment_delete"
+	AuditActionShareLinkCreate  = "flow.share_link_create"
+	AuditActionShareLinkRevoke  = "flow.share_link_revoke"
+	AuditActionPolicySave       = "policy.save"
+	AuditActionPolicyDelete     = "policy.delete"
+	AuditActionKnowledgeUpload  = "org.knowledge_upload"
+	AuditActionKnowledgeDelete  = "org.knowledge_delete"
+	AuditActionKnowledgeReindex = "org.knowledge_reindex"
+	AuditActionOrgCreate        = "org.create"
+	AuditActionOrgUpdate        = "org.update"
+	AuditActionOrgDelete        = "org.delete"
+	AuditActionScanNow          = "admin.scan_now"
+	AuditActionAlertDismiss     = "governance.alert_dismiss"
+	AuditActionAlertClear       = "governance.alert_clear"
+	// These four were emitted as raw strings before; the values are kept so
+	// existing rows stay filterable.
+	AuditActionOrgChannelSave   = "org_channel_save"
+	AuditActionOrgChannelDelete = "org_channel_delete"
+	AuditActionOrgRuleSave      = "org_rule_save"
+	AuditActionOrgRuleDelete    = "org_rule_delete"
+	AuditActionSSOLink          = "auth.sso_link"
+	AuditActionSSOUnlink        = "auth.sso_unlink"
 )
+
+// AllAuditActions is the closed set of audit action strings the handlers
+// emit. The admin audit UI builds its filter from this list (GET
+// /api/admin/audit/actions), so a new constant must be added here too — the
+// test in audit_actions_test.go enforces that.
+func AllAuditActions() []string {
+	return []string{
+		AuditActionLogin, AuditActionLogout, AuditActionRegister, AuditActionPasswordChange,
+		AuditActionRoleChange, AuditActionFlowUpload, AuditActionFlowAnalyze, AuditActionFlowExport,
+		AuditActionFlowDelete, AuditActionFlowShare, AuditActionFlowSave, AuditActionFlowVersion,
+		AuditActionFlowRestore, AuditActionFindingTriage, AuditActionBaselineSet, AuditActionBaselineClear,
+		AuditActionChatStream, AuditActionSettingsChange, AuditActionKeysSave, AuditActionOrgInviteCreate,
+		AuditActionOrgInviteRevoke, AuditActionOrgInviteAccept, AuditActionOrgMemberAdd,
+		AuditActionOrgMemberRemove, AuditActionOrgMemberRole, AuditActionProfileUpdate,
+		AuditActionAccountDelete, AuditActionDataExport, AuditActionSessionRevoke, AuditActionSSOLogin,
+		AuditActionLoginFailure, AuditActionAccountLock, AuditActionTokenCreate, AuditActionTokenRevoke,
+		AuditActionMigrationStart, AuditActionCommentAdd, AuditActionCommentDelete,
+		AuditActionShareLinkCreate, AuditActionShareLinkRevoke, AuditActionPolicySave,
+		AuditActionPolicyDelete, AuditActionKnowledgeUpload, AuditActionKnowledgeDelete,
+		AuditActionKnowledgeReindex, AuditActionOrgCreate, AuditActionOrgUpdate, AuditActionOrgDelete,
+		AuditActionScanNow, AuditActionAlertDismiss, AuditActionAlertClear, AuditActionOrgChannelSave,
+		AuditActionOrgChannelDelete, AuditActionOrgRuleSave, AuditActionOrgRuleDelete,
+		AuditActionSSOLink, AuditActionSSOUnlink,
+	}
+}
 
 var (
 	auditCh     chan *storageif.AuditEvent

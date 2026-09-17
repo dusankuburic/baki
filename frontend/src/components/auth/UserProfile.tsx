@@ -14,6 +14,7 @@ import {ChangePasswordCard} from './ChangePasswordCard'
 import {OrganisationsCard} from './OrganisationsCard'
 import {ActiveSessionsCard} from './ActiveSessionsCard'
 import {AccountDataCard} from './AccountDataCard'
+import {LinkedIdentitiesCard} from './LinkedIdentitiesCard'
 
 function formatMemberSince(iso: string | undefined): string | null {
   if (!iso) return null
@@ -104,6 +105,7 @@ export const UserProfile: React.FC = () => {
         <div className="space-y-5">
           <ActiveSessionsCard />
           <ChangePasswordCard />
+          <LinkedIdentitiesCard />
         </div>
       </div>
     </div>

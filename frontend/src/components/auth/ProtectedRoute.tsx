@@ -1,6 +1,7 @@
 import {useEffect, useState, type ReactNode} from 'react'
 import {useAuthStore} from '@/stores/authStore'
 import {useOrgStore} from '@/stores/orgStore'
+import {useUIStore} from '@/stores/uiStore'
 import {isTauri} from '@/platform/guards'
 import LoginForm from './LoginForm'
 import ResetPasswordView from './ResetPasswordView'
@@ -30,6 +31,15 @@ export default function ProtectedRoute({children}: ProtectedRouteProps) {
   useEffect(() => {
     if (recovery.resetToken || recovery.verifyToken || recovery.inviteToken) clearRecoveryHash()
   }, [recovery.resetToken, recovery.verifyToken, recovery.inviteToken])
+
+  // The SSO account-link callback lands on /#ssoLinked=<provider> for a user
+  // who is already signed in; open the profile view where the linked-identity
+  // card reads (and strips) the fragment and confirms the result.
+  useEffect(() => {
+    if (isAuthenticated && !isTauri() && window.location.hash.includes('ssoLinked=')) {
+      useUIStore.getState().setMainPaneView('profile')
+    }
+  }, [isAuthenticated])
 
   useEffect(() => {
     if (!isTauri()) {

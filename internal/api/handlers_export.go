@@ -107,6 +107,7 @@ func (h *ExportHandler) handleExportMarkdown(w http.ResponseWriter, r *http.Requ
 	}
 	// Return base64 under `data`, mirroring PDF, so the web download path
 	// (data:...;base64,res.data in export.ts) works consistently.
+	logAudit(r.Context(), h.security.Backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "markdown"})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
@@ -153,6 +154,7 @@ func (h *ExportHandler) handleExportHTML(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.security.Backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "html"})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),
@@ -201,6 +203,7 @@ func (h *ExportHandler) handleExportPDF(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.security.Backend, r, h.security.TrustedProxies, AuditActionFlowExport, "flow", req.FlowID, map[string]string{"format": "pdf"})
 	render.JSON(w, map[string]any{
 		"status": "ok",
 		"data":   base64.StdEncoding.EncodeToString(content),

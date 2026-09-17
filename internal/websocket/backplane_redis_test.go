@@ -135,7 +135,7 @@ func TestOriginDedup(t *testing.T) {
 	t.Cleanup(b.close)
 	time.Sleep(50 * time.Millisecond) // let PSubscribe register
 
-	env, _ := json.Marshal(Envelope{Type: EventCursorMove})
+	env, _ := json.Marshal(Envelope{Type: EventPresenceUpdate})
 	b.publish("flow-1", env) // origin == "self"
 
 	select {

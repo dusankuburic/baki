@@ -35,7 +35,9 @@ interface OrgState {
   loadOrgs: () => Promise<void>
   setActiveOrg: (id: string | null) => void
   createOrg: (name: string) => Promise<Organisation>
-  inviteMember: (orgId: string, email: string, role: OrgRole) => Promise<void>
+  // Resolves to the raw invite token so the UI can show a copyable link
+  // when the invite email cannot be delivered (no SMTP configured).
+  inviteMember: (orgId: string, email: string, role: OrgRole) => Promise<string | undefined>
   acceptInvite: (token: string) => Promise<void>
   removeMember: (orgId: string, userId: string) => Promise<void>
   setMemberRole: (orgId: string, userId: string, role: OrgRole) => Promise<void>
@@ -105,8 +107,9 @@ export const useOrgStore = create<OrgState>()(
           // Create a token invite — the backend emails the invitee a link they
           // accept via acceptInvite (POST /api/invites/{token}/accept). The member
           // list only changes once they accept, so no loadOrgs() here.
-          await request(`/api/orgs/${orgId}/invites`, {body: {email, role}})
+          const res = await request<{token?: string} | undefined>(`/api/orgs/${orgId}/invites`, {body: {email, role}})
           set({isBusy: false})
+          return res?.token
         } catch (err) {
           set({isBusy: false, error: err instanceof Error ? err.message : 'Failed to send invite'})
           throw err

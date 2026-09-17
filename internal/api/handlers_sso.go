@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"pad-analyzer/internal/api/middleware"
@@ -36,6 +38,8 @@ type SSOClient interface {
 type IdentityStore interface {
 	SaveIdentityLink(ctx context.Context, link *storageif.IdentityLink) error
 	LoadIdentityLink(ctx context.Context, provider, subject string) (*storageif.IdentityLink, error)
+	ListIdentityLinks(ctx context.Context, userID string) ([]*storageif.IdentityLink, error)
+	DeleteIdentityLink(ctx context.Context, userID, provider string) error
 }
 
 // ssoFlowCookie carries the per-login CSRF state, OIDC nonce, and PKCE
@@ -47,6 +51,10 @@ type ssoFlowState struct {
 	State    string `json:"s"`
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
+	// LinkUserID marks a "link this IdP identity to my existing account"
+	// round trip started from account settings by an authenticated user
+	// (handleSSOLinkStart). The callback then links instead of logging in.
+	LinkUserID string `json:"l,omitempty"`
 }
 
 func (h *AuthHandler) ssoEnabled() bool {
@@ -83,24 +91,36 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metrics.RecordAuthOp("sso_start")
+	authURL, ok := h.beginSSOFlow(w, r, "")
+	if !ok {
+		return
+	}
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
 
+// beginSSOFlow mints the per-attempt state/nonce/PKCE verifier, stores them in
+// the HttpOnly flow cookie and returns the IdP authorization URL. linkUserID,
+// when set, turns the callback into an account-link instead of a login. On
+// failure the error response has already been written and ok is false.
+func (h *AuthHandler) beginSSOFlow(w http.ResponseWriter, r *http.Request, linkUserID string) (string, bool) {
 	// State, Nonce, and a PKCE verifier (two tokens = 86 chars, within PKCE's
 	// 43-128 bounds). Any crypto/rand failure fails the request rather than
 	// weakening the login flow.
 	toks, err := randomTokens(4)
 	if err != nil {
 		render.Error(w, fmt.Errorf("failed to initialize login: %w", err), http.StatusInternalServerError)
-		return
+		return "", false
 	}
 	flow := ssoFlowState{
-		State:    toks[0],
-		Nonce:    toks[1],
-		Verifier: toks[2] + toks[3],
+		State:      toks[0],
+		Nonce:      toks[1],
+		Verifier:   toks[2] + toks[3],
+		LinkUserID: linkUserID,
 	}
 	authURL, err := h.ssoClient.AuthCodeURL(r.Context(), flow.State, flow.Nonce, flow.Verifier)
 	if err != nil {
 		render.Error(w, err, http.StatusBadGateway)
-		return
+		return "", false
 	}
 
 	payload, _ := json.Marshal(flow)
@@ -115,7 +135,136 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		Secure:   requestIsTLS(r),
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, authURL, http.StatusFound)
+	return authURL, true
+}
+
+// handleSSOLinkStart begins an IdP round trip that LINKS the asserted identity
+// to the caller's existing account. This is the "link <provider> from your
+// account settings" step resolveSSOUser has always pointed users at for a
+// verified account with the same email — it did not exist, so anyone who
+// registered by email before SSO was enabled could never use SSO. The SPA
+// calls it as an authenticated XHR (a top-level navigation cannot carry the
+// bearer token), receives the IdP URL and navigates there; the flow cookie set
+// here follows the browser to /callback.
+// @Summary      Start linking an SSO identity to the current account
+// @Tags         sso
+// @Produce      json
+// @Success      200 {object} map[string]string "IdP authorization URL"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      404 {object} map[string]string "SSO not configured"
+// @Router       /api/auth/sso/link/start [post]
+func (h *AuthHandler) handleSSOLinkStart(w http.ResponseWriter, r *http.Request) {
+	if !h.ssoEnabled() {
+		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
+		return
+	}
+	userID := h.security.CallerID(r)
+	if userID == "" {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+	metrics.RecordAuthOp("sso_link_start")
+	authURL, ok := h.beginSSOFlow(w, r, userID)
+	if !ok {
+		return
+	}
+	render.JSON(w, map[string]string{"url": authURL})
+}
+
+// linkSSOIdentity attaches ident to userID. An identity already linked to a
+// different account is refused (one external identity maps to exactly one
+// local user); re-linking to the same account is a no-op.
+func (h *AuthHandler) linkSSOIdentity(ctx context.Context, userID string, ident *sso.Identity) error {
+	provider := h.ssoClient.ProviderName()
+	if existing, err := h.identityStore.LoadIdentityLink(ctx, provider, ident.Subject); err == nil {
+		if existing.UserID == userID {
+			return nil
+		}
+		return fmt.Errorf("this %s identity is already linked to another account", provider)
+	} else if !errors.Is(err, storageif.ErrNotFound) {
+		return err
+	}
+	return h.identityStore.SaveIdentityLink(ctx, &storageif.IdentityLink{
+		Provider: provider,
+		Subject:  ident.Subject,
+		UserID:   userID,
+		Email:    strings.ToLower(ident.Email),
+	})
+}
+
+// identityLinkView is the client-facing shape of a link: the opaque IdP
+// subject stays server-side.
+type identityLinkView struct {
+	Provider  string    `json:"provider"`
+	Email     string    `json:"email,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// @Summary      List the caller's linked SSO identities
+// @Tags         sso
+// @Produce      json
+// @Success      200 {array} identityLinkView "Links"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Router       /api/auth/sso/links [get]
+func (h *AuthHandler) handleSSOLinks(w http.ResponseWriter, r *http.Request) {
+	userID := h.security.CallerID(r)
+	if userID == "" {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+	if h.identityStore == nil {
+		render.JSON(w, []identityLinkView{})
+		return
+	}
+	links, err := h.identityStore.ListIdentityLinks(r.Context(), userID)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	out := make([]identityLinkView, 0, len(links))
+	for _, l := range links {
+		out = append(out, identityLinkView{Provider: l.Provider, Email: l.Email, CreatedAt: l.CreatedAt})
+	}
+	render.JSON(w, out)
+}
+
+// handleSSOUnlink removes the caller's link for one provider. Refused when
+// the account has no password: the link is then its only way to sign in and
+// removing it would lock the user out.
+// @Summary      Unlink an SSO identity from the current account
+// @Tags         sso
+// @Param        provider path string true "Provider name"
+// @Produce      json
+// @Success      200 {object} map[string]string "OK"
+// @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      409 {object} map[string]string "No password set — unlinking would lock the account"
+// @Router       /api/auth/sso/links/{provider} [delete]
+func (h *AuthHandler) handleSSOUnlink(w http.ResponseWriter, r *http.Request) {
+	userID := h.security.CallerID(r)
+	if userID == "" {
+		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
+		return
+	}
+	if h.identityStore == nil || h.backend == nil {
+		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
+		return
+	}
+	user, err := h.backend.LoadUserByID(r.Context(), userID)
+	if err != nil {
+		render.Error(w, err, 0)
+		return
+	}
+	if user.Password == "" {
+		render.Error(w, fmt.Errorf("set a password first — this identity is currently the only way to sign in"), http.StatusConflict)
+		return
+	}
+	provider := chi.URLParam(r, "provider")
+	if err := h.identityStore.DeleteIdentityLink(r.Context(), userID, provider); err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOUnlink, "user", userID, map[string]string{"provider": provider})
+	render.JSON(w, map[string]string{"status": "ok"})
 }
 
 // handleSSOCallback receives the IdP redirect, validates state, exchanges the
@@ -167,6 +316,20 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 	ident, err := h.ssoClient.Exchange(r.Context(), code, flow.Verifier, flow.Nonce)
 	if err != nil {
 		redirectSSOError(w, r, "identity verification failed")
+		return
+	}
+
+	if flow.LinkUserID != "" {
+		// Account-link round trip (handleSSOLinkStart): the caller proved
+		// ownership of the local account when they started it and has now
+		// proved control of the IdP identity — attach, do not log in.
+		if err := h.linkSSOIdentity(r.Context(), flow.LinkUserID, ident); err != nil {
+			logger.Warn("sso: identity link failed", "err", err)
+			redirectSSOError(w, r, "could not link this identity — it may already belong to another account")
+			return
+		}
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOLink, "user", flow.LinkUserID, map[string]string{"provider": h.ssoClient.ProviderName()})
+		http.Redirect(w, r, "/#ssoLinked="+url.QueryEscape(h.ssoClient.ProviderName()), http.StatusFound)
 		return
 	}
 

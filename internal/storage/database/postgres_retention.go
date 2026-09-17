@@ -185,18 +185,173 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 	if err != nil {
 		return nil, fmt.Errorf("export: list tokens: %w", err)
 	}
-	audit, err := b.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: userID, Limit: 1000})
+	audit, err := b.exportAuditEvents(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("export: list audit: %w", err)
+		return nil, err
+	}
+	flowIDs := make([]string, 0, len(flows))
+	for _, f := range flows {
+		flowIDs = append(flowIDs, f.ID)
+	}
+	sections, err := b.exportUserSections(ctx, userID, flowIDs)
+	if err != nil {
+		return nil, err
 	}
 	return &interfaces.UserDataExport{
-		User:        user,
-		Flows:       flows,
-		Settings:    settings,
-		AuditEvents: audit,
-		APITokens:   tokens,
-		ExportedAt:  time.Now().UTC(),
+		User:            user,
+		Flows:           flows,
+		Settings:        settings,
+		AuditEvents:     audit,
+		APITokens:       tokens,
+		Conversations:   sections.conversations,
+		Comments:        sections.comments,
+		TriageDecisions: sections.triage,
+		Organisations:   sections.orgs,
+		Sessions:        sections.sessions,
+		ExportedAt:      time.Now().UTC(),
 	}, nil
+}
+
+// exportAuditEvents pages through the user's whole audit history. A single
+// Limit:1000 call silently truncated the trail for active accounts with no
+// indication in the bundle.
+func (b *PostgresStorageBackend) exportAuditEvents(ctx context.Context, userID string) ([]*interfaces.AuditEvent, error) {
+	const auditPageSize = 1000
+	audit := []*interfaces.AuditEvent{}
+	for offset := 0; ; offset += auditPageSize {
+		page, err := b.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: userID, Limit: auditPageSize, Offset: offset})
+		if err != nil {
+			return nil, fmt.Errorf("export: list audit: %w", err)
+		}
+		audit = append(audit, page...)
+		if len(page) < auditPageSize {
+			return audit, nil
+		}
+	}
+}
+
+// userExportSections are the bundle sections that follow the flows: chat
+// history on the user's own flows, the comments and triage decisions they
+// authored, their organisations and their active sessions.
+type userExportSections struct {
+	conversations []*interfaces.ExportedConversation
+	comments      []*interfaces.FindingComment
+	triage        []*interfaces.FindingStatus
+	orgs          []*interfaces.Organisation
+	sessions      []interfaces.RefreshTokenInfo
+}
+
+// exportUserSections loads userExportSections for both export paths, so the
+// buffered and the streamed bundle cannot drift apart again. (They did: the
+// sections were added to ExportUserData only, while the account-export handler
+// always streams on Postgres, so users never received them.) flowIDs are the
+// user's owned flows, which scope conversations and triage.
+func (b *PostgresStorageBackend) exportUserSections(ctx context.Context, userID string, flowIDs []string) (*userExportSections, error) {
+	var out userExportSections
+	var err error
+	if out.conversations, err = b.exportConversations(ctx, flowIDs); err != nil {
+		return nil, fmt.Errorf("export: conversations: %w", err)
+	}
+	if out.comments, err = b.exportAuthoredComments(ctx, userID); err != nil {
+		return nil, fmt.Errorf("export: comments: %w", err)
+	}
+	if out.triage, err = b.exportTriageDecisions(ctx, userID, flowIDs); err != nil {
+		return nil, fmt.Errorf("export: triage: %w", err)
+	}
+	if out.orgs, err = b.ListOrgsForUser(ctx, userID); err != nil {
+		return nil, fmt.Errorf("export: organisations: %w", err)
+	}
+	if out.sessions, err = b.ListUserRefreshTokens(ctx, userID); err != nil {
+		return nil, fmt.Errorf("export: sessions: %w", err)
+	}
+	// Empty sections serialise as [] rather than null, so a consumer of the
+	// bundle can tell "none" from "section missing".
+	if out.orgs == nil {
+		out.orgs = []*interfaces.Organisation{}
+	}
+	if out.sessions == nil {
+		out.sessions = []interfaces.RefreshTokenInfo{}
+	}
+	return &out, nil
+}
+
+// exportConversations returns every stored chat conversation on the given
+// (owned) flows. Chat with the assistant about your own flow is user-authored
+// content and belongs in the bundle.
+func (b *PostgresStorageBackend) exportConversations(ctx context.Context, flowIDs []string) ([]*interfaces.ExportedConversation, error) {
+	out := []*interfaces.ExportedConversation{}
+	if len(flowIDs) == 0 {
+		return out, nil
+	}
+	rows, err := b.query(ctx).QueryContext(ctx,
+		`SELECT flow_id, scope, messages FROM conversations WHERE flow_id = ANY($1) ORDER BY flow_id, scope`,
+		flowIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c interfaces.ExportedConversation
+		var data []byte
+		if err := rows.Scan(&c.FlowID, &c.Scope, &data); err != nil {
+			return nil, err
+		}
+		if len(data) > 0 {
+			if err := json.Unmarshal(data, &c.Messages); err != nil {
+				return nil, fmt.Errorf("unmarshal conversation %s/%s: %w", c.FlowID, c.Scope, err)
+			}
+		}
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
+// exportAuthoredComments returns the comments the user wrote, on any flow —
+// they are the user's own words even when the flow belongs to someone else.
+func (b *PostgresStorageBackend) exportAuthoredComments(ctx context.Context, userID string) ([]*interfaces.FindingComment, error) {
+	rows, err := b.query(ctx).QueryContext(ctx,
+		`SELECT id, flow_id, finding_key, author_id, author_name, body, created_at
+		 FROM finding_comments WHERE author_id = $1 ORDER BY created_at ASC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*interfaces.FindingComment{}
+	for rows.Next() {
+		c := &interfaces.FindingComment{}
+		if err := rows.Scan(&c.ID, &c.FlowID, &c.FindingKey, &c.AuthorID, &c.AuthorName, &c.Body, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// exportTriageDecisions returns the triage rows the user last updated on the
+// given (owned) flows — status changes, assignments and justifications they
+// recorded. Rows on those flows last touched by a collaborator are that
+// collaborator's content and stay out.
+func (b *PostgresStorageBackend) exportTriageDecisions(ctx context.Context, userID string, flowIDs []string) ([]*interfaces.FindingStatus, error) {
+	out := []*interfaces.FindingStatus{}
+	if len(flowIDs) == 0 {
+		return out, nil
+	}
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT flow_id, finding_key, rule_id, status, justification, assignee_id, updated_by, updated_at
+		FROM finding_status WHERE flow_id = ANY($1) AND updated_by = $2 ORDER BY flow_id, finding_key`,
+		flowIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var st interfaces.FindingStatus
+		if err := rows.Scan(&st.FlowID, &st.FindingKey, &st.RuleID, &st.Status, &st.Justification, &st.AssigneeID, &st.UpdatedBy, &st.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &st)
+	}
+	return out, rows.Err()
 }
 
 // exportFlowPageSize bounds how many flows (with content) ExportUserDataTo
@@ -221,9 +376,9 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 	if err != nil {
 		return fmt.Errorf("export: list tokens: %w", err)
 	}
-	audit, err := b.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: userID, Limit: 1000})
+	audit, err := b.exportAuditEvents(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("export: list audit: %w", err)
+		return err
 	}
 
 	bw := bufio.NewWriter(w)
@@ -248,6 +403,7 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 		return err
 	}
 	first := true
+	var flowIDs []string // owned flows, which scope the conversation and triage sections
 	// Immutable ordering, for the same reason as ExportUserData above: a
 	// concurrent save must not be able to drop a flow from a data-subject
 	// export.
@@ -271,6 +427,7 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 				}
 			}
 			first = false
+			flowIDs = append(flowIDs, f.ID)
 			data, err := json.Marshal(f)
 			if err != nil {
 				return fmt.Errorf("export: marshal flow %s: %w", f.ID, err)
@@ -294,6 +451,24 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 	}
 	if err := writeField(`,"apiTokens":`, tokens); err != nil {
 		return err
+	}
+	sections, err := b.exportUserSections(ctx, userID, flowIDs)
+	if err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		prefix string
+		value  any
+	}{
+		{`,"conversations":`, sections.conversations},
+		{`,"comments":`, sections.comments},
+		{`,"triageDecisions":`, sections.triage},
+		{`,"organisations":`, sections.orgs},
+		{`,"sessions":`, sections.sessions},
+	} {
+		if err := writeField(field.prefix, field.value); err != nil {
+			return err
+		}
 	}
 	if err := writeField(`,"exportedAt":`, time.Now().UTC()); err != nil {
 		return err

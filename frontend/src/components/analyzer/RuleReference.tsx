@@ -1,6 +1,7 @@
 import React, {useState, useMemo} from 'react'
 import {Search, Wrench, AlertTriangle, Info, BookOpen} from 'lucide-react'
 import {analysisApi} from '@/api/analysis'
+import {useOrgStore} from '@/stores/orgStore'
 import type {Rule} from '@/types/analysis'
 import {Spinner} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
@@ -15,13 +16,16 @@ export default function RuleReference() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<string>('all')
 
+  // Scope to the active org so the reference lists the org's custom rules
+  // and reflects its overrides, matching what analysis applies to its flows.
+  const activeOrgId = useOrgStore(s => s.activeOrgId)
   const {
     data: rules,
     isLoading,
     error,
   } = useAsync(async () => {
-    return await analysisApi.getRules()
-  }, [])
+    return await analysisApi.getRules(activeOrgId ?? undefined)
+  }, [activeOrgId])
 
   const categories = useMemo(() => {
     if (!rules) return []

@@ -171,6 +171,7 @@ func (h *AnalysisHandler) handleDismissGovernanceAlert(w http.ResponseWriter, r 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAlertDismiss, "alert", req.ID, nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -190,5 +191,6 @@ func (h *AnalysisHandler) handleClearGovernanceAlerts(w http.ResponseWriter, r *
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionAlertClear, "alert", "", nil)
 	render.JSON(w, map[string]string{"status": "ok"})
 }

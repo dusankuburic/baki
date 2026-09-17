@@ -31,7 +31,7 @@ func newRankServer(hub *Hub, userID string, checker FlowAccessChecker) *httptest
 //
 // The room join is authorized at "viewer", and the HTTP write endpoints require
 // "editor" — but handleIncoming broadcast EventBlockUpdate/Create/Delete in the
-// same case arm as cursor moves, with no rank check at all. So a read-only
+// same case arm as presence updates, with no rank check at all. So a read-only
 // collaborator who was refused by POST /api/flow/save-source could send the
 // identical mutation over the socket and have it delivered verbatim to every
 // member of the room and out over the Redis backplane.
@@ -132,14 +132,14 @@ func TestWS_ViewerCanStillSendPresence(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	sendEnvelope(t, viewerConn, Envelope{
-		Type:    EventCursorMove,
+		Type:    EventPresenceUpdate,
 		Payload: map[string]any{"blockId": "BLOCK-2"},
 	})
 
 	_ = ownerConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	env := readEnvelope(t, ownerConn)
-	if env.Type != EventCursorMove {
-		t.Errorf("a viewer's cursor move was blocked: got %q", env.Type)
+	if env.Type != EventPresenceUpdate {
+		t.Errorf("a viewer's presence update was blocked: got %q", env.Type)
 	}
 }
 

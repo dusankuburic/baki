@@ -63,3 +63,26 @@ describe('PresenceIndicators', () => {
     expect(dot).toBeTruthy()
   })
 })
+
+describe('PresenceIndicators socket errors', () => {
+  it('toasts a server error envelope instead of dropping it', async () => {
+    const {ToastProvider} = await import('@/components/shared')
+    setPresence({u1: {userId: 'u1', displayName: 'Ann'}}, 'connected')
+    render(
+      <ToastProvider>
+        <PresenceIndicators />
+      </ToastProvider>,
+    )
+    usePresenceStore.setState({
+      lastError: {code: 'permission_denied', message: 'editor access is required to modify this flow', at: 1},
+    })
+    expect(await screen.findByText('editor access is required to modify this flow')).toBeInTheDocument()
+    expect(screen.getByText('permission_denied')).toBeInTheDocument()
+  })
+
+  it('renders without a ToastProvider (isolated mounts skip the toast)', () => {
+    setPresence({u1: {userId: 'u1', displayName: 'Ann'}}, 'connected')
+    usePresenceStore.setState({lastError: {code: 'unknown_event', message: 'nope', at: 2}})
+    expect(() => render(<PresenceIndicators />)).not.toThrow()
+  })
+})

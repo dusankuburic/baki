@@ -161,6 +161,10 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 			render.Error(w, err, http.StatusInternalServerError)
 			return
 		}
+		// flow.upload was declared (and offered as an audit-log filter) but
+		// never emitted, so the audit trail could not show who brought a
+		// flow into the deployment.
+		logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowUpload, "flow", doc.ID, map[string]string{"name": doc.Name})
 	}
 
 	render.JSON(w, doc)

@@ -75,7 +75,11 @@ export const analysisApi = {
 
   getDataFlow: (): Promise<DataFlowAnalysis> => request('/api/analysis/dataflow', {body: {flowId: activeFlowId()}}),
 
-  getRules: (): Promise<Rule[]> => request('/api/analysis/rules', {method: 'GET'}),
+  // orgId scopes the catalog to that organisation's custom rules and
+  // enable/severity/threshold overrides — the rules that actually run on its
+  // flows. Without it the deployment catalog is returned.
+  getRules: (orgId?: string): Promise<Rule[]> =>
+    request(`/api/analysis/rules${orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''}`, {method: 'GET'}),
 
   updateRuleConfig: (ruleId: string, config: RuleConfig): Promise<void> =>
     request('/api/analysis/rule/config', {body: {ruleId, config}}),

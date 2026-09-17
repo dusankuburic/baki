@@ -247,7 +247,7 @@ func TestClient_Send_BufferFull_DisconnectsSlowClient(t *testing.T) {
 	//
 	// Fill the buffer to capacity — every Send goes into the channel.
 	for i := range sendBufferCap {
-		c.send <- Envelope{Type: EventCursorMove, UserID: "u", Timestamp: time.Now()}
+		c.send <- Envelope{Type: EventPresenceUpdate, UserID: "u", Timestamp: time.Now()}
 		_ = i
 	}
 	if c.disconnected.Load() {

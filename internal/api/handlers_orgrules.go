@@ -131,7 +131,7 @@ func (h *OrgHandler) handleOrgRuleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidateRuleProfile(org.ID)
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, "org_rule_save", "org", org.ID,
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgRuleSave, "org", org.ID,
 		map[string]string{"ruleId": req.Config.ID})
 	render.JSON(w, toOrgRuleOut(rule))
 }
@@ -157,7 +157,7 @@ func (h *OrgHandler) handleOrgRuleDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	h.invalidateRuleProfile(org.ID)
-	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, "org_rule_delete", "org", org.ID,
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionOrgRuleDelete, "org", org.ID,
 		map[string]string{"ruleId": chi.URLParam(r, "ruleId")})
 	render.JSON(w, map[string]string{"status": "ok"})
 }

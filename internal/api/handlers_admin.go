@@ -190,6 +190,20 @@ func (h *AdminHandler) handleAdminUserRole(w http.ResponseWriter, r *http.Reques
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// @Summary      List audit action names
+// @Description  Returns every audit action string the server can emit, so the admin filter offers the full set instead of a hand-maintained subset.
+// @Tags         admin
+// @Produce      json
+// @Success      200 {array} string "Actions"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Router       /api/admin/audit/actions [get]
+func (h *AdminHandler) handleAdminAuditActions(w http.ResponseWriter, r *http.Request) {
+	if !h.security.RequireRole(w, r, auth.RoleAdmin) {
+		return
+	}
+	render.JSON(w, AllAuditActions())
+}
+
 // @Summary      List audit log entries
 // @Description  Returns the audit trail (logins, settings changes, admin actions).
 // @Tags         admin
@@ -296,5 +310,6 @@ func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	runDetached("admin.scan-now", "governance scan", h.scanNow)
+	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionScanNow, "scanner", "", nil)
 	render.JSON(w, map[string]bool{"started": true})
 }
