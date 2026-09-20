@@ -54,6 +54,9 @@ type Result struct {
 	ConversationsSkipped  int
 	ConversationsFailed   int
 	SettingsMoved         bool
+	// FlowsAdopted counts flows whose owner did not exist in the destination
+	// and were therefore assigned to the operator who ran the migration.
+	FlowsAdopted int
 	// NotMigrated lists the kinds of data the source directory can hold that
 	// this migrator does not copy. The status used to report counts for flows
 	// only, so a "completed" run read as a full upgrade.
@@ -82,6 +85,16 @@ type Migrator struct {
 	// When non-empty, conversations are migrated alongside flows; empty disables.
 	convDir   string
 	validator *Validator
+	// defaultOwner adopts flows whose owner does not exist in the destination.
+	// Users are not migrated, so a legacy flow's owner_id names an account the
+	// new deployment does not have: the flow landed owned by nobody, invisible
+	// in every library and portfolio view, while the run still reported it as
+	// migrated. Empty keeps the source owner as-is.
+	defaultOwner string
+	// ownerKnown caches destination user lookups for the run.
+	ownerKnown map[string]bool
+	// adopted counts reassignments made during the current run.
+	adopted int
 }
 
 // defaultPerFlowMigrationTimeout bounds each individual flow copy.
@@ -95,6 +108,7 @@ func New(src, dst interfaces.StorageBackend) *Migrator {
 		batchSize:      50,
 		perFlowTimeout: defaultPerFlowMigrationTimeout,
 		validator:      NewValidator(),
+		ownerKnown:     map[string]bool{},
 	}
 }
 
@@ -121,6 +135,14 @@ func (m *Migrator) WithConversationsDir(dir string) *Migrator {
 	return m
 }
 
+// WithDefaultOwner sets the account that adopts flows whose recorded owner does
+// not exist in the destination (users are not migrated, so that is the common
+// case). Empty leaves owners untouched.
+func (m *Migrator) WithDefaultOwner(userID string) *Migrator {
+	m.defaultOwner = userID
+	return m
+}
+
 // Migrate runs the full migration: flows first, then settings, then
 // conversations (best-effort).  It returns a Result even on partial failure.
 // notMigrated is what a legacy filesystem data directory can hold beyond the
@@ -139,6 +161,7 @@ var notMigrated = []string{
 func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 	start := time.Now()
 	res := Result{NotMigrated: append([]string(nil), notMigrated...)}
+	m.adopted = 0
 
 	if err := m.dst.Ping(ctx); err != nil {
 		return res, fmt.Errorf("destination unreachable: %w", err)
@@ -164,6 +187,7 @@ func (m *Migrator) Migrate(ctx context.Context) (Result, error) {
 		logger.Warn("migration: conversations warning", "error", err)
 	}
 
+	res.FlowsAdopted = m.adopted
 	res.Duration = time.Since(start)
 	return res, nil
 }
@@ -237,7 +261,34 @@ func (m *Migrator) migrateOneFlow(ctx context.Context, flow *interfaces.FlowDocu
 		return errSkipped
 	}
 
+	if m.adoptOwner(flowCtx, full) {
+		m.adopted++
+	}
 	return m.dst.SaveFlow(flowCtx, full)
+}
+
+// adoptOwner points a flow at the operator when its recorded owner is absent
+// from the destination, and reports whether it did. Without this the flow is
+// stored owned by an account that does not exist, which no library, portfolio
+// or search query can return — a migration that reports success and shows
+// nothing.
+func (m *Migrator) adoptOwner(ctx context.Context, flow *interfaces.FlowDocument) bool {
+	if m.defaultOwner == "" || flow.OwnerID == m.defaultOwner {
+		return false
+	}
+	if flow.OwnerID != "" {
+		known, cached := m.ownerKnown[flow.OwnerID]
+		if !cached {
+			u, err := m.dst.LoadUserByID(ctx, flow.OwnerID)
+			known = err == nil && u != nil
+			m.ownerKnown[flow.OwnerID] = known
+		}
+		if known {
+			return false
+		}
+	}
+	flow.OwnerID = m.defaultOwner
+	return true
 }
 
 func (m *Migrator) migrateSettings(ctx context.Context) error {

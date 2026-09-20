@@ -195,7 +195,7 @@ export default function KnowledgeBasePanel() {
               {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Index Document'}
             </Button>
           </div>
-          <p className="text-2xs text-text-tertiary mt-2">Currently supports .txt and .md files up to 1MB.</p>
+          <p className="text-2xs text-text-tertiary mt-2">{t('knowledge.uploadHint')}</p>
           {uploadError && <p className="text-xs text-red-400 mt-2">{uploadError}</p>}
         </div>
       )}
@@ -208,7 +208,7 @@ export default function KnowledgeBasePanel() {
               onClick={handleReindex}
               disabled={reindexing}
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-brand-400 border border-border-default hover:border-brand-500/50 rounded-md transition-colors disabled:opacity-50"
-              title="Re-embed every document with the currently configured embedding provider (recovery after changing the embedding model)"
+              title={t('knowledge.reindexTitle')}
             >
               {reindexing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
               {reindexing ? 'Re-indexing…' : 'Re-index'}
@@ -223,7 +223,7 @@ export default function KnowledgeBasePanel() {
           <ErrorState message={loadError} onRetry={loadDocs} />
         ) : docs.length === 0 ? (
           <div className="text-center py-12 bg-surface-1 rounded-lg border border-dashed border-border-default text-text-tertiary">
-            No documents indexed yet.
+            {t('knowledge.empty')}
           </div>
         ) : (
           <div className="grid gap-2">
@@ -250,9 +250,7 @@ export default function KnowledgeBasePanel() {
                       )}
                     </div>
                     {(doc.chunkCount ?? 0) > 0 && (doc.vectorIndexed ?? 0) === 0 && (
-                      <div className="text-xs text-amber-400">
-                        Not searchable — embedding dimension mismatch; re-index below.
-                      </div>
+                      <div className="text-xs text-amber-400">{t('knowledge.dimensionMismatch')}</div>
                     )}
                   </div>
                 </div>

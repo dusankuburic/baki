@@ -51,6 +51,8 @@ function AppInner() {
   const toast = useToast()
   const sidebarCollapsed = useUIStore(s => s.sidebarCollapsed)
   const inspectorCollapsed = useUIStore(s => s.inspectorCollapsed)
+  const mobileDrawer = useUIStore(s => s.mobileDrawer)
+  const closeMobileDrawer = useUIStore(s => s.closeMobileDrawer)
   const setCommandPaletteOpen = useUIStore(s => s.setCommandPaletteOpen)
   const globalSearchOpen = useUIStore(s => s.globalSearchOpen)
   const setGlobalSearchOpen = useUIStore(s => s.setGlobalSearchOpen)
@@ -79,6 +81,11 @@ function AppInner() {
   // Responsive: below md (768px) the 3-pane shell collapses — sidebar and
   // inspector become overlay drawers; main pane takes full width.
   const isDesktop = useIsDesktop()
+  // Back on the desktop layout the panes render inline, so drop any open
+  // drawer rather than have it reappear the next time the window narrows.
+  useEffect(() => {
+    if (isDesktop) closeMobileDrawer()
+  }, [isDesktop, closeMobileDrawer])
 
   // Onboarding: show the welcome tour only on first run (firstRunCompleted
   // is false in the default settings) — and only once settings have loaded
@@ -229,17 +236,19 @@ function AppInner() {
             </>
           )}
         </div>
-        {/* Mobile sidebar drawer (overlay) */}
-        {!isDesktop && !sidebarCollapsed && (
-          <MobileDrawer side="left" label="Sidebar" onClose={toggleSidebar}>
+        {/* Mobile drawers (overlay). Driven by mobileDrawer, not the persisted
+            pane flags: those default to "shown", so both drawers used to open
+            over the app on every load at phone width, and the inspector's
+            backdrop swallowed the taps meant for the shell. */}
+        {!isDesktop && mobileDrawer === 'sidebar' && (
+          <MobileDrawer side="left" label="Sidebar" onClose={closeMobileDrawer}>
             <ErrorBoundary fallbackMessage="Sidebar error">
               <Sidebar />
             </ErrorBoundary>
           </MobileDrawer>
         )}
-        {/* Mobile inspector drawer (overlay, right-aligned) */}
-        {!isDesktop && !inspectorCollapsed && (
-          <MobileDrawer side="right" label="Inspector" onClose={toggleInspector}>
+        {!isDesktop && mobileDrawer === 'inspector' && (
+          <MobileDrawer side="right" label="Inspector" onClose={closeMobileDrawer}>
             <ErrorBoundary fallbackMessage="Inspector error">
               <InspectorPanel />
             </ErrorBoundary>

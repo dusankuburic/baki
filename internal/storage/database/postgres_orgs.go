@@ -159,9 +159,48 @@ func (b *PostgresStorageBackend) ListOrgsForUser(ctx context.Context, userID str
 		return nil, fmt.Errorf("iterate orgs: %w", err)
 	}
 
-	// We don't load full member lists for the user's org list to keep it fast.
-	// If needed, the caller can LoadOrg(id) for a specific one.
+	// Members come with the list. They used to be left nil "to keep it fast",
+	// but this is the only org endpoint the app calls: the organisations panel
+	// reads org.members to decide who is an admin and to render the roster, so
+	// a nil list meant a TypeError on the first row for anyone who belongs to
+	// an org. One extra query for the whole page, not one per org.
+	if err := b.attachOrgMembers(ctx, orgs); err != nil {
+		return nil, err
+	}
 	return orgs, nil
+}
+
+// attachOrgMembers fills Members on each org in one round trip.
+func (b *PostgresStorageBackend) attachOrgMembers(ctx context.Context, orgs []*interfaces.Organisation) error {
+	if len(orgs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(orgs))
+	byID := make(map[string]*interfaces.Organisation, len(orgs))
+	for _, o := range orgs {
+		ids = append(ids, o.ID)
+		byID[o.ID] = o
+		o.Members = []interfaces.OrgMember{}
+	}
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT org_id, user_id, role, joined_at
+		FROM org_members WHERE org_id = ANY($1)
+		ORDER BY joined_at ASC`, ids)
+	if err != nil {
+		return fmt.Errorf("query org members: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var orgID string
+		var m interfaces.OrgMember
+		if err := rows.Scan(&orgID, &m.UserID, &m.Role, &m.JoinedAt); err != nil {
+			return fmt.Errorf("scan org member: %w", err)
+		}
+		if o := byID[orgID]; o != nil {
+			o.Members = append(o.Members, m)
+		}
+	}
+	return rows.Err()
 }
 
 func (b *PostgresStorageBackend) DeleteOrg(ctx context.Context, id string) error {

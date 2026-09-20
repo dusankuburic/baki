@@ -149,7 +149,7 @@ var clientExportExts = map[string]bool{".csv": true, ".sarif": true, ".xml": tru
 // handler refuses it in cloud mode.
 func (s *ExportService) SaveClientExport(path, content string) error {
 	if err := validateUserPath(path); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		return fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("%w: export path must be absolute", ErrInvalidInput)

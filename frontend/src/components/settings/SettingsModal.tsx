@@ -64,8 +64,7 @@ export default function SettingsModal({
 }) {
   const {t} = useTranslation('settings')
   const sections = useSections()
-  const validInitial =
-    initialSection && sections.some(s => s.id === initialSection) ? initialSection : 'general'
+  const validInitial = initialSection && sections.some(s => s.id === initialSection) ? initialSection : 'general'
   const [activeSection, setActiveSection] = useState<SettingsSection>(validInitial)
 
   return (

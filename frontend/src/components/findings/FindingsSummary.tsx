@@ -22,7 +22,7 @@ export default function FindingsSummary({stats, durationMs, healthScore}: Props)
             <div
               role="img"
               aria-label={t('summary.healthAria', {score: healthScore, label: scoreLabel(healthScore)})}
-              title={`${scoreLabel(healthScore)} health`}
+              title={t('summary.healthTitle', {label: scoreLabel(healthScore)})}
               className={clsx(
                 'px-2 py-0.5 rounded-md font-mono text-sm font-bold',
                 scoreBg(healthScore),

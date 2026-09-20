@@ -27,11 +27,7 @@ export const LinkedIdentitiesCard: React.FC = () => {
   const [unlinking, setUnlinking] = useState<string | null>(null)
 
   const {data: sso} = useAsync<SSOInfo | null>(() => authApi.ssoInfo().catch(() => null), [])
-  const {
-    data: links,
-    error,
-    refetch,
-  } = useAsync<IdentityLinkInfo[]>(() => authApi.ssoLinks().then(l => l ?? []), [])
+  const {data: links, error, refetch} = useAsync<IdentityLinkInfo[]>(() => authApi.ssoLinks().then(l => l ?? []), [])
 
   useEffect(() => {
     const provider = readLinkedHash()
@@ -122,7 +118,14 @@ export const LinkedIdentitiesCard: React.FC = () => {
           </div>
         ))}
         {!current && (
-          <Button variant="secondary" size="sm" icon={KeyRound} onClick={handleLink} loading={starting} disabled={starting}>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={KeyRound}
+            onClick={handleLink}
+            loading={starting}
+            disabled={starting}
+          >
             {starting ? t('linked.linking') : t('linked.link', {provider})}
           </Button>
         )}

@@ -87,6 +87,13 @@ interface UiState {
   mainPaneView: MainPaneView
   inspectorTab: InspectorTab
   sidebarCollapsed: boolean
+  // mobileDrawer is which overlay drawer is open below the md breakpoint.
+  // It is deliberately SEPARATE from the collapsed flags above, which are the
+  // persisted desktop layout: driving the drawers from those opened both of
+  // them over the app on every first load at phone width (their default is
+  // "pane shown"), and closing them would have overwritten the user's saved
+  // desktop layout.
+  mobileDrawer: 'sidebar' | 'inspector' | null
   inspectorCollapsed: boolean
   commandPaletteOpen: boolean
   globalSearchOpen: boolean
@@ -118,10 +125,19 @@ interface UiState {
   setActiveDiff: (d: FlowDiff | null) => void
   setShowSourceEditor: (v: boolean) => void
   setShowHelpOverlay: (v: boolean) => void
+  closeMobileDrawer: () => void
   toggleSidebar: () => void
   toggleComplexityMode: () => void
   toggleInspector: () => void
   toggleSettings: () => void
+}
+
+// isDesktopViewport mirrors useIsDesktop's breakpoint for the store's own
+// decisions. Treats a non-browser environment as desktop so the pane flags
+// behave as before under jsdom and SSR.
+function isDesktopViewport(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+  return window.matchMedia('(min-width: 768px)').matches
 }
 
 export const useUIStore = create<UiState>(set => ({
@@ -131,6 +147,7 @@ export const useUIStore = create<UiState>(set => ({
   inspectorTab: 'details',
   sidebarCollapsed: false,
   inspectorCollapsed: false,
+  mobileDrawer: null,
   commandPaletteOpen: false,
   globalSearchOpen: false,
   complexityMode: false,
@@ -165,9 +182,23 @@ export const useUIStore = create<UiState>(set => ({
   setActiveDiff: d => set({activeDiff: d}),
   setShowSourceEditor: v => set({showSourceEditor: v}),
   setShowHelpOverlay: v => set({showHelpOverlay: v}),
-  toggleSidebar: () => set(s => ({sidebarCollapsed: !s.sidebarCollapsed})),
+  closeMobileDrawer: () => set({mobileDrawer: null}),
+  // Below md the same control opens and closes the overlay drawer instead of
+  // collapsing a pane, so every existing caller (title bar, command palette,
+  // shortcuts) keeps working on both layouts.
+  toggleSidebar: () =>
+    set(s =>
+      isDesktopViewport()
+        ? {sidebarCollapsed: !s.sidebarCollapsed}
+        : {mobileDrawer: s.mobileDrawer === 'sidebar' ? null : 'sidebar'},
+    ),
   toggleComplexityMode: () => set(s => ({complexityMode: !s.complexityMode})),
-  toggleInspector: () => set(s => ({inspectorCollapsed: !s.inspectorCollapsed})),
+  toggleInspector: () =>
+    set(s =>
+      isDesktopViewport()
+        ? {inspectorCollapsed: !s.inspectorCollapsed}
+        : {mobileDrawer: s.mobileDrawer === 'inspector' ? null : 'inspector'},
+    ),
   toggleSettings: () => set(s => ({settingsOpen: !s.settingsOpen})),
 }))
 

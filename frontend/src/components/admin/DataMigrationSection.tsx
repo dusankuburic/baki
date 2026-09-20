@@ -97,6 +97,12 @@ export const DataMigrationSection: React.FC<{
                 {(result.Duration / 1e9).toFixed(2)}s
               </span>
             </div>
+            {result.FlowsAdopted > 0 && (
+              <p className="col-span-full text-xs text-text-tertiary">
+                {result.FlowsAdopted} flow{result.FlowsAdopted === 1 ? '' : 's'} named an owner this deployment does not
+                have and now belong to you.
+              </p>
+            )}
             {result.NotMigrated && result.NotMigrated.length > 0 && (
               <p className="col-span-full text-xs text-text-tertiary">Not migrated: {result.NotMigrated.join(', ')}.</p>
             )}
@@ -116,13 +122,14 @@ export const DataMigrationSection: React.FC<{
           <p className="text-xs text-text-tertiary">
             {status && !status.configured ? (
               <>
-                Not configured. Set <code className="font-mono">PAD_DATA_DIR</code> to the data directory of a server that
-                ran with filesystem storage, with <code className="font-mono">PAD_STORAGE=database</code>.
+                Not configured. Set <code className="font-mono">PAD_DATA_DIR</code> to the data directory of a server
+                that ran with filesystem storage, with <code className="font-mono">PAD_STORAGE=database</code>.
               </>
             ) : (
               <>
                 Copies flows, settings and chat conversations from the legacy data directory into the database. Already
-                migrated flows are skipped; users, organisations, triage, versions and tokens are not migrated.
+                migrated flows are skipped; users, organisations, triage, versions and tokens are not migrated, so flows
+                whose owner does not exist here are assigned to you.
               </>
             )}
           </p>

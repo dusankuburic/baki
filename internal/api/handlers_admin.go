@@ -204,6 +204,35 @@ func (h *AdminHandler) handleAdminAuditActions(w http.ResponseWriter, r *http.Re
 	render.JSON(w, AllAuditActions())
 }
 
+// auditEventView is the wire shape of an audit entry. The storage struct stays
+// untagged because the on-disk spill queue persists it as JSON lines, so the
+// camelCase keys the admin table reads (action, email, createdAt, meta) are
+// built here. Before this the table received Action/Email/CreatedAt and showed
+// blank cells with "Invalid Date" on every row.
+type auditEventView struct {
+	ID           string            `json:"id"`
+	UserID       string            `json:"userId"`
+	Email        string            `json:"email"`
+	Action       string            `json:"action"`
+	ResourceType string            `json:"resourceType"`
+	ResourceID   string            `json:"resourceId"`
+	IP           string            `json:"ip"`
+	Meta         map[string]string `json:"meta"`
+	CreatedAt    time.Time         `json:"createdAt"`
+}
+
+func toAuditEventViews(events []*storageif.AuditEvent) []auditEventView {
+	out := make([]auditEventView, 0, len(events))
+	for _, e := range events {
+		out = append(out, auditEventView{
+			ID: e.ID, UserID: e.UserID, Email: e.Email, Action: e.Action,
+			ResourceType: e.ResourceType, ResourceID: e.ResourceID, IP: e.IP,
+			Meta: e.Meta, CreatedAt: e.CreatedAt,
+		})
+	}
+	return out
+}
+
 // @Summary      List audit log entries
 // @Description  Returns the audit trail (logins, settings changes, admin actions), newest first. GET /api/admin/audit/actions lists the action values.
 // @Tags         admin
@@ -247,11 +276,11 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, events)
+	render.JSON(w, toAuditEventViews(events))
 }
 
 // @Summary      Start data migration
-// @Description  Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, cloud mode). Idempotent and non-blocking; the status result lists what is not migrated.
+// @Description  Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, cloud mode). Idempotent and non-blocking; the status result lists what is not migrated. Users are not migrated, so flows whose recorded owner is absent here are assigned to the admin who starts the run (reported as FlowsAdopted).
 // @Tags         admin
 // @Produce      json
 // @Success      200 {object} map[string]string "Started"
@@ -267,7 +296,7 @@ func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Reque
 		render.Error(w, fmt.Errorf("migration not configured: set PAD_DATA_DIR (and PAD_STORAGE=database) in cloud mode"), http.StatusServiceUnavailable)
 		return
 	}
-	if !h.runner.Start() {
+	if !h.runner.StartAs(h.security.CallerID(r)) {
 		render.Error(w, fmt.Errorf("migration already in progress"), http.StatusConflict)
 		return
 	}

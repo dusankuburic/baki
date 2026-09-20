@@ -370,3 +370,71 @@ func TestMigrator_Conversations_SkipIfDstNonEmpty(t *testing.T) {
 		t.Errorf("dst conversation was overwritten: %+v", got)
 	}
 }
+
+// TestMigrator_AdoptsFlowsWhoseOwnerIsNotInTheDestination: users are not
+// migrated, so a legacy flow names an owner the new deployment does not have.
+// Stored as-is the flow belongs to nobody — invisible in every library,
+// portfolio and search view — while the run reported it as migrated.
+func TestMigrator_AdoptsFlowsWhoseOwnerIsNotInTheDestination(t *testing.T) {
+	src := testutil.NewFakeBackend()
+	// The shared fake has no user store, so the destination is wrapped to
+	// answer for the one account that exists there.
+	dst := &backendWithUsers{FakeBackend: testutil.NewFakeBackend(), users: map[string]bool{"kept-owner": true}}
+	ctx := context.Background()
+	for id, owner := range map[string]string{"orphan": "", "ghost": "deleted-user", "kept": "kept-owner"} {
+		src.Flows[id] = &interfaces.FlowDocument{
+			ID: id, Name: id, OwnerID: owner, Content: []byte(`{"subflows":[]}`),
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+	}
+
+	res, err := migration.New(src, dst).WithDefaultOwner("operator-1").Migrate(ctx)
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if res.FlowsMigrated != 3 {
+		t.Fatalf("FlowsMigrated = %d, want 3", res.FlowsMigrated)
+	}
+	if res.FlowsAdopted != 2 {
+		t.Errorf("FlowsAdopted = %d, want 2 (the ownerless and the ghost-owned flow)", res.FlowsAdopted)
+	}
+	owners := map[string]string{}
+	for id, f := range dst.Flows {
+		owners[id] = f.OwnerID
+	}
+	if owners["orphan"] != "operator-1" || owners["ghost"] != "operator-1" {
+		t.Errorf("orphaned flows should be adopted by the operator, got %v", owners)
+	}
+	if owners["kept"] != "kept-owner" {
+		t.Errorf("a flow whose owner exists must keep it, got %q", owners["kept"])
+	}
+}
+
+// TestMigrator_WithoutDefaultOwner_LeavesOwnersAlone keeps the option opt-in.
+func TestMigrator_WithoutDefaultOwner_LeavesOwnersAlone(t *testing.T) {
+	src := testutil.NewFakeBackend()
+	dst := testutil.NewFakeBackend()
+	src.Flows["a"] = &interfaces.FlowDocument{ID: "a", Name: "a", OwnerID: "", Content: []byte(`{"subflows":[]}`)}
+
+	res, err := migration.New(src, dst).Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if res.FlowsAdopted != 0 || dst.Flows["a"].OwnerID != "" {
+		t.Errorf("adopted=%d owner=%q, want 0 and empty", res.FlowsAdopted, dst.Flows["a"].OwnerID)
+	}
+}
+
+// backendWithUsers gives the fake destination a user store: the migrator asks
+// whether a flow's recorded owner exists there before adopting the flow.
+type backendWithUsers struct {
+	*testutil.FakeBackend
+	users map[string]bool
+}
+
+func (b *backendWithUsers) LoadUserByID(_ context.Context, id string) (*interfaces.User, error) {
+	if b.users[id] {
+		return &interfaces.User{ID: id}, nil
+	}
+	return nil, interfaces.ErrNotFound
+}

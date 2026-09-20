@@ -16,7 +16,11 @@ func (b *PostgresStorageBackend) SavePolicy(ctx context.Context, p *models.Polic
 	if err != nil {
 		return err
 	}
-	_, err = b.query(ctx).ExecContext(ctx,
+	// RETURNING the stamps, and writing them back onto p: the row's timestamps
+	// are set here (NOW()), and the save handler renders the struct it was
+	// given — so without this a just-saved policy came back with a zero
+	// created/updated date and the panel showed the year 1 until a refetch.
+	return b.query(ctx).QueryRowContext(ctx,
 		`INSERT INTO policies (id, org_id, name, description, rules, gate_severity, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
 		 ON CONFLICT (id, org_id) DO UPDATE SET
@@ -24,9 +28,10 @@ func (b *PostgresStorageBackend) SavePolicy(ctx context.Context, p *models.Polic
 		   description = EXCLUDED.description,
 		   rules = EXCLUDED.rules,
 		   gate_severity = EXCLUDED.gate_severity,
-		   updated_at = NOW()`,
-		p.ID, p.OrgID, p.Name, p.Description, rulesJSON, string(p.GateSeverity))
-	return err
+		   updated_at = NOW()
+		 RETURNING created_at, updated_at`,
+		p.ID, p.OrgID, p.Name, p.Description, rulesJSON, string(p.GateSeverity),
+	).Scan(&p.CreatedAt, &p.UpdatedAt)
 }
 
 // GetPolicy retrieves a single policy by id within an org.

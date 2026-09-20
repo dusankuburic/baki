@@ -201,7 +201,7 @@ func (b *PostgresStorageBackend) ExportUserData(ctx context.Context, userID stri
 		User:            user,
 		Flows:           flows,
 		Settings:        settings,
-		AuditEvents:     audit,
+		AuditEvents:     interfaces.NewExportedAuditEvents(audit),
 		APITokens:       tokens,
 		Conversations:   sections.conversations,
 		Comments:        sections.comments,
@@ -446,7 +446,7 @@ func (b *PostgresStorageBackend) ExportUserDataTo(ctx context.Context, userID st
 	if err := writeField(`,"settings":`, settings); err != nil {
 		return err
 	}
-	if err := writeField(`,"auditEvents":`, audit); err != nil {
+	if err := writeField(`,"auditEvents":`, interfaces.NewExportedAuditEvents(audit)); err != nil {
 		return err
 	}
 	if err := writeField(`,"apiTokens":`, tokens); err != nil {

@@ -53,6 +53,5 @@ export const chatApi = {
   getSuggestedPrompts: (hasBlock: boolean, hasFindings?: boolean): Promise<string[]> =>
     request('/api/chat/suggested-prompts', {body: {hasBlock, hasFindings: hasFindings ?? false}}),
 
-
   previewContext: (req: ChatRequest): Promise<ContextPreview> => request('/api/chat/preview-context', {body: req}),
 }

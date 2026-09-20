@@ -48,7 +48,14 @@ export function useAdminData(isAdmin: boolean) {
     const u = userId ?? auditUserRef.current
     const o = offset ?? auditOffsetRef.current
     try {
-      setAuditEvents(await adminApi.listAuditEvents({action: a || undefined, userId: u || undefined, limit: AUDIT_PAGE_SIZE, offset: o}))
+      setAuditEvents(
+        await adminApi.listAuditEvents({
+          action: a || undefined,
+          userId: u || undefined,
+          limit: AUDIT_PAGE_SIZE,
+          offset: o,
+        }),
+      )
     } catch {
       // audit log is optional
     }

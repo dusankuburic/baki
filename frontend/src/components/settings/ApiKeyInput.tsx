@@ -5,6 +5,8 @@ import {providersApi} from '@/api'
 import type {ProviderTestResult} from '@/types'
 import {logger} from '@/lib/logger'
 import {useTranslation} from 'react-i18next'
+import {useSystemStore} from '@/stores/systemStore'
+import {isTauri} from '@/platform/guards'
 
 interface Props {
   provider: string
@@ -21,6 +23,11 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'valid' | 'invalid' | null>(null)
   const [hasKey, setHasKey] = useState<boolean | null>(null)
+  // Where the key actually ends up: the OS keychain on a local backend, the
+  // server (encrypted at rest) in cloud mode. The line used to claim the
+  // keychain either way. Same signal the Privacy panel uses.
+  const systemInfo = useSystemStore(s => s.info)
+  const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
 
   const checkKey = useCallback(() => {
     providersApi
@@ -79,12 +86,14 @@ export default function ApiKeyInput({provider, label, onConfigured}: Props) {
       <label className="text-sm font-medium text-text-primary">{label}</label>
       {hasKey ? (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-text-secondary">API key configured (saved in keychain)</span>
+          <span className="text-sm text-text-secondary">
+            {localBackend ? t('keys.configuredLocal') : t('keys.configuredServer')}
+          </span>
           <Button size="sm" variant="secondary" onClick={handleDelete}>
-            Remove
+            {t('keys.remove')}
           </Button>
           <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing}>
-            {testing ? 'Testing...' : 'Test'}
+            {testing ? t('keys.testing') : t('keys.test')}
           </Button>
           {testResult === 'valid' && <span className="text-xs text-green-400">Valid</span>}
           {testResult === 'invalid' && <span className="text-xs text-red-400">Invalid</span>}

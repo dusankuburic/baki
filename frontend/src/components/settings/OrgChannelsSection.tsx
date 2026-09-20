@@ -110,9 +110,7 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
       ) : error ? (
         <p className="text-xs text-red-400 py-3">{t('channels.loadFailed')}</p>
       ) : channels.length === 0 && !creating ? (
-        <p className="text-xs text-text-tertiary py-3">
-          No channels configured. Events go only to the deployment-global destinations.
-        </p>
+        <p className="text-xs text-text-tertiary py-3">{t('channels.empty')}</p>
       ) : (
         <ul className="space-y-1.5">
           {channels.map(ch => (

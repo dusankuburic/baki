@@ -10,6 +10,8 @@ export interface MigrationResult {
   ConversationsSkipped: number
   ConversationsFailed: number
   SettingsMoved: boolean
+  /** Flows whose recorded owner does not exist here, reassigned to the operator. */
+  FlowsAdopted: number
   NotMigrated: string[] | null
   Errors: Array<{FlowID: string; Message: string}> | null
   Duration: number

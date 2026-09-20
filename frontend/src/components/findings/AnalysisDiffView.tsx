@@ -123,9 +123,7 @@ export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI
         <div className="flex flex-col items-center justify-center flex-1 gap-2 p-6 text-center">
           <GitCompareArrows size={22} className="text-text-tertiary" />
           <span className="text-sm text-text-secondary">{t('diff.firstAnalysis')}</span>
-          <span className="text-2xs text-text-tertiary">
-            Change the flow and re-analyze — this view will then show which findings are new, fixed, or unchanged.
-          </span>
+          <span className="text-2xs text-text-tertiary">{t('diffView.empty')}</span>
         </div>
       ) : (
         <div>

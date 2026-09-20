@@ -109,7 +109,7 @@ export default function ProvidersPanel() {
             {githubUser ? (
               <div className="flex items-center gap-3">
                 <span className="text-sm text-text-secondary">
-                  Connected as <strong className="text-text-primary">@{githubUser}</strong>
+                  {t('providers.connectedAs')} <strong className="text-text-primary">@{githubUser}</strong>
                 </span>
                 <button
                   className="text-xs text-red-400 hover:text-red-300"
@@ -141,14 +141,14 @@ export default function ProvidersPanel() {
                 rel="noopener noreferrer"
                 className="text-brand-400 hover:underline"
               >
-                Copilot subscription
+                {t('providers.copilotSubscriptionLink')}
               </a>
               .
             </p>
             {copilotUser ? (
               <div className="flex items-center gap-3">
                 <span className="text-sm text-text-secondary">
-                  Connected as <strong className="text-text-primary">@{copilotUser}</strong>
+                  {t('providers.connectedAs')} <strong className="text-text-primary">@{copilotUser}</strong>
                 </span>
                 <button
                   className="text-xs text-red-400 hover:text-red-300"
@@ -170,7 +170,7 @@ export default function ProvidersPanel() {
             {!copilotUser && (
               <details className="text-xs text-text-tertiary">
                 <summary className="cursor-pointer hover:text-text-secondary transition-colors">
-                  Or use a Personal Access Token
+                  {t('providers.orUsePat')}
                 </summary>
                 <div className="mt-2">
                   <ApiKeyInput provider="copilot" label={t('providers.githubPat')} onConfigured={refresh} />

@@ -50,7 +50,12 @@ export interface PortfolioQuery {
 
 export interface Portfolio {
   entries: PortfolioEntry[]
+  /** Every accessible flow under the requested scope. */
   totalFlows: number
+  /** How many of them were ranked; the rollups below cover exactly these. */
+  rankedFlows: number
+  /** True when the fleet exceeds the server's ranking cap, so the rollups describe a subset. */
+  truncated: boolean
   analyzedFlows: number
   avgHealth: number
   errors: number

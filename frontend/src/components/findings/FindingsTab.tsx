@@ -302,7 +302,7 @@ export default function FindingsTab() {
   if (!doc) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-text-tertiary p-4 text-center">
-        Load a flow to run analysis
+        {t('tabEmpty.noFlow')}
       </div>
     )
   }

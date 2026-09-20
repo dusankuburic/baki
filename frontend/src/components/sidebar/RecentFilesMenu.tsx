@@ -180,7 +180,7 @@ export default function RecentFilesMenu({
               className="text-2xs text-text-tertiary hover:text-semantic-error flex items-center gap-1"
             >
               <Trash2 size={10} />
-              Clear all
+              {t('recent.clearAll')}
             </button>
           )}
         </div>

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -238,15 +239,35 @@ func TestCLI_RulesJSONCarriesOptions(t *testing.T) {
 	}
 }
 
+// seenRequest records what the fake webhook received. The handler runs on the
+// server's goroutine while the test reads it, so every access takes the mutex
+// (the plain map this used to be was a data race under -race).
+type seenRequest struct {
+	mu     sync.Mutex
+	fields map[string]string
+}
+
+func (s *seenRequest) set(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fields[key] = value
+}
+
+func (s *seenRequest) get(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fields[key]
+}
+
 // ciWebhookServer mirrors internal/api.verifySignature: HMAC-SHA256 over
 // "<ts>." + body, constant-time compare, ±5 min timestamp window.
-func ciWebhookServer(t *testing.T, secret string, passed bool) (*httptest.Server, *map[string]string) {
+func ciWebhookServer(t *testing.T, secret string, passed bool) (*httptest.Server, *seenRequest) {
 	t.Helper()
-	seen := map[string]string{}
+	seen := &seenRequest{fields: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		seen["path"] = r.URL.Path
-		seen["body"] = string(body)
+		seen.set("path", r.URL.Path)
+		seen.set("body", string(body))
 		ts := r.Header.Get("X-Baki-Timestamp")
 		sec, err := strconv.ParseInt(ts, 10, 64)
 		if err != nil || time.Since(time.Unix(sec, 0)).Abs() > 5*time.Minute {
@@ -270,7 +291,7 @@ func ciWebhookServer(t *testing.T, secret string, passed bool) (*httptest.Server
 		})
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &seen
+	return srv, seen
 }
 
 // TestCLI_ReportSignsLikeTheServerVerifies drives `bakicli report` against a
@@ -282,13 +303,13 @@ func TestCLI_ReportSignsLikeTheServerVerifies(t *testing.T) {
 	if code != 1 {
 		t.Errorf("gate failed on the server → exit 1, got %d (stderr=%s)", code, stderr)
 	}
-	if (*seen)["path"] != "/api/integrations/ci" {
-		t.Errorf("posted to %q", (*seen)["path"])
+	if got := seen.get("path"); got != "/api/integrations/ci" {
+		t.Errorf("posted to %q", got)
 	}
 	var body map[string]string
-	_ = json.Unmarshal([]byte((*seen)["body"]), &body)
+	_ = json.Unmarshal([]byte(seen.get("body")), &body)
 	if body["flowId"] != "flow-1" || body["failOn"] != "warning" || body["format"] != "summary" {
-		t.Errorf("request body = %s", (*seen)["body"])
+		t.Errorf("request body = %s", seen.get("body"))
 	}
 	if !strings.Contains(stdout, `"passed":false`) || !strings.Contains(stderr, "gate FAILED") {
 		t.Errorf("stdout=%q stderr=%q", stdout, stderr)

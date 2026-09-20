@@ -3,6 +3,9 @@
 // strings exactly where tests/e2e assert on them.
 export const enSettings = {
   providers: {
+    connectedAs: 'Connected as',
+    copilotSubscriptionLink: 'Copilot subscription',
+    orUsePat: 'Or use a Personal Access Token',
     title: 'AI Providers',
     subtitle: 'Configure API keys for AI-powered analysis and chat.',
     anthropicKey: 'Anthropic API Key',
@@ -19,6 +22,11 @@ export const enSettings = {
     embeddingNoticeSuffix:
       "Indexing needs a configured OpenAI, Gemini, GLM, or GitHub Models key (set under AI Behavior → Embedding Assistant). Claude, Copilot, and xAI don't support embeddings, so a Claude-only setup can't use the Knowledge Base.",
     uploadTitle: 'Upload SOP',
+    uploadHint: 'Currently supports .txt and .md files up to 1MB.',
+    reindexTitle:
+      'Re-embed every document with the currently configured embedding provider (recovery after changing the embedding model)',
+    empty: 'No documents indexed yet.',
+    dimensionMismatch: 'Not searchable — embedding dimension mismatch; re-index below.',
     indexedTitle: 'Indexed Documents',
     deleteTitle: 'Delete document',
     deleteNamedMessage: 'Delete "{{filename}}" from the knowledge base?',
@@ -26,6 +34,12 @@ export const enSettings = {
   },
   general: {
     subtitle: 'Basic application settings and behavior.',
+    updatesHeading: 'Updates',
+    updatesBody: 'PAD Analyzer is under active development. Check the releases page for the latest version.',
+    viewReleases: 'View releases →',
+    onboardingHeading: 'Onboarding',
+    onboardingBody: 'Replay the welcome tour and guided walkthrough.',
+    replayTour: 'Replay tour →',
   },
   apiKey: {
     placeholder: 'Enter API key...',
@@ -39,9 +53,17 @@ export const enSettings = {
     lightThemes: 'Light Themes',
     comfortable: 'Comfortable',
     compact: 'Compact',
+    densityLabel: 'UI Density',
     densityHint: 'Compact shows more content, comfortable adds spacing.',
     highContrast: 'High Contrast',
     reduceMotion: 'Reduce Motion',
+  },
+  keys: {
+    configuredLocal: 'API key configured (saved in your OS keychain)',
+    configuredServer: 'API key configured (stored encrypted on this server)',
+    remove: 'Remove',
+    test: 'Test',
+    testing: 'Testing…',
   },
   parser: {
     subtitle: 'Configure how Power Automate Desktop flows are parsed.',
@@ -58,15 +80,21 @@ export const enSettings = {
       'API keys are sent to this PAD Analyzer server and stored there encrypted at rest. The server uses them to call the respective AI provider on your behalf.',
   },
   about: {
+    productName: 'PAD Analyzer',
+    versionLabel: 'Version',
+    platformLabel: 'Platform',
     title: 'About PAD Analyzer',
     subtitle: 'Power Automate Desktop flow analysis tool.',
     builtWith: 'Built with Tauri, Go, React, and TypeScript.',
   },
   shortcuts: {
+    searchPlaceholder: 'Search shortcuts…',
+    searchAria: 'Search shortcuts',
     title: 'Keyboard Shortcuts',
     subtitle: 'Reference of all available keyboard shortcuts.',
   },
   rules: {
+    appliesTo: 'Applies to',
     title: 'Analysis Rules',
     subtitle: 'Configure which static analysis rules are active and their reporting severity.',
     loading: 'Loading rules...',
@@ -153,6 +181,7 @@ export const enSettings = {
     tryNoMatches: 'Matches nothing in {{flow}} — the rule compiles but would not fire here.',
   },
   channels: {
+    empty: 'No channels configured. Events go only to the deployment-global destinations.',
     title: 'Notification channels',
     subtitle: "Governance events for this org's flows are also delivered to these destinations.",
     add: 'Add channel',
@@ -198,6 +227,8 @@ export const enSettings = {
   },
   orgs: {
     title: 'Organizations',
+    subtitle: 'Group flows and share them with teammates. Roles control who can view or edit.',
+    empty: 'No organizations yet.',
     inviteLinkBody:
       'Invite created for {{email}}. If email delivery is not configured, copy this link and send it yourself — it is shown only once.',
     inviteLinkCopy: 'Copy link',

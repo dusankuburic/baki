@@ -203,7 +203,7 @@ export default function FindingsToolbar({
               key={s}
               onClick={() => toggleStatusFilter(s)}
               aria-pressed={statusFilter.has(s)}
-              title="Filter by triage status"
+              title={t('toolbar.triageFilterAria')}
               className={clsx(
                 'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
                 statusFilter.has(s)
@@ -219,7 +219,7 @@ export default function FindingsToolbar({
           <button
             onClick={toggleAssignedToMe}
             aria-pressed={assignedToMeOnly}
-            title="Show only findings assigned to me"
+            title={t('toolbar.assignedToMe')}
             className={clsx(
               'text-2xs font-bold px-2 py-0.5 rounded-full border transition-all duration-fast',
               assignedToMeOnly
@@ -252,7 +252,7 @@ export default function FindingsToolbar({
                 ? 'bg-brand-500/10 text-brand-400 border-transparent'
                 : 'bg-transparent text-text-disabled border-border-subtle hover:text-text-tertiary',
             )}
-            title="Saved filter views"
+            title={t('toolbar.savedViewsAria')}
           >
             <Bookmark size={11} />
           </button>
@@ -263,7 +263,7 @@ export default function FindingsToolbar({
                 className="flex items-center gap-1.5 w-full text-left text-2xs px-2.5 py-1.5 hover:bg-surface-3 transition-colors text-brand-400 font-medium"
               >
                 <Bookmark size={10} />
-                Save current filters…
+                {t('toolbar.saveCurrentFilters')}
               </button>
               {savedViews.length > 0 && <div className="border-t border-border-subtle my-0.5" />}
               {savedViews.map(view => (
@@ -296,10 +296,10 @@ export default function FindingsToolbar({
       <div className="relative" ref={sortRef}>
         <button
           onClick={() => setShowSort(o => !o)}
-          aria-label="Change findings sort order"
+          aria-label={t('toolbar.sortAria')}
           aria-haspopup="menu"
           aria-expanded={showSort}
-          title={`Sort: ${SORT_OPTIONS.find(o => o.mode === sortMode)?.label ?? 'Rule order'}`}
+          title={t('toolbar.sortTitle', {label: SORT_OPTIONS.find(o => o.mode === sortMode)?.label ?? 'Rule order'})}
           className={clsx(
             'flex items-center gap-1 text-2xs px-1.5 py-1 rounded transition-colors flex-shrink-0',
             sortMode !== 'severity'
@@ -336,8 +336,8 @@ export default function FindingsToolbar({
       <button
         onClick={onShowDiff}
         disabled={diffLoading}
-        title="Compare with previous run"
-        aria-label="Compare findings with previous analysis run"
+        title={t('toolbar.compareTitle')}
+        aria-label={t('toolbar.compareAria')}
         className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0 disabled:opacity-50"
       >
         <GitCompareArrows size={12} />
@@ -361,32 +361,32 @@ export default function FindingsToolbar({
           <button
             onClick={onExportCSV}
             className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
-            aria-label="Export findings as CSV"
-            title="Export as CSV"
+            aria-label={t('toolbar.exportCsvTitle')}
+            title={t('toolbar.exportCsvAria')}
           >
             <Download size={12} />
           </button>
           <button
             onClick={onExportHTML}
             className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
-            aria-label="Export findings as HTML"
-            title="Export as HTML"
+            aria-label={t('toolbar.exportHtmlTitle')}
+            title={t('toolbar.exportHtmlAria')}
           >
             <FileText size={12} />
           </button>
           <button
             onClick={onExportSARIF}
             className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
-            aria-label="Export findings as SARIF"
-            title="Export as SARIF (GitHub Code Scanning)"
+            aria-label={t('toolbar.exportSarifTitle')}
+            title={t('toolbar.exportSarifAria')}
           >
             <FileCode size={12} />
           </button>
           <button
             onClick={onExportJUnit}
             className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors flex-shrink-0"
-            aria-label="Export findings as JUnit XML"
-            title="Export as JUnit XML (CI dashboards)"
+            aria-label={t('toolbar.exportJunitTitle')}
+            title={t('toolbar.exportJunitAria')}
           >
             <ShieldCheck size={12} />
           </button>
@@ -415,7 +415,7 @@ export default function FindingsToolbar({
           </button>
           <button
             onClick={onShare}
-            title="Create read-only share link"
+            title={t('toolbar.shareLinkTitle')}
             className="text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors"
           >
             <Share2 size={12} />
@@ -429,7 +429,7 @@ export default function FindingsToolbar({
                 onOpenSnapshots()
                 setShowUndo(o => !o)
               }}
-              title="Undo a fix or save (restore a snapshot)"
+              title={t('toolbar.undoTitle')}
               className={clsx(
                 'text-2xs px-1.5 py-1 rounded transition-colors',
                 showUndo
@@ -444,9 +444,7 @@ export default function FindingsToolbar({
                 {snapshotsLoading ? (
                   <div className="px-2.5 py-1.5 text-2xs text-text-tertiary">Loading…</div>
                 ) : snapshots.length === 0 ? (
-                  <div className="px-2.5 py-1.5 text-2xs text-text-tertiary">
-                    No snapshots yet — one is captured before every fix, batch fix, or source save.
-                  </div>
+                  <div className="px-2.5 py-1.5 text-2xs text-text-tertiary">{t('toolbar.noSnapshots')}</div>
                 ) : (
                   [...snapshots].reverse().map(snap => (
                     <button

@@ -230,8 +230,8 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                   </button>
                   <button
                     onClick={() => selectAllFindings(group.findings.map(f => f.id))}
-                    aria-label="Select all findings in this group"
-                    title="Select all in group"
+                    aria-label={t('group.selectAllTitle')}
+                    title={t('group.selectAllAria')}
                     className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
                   >
                     {group.findings.every(f => selectedFindingIds.has(f.id)) && group.findings.length > 0 ? (
@@ -245,8 +245,8 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                       const reason = await promptSuppressReason(group.findings.length)
                       if (reason !== null) suppressMany(group.findings, reason)
                     }}
-                    aria-label={`Suppress all ${group.findings.length} findings of this rule`}
-                    title="Suppress all findings in this group"
+                    aria-label={t('group.suppressAllTitle', {count: group.findings.length})}
+                    title={t('group.suppressAllAria')}
                     className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100 shrink-0 mt-0.5 flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-all duration-fast"
                   >
                     <EyeOff size={12} />
@@ -308,7 +308,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                   triageFindingsBatch(selectedFindings, {assigneeId: currentUserId, status: 'in_progress'})
                 }}
                 className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-2 py-1 rounded hover:bg-surface-3 transition-colors"
-                title="Assign the selection to me and set it in progress"
+                title={t('group.assignToMeTitle')}
               >
                 <UserPlus size={11} />
                 {t('selection.assignMe', 'Assign to me')}
@@ -317,7 +317,7 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
             <button
               onClick={() => triageFindingsBatch(selectedFindings, {status: 'resolved'})}
               className="flex items-center gap-1 text-2xs text-semantic-success px-2 py-1 rounded hover:bg-semantic-success/10 transition-colors"
-              title="Mark the selection resolved"
+              title={t('group.resolveTitle')}
             >
               <CheckCircle2 size={11} />
               {t('selection.resolve', 'Resolve')}

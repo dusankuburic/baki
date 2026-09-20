@@ -150,7 +150,10 @@ export const HistoryTab: React.FC = () => {
           ) : (
             // Versions are created by Save Snapshot above (and library saves) —
             // not by analysis, as this copy used to claim.
-            <EmptyState title="No history yet" description="Save a snapshot above to record the first version of this flow." />
+            <EmptyState
+              title="No history yet"
+              description="Save a snapshot above to record the first version of this flow."
+            />
           )
         ) : (
           <div className="space-y-2">

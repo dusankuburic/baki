@@ -8,9 +8,8 @@ import {join} from 'node:path'
 // English kept getting hardcoded into new components faster than it was being
 // extracted. This test locks in each directory as it is converted: once a
 // namespace lands here, a new component in it that does not use i18n at all
-// fails the suite. The stricter raw-English-literal scan is enforced only for
-// the directories in RAW_COPY_ENFORCED (chat today); the others still render
-// some literal copy, so passing here does not mean they are fully translated.
+// fails the suite, and so does one that renders raw English literals (the
+// stricter scan below, enforced for every directory on the list).
 //
 // ADD A DIRECTORY HERE AS SOON AS ITS NAMESPACE IS COMPLETE — that is the whole
 // point. Do not add one "to do later".
@@ -132,8 +131,10 @@ function sourceFiles(dir: string): string[] {
 // snake_case / kebab-case tokens).
 const HUMAN_ATTRS = ['aria-label', 'title', 'placeholder', 'alt', 'aria-description']
 
-// Directories whose raw-copy scan is enforced (see the note on the test below).
-const RAW_COPY_ENFORCED = new Set(['src/components/chat'])
+// Directories whose raw-copy scan is enforced. Every directory on
+// I18N_COMPLETE_DIRS is now clear, so the scan gates them all: a new component
+// that renders raw English in any of them fails here.
+const RAW_COPY_ENFORCED = new Set(I18N_COMPLETE_DIRS)
 
 function findRawCopy(src: string): string[] {
   const out: string[] = []
@@ -164,11 +165,9 @@ describe('i18n coverage', () => {
       expect(offenders).toEqual([])
     })
 
-    // Enforced per-directory. The scan found real drift in every directory on
-    // I18N_COMPLETE_DIRS — the import-only check above was never able to see
-    // it — but clearing ~200 literals across findings/auth/shared/sidebar/
-    // settings is its own piece of work. Chat is clean and locked in here;
-    // ADD A DIRECTORY TO RAW_COPY_ENFORCED AS SOON AS YOU CLEAR IT.
+    // Enforced for every directory in I18N_COMPLETE_DIRS (see
+    // RAW_COPY_ENFORCED). The skipIf stays so a directory can be added to the
+    // list above while its literals are still being extracted.
     it.skipIf(!RAW_COPY_ENFORCED.has(dir))(`${dir} renders no raw English literals`, () => {
       const offenders: string[] = []
       for (const f of sourceFiles(dir)) {

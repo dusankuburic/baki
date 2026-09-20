@@ -64,6 +64,40 @@ describe('PortfolioView', () => {
     expect(screen.getByText('Alpha')).toBeInTheDocument()
   })
 
+  // The rollups cover the ranked flows only, so a capped ranking must say so
+  // rather than present its averages as the whole fleet's.
+  it('says when the fleet is larger than the ranking', async () => {
+    portfolio.mockResolvedValue({
+      totalFlows: 4200,
+      rankedFlows: 1000,
+      truncated: true,
+      analyzedFlows: 900,
+      avgHealth: 72,
+      errors: 12,
+      warnings: 3,
+      info: 1,
+      entries: [
+        {
+          flowId: 'f1',
+          flowName: 'Alpha',
+          ownerName: 'u1',
+          analyzed: true,
+          healthScore: 72,
+          errors: 1,
+          warnings: 0,
+          info: 0,
+          analyzedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    })
+    render(
+      <ToastProvider>
+        <PortfolioView />
+      </ToastProvider>,
+    )
+    await waitFor(() => expect(screen.getByText(/Ranking the 1000 flows loaded first of 4200/)).toBeInTheDocument())
+  })
+
   it('shows an empty state when there are no flows', async () => {
     portfolio.mockResolvedValue({
       totalFlows: 0,

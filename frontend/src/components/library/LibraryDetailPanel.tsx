@@ -155,29 +155,29 @@ export default function LibraryDetailPanel({
         )}
 
         {versioningAvailable() && (
-        <Section title={`Version history${versions.length ? ` (${versions.length})` : ''}`}>
-          {versionsError ? (
-            <p className="text-xs text-semantic-error" role="alert">
-              Version history unavailable: {versionsError}
-            </p>
-          ) : versions.length === 0 ? (
-            <p className="text-xs text-text-tertiary">No saved versions yet.</p>
-          ) : (
-            <ul className="space-y-1.5">
-              {versions.map(v => (
-                <li key={v.id} className="text-xs text-text-secondary">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="font-medium text-text-primary">v{v.version}</span>
-                    <span className="text-text-tertiary" title={absoluteTime(v.createdAt)}>
-                      {relativeTime(v.createdAt)}
-                    </span>
-                  </div>
-                  {v.comment && <div className="text-text-tertiary truncate">{v.comment}</div>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Section>
+          <Section title={`Version history${versions.length ? ` (${versions.length})` : ''}`}>
+            {versionsError ? (
+              <p className="text-xs text-semantic-error" role="alert">
+                Version history unavailable: {versionsError}
+              </p>
+            ) : versions.length === 0 ? (
+              <p className="text-xs text-text-tertiary">No saved versions yet.</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {versions.map(v => (
+                  <li key={v.id} className="text-xs text-text-secondary">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="font-medium text-text-primary">v{v.version}</span>
+                      <span className="text-text-tertiary" title={absoluteTime(v.createdAt)}>
+                        {relativeTime(v.createdAt)}
+                      </span>
+                    </div>
+                    {v.comment && <div className="text-text-tertiary truncate">{v.comment}</div>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
         )}
 
         <div className="flex items-center gap-2 pt-3 border-t border-border-subtle flex-wrap">

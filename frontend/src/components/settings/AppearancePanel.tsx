@@ -57,7 +57,7 @@ export default function AppearancePanel() {
         {/* ... Rest of settings (density, accessibility) ... */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div>
-            <label className="text-sm font-medium text-text-primary block mb-3">UI Density</label>
+            <label className="text-sm font-medium text-text-primary block mb-3">{t('appearance.densityLabel')}</label>
             <div className="flex gap-2">
               <DensityButton
                 label={t('appearance.comfortable')}

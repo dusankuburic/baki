@@ -115,11 +115,9 @@ export default function PatchPreviewModal({open, original, patched, fixType, onA
   }
 
   return (
-    <Modal isOpen={open} onClose={onCancel} title={`Preview: ${fixType}`} size="lg">
+    <Modal isOpen={open} onClose={onCancel} title={t('patchPreview.title', {fixType})} size="lg">
       <div className="space-y-3">
-        <p className="text-xs text-text-tertiary">
-          Review the source change below. The fix writes directly to the flow file and re-analyzes.
-        </p>
+        <p className="text-xs text-text-tertiary">{t('patchPreview.body')}</p>
         <div className="rounded-md border border-border-subtle overflow-hidden max-h-96 overflow-y-auto">
           <pre className="text-2xs font-mono leading-relaxed">
             {diff.map((line, idx) => (

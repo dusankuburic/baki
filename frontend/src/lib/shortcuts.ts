@@ -101,9 +101,9 @@ export const allShortcuts: Shortcut[] = [
   {id: 'nav.parent', keys: 'mod+up', description: 'Parent block', category: 'Navigation', scope: 'main'},
   {id: 'nav.first.child', keys: 'mod+down', description: 'First child', category: 'Navigation', scope: 'main'},
   {
-    id: 'nav.up.subflow',
+    id: 'nav.clear.subflow',
     keys: 'mod+shift+up',
-    description: 'Up to parent subflow',
+    description: 'Clear subflow selection',
     category: 'Navigation',
     scope: 'global',
   },

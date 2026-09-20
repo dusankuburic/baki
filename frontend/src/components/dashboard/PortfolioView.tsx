@@ -208,7 +208,7 @@ export default function PortfolioView() {
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Stat label="Flows" value={data.totalFlows} />
-          <Stat label="Analyzed" value={`${data.analyzedFlows}/${data.totalFlows}`} />
+          <Stat label="Analyzed" value={`${data.analyzedFlows}/${data.rankedFlows ?? data.totalFlows}`} />
           <Stat
             label="Avg health"
             value={data.analyzedFlows > 0 ? `${data.avgHealth}` : '—'}
@@ -216,6 +216,15 @@ export default function PortfolioView() {
           />
           <Stat label="Open errors" value={data.errors} accent={data.errors > 0 ? 'text-semantic-error' : undefined} />
         </div>
+
+        {/* The server ranks a bounded number of flows. Saying so is the
+            difference between "the fleet averages 72" and "these 1000 do". */}
+        {data.truncated && (
+          <p className="text-xs text-text-tertiary">
+            Ranking the {data.rankedFlows} flows loaded first of {data.totalFlows} accessible. The figures above cover
+            those {data.rankedFlows}.
+          </p>
+        )}
 
         {/* Bulk-action toolbar — appears when any rows are selected. */}
         {selected.size > 0 && (
