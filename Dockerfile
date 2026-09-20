@@ -20,7 +20,7 @@ RUN npm run build
 RUN cp -a dist dist-nomaps && find dist-nomaps -name '*.map' -delete
 
 # Stage 2: Build the backend
-FROM golang:1.25-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS backend-builder
+FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY core/go.mod core/go.sum ./core/
