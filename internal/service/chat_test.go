@@ -1198,18 +1198,23 @@ func TestStreamChatMessage_PersistsUserTurnAtStart(t *testing.T) {
 		}
 	}
 
-	// The store must hold [history + fresh user] — the start-persist retained
-	// the user turn despite no client save-on-done running in this backend-only
-	// test (mirrors a close-during-stream before onDone).
+	// The store must hold [history + fresh user + the answer]. The start-persist
+	// retains the question; the completion-persist retains the answer, which
+	// used to be left to the client's save-on-done — so a client that went away
+	// (this backend-only test mirrors a tab closed during the stream) left the
+	// question stored with nothing beside it.
 	got, err := svc.GetConversation(context.Background(), doc, "flow")
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("expected 3 messages [history(2) + fresh user], got %d: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 messages [history(2) + fresh user + answer], got %d: %+v", len(got), got)
 	}
 	if got[2].Role != "user" || got[2].Content != "fresh question" {
-		t.Errorf("last message = %+v, want role=user content='fresh question'", got[2])
+		t.Errorf("third message = %+v, want role=user content='fresh question'", got[2])
+	}
+	if got[3].Role != "assistant" || got[3].Content == "" {
+		t.Errorf("last message = %+v, want the streamed assistant answer", got[3])
 	}
 	// Prior history is preserved unchanged.
 	if got[0].Content != "previous question" || got[1].Content != "previous answer" {
@@ -1260,5 +1265,52 @@ func TestStreamChatMessage_LegacyMessagesDoesNotStartPersist(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Content != "stored" {
 		t.Errorf("legacy/override path should not have backend-persisted; store = %+v", got)
+	}
+}
+
+// TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff: the
+// completion-persist goes through SaveConversation, so the "Save conversation
+// history" preference still decides. Otherwise the fix for the lost answer
+// would have quietly re-enabled storage the user switched off.
+func TestStreamChatMessage_DoesNotStoreTheAnswerWhenHistoryIsOff(t *testing.T) {
+	registerFakeProvider()
+	dir := t.TempDir()
+	factory := ai.NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
+	svc := &ChatService{
+		notifier:      &testutil.CountingNotifier{},
+		configDir:     dir,
+		flowCache:     &FlowService{},
+		analysisCache: &AnalysisService{},
+		factory:       factory,
+		settings:      &staticSettings{s: models.AppSettings{AI: models.AISettings{SaveConversationHistory: false}}},
+		chatCtxCache:  newChatContextCache(),
+	}
+	doc := &models.FlowDocument{ID: "f-off", Name: "f-off"}
+
+	id, err := svc.StreamChatMessage(context.Background(), "test", doc, nil, models.ChatRequest{
+		Provider: "fake", Model: "fake-model", UserMessage: "question",
+	})
+	if err != nil {
+		t.Fatalf("StreamChatMessage: %v", err)
+	}
+	svc.BeginStream(context.Background(), id)
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, ok := svc.activeStreams.Load(id); !ok {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("stream did not finish within 5s")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	got, err := svc.GetConversation(context.Background(), doc, "flow")
+	if err != nil {
+		t.Fatalf("GetConversation: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("history off: nothing should be stored, got %d message(s): %+v", len(got), got)
 	}
 }

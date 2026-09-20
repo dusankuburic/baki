@@ -56,9 +56,7 @@ export default function SharedReportView() {
         <div className="text-center space-y-2">
           <p className="text-lg font-medium text-text-primary">{t('sharedReport.cannotOpen')}</p>
           <p className="text-sm text-text-tertiary">{error}</p>
-          <p className="text-xs text-text-disabled mt-4">
-            The link may have expired or been revoked. Contact the flow owner for a new link.
-          </p>
+          <p className="text-xs text-text-disabled mt-4">{t('sharedReport.expiredHint')}</p>
         </div>
       </div>
     )

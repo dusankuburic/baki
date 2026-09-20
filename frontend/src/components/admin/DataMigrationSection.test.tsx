@@ -31,6 +31,7 @@ describe('DataMigrationSection', () => {
             ConversationsSkipped: 0,
             ConversationsFailed: 0,
             SettingsMoved: true,
+            FlowsAdopted: 0,
             NotMigrated: ['users and sessions', 'flow versions'],
             Errors: null,
             Duration: 1e9,

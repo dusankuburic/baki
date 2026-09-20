@@ -65,6 +65,18 @@ func (r *MigrationRunner) Enabled() bool { return r != nil && r.migrator != nil 
 // 409) if a migration is already running — in this process or, when a
 // GlobalLocker is wired, on any other replica — or false if not configured
 // (503).
+// StartAs begins a run whose orphaned flows are adopted by operatorID — the
+// admin who asked for the migration. Users are not migrated, so legacy flows
+// name owners the destination does not have; stored as-is they are invisible in
+// every library view while the run reports them migrated.
+func (r *MigrationRunner) StartAs(operatorID string) bool {
+	if !r.Enabled() {
+		return false
+	}
+	r.migrator.WithDefaultOwner(operatorID)
+	return r.Start()
+}
+
 func (r *MigrationRunner) Start() bool {
 	if !r.Enabled() {
 		return false

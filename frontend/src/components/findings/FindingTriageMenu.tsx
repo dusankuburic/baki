@@ -120,7 +120,9 @@ export default function FindingTriageMenu({finding}: Props) {
           {t(`triage.status.${triageStatus}`)}
           {/* Desktop triage is process memory (the store persists only in
               cloud mode): say so on the chip, which otherwise looks saved. */}
-          {isDesktop && <span className="ml-1 normal-case tracking-normal opacity-70">· {t('triage.labels.sessionOnly')}</span>}
+          {isDesktop && (
+            <span className="ml-1 normal-case tracking-normal opacity-70">· {t('triage.labels.sessionOnly')}</span>
+          )}
         </span>
       )}
 
@@ -148,7 +150,11 @@ export default function FindingTriageMenu({finding}: Props) {
             setShowAssign(false)
           }}
           className="flex items-center gap-1 text-2xs text-text-tertiary hover:text-text-secondary px-1.5 py-1 rounded hover:bg-surface-3 transition-colors shrink-0"
-          title={isDesktop ? `${t('triage.actions.setStatus')} (${t('triage.labels.sessionOnly')})` : t('triage.actions.setStatus')}
+          title={
+            isDesktop
+              ? `${t('triage.actions.setStatus')} (${t('triage.labels.sessionOnly')})`
+              : t('triage.actions.setStatus')
+          }
         >
           <CircleDot size={10} />
         </button>

@@ -306,13 +306,22 @@ type PortfolioEntry struct {
 // Portfolio is the fleet view: every flow the caller can govern, ranked worst-
 // health-first, with rollup totals. Unanalyzed flows sort last (no health yet).
 type Portfolio struct {
-	Entries       []PortfolioEntry `json:"entries"`
-	TotalFlows    int              `json:"totalFlows"`
-	AnalyzedFlows int              `json:"analyzedFlows"`
-	AvgHealth     int              `json:"avgHealth"`
-	Errors        int              `json:"errors"`
-	Warnings      int              `json:"warnings"`
-	Info          int              `json:"info"`
+	Entries []PortfolioEntry `json:"entries"`
+	// TotalFlows is every flow the caller can access under the requested
+	// scope. RankedFlows is how many of them this response actually ranked:
+	// ranking is in-memory and capped, and the rollups below (AnalyzedFlows,
+	// AvgHealth, Errors, Warnings, Info) cover exactly the ranked flows.
+	// Truncated is true when the cap was hit, so the rollups describe a
+	// subset — the totals used to be reported from the capped list, which
+	// read as the whole fleet.
+	TotalFlows    int  `json:"totalFlows"`
+	RankedFlows   int  `json:"rankedFlows"`
+	Truncated     bool `json:"truncated"`
+	AnalyzedFlows int  `json:"analyzedFlows"`
+	AvgHealth     int  `json:"avgHealth"`
+	Errors        int  `json:"errors"`
+	Warnings      int  `json:"warnings"`
+	Info          int  `json:"info"`
 }
 
 type GraphNode struct {

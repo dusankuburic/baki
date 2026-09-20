@@ -1228,7 +1228,9 @@ func writeBackup(file string, data []byte) error {
 	if info, err := os.Stat(file); err == nil {
 		mode = info.Mode().Perm()
 	}
-	if err := os.WriteFile(file+".bak", data, mode); err != nil { // #nosec G306 -- mirrors the source file's mode
+	// #nosec G306,G304,G703 -- `file` is the path this command was asked to fix
+	// (a CLI argument, not request input); the mode mirrors the source file.
+	if err := os.WriteFile(file+".bak", data, mode); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 	return nil

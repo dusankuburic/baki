@@ -66,6 +66,13 @@ func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID strin
 	if err != nil {
 		return nil, err
 	}
+	// The real fleet size, not the size of the capped page: TotalFlows came
+	// from len(docs), so a fleet larger than the ranking cap reported exactly
+	// the cap and averaged over that slice as if it were everything.
+	totalAccessible, err := s.CountLibraryFlows(ctx, userID, orgID, ScopeAll, "")
+	if err != nil {
+		return nil, err
+	}
 
 	ids := make([]string, 0, len(docs))
 	ownerSet := make(map[string]struct{})
@@ -87,14 +94,16 @@ func (s *LibraryService) BuildPortfolio(ctx context.Context, userID, orgID strin
 	}
 	names := s.ResolveOwnerNames(ctx, ownerIDs)
 
-	return assemblePortfolio(docs, health, names, sortBy, limit), nil
+	return assemblePortfolio(docs, health, names, sortBy, limit, totalAccessible), nil
 }
 
 // assemblePortfolio is the pure assembly + ranking core (no I/O) so it can be
-// unit-tested directly. Totals are computed over every doc before the entries
-// are ordered and trimmed. Every order except name puts unanalyzed flows last
+// unit-tested directly. Rollups are computed over every ranked doc before the
+// entries are ordered and trimmed. totalAccessible is the caller's whole
+// fleet (which may exceed the ranking cap); pass <= 0 to report the ranked
+// count as the total. Every order except name puts unanalyzed flows last
 // (they have no health to rank by); ties break by name.
-func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storageif.HealthSnapshot, ownerNames map[string]string, sortBy PortfolioSort, limit int) *models.Portfolio {
+func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storageif.HealthSnapshot, ownerNames map[string]string, sortBy PortfolioSort, limit int, totalAccessible int) *models.Portfolio {
 	p := &models.Portfolio{Entries: make([]models.PortfolioEntry, 0, len(docs))}
 	for _, d := range docs {
 		e := models.PortfolioEntry{
@@ -119,7 +128,12 @@ func assemblePortfolio(docs []*storageif.FlowDocument, health map[string]*storag
 		}
 		p.Entries = append(p.Entries, e)
 	}
+	p.RankedFlows = len(docs)
 	p.TotalFlows = len(docs)
+	if totalAccessible > len(docs) {
+		p.TotalFlows = totalAccessible
+		p.Truncated = true
+	}
 	if p.AnalyzedFlows > 0 {
 		p.AvgHealth /= p.AnalyzedFlows
 	}

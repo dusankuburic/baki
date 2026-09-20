@@ -32,8 +32,8 @@ export default function ShortcutsPanel() {
       <Input
         value={search}
         onChange={e => setSearch((e.target as HTMLInputElement).value)}
-        placeholder="Search shortcuts..."
-        aria-label="Search shortcuts"
+        placeholder={t('shortcuts.searchPlaceholder')}
+        aria-label={t('shortcuts.searchAria')}
         className="mb-4"
       />
 

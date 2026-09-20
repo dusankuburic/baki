@@ -82,7 +82,11 @@ export default function BackendCrashBanner() {
           </h2>
         </div>
         <p className="text-xs text-text-secondary">{t('backendCrash.body')}</p>
-        {detail && <pre className="text-2xs text-text-tertiary whitespace-pre-wrap break-words max-h-24 overflow-auto">{detail}</pre>}
+        {detail && (
+          <pre className="text-2xs text-text-tertiary whitespace-pre-wrap break-words max-h-24 overflow-auto">
+            {detail}
+          </pre>
+        )}
         <div className="flex justify-end">
           <button
             onClick={handleRestart}

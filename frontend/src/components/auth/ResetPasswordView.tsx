@@ -75,7 +75,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
             )}
 
             <label htmlFor="new-password" className="text-xs font-medium text-text-secondary">
-              New password
+              {t('reset.newPasswordLabel')}
             </label>
             <Input
               id="new-password"
@@ -89,7 +89,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               autoFocus
             />
             <label htmlFor="confirm-password" className="text-xs font-medium text-text-secondary">
-              Confirm new password
+              {t('reset.confirmPasswordLabel')}
             </label>
             <Input
               id="confirm-password"
@@ -110,7 +110,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               icon={KeyRound}
               disabled={loading || !password || !confirm}
             >
-              Reset password
+              {t('reset.submit')}
             </Button>
 
             <div className="text-center text-sm text-text-tertiary">

@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"unicode/utf8"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/errreport"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -224,13 +226,19 @@ func (s *SystemService) AppInfo() (info *models.AppInfo, err error) {
 // being the whole budget — a log line is read by people, not stored blobs.
 const maxFrontendErrorField = 8 << 10
 
-func (s *SystemService) LogError(payload models.FrontendError) {
-	logger.Error("frontend error",
-		"message", truncateForLog(payload.Message, maxFrontendErrorField),
-		"stack", truncateForLog(payload.Stack, maxFrontendErrorField),
-		"componentStack", truncateForLog(payload.ComponentStack, maxFrontendErrorField),
-		"url", truncateForLog(payload.URL, 2048),
-	)
+// LogError records a client-side error report. It goes through errreport, not
+// only the log: that package is meant to be the one place exceptions are
+// aggregated (it counts pad_errors_reported_total and forwards to a registered
+// sink), and browser errors — the largest single source of them — bypassed it
+// entirely, so they were invisible to both the counter and any crash-triage
+// backend.
+func (s *SystemService) LogError(ctx context.Context, payload models.FrontendError) {
+	message := truncateForLog(payload.Message, maxFrontendErrorField)
+	errreport.CaptureError(ctx, "frontend", errors.New(message), errreport.Attrs{
+		"stack":          truncateForLog(payload.Stack, maxFrontendErrorField),
+		"componentStack": truncateForLog(payload.ComponentStack, maxFrontendErrorField),
+		"url":            truncateForLog(payload.URL, 2048),
+	})
 }
 
 // truncateForLog cuts s to max bytes with a visible marker, on a rune boundary.

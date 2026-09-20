@@ -65,8 +65,7 @@ export const SharingTab: React.FC = () => {
     return libraryApi.get(document.id).catch(() => null)
   }, [document?.id])
   const canManage =
-    libraryFlow?.canShare === true ||
-    collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
+    libraryFlow?.canShare === true || collaborators.some(c => c.userId === currentUser?.id && c.permission === 'admin')
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()

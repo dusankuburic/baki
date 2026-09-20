@@ -226,7 +226,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
         >
           <div className="flex flex-col gap-1 mb-2">
-            <h1 className="text-xl font-semibold text-text-primary">Reset your password</h1>
+            <h1 className="text-xl font-semibold text-text-primary">{t('login.resetTitle')}</h1>
             <p className="text-sm text-text-tertiary">{forgotSent ? t('login.resetSent') : t('login.resetPrompt')}</p>
           </div>
 
@@ -251,14 +251,14 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
                 icon={Send}
                 disabled={forgotLoading || !email}
               >
-                Send reset link
+                {t('login.resetSubmit')}
               </Button>
             </>
           )}
 
           <div className="text-center text-sm text-text-tertiary">
             <button type="button" className="text-brand-500 hover:underline font-medium" onClick={backToLogin}>
-              Back to sign in
+              {t('login.backToSignIn')}
             </button>
           </div>
         </form>
@@ -352,7 +352,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
             onChange={e => setRemember(e.target.checked)}
             className="accent-brand-500 w-3.5 h-3.5"
           />
-          Keep me signed in on this device
+          {t('login.rememberMe')}
         </label>
 
         {!isRegister && (
@@ -365,7 +365,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
               setForgot(true)
             }}
           >
-            Forgot password?
+            {t('login.forgotPassword')}
           </button>
         )}
 

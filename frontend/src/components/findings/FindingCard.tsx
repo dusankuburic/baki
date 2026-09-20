@@ -170,7 +170,7 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
             className="flex items-center gap-1 text-2xs text-brand-400 hover:text-brand-300 px-1.5 py-1 rounded hover:bg-brand-500/10 transition-colors shrink-0"
           >
             <Sparkles size={10} />
-            Fix with AI
+            {t('card.fixWithAi')}
           </button>
         )}
 

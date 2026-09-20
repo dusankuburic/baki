@@ -30,7 +30,11 @@ export default function MobileDrawer({
   // pointer-device users keep Esc/backdrop/click paths.
   const [dragX, setDragX] = useState(0)
   const drag = useRef<{startX: number; width: number} | null>(null)
-  const axisX = side === 'right' // right drawer: dragging left (negative) closes
+  // A drawer closes by sliding toward the edge it is anchored to: the left
+  // drawer moves LEFT (negative dx), the right drawer moves RIGHT (positive).
+  // These were the other way round, so swiping a drawer off its own edge did
+  // nothing and only a swipe across the screen (into the content) tracked.
+  const closesLeftward = side === 'left'
 
   return (
     <div className={`fixed inset-0 z-50 flex ${side === 'right' ? 'justify-end' : ''} md:hidden`}>
@@ -53,7 +57,7 @@ export default function MobileDrawer({
           if (!drag.current) return
           const dx = e.clientX - drag.current.startX
           // Only track the outward direction; the inward one resists at 0.
-          const outward = axisX ? Math.min(0, dx) : Math.max(0, dx)
+          const outward = closesLeftward ? Math.min(0, dx) : Math.max(0, dx)
           setDragX(outward)
         }}
         onPointerUp={() => {

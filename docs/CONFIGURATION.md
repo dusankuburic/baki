@@ -82,6 +82,11 @@ metrics token, an insecure `sslmode` in cloud mode.
 
 `POST /api/integrations/ci` lets a pipeline ask the server to re-analyse a **stored** flow and record the run on the dashboard. The server never ingests numbers from the runner. It is off until `PAD_CI_WEBHOOK_SECRET` is set.
 
+The secret is a deployment-level credential, not a user's: a caller holding it
+can ask the server to analyse any stored flow by ID and read back its finding
+counts (and, with `format: report`, the findings themselves). Treat it like a
+read token for the whole library and scope it to CI.
+
 The request body is `{"flowId": "<id>", "failOn": "error", "format": "summary"}`. `failOn` accepts `error`, `warning`, `info` or `none`; `format` accepts `summary`, `report` (adds findings) or `sarif`. Two headers authenticate it:
 
 - `X-Baki-Timestamp` is the current Unix time in seconds. The server rejects values more than five minutes off its clock.

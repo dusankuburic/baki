@@ -119,9 +119,9 @@ describe('register', () => {
   it('surfaces the error message and rethrows on failure', async () => {
     mockRegister.mockRejectedValue(new Error('email already registered'))
 
-    await expect(
-      useAuthStore.getState().register({email: 'alice@example.com', password: 'secret'}),
-    ).rejects.toThrow('email already registered')
+    await expect(useAuthStore.getState().register({email: 'alice@example.com', password: 'secret'})).rejects.toThrow(
+      'email already registered',
+    )
     expect(useAuthStore.getState().error).toBe('email already registered')
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })

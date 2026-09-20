@@ -1,5 +1,11 @@
 import {test, expect, Page, Route} from '@playwright/test'
-import {mockFlowDocument, mockAnalysisReport, mockDashboardHome, setupAuthenticatedPage} from './helpers'
+import {
+  mockFlowDocument,
+  mockAnalysisReport,
+  mockDashboardHome,
+  setupAuthenticatedPage,
+  SAMPLE_FLOW_CONTENT,
+} from './helpers'
 
 /**
  * Chat streaming happy path E2E. The most intricate frontend machinery
@@ -15,11 +21,7 @@ import {mockFlowDocument, mockAnalysisReport, mockDashboardHome, setupAuthentica
 const STREAM_ID = 'e2e-fixed-stream-id'
 
 function sseBody(events: Array<{name: string; data: unknown}>) {
-  return (
-    events
-      .map(e => `event: ${e.name}\ndata: ${JSON.stringify(e.data)}\n\n`)
-      .join('') + '\n'
-  )
+  return events.map(e => `event: ${e.name}\ndata: ${JSON.stringify(e.data)}\n\n`).join('') + '\n'
 }
 
 async function stubChatBoot(page: Page) {
@@ -35,7 +37,19 @@ async function stubChatBoot(page: Page) {
   const bootStubs: Record<string, unknown> = {
     '/api/local-config': {mode: 'cloud'},
     '/api/system/info': {version: 'e2e', platform: 'linux', arch: 'x64', buildDate: '', gitCommit: ''},
-    '/api/system/settings': {},
+    // Full AppSettings shape with first-run completed: the onboarding modal
+    // would otherwise overlay the composer. (The helper stubs this too, but
+    // this map is registered later and Playwright matches the last route
+    // first, so it must carry the flag itself.)
+    '/api/system/settings': {
+      version: 1,
+      general: {firstRunCompleted: true},
+      appearance: {},
+      layout: {},
+      ai: {},
+      parser: {},
+      analysis: {},
+    },
     '/api/flow/recent': [],
     '/api/orgs/': [],
     '/api/analysis/dashboard': mockDashboardHome(),
@@ -106,13 +120,23 @@ async function stubChatBoot(page: Page) {
 
 async function openChatWithFlow(page: Page) {
   await page.goto('/')
-  // Complete first-run onboarding so its modal can't overlay the composer.
-  const skipBtn = page.getByRole('button', {name: 'Skip', exact: true})
-  await skipBtn.waitFor({state: 'visible', timeout: 8_000}).then(() => skipBtn.click(), () => {})
-  const startBtn = page.getByRole('button', {name: 'Load sample & start'})
-  await startBtn.waitFor({state: 'visible', timeout: 8_000}).then(() => startBtn.click(), () => {})
-  // Open the AI inspector tab (Details is the default).
-  const aiTab = page.getByRole('tab', {name: 'AI'}).or(page.getByRole('button', {name: 'AI', exact: true}))
+  // Load a flow through the file picker (the upload stub answers it). This
+  // used to go through the onboarding modal's "Load sample & start", which it
+  // reached by clicking Skip — Skip now dismisses the tour, as it says, so
+  // that route left the app with no flow and the AI tab inert.
+  const openBtn = page.locator('button:has-text("Open file")').first()
+  const [fileChooser] = await Promise.all([page.waitForEvent('filechooser'), openBtn.click()])
+  await fileChooser.setFiles({
+    name: 'Main.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from(SAMPLE_FLOW_CONTENT),
+  })
+  await expect(page.locator('text=Customer Data Sync').first()).toBeVisible({timeout: 10_000})
+  // Open the AI inspector tab (Details is the default). `exact` matters: role
+  // name matching is a case-insensitive SUBSTRING, and "Details" contains
+  // "ai" — the non-exact locator matched Details first and clicked that, so
+  // the panel never switched and the composer was never rendered.
+  const aiTab = page.getByRole('tab', {name: 'AI', exact: true})
   await aiTab.first().waitFor({timeout: 15_000})
   await aiTab.first().click()
 }

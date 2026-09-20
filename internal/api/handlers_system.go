@@ -239,7 +239,7 @@ func (h *SystemHandler) handleLogError(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	h.sysSvc.LogError(req)
+	h.sysSvc.LogError(r.Context(), req)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

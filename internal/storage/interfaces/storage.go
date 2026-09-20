@@ -89,11 +89,11 @@ type RefreshTokenInfo struct {
 // ExportUserData. It contains only the user's own data; collaborator-authored
 // content on shared flows is out of scope.
 type UserDataExport struct {
-	User        *User           `json:"user"`
-	Flows       []*FlowDocument `json:"flows"`
-	Settings    *AppSettings    `json:"settings"`
-	AuditEvents []*AuditEvent   `json:"auditEvents"`
-	APITokens   []*APIToken     `json:"apiTokens"`
+	User        *User                `json:"user"`
+	Flows       []*FlowDocument      `json:"flows"`
+	Settings    *AppSettings         `json:"settings"`
+	AuditEvents []ExportedAuditEvent `json:"auditEvents"`
+	APITokens   []*APIToken          `json:"apiTokens"`
 	// The sections below were missing from the bundle while the endpoint
 	// described itself as "everything stored about the user": chat history on
 	// the user's own flows, the comments and triage decisions they authored,
@@ -104,6 +104,37 @@ type UserDataExport struct {
 	Organisations   []*Organisation         `json:"organisations"`
 	Sessions        []RefreshTokenInfo      `json:"sessions"`
 	ExportedAt      time.Time               `json:"exportedAt"`
+}
+
+// ExportedAuditEvent is an AuditEvent with the camelCase keys the rest of the
+// bundle uses. AuditEvent itself stays untagged because the on-disk spill queue
+// persists it as JSON, so its field names are a storage contract.
+type ExportedAuditEvent struct {
+	ID           string            `json:"id"`
+	UserID       string            `json:"userId"`
+	Email        string            `json:"email"`
+	Action       string            `json:"action"`
+	ResourceType string            `json:"resourceType"`
+	ResourceID   string            `json:"resourceId"`
+	IP           string            `json:"ip"`
+	Meta         map[string]string `json:"meta"`
+	CreatedAt    time.Time         `json:"createdAt"`
+}
+
+// NewExportedAuditEvents maps stored events onto the export shape.
+func NewExportedAuditEvents(events []*AuditEvent) []ExportedAuditEvent {
+	out := make([]ExportedAuditEvent, 0, len(events))
+	for _, e := range events {
+		if e == nil {
+			continue
+		}
+		out = append(out, ExportedAuditEvent{
+			ID: e.ID, UserID: e.UserID, Email: e.Email, Action: e.Action,
+			ResourceType: e.ResourceType, ResourceID: e.ResourceID, IP: e.IP,
+			Meta: e.Meta, CreatedAt: e.CreatedAt,
+		})
+	}
+	return out
 }
 
 // ExportedConversation is one stored chat conversation on a flow the user
@@ -836,6 +867,12 @@ type FlowDocument struct {
 }
 
 // FlowMetadata contains metadata about a flow
+// FlowMetadata is stored as the flows.metadata JSON column and READ BY SQL
+// (ORDER BY metadata->>'BlockCount', the dashboard's subflow sums, and an index
+// built on that expression). Its JSON keys are therefore a storage contract:
+// renaming them silently turns those queries into zeroes. API responses that
+// need camelCase shape it at the boundary (see the version view in
+// internal/api), they do not retag this struct.
 type FlowMetadata struct {
 	BlockCount   int
 	SubflowCount int
@@ -996,6 +1033,10 @@ type RecentFile struct {
 }
 
 // AuditEvent records a user action for compliance and security visibility.
+// AuditEvent is one entry of the audit trail. The on-disk spill queue persists
+// these as JSON lines, so the field names are a storage contract too; the admin
+// API renders them through a view (internal/api) that carries the camelCase
+// keys clients read.
 type AuditEvent struct {
 	ID           string
 	UserID       string
@@ -1018,6 +1059,9 @@ type AuditFilter struct {
 }
 
 // FlowVersion stores a snapshot of a flow at a point in time.
+// FlowVersion is one stored snapshot of a flow. Rendered through an API view
+// (internal/api) rather than directly: the nested FlowMetadata carries storage
+// JSON keys that SQL depends on, so the wire shape is built at the boundary.
 type FlowVersion struct {
 	ID        string
 	FlowID    string

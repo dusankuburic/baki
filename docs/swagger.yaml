@@ -95,6 +95,8 @@ paths:
       description: Copies flows, settings and chat conversations from a legacy filesystem-backed
         server's data directory (PAD_DATA_DIR) into the database (admin only, cloud
         mode). Idempotent and non-blocking; the status result lists what is not migrated.
+        Users are not migrated, so flows whose recorded owner is absent here are assigned
+        to the admin who starts the run (reported as FlowsAdopted).
       produces:
       - application/json
       responses:

@@ -23,7 +23,7 @@ func TestAssemblePortfolio(t *testing.T) {
 	}
 	names := map[string]string{"u1": "u1@example.com", "u2": "u2@example.com"}
 
-	p := assemblePortfolio(docs, health, names, PortfolioSortRisk, 0)
+	p := assemblePortfolio(docs, health, names, PortfolioSortRisk, 0, 0)
 
 	if p.TotalFlows != 3 || p.AnalyzedFlows != 2 {
 		t.Fatalf("totals: total=%d analyzed=%d, want 3/2", p.TotalFlows, p.AnalyzedFlows)
@@ -84,7 +84,7 @@ func TestAssemblePortfolio_SortAndLimit(t *testing.T) {
 		{PortfolioSortRisk, 10, []string{"f2", "f3", "f1", "f4"}},
 	}
 	for _, tc := range cases {
-		p := assemblePortfolio(docs, health, map[string]string{}, tc.sort, tc.limit)
+		p := assemblePortfolio(docs, health, map[string]string{}, tc.sort, tc.limit, 0)
 		got := make([]string, len(p.Entries))
 		for i, e := range p.Entries {
 			got[i] = e.FlowID
@@ -112,7 +112,7 @@ func TestParsePortfolioSort(t *testing.T) {
 }
 
 func TestAssemblePortfolio_Empty(t *testing.T) {
-	p := assemblePortfolio(nil, map[string]*storageif.HealthSnapshot{}, map[string]string{}, PortfolioSortRisk, 0)
+	p := assemblePortfolio(nil, map[string]*storageif.HealthSnapshot{}, map[string]string{}, PortfolioSortRisk, 0, 0)
 	if p.TotalFlows != 0 || p.AnalyzedFlows != 0 || p.AvgHealth != 0 {
 		t.Errorf("empty portfolio should be zeroed, got %+v", p)
 	}
@@ -139,5 +139,38 @@ func TestBuildPortfolio_LocalModeIsEmpty(t *testing.T) {
 	}
 	if p.Entries == nil {
 		t.Error("Entries must be a non-nil empty slice so the JSON is [] rather than null")
+	}
+}
+
+// TestAssemblePortfolio_ReportsTheWholeFleetWhenRankingIsCapped: the rollups
+// cover the ranked flows only, so a fleet larger than the ranking cap must say
+// so. TotalFlows used to be len(docs) — exactly the cap — which read as the
+// whole fleet with averages over an arbitrary slice of it.
+func TestAssemblePortfolio_ReportsTheWholeFleetWhenRankingIsCapped(t *testing.T) {
+	docs := []*storageif.FlowDocument{
+		{ID: "f1", Name: "One", OwnerID: "u1"},
+		{ID: "f2", Name: "Two", OwnerID: "u1"},
+	}
+	health := map[string]*storageif.HealthSnapshot{
+		"f1": {HealthScore: 40, Errors: 2},
+		"f2": {HealthScore: 80},
+	}
+
+	p := assemblePortfolio(docs, health, map[string]string{}, PortfolioSortRisk, 0, 500)
+	if p.RankedFlows != 2 || p.TotalFlows != 500 || !p.Truncated {
+		t.Errorf("ranked=%d total=%d truncated=%v, want 2/500/true", p.RankedFlows, p.TotalFlows, p.Truncated)
+	}
+	if p.AnalyzedFlows != 2 || p.AvgHealth != 60 || p.Errors != 2 {
+		t.Errorf("rollups must cover the ranked flows: %+v", p)
+	}
+
+	// A fleet that fits: no truncation, and the total is the ranked count.
+	if p := assemblePortfolio(docs, health, map[string]string{}, PortfolioSortRisk, 0, 2); p.Truncated || p.TotalFlows != 2 {
+		t.Errorf("total=%d truncated=%v, want 2/false", p.TotalFlows, p.Truncated)
+	}
+	// Unknown total (0): report the ranked count, as the local-mode and
+	// direct-call paths do.
+	if p := assemblePortfolio(docs, health, map[string]string{}, PortfolioSortRisk, 0, 0); p.Truncated || p.TotalFlows != 2 {
+		t.Errorf("total=%d truncated=%v, want 2/false", p.TotalFlows, p.Truncated)
 	}
 }

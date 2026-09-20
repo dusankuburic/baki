@@ -39,7 +39,7 @@ export default function AboutPanel() {
 
       <div className="space-y-4">
         <div className="py-3 px-4 rounded-lg bg-surface-2 border border-border-default">
-          <div className="text-lg font-bold text-text-primary mb-2">PAD Analyzer</div>
+          <div className="text-lg font-bold text-text-primary mb-2">{t('about.productName')}</div>
           <div className="space-y-1 text-sm text-text-secondary">
             <div>Version: {info?.version ?? '...'}</div>
             <div>

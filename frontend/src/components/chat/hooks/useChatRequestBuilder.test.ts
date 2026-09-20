@@ -152,7 +152,9 @@ describe('useChatRequestBuilder', () => {
         getMessages: () => msgs,
       }),
     )
-    expect(result.current.buildRequest('hi')?.messages).toEqual([{id: 'm1', role: 'user', content: 'hi', timestamp: 't'}])
+    expect(result.current.buildRequest('hi')?.messages).toEqual([
+      {id: 'm1', role: 'user', content: 'hi', timestamp: 't'},
+    ])
   })
 
   it("uses the thread's stored selectedSourceFiles when overrideFiles is not given", () => {

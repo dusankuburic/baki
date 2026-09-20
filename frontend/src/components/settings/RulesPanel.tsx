@@ -184,7 +184,7 @@ export default function RulesPanel() {
       <div>
         <h2 className="text-xl font-semibold text-text-primary flex items-center gap-2">
           <Shield size={20} className="text-brand-500" />
-          Analysis Rules
+          {t('rules.title')}
         </h2>
         <p className="text-sm text-text-secondary mt-1">{t('rules.subtitle')}</p>
       </div>
@@ -192,7 +192,7 @@ export default function RulesPanel() {
       {(isSystemAdmin || adminOrgs.length > 0) && (
         <div className="p-4 border border-border-default rounded-xl bg-surface-1 space-y-2">
           <label htmlFor="rules-scope" className="text-sm font-bold text-text-primary">
-            Applies to
+            {t('rules.appliesTo')}
           </label>
           <select
             id="rules-scope"
@@ -291,7 +291,10 @@ export default function RulesPanel() {
               )}
 
               {eff.enabled && eff.options && Object.keys(eff.options).length > 0 && (
-                <div className="flex flex-wrap items-center gap-4 animate-fade-in" data-testid={`thresholds-${rule.id}`}>
+                <div
+                  className="flex flex-wrap items-center gap-4 animate-fade-in"
+                  data-testid={`thresholds-${rule.id}`}
+                >
                   <span className="text-2xs font-bold uppercase text-text-tertiary">{t('rules.thresholds')}</span>
                   {Object.entries(eff.options).map(([key, val]) => (
                     <label key={key} className="flex items-center gap-2 text-xs text-text-secondary">

@@ -424,6 +424,47 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 	render.JSON(w, h.toLibraryFlow(r.Context(), existing, userID, h.libSvc.ResolveOwnerName(r.Context(), existing.OwnerID)))
 }
 
+// flowVersionView is the wire shape of a stored version. The storage struct is
+// not tagged on purpose — its nested FlowMetadata keys are read by SQL
+// (metadata->>'BlockCount') — so the camelCase the history panel reads is built
+// here. Before this, the panel received Version/Comment/CreatedAt and rendered
+// "v undefined", "No comment" and an invalid date for every snapshot.
+type flowVersionView struct {
+	ID        string              `json:"id"`
+	FlowID    string              `json:"flowId"`
+	Version   int                 `json:"version"`
+	Comment   string              `json:"comment"`
+	Metadata  flowVersionMetaView `json:"metadata"`
+	CreatedBy string              `json:"createdBy"`
+	CreatedAt time.Time           `json:"createdAt"`
+}
+
+type flowVersionMetaView struct {
+	BlockCount   int `json:"blockCount"`
+	SubflowCount int `json:"subflowCount"`
+	MaxDepth     int `json:"maxDepth"`
+}
+
+func toFlowVersionView(v *storageif.FlowVersion) flowVersionView {
+	return flowVersionView{
+		ID: v.ID, FlowID: v.FlowID, Version: v.Version, Comment: v.Comment,
+		Metadata: flowVersionMetaView{
+			BlockCount:   v.Metadata.BlockCount,
+			SubflowCount: v.Metadata.SubflowCount,
+			MaxDepth:     v.Metadata.MaxDepth,
+		},
+		CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt,
+	}
+}
+
+func toFlowVersionViews(vs []*storageif.FlowVersion) []flowVersionView {
+	out := make([]flowVersionView, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, toFlowVersionView(v))
+	}
+	return out
+}
+
 // handleListFlowVersions returns the version history for a library flow.
 // @Summary      List flow versions
 // @Description  handleListFlowVersions returns the version history for a library flow.
@@ -434,7 +475,7 @@ func (h *LibraryHandler) handleLibraryUpdate(w http.ResponseWriter, r *http.Requ
 // @Router       /api/library/{id}/versions [get]
 func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.Request) {
 	if h.backend == nil {
-		render.JSON(w, []storageif.FlowVersion{})
+		render.JSON(w, []flowVersionView{})
 		return
 	}
 
@@ -455,7 +496,7 @@ func (h *LibraryHandler) handleListFlowVersions(w http.ResponseWriter, r *http.R
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, versions)
+	render.JSON(w, toFlowVersionViews(versions))
 }
 
 // handleSaveFlowVersion snapshots the current flow content as a new version.
@@ -516,7 +557,7 @@ func (h *LibraryHandler) handleSaveFlowVersion(w http.ResponseWriter, r *http.Re
 		return
 	}
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionFlowVersion, "flow", id, map[string]string{"version": strconv.Itoa(v.Version)})
-	render.JSONStatus(w, http.StatusCreated, v)
+	render.JSONStatus(w, http.StatusCreated, toFlowVersionView(v))
 }
 
 // handleGetFlowVersion loads a specific historical version.

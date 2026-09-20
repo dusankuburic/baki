@@ -196,6 +196,77 @@ rules, CLI, CI, settings, both runtime modes). What it found, and what changed:
   endpoint counts; and the project tree lists `core/`, `cmd/`, `ci/` and
   `infra/`.
 
+**Verification gates and mobile shell**
+
+- At phone width both overlay drawers opened over the app on every load: they
+  were driven by the persisted desktop pane flags, whose default is "pane
+  shown", and the inspector's backdrop swallowed taps meant for the shell.
+  The drawers now have their own state, closed until opened.
+- Swipe-to-close moved the drawer the wrong way: a drawer closes toward the
+  edge it is anchored to, and the two directions were reversed, so swiping a
+  drawer off its own edge did nothing.
+- The portfolio ranks a bounded number of flows but reported the size of that
+  page as the fleet total, so a fleet above the cap always read as exactly the
+  cap with averages over an arbitrary slice. It now reports the real total,
+  how many flows were ranked, and says when the two differ.
+- `.env.example` is advertised as the annotated environment reference and had
+  drifted to 43 of 78 variables; a test now fails when a variable the server
+  reads is missing from it.
+- The i18n coverage test enforced its raw-English scan for one of seven
+  directories it claims to lock in. The remaining literals are extracted and
+  the scan now gates all seven. Two of them were also wrong: the API-key line
+  promised the OS keychain in cloud mode too, and the flow tree offered "Drill
+  into subflow" for an action that only selects it.
+- Settings → General linked to another project's releases page.
+- The "Up to parent subflow" shortcut could only ever clear the selection once
+  drill-into-subflow was removed, over a path stack nothing pushed to. Both are
+  now named for what they do.
+- The end-to-end suite had four failures that predate this work: two specs
+  broke on a role-name matcher that matches substrings ("Details" contains
+  "ai"), one mocked a response shape the handler does not return, and the
+  mobile ones were the drawer bugs above. Prettier and golangci-lint were
+  also failing. All green now.
+
+**Found by running the cloud stack**
+
+- Audit events and version history reached clients under Go field names
+  (`Action`, `CreatedAt`, `Version`) because their storage structs carried no
+  JSON tags, while every reader looks for `action`, `createdAt` and `version`.
+  The admin audit table rendered blank cells and "Invalid Date" for every row,
+  and version history showed "v undefined" with "No comment" for every
+  snapshot. Both are now shaped at the API boundary, because those structs are
+  storage contracts as well: `flows.metadata` is read by SQL
+  (`ORDER BY metadata->>'BlockCount'`, the dashboard's subflow sums, and an
+  index on that expression) and the audit spill queue persists events as JSON
+  lines. Tests pin the wire shape and the stored keys in both directions.
+- The organisations list left every roster empty: `/api/orgs` is the only org
+  endpoint the app calls, and it skipped members "to keep it fast", so the
+  panel that reads `org.members` to find admins crashed on its first row for
+  anyone who belongs to an org. The list now carries the roster in one extra
+  query, and the panel tolerates its absence.
+- Saving a policy answered with zero timestamps: the row is stamped by the
+  insert, but the handler echoed the request struct back, so a just-saved
+  policy read as the year 1 until something refetched the list.
+- Client-side error reports were only written to the log, so the package that
+  owns exception aggregation never saw the largest source of exceptions:
+  `pad_errors_reported_total` stayed empty and no crash-triage sink received
+  them. Browser errors now report through it.
+- The legacy-server migration copied flows that named owners the destination
+  does not have (users are deliberately not migrated), so they arrived owned by
+  nobody: invisible in every library, portfolio and search view while the run
+  reported them as migrated. Such flows are now adopted by the admin who
+  started the run, and the result reports how many.
+- Documented that `PAD_CI_WEBHOOK_SECRET` is a deployment-level credential: it
+  lets its holder analyse any stored flow by ID and read the findings back.
+- A chat stream stored the question but not the answer: the answer was left to
+  the client's save-on-done, so a tab closed mid-answer (or any caller that
+  does not call the save endpoint) left the turn half-recorded. The server now
+  stores the finished answer on the same path that stores the question, still
+  subject to the "Save conversation history" preference.
+- A malformed `conversationId` came back as a 500 whose message was masked to
+  "internal server error" — a client field reported as a server fault. It is a
+  400 that says what is wrong.
+
 **Removed** (implemented with no caller, and no reason to add one): flow owner
 transfer, the `cursor.move` collaboration event, conversation export, the
 read-sources / open-from-system / server-side CSV / metrics / subflow-hashes /

@@ -582,7 +582,11 @@ func validateConversationID(req models.ChatRequest) error {
 		return nil
 	}
 	if _, err := uuid.Parse(req.ConversationID); err != nil {
-		return fmt.Errorf("conversationId must be a UUID: %w", err)
+		// ErrInvalidInput so the HTTP layer answers 400 and the caller can read
+		// why: unwrapped, this surfaced as a 500 whose message was masked to
+		// "internal server error" — a malformed client field reported as a
+		// server fault.
+		return fmt.Errorf("%w: conversationId must be a UUID: %w", ErrInvalidInput, err)
 	}
 	return nil
 }
@@ -727,6 +731,15 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// without the client re-sending the whole history each turn. A
 		// non-empty Messages slice (legacy client, or a resend that locally
 		// truncated history) is used as-is.
+		serverOwnsHistory := len(req.Messages) == 0
+		if serverOwnsHistory {
+			// The answer is stored when the stream finishes, for the same
+			// reason the question is stored when it starts: the client saves
+			// the conversation itself on done, so a tab that closes (or any
+			// headless caller) left the question stored with no answer beside
+			// it. Deferred here so every exit path runs it.
+			defer s.persistAssistantTurn(ctx, doc, req, ctl)
+		}
 		if len(req.Messages) == 0 {
 			// Hold the per-conversation mutex across reconstruct + persist so two
 			// concurrent streams on the same (flowID, convKey) can't both read

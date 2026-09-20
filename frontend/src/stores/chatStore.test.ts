@@ -481,7 +481,9 @@ describe('thread persistence', () => {
 
   it('returns the existing ids without touching storage when threads are already loaded', () => {
     const a = useChatStore.getState().createThread('flow1')
-    stored['baki:chatThreads:v1:flow1'] = JSON.stringify([{id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'}])
+    stored['baki:chatThreads:v1:flow1'] = JSON.stringify([
+      {id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'},
+    ])
     expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([a])
     expect(useChatStore.getState().threads).toHaveLength(1)
   })

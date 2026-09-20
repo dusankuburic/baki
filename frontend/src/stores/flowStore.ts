@@ -49,7 +49,6 @@ interface FlowState {
   renamingBlockId: string | null
   visibleBlockId: string | null
   selectedSubflowId: string | null
-  drilledSubflowPath: string[]
   expandedSubflowIds: Set<string>
   expandedBlockIds: Set<string>
   visibleTypes: Set<BlockType>
@@ -87,7 +86,7 @@ interface FlowState {
   selectSubflow: (subflowId: string | null, skipHistory?: boolean) => void
   goBack: () => void
   goForward: () => void
-  drillUp: () => void
+  clearSubflowSelection: () => void
   toggleSubflowExpand: (id: string) => void
   toggleBlockExpand: (id: string) => void
   setVisibleTypes: (types: Set<BlockType>) => void
@@ -116,7 +115,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   renamingBlockId: null,
   visibleBlockId: null,
   selectedSubflowId: null,
-  drilledSubflowPath: [],
   expandedSubflowIds: new Set(),
   expandedBlockIds: new Set(),
   visibleTypes: new Set(ALL_TYPES),
@@ -144,7 +142,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       renamingBlockId: null,
       visibleBlockId: null,
       selectedSubflowId: firstId,
-      drilledSubflowPath: firstId ? [firstId] : [],
       expandedSubflowIds: new Set(doc?.subflows.map(s => s.id) ?? []),
       expandedBlockIds: new Set(),
       isParsing: false,
@@ -293,11 +290,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
   },
 
-  drillUp: () =>
-    set(state => {
-      const path = state.drilledSubflowPath.slice(0, -1)
-      return {drilledSubflowPath: path, selectedSubflowId: path[path.length - 1] ?? null}
-    }),
+  // This was drillUp, popping a path stack. Nothing pushes onto that stack any
+  // more (the drill-into-subflow action is gone), so the path held at most the
+  // subflow selected on load and "up" could only ever clear it. Named for what
+  // it does.
+  clearSubflowSelection: () => set({selectedSubflowId: null}),
 
   toggleSubflowExpand: id =>
     set(state => ({
@@ -363,7 +360,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       selectedBlockIds: new Set<string>(),
       renamingBlockId: null,
       selectedSubflowId: null,
-      drilledSubflowPath: [],
       expandedSubflowIds: new Set(),
       expandedBlockIds: new Set(),
       parseError: null,

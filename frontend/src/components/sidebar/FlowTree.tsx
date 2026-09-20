@@ -1,4 +1,5 @@
 import {useRef, useCallback, useMemo, useEffect, useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Copy, ArrowDownToLine, Eye, EyeOff} from 'lucide-react'
 import TreeNode from './TreeNode'
 import {flattenTreeRows, type TreeRow} from '@/lib/tree'
@@ -43,6 +44,7 @@ export default function FlowTree({
   onToggleBlockExpand,
   findingCounts,
 }: FlowTreeProps) {
+  const {t} = useTranslation('shell')
   const containerRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(600)
@@ -290,7 +292,7 @@ export default function FlowTree({
             }}
           >
             <Copy size={14} />
-            Copy name
+            {t('tree.copyName')}
           </button>
           {ctxMenu.row.kind === 'block' && ctxMenu.row.blockData && (
             <button
@@ -302,7 +304,7 @@ export default function FlowTree({
               }}
             >
               <Copy size={14} />
-              Copy line number
+              {t('tree.copyLineNumber')}
             </button>
           )}
           {(ctxMenu.row.hasChildren || ctxMenu.row.kind === 'subflow') && (
@@ -319,11 +321,11 @@ export default function FlowTree({
             >
               {expandedSubflowIds.has(ctxMenu.row.id) || expandedBlockIds.has(ctxMenu.row.id) ? (
                 <>
-                  <EyeOff size={14} /> Collapse
+                  <EyeOff size={14} /> {t('tree.collapse')}
                 </>
               ) : (
                 <>
-                  <Eye size={14} /> Expand all
+                  <Eye size={14} /> {t('tree.expandAll')}
                 </>
               )}
             </button>
@@ -337,7 +339,7 @@ export default function FlowTree({
               }}
             >
               <ArrowDownToLine size={14} />
-              Drill into subflow
+              {t('tree.openSubflow')}
             </button>
           )}
         </div>

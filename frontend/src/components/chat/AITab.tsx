@@ -57,15 +57,8 @@ export default function AITab() {
   const provider = useChatStore(s => s.selectedProvider)
   const chatPanel = useChatPanel()
 
-  const {
-    configured,
-    providers,
-    selectedModel,
-    setSelectedModel,
-    handleSetProvider,
-    currentModels,
-    currentModelDetail,
-  } = useProviderSetup()
+  const {configured, providers, selectedModel, setSelectedModel, handleSetProvider, currentModels, currentModelDetail} =
+    useProviderSetup()
 
   const {
     doc,

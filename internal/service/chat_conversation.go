@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"pad-analyzer/internal/config"
+	"pad-core/logger"
 	"pad-core/models"
 )
 
@@ -131,4 +135,52 @@ func (s *ChatService) ClearConversation(ctx context.Context, doc *models.FlowDoc
 		return fmt.Errorf("failed to delete conversation file: %w", err)
 	}
 	return nil
+}
+
+// persistAssistantTurn appends the finished answer to the stored conversation.
+//
+// The question is persisted when the stream starts (persistInitialUserTurn) but
+// the answer was left to the client's save-on-done call, so a browser tab closed
+// mid-answer — or any caller that simply does not call /api/chat/save — left the
+// conversation holding a question with nothing beside it. Only runs on the
+// server-reconstructed path: a client that sent its own Messages owns
+// persistence, and SaveConversation still honours the history preference.
+//
+// Best-effort and idempotent in effect: the client's own save replaces the whole
+// list with the same content.
+func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl) {
+	if doc == nil || ctl == nil {
+		return
+	}
+	ctl.mu.Lock()
+	answer := ctl.buffer.String()
+	done, errMsg := ctl.done, ctl.errMsg
+	ctl.mu.Unlock()
+	if !done || errMsg != "" || strings.TrimSpace(answer) == "" {
+		return
+	}
+
+	convKey := req.ConversationKey()
+	// The stream's context is cancelled as the worker unwinds; this write must
+	// still land.
+	writeCtx := context.WithoutCancel(ctx)
+	history, err := s.GetConversation(writeCtx, doc, convKey)
+	if err != nil {
+		logger.Warn("chat: could not load conversation to store the answer", "error", err)
+		return
+	}
+	if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
+		return // already stored (a retry, or the client got there first)
+	}
+	history = append(history, models.ChatMessage{
+		ID:        uuid.NewString(),
+		Role:      "assistant",
+		Content:   answer,
+		Timestamp: time.Now(),
+		Provider:  req.Provider,
+		Model:     req.Model,
+	})
+	if err := s.SaveConversation(writeCtx, doc, convKey, history); err != nil {
+		logger.Warn("chat: failed to store the finished answer", "error", err)
+	}
 }

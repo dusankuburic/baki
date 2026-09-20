@@ -1,5 +1,11 @@
 import {test, expect} from '@playwright/test'
-import {setupAuthenticatedPage, mockFlowDocument, mockAnalysisReport, mockDashboardHome, SAMPLE_FLOW_CONTENT} from './helpers'
+import {
+  setupAuthenticatedPage,
+  mockFlowDocument,
+  mockAnalysisReport,
+  mockDashboardHome,
+  SAMPLE_FLOW_CONTENT,
+} from './helpers'
 
 // E2E spec: the core analyze → apply-fix → re-analyze loop.
 // Verifies that clicking "Apply Fix" on an auto-fixable finding causes it to
@@ -8,12 +14,8 @@ import {setupAuthenticatedPage, mockFlowDocument, mockAnalysisReport, mockDashbo
 test.describe('Apply fix loop', () => {
   test.beforeEach(async ({page}) => {
     await setupAuthenticatedPage(page)
-    await page.route('**/api/flow/upload', route =>
-      route.fulfill({status: 200, json: mockFlowDocument()}),
-    )
-    await page.route('**/api/dashboard/home', route =>
-      route.fulfill({status: 200, json: mockDashboardHome()}),
-    )
+    await page.route('**/api/flow/upload', route => route.fulfill({status: 200, json: mockFlowDocument()}))
+    await page.route('**/api/dashboard/home', route => route.fulfill({status: 200, json: mockDashboardHome()}))
 
     // Track whether the fix has been applied so we can return different
     // analysis results on the second /api/analysis/analyze call.
@@ -25,15 +27,23 @@ test.describe('Apply fix loop', () => {
       const report = mockAnalysisReport()
       if (fixApplied) {
         // Remove the unhandled-error finding (the one that was fixed)
-        report.findings = report.findings.filter(
-          (f: {ruleId: string}) => f.ruleId !== 'unhandled-error',
-        )
+        report.findings = report.findings.filter((f: {ruleId: string}) => f.ruleId !== 'unhandled-error')
         report.stats.warnings = report.stats.warnings - 1
       }
       route.fulfill({status: 200, json: report})
     })
 
-    // Mock the apply-fix endpoint: returns the updated document.
+    // Preview is refused, which is the cloud-mode answer; the card then
+    // applies directly without a diff. Stubbed explicitly rather than left to
+    // fail as a connection error.
+    await page.route('**/api/flow/preview-fix', route =>
+      route.fulfill({status: 403, json: {code: 'FORBIDDEN', message: 'preview not available'}}),
+    )
+
+    // Mock the apply-fix endpoint: returns the updated document. The handler
+    // renders the document itself — this used to answer {document, applied},
+    // so the client read an undefined flow id and filed the re-analysis under
+    // it, leaving the fixed finding on screen.
     await page.route('**/api/flow/apply-fix', async route => {
       fixApplied = true
       const doc = mockFlowDocument()
@@ -44,7 +54,7 @@ test.describe('Apply fix loop', () => {
           _fixed: 'wrap-error-handler',
         }
       }
-      await route.fulfill({status: 200, json: {document: doc, applied: 1}})
+      await route.fulfill({status: 200, json: doc})
     })
 
     await page.goto('/')
@@ -54,10 +64,7 @@ test.describe('Apply fix loop', () => {
   test('apply fix resolves the finding', async ({page}) => {
     // 1. Load the sample flow
     const openBtn = page.locator('button:has-text("Open file")').first()
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent('filechooser'),
-      openBtn.click(),
-    ])
+    const [fileChooser] = await Promise.all([page.waitForEvent('filechooser'), openBtn.click()])
     await fileChooser.setFiles({
       name: 'Main.txt',
       mimeType: 'text/plain',
@@ -67,11 +74,11 @@ test.describe('Apply fix loop', () => {
 
     // 2. Run analysis
     const findingsTab = page.locator('button[title="Findings"]')
-    if (await findingsTab.count() > 0) {
+    if ((await findingsTab.count()) > 0) {
       await findingsTab.first().click()
     }
     const runBtn = page.locator('button:has-text("Run Analysis")')
-    if (await runBtn.count() > 0) {
+    if ((await runBtn.count()) > 0) {
       await runBtn.click()
     }
 
@@ -80,7 +87,7 @@ test.describe('Apply fix loop', () => {
 
     // 4. Click the "Apply fix" button on the finding
     const applyFixBtn = page.locator('button:has-text("Apply fix")').first()
-    if (await applyFixBtn.count() > 0) {
+    if ((await applyFixBtn.count()) > 0) {
       await applyFixBtn.click()
 
       // 5. After re-analysis, the finding should be gone

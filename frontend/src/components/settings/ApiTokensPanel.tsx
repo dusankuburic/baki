@@ -113,7 +113,7 @@ export default function ApiTokensPanel() {
           {t('tokens.title')}
         </h2>
         <p className="text-sm text-text-secondary mt-1">
-          {t('tokens.subtitlePrefix')} <code className="text-brand-400">Authorization: Bearer pad_pat_…</code>
+          {t('tokens.subtitlePrefix')} <code className="text-brand-400">{'Authorization: Bearer pad_pat_…'}</code>
           {t('tokens.subtitleSuffix')}
         </p>
       </div>
@@ -178,7 +178,10 @@ export default function ApiTokensPanel() {
           <legend className="text-xs font-medium text-text-secondary">{t('tokens.scopesLabel')}</legend>
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             {API_TOKEN_SCOPES.map(scope => (
-              <label key={scope} className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
+              <label
+                key={scope}
+                className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none"
+              >
                 <input
                   type="checkbox"
                   className="accent-brand-500 w-3.5 h-3.5"

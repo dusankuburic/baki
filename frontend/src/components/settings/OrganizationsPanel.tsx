@@ -212,9 +212,7 @@ export default function OrganizationsPanel() {
             <Building2 size={20} className="text-brand-500" />
             {t('orgs.title')}
           </h2>
-          <p className="text-sm text-text-secondary mt-1">
-            Group flows and share them with teammates. Roles control who can view or edit.
-          </p>
+          <p className="text-sm text-text-secondary mt-1">{t('orgs.subtitle')}</p>
         </div>
         {!creating && (
           <button
@@ -279,13 +277,16 @@ export default function OrganizationsPanel() {
       ) : organisations.length === 0 ? (
         <div className="py-8 text-center">
           <Building2 size={32} className="mx-auto text-text-tertiary/50" />
-          <p className="mt-2 text-sm text-text-tertiary">No organizations yet.</p>
+          <p className="mt-2 text-sm text-text-tertiary">{t('orgs.empty')}</p>
         </div>
       ) : (
         <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">
           {organisations.map(org => {
             const isOwner = currentUser?.id === org.ownerId
-            const isAdmin = org.members.find(m => m.userId === currentUser?.id)?.role === 'admin'
+            // The roster comes with the list, but a server that omits it must
+            // not take the whole panel down with a nil dereference.
+            const members = org.members ?? []
+            const isAdmin = members.find(m => m.userId === currentUser?.id)?.role === 'admin'
             const canManageMembers = isOwner || isAdmin
             const isActive = org.id === activeOrgId
             const isRenaming = renamingId === org.id
@@ -342,7 +343,7 @@ export default function OrganizationsPanel() {
                       )}
                     </div>
                     <p className="text-xs text-text-tertiary mt-0.5">
-                      {org.members.length} {org.members.length === 1 ? 'member' : 'members'}
+                      {members.length} {members.length === 1 ? 'member' : 'members'}
                     </p>
                   </div>
                   {canManageMembers && !isRenaming && (
@@ -382,15 +383,15 @@ export default function OrganizationsPanel() {
                         {t('orgs.members')}
                       </h4>
                       <div className="border border-border-subtle rounded-lg overflow-hidden">
-                        {org.members.length === 0 ? (
+                        {members.length === 0 ? (
                           <div className="p-3 text-xs text-text-tertiary text-center">{t('orgs.noMembers')}</div>
                         ) : (
-                          org.members.map((m, j) => (
+                          members.map((m, j) => (
                             <div
                               key={m.userId}
                               className={clsx(
                                 'flex items-center gap-3 p-2.5',
-                                j !== org.members.length - 1 && 'border-b border-border-subtle',
+                                j !== members.length - 1 && 'border-b border-border-subtle',
                               )}
                             >
                               <div className="flex-1 min-w-0">

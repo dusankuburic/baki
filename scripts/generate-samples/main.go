@@ -91,7 +91,7 @@ func main() {
 	if len(os.Args) > 1 {
 		out = os.Args[1]
 	}
-	if err := os.WriteFile(out, []byte(output), 0o644); err != nil { //nolint:gosec // generated fixture, world-readable is intended
+	if err := os.WriteFile(out, []byte(output), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "generate-samples: %v\n", err)
 		os.Exit(1)
 	}
