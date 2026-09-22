@@ -501,7 +501,11 @@ func (s *AnalysisService) GetRulesSummaryFor(ctx context.Context, orgID string) 
 	return summary
 }
 
-func (s *AnalysisService) SetRuleEnabled(ruleID string, enabled bool) (err error) {
+// SetRuleEnabled writes the DEPLOYMENT-WIDE settings singleton, so it takes the
+// request context: in cloud mode the write joins that request's RLS
+// transaction. It also used to land in a local file that nothing on the read
+// path in cloud mode ever consulted — see BackendSettingsProvider.
+func (s *AnalysisService) SetRuleEnabled(ctx context.Context, ruleID string, enabled bool) (err error) {
 	defer logger.Guard("App.SetRuleEnabled", &err)
 
 	settings := s.settings.Get()
@@ -514,10 +518,12 @@ func (s *AnalysisService) SetRuleEnabled(ruleID string, enabled bool) (err error
 	rc.Enabled = enabled
 	settings.Analysis.Rules[ruleID] = rc
 
-	return s.settings.Update(*settings)
+	return s.settings.Update(ctx, *settings)
 }
 
-func (s *AnalysisService) UpdateRuleConfig(ruleID string, config models.RuleConfig) (err error) {
+// UpdateRuleConfig writes the deployment-wide settings singleton; see
+// SetRuleEnabled for why it takes a context.
+func (s *AnalysisService) UpdateRuleConfig(ctx context.Context, ruleID string, config models.RuleConfig) (err error) {
 	defer logger.Guard("App.UpdateRuleConfig", &err)
 
 	settings := s.settings.Get()
@@ -533,5 +539,5 @@ func (s *AnalysisService) UpdateRuleConfig(ruleID string, config models.RuleConf
 	}
 	settings.Analysis.Rules[ruleID] = config
 
-	return s.settings.Update(*settings)
+	return s.settings.Update(ctx, *settings)
 }

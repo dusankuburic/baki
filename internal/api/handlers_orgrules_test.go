@@ -190,8 +190,11 @@ func TestOrgSettings_InvalidatesRuleProfile(t *testing.T) {
 // stubSettingsProvider is a deployment-settings stand-in for the test above.
 type stubSettingsProvider struct{ s *models.AppSettings }
 
-func (p *stubSettingsProvider) Get() *models.AppSettings          { return p.s }
-func (p *stubSettingsProvider) Update(v models.AppSettings) error { p.s = &v; return nil }
+func (p *stubSettingsProvider) Get() *models.AppSettings { return p.s }
+func (p *stubSettingsProvider) Update(_ context.Context, v models.AppSettings) error {
+	p.s = &v
+	return nil
+}
 func (p *stubSettingsProvider) AddRecentFile(string, int64) error { return nil }
 func (p *stubSettingsProvider) RemoveRecentFile(string) error     { return nil }
 func (p *stubSettingsProvider) ClearRecentFiles() error           { return nil }

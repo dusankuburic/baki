@@ -26,11 +26,50 @@ func ProvideDocumentProvider(mode config.DeploymentMode, storageBackend storagei
 	return service.NewCloudDocumentProvider(storageBackend)
 }
 
-func ProvideSettingsStore() (*storage.SettingsStore, error) {
+// ProvideSettingsStore builds the desktop app-settings store, backed by a file
+// under the user's config directory. Cloud mode gets a memory-only instance
+// because nothing there should be reading it — see ProvideSettingsProvider —
+// and because a file-backed store would force the container to have a writable
+// home directory.
+func ProvideSettingsStore(mode config.DeploymentMode) (*storage.SettingsStore, error) {
+	if mode == config.ModeCloud {
+		return storage.NewInMemorySettingsStore(), nil
+	}
 	return storage.NewSettingsStore()
 }
 
-func ProvideConfigDir() (string, error) {
+// ProvideSettingsProvider selects where deployment-wide settings live.
+//
+// Cloud mode reads and writes them through the storage backend (Postgres
+// app_settings). It previously used the same local store as the desktop, which
+// split deployment settings in two: POST /api/system/settings wrote to the
+// database while POST /api/analysis/rule/enabled wrote to the local file, and
+// every reader on the analysis path — rule profiles, the AI daily budget, the
+// knowledge-base embedding provider — read the local file. In a container that
+// file is recreated from defaults on every start, so an administrator's saved
+// configuration had no effect on analysis at all.
+func ProvideSettingsProvider(
+	ctx context.Context,
+	mode config.DeploymentMode,
+	store *storage.SettingsStore,
+	backend storageif.StorageBackend,
+) service.SettingsProvider {
+	if mode == config.ModeCloud && backend != nil {
+		return service.NewBackendSettingsProvider(ctx, backend)
+	}
+	return store
+}
+
+// ProvideConfigDir resolves the per-user application directory. It is a
+// desktop concept: in cloud mode the container's filesystem is ephemeral and
+// (under the compose production overlay) read-only, so this returns an empty
+// path and the stores that take it degrade to no-ops. Returning a path here
+// also made boot depend on os.UserConfigDir() succeeding, i.e. on $HOME being
+// set inside a distroless image.
+func ProvideConfigDir(mode config.DeploymentMode) (string, error) {
+	if mode == config.ModeCloud {
+		return "", nil
+	}
 	return storage.ConfigDir()
 }
 
@@ -39,8 +78,14 @@ func ProvideASTCache() (cache.Cache, error) {
 }
 
 // ProvideHistoryStore persists per-flow analysis trend snapshots under the
-// app config dir (HistoryStore treats an empty dir as a no-op).
+// app config dir (HistoryStore treats an empty dir as a no-op). An empty
+// configDir must stay empty rather than becoming the relative path
+// "analysis-history", which would write into the container's working directory.
+// Cloud mode keeps durable analysis history in Postgres.
 func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
+	if configDir == "" {
+		return analyzer.NewHistoryStore("")
+	}
 	return analyzer.NewHistoryStore(filepath.Join(configDir, "analysis-history"))
 }
 
@@ -70,10 +115,7 @@ var ServiceModule = fx.Options(
 		ProvideASTCache,
 		ProvideHistoryStore,
 		ProvideAI,
-		// Adapter: expose *storage.SettingsStore as service.SettingsProvider
-		// so services depend on the interface, not the concrete filesystem
-		// implementation.
-		func(s *storage.SettingsStore) service.SettingsProvider { return s },
+		ProvideSettingsProvider,
 		// WebhookNotifier is a thin facade over the shared notify.Dispatcher,
 		// consolidating analysis-complete alerts onto the same delivery stack as
 		// governance (scanner) alerts. The dispatcher is provided by
@@ -81,11 +123,17 @@ var ServiceModule = fx.Options(
 		service.NewWebhookNotifier,
 		// service.KeyStore itself comes from main.go's provideKeyStore (a
 		// plain fx provider, not a global) — no adapter needed here.
-		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings *storage.SettingsStore) *rag.KnowledgeService {
+		func(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider) *rag.KnowledgeService {
 			// Pass the factory (not a pre-resolved provider) so the embedding
 			// provider is resolved per request in the caller's scope. Resolving
 			// once here with an empty scope fails in cloud mode (keys are
 			// per-user) and never picks up keys added later.
+			//
+			// settings is the service.SettingsProvider, NOT the concrete
+			// *storage.SettingsStore: in cloud mode the configured embedding
+			// provider and model live in the database, and taking the concrete
+			// store here read them from a local file that always held the
+			// defaults.
 			return rag.NewKnowledgeService(backend, factory, settings)
 		},
 		func(settings service.SettingsProvider, secrets service.KeyStore, notifier service.EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode) *service.SystemService {

@@ -22,15 +22,19 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # GHCR stays as the registry for self-hosters: docker-compose.prod.yml pulls
+  # `latest` from here. Azure does NOT pull from GHCR any more — see ACR below.
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Repository name inside the Azure Container Registry.
+  ACR_IMAGE_NAME: baki-backend
 
 jobs:
   # Gate the entire deploy pipeline on CI passing. Without this, a push to
   # main could deploy with broken tests — deploy.yml and ci.yml trigger on the
   # same event but were independent pipelines. The reusable-workflow call
-  # executes all CI jobs (go-test, frontend, e2e, lint, vulncheck) and fails
-  # here if any of them fail, blocking the deploy.
+  # executes all CI jobs (go-test, frontend, e2e, lint, vulncheck, bicep) and
+  # fails here if any of them fail, blocking the deploy.
   ci:
     name: CI Gate
     uses: ./.github/workflows/ci.yml
@@ -39,9 +43,19 @@ jobs:
     name: Build & Push
     needs: ci
     runs-on: ubuntu-latest
+    # Deliberately NOT bound to a GitHub Environment. The image is built once
+    # and promoted — staging and production deploy the same digest — so the
+    # registry and the Azure identity used here are infrastructure-level, not
+    # per-environment. Binding this job to an environment would also make a
+    # protection rule gate the build as well as the deploy, asking for two
+    # approvals per release.
+    #
+    # Consequence: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID and
+    # AZURE_CONTAINER_REGISTRY must be REPOSITORY-level secrets. The
+    # application secrets (PAD_*) stay environment-scoped on the deploy job.
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
       image-digest: ${{ steps.build.outputs.digest }}
+      acr-login-server: ${{ steps.acr.outputs.login-server }}
     steps:
       # fetch-depth: 0 so `git describe` can see tags — the build stamp below
       # needs them to produce a human-meaningful version.
@@ -69,21 +83,51 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Azure Container Registry. The deploy service principal needs AcrPush.
+      # The Container App itself pulls with its user-assigned managed identity
+      # (AcrPull, granted in infra/main.bicep), so nothing downstream of this
+      # job holds a registry credential — which is the reason for moving off
+      # GHCR for the Azure path: managed identity cannot authenticate to GHCR,
+      # so ACA needed a long-lived classic PAT present at every restart and
+      # scale event.
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        id: acr
+        run: |
+          set -euo pipefail
+          REGISTRY_NAME="${{ secrets.AZURE_CONTAINER_REGISTRY }}"
+          if [ -z "$REGISTRY_NAME" ]; then
+            echo "::error::AZURE_CONTAINER_REGISTRY is not set. Provision the registry with infra/registry.bicep and add its NAME (not login server) as a secret."
+            exit 1
+          fi
+          az acr login --name "$REGISTRY_NAME"
+          echo "login-server=${REGISTRY_NAME,,}.azurecr.io" >> "$GITHUB_OUTPUT"
+
+      # No `latest` here. The image is pushed BEFORE Trivy scans it (the scan
+      # job needs a pushed digest to pull), so a `latest` tag at this point
+      # would hand docker-compose.prod.yml — which pulls `latest` — an unscanned
+      # image. The promote-latest job below re-tags the same digest as `latest`
+      # only after scan + SBOM pass.
       - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
         id: meta
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # No `latest` here. The image is pushed BEFORE Trivy scans it (the
-          # scan job needs a pushed digest to pull), so a `latest` tag at
-          # this point would hand docker-compose.prod.yml — which pulls
-          # `:latest` — an unscanned image. The promote-latest job below
-          # re-tags the same digest as `latest` only after scan + SBOM pass.
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ steps.acr.outputs.login-server }}/${{ env.ACR_IMAGE_NAME }}
           tags: |
             type=sha,prefix=
             type=ref,event=branch
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
+      # One build, pushed to both registries. The manifest is content-addressed,
+      # so `digest` below is the same in ACR and GHCR — the Azure deploy pins
+      # that digest, and a floating tag can't sneak in.
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         id: build
         with:
@@ -104,6 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # GHCR images are private; authenticate so Trivy can pull by digest.
+      # Scanning the GHCR copy is equivalent — same digest, same bytes.
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -180,41 +225,120 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Deploy the hardened IaC (infra/main.bicep) so the container
-      # securityContext (#19: non-root, cap-drop-ALL, read-only root fs) and
-      # reproducible environment (#13) are applied at deploy time. The image is
-      # pinned by digest from the build job — a floating tag can't sneak in.
-      # The resource group must pre-exist (the Bicep is resource-group scoped).
-      - uses: azure/arm-deploy@a1361c2c2cd398621955b16ca32e01c65ea340f5  # v2
+      # The image currently serving traffic, captured before we replace it, so
+      # a failed smoke test has something to roll back to. Empty on the first
+      # deploy, which the rollback step handles.
+      - name: Capture current revision image
+        id: current
+        run: |
+          set -euo pipefail
+          IMAGE=$(az containerapp show \
+            --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Previously deployed image: ${IMAGE:-<none, first deploy>}"
+
+      # Template correctness is gated in CI by the `bicep` job, which compiles
+      # every infra/*.bicep and treats warnings as failures. A `what-if` here
+      # would need the full parameter set duplicated to produce a diff that is
+      # not misleading; run it by hand against a scratch resource group when
+      # reviewing an infrastructure change (see README).
+
+      # Deploy the IaC so the environment is reproducible from the repo rather
+      # than from portal drift. The image is pinned by digest from the build
+      # job. Parameter VALUES ARE QUOTED: the previous unquoted `>`-folded form
+      # split any secret containing a space into two arguments.
+      #
+      # maxReplicas stays 1 deliberately — internal/api/events.go is an
+      # in-process SSE hub, so a second replica silently breaks chat streaming.
+      # See the header of infra/main.bicep.
+      - name: Deploy infrastructure
+        id: deploy
+        uses: azure/arm-deploy@a1361c2c2cd398621955b16ca32e01c65ea340f5  # v2
         with:
           resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
           template: infra/main.bicep
-          parameters: >
-            appName=${{ secrets.AZURE_CONTAINER_APP_NAME }}
-            image=ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
-            authSecret=${{ secrets.PAD_AUTH_SECRET }}
-            encryptionKey=${{ secrets.PAD_ENCRYPTION_KEY }}
-            databaseUrl=${{ secrets.PAD_DATABASE_URL }}
-            storageAccountResourceId=${{ secrets.AZURE_STORAGE_ACCOUNT_ID }}
-            registryUsername=${{ github.repository_owner }}
-            registryPassword=${{ secrets.GHCR_PULL_TOKEN }}
-            metricsToken=${{ secrets.PAD_METRICS_TOKEN }}
+          parameters: >-
+            appName="${{ secrets.AZURE_CONTAINER_APP_NAME }}"
+            registryName="${{ secrets.AZURE_CONTAINER_REGISTRY }}"
+            image="${{ needs.build-and-push.outputs.acr-login-server }}/${{ env.ACR_IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}"
+            authSecret="${{ secrets.PAD_AUTH_SECRET }}"
+            encryptionKey="${{ secrets.PAD_ENCRYPTION_KEY }}"
+            databaseUrl="${{ secrets.PAD_DATABASE_URL }}"
+            metricsToken="${{ secrets.PAD_METRICS_TOKEN }}"
+            ciWebhookSecret="${{ secrets.PAD_CI_WEBHOOK_SECRET }}"
+            smtpHost="${{ secrets.PAD_SMTP_HOST }}"
+            smtpUsername="${{ secrets.PAD_SMTP_USERNAME }}"
+            smtpPassword="${{ secrets.PAD_SMTP_PASSWORD }}"
+            emailFrom="${{ secrets.PAD_EMAIL_FROM }}"
+            appBaseUrl="${{ secrets.PAD_APP_BASE_URL }}"
+            ssoIssuer="${{ secrets.PAD_SSO_ISSUER }}"
+            ssoClientId="${{ secrets.PAD_SSO_CLIENT_ID }}"
+            ssoClientSecret="${{ secrets.PAD_SSO_CLIENT_SECRET }}"
+            ssoRedirectUrl="${{ secrets.PAD_SSO_REDIRECT_URL }}"
+            storageAccountResourceId="${{ secrets.AZURE_STORAGE_ACCOUNT_ID }}"
+            allowedOrigins="${{ secrets.PAD_ALLOWED_ORIGINS }}"
+            alertEmails="${{ secrets.ALERT_EMAILS }}"
+            minReplicas=1
+            maxReplicas=1
 
+      # Probe /readyz (not /healthz): /healthz is an unconditional 200 liveness
+      # marker, so it would pass even with the database or blob unreachable.
+      # /readyz gates on backend + blob + Redis reachability, so a deploy with a
+      # broken connection fails this gate instead of silently accepting traffic.
+      #
+      # The hostname comes from the template's own `fqdn` output. It used to be
+      # a hand-maintained secret, which meant an unset value made this curl
+      # `https:///readyz` and fail after 50 seconds for the wrong reason.
       - name: Smoke test
+        id: smoke
         shell: bash
         run: |
-          # Probe /readyz (not /healthz): /healthz is an unconditional 200
-          # liveness marker, so it would pass even with the DB or blob
-          # unreachable. /readyz gates on backend + Redis reachability, so a
-          # deploy with a broken DB/blob connection fails this gate instead of
-          # silently accepting traffic.
-          for i in $(seq 1 10); do
-            if curl -sf "https://${{ secrets.AZURE_CONTAINER_APP_FQDN }}/readyz" > /dev/null 2>&1; then
+          set -uo pipefail
+          FQDN="${{ steps.deploy.outputs.fqdn }}"
+          if [ -z "$FQDN" ]; then
+            echo "::error::Deployment produced no fqdn output."
+            exit 1
+          fi
+          echo "Probing https://${FQDN}/readyz"
+          # A cold start runs schema migrations before it can answer, so allow
+          # generously more time than the old 50s budget.
+          for i in $(seq 1 24); do
+            if curl -sf --max-time 10 "https://${FQDN}/readyz" > /dev/null 2>&1; then
               echo "Readiness check passed on attempt $i"
               exit 0
             fi
             echo "Attempt $i failed, waiting 5s..."
             sleep 5
           done
-          echo "Readiness check failed after 10 attempts"
+          echo "::error::Readiness check failed after 24 attempts (~2 minutes)"
           exit 1
+
+      # The template runs in Single revision mode, so the new revision is
+      # already live by the time the smoke test runs. If it failed, put the
+      # previous image back rather than leaving a broken revision serving.
+      - name: Roll back on smoke-test failure
+        if: failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.image != ''
+        run: |
+          set -euo pipefail
+          echo "::warning::Smoke test failed — rolling back to ${{ steps.current.outputs.image }}"
+          az containerapp update \
+            --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ steps.current.outputs.image }}"
+          echo "Rollback issued. The deploy job still fails so the bad build is not treated as shipped."
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy to ${{ github.event.inputs.environment || 'staging' }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| App URL | ${{ steps.deploy.outputs.appUrl || 'n/a' }} |"
+            echo "| Image digest | \`${{ needs.build-and-push.outputs.image-digest }}\` |"
+            echo "| Previous image | \`${{ steps.current.outputs.image || 'none (first deploy)' }}\` |"
+            echo "| Smoke test | ${{ steps.smoke.outcome || 'skipped' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

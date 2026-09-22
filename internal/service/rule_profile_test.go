@@ -14,8 +14,11 @@ import (
 // stubSettings is a minimal SettingsProvider over one in-memory value.
 type stubSettings struct{ s *models.AppSettings }
 
-func (p *stubSettings) Get() *models.AppSettings          { return p.s }
-func (p *stubSettings) Update(v models.AppSettings) error { p.s = &v; return nil }
+func (p *stubSettings) Get() *models.AppSettings { return p.s }
+func (p *stubSettings) Update(_ context.Context, v models.AppSettings) error {
+	p.s = &v
+	return nil
+}
 func (p *stubSettings) AddRecentFile(string, int64) error { return nil }
 func (p *stubSettings) RemoveRecentFile(string) error     { return nil }
 func (p *stubSettings) ClearRecentFiles() error           { return nil }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +92,7 @@ func TestAnalysisService_SetRuleEnabled(t *testing.T) {
 	analysis.settings = s
 
 	const ruleID = "unhandled-error"
-	if err := analysis.SetRuleEnabled(ruleID, false); err != nil {
+	if err := analysis.SetRuleEnabled(context.Background(), ruleID, false); err != nil {
 		t.Fatalf("SetRuleEnabled: %v", err)
 	}
 
@@ -105,7 +106,7 @@ func TestAnalysisService_SetRuleEnabled(t *testing.T) {
 	}
 
 	// Re-enable and verify.
-	if err := analysis.SetRuleEnabled(ruleID, true); err != nil {
+	if err := analysis.SetRuleEnabled(context.Background(), ruleID, true); err != nil {
 		t.Fatalf("SetRuleEnabled(true): %v", err)
 	}
 	got = s.Get()
@@ -124,7 +125,7 @@ func TestAnalysisService_UpdateRuleConfig(t *testing.T) {
 		Severity: "error",
 	}
 	const ruleID = "deep-nesting"
-	if err := analysis.UpdateRuleConfig(ruleID, config); err != nil {
+	if err := analysis.UpdateRuleConfig(context.Background(), ruleID, config); err != nil {
 		t.Fatalf("UpdateRuleConfig: %v", err)
 	}
 

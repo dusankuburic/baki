@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"pad-core/models"
@@ -17,7 +18,7 @@ func TestRuleConfig_ToggleDoesNotWipeOverrides(t *testing.T) {
 	}
 
 	// User configures a severity override + a threshold option.
-	if err := svc.UpdateRuleConfig("deep-nesting", models.RuleConfig{
+	if err := svc.UpdateRuleConfig(context.Background(), "deep-nesting", models.RuleConfig{
 		Enabled:  true,
 		Severity: "error",
 		Options:  map[string]any{"maxDepth": 3},
@@ -42,7 +43,7 @@ func TestRuleConfig_ToggleDoesNotWipeOverrides(t *testing.T) {
 	}
 
 	// A toggle-style save (no Options, as the UI sends) must preserve them.
-	if err := svc.UpdateRuleConfig("deep-nesting", models.RuleConfig{
+	if err := svc.UpdateRuleConfig(context.Background(), "deep-nesting", models.RuleConfig{
 		Enabled:  false,
 		Severity: "error",
 	}); err != nil {
@@ -61,7 +62,7 @@ func TestRuleConfig_ToggleDoesNotWipeOverrides(t *testing.T) {
 	}
 
 	// SetRuleEnabled (the dedicated toggle endpoint) must also preserve both.
-	if err := svc.SetRuleEnabled("deep-nesting", true); err != nil {
+	if err := svc.SetRuleEnabled(context.Background(), "deep-nesting", true); err != nil {
 		t.Fatalf("SetRuleEnabled: %v", err)
 	}
 	rc = svc.settings.Get().Analysis.Rules["deep-nesting"]

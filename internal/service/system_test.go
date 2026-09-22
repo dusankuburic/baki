@@ -8,7 +8,8 @@ import (
 )
 
 // TestSettingsRoundTrip guards against the storage-layer and domain settings
-// structs drifting apart. toModel/fromModel bridge them via a JSON round-trip,
+// structs drifting apart. settingsToModel/settingsFromModel bridge them via a
+// JSON round-trip,
 // so any field present on one struct but missing (or mis-tagged) on the other
 // would be silently dropped. Converting a fully-populated DefaultSettings down
 // to the storage struct and back must reproduce it exactly.
@@ -18,14 +19,13 @@ import (
 // numeric values (int 6 -> float64 6). Comparing marshaled output ignores that
 // representational detail while still catching any actually-dropped field.
 func TestSettingsRoundTrip(t *testing.T) {
-	s := &SystemService{}
 	original := models.DefaultSettings()
 
-	stored := s.fromModel(original)
+	stored := settingsFromModel(original)
 	if stored == nil {
-		t.Fatal("fromModel returned nil for valid settings")
+		t.Fatal("settingsFromModel returned nil for valid settings")
 	}
-	roundTripped := s.toModel(stored)
+	roundTripped := settingsToModel(stored)
 
 	wantJSON, err := json.Marshal(original)
 	if err != nil {
@@ -43,16 +43,14 @@ func TestSettingsRoundTrip(t *testing.T) {
 // TestToModel_NilReturnsDefaults verifies nil storage settings yield usable
 // defaults rather than a nil pointer.
 func TestToModel_NilReturnsDefaults(t *testing.T) {
-	s := &SystemService{}
-	if got := s.toModel(nil); got == nil {
-		t.Error("toModel(nil) returned nil, want default settings")
+	if got := settingsToModel(nil); got == nil {
+		t.Error("settingsToModel(nil) returned nil, want default settings")
 	}
 }
 
 // TestFromModel_NilReturnsNil documents the inverse: a nil model maps to nil.
 func TestFromModel_NilReturnsNil(t *testing.T) {
-	s := &SystemService{}
-	if got := s.fromModel(nil); got != nil {
-		t.Errorf("fromModel(nil) = %+v, want nil", got)
+	if got := settingsFromModel(nil); got != nil {
+		t.Errorf("settingsFromModel(nil) = %+v, want nil", got)
 	}
 }

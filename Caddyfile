@@ -1,0 +1,52 @@
+# TLS terminator for the baki production stack
+# (docker compose -f docker-compose.yml -f docker-compose.prod.yml up).
+#
+# docker-compose.prod.yml sets PAD_BEHIND_PROXY=true, which is the app's escape
+# hatch from the check in internal/config/loader.go that otherwise refuses to
+# start cloud-mode auth without TLS — "without one, JWTs and passwords would be
+# sent in plaintext". The overlay used to set it with nothing in front actually
+# terminating TLS, so the production stack served JWT auth over plaintext HTTP
+# on a published port and had disabled the one guard that would have said so.
+# This file is what makes that declaration true.
+
+{
+	# Contact address for the ACME account; Let's Encrypt uses it for expiry
+	# and revocation notices. It has to be non-empty: the `email` directive
+	# takes exactly one argument, and an unset variable expands to nothing and
+	# fails the config parse at startup — which is why docker-compose.prod.yml
+	# makes ACME_EMAIL mandatory rather than defaulting it. The value is unused
+	# when BAKI_SITE_ADDRESS is a local name such as "localhost", because Caddy
+	# then issues from its own internal CA instead of talking to an ACME server.
+	email {$ACME_EMAIL}
+}
+
+# BAKI_SITE_ADDRESS is the public origin, e.g. https://baki.example.com.
+# Caddy provisions and renews a certificate for it automatically, and redirects
+# http:// to https://. Use "localhost" to test the stack with Caddy's internal
+# CA instead of a public one.
+{$BAKI_SITE_ADDRESS} {
+	# /metrics and /debug/pprof are operator surfaces, not public ones. The app
+	# gates them on PAD_METRICS_TOKEN, but PAD_BEHIND_PROXY=true makes its
+	# private-IP allowlist pass for every request (RemoteAddr is this proxy) —
+	# which is exactly why internal/api/middleware/metricsguard.go says to block
+	# them at the ingress as well. Scrape them from inside the compose network
+	# (http://app:8080/metrics) instead.
+	@operator path /metrics /debug/pprof /debug/pprof/*
+	respond @operator 404
+
+	reverse_proxy app:8080 {
+		# Write responses through as they arrive instead of buffering. Caddy
+		# does this automatically for text/event-stream, which covers
+		# /api/events — the channel that carries chat tokens and analysis
+		# progress — but setting it explicitly keeps the behaviour from
+		# depending on a content-type sniff. The payloads here are an API and a
+		# small SPA bundle, so there is nothing that benefits from buffering.
+		flush_interval -1
+	}
+
+	# No `encode`: the app already negotiates compression itself
+	# (internal/api/middleware/compress.go, which deliberately excludes
+	# text/event-stream because compressing it would buffer the stream).
+	# Compressing a second time here would cost CPU for nothing and would
+	# reintroduce that buffering on the SSE path.
+}

@@ -1,24 +1,48 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Example parameter file. The deploy workflow (.github/workflows/deploy.yml) passes parameters INLINE (az deployment group create ... --parameters appName=... image=...), so this file is NOT used by CI — it exists only for manual `az deployment group create --parameters @infra/main.parameters.json`. Replace the placeholders + appName/image for a manual deploy. By default the template provisions a storage account (provisionStorage default true); set it to false to bring your own. Secrets are Container App secrets passed as parameters (no Key Vault). provisionRedis defaults FALSE: the template is single-replica and the app refuses to boot when PAD_REDIS_URL is set but unreachable, so Redis is only worth its cost and its failure mode once maxReplicas > 1. registryUsername/registryPassword (a GHCR PAT with read:packages) are required unless the image package is public; metricsToken gates GET /metrics. alertEmails is empty by default — set it to receive operational alerts.",
+  "_comment": "Example parameter file for a MANUAL `az deployment group create --parameters @infra/main.parameters.json`. The deploy workflow (.github/workflows/deploy.yml) passes parameters inline, so CI does not read this file. Deploy order: infra/registry.bicep, then infra/postgres.bicep (plus its one-time SQL bootstrap), then this template. maxReplicas stays 1: internal/api/events.go is an in-process SSE hub, so a second replica silently breaks chat streaming — see the header of infra/main.bicep. provisionRedis stays false for the same reason, and because the app refuses to boot when PAD_REDIS_URL is set but unreachable.",
   "parameters": {
-    "appName":                  { "value": "baki-backend" },
-    "image":                    { "value": "ghcr.io/ORG/baki-backend:latest" },
-    "minReplicas":              { "value": 1 },
-    "maxReplicas":              { "value": 1 },
-    "cpu":                      { "value": "0.5" },
-    "memory":                   { "value": "1.0Gi" },
-    "provisionStorage":         { "value": true },
-    "provisionRedis":           { "value": false },
-    "alertEmails":              { "value": "" },
-    "registryServer":           { "value": "ghcr.io" },
-    "registryUsername":         { "value": "ORG" },
-    "registryPassword":         { "value": "<GHCR PAT with read:packages>" },
-    "metricsToken":             { "value": "<random token for GET /metrics>" },
-    "storageAccountResourceId": { "value": "" },
-    "authSecret":               { "value": "<openssl rand -hex 32>" },
-    "encryptionKey":            { "value": "<openssl rand -hex 32, different from authSecret; set before users store provider keys>" },
-    "databaseUrl":              { "value": "postgres://baki_app:<password>@<host>:5432/baki?sslmode=require" }
+    "appName":            { "value": "baki-backend" },
+    "registryName":       { "value": "bakiprod" },
+    "image":              { "value": "bakiprod.azurecr.io/baki-backend@sha256:<digest>" },
+    "minReplicas":        { "value": 1 },
+    "maxReplicas":        { "value": 1 },
+    "cpu":                { "value": "0.5" },
+    "memory":             { "value": "1.0Gi" },
+
+    "provisionStorage":   { "value": true },
+    "blobContainerName":  { "value": "flow-content" },
+    "blobRetentionDays":  { "value": 14 },
+
+    "provisionRedis":     { "value": false },
+
+    "trustedProxies":     { "value": "100.64.0.0/10,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" },
+    "allowedOrigins":     { "value": "" },
+
+    "alertEmails":        { "value": "ops@example.com" },
+
+    "authSecret":         { "value": "<openssl rand -hex 32>" },
+    "encryptionKey":      { "value": "<openssl rand -hex 32, DIFFERENT from authSecret; set it before users store provider keys — changing it later makes them unreadable>" },
+    "databaseUrl":        { "value": "postgres://baki_app:<app-password>@<server>.postgres.database.azure.com:5432/baki?sslmode=require" },
+    "metricsToken":       { "value": "<openssl rand -hex 32; without it GET /metrics is public, because PAD_BEHIND_PROXY makes the private-IP allowlist vacuous>" },
+
+    "_email_comment":     "Without SMTP the app falls back to a log-only mailer: password-reset and email-verification links are written to Log Analytics instead of being delivered.",
+    "smtpHost":           { "value": "" },
+    "smtpPort":           { "value": "587" },
+    "smtpUsername":       { "value": "" },
+    "smtpPassword":       { "value": "" },
+    "emailFrom":          { "value": "" },
+    "appBaseUrl":         { "value": "" },
+
+    "_sso_comment":       "All three of issuer/clientId/redirectUrl are required together, or SSO stays off. Entra ID issuer: https://login.microsoftonline.com/{tenant-id}/v2.0",
+    "ssoIssuer":          { "value": "" },
+    "ssoClientId":        { "value": "" },
+    "ssoClientSecret":    { "value": "" },
+    "ssoRedirectUrl":     { "value": "" },
+
+    "auditRetentionDays": { "value": "365" },
+    "dbMaxOpenConns":     { "value": "" },
+    "scanInterval":       { "value": "" }
   }
 }

@@ -1,10 +1,82 @@
-# Production overlay — use: docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+# Production overlay — use:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+#
+# Adds the TLS terminator the base file's warning assumes, stops publishing the
+# app's own port, and makes every credential mandatory.
 services:
+  # TLS terminator. The overlay used to set PAD_BEHIND_PROXY=true with nothing
+  # in front of the app: that flag is the documented escape hatch from the
+  # cloud-mode "auth requires TLS" check in internal/config/loader.go, so the
+  # production stack served JWTs and passwords over plaintext HTTP on a
+  # published port, with the one guard that would have refused to start
+  # explicitly disabled. Caddy obtains and renews certificates automatically.
+  #
+  # Terminating TLS somewhere else instead (a cloud load balancer, an existing
+  # nginx)? Then do not use this overlay's proxy — see the deployment notes in
+  # README.md. Keeping PAD_BEHIND_PROXY=true without any terminator is the bug
+  # this service exists to fix.
+  caddy:
+    image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
+    environment:
+      # Public origin, e.g. https://baki.example.com. Port 80 must be reachable
+      # from the internet for the ACME HTTP challenge.
+      - BAKI_SITE_ADDRESS=${BAKI_SITE_ADDRESS:?BAKI_SITE_ADDRESS must be set, e.g. https://baki.example.com}
+      # Required, not optional: Caddy's `email` directive takes exactly one
+      # argument, so an empty value fails the config parse and the proxy never
+      # starts. Any address you actually monitor will do.
+      - ACME_EMAIL=${ACME_EMAIL:?ACME_EMAIL must be set — the ACME account contact address for certificate expiry notices}
+    networks:
+      default:
+        # Static, so the app can trust this one address and nothing else.
+        ipv4_address: ${BAKI_PROXY_IP:-172.29.0.10}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account state. Without a volume every restart
+      # re-requests a certificate and walks into Let's Encrypt's rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    cap_drop: [ALL]
+    # Caddy binds 80 and 443 as a non-root user.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
   app:
     image: ghcr.io/${GHCR_REPO:-pad-analyzer/baki}:${PAD_VERSION:-latest}
+    # Reachable only through caddy on the compose network. The base file
+    # publishes the app's port for local development; compose CONCATENATES
+    # `ports` across files, so this has to reset the list rather than override
+    # it — otherwise the app stays exposed on 8080 alongside the proxy, which
+    # is precisely the plaintext path this overlay removes.
+    ports: !reset []
     environment:
       - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
+      # Dedicated at-rest key for the provider-key store. Unset, the keystore
+      # falls back to PAD_AUTH_SECRET, so rotating the JWT secret would make
+      # every stored AI provider key undecryptable.
+      - PAD_ENCRYPTION_KEY=${PAD_ENCRYPTION_KEY:?PAD_ENCRYPTION_KEY must be set (a different value from PAD_AUTH_SECRET)}
       - PAD_BEHIND_PROXY=true
+      # WITHOUT THIS, EVERY CLIENT SHARES ONE RATE-LIMIT BUCKET. The app trusts
+      # X-Forwarded-For only from a listed proxy; with an empty list it falls
+      # back to the immediate TCP peer, which behind caddy is caddy — so the
+      # general limit (1 rps) and the auth limit (5/minute) would apply to the
+      # whole deployment at once, and every audit entry would record the
+      # proxy's address instead of the user's.
+      #
+      # Exactly one address, not a private range. Anything listed here can
+      # declare its own client IP via X-Forwarded-For, which means forging
+      # audit-log entries and sidestepping per-IP rate limits — so the list is
+      # pinned to caddy's static address below rather than to the RFC1918
+      # blocks the network is allocated from, which would extend that trust to
+      # every other container that can reach the app.
+      - PAD_TRUSTED_PROXIES=${BAKI_PROXY_IP:-172.29.0.10}/32
       - PAD_MODE=cloud
       - PAD_AUTH_ENABLED=true
       - PAD_STORAGE=database
@@ -15,7 +87,24 @@ services:
       # production stack would silently inherit that and accept an unencrypted
       # database connection. Your DSN must use sslmode=require or verify-full.
       - PAD_DB_REQUIRE_SSL=true
-      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:?PAD_ALLOWED_ORIGINS must be set}
+      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:?PAD_ALLOWED_ORIGINS must be set (the public origin, matching BAKI_SITE_ADDRESS)}
+      # Public origin used to build links in password-reset and verification
+      # email. Wrong or unset, those links point somewhere the user cannot
+      # reach.
+      - PAD_APP_BASE_URL=${PAD_APP_BASE_URL:-${BAKI_SITE_ADDRESS}}
+      # Gates GET /metrics and /debug/pprof. Mandatory here because
+      # PAD_BEHIND_PROXY=true makes the endpoint's private-IP allowlist pass
+      # for every request — the token is the only real gate left. Caddy also
+      # 404s both paths at the edge.
+      - PAD_METRICS_TOKEN=${PAD_METRICS_TOKEN:?PAD_METRICS_TOKEN must be set}
+      # Transactional email. Without an SMTP relay the app falls back to a
+      # log-only mailer, which means password-reset and verification links are
+      # written to the container log instead of being delivered.
+      - PAD_SMTP_HOST=${PAD_SMTP_HOST:-}
+      - PAD_SMTP_PORT=${PAD_SMTP_PORT:-587}
+      - PAD_SMTP_USERNAME=${PAD_SMTP_USERNAME:-}
+      - PAD_SMTP_PASSWORD=${PAD_SMTP_PASSWORD:-}
+      - PAD_EMAIL_FROM=${PAD_EMAIL_FROM:-}
       # Azure Blob Storage offload (optional). Set both to enable it (Managed
       # Identity auth); the readiness probe (/readyz) gates traffic on blob
       # reachability. Leave unset to keep flow content in Postgres.
@@ -44,6 +133,9 @@ services:
       # initialised from the old 01-app-role.sql has the published password and
       # needs an explicit ALTER ROLE — see scripts/db-init/01-app-role.sh.
       - BAKI_APP_PASSWORD=${BAKI_APP_PASSWORD:?BAKI_APP_PASSWORD must be set}
+    # Not published. The base file binds 127.0.0.1 for local psql access; in
+    # production the database is reachable only from the compose network.
+    ports: !reset []
     # Pin to an immutable digest in production (the base file's floating tag can
     # silently change). Bump deliberately when applying Postgres security
     # patches.
@@ -59,3 +151,16 @@ services:
         limits:
           cpus: '1'
           memory: 2G
+
+# The subnet is pinned so caddy can hold a fixed address (see
+# PAD_TRUSTED_PROXIES above). Override BAKI_SUBNET and BAKI_PROXY_IP together if
+# 172.29.0.0/24 collides with something already routed on the host.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${BAKI_SUBNET:-172.29.0.0/24}
+
+volumes:
+  caddy_data:
+  caddy_config:

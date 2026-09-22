@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"pad-core/analyzer"
@@ -80,7 +81,7 @@ func TestGetRulesSummary_HonoursSettingsOverrides(t *testing.T) {
 
 	// Disabling a rule changes its Enabled flag but must not change the catalog
 	// total the dashboard shows.
-	if err := svc.SetRuleEnabled("deep-nesting", false); err != nil {
+	if err := svc.SetRuleEnabled(context.Background(), "deep-nesting", false); err != nil {
 		t.Fatalf("SetRuleEnabled: %v", err)
 	}
 	if got := svc.GetRulesSummary().TotalRules; got != totalBefore {

@@ -52,7 +52,7 @@ func TestApplyFixBatch_HonorsDisabledRule(t *testing.T) {
 		settings.Analysis.Rules = map[string]models.RuleConfig{}
 	}
 	settings.Analysis.Rules["missing-timeout"] = models.RuleConfig{Enabled: false}
-	if err := store.Update(*settings); err != nil {
+	if err := store.Update(context.Background(), *settings); err != nil {
 		t.Fatalf("Update settings: %v", err)
 	}
 

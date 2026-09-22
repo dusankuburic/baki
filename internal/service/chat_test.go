@@ -649,11 +649,11 @@ func TestDailyUsage_NilBackendDoesNotPanic(t *testing.T) {
 // to drive settings without the on-disk SettingsStore.
 type staticSettings struct{ s models.AppSettings }
 
-func (m *staticSettings) Get() *models.AppSettings          { cp := m.s; return &cp }
-func (m *staticSettings) Update(models.AppSettings) error   { return nil }
-func (m *staticSettings) AddRecentFile(string, int64) error { return nil }
-func (m *staticSettings) RemoveRecentFile(string) error     { return nil }
-func (m *staticSettings) ClearRecentFiles() error           { return nil }
+func (m *staticSettings) Get() *models.AppSettings                         { cp := m.s; return &cp }
+func (m *staticSettings) Update(context.Context, models.AppSettings) error { return nil }
+func (m *staticSettings) AddRecentFile(string, int64) error                { return nil }
+func (m *staticSettings) RemoveRecentFile(string) error                    { return nil }
+func (m *staticSettings) ClearRecentFiles() error                          { return nil }
 
 // TestEnforceBudget_FailsClosedOnStoreError verifies the cost guardrail denies
 // a request when the day's spend can't be read, instead of treating the unknown
@@ -1130,11 +1130,11 @@ func TestChunkCoalescer_EmptyChunkIgnored(t *testing.T) {
 // (non-failing-key) provider path, which reaches enforceBudget.
 type nilSettings struct{}
 
-func (nilSettings) Get() *models.AppSettings          { return nil }
-func (nilSettings) Update(models.AppSettings) error   { return nil }
-func (nilSettings) AddRecentFile(string, int64) error { return nil }
-func (nilSettings) RemoveRecentFile(string) error     { return nil }
-func (nilSettings) ClearRecentFiles() error           { return nil }
+func (nilSettings) Get() *models.AppSettings                         { return nil }
+func (nilSettings) Update(context.Context, models.AppSettings) error { return nil }
+func (nilSettings) AddRecentFile(string, int64) error                { return nil }
+func (nilSettings) RemoveRecentFile(string) error                    { return nil }
+func (nilSettings) ClearRecentFiles() error                          { return nil }
 
 // TestStreamChatMessage_PersistsUserTurnAtStart covers BUG-5: on the
 // reconstruction path (client omitted Messages), the backend persists

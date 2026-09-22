@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -64,7 +65,7 @@ func TestSettingsStore_Update_PersistsAndGet(t *testing.T) {
 	updated.Appearance.Density = "compact"
 	updated.Layout.SidebarWidth = 999
 
-	if err := s.Update(updated); err != nil {
+	if err := s.Update(context.Background(), updated); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -82,7 +83,7 @@ func TestSettingsStore_Update_WritesToDisk(t *testing.T) {
 
 	updated := *s.Get()
 	updated.Appearance.Theme = models.ThemeLight
-	if err := s.Update(updated); err != nil {
+	if err := s.Update(context.Background(), updated); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 

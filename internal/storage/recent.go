@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"time"
@@ -37,7 +38,7 @@ func AddRecentFile(s *SettingsStore, path string, size int64) error {
 
 	clone := *settings
 	clone.RecentFiles = updated
-	return s.Update(clone)
+	return s.Update(context.Background(), clone)
 }
 
 func RemoveRecentFile(s *SettingsStore, path string) error {
@@ -50,12 +51,12 @@ func RemoveRecentFile(s *SettingsStore, path string) error {
 	}
 	clone := *settings
 	clone.RecentFiles = filtered
-	return s.Update(clone)
+	return s.Update(context.Background(), clone)
 }
 
 func ClearRecentFiles(s *SettingsStore) error {
 	settings := s.Get()
 	clone := *settings
 	clone.RecentFiles = nil
-	return s.Update(clone)
+	return s.Update(context.Background(), clone)
 }

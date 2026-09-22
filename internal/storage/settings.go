@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,9 +29,27 @@ func NewSettingsStore() (*SettingsStore, error) {
 	return NewSettingsStoreAt(path)
 }
 
+// NewInMemorySettingsStore creates a SettingsStore that never touches the
+// filesystem. Cloud mode uses it: deployment settings there live in Postgres
+// (app_settings, see SystemService.GetSettings), so the on-disk file was a
+// per-container copy of the defaults that nothing read back and nothing shared
+// between replicas — while still requiring a writable $HOME inside an image
+// whose whole point is that it has no writable state.
+//
+// Behaviour is identical to what the file-backed store actually did in a
+// container: every cold start created the file fresh from
+// models.DefaultSettings() anyway.
+func NewInMemorySettingsStore() *SettingsStore {
+	return &SettingsStore{current: models.DefaultSettings()}
+}
+
 // NewSettingsStoreAt creates a SettingsStore backed by the given file path.
+// An empty path yields a memory-only store (see NewInMemorySettingsStore).
 // It is intended for use in tests and non-standard deployment scenarios.
 func NewSettingsStoreAt(path string) (*SettingsStore, error) {
+	if path == "" {
+		return NewInMemorySettingsStore(), nil
+	}
 	s := &SettingsStore{
 		path:    path,
 		current: models.DefaultSettings(),
@@ -50,7 +69,10 @@ func (s *SettingsStore) Get() *models.AppSettings {
 	return s.current.Clone()
 }
 
-func (s *SettingsStore) Update(updated models.AppSettings) error {
+// Update replaces the stored settings. The context is accepted to satisfy
+// service.SettingsProvider and is unused here: this store writes to a local
+// file, with no transaction to join and no remote call to cancel.
+func (s *SettingsStore) Update(_ context.Context, updated models.AppSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := migrate(&updated); err != nil {
@@ -63,6 +85,10 @@ func (s *SettingsStore) Update(updated models.AppSettings) error {
 func (s *SettingsStore) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.path == "" {
+		return nil // memory-only store
+	}
 
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -101,6 +127,10 @@ func (s *SettingsStore) load() error {
 }
 
 func (s *SettingsStore) persistLocked() error {
+	if s.path == "" {
+		return nil // memory-only store
+	}
+
 	data, err := json.MarshalIndent(s.current, "", "  ")
 	if err != nil {
 		return err

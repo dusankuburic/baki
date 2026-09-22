@@ -74,7 +74,7 @@ runs:
   using: 'composite'
   steps:
     # Acquire bakicli from GitHub Releases (fast, pin-able via the `version`
-    # input, checksum-verified via the .sha256 sidecar shipped per RELEASE.md).
+    # input, checksum-verified via the .sha256 sidecar shipped with each release).
     # Every run used to compile the CLI from source through setup-go — slow
     # first-runs and no pinning story. Any download failure (air-gapped
     # runner, tag predating the release assets, no release cut yet) falls back

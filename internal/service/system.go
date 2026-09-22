@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -40,15 +39,17 @@ func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier Even
 // keeping requests alive past client cancellation). The in-memory fallbacks
 // (SettingsProvider, secrets) don't do I/O so ctx is passed but unused there.
 
-func (s *SystemService) GetSettings(ctx context.Context) (settings *models.AppSettings, err error) {
+// GetSettings returns the deployment-wide settings.
+//
+// This used to branch on s.backend and read Postgres directly, which made it a
+// SECOND source of truth: every other reader of deployment settings (the
+// analysis rule profile, the AI daily budget, the embedding provider) went
+// through the SettingsProvider, which in cloud mode was a local file that
+// nothing durable ever wrote to. Both now go through the provider, which is
+// backend-backed in cloud mode (BackendSettingsProvider) and file-backed on the
+// desktop, so there is exactly one path to these values.
+func (s *SystemService) GetSettings(_ context.Context) (settings *models.AppSettings, err error) {
 	defer logger.Guard("SystemService.GetSettings", &err)
-	if s.backend != nil {
-		ifaceSettings, err := s.backend.LoadSettings(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("load settings: %w", err)
-		}
-		return s.toModel(ifaceSettings), nil
-	}
 	if s.settings == nil {
 		return models.DefaultSettings(), nil
 	}
@@ -57,19 +58,13 @@ func (s *SystemService) GetSettings(ctx context.Context) (settings *models.AppSe
 
 func (s *SystemService) UpdateSettings(ctx context.Context, settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateSettings", &err)
-	if s.backend != nil {
-		if err := s.backend.SaveSettings(ctx, s.fromModel(&settings)); err != nil {
-			return fmt.Errorf("persist settings: %w", err)
-		}
-		s.notifier.Emit("settings:changed", settings)
-		return nil
-	}
-	// Desktop/local mode — no backend, use in-memory store
 	if s.settings == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
-	if err = s.settings.Update(settings); err != nil {
-		return err
+	// ctx carries the request's RLS transaction in cloud mode, so a request
+	// that writes settings and then fails has the write rolled back with it.
+	if err = s.settings.Update(ctx, settings); err != nil {
+		return fmt.Errorf("persist settings: %w", err)
 	}
 	s.notifier.Emit("settings:changed", settings)
 	return nil
@@ -84,7 +79,7 @@ func (s *SystemService) GetUserSettings(ctx context.Context, userID string) (set
 	if err != nil {
 		return nil, err
 	}
-	return s.toModel(ifaceSettings), nil
+	return settingsToModel(ifaceSettings), nil
 }
 
 func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, settings models.AppSettings) (err error) {
@@ -92,7 +87,7 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 	if s.backend == nil {
 		return s.UpdateSettings(ctx, settings)
 	}
-	if err := s.backend.SaveUserSettings(ctx, userID, s.fromModel(&settings)); err != nil {
+	if err := s.backend.SaveUserSettings(ctx, userID, settingsFromModel(&settings)); err != nil {
 		return err
 	}
 	s.notifier.EmitTo(userID, "settings:changed", settings)
@@ -108,7 +103,7 @@ func (s *SystemService) GetOrgSettings(ctx context.Context, orgID string) (setti
 	if err != nil {
 		return nil, err
 	}
-	return s.toModel(ifaceSettings), nil
+	return settingsToModel(ifaceSettings), nil
 }
 
 func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, settings models.AppSettings) (err error) {
@@ -116,7 +111,7 @@ func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, set
 	if s.backend == nil {
 		return s.UpdateSettings(ctx, settings)
 	}
-	if err := s.backend.SaveOrgSettings(ctx, orgID, s.fromModel(&settings)); err != nil {
+	if err := s.backend.SaveOrgSettings(ctx, orgID, settingsFromModel(&settings)); err != nil {
 		return err
 	}
 	s.emitOrgSettingsChanged(ctx, orgID, settings)
@@ -173,40 +168,6 @@ func memberIDs(members []storageif.OrgMember) []string {
 // effectively never fire for these mirror structs, but they're logged rather
 // than discarded so a future field-type mismatch surfaces instead of silently
 // dropping data. TestSettingsRoundTrip guards against the structs drifting apart.
-func (s *SystemService) toModel(is *storageif.AppSettings) *models.AppSettings {
-	if is == nil {
-		return models.DefaultSettings()
-	}
-	data, err := json.Marshal(is)
-	if err != nil {
-		logger.Warn("SystemService.toModel: marshal storage settings", "error", err)
-		return models.DefaultSettings()
-	}
-	var m models.AppSettings
-	if err := json.Unmarshal(data, &m); err != nil {
-		logger.Warn("SystemService.toModel: unmarshal into model settings", "error", err)
-		return models.DefaultSettings()
-	}
-	return &m
-}
-
-func (s *SystemService) fromModel(m *models.AppSettings) *storageif.AppSettings {
-	if m == nil {
-		return nil
-	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		logger.Warn("SystemService.fromModel: marshal model settings", "error", err)
-		return nil
-	}
-	var is storageif.AppSettings
-	if err := json.Unmarshal(data, &is); err != nil {
-		logger.Warn("SystemService.fromModel: unmarshal into storage settings", "error", err)
-		return nil
-	}
-	return &is
-}
-
 func (s *SystemService) AppInfo() (info *models.AppInfo, err error) {
 	defer logger.Guard("SystemService.AppInfo", &err)
 	return &models.AppInfo{

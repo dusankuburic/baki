@@ -392,7 +392,7 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 		render.Error(w, fmt.Errorf("ruleId is required"), http.StatusBadRequest)
 		return
 	}
-	if err := h.analysisSvc.SetRuleEnabled(req.ID, req.Enabled); err != nil {
+	if err := h.analysisSvc.SetRuleEnabled(r.Context(), req.ID, req.Enabled); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -488,7 +488,7 @@ func (h *AnalysisHandler) handleUpdateRuleConfig(w http.ResponseWriter, r *http.
 		render.Error(w, fmt.Errorf("ruleId is required"), http.StatusBadRequest)
 		return
 	}
-	if err := h.analysisSvc.UpdateRuleConfig(req.ID, req.Config); err != nil {
+	if err := h.analysisSvc.UpdateRuleConfig(r.Context(), req.ID, req.Config); err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}

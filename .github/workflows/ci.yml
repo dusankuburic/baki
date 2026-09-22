@@ -271,6 +271,50 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  bicep:
+    # The Azure templates had never been compiled by anything. infra/main.bicep
+    # carried a leaked shell-quoting artifact that made `bicep build` fail
+    # outright, plus a handful of schema errors behind it — all of which this
+    # job would have caught, and none of which any test could. Warnings are
+    # errors here (--diagnostics-format) because the schema mistakes that
+    # silently dropped blob soft-delete and the container securityContext were
+    # warnings, not errors.
+    name: Bicep Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Install Bicep CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /usr/local/bin/bicep \
+            https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x /usr/local/bin/bicep
+          bicep --version
+      - name: Build templates
+        run: |
+          set -euo pipefail
+          status=0
+          for f in infra/*.bicep; do
+            echo "::group::$f"
+            # BCP081 ("no types available") is informational: several resource
+            # providers publish no type metadata for the api-versions used here,
+            # so Bicep cannot pre-validate their properties. Everything else is
+            # treated as a failure.
+            if ! bicep build --stdout "$f" >/dev/null 2>/tmp/bicep.err; then
+              cat /tmp/bicep.err
+              echo "::error file=$f::bicep build failed"
+              status=1
+            elif grep -v 'BCP081' /tmp/bicep.err | grep -q .; then
+              grep -v 'BCP081' /tmp/bicep.err
+              echo "::error file=$f::bicep build produced warnings"
+              status=1
+            else
+              echo "ok"
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
@@ -291,9 +335,8 @@ jobs:
       - name: Verify bakicli / baki-backend are gitignored, not tracked
         run: |
           set -e
-          # AGENTS.md "Never Commit" + .gitignore list these as build outputs.
-          # A previous regression (commit 53e10e3) re-tracked bakicli; this
-          # guard prevents a repeat.
+          # .gitignore lists these as build outputs. A previous regression
+          # (commit 53e10e3) re-tracked bakicli; this guard prevents a repeat.
           if git ls-files | grep -E '^(bakicli|baki-backend)$'; then
             echo "::error::Tracked binary detected. Run: git rm --cached <file>"
             exit 1

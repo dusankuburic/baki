@@ -115,17 +115,62 @@ npm run dev
 
 ### Production web deploy
 
+For a self-hosted box, the compose production overlay is the supported path. It
+adds a Caddy TLS terminator, stops publishing the app's own port, and makes
+every credential mandatory:
+
 ```bash
-npm run build --prefix frontend     # bundles the static site to frontend/dist/
+cat > .env <<'ENV'
+BAKI_SITE_ADDRESS=https://baki.example.com   # public origin; port 80 must be reachable for ACME
+ACME_EMAIL=ops@example.com                   # certificate expiry notices
+PAD_ALLOWED_ORIGINS=https://baki.example.com
+PAD_AUTH_SECRET=...                          # openssl rand -hex 32
+PAD_ENCRYPTION_KEY=...                       # a DIFFERENT openssl rand -hex 32
+PAD_METRICS_TOKEN=...                        # openssl rand -hex 32
+PAD_DATABASE_URL=postgres://baki_app:...@db:5432/baki?sslmode=require
+BAKI_APP_PASSWORD=...                        # must match the password in PAD_DATABASE_URL
+ENV
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-Serve `frontend/dist/` from any static host / reverse proxy, run the Go binary (`go build -o pad-analyzer . && ./pad-analyzer` with the same `PAD_*` env), and set `PAD_ALLOWED_ORIGINS` to your real web origin (e.g. `https://app.example.com`). Point the built frontend at the backend via `VITE_API_URL` at build time, or serve both behind one origin.
+Caddy obtains and renews the certificate automatically and redirects `http://`
+to `https://`. Only ports 80 and 443 are published; the app and the database are
+reachable only on the compose network.
+
+Two settings in that overlay are load-bearing rather than cosmetic:
+
+- **`PAD_BEHIND_PROXY=true`** is the documented escape hatch from the cloud-mode
+  check that otherwise refuses to start auth without TLS. It is only honest
+  because something in the stack actually terminates TLS. Do not set it with
+  nothing in front.
+- **`PAD_TRUSTED_PROXIES`** is pinned to Caddy's single static address. The app
+  honours `X-Forwarded-For` only from a listed proxy, so with an empty list
+  every client collapses into one rate-limit bucket (1 rps general, 5 logins a
+  minute for the whole deployment) and audit entries record the proxy instead of
+  the user. Widening it to the private ranges would let any other container on
+  the network declare its own client IP.
+
+`/metrics` and `/debug/pprof` are 404'd at the edge; scrape them from inside the
+compose network (`http://app:8080/metrics`) with `PAD_METRICS_TOKEN`.
+
+**Terminating TLS somewhere else** (a cloud load balancer, an existing nginx)?
+Then do not use this overlay's proxy. Run the app behind your own front end and
+set `PAD_TRUSTED_PROXIES` to that front end's address yourself — the default in
+the overlay is Caddy's address and will not match.
+
+**Building the frontend separately** is still possible: `npm run build --prefix
+frontend` bundles the static site to `frontend/dist/` for any static host. Set
+`PAD_ALLOWED_ORIGINS` to your real web origin and point the build at the backend
+with `VITE_API_URL`. Leaving `VITE_API_URL` unset makes the bundle use its own
+origin at runtime, which is what the container image does — one image works at
+any hostname.
 
 ---
 
 ## Configuration
 
-Backend env vars (the common ones; the complete reference with defaults is [docs/CONFIGURATION.md](docs/CONFIGURATION.md), and `.env.example` is annotated):
+Backend env vars (the common ones; `.env.example` is annotated and lists every variable with its default):
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -152,45 +197,210 @@ Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:
 
 #### Azure Container Apps deployment (ops runbook)
 
-1. **Identity & RBAC** — assign a (user-assigned) managed identity to the Container App and grant it **Storage Blob Data Contributor** on the storage account. For Postgres, set `PAD_DATABASE_URL` with `password=managed-identity` and grant the identity the AAD login role; the server injects a fresh Entra token per connection.
-2. **Container** — the container must exist before the app starts; the app does not
-   create it. The Bicep in `infra/` provisions it as **`flow-content`** and sets
-   `PAD_AZURE_STORAGE_CONTAINER` to match, so on that path there is nothing to do.
-   To create it by hand, use the same name — `flows/` is a key *prefix inside* the
-   container, not a container name:
+The `infra/` Bicep provisions the whole stack. Deploy it in three steps, because
+each one produces an input the next needs.
+
+**1. Container registry** — once.
+
+```bash
+az group create -n rg-baki-prod -l westeurope
+az deployment group create -g rg-baki-prod -f infra/registry.bicep \
+  --parameters registryName=bakiprod
+```
+
+The Container App pulls with its managed identity (`AcrPull`, granted by
+`infra/main.bicep`), so no registry username or password is stored anywhere.
+That is why the Azure path uses ACR rather than GHCR: managed identity cannot
+authenticate to GHCR, so ACA would need a long-lived classic PAT present at
+every restart and scale event. GHCR is still published for self-hosters using
+`docker-compose.prod.yml`.
+
+**2. PostgreSQL** — once.
+
+```bash
+az deployment group create -g rg-baki-prod -f infra/postgres.bicep \
+  --parameters serverName=baki-pg adminPassword="$(openssl rand -base64 24)"
+```
+
+Two settings in that template are load-bearing, not hardening niceties:
+
+- **`allowAzureServices`** adds the firewall rule that lets the Container Apps
+  environment connect. A Flexible Server with `publicNetworkAccess: Enabled`
+  and no firewall rules accepts *no* connections at all.
+- **`allowedExtensions`** (`azure.extensions`) allow-lists `PG_TRGM` and
+  `VECTOR`. Azure rejects `CREATE EXTENSION` for anything not on that list, and
+  schema migration v13 runs an unguarded `CREATE EXTENSION IF NOT EXISTS
+  pg_trgm` — so without it the app fails its migrations and never finishes
+  booting. (`vector` is exception-guarded and merely degrades knowledge search
+  to the in-Go ranker.)
+
+Then run the one-time SQL bootstrap documented at the bottom of
+`infra/postgres.bicep`: create the dedicated `baki_app` role
+(`NOSUPERUSER NOBYPASSRLS`, owning the database and the `public` schema) and
+`CREATE EXTENSION vector` as the administrator. **The app must not connect as
+the administrator** — superusers and `BYPASSRLS` roles ignore every row-level
+security policy, and migrations need to own their tables for
+`ALTER TABLE … FORCE ROW LEVEL SECURITY` to apply. The server warns at boot if
+it detects an RLS-bypassing role.
+
+**3. The app** — every deploy.
+
+```bash
+az deployment group create -g rg-baki-prod -f infra/main.bicep \
+  --parameters @infra/main.parameters.json \
+  --parameters image=bakiprod.azurecr.io/baki-backend@sha256:... \
+               authSecret=... databaseUrl=...
+```
+
+`.github/workflows/deploy.yml` does this automatically, pinning the image by
+digest after it has passed the CI gate, the Trivy scan and SBOM generation, then
+smoke-testing `/readyz` and rolling back to the previous image if that fails.
+
+What the template sets up, and what still needs a human:
+
+1. **Identity & RBAC** — a user-assigned managed identity gets
+   **Storage Blob Data Contributor** on the storage account and **AcrPull** on
+   the registry. Both role assignments are scoped to the resource, not the
+   resource group. On a bring-your-own storage account (`storageAccountResourceId`)
+   the template cannot create the role assignment — it may be in another
+   resource group — so grant it yourself.
+   Postgres uses password auth by default. The code also supports Entra tokens
+   (`PAD_DATABASE_URL` with `password=managed-identity`, see
+   `internal/storage/database/azure.go`); if you switch to it, give the app its
+   own non-admin principal rather than making its identity the server
+   administrator.
+2. **Blob container** — provisioned as **`flow-content`**, with
+   `PAD_AZURE_STORAGE_CONTAINER` set to match. `flows/` is a key *prefix inside*
+   the container, not a container name. To create it by hand:
    ```bash
    az storage container create --account-name <acct> --name flow-content --auth-mode login
    ```
-3. **Recoverability** — enable blob **soft-delete** and **versioning** on the account so an accidental/buggy delete is recoverable (the DB remains the source of truth):
+3. **Recoverability** — blob soft-delete, container soft-delete, versioning,
+   change feed and point-in-time restore are provisioned as code on the
+   `blobServices/default` resource (`blobRetentionDays`, default 14). Verify
+   after a deploy:
    ```bash
-   az storage account blob-service-properties update --account-name <acct> \
-     --enable-delete-retention true --delete-retention-days 14 --enable-versioning true
+   az storage account blob-service-properties show --account-name <acct> \
+     --query "{versioning:isVersioningEnabled, softDelete:deleteRetentionPolicy, pitr:restorePolicy}"
    ```
-4. **Lifecycle policy** — **do not add an age-based delete rule under `flows/`.** This
-   step previously recommended one, on the premise that "the current `content.v{N}` is
-   rewritten on every save". That premise is false: content is **version-keyed**
-   (`flowContentKey` → `flows/{id}/content.v{N}.json`), so each save writes a *new*
-   blob and the live one keeps the modification time of the last edit. A "delete blobs
-   not modified in 30 days" rule therefore deletes the **live content of every flow
-   nobody has edited in 30 days** — exactly the destruction the note under *Azure Blob
-   Storage* above warns about, and which the code comment at
-   `internal/storage/database/postgres_flows.go` states outright: such a rule "cannot
-   tell a stale v(N-1) from the LIVE blob of a flow that simply hasn't been edited
-   lately".
+4. **Lifecycle policy** — **there is none, and do not add an age-based rule
+   under `flows/`.** Content is version-keyed
+   (`flowContentKey` → `flows/{id}/content.v{N}.json`), so each save writes a
+   *new* blob and the live one keeps the modification time of the last edit. A
+   "delete blobs not modified in 30 days" rule therefore deletes the **live
+   content of every flow nobody has edited in 30 days** — the destruction the
+   note under *Azure Blob Storage* above warns about, and which the code comment
+   in `internal/storage/database/postgres_flows.go` states outright: such a rule
+   "cannot tell a stale v(N-1) from the LIVE blob of a flow that simply hasn't
+   been edited lately".
+
+   An earlier version of this template tiered blobs to **Archive** at 90 days,
+   which has the same shape of bug: archive-tier blobs cannot be read without
+   rehydration, so any flow untouched for a quarter became unreadable. That rule
+   has been removed.
 
    Superseded blobs are already reclaimed by the application shortly after each
-   successful save, and `DeleteFlow` removes the flow's whole prefix, so no age-based
-   rule is needed. If you want a backstop for orphans left by a rolled-back
-   transaction, it must key on something that distinguishes an orphan from a live
-   blob — e.g. reconcile against the `flows` table's current version — not on age.
+   successful save, and `DeleteFlow` removes the flow's whole prefix. If you want
+   a backstop for orphans left by a rolled-back transaction, it must key on
+   something that distinguishes an orphan from a live blob — e.g. reconcile
+   against the `flows` table's current version — not on age.
+5. **Probes** — `livenessProbe` is `GET /healthz` (unconditional 200; it
+   deliberately does not touch the database, so a slow DB cannot restart the
+   container) and `readinessProbe` is `GET /readyz` (Postgres, blob and, when
+   configured, Redis). The readiness failure threshold is generous because a
+   cold start runs schema migrations before it can serve.
+6. **Client IP** — `trustedProxies` is set, and it matters. With it empty the
+   app falls back to the immediate TCP peer, which behind the ACA ingress is the
+   ingress itself: every client then shares **one** per-IP rate-limit bucket
+   (1 rps general, 5 logins/minute for the entire deployment) and every audit
+   entry records the proxy address. After the first deploy, check a real
+   access-log line's `remote_ip` and narrow the CIDR list.
+7. **Observability** — an Application Insights instance is provisioned and the
+   environment's managed OpenTelemetry agent forwards traces to it; the app
+   picks the endpoint up from the injected `OTEL_EXPORTER_OTLP_ENDPOINT` with no
+   extra configuration. Structured logs go to Log Analytics, with two KQL alerts
+   (ERROR burst, readiness failing) and a Container App restart alert — all four
+   require `alertEmails`. The ~40 Prometheus metrics at `/metrics` are still
+   scraped by nothing: alert on `pad_blob_operations_total{status="error"}` and
+   `{status="throttled"}`, blob-op duration p99
+   (`pad_blob_operation_duration_seconds`), and `pad_blob_content_missing_total`
+   (a flow's content blob was absent though its metadata recorded content — data
+   loss; any increase warrants investigation) once a scrape pipeline exists.
+   Set `metricsToken`: `PAD_BEHIND_PROXY=true` makes the endpoint's private-IP
+   allowlist pass for every request, so the token is the only real gate.
+8. **Disaster recovery** — `infra/postgres.bicep` provisions geo-redundant
+   automated backups with a pinned retention window, which is the PITR range;
+   restore with `az postgres flexible-server restore` (or `geo-restore` for a
+   regional outage) and repoint `PAD_DATABASE_URL` at the new server. **Restore
+   blob storage too**: superseded content blobs are hard-deleted about a minute
+   after each save, so every flow saved after the restore point has a row
+   pointing at a blob that is gone — recover those from blob soft-delete
+   (`az storage blob undelete`) in the same window. `/readyz` returning 200 does
+   not prove this: it checks reachability, not that any particular flow's
+   content still exists. Watch `pad_blob_content_missing_total`.
 
-   Note the shipped Bicep also configures `tierToArchive` at 90 days after
-   modification (`infra/main.bicep`). Archive-tier blobs cannot be read without
-   rehydration, so on that IaC a flow untouched for 90 days becomes temporarily
-   unreadable; narrow or remove that rule if you need every flow to stay hot.
- 5. **Probes** — set the ACA `livenessProbe` to `GET /healthz` and `readinessProbe` to `GET /readyz` (the latter checks DB *and* blob reachability).
- 6. **Observability** — alert on `pad_blob_operations_total{status="error"}` and `{status="throttled"}` (429s ⇒ throttling/scale), blob-op duration p99 (`pad_blob_operation_duration_seconds`), readiness failures, and `pad_blob_content_missing_total` (a flow's content blob was absent though its metadata recorded content — data loss; any increase warrants investigation).
- 7. **Disaster recovery** — database backup/restore (PITR + geo-restore), RPO/RTO targets, a quarterly restore drill, and cutover steps are in [`docs/DR_RUNBOOK.md`](docs/DR_RUNBOOK.md). Provisioning a geo-redundant-backed-up Postgres via IaC is in [`infra/postgres.bicep`](infra/postgres.bicep).
+> **Single replica.** `minReplicas` and `maxReplicas` are both 1, and that is a
+> correctness bound rather than a cost default. `internal/api/events.go` is an
+> in-process SSE hub with no cross-replica backplane, so with a second replica a
+> chat stream started on one replica never reaches an SSE client connected to
+> the other, and the subscriber watchdog cancels it for lack of a local
+> subscriber. Cancel-stream, AI budget accounting, the WebSocket ticket replay
+> guard and the retention purge are per-process too. The WebSocket hub
+> (`internal/websocket/backplane.go`) already has the Redis backplane the SSE hub
+> needs; scale out after that pattern is applied there.
+
+#### GitHub secrets for the deploy workflow
+
+`.github/workflows/deploy.yml` authenticates to Azure with OIDC federated
+credentials — there is no client secret. Register an app, federate it to this
+repository, and grant it **Contributor** on the resource group plus **AcrPush**
+on the registry.
+
+The image is built once and promoted: staging and production deploy the same
+digest. So the build job is deliberately not bound to a GitHub Environment —
+otherwise a protection rule would gate the build as well as the deploy, asking
+for two approvals per release. That splits the secrets in two:
+
+**Repository-level** (read by the build job, before any environment gate):
+
+| Secret | Purpose |
+|---|---|
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | OIDC federated login for `azure/login` |
+| `AZURE_CONTAINER_REGISTRY` | ACR **name**, not login server |
+
+**Environment-level** (`staging`, `production` — read by the deploy job):
+
+| Secret | Purpose |
+|---|---|
+| `AZURE_RESOURCE_GROUP` | Target resource group (must already exist; the Bicep is RG-scoped) |
+| `AZURE_CONTAINER_APP_NAME` | `appName` for the template |
+| `PAD_AUTH_SECRET` | JWT signing key, ≥ 32 chars |
+| `PAD_ENCRYPTION_KEY` | AES-256-GCM key for the provider keystore. Set it — unset, the keystore falls back to `PAD_AUTH_SECRET`, and rotating the JWT secret then makes every stored provider key unreadable |
+| `PAD_DATABASE_URL` | DSN for the dedicated `baki_app` role |
+| `PAD_METRICS_TOKEN` | Gates `GET /metrics` and `/debug/pprof` |
+| `ALERT_EMAILS` | Comma-separated recipients. **Empty provisions no alerting at all** — all four alert resources are conditional on it |
+| `PAD_ALLOWED_ORIGINS` | Only needed once a custom domain fronts the app; defaults to the ingress FQDN |
+| `PAD_SMTP_HOST` / `PAD_SMTP_USERNAME` / `PAD_SMTP_PASSWORD` / `PAD_EMAIL_FROM` / `PAD_APP_BASE_URL` | Transactional email. Without SMTP the app uses a log-only mailer, which means password-reset and verification links are written into Log Analytics instead of delivered |
+| `PAD_SSO_ISSUER` / `PAD_SSO_CLIENT_ID` / `PAD_SSO_CLIENT_SECRET` / `PAD_SSO_REDIRECT_URL` | OIDC SSO. All of issuer/client-id/redirect are required together or SSO stays off |
+| `PAD_CI_WEBHOOK_SECRET` | Enables `POST /api/integrations/ci`; treat it as a read token for the whole flow library |
+| `AZURE_STORAGE_ACCOUNT_ID` | Optional: bring your own storage account instead of letting the template provision one. The template cannot create the blob role assignment for an account it does not own — grant the managed identity **Storage Blob Data Contributor** yourself, and create the `flow-content` container |
+
+The deploy job also uses the three `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
+`AZURE_SUBSCRIPTION_ID` secrets. Repository-level values are visible to
+environment-scoped jobs, so define them once at the repository level and add
+environment-level overrides only if staging and production use different
+subscriptions.
+
+To review an infrastructure change before it ships, run what-if by hand against
+a scratch resource group:
+
+```bash
+az deployment group what-if -g rg-baki-scratch -f infra/main.bicep \
+  --parameters @infra/main.parameters.json
+```
+
+CI compiles every `infra/*.bicep` on each push (the `bicep` job) and fails on
+warnings, so schema mistakes cannot reach a deploy.
 
 AI provider keys are set in-app under **Settings → Providers** (`Ctrl + ,`). Desktop stores them in the OS keyring; web stores them server-side. Supported: GitHub Copilot (OAuth device flow or PAT), GitHub Models, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM.
 
@@ -270,7 +480,7 @@ Both templates download the release binary (falling back to a source build), run
 - **GitLab** — include `https://raw.githubusercontent.com/dusankuburic/baki/main/ci/.gitlab-ci.pad-analysis.yml` and extend `.pad-analysis`. The SARIF file is a plain job artifact. GitLab's `artifacts:reports:sast` expects its own schema and ignores SARIF, so the merge-request security widget stays empty.
 - **Azure DevOps** — copy `ci/azure-pipelines.pad-analysis.yml` into your repository (or reference it through a GitHub repository resource) and use it as a step template.
 
-Both headers list every variable or parameter. To record a run on a PAD Analyzer server's dashboard, use `bakicli report` (see [CI webhook](docs/CONFIGURATION.md#ci-webhook)).
+Both headers list every variable or parameter. To record a run on a PAD Analyzer server's dashboard, use `bakicli report` — it signs the request with `PAD_CI_WEBHOOK_SECRET` and posts to `/api/integrations/ci`, which is disabled until that secret is set. Treat the secret as a read token for the whole flow library.
 
 ## Tests
 
