@@ -68,6 +68,14 @@ type Router struct {
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
 
+	// indexCSPOnce/indexCSPHash cache the sha256 pin of index.html's inline
+	// theme-bootstrap script, derived lazily from the file actually served.
+	// A hardcoded hash drifted from the built index.html once and silently
+	// blocked the bootstrap on every page load (CSP violation in the console);
+	// deriving it from the artifact makes that class of drift impossible.
+	indexCSPOnce sync.Once
+	indexCSPHash string
+
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 	mux          *chi.Mux

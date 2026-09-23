@@ -93,6 +93,19 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		}
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// /assets/* is exempt from rate limiting. Those files are
+			// content-hashed and immutable, and a single SPA load fetches
+			// dozens of them in one burst — counting them against the per-IP
+			// general bucket made an ordinary reload 429 its own lazy chunks,
+			// which the browser surfaces as "Failed to fetch dynamically
+			// imported module". APIs (including the SPA's / index.html) stay
+			// throttled as designed.
+			if method := r.Method; method == http.MethodGet || method == http.MethodHead {
+				if strings.HasPrefix(canonicalRequestPath(r.URL.Path), "/assets/") {
+					router.ServeHTTP(w, r)
+					return
+				}
+			}
 			rl, ok := rateLimitersByGroup[rateLimitGroup(r.Method, r.URL.Path)]
 			if !ok {
 				rl = generalRl

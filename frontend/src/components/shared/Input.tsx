@@ -31,8 +31,8 @@ export default function Input({
         className={clsx(
           'flex items-center h-9 bg-surface-2 border rounded-md px-3 transition-colors duration-fast',
           error
-            ? 'border-semantic-error focus-within:border-semantic-error focus-within:ring-2 focus-within:ring-semantic-error/20'
-            : 'border-border-default focus-within:border-focus focus-within:ring-2 focus-within:ring-brand-500/20',
+            ? 'border-semantic-error focus-within:border-semantic-error'
+            : 'border-border-default focus-within:border-border-focus',
         )}
       >
         {Icon && <Icon size={14} className="text-text-tertiary mr-2 flex-shrink-0" />}

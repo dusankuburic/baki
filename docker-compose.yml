@@ -36,6 +36,19 @@ services:
       - PAD_DB_REQUIRE_SSL=false
       - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
       - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080}
+      # GLM provider base URL. The default targets z.ai's pay-as-you-go
+      # endpoint; a GLM Coding Plan key is only entitled to the coding
+      # endpoint and gets rejected there (surfacing as an "insufficient
+      # balance" chat error). See GLM_API_URL in .env.
+      - GLM_API_URL=${GLM_API_URL:-}
+      # General per-IP rate budget. The code defaults (1 rps, burst 20) are
+      # tuned for public multi-tenant deployments; behind Docker NAT every
+      # request — browser and CLI alike — arrives from the single gateway IP,
+      # and one app boot fires ~10 API calls, so the default bucket drained
+      # on ordinary page loads (429 on /api/dashboard/home etc.). .env raises
+      # it for this single-user stack; unset keeps the code default.
+      - PAD_RATE_LIMIT_GENERAL_RPS=${PAD_RATE_LIMIT_GENERAL_RPS:-}
+      - PAD_RATE_LIMIT_GENERAL_BURST=${PAD_RATE_LIMIT_GENERAL_BURST:-}
     depends_on:
       db:
         condition: service_healthy

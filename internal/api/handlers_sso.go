@@ -404,7 +404,20 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	logAudit(r.Context(), h.backend, r, h.security.TrustedProxies, AuditActionSSOLogin, "user", user.ID, map[string]string{"provider": h.ssoClient.ProviderName()})
-	render.JSON(w, pair)
+	// Mirrors handleAuthLogin: the client's LoginResponseSchema requires the
+	// `user` object alongside the tokens.
+	render.JSON(w, map[string]any{
+		"user": map[string]any{
+			"id":    user.ID,
+			"email": user.Email,
+			"role":  user.Role,
+		},
+		"accessToken":      pair.AccessToken,
+		"refreshToken":     pair.RefreshToken,
+		"expiresAt":        pair.ExpiresAt,
+		"refreshId":        pair.RefreshID,
+		"refreshExpiresAt": pair.RefreshExpiresAt,
+	})
 }
 
 // resolveSSOUser maps a verified IdP identity to a local user:

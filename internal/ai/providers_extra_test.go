@@ -346,8 +346,10 @@ func TestGLMProvider_Identity(t *testing.T) {
 	if p.DefaultModel() == "" {
 		t.Error("DefaultModel() must not be empty")
 	}
-	if p.FreeModel() == "" {
-		t.Error("GLM should have a free model")
+	// The 4.7 family (incl. the free flash) was dropped from the catalog, so
+	// GLM no longer advertises a free model — like the other pay-only providers.
+	if p.FreeModel() != "" {
+		t.Errorf("FreeModel() = %q, want empty (no free model in catalog)", p.FreeModel())
 	}
 	pricing := p.PricePerMillionTokens()
 	if pricing.InputCostPerM <= 0 {

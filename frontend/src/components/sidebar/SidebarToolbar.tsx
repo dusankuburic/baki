@@ -4,6 +4,7 @@ import {Sparkles, User, Shield, Settings, LayoutDashboard, BarChart3, Cloud, Loa
 import Button from '@/components/shared/Button'
 import Avatar from '@/components/shared/Avatar'
 import {useAuthStore} from '@/stores/authStore'
+import {useSystemStore} from '@/stores/systemStore'
 import {useUIStore} from '@/stores/uiStore'
 import {isTauri} from '@/platform/guards'
 
@@ -20,6 +21,11 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
   const mainPaneView = useUIStore(s => s.mainPaneView)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const toggleSettings = useUIStore(s => s.toggleSettings)
+  // Session analytics are a local-mode capability (see AnalyticsDashboard's
+  // gate): in cloud mode the view only shows a "not available" notice, so the
+  // nav button would advertise a dead feature. Hidden until the backend
+  // confirms the capability — unknown means unavailable.
+  const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
 
   const navClass = (view: 'home' | 'dashboard' | 'library' | 'profile' | 'admin') =>
     clsx(
@@ -60,14 +66,16 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
           <LayoutDashboard size={16} />
         </button>
 
-        <button
-          onClick={() => setMainPaneView('dashboard')}
-          className={navClass('dashboard')}
-          title={t('sidebar.analyticsDashboard')}
-          aria-label={t('sidebar.analyticsDashboard')}
-        >
-          <BarChart3 size={16} />
-        </button>
+        {sessionAnalytics && (
+          <button
+            onClick={() => setMainPaneView('dashboard')}
+            className={navClass('dashboard')}
+            title={t('sidebar.analyticsDashboard')}
+            aria-label={t('sidebar.analyticsDashboard')}
+          >
+            <BarChart3 size={16} />
+          </button>
+        )}
 
         {/* Cloud Library is a storage-backend feature: on desktop the list is
             always empty and tag edits 400, so the nav is hidden there. */}

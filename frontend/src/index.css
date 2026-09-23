@@ -1917,13 +1917,19 @@ pre,
 /* === KEYBOARD FOCUS RING === */
 /* Only visible for keyboard navigation (:focus-visible), not mouse clicks.
    Uses the theme brand color so the ring adapts to every theme.
-   Modern browsers make outline follow the element's border-radius. */
-:focus-visible {
+   Modern browsers make outline follow the element's border-radius.
+   :where() keeps specificity at zero so components that already draw their
+   own focus indicator (e.g. shared/Input's focus-within border) win with
+   their plain `outline-none` opt-out — without it this rule outranked the
+   class (later in source, same specificity), and text fields showed BOTH the
+   wrapper border and this outline ring on click, since text inputs match
+   :focus-visible even for mouse focus. */
+:where(:focus-visible) {
   outline: 2px solid var(--brand-500);
   outline-offset: 2px;
 }
 
-:focus:not(:focus-visible) {
+:where(:focus:not(:focus-visible)) {
   outline: none;
 }
 

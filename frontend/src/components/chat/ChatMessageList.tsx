@@ -28,6 +28,7 @@ interface ListContext {
   footer?: React.ReactNode
   footerRef: React.MutableRefObject<HTMLDivElement | null>
   label: string
+  onWheel: () => void
 }
 
 // The Scroller carries the conversation's accessibility semantics and the item
@@ -40,6 +41,7 @@ const Scroller = React.forwardRef<HTMLDivElement, {context?: ListContext} & Reac
         ref={ref}
         style={style}
         {...props}
+        onWheel={context?.onWheel}
         className="px-3 pt-3 custom-scrollbar overflow-y-auto"
         role="log"
         aria-live="polite"
@@ -75,6 +77,12 @@ function ChatMessageList({messages, renderMessage, footer, isStreaming, scrollTo
   const footerRef = useRef<HTMLDivElement | null>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const atBottomRef = useRef(true)
+  // Timestamp of the last wheel event, used to keep auto-pinning from
+  // fighting an active user scroll (see the ResizeObserver below).
+  const lastWheelRef = useRef(0)
+  const handleWheel = useCallback(() => {
+    lastWheelRef.current = Date.now()
+  }, [])
 
   const scrollToBottom = useCallback((smooth = true) => {
     // 'auto' jumps directly; 'smooth' animates (Virtuoso has no 'instant').
@@ -99,6 +107,12 @@ function ChatMessageList({messages, renderMessage, footer, isStreaming, scrollTo
     const el = footerRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
+      // While the user is actively wheeling, hold off pinning: crossing the
+      // at-bottom threshold mid-wheel made this instant scrollToIndex cancel
+      // the user's momentum and yank the list, which read as the view
+      // "bouncing back" off the end. Once the wheel goes quiet the next
+      // chunk re-pins, so stick-to-bottom behaviour is unchanged.
+      if (Date.now() - lastWheelRef.current < 400) return
       if (atBottomRef.current) scrollToBottom(false)
     })
     ro.observe(el)
@@ -112,7 +126,10 @@ function ChatMessageList({messages, renderMessage, footer, isStreaming, scrollTo
     virtuosoRef.current?.scrollToIndex({index: scrollTo.index, align: 'center', behavior: 'smooth'})
   }, [scrollTo])
 
-  const context = useMemo<ListContext>(() => ({footer, footerRef, label: t('a11y.conversation')}), [footer, t])
+  const context = useMemo<ListContext>(
+    () => ({footer, footerRef, label: t('a11y.conversation'), onWheel: handleWheel}),
+    [footer, t, handleWheel],
+  )
 
   return (
     <div className="flex-1 overflow-hidden relative">
@@ -123,7 +140,11 @@ function ChatMessageList({messages, renderMessage, footer, isStreaming, scrollTo
         itemContent={(i, m) => <div className="chat-msg-item pb-3">{renderMessage(i, m)}</div>}
         components={COMPONENTS}
         initialTopMostItemIndex={Math.max(0, messages.length - 1)}
-        followOutput={isStreaming ? 'smooth' : 'auto'}
+        // 'auto' (instant) even while streaming: followOutput's smooth
+        // animation ran as a SECOND scroll system against the ResizeObserver's
+        // instant jumps, and the two fighting produced the rubber-band bounce
+        // at the bottom of a live reply.
+        followOutput="auto"
         atBottomStateChange={atBottom => {
           atBottomRef.current = atBottom
           setShowScrollBtn(!atBottom)

@@ -60,7 +60,7 @@ export default function SearchBar({
 
   return (
     <div className="flex items-center h-12 px-3">
-      <div className="flex items-center w-full h-8 bg-surface-2 border border-border-default rounded-md px-2 gap-2 focus-within:border-border-focus focus-within:ring-2 focus-within:ring-brand-500/20 transition-shadow duration-fast">
+      <div className="flex items-center w-full h-8 bg-surface-2 border border-border-default rounded-md px-2 gap-2 focus-within:border-border-focus transition-colors duration-fast">
         <Search size={14} className="text-text-tertiary flex-shrink-0" />
         <input
           ref={inputRef}

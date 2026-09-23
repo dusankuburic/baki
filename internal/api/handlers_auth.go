@@ -361,7 +361,23 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	render.JSON(w, pair)
+	// The client validates the login response against a schema that requires
+	// a `user` object (frontend/src/api/schemas.lazy.ts LoginResponseSchema) —
+	// the same shape register's verified branch returns. Tokens alone made
+	// every successful login fail client-side with "Response validation
+	// failed: user: Invalid input".
+	render.JSON(w, map[string]any{
+		"user": map[string]any{
+			"id":    user.ID,
+			"email": user.Email,
+			"role":  user.Role,
+		},
+		"accessToken":      pair.AccessToken,
+		"refreshToken":     pair.RefreshToken,
+		"expiresAt":        pair.ExpiresAt,
+		"refreshId":        pair.RefreshID,
+		"refreshExpiresAt": pair.RefreshExpiresAt,
+	})
 }
 
 // @Summary      Refresh access token

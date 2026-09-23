@@ -26,6 +26,24 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // A dynamic import that 404s means this tab predates the currently
+    // deployed bundle — the hashed chunk filenames it references no longer
+    // exist (e.g. a redeploy happened while the tab stayed open). Retrying
+    // in-page can't help because the old index.html still points at the old
+    // chunk names; the only fix is reloading the document. Guarded by
+    // sessionStorage so a chunk that is genuinely broken in the NEW build
+    // cannot reload-loop the page.
+    if (this.isStaleChunkError(error)) {
+      try {
+        if (!sessionStorage.getItem('baki.stale-chunk-reloaded')) {
+          sessionStorage.setItem('baki.stale-chunk-reloaded', '1')
+          window.location.reload()
+          return
+        }
+      } catch {
+        // sessionStorage unavailable — fall through to normal error handling
+      }
+    }
     logger.error('ErrorBoundary caught:', error, info)
     try {
       // .catch() on the promise itself, not just this try/catch: the try only
@@ -55,6 +73,16 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   }
 
   private retry = () => this.setState({hasError: false, error: null})
+
+  // Vite's lazy chunks fail with these messages when the file is gone from
+  // the server (Chromium, Firefox, older Safari phrasings respectively).
+  private isStaleChunkError(error: Error): boolean {
+    return (
+      /Failed to fetch dynamically imported module/i.test(error.message) ||
+      /Importing a module script failed/i.test(error.message) ||
+      /error loading dynamically imported module/i.test(error.message)
+    )
+  }
 
   render() {
     if (this.state.hasError) {

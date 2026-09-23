@@ -5,6 +5,7 @@ import {logger} from '@/lib/logger'
 import {parseChatMessages} from '@/lib/chatMessage'
 import type {SourceFileInfo, ConversationFile, FlowDocument} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
+import {isTauri} from '@/platform/guards'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
 
@@ -42,6 +43,14 @@ export function useChatConversations({doc, flowThreads, activeThreadId}: UseChat
   useEffect(() => {
     if (!doc) {
       // Clears the list when the document goes away; the async fetch owns the other branch.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSourceFiles(EMPTY_SOURCE_FILES)
+      return
+    }
+    // Source files are a local-filesystem (desktop) feature — the endpoint
+    // answers 403 in cloud mode by design, so calling it there on every doc
+    // load only produced a console error and an empty catch.
+    if (!isTauri()) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSourceFiles(EMPTY_SOURCE_FILES)
       return

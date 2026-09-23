@@ -73,6 +73,15 @@ var rlsHeavyExactPaths = map[string]bool{
 	"/api/flow/search-library": true,
 	// 10 MB multipart parse + save; role-gated (member) and per-user throttled.
 	"/api/flow/upload": true,
+	// Home dashboard aggregates: ~16 read-only queries run CONCURRENTLY on an
+	// errgroup, every one carrying its explicit owner_id predicate. On the
+	// request-long RLS transaction they shared one *sql.Tx — a canceled
+	// sibling (page navigation cancels the request context) left the
+	// transaction's connection poisoned, so later cold builds died on their
+	// first query with "driver: bad connection" and served the empty stub
+	// (which then sat in the 30s cache). Pool connections retry cleanly per
+	// query; the explicit predicates remain the access control.
+	"/api/dashboard/home": true,
 }
 
 func rlsExemptPath(path string) bool {

@@ -79,7 +79,16 @@ export const adminApi = {
 
   getMigrationStatus: (): Promise<MigrationStatus> => request('/api/admin/migration/status', {method: 'GET'}),
 
-  listUsers: (): Promise<AuthUser[]> => request('/api/admin/users/list', {method: 'GET'}),
+  // The endpoint returns a paged envelope {items, total, offset, limit}, not a
+  // bare array — handing it to setUsers() verbatim made the dashboard crash
+  // on users.filter(). Ask for the server's max page (100) so the dashboard's
+  // user list and its "Total Users" stat stay whole for realistic deployments.
+  listUsers: async (): Promise<AuthUser[]> => {
+    const res = await request<{items: AuthUser[]; total: number}>('/api/admin/users/list?limit=100', {
+      method: 'GET',
+    })
+    return res.items
+  },
 
   setUserRole: (userId: string, role: string): Promise<void> =>
     request(`/api/admin/users/${userId}/role`, {body: {role}, method: 'PUT'}),

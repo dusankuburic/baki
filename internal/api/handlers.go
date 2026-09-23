@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"html"
@@ -9,6 +11,47 @@ import (
 	"os"
 	"strings"
 )
+
+// indexScriptCSPHash derives the Content-Security-Policy pin for the SPA
+// shell's inline theme-bootstrap script from the index.html actually being
+// served (computed once). The pin used to be hardcoded and drifted out of
+// sync with the built artifact — the browser then blocked the bootstrap with
+// a CSP violation on every page load while everything else kept working.
+// Returns "" when the script cannot be located, leaving script-src at 'self'
+// only.
+func (rt *Router) indexScriptCSPHash(indexPath string) string {
+	rt.indexCSPOnce.Do(func() {
+		data, err := os.ReadFile(indexPath) // #nosec G304 -- build artifact path from config
+		if err != nil {
+			return
+		}
+		// The first plain <script> tag is the theme bootstrap; every other
+		// script in the built shell carries attributes (type/src) and loads
+		// via 'self'.
+		const openTag, closeTag = "<script>", "</script>"
+		start := bytes.Index(data, []byte(openTag))
+		if start < 0 {
+			return
+		}
+		start += len(openTag)
+		end := bytes.Index(data[start:], []byte(closeTag))
+		if end < 0 {
+			return
+		}
+		// The HTML tokenizer normalizes CRLF/CR to LF before the CSP engine
+		// hashes an inline script, so the pin must hash the normalized text —
+		// hashing raw bytes (a CRLF checkout) produces a hash the browser
+		// rejects. This exact mismatch is how the old hardcoded pin went stale.
+		body := bytes.ReplaceAll(data[start:start+end], []byte("\r\n"), []byte("\n"))
+		body = bytes.ReplaceAll(body, []byte("\r"), []byte("\n"))
+		sum := sha256.Sum256(body)
+		// CSP source grammar requires the quotes: 'sha256-<b64>'. Emitting the
+		// pin unquoted made browsers parse it as a host source, reject it as
+		// invalid, and block the bootstrap script.
+		rt.indexCSPHash = "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	})
+	return rt.indexCSPHash
+}
 
 // serveStatic serves the SPA bundle with sensible caching + a Content-
 // Security-Policy header on HTML responses, and rejects directory-listing
@@ -70,7 +113,9 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 		w.Header().Set("Cache-Control", "no-cache")
 		// Content-Security-Policy for the SPA shell.
 		//   - script-src: the inline theme-bootstrap script in index.html is
-		//     hash-pinned (no 'unsafe-inline'); bundled scripts come from 'self'.
+		//     hash-pinned (no 'unsafe-inline'); the pin is derived from the
+		//     served artifact at runtime (indexScriptCSPHash) so it cannot
+		//     drift from the build. Bundled scripts come from 'self'.
 		//   - style-src: 'unsafe-inline' is retained because the SPA and its
 		//     third-party components (graph/toast/editor libs) inject <style>
 		//     at runtime. Removing it without a per-request nonce scheme breaks
@@ -78,9 +123,13 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 		//     trade-off documented here rather than an oversight.
 		//   - object-src 'none': there are no <object>/<embed> payloads, so
 		//     legacy plugin content is blocked outright.
+		scriptSrc := "'self'"
+		if pin := rt.indexScriptCSPHash(indexPath); pin != "" {
+			scriptSrc += " " + pin
+		}
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self' 'sha256-ukxiLLS3A6HuiM7piLMSGXuqzQQJAY0uuePIfYP+vdA='; "+
+				"script-src "+scriptSrc+"; "+
 				"style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data:; "+
 				"font-src 'self'; "+

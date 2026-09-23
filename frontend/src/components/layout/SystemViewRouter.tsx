@@ -1,7 +1,9 @@
-import {lazy, Suspense} from 'react'
+import {lazy, Suspense, useEffect} from 'react'
 import {Spinner} from '@/components/shared'
 import {UserProfile} from '@/components/auth/UserProfile'
 import {MainPaneToolbar} from '@/components/flow'
+import {useSystemStore} from '@/stores/systemStore'
+import {useUIStore} from '@/stores/uiStore'
 
 // GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
 // its lazy siblings below.
@@ -26,7 +28,18 @@ const AdminDashboard = lazy(() => import('@/components/admin/AdminDashboard').th
 // Returns null for flow-editor views ('block', 'graph', 'map', 'local-map',
 // 'diff', '' …) so the caller knows to render the editor groups instead.
 export function SystemViewRouter({view}: {view: string}) {
-  switch (view) {
+  const setMainPaneView = useUIStore(s => s.setMainPaneView)
+  // Session analytics are local-mode-only. The nav button is hidden in cloud
+  // mode (SidebarToolbar), but a persisted/stale UI state could still land on
+  // 'dashboard' — bounce it to Home, the cloud equivalent, instead of the
+  // view's dead "not available in this mode" notice.
+  const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
+  const effectiveView = view === 'dashboard' && !sessionAnalytics ? 'home' : view
+  useEffect(() => {
+    if (effectiveView !== view) setMainPaneView('home')
+  }, [effectiveView, view, setMainPaneView])
+
+  switch (effectiveView) {
     case 'profile':
       return (
         <div className="flex flex-col h-full bg-surface-1">

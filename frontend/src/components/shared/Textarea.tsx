@@ -21,8 +21,8 @@ export default function Textarea({error, hint, className, id, ...rest}: Textarea
           'bg-surface-2 border rounded-md px-3 py-2 text-sm outline-none resize-y min-h-[80px] transition-colors duration-fast',
           'text-text-primary placeholder:text-text-disabled',
           error
-            ? 'border-semantic-error focus:border-semantic-error focus:ring-2 focus:ring-semantic-error/20'
-            : 'border-border-default focus:border-focus focus:ring-2 focus:ring-brand-500/20',
+            ? 'border-semantic-error focus:border-semantic-error'
+            : 'border-border-default focus:border-border-focus',
         )}
         {...rest}
       />

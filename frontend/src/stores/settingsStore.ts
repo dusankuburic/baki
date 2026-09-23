@@ -79,7 +79,7 @@ export const defaultSettings: AppSettings = {
       },
       glm: {
         enabled: false,
-        defaultModel: 'glm-5.1',
+        defaultModel: 'glm-5.2',
         temperature: 0.3,
         maxTokens: 4096,
         contextTokenBudget: 4000,

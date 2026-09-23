@@ -27,12 +27,16 @@ var modelCatalog = map[string][]ModelInfo{
 		{ID: "grok-2", DisplayName: "Grok 2", ContextLimit: 131072, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
 	},
 	"glm": {
+		// glm-5.3 and glm-5.2 verified against the z.ai coding endpoint
+		// 2026-09-23; the -turbo/-air/-flash variants of either do not exist
+		// there (1211 Unknown Model). The 4.7 family was dropped from this
+		// deployment's catalog on request — glm-4.7-flashx is additionally
+		// not entitled on GLM Coding Plan keys (1113 resource-package error).
+		{ID: "glm-5.3", DisplayName: "GLM-5.3", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
+		{ID: "glm-5.2", DisplayName: "GLM-5.2", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
 		{ID: "glm-5.1", DisplayName: "GLM-5.1", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
 		{ID: "glm-5", DisplayName: "GLM-5", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.0, OutputCostPerM: 3.2}},
 		{ID: "glm-5-turbo", DisplayName: "GLM-5 Turbo", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0.8, OutputCostPerM: 2.4}},
-		{ID: "glm-4.7", DisplayName: "GLM-4.7", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0.6, OutputCostPerM: 2.2}},
-		{ID: "glm-4.7-flashx", DisplayName: "GLM-4.7 FlashX", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0.2, OutputCostPerM: 0.6}},
-		{ID: "glm-4.7-flash", DisplayName: "GLM-4.7 Flash (Free)", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
 	},
 	// GitHub Models' free tier enforces an 8 192-token request limit for most
 	// models regardless of native context window; the limits cap the context

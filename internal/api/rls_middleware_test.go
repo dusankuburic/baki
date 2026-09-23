@@ -32,10 +32,11 @@ func TestRLSHeavyExemptPathsAreRegisteredRoutes(t *testing.T) {
 	}
 
 	for path := range rlsHeavyExactPaths {
-		// All exempted routes are POSTs (see routes_chi.go); verify both that
-		// the POST exists and that the exemption key matches its exact path.
-		if !registered["POST "+path] {
-			t.Errorf("rlsHeavyExactPaths entry %q is not a registered POST route (registered set drifted?)", path)
+		// Exempted routes are mutating POSTs (see routes_chi.go) plus the
+		// read-only GET dashboard aggregate; verify the exemption key matches
+		// a registered route of one of those methods.
+		if !registered["POST "+path] && !registered["GET "+path] {
+			t.Errorf("rlsHeavyExactPaths entry %q is not a registered GET/POST route (registered set drifted?)", path)
 		}
 	}
 }
