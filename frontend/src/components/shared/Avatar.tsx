@@ -6,6 +6,7 @@ const SIZE_CLASSES = {
   sm: 'w-7 h-7 text-2xs',
   md: 'w-8 h-8 text-xs',
   lg: 'w-11 h-11 text-lg',
+  xl: 'w-16 h-16 text-xl',
 } as const
 
 export type AvatarSize = keyof typeof SIZE_CLASSES

@@ -28,23 +28,27 @@ export default function ParseErrorsBanner() {
   const warnCount = errors.length - errorCount
 
   return (
-    <div className="border-b border-amber-500/20 bg-amber-500/5 flex-shrink-0">
-      <div className="px-3 py-1.5 flex items-center gap-2">
+    // .parse-banner: the hint, then the counts, drop out as the pane narrows
+    // (index.css) so the summary never wraps onto a second line.
+    <div className="parse-banner border-b border-amber-500/20 bg-amber-500/5 flex-shrink-0">
+      <div className="px-3 h-8 flex items-center gap-2">
         <AlertTriangle size={13} className="text-amber-400 shrink-0" />
         <button
           onClick={() => setExpanded(e => !e)}
           aria-expanded={expanded}
-          className="flex items-center gap-1.5 text-2xs text-amber-300 hover:text-amber-200 transition-colors"
+          className="flex items-center gap-1.5 shrink-0 whitespace-nowrap text-2xs text-amber-300 hover:text-amber-200 transition-colors"
         >
           <span className="font-medium">
             {errors.length} parse issue{errors.length !== 1 ? 's' : ''} in this flow
           </span>
-          <span className="text-amber-400/70">
+          <span className="parse-banner-counts text-amber-400/70">
             ({errorCount} error{errorCount !== 1 ? 's' : ''}, {warnCount} warning{warnCount !== 1 ? 's' : ''})
           </span>
           <ChevronDown size={11} className={clsx('transition-transform duration-fast', expanded && 'rotate-180')} />
         </button>
-        <span className="text-2xs text-text-tertiary">— affected lines were skipped or partially parsed</span>
+        <span className="parse-banner-hint min-w-0 truncate text-2xs text-text-tertiary">
+          — affected lines were skipped or partially parsed
+        </span>
         <button
           onClick={() => setDismissed(true)}
           aria-label="Dismiss parse issues banner"

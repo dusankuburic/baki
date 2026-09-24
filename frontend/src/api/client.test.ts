@@ -433,6 +433,38 @@ describe('api/client', () => {
       expect(out).toEqual({fresh: true})
     })
 
+    // Regression: an in-flight GET used to be shared with any identical GET,
+    // signal or not. StrictMode mounts the library twice; the first mount
+    // aborted its request and the second, sharing that promise, rejected too
+    // and rendered "No flows yet".
+    it('never shares an abortable GET: aborting one leaves an identical concurrent GET intact', async () => {
+      let calls = 0
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (_url, init) =>
+          new Promise<Response>((resolve, reject) => {
+            calls++
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted.', 'AbortError')),
+            )
+            setTimeout(() => resolve(new Response(JSON.stringify({items: [1]}), {status: 200})), 5)
+          }),
+      )
+      const {request} = await getClient()
+      const first = new AbortController()
+      const second = new AbortController()
+
+      const a = request('/api/library', {method: 'GET', signal: first.signal})
+      const b = request('/api/library', {method: 'GET', signal: second.signal})
+      // Both fetches are on the wire before the first caller gives up.
+      await new Promise(r => setTimeout(r, 0))
+      expect(calls).toBe(2)
+      first.abort()
+
+      const err: unknown = await a.catch(e => e)
+      expect((err as {name?: string}).name).toBe('AbortError')
+      await expect(b).resolves.toEqual({items: [1]})
+    })
+
     it('abortAllRequests() aborts in-flight requests', async () => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(
         (_url, init) =>

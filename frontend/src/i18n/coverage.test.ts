@@ -34,6 +34,12 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/auth/ProtectedRoute.tsx',
   // Pure string/hash helpers.
   'src/components/auth/authHash.ts',
+  // Profile section chrome: renders only the copy its callers pass in.
+  'src/components/auth/SectionCard.tsx',
+  // Scroll-position tracking for the profile's section nav; no copy.
+  'src/components/auth/useActiveSection.ts',
+  // sessionStorage plumbing for the sign-in screen's post-logout note.
+  'src/components/auth/authNotice.ts',
 
   // --- src/components/settings ---
   // Re-export barrel; no rendered copy of its own.

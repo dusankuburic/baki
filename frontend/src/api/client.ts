@@ -420,7 +420,13 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   if (cached && cached.expiresAt > Date.now()) {
     return cloneCached(cached.value) as T
   }
-  const existing = getInFlight.get(key)
+  // An abortable request belongs to its caller and is never shared: the
+  // caller's abort would reject every sharer with it. React StrictMode
+  // mounts the library twice — the first mount aborts its page load and the
+  // second, handed that same promise, settled on an empty list. It still
+  // fills the cache for later callers.
+  const shareable = !opts.signal
+  const existing = shareable ? getInFlight.get(key) : undefined
   if (existing) {
     // Share the round trip, not the object: clone from the pristine cached
     // copy; on an epoch mismatch fall back to the propagated value.
@@ -441,7 +447,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     .finally(() => {
       if (getInFlight.get(key) === promise) getInFlight.delete(key)
     })
-  getInFlight.set(key, promise)
+  if (shareable) getInFlight.set(key, promise)
   return promise
 }
 

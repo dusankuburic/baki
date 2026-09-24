@@ -12,15 +12,21 @@ interface LibraryListProps {
   openingId?: string | null
 }
 
+// The columns are ranked (see .library-row in index.css): the name always
+// shows and takes what is left; owner, then subflows, drop out as the results
+// pane narrows. The header and the rows share the same classes, so a column
+// and its heading always disappear together — the old fixed pixel tracks
+// crushed the name to nothing and clipped "Subflows" while both headings
+// still showed.
 function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: LibraryListProps) {
   return (
-    <div className="rounded-lg border border-border-default bg-surface-2 overflow-hidden">
-      <div className="grid grid-cols-[1fr_120px_140px_80px_80px] gap-3 px-4 py-2 border-b border-border-subtle bg-surface-3 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
-        <div>Name</div>
-        <div>Owner</div>
-        <div>Updated</div>
+    <div className="library-list rounded-lg border border-border-default bg-surface-2 overflow-hidden">
+      <div className="library-row px-4 py-2 border-b border-border-subtle bg-surface-3 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
+        <div className="truncate">Name</div>
+        <div className="library-col-owner truncate">Owner</div>
+        <div className="truncate">Updated</div>
         <div className="text-right">Blocks</div>
-        <div className="text-right">Subflows</div>
+        <div className="library-col-subflows text-right">Subflows</div>
       </div>
       <ul className="divide-y divide-border-subtle">
         {items.map(flow => {
@@ -31,8 +37,6 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: Libra
               role="button"
               tabIndex={0}
               aria-pressed={selected}
-              aria-label={`Flow ${openingId === flow.id ? <Spinner size={12} /> : null}
-              {flow.name}`}
               onClick={() => onSelect(flow)}
               onDoubleClick={() => onOpen(flow)}
               onKeyDown={e => {
@@ -47,21 +51,25 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: Libra
                 }
               }}
               className={clsx(
-                'grid grid-cols-[1fr_120px_140px_80px_80px] gap-3 px-4 py-2.5 text-sm cursor-pointer transition-colors',
+                'library-row px-4 py-2.5 text-sm cursor-pointer transition-colors',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500/60',
                 selected ? 'bg-brand-500/15 text-brand-300' : 'text-text-secondary hover:bg-surface-3',
               )}
             >
-              <div className="min-w-0">
-                <div className="font-medium text-text-primary truncate">{flow.name}</div>
-                {flow.description && <div className="text-xs text-text-tertiary truncate">{flow.description}</div>}
+              <div className="flex items-center gap-2 min-w-0">
+                {/* The row being opened shows its spinner, like the grid card. */}
+                {openingId === flow.id && <Spinner size={12} className="shrink-0" />}
+                <div className="min-w-0">
+                  <div className="font-medium text-text-primary truncate">{flow.name}</div>
+                  {flow.description && <div className="text-xs text-text-tertiary truncate">{flow.description}</div>}
+                </div>
               </div>
-              <div className="text-xs truncate">{flow.ownerDisplayName ?? '—'}</div>
-              <div className="text-xs" title={absoluteTime(flow.updatedAt)}>
+              <div className="library-col-owner text-xs truncate">{flow.ownerDisplayName ?? '—'}</div>
+              <div className="text-xs truncate" title={absoluteTime(flow.updatedAt)}>
                 {relativeTime(flow.updatedAt)}
               </div>
               <div className="text-xs text-right tabular-nums">{flow.blockCount}</div>
-              <div className="text-xs text-right tabular-nums">{flow.subflowCount}</div>
+              <div className="library-col-subflows text-xs text-right tabular-nums">{flow.subflowCount}</div>
             </li>
           )
         })}

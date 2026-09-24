@@ -1,6 +1,6 @@
 import {Trans, useTranslation} from 'react-i18next'
 import {Fragment, lazy, Suspense, memo, useState, useMemo, useEffect} from 'react'
-import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle, Code2} from 'lucide-react'
+import {X, FolderOpen, XCircle, MinusSquare, AlertTriangle, FlaskConical, HelpCircle} from 'lucide-react'
 import {MainPaneToolbar} from '@/components/flow'
 import SourceEditor from '@/components/flow/SourceEditor'
 import ParseErrorsBanner from '@/components/flow/ParseErrorsBanner'
@@ -166,21 +166,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="relative">
-        <MainPaneToolbar />
-        {document && (
-          <div className="absolute top-1 right-3 z-20">
-            <button
-              onClick={() => setShowSource(true)}
-              className="flex items-center gap-1 text-2xs px-2 py-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-surface-3 transition-colors"
-              title={t('mainPane.editRawSource')}
-            >
-              <Code2 size={12} />
-              Source
-            </button>
-          </div>
-        )}
-      </div>
+      <MainPaneToolbar />
       <ParseErrorsBanner />
       <div ref={editorContainerRef} className="flex-1 flex overflow-hidden">
         {groups.map((group, gi) => (

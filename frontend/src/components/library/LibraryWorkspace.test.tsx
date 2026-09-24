@@ -239,6 +239,21 @@ describe('LibraryWorkspace', () => {
     expect(list).toHaveBeenCalled()
   })
 
+  it('marks the detail pane open while a flow is selected, so it can slide over a narrow results pane', async () => {
+    list.mockResolvedValue({items: [flow('a', {name: 'Pipeline'})], total: 1, offset: 0, limit: 24})
+    get.mockResolvedValue({...flow('a', {name: 'Pipeline'})})
+    versions.mockResolvedValue([])
+    renderWorkspace()
+
+    const card = await screen.findByText('Pipeline')
+    const pane = screen.getByRole('complementary', {name: 'Flow details'})
+    expect(pane).toHaveAttribute('data-open', 'false')
+    fireEvent.click(card)
+    expect(pane).toHaveAttribute('data-open', 'true')
+    fireEvent.click(await screen.findByLabelText('Close detail panel'))
+    expect(pane).toHaveAttribute('data-open', 'false')
+  })
+
   it('switches between grid and list view', async () => {
     list.mockResolvedValue({items: [flow('a')], total: 1, offset: 0, limit: 24})
     renderWorkspace()

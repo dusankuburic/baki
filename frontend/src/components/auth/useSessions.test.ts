@@ -83,3 +83,57 @@ describe('useSessions', () => {
     expect(authApi.revokeSession).not.toHaveBeenCalled()
   })
 })
+
+describe('useSessions ordering and results', () => {
+  it('pins the current session first, then the newest sign-in first', async () => {
+    vi.mocked(authApi.listSessions).mockResolvedValue([
+      {id: 'old', createdAt: '2026-09-20T10:00:00Z', expiresAt: ''},
+      {id: 'newest', createdAt: '2026-09-24T10:00:00Z', expiresAt: ''},
+      {id: 'current-jti', createdAt: '2026-09-22T10:00:00Z', expiresAt: ''},
+      {id: 'undated', createdAt: '', expiresAt: ''},
+    ])
+    const {result} = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.sessions.map(s => s.id)).toEqual(['current-jti', 'newest', 'old', 'undated'])
+  })
+
+  it('revoke resolves true on success and false (with the error kept) on failure', async () => {
+    vi.mocked(authApi.listSessions).mockResolvedValue([
+      {id: 'current-jti', createdAt: '', expiresAt: ''},
+      {id: 'other-1', createdAt: '', expiresAt: ''},
+    ])
+    vi.mocked(authApi.revokeSession).mockRejectedValueOnce(new Error('gone')).mockResolvedValueOnce(undefined)
+    const {result} = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    let ok = true
+    await act(async () => {
+      ok = await result.current.revoke('other-1')
+    })
+    expect(ok).toBe(false)
+    expect(result.current.error).toBe('gone')
+    expect(result.current.sessions).toHaveLength(2)
+
+    await act(async () => {
+      ok = await result.current.revoke('other-1')
+    })
+    expect(ok).toBe(true)
+    expect(result.current.sessions.map(s => s.id)).toEqual(['current-jti'])
+  })
+
+  it('revokeOthers resolves to how many sessions it signed out', async () => {
+    vi.mocked(authApi.listSessions).mockResolvedValue([
+      {id: 'current-jti', createdAt: '', expiresAt: ''},
+      {id: 'other-1', createdAt: '', expiresAt: ''},
+      {id: 'other-2', createdAt: '', expiresAt: ''},
+    ])
+    vi.mocked(authApi.revokeSession).mockResolvedValue(undefined)
+    const {result} = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    let count = 0
+    await act(async () => {
+      count = await result.current.revokeOthers()
+    })
+    expect(count).toBe(2)
+  })
+})

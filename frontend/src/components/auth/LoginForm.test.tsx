@@ -74,4 +74,17 @@ describe('LoginForm', () => {
     render(<LoginForm />)
     expect(screen.queryByText('Invalid credentials')).not.toBeInTheDocument()
   })
+
+  it('shows why a deliberate sign-out landed here, once', () => {
+    sessionStorage.setItem('auth_notice', 'password-changed')
+    render(<LoginForm />)
+    expect(screen.getByRole('status')).toHaveTextContent('Password updated. Sign in again with your new password.')
+    expect(sessionStorage.getItem('auth_notice')).toBeNull()
+  })
+
+  it('shows no notice without one stored', () => {
+    sessionStorage.removeItem('auth_notice')
+    render(<LoginForm />)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
 })

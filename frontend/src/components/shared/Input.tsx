@@ -6,6 +6,10 @@ type InputProps = React.InputHTMLAttributes<HTMLInputElement> & {
   icon?: LucideIcon
   trailingIcon?: LucideIcon
   onTrailingClick?: () => void
+  // Names the trailing button (e.g. "Show password") and makes it a real tab
+  // stop with aria-pressed; without a label it stays a decorative shortcut.
+  trailingLabel?: string
+  trailingPressed?: boolean
   error?: string
   hint?: string
 }
@@ -17,6 +21,8 @@ export default function Input({
   icon: Icon,
   trailingIcon: TrailingIcon,
   onTrailingClick,
+  trailingLabel,
+  trailingPressed,
   error,
   hint,
   className,
@@ -47,8 +53,10 @@ export default function Input({
           <button
             type="button"
             onClick={onTrailingClick}
-            className="ml-2 text-text-tertiary hover:text-text-secondary transition-colors duration-fast"
-            tabIndex={-1}
+            className="ml-2 rounded-sm text-text-tertiary hover:text-text-secondary transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
+            tabIndex={trailingLabel ? 0 : -1}
+            aria-label={trailingLabel}
+            aria-pressed={trailingLabel ? trailingPressed : undefined}
           >
             <TrailingIcon size={14} />
           </button>

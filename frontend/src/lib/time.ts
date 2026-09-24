@@ -21,3 +21,27 @@ export function absoluteTime(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleString()
 }
+
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ['year', 365 * 86400],
+  ['month', 30 * 86400],
+  ['week', 7 * 86400],
+  ['day', 86400],
+  ['hour', 3600],
+  ['minute', 60],
+]
+
+// relativeTimeText renders a sentence-ready distance in either direction
+// ("2 hours ago", "in 23 hours", "yesterday", "now") for prose such as
+// "Signed in 2 hours ago", where the compact "2h" of relativeTime reads as a
+// unit rather than a time. `now` and `locale` are parameters for tests.
+export function relativeTimeText(iso: string, now = Date.now(), locale?: string): string {
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+  const diff = (then - now) / 1000
+  const rtf = new Intl.RelativeTimeFormat(locale, {numeric: 'auto'})
+  for (const [unit, secs] of RELATIVE_UNITS) {
+    if (Math.abs(diff) >= secs) return rtf.format(Math.round(diff / secs), unit)
+  }
+  return rtf.format(0, 'second')
+}

@@ -7,6 +7,7 @@ import {authApi, type SSOInfo} from '@/api/auth'
 import {systemApi} from '@/api/system'
 import {ApiError, getBackendConfig} from '@/api/client'
 import {useTranslation} from 'react-i18next'
+import {clearPostLogoutNotice, readPostLogoutNotice} from './authNotice'
 
 interface LoginFormProps {
   onSuccess?: () => void
@@ -55,6 +56,13 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   const [registeredEmail, setRegisteredEmail] = useState<string | null>(null)
   const [needsVerification, setNeedsVerification] = useState(false)
   const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent'>('idle')
+  // Why the user is back here after a deliberate sign-out (password change,
+  // account deletion): read once, shown until they act, cleared on mount so a
+  // reload does not repeat it.
+  const [notice] = useState(readPostLogoutNotice)
+  useEffect(() => {
+    clearPostLogoutNotice()
+  }, [])
   const login = useAuthStore(s => s.login)
   const register = useAuthStore(s => s.register)
   const loginWithSSOTicket = useAuthStore(s => s.loginWithSSOTicket)
@@ -280,6 +288,15 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
             {isRegister ? t('login.subtitleRegister') : t('login.subtitleSignIn')}
           </p>
         </div>
+
+        {notice && !isRegister && (
+          <div
+            role="status"
+            className="px-3 py-2 bg-semantic-success/10 border border-semantic-success/30 rounded-lg text-sm text-semantic-success"
+          >
+            {notice === 'password-changed' ? t('login.noticePasswordChanged') : t('login.noticeAccountDeleted')}
+          </div>
+        )}
 
         {(error || ssoError || formError) && (
           <div

@@ -1,12 +1,11 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import {RefreshCw, ChevronLeft} from 'lucide-react'
 import {libraryApi, type LibraryFlow} from '@/api/library'
 import {flowApi} from '@/api/flow'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
-import {Button, useToast, useConfirm} from '@/components/shared'
+import {useToast, useConfirm} from '@/components/shared'
 import type {FlowDocument, PagedResponse} from '@/types'
 import {logger} from '@/lib/logger'
 import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
@@ -263,31 +262,20 @@ export default function LibraryWorkspace() {
   const showSkeleton = isLoading && items.length === 0
 
   return (
-    <div className="flex flex-col h-full bg-surface-1">
-      <header className="flex items-center justify-between gap-3 px-4 h-12 border-b border-border-subtle flex-shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="sm" icon={ChevronLeft} onClick={() => setMainPaneView('home')}>
-            Home
-          </Button>
-          <h1 className="text-sm font-semibold text-text-primary truncate">Cloud Library</h1>
-          <span className="text-xs text-text-tertiary">
-            {isLoading ? 'loading…' : `${total} flow${total === 1 ? '' : 's'}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => fetchPage(true)} disabled={isLoading}>
-            Refresh
-          </Button>
-        </div>
-      </header>
-
-      <div className="flex-1 flex overflow-hidden">
-        <aside className="w-56 border-r border-border-subtle overflow-y-auto flex-shrink-0">
+    // The main pane's toolbar (section switcher, title) sits above this, the
+    // same one every other system view has; the library used to draw its own
+    // header with a back link, which made switching sections look like
+    // leaving the app.
+    <div className="library-workspace flex flex-col h-full bg-surface-1">
+      {/* relative: the detail panel slides over this box when there is no
+          room to dock it (see .library-detail). */}
+      <div className="relative flex-1 flex overflow-hidden">
+        <aside className="library-rail border-r border-border-subtle overflow-y-auto flex-shrink-0">
           <LibraryFilterRail orgs={orgs} tags={knownTags} />
         </aside>
 
         <section className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <LibraryToolbar />
+          <LibraryToolbar total={total} isLoading={isLoading} onRefresh={() => fetchPage(true)} />
 
           {error && (
             <div className="mx-4 my-3 px-3 py-2 text-sm bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-semantic-error">
@@ -330,7 +318,11 @@ export default function LibraryWorkspace() {
           )}
         </section>
 
-        <aside className="w-80 border-l border-border-subtle overflow-y-auto flex-shrink-0 hidden xl:block">
+        <aside
+          className="library-detail flex-shrink-0 overflow-y-auto"
+          data-open={selectedFlowId ? 'true' : 'false'}
+          aria-label="Flow details"
+        >
           <LibraryDetailPanel
             flowId={selectedFlowId}
             reloadKey={detailReload}

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
-import {relativeTime, absoluteTime} from './time'
+import {relativeTime, absoluteTime, relativeTimeText} from './time'
 
 const NOW = new Date('2026-01-15T12:00:00.000Z')
 
@@ -56,5 +56,29 @@ describe('absoluteTime', () => {
 
   it('returns empty string for an invalid ISO string', () => {
     expect(absoluteTime('garbage')).toBe('')
+  })
+})
+
+describe('relativeTimeText', () => {
+  const now = Date.parse('2026-09-24T12:00:00Z')
+  const at = (offsetSecs: number) => new Date(now + offsetSecs * 1000).toISOString()
+
+  it('reads as a sentence in either direction', () => {
+    expect(relativeTimeText(at(-2 * 3600), now, 'en')).toBe('2 hours ago')
+    expect(relativeTimeText(at(-5 * 60), now, 'en')).toBe('5 minutes ago')
+    expect(relativeTimeText(at(-3 * 86400), now, 'en')).toBe('3 days ago')
+    expect(relativeTimeText(at(22 * 3600), now, 'en')).toBe('in 22 hours')
+    expect(relativeTimeText(at(2 * 7 * 86400), now, 'en')).toBe('in 2 weeks')
+  })
+
+  it('uses the natural words for the nearest steps and the present', () => {
+    expect(relativeTimeText(at(-86400), now, 'en')).toBe('yesterday')
+    expect(relativeTimeText(at(86400), now, 'en')).toBe('tomorrow')
+    expect(relativeTimeText(at(-20), now, 'en')).toBe('now')
+  })
+
+  it('is empty for an unparseable timestamp', () => {
+    expect(relativeTimeText('', now, 'en')).toBe('')
+    expect(relativeTimeText('not a date', now, 'en')).toBe('')
   })
 })

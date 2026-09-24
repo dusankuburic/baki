@@ -1,7 +1,9 @@
 import {useState, useEffect, useRef, useCallback, memo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {Save, RotateCcw, Code2, Plus} from 'lucide-react'
 import {flowApi, analysisApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
+import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useToast, useConfirm, Spinner} from '@/components/shared'
 import type {AnalysisReport} from '@/types'
@@ -52,6 +54,7 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const setReport = useAnalysisStore(s => s.setReport)
   const toast = useToast()
   const {confirm} = useConfirm()
+  const {t} = useTranslation('shell')
 
   const [source, setSource] = useState('')
   const [original, setOriginal] = useState('')
@@ -113,6 +116,13 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   }, [document?.id, memberFile, reloadNonce])
 
   const dirty = source !== original
+  // The toolbar's view switcher can close the editor too; it reads this flag
+  // to confirm before discarding edits (see MainPaneToolbar).
+  const setSourceDirty = useUIStore(s => s.setSourceEditorDirty)
+  useEffect(() => {
+    setSourceDirty(dirty)
+    return () => setSourceDirty(false)
+  }, [dirty, setSourceDirty])
   // Cloud folder flows (no on-disk path) store no per-file source: the server
   // refuses to save the combined text because it would collapse the folder
   // structure, so Save used to arm on the first keystroke and always fail.
@@ -167,15 +177,15 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const handleClose = useCallback(async () => {
     if (dirty) {
       const ok = await confirm({
-        title: 'Discard unsaved changes?',
-        message: 'You have unsaved edits in the source editor. Switching to Block view will discard them.',
+        title: t('mainPane.discardSourceTitle'),
+        message: t('mainPane.discardSourceMessage'),
         danger: true,
-        confirmLabel: 'Discard',
+        confirmLabel: t('mainPane.discardSourceConfirm'),
       })
       if (!ok) return
     }
     onClose()
-  }, [dirty, confirm, onClose])
+  }, [dirty, confirm, onClose, t])
 
   // Ctrl+S / Cmd+S keyboard shortcut for save.
   useEffect(() => {

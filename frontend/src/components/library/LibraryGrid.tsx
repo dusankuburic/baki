@@ -16,7 +16,10 @@ interface LibraryGridProps {
 
 function LibraryGridImpl({items, selectedId, onSelect, onOpen, openingId}: LibraryGridProps) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
+    // Column count follows the pane's width (.library-grid), not viewport
+    // breakpoints: with the sidebar and inspector open the main pane is far
+    // narrower than the window, and four forced columns gave 105px cards.
+    <div className="library-grid">
       {items.map(flow => (
         <SelectableCard
           key={flow.id}
@@ -64,7 +67,7 @@ function SelectableCard({
       }}
       disabled={opening}
       className={clsx(
-        'group flex flex-col gap-3 p-4 rounded-xl border bg-surface-2 transition-colors text-left w-full',
+        'group flex flex-col gap-3 p-4 rounded-xl border bg-surface-2 transition-colors text-left w-full min-w-0 overflow-hidden',
         selected
           ? 'border-brand-500 ring-2 ring-brand-500/30 bg-surface-3'
           : 'border-border-default hover:border-brand-500/50 hover:bg-surface-3',
@@ -83,8 +86,8 @@ function SelectableCard({
         </div>
       </div>
 
-      <div className="flex items-center gap-3 text-xs text-text-tertiary">
-        <span className="flex items-center gap-1">
+      <div className="flex items-center gap-3 min-w-0 text-xs text-text-tertiary">
+        <span className="flex items-center gap-1 shrink-0 tabular-nums">
           <FileCode size={12} />
           {flow.blockCount}
         </span>

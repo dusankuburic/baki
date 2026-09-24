@@ -2333,6 +2333,301 @@ pre,
   max-height: clamp(120px, 30vh, 320px);
 }
 
+/* === MAIN PANE TOOLBAR ===
+
+   The toolbar sits at the top of the main pane, whose width the sidebar and
+   inspector set. It answers to that width: the view switcher drops its
+   labels, then the secondary actions fold into a "More" menu, then the
+   history buttons go — so no control is pushed outside the pane and
+   clipped, as the fixed layout did below ~600px. */
+.main-toolbar {
+  container: main-toolbar / inline-size;
+}
+.main-toolbar-narrow {
+  display: none;
+}
+/* The graph views add a zoom cluster, so their labels go first. */
+@container main-toolbar (max-width: 879px) {
+  .main-toolbar[data-tools='graph'] .seg-label {
+    display: none;
+  }
+}
+@container main-toolbar (max-width: 759px) {
+  .seg-label {
+    display: none;
+  }
+}
+/* Compact: the secondary actions fold into "More", the view switcher
+   tightens, the zoom readout goes. The graph views get there 80px earlier
+   for the same reason as above. */
+@container main-toolbar (max-width: 639px) {
+  .main-toolbar[data-tools='graph'] .main-toolbar-wide {
+    display: none;
+  }
+  .main-toolbar[data-tools='graph'] .main-toolbar-narrow {
+    display: flex;
+  }
+  .main-toolbar[data-tools='graph'] .main-toolbar-zoom-readout {
+    display: none;
+  }
+  .main-toolbar[data-tools='graph'] .seg-collapsible [role='radio'] {
+    padding-inline: 0.5rem;
+  }
+}
+@container main-toolbar (max-width: 559px) {
+  .main-toolbar-wide {
+    display: none;
+  }
+  .main-toolbar-narrow {
+    display: flex;
+  }
+  .main-toolbar-zoom-readout {
+    display: none;
+  }
+  .seg-collapsible [role='radio'] {
+    padding-inline: 0.5rem;
+  }
+}
+@container main-toolbar (max-width: 439px) {
+  .main-toolbar-nav {
+    display: none;
+  }
+}
+/* Phone widths: pinch and wheel zoom the graph; the dividers go too. */
+@container main-toolbar (max-width: 359px) {
+  .main-toolbar-sep,
+  .main-toolbar-zoom {
+    display: none;
+  }
+}
+
+/* The parse-issues banner under the toolbar: the hint, then the counts,
+   drop out before the summary would wrap. */
+.parse-banner {
+  container: parse-banner / inline-size;
+}
+@container parse-banner (max-width: 559px) {
+  .parse-banner-hint {
+    display: none;
+  }
+}
+@container parse-banner (max-width: 379px) {
+  .parse-banner-counts {
+    display: none;
+  }
+}
+
+/* === CLOUD LIBRARY ===
+
+   The library lives in the main pane, whose width the app's sidebar and
+   inspector set, so its panes and the results inside answer to the
+   workspace's own width — never the viewport's. */
+.library-workspace {
+  container: library / inline-size;
+}
+.library-rail {
+  width: 14rem;
+}
+@container library (max-width: 639px) {
+  .library-rail {
+    width: 11rem;
+  }
+}
+
+/* The detail panel docks beside the results once there is room for the
+   rail, a results pane of at least 400px and a 16rem panel (20rem from
+   1100px). Narrower than that it slides over the results while a flow is
+   selected, so details, Load, Rename and Delete stay reachable at every
+   width instead of vanishing below a viewport breakpoint. */
+.library-detail {
+  display: none;
+}
+.library-detail[data-open='true'] {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(20rem, 100%);
+  z-index: var(--z-raised);
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-xl);
+}
+@container library (min-width: 880px) {
+  .library-detail,
+  .library-detail[data-open='true'] {
+    display: flex;
+    flex-direction: column;
+    position: static;
+    width: 16rem;
+    box-shadow: none;
+    border-left: 1px solid var(--border-subtle);
+  }
+}
+@container library (min-width: 1100px) {
+  .library-detail,
+  .library-detail[data-open='true'] {
+    width: 20rem;
+  }
+}
+
+/* As many cards as fit at 15rem or wider: the count follows the pane the
+   grid actually has, so a card never shrinks below its own content. */
+.library-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
+}
+
+/* The list's columns are ranked. The name always shows and takes what is
+   left; owner, then subflows, drop out as the results pane narrows, so no
+   column is ever crushed to nothing under a heading that still names it. */
+.library-list {
+  container: library-list / inline-size;
+}
+.library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4.5rem 4rem;
+  column-gap: 0.75rem;
+  align-items: center;
+}
+.library-col-owner,
+.library-col-subflows {
+  display: none;
+}
+@container library-list (min-width: 440px) {
+  .library-row {
+    grid-template-columns: minmax(0, 1fr) 5rem 4.5rem 4.5rem;
+  }
+  .library-col-subflows {
+    display: block;
+  }
+}
+@container library-list (min-width: 560px) {
+  .library-row {
+    grid-template-columns: minmax(0, 1fr) minmax(7rem, 10rem) 5rem 4.5rem 4.5rem;
+  }
+  .library-col-owner {
+    display: block;
+  }
+}
+
+/* === USER PROFILE ===
+
+   The profile lives in the main pane, whose width the sidebar and inspector
+   set, so its layout answers to that width, never the viewport's: the
+   section nav is a sticky rail beside the content from 880px and a sticky
+   row of chips above it below that; the hero's actions drop under the name
+   in a narrow pane; the identity fields go from stacked to two columns. */
+.profile-page {
+  container: profile / inline-size;
+}
+.profile-layout {
+  max-width: 64rem;
+  margin-inline: auto;
+  padding: 1.25rem 1rem 3rem;
+}
+.profile-body {
+  margin-top: 1.5rem;
+}
+.profile-nav {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: sticky;
+  top: 0;
+  z-index: var(--z-raised);
+  margin: 0 -1rem 1.25rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.profile-nav::-webkit-scrollbar {
+  display: none;
+}
+.profile-nav-item {
+  flex: none;
+  white-space: nowrap;
+}
+/* Room for the sticky chip row when a group scrolls to the top. */
+.profile-group {
+  scroll-margin-top: 3.5rem;
+}
+/* A card's head action drops below the description once the title block
+   cannot keep 11rem beside it, instead of squeezing the description into a
+   two-word column next to the button. A short "Edit" stays inline where a
+   wide "Sign out other sessions" wraps; either way it keeps the right edge. */
+.profile-card-head {
+  flex-wrap: wrap;
+}
+.profile-card-title {
+  flex: 1 1 11rem;
+  min-width: 0;
+}
+.profile-card-action {
+  margin-left: auto;
+}
+.profile-hero-actions {
+  width: 100%;
+}
+.profile-field {
+  display: grid;
+  gap: 0.125rem;
+}
+.profile-session {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  align-items: center;
+}
+@container profile (min-width: 560px) {
+  .profile-hero-actions {
+    width: auto;
+    margin-left: auto;
+  }
+  .profile-field {
+    grid-template-columns: 9rem minmax(0, 1fr);
+    column-gap: 1rem;
+    align-items: baseline;
+  }
+}
+@container profile (min-width: 640px) {
+  .profile-layout {
+    padding: 2rem 2rem 4rem;
+  }
+  .profile-nav {
+    margin-inline: -2rem;
+    padding-inline: 2rem;
+  }
+}
+@container profile (min-width: 880px) {
+  .profile-body {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    column-gap: 2rem;
+    align-items: start;
+  }
+  .profile-nav {
+    flex-direction: column;
+    overflow: visible;
+    top: 1rem;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border-bottom: 0;
+  }
+  .profile-nav-item {
+    white-space: normal;
+    text-align: left;
+  }
+  .profile-group {
+    scroll-margin-top: 1rem;
+  }
+}
+
 /* === AUTOFILL OVERRIDE === */
 /* Chrome does not resolve CSS custom properties inside :-webkit-autofill — hardcode per theme */
 

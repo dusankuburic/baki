@@ -107,6 +107,9 @@ interface UiState {
   graphZoom: number
   activeDiff: FlowDiff | null
   showSourceEditor: boolean
+  // sourceEditorDirty: the source editor holds unsaved edits. The toolbar's
+  // view switcher reads it to confirm before closing the editor.
+  sourceEditorDirty: boolean
   showHelpOverlay: boolean
   // chatFocus is the session-only full-window reading layout for the AI chat
   // (desktop only). Not persisted: reopening the app inside an overlay would
@@ -128,6 +131,7 @@ interface UiState {
   setGraphZoom: (z: number) => void
   setActiveDiff: (d: FlowDiff | null) => void
   setShowSourceEditor: (v: boolean) => void
+  setSourceEditorDirty: (v: boolean) => void
   setShowHelpOverlay: (v: boolean) => void
   closeMobileDrawer: () => void
   toggleSidebar: () => void
@@ -164,6 +168,7 @@ export const useUIStore = create<UiState>((set, get) => ({
   graphZoom: 1,
   activeDiff: null,
   showSourceEditor: false,
+  sourceEditorDirty: false,
   showHelpOverlay: false,
   chatFocus: false,
 
@@ -187,7 +192,8 @@ export const useUIStore = create<UiState>((set, get) => ({
   setSelectedVariable: v => set({selectedVariable: v}),
   setGraphZoom: z => set({graphZoom: z}),
   setActiveDiff: d => set({activeDiff: d}),
-  setShowSourceEditor: v => set({showSourceEditor: v}),
+  setShowSourceEditor: v => set(v ? {showSourceEditor: true} : {showSourceEditor: false, sourceEditorDirty: false}),
+  setSourceEditorDirty: v => set({sourceEditorDirty: v}),
   setShowHelpOverlay: v => set({showHelpOverlay: v}),
   closeMobileDrawer: () => set({mobileDrawer: null}),
   // Below md the same control opens and closes the overlay drawer instead of
@@ -246,6 +252,7 @@ registerStoreReset(() =>
     graphZoom: 1,
     activeDiff: null,
     showSourceEditor: false,
+    sourceEditorDirty: false,
     showHelpOverlay: false,
   }),
 )

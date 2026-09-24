@@ -103,17 +103,25 @@ test.describe('Authentication', () => {
     // for real (stubbed upload). Both waits no-op when first-run is already
     // done and the modal never opens.
     const skipBtn = page.getByRole('button', {name: 'Skip', exact: true})
-    await skipBtn.waitFor({state: 'visible', timeout: 8_000}).then(() => skipBtn.click(), () => {})
+    await skipBtn.waitFor({state: 'visible', timeout: 8_000}).then(
+      () => skipBtn.click(),
+      () => {},
+    )
     const startBtn = page.getByRole('button', {name: 'Load sample & start'})
-    await startBtn.waitFor({state: 'visible', timeout: 8_000}).then(() => startBtn.click(), () => {})
+    await startBtn.waitFor({state: 'visible', timeout: 8_000}).then(
+      () => startBtn.click(),
+      () => {},
+    )
 
     // The avatar/profile area exposes logout from the Profile system view.
     await page.getByRole('button', {name: 'User Profile'}).click()
-    await page.getByRole('button', {name: 'Logout'}).click()
+    await page.getByRole('button', {name: 'Sign out', exact: true}).click()
 
     // Back at the login gate; refresh token storage is cleared.
     await expect(page.locator('input[type="password"]').first()).toBeVisible({timeout: 10_000})
-    const stored = await page.evaluate(() => localStorage.getItem('auth_refresh_token') ?? sessionStorage.getItem('auth_refresh_token'))
+    const stored = await page.evaluate(
+      () => localStorage.getItem('auth_refresh_token') ?? sessionStorage.getItem('auth_refresh_token'),
+    )
     expect(stored).toBeNull()
   })
 
@@ -130,12 +138,11 @@ test.describe('Authentication', () => {
 
   test('authenticated session can still open and analyze a flow', async ({page}) => {
     await stubAuth(page)
-    await page.route('**/api/flow/load-path', async route =>
-      route.fulfill({status: 200, json: mockFlowDocument()}))
-    await page.route('**/api/analysis/analyze', async route =>
-      route.fulfill({status: 200, json: mockAnalysisReport()}))
+    await page.route('**/api/flow/load-path', async route => route.fulfill({status: 200, json: mockFlowDocument()}))
+    await page.route('**/api/analysis/analyze', async route => route.fulfill({status: 200, json: mockAnalysisReport()}))
     await page.route('**/api/analysis/dashboard', async route =>
-      route.fulfill({status: 200, json: mockDashboardHome()}))
+      route.fulfill({status: 200, json: mockDashboardHome()}),
+    )
 
     await page.goto('/')
     await page.locator('input[type="email"], input[placeholder="Email"]').first().waitFor({timeout: 10_000})

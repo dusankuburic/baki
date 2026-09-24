@@ -1,6 +1,7 @@
-import {Search, LayoutGrid, List} from 'lucide-react'
+import {Search, LayoutGrid, List, RefreshCw} from 'lucide-react'
 import clsx from 'clsx'
 import Input from '@/components/shared/Input'
+import IconButton from '@/components/shared/IconButton'
 import {useLibraryBrowseStore} from '@/stores/libraryBrowseStore'
 import type {LibrarySort} from '@/api/library'
 
@@ -12,7 +13,15 @@ const SORT_OPTIONS: {value: LibrarySort; label: string}[] = [
   {value: 'blocks_desc', label: 'Most blocks'},
 ]
 
-export default function LibraryToolbar() {
+export default function LibraryToolbar({
+  total,
+  isLoading,
+  onRefresh,
+}: {
+  total: number
+  isLoading: boolean
+  onRefresh: () => void
+}) {
   const view = useLibraryBrowseStore(s => s.view)
   const setView = useLibraryBrowseStore(s => s.setView)
   const sort = useLibraryBrowseStore(s => s.sort)
@@ -21,13 +30,14 @@ export default function LibraryToolbar() {
   const setQuery = useLibraryBrowseStore(s => s.setQuery)
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle flex-shrink-0">
+    // Wraps rather than squeezing the search box to nothing in a narrow pane.
+    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border-subtle flex-shrink-0">
       <Input
         icon={Search}
         placeholder="Search flows by name…"
         value={query}
         onChange={e => setQuery(e.target.value)}
-        className="flex-1 max-w-md"
+        className="flex-1 min-w-[10rem] max-w-md"
       />
       <select
         value={sort}
@@ -44,6 +54,12 @@ export default function LibraryToolbar() {
       <div className="inline-flex rounded-md border border-border-default overflow-hidden">
         <ViewToggle active={view === 'grid'} onClick={() => setView('grid')} icon={LayoutGrid} label="Grid view" />
         <ViewToggle active={view === 'list'} onClick={() => setView('list')} icon={List} label="List view" />
+      </div>
+      <div className="ml-auto flex items-center gap-1">
+        <span className="text-xs text-text-tertiary tabular-nums" aria-live="polite">
+          {isLoading ? 'loading…' : `${total} flow${total === 1 ? '' : 's'}`}
+        </span>
+        <IconButton icon={RefreshCw} size="sm" label="Refresh" onClick={onRefresh} disabled={isLoading} />
       </div>
     </div>
   )

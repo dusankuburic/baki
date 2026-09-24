@@ -14,6 +14,14 @@ type SegmentedControlProps<T> = {
    * setting, not an empty control.
    */
   disabled?: boolean
+  /** Accessible name for the group. */
+  label?: string
+  /**
+   * Lets a container query hide the option labels (class `seg-label`) and
+   * keep the icons: each button then carries its label as aria-label and
+   * title, so an icon-only segment keeps its name and a hover hint.
+   */
+  collapseLabels?: boolean
 }
 
 export default function SegmentedControl<T extends string>({
@@ -23,11 +31,18 @@ export default function SegmentedControl<T extends string>({
   size = 'md',
   className,
   disabled = false,
+  label,
+  collapseLabels = false,
 }: SegmentedControlProps<T>) {
   return (
     <div
-      className={clsx('inline-flex bg-surface-2 border border-border-default rounded-md p-0.5 gap-0.5', className)}
+      className={clsx(
+        'inline-flex bg-surface-2 border border-border-default rounded-md p-0.5 gap-0.5',
+        collapseLabels && 'seg-collapsible',
+        className,
+      )}
       role="radiogroup"
+      aria-label={label}
     >
       {options.map(opt => {
         const Icon = opt.icon
@@ -49,10 +64,12 @@ export default function SegmentedControl<T extends string>({
             role="radio"
             aria-checked={isActive}
             aria-disabled={disabled || undefined}
+            aria-label={collapseLabels ? opt.label : undefined}
+            title={collapseLabels ? opt.label : undefined}
           >
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
               {Icon && <Icon size={14} />}
-              {opt.label}
+              {collapseLabels ? <span className="seg-label">{opt.label}</span> : opt.label}
             </span>
           </button>
         )

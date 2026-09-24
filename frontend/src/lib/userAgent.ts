@@ -38,3 +38,15 @@ export function describeUserAgent(ua: string | undefined): string {
   if (os) return os
   return 'Unknown device'
 }
+
+export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'unknown'
+
+// deviceKind picks the icon for a session row. Tablets go first: an iPad UA
+// carries no "Mobile" token, and an Android UA without one is a tablet too.
+export function deviceKind(ua: string | undefined): DeviceKind {
+  if (!ua) return 'unknown'
+  if (/iPad|Tablet/i.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua))) return 'tablet'
+  if (/iPhone|iPod|Mobile/i.test(ua)) return 'mobile'
+  if (/Windows|Macintosh|Mac OS X|Linux|CrOS|X11/.test(ua)) return 'desktop'
+  return 'unknown'
+}
